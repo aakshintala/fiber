@@ -366,7 +366,8 @@ fn every_call_is_decided_before_any_runs_and_results_return_in_request_order() {
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
-            | Input::ToolCall { .. } => None,
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     assert_eq!(results.len(), 3);
@@ -1177,6 +1178,7 @@ fn hosted_action() -> contract::provider::ReplyAction {
             changed_by: None,
             provider_item: Some(search_result_block()),
             hosts_surfaced: vec!["https://www.rust-lang.org/".into()],
+            loaded: None,
         },
     })
 }

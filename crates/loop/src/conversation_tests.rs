@@ -904,6 +904,7 @@ fn a_job_record_under_an_action_does_not_flush_its_call() {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     let lines = vec![
         line("tool_call_requested", &requested, Some("a_1")),
@@ -944,6 +945,7 @@ fn result(text: &str) -> Event {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -955,6 +957,7 @@ fn shape(conversation: &[Input]) -> Vec<String> {
             Input::User { .. } => "user".to_owned(),
             Input::ToolCall { action_id, .. } => format!("call {}", action_id.0),
             Input::ToolResult { action_id, .. } => format!("result {}", action_id.0),
+            Input::ToolSearchResult { action_id, .. } => format!("search result {}", action_id.0),
             Input::Assistant { .. } => "assistant".to_owned(),
             Input::Reasoning { .. } => "reasoning".to_owned(),
         })
@@ -1035,6 +1038,7 @@ fn image_result() -> Event {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -1118,6 +1122,7 @@ fn pdf_result() -> Event {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -1454,6 +1459,7 @@ mod window {
             changed_by: None,
             provider_item: None,
             hosts_surfaced: Vec::new(),
+            loaded: None,
         })
     }
 
@@ -2127,7 +2133,8 @@ fn rebuild_stamps_each_side_of_a_switch_with_the_model_in_force() {
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     assert_eq!(models, vec!["fake/old", "fake/new"]);
@@ -2174,6 +2181,7 @@ fn skilled_result(status: contract::events::CallStatus, name: &str, path: &str) 
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -3252,6 +3260,7 @@ mod from_log {
             .iter()
             .map(|input| match input {
                 Input::ToolCall { action_id, .. } => ("call", action_id.0.clone()),
+                Input::ToolSearchResult { action_id, .. } => ("search result", action_id.0.clone()),
                 Input::ToolResult {
                     action_id, text, ..
                 } => {

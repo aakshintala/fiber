@@ -208,12 +208,6 @@ fn diagnose_with(
     }
 }
 
-/// Whether a devices error means there are no devices: any other error
-/// fails the read.
-fn is_missing(kind: io::ErrorKind) -> bool {
-    kind == io::ErrorKind::NotFound
-}
-
 /// The global `hub.port`; a project's value is never read.
 fn port(home: &Path) -> Result<Option<u16>, Failure> {
     let Some(value) = config::get_global(home, "hub.port").map_err(|e| failed(e.code(), e))? else {
@@ -246,7 +240,7 @@ fn devices(home: &Path) -> Result<Vec<String>, Failure> {
     };
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
-        Err(e) if is_missing(e.kind()) => return Ok(Vec::new()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(lost(e)),
     };
     let mut names = Vec::new();
@@ -267,7 +261,37 @@ fn devices(home: &Path) -> Result<Vec<String>, Failure> {
 /// answer read; `before_wait` runs after each wait's deadline check, just
 /// before [`Clock::wait_until`]. The stream comes back blocking with no
 /// read timeout, as it arrived.
+// Exempted from mutation testing: the InvalidInput arm is macOS-only (Linux never refuses the restore) and mutants run on Linux, so no test can reach its guard mutants; the macOS job still runs an_answer_followed_by_a_close_is_read.
+#[cfg_attr(false, mutants::skip)]
 fn ask(
+    stream: &UnixStream,
+    deadline: Instant,
+    within: Duration,
+    clock: &dyn Clock,
+    before_read: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
+) -> Result<Reply, Failure> {
+    let result = exchange(stream, deadline, within, clock, before_read, before_wait);
+    // macOS refuses the option once the peer has closed, while its
+    // buffered bytes stay readable; ignoring that refusal keeps a
+    // close-after-answer a reply.
+    let restore = match stream.set_nonblocking(false) {
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
+        other => other,
+    };
+    match result {
+        // The exchange's own error wins over a restore failure.
+        Err(exchange) => Err(exchange),
+        Ok(reply) => restore
+            .map(|()| reply)
+            .map_err(|error| failed(ErrorCode::IoFailed, format!("the hub: {error}"))),
+    }
+}
+
+/// The exchange `ask` wraps: it sends `status` and reads lines until its
+/// answer, failing once `deadline` passes on `clock`. It leaves the
+/// stream's mode alone; `ask` restores blocking after.
+fn exchange(
     mut stream: &UnixStream,
     deadline: Instant,
     within: Duration,
@@ -348,7 +372,6 @@ fn ask(
         while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=end).collect();
             if let Some(reply) = answer(&line)? {
-                ignore_closed_peer(stream.set_nonblocking(false)).map_err(lost)?;
                 return Ok(reply);
             }
         }
@@ -374,22 +397,6 @@ fn wait_clock(clock: &dyn Clock, until: Instant, fd: BorrowedFd, events: PollFla
         )]
         let _ = poll(&mut fds, spec.as_ref());
     });
-}
-
-/// Whether a status exchange error is the closed-peer refusal to ignore:
-/// macOS refuses the option once the peer has closed, while its buffered
-/// bytes stay readable and a read of the closed socket does not block.
-fn is_closed_peer(kind: io::ErrorKind) -> bool {
-    kind == io::ErrorKind::InvalidInput
-}
-
-/// Folds a `set_nonblocking` result, ignoring the closed-peer refusal,
-/// so tests inject each outcome.
-fn ignore_closed_peer(set: io::Result<()>) -> io::Result<()> {
-    match set {
-        Err(error) if is_closed_peer(error.kind()) => Ok(()),
-        other => other,
-    }
 }
 
 /// The version, client count and environment from the hub's answer to

@@ -997,6 +997,14 @@ fn a_stale_manifest_conflict_is_not_final_until_the_fixpoint() {
     assert_eq!(got[&zz], "v1.0.0", "{got:?}");
     assert_eq!(got[&d], "v2.0.0", "{got:?}");
     assert_eq!(got[&r], "v1.0.0", "{got:?}");
+    // A replaced manifest's staging copy goes with it: no `.new` or
+    // `.old` entry is left in `extensions/` once the plan is dropped.
+    let left: Vec<String> = fs::read_dir(setup.home().join("extensions"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".new") || n.ends_with(".old"))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
 }
 
 /// Verify counterexample: `r→z1,zz1`, `z1→a` (missing), `zz1→z1.5`, `z1.5`

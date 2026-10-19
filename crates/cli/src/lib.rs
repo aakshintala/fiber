@@ -19,7 +19,15 @@ use contract::ErrorCode;
 use contract::shapes::Failure;
 use doors::failure;
 
+mod error;
+
+pub use error::{CliError, Refusal};
+
 mod approve;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod config;
 mod doctor;
 mod extension;
@@ -31,10 +39,30 @@ mod hub_service;
 mod hub_status;
 mod hub_token;
 mod hub_unit;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod login;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod mcp;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod mcp_login;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod model_lists;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod models;
 mod prune;
 mod release;
@@ -50,7 +78,8 @@ pub use approve::approve;
 pub use config::{config_get, config_set, config_set_text};
 pub use doctor::{doctor, with_fix};
 pub use extension::{
-    extension_install, extension_list, extension_reinstall, extension_remove, extension_update,
+    FirstPartyInstall, LoginNeed, extension_install, extension_list, extension_reinstall,
+    extension_remove, extension_update, install_first_party,
 };
 pub use extension_test::extension_test;
 pub use hub_list::{hub_add, hub_remove};
@@ -108,16 +137,16 @@ fn fail(e: Failure) -> i32 {
 }
 
 /// Maps a command result to its exit code through the one error branch.
-fn finish(result: Result<(), Failure>) -> i32 {
+fn finish<E: Into<Failure>>(result: Result<(), E>) -> i32 {
     finish_code(result.map(|()| 0))
 }
 
 /// Maps an integer command result to its exit code: the value on success,
 /// the failure's code once printed on error.
-fn finish_code(result: Result<i32, Failure>) -> i32 {
+fn finish_code<E: Into<Failure>>(result: Result<i32, E>) -> i32 {
     match result {
         Ok(code) => code,
-        Err(e) => fail(e),
+        Err(e) => fail(e.into()),
     }
 }
 
@@ -131,20 +160,20 @@ fn write_line(out: &mut dyn Write, line: &str) -> Result<(), Failure> {
 
 /// Runs `run` with Fiber home and the current directory, mapping any
 /// failure to its exit code.
-fn with_dirs(run: impl FnOnce(&Path, &Path) -> Result<(), Failure>) -> i32 {
+fn with_dirs<E: Into<Failure>>(run: impl FnOnce(&Path, &Path) -> Result<(), E>) -> i32 {
     with_dirs_code(|home, workspace| run(home, workspace).map(|()| 0))
 }
 
 /// Runs `run` with Fiber home and the current directory, keeping its
 /// integer success code and mapping any failure to its exit code. Home
 /// is read before the current directory, as each wrapper did.
-fn with_dirs_code(run: impl FnOnce(&Path, &Path) -> Result<i32, Failure>) -> i32 {
+fn with_dirs_code<E: Into<Failure>>(run: impl FnOnce(&Path, &Path) -> Result<i32, E>) -> i32 {
     let ran = ::config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
             let workspace = std::env::current_dir()
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            run(&home, &workspace)
+            run(&home, &workspace).map_err(Into::into)
         });
     finish_code(ran)
 }

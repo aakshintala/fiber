@@ -193,6 +193,105 @@ impl Hubbed {
 }
 
 #[test]
+fn history_pages_a_rewound_sessions_chain_back_to_the_root() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup);
+    let old = hubbed.start("c_start", "c_sub", "one");
+    hubbed.prompt("c_two", &old, "two");
+    let client = hubbed.client();
+    client.send(&rewind("c_middle", &old, json!({})));
+    let ack = until_ack(client, "the first rewind acknowledgement", "c_middle");
+    let middle = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until(client, "the middle session's extensions", |line| {
+        line["session_id"] == middle && line["kind"] == "extensions_loaded"
+    });
+    hubbed.prompt("c_three", &middle, "three");
+    client.send(&rewind("c_next", &middle, json!({})));
+    let ack = until_ack(client, "the second rewind acknowledgement", "c_next");
+    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until(client, "the next session's extensions", |line| {
+        line["session_id"] == next && line["kind"] == "extensions_loaded"
+    });
+    let other = hubbed.start("c_other", "c_other_sub", "unrelated");
+    let snapshots = [&old, &middle].map(|id| fs::read(session_log_path(&setup, id)).unwrap());
+
+    client.send(&command("c_history", Some(&next), "history", json!({})));
+    let ack = until_ack(client, "the own history page", "c_history");
+    let own = ack.last().unwrap()["payload"]["result"]["lines"]
+        .as_array()
+        .unwrap();
+    assert_eq!(own[0]["kind"], "session_started");
+    let mut point = own[0]["payload"]["forked_from"].clone();
+    for (index, ancestor) in [&middle, &old].into_iter().enumerate() {
+        assert_eq!(point["session_id"], *ancestor);
+        let bound = point["seq"].as_u64().unwrap();
+        let id = format!("c_ancestor_{index}");
+        client.send(&command(
+            &id,
+            Some(&next),
+            "history",
+            json!({"session_id":ancestor,"to_seq":bound}),
+        ));
+        let ack = until_ack(client, "the ancestor history page", &id);
+        let page = ack.last().unwrap()["payload"]["result"]["lines"]
+            .as_array()
+            .unwrap();
+        let expected: Vec<Value> = session_log(&setup, ancestor)
+            .into_iter()
+            .take(usize::try_from(bound).unwrap() + 1)
+            .collect();
+        assert_eq!(page.len(), expected.len());
+        for (offset, (actual, expected)) in page.iter().zip(&expected).enumerate() {
+            assert_eq!(actual["kind"], expected["kind"], "{ancestor} line {offset}");
+            assert!(actual == expected, "{ancestor} line {offset} differs");
+        }
+        assert_eq!(page[0]["kind"], "session_started");
+        assert_eq!(page[0]["seq"], 0);
+        point = page[0]["payload"]
+            .get("forked_from")
+            .cloned()
+            .unwrap_or(Value::Null);
+    }
+    assert!(point.is_null(), "the root has no forked_from");
+    client.send(&command(
+        "c_off_chain",
+        Some(&next),
+        "history",
+        json!({"session_id":other}),
+    ));
+    let rejected = until_rejected(client, "the off-chain rejection", "c_off_chain");
+    assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+    let next_log = session_log(&setup, &next);
+    let bound = next_log[0]["payload"]["forked_from"]["seq"]
+        .as_u64()
+        .unwrap();
+    client.send(&command(
+        "c_past",
+        Some(&next),
+        "history",
+        json!({"session_id":middle,"from_seq":bound + 1}),
+    ));
+    let rejected = until_rejected(client, "the continuation-bound rejection", "c_past");
+    assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+    for (id, snapshot) in [&old, &middle].into_iter().zip(snapshots) {
+        let after = fs::read(session_log_path(&setup, id)).unwrap();
+        assert_eq!(after.len(), snapshot.len());
+        assert!(after == snapshot, "paging must not resume {id}");
+    }
+    hubbed.close("c_close_next", &next);
+    hubbed.close("c_close_other", &other);
+    hubbed.finish();
+}
+
+#[test]
 fn a_rewind_continues_the_session_from_the_latest_turn() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();

@@ -69,7 +69,7 @@ its own. From the top:
    the new worktree switch, the model and thinking chips and "Enter starts a
    session".
 
-A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter and Delete name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it only when home was entered from a session; this build never shows it, since no back key exists yet (#2438 builds the key). Until the first prompt, the input box's
+A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
 placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
 the hub to start a session in the chosen workspace, and the screen switches to
 it. No session exists before Enter, so opening the terminal, glancing at home
@@ -141,7 +141,7 @@ and exited, across the project sections. ↓ from the last row focuses the
 entry bar, and ↑ from an empty entry bar focuses the last row; on home no
 session is on screen, so ↑ there recalls no prompt. ↓ from the entry bar
 focuses the chip row, on the chip focused there last, the workspace chip at
-first, and ↑ goes back. ← and → move between the chips and stop at the ends.
+first, and ↑ goes back. ← and → move between the chips and stop at the ends. → or Esc goes back to the session home came from when the box is empty and nothing is open; Esc also goes back with a chip focused. Esc is `close_or_interrupt`'s bound key.
 Enter on a focused chip does what a click does: the workspace chip opens the
 workspace picker, the new worktree switch toggles, the model chip opens the
 model picker, and the thinking chip opens it at the model's thinking chips.
@@ -1365,7 +1365,7 @@ what it started keeps running.
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
 - **Esc closes whatever is on top,** except the workspace picker while no
-  workspace is chosen ("Home"). It returns focus to the input box from
+  workspace is chosen ("Home"). On home, Esc on a focused row goes back to the session the person came from ("Home"). It returns focus to the input box from
   the conversation, and interrupts the turn only when nothing is open and the
   input box has focus. In a question form, Esc means "Chat about this".
 - **Slash commands.** Typing `/` opens one completion panel above the input
@@ -1417,7 +1417,9 @@ Shift+Tab moves focus to the newest item in the conversation.
   `$EDITOR`.
 - Tab moves focus to the panel, then the rail, then back to the
   conversation.
-- Esc returns focus to the input box, keeping the draft.
+- Esc returns focus to the input box, keeping the draft, except on home,
+  where Esc on a focused row goes back to the session the person came
+  from ("Home").
 
 The focus order is not defined screen by screen. It is every click target on
 screen, the same targets hover highlights, and each turn, from top to bottom and left to
@@ -1541,7 +1543,8 @@ of them when a key arrives:
 - Input: the input box has the keyboard, home with nothing open included,
   and so does a focused rail: typing there goes to the input box. On home,
   ↑, ↓, ← and → move between the session list, the entry bar and the chip
-  row ("Home"), and on a focused rail ↑, ↓, Enter, → and Esc move and
+  row ("Home"), and Esc on a focused row goes back to the session home came
+  from; on a focused rail ↑, ↓, Enter, → and Esc move and
   switch ("The rail"); like an overlay's own keys, they are not bindings.
 
 A global action acts in all six. The rest act only where they are listed:

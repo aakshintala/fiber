@@ -328,6 +328,9 @@ pub struct JobInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryArgs {
+    /// The session whose log `from_seq` and `to_seq` count in; absent means this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
     /// The first `seq` to return, inclusive; absent means the last lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_seq: Option<Seq>,

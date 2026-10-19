@@ -11,17 +11,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use config::{Config, McpTokenFiles, Sources, delete_credential};
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::OfferedKind;
 use contract::mcp_remote::McpRemote;
 use contract::mcp_tokens::TokenFiles;
-use contract::shapes::Failure;
 use extensions::{Browser, Decision, Index, Store};
 
 use crate::approve::say;
-use crate::mcp::{Streams, config_failure};
-use crate::{failed, project_of, usage, with_dirs};
+use crate::mcp::Streams;
+use crate::{CliError, project_of, with_dirs};
 
 /// A config path segment holding a `.` is quoted, as the startup seam
 /// reads it: `mcp.servers."a.b".url`.
@@ -50,32 +48,28 @@ fn is_declared(config: &Config, server: &str) -> bool {
         .is_some()
 }
 
-fn unknown(server: &str) -> Failure {
-    usage(format!(
-        "no server named `{server}` is declared. Run `fiber --help` for usage."
-    ))
+fn unknown(server: &str) -> CliError {
+    CliError::McpServerUnknown {
+        server: server.to_owned(),
+    }
 }
 
-fn stdio(server: &str) -> Failure {
-    usage(format!(
-        "`{server}` declares a command, not a url; only a remote server holds a token. Run `fiber --help` for usage."
-    ))
+fn stdio(server: &str) -> CliError {
+    CliError::McpServerStdio {
+        server: server.to_owned(),
+    }
 }
 
-fn userinfo(server: &str) -> Failure {
-    failed(
-        ErrorCode::ConfigInvalid,
-        format!("`{server}`'s url carries a user name or password; remove it."),
-    )
+fn userinfo(server: &str) -> CliError {
+    CliError::UrlHasUserinfo {
+        server: server.to_owned(),
+    }
 }
 
-fn unapproved(server: &str) -> Failure {
-    failed(
-        ErrorCode::McpServerUnapproved,
-        format!(
-            "`{server}` is declared by the repository but not approved; run `fiber approve` in the repository."
-        ),
-    )
+fn unapproved(server: &str) -> CliError {
+    CliError::McpUnapproved {
+        server: server.to_owned(),
+    }
 }
 
 /// The repository declaration's URL, checked against its approval: the
@@ -93,8 +87,8 @@ fn approved_url(
     effective: &str,
     between: &dyn Fn(),
     clock: &Arc<dyn Clock>,
-) -> Result<String, Failure> {
-    let declared = config::declared(workspace).map_err(config_failure)?;
+) -> Result<String, CliError> {
+    let declared = config::declared(workspace)?;
     let Some(entry) = declared.mcp_servers.get(server) else {
         return Err(unapproved(server));
     };
@@ -105,10 +99,9 @@ fn approved_url(
         return Err(unapproved(server));
     }
     between();
-    let item =
-        extensions::mcp_server_item(workspace, server, entry).map_err(|e| failed(e.code(), e))?;
+    let item = extensions::mcp_server_item(workspace, server, entry)?;
     let mut index = Index::load(home);
-    let hash = extensions::hash(&mut index, &item).map_err(|e| failed(e.code(), e))?;
+    let hash = extensions::hash(&mut index, &item)?;
     // The index only saves a re-hash; failing to write it costs nothing else.
     index.save().unwrap_or(());
     let approved = Store::new(home, project, Arc::clone(clock))
@@ -136,7 +129,7 @@ pub(crate) fn run_login(
     between: &dyn Fn(),
     streams: Streams<'_>,
     clock: &Arc<dyn Clock>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let Streams { out: _, err } = streams;
     let (_, project) = project_of(home, workspace)?;
     let config = Config::load(Sources {
@@ -145,7 +138,7 @@ pub(crate) fn run_login(
         project: project.clone(),
         overrides: Vec::new(),
     })
-    .map_err(config_failure)?;
+    .map_err(CliError::from)?;
     let Some((url, from_repository)) = effective_url(&config, server) else {
         if is_declared(&config, server) {
             return Err(stdio(server));
@@ -164,13 +157,16 @@ pub(crate) fn run_login(
     let files = McpTokenFiles::new(home.to_path_buf());
     let files_ref: &dyn TokenFiles = &files;
     if let Err(error) = remote.login(files_ref, &url, &|url| browser.open(url), &**clock) {
-        if error.code == ErrorCode::ConfigInvalid {
+        if error.code == contract::ErrorCode::ConfigInvalid {
             // Only the PKCE refusal reaches here with this code: the
             // `url` and userinfo checks above already ran, so prefixing
             // the server names the refusal without printing any code.
-            return Err(failed(error.code, format!("`{server}`: {}", error.message)));
+            return Err(CliError::McpLoginRefused {
+                server: server.to_owned(),
+                message: error.message,
+            });
         }
-        return Err(error);
+        return Err(CliError::from(error));
     }
     say(err, &format!("fiber: stored credentials/mcp/{key}\n"));
     Ok(())
@@ -184,7 +180,7 @@ pub(crate) fn run_logout(
     server: &str,
     remote: &dyn McpRemote,
     streams: Streams<'_>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let Streams { out: _, err } = streams;
     let (_, project) = project_of(home, workspace)?;
     let config = Config::load(Sources {
@@ -193,7 +189,7 @@ pub(crate) fn run_logout(
         project,
         overrides: Vec::new(),
     })
-    .map_err(config_failure)?;
+    .map_err(CliError::from)?;
     let Some((url, _)) = effective_url(&config, server) else {
         if is_declared(&config, server) {
             return Err(stdio(server));
@@ -204,7 +200,7 @@ pub(crate) fn run_logout(
         return Err(userinfo(server));
     }
     let key = remote.token_key(&url)?;
-    if delete_credential(home, "mcp", &key).map_err(config_failure)? {
+    if delete_credential(home, "mcp", &key)? {
         Ok(())
     } else {
         say(err, &format!("fiber: no token was stored for `{server}`\n"));

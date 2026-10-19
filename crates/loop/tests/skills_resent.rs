@@ -307,7 +307,8 @@ fn user_texts(conversation: &[Input]) -> Vec<&str> {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect()
 }
@@ -1158,6 +1159,7 @@ fn hosted_skill() -> Scripted {
         changed_by: None,
         provider_item: Some(json!({"type": "server_tool_result"})),
         hosts_surfaced: Vec::new(),
+        loaded: None,
     };
     let mut end = fakes::reply("");
     end.actions

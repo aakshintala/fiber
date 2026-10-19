@@ -355,6 +355,7 @@ fn completed_delegate_header_freezes_the_elapsed_and_drops_the_stop() {
         json!({"job_id": "j_1", "status": "failed"}),
     ));
     // Time passing after the completion changes nothing drawn.
+    // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
     clock.advance(std::time::Duration::from_secs(3600));
     app.set_now(clock.now(), wall_ms(&clock));
     let (rows, targets) = rendered(&app, 80, 24);

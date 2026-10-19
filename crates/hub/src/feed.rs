@@ -20,8 +20,10 @@
 //! across a socket write, so one slow or dead client blocks no other.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::fs;
+use std::io::BufReader;
+#[cfg(test)]
+use std::io::Write;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -57,10 +59,6 @@ pub(crate) use fanout::{
 
 /// How often the hub rescans `run/` for new sessions.
 pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
-
-/// The most of a log's end read to find its last line: `fiber_exited` and
-/// `rewound` are far shorter, so a longer last line is neither.
-pub(crate) const TAIL: u64 = 64 * 1024;
 
 /// Called at the end of every scan of `run/` with the names it found.
 pub(crate) type ScanHook = Box<dyn Fn(&BTreeSet<String>) + Send + Sync>;
@@ -434,16 +432,20 @@ impl Feed {
     /// Subscribes `summary` to session `id` and follows it on a thread. A
     /// connect that fails is not a crash: the next scan tries again.
     fn follow(self: &Arc<Self>, id: String) {
-        // Where the log ended before connecting: any earlier run's exit
-        // line is already before that point, and the followed run's
-        // `fiber_exited` or `rewound`, if it writes one, comes after.
-        let found = recent::find(&self.home, &id).map(|(project, dir)| {
-            let from = fs::metadata(dir.join("events.jsonl")).map_or(0, |meta| meta.len());
-            (project, dir, from)
-        });
         let Ok(stream) = UnixStream::connect(self.socket(&id)) else {
             return;
         };
+        // Where the log ended once connected: any earlier run's exit
+        // line is already before that point, and the followed run's
+        // `fiber_exited` or `rewound`, if it writes one, comes after.
+        // After the connect so a stale socket costs no directory scan,
+        // and before any write, so the followed run's exit cannot land
+        // before it. The end of the last complete line, never the raw
+        // length: a resumed writer truncates a torn tail.
+        let found = recent::lookup(&self.home, &SessionId(id.clone())).map(|(project, dir)| {
+            let from = log::complete_len_of(&dir);
+            (project, dir, from)
+        });
         let Ok(shutdown) = stream.try_clone() else {
             return;
         };
@@ -455,10 +457,10 @@ impl Feed {
         // The `c_hub_feed_` prefix keeps the feed's own connection
         // distinct from a relay rejoin.
         let subscribe = format!(
-            "{{\"id\":\"{}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}\n",
+            "{{\"id\":\"{}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}",
             crate::start::mint("c_hub_feed_")
         );
-        if read.get_ref().write_all(subscribe.as_bytes()).is_err() {
+        if support::framing::write_line(&mut read.get_ref(), subscribe.as_bytes()).is_err() {
             return;
         }
         let mut state = lock(&self.state);
@@ -495,15 +497,16 @@ impl Feed {
         read: support::stoppable::Reader,
         found: Option<(String, PathBuf, u64)>,
     ) {
-        let log = found.as_ref().map(|(_, dir, _)| dir.join("events.jsonl"));
+        let dir = found.as_ref().map(|(_, dir, _)| dir.clone());
         let mut read = BufReader::new(read);
-        let mut buf = Vec::new();
         loop {
-            buf.clear();
-            match read.read_until(b'\n', &mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    if !self.on_line(id, &buf, log.as_deref()) {
+            match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+                Ok(None) | Err(_) => break,
+                Ok(Some(mut line)) => {
+                    // `snapshot` concatenates stored lines with no separator,
+                    // so every line kept ends in exactly one LF.
+                    line.push(b'\n');
+                    if !self.on_line(id, &line, dir.as_deref()) {
                         read.get_ref()
                             .get_ref()
                             .shutdown(Shutdown::Both)
@@ -517,18 +520,18 @@ impl Feed {
     }
 
     /// Takes one summary line. False once it shows a delegate.
-    fn on_line(&self, id: &str, bytes: &[u8], log: Option<&Path>) -> bool {
+    fn on_line(&self, id: &str, bytes: &[u8], dir: Option<&Path>) -> bool {
         let Some(payload) = parse_status(bytes) else {
             return true;
         };
         let _settle = Settle(self, id);
         // The unseen-turn probe, with no lock held: only a non-delegate `idle`
-        // with a known log and no live entry reads the log.
+        // with a known directory and no live entry reads the log.
         let unseen = if !may_be_unseen(&payload) {
             false
-        } else if let Some(log) = log {
+        } else if let Some(dir) = dir {
             let live = matches!(lock(&self.state).entries.get(id), Some(Entry::Running(_)));
-            !live && self.attention.ended_unseen(log, &payload)
+            !live && self.attention.ended_unseen(dir, &payload)
         } else {
             false
         };
@@ -573,15 +576,29 @@ impl Feed {
         crate::rewind::notify_left(&self.on_rewound, id, &found);
         let how = found
             .as_ref()
-            .filter(|(_, dir, _)| dir.is_dir())
+            .filter(|(_, dir, _)| log::dir_exists(dir))
             .map(|(_, dir, from)| match how_left(dir) {
+                Left::Exited => Left::Exited,
                 // Resumed already: the log's last line is the new run's,
                 // and this run's exit line is past where it was followed
                 // from. A socket that accepts is no sign: a killed
                 // process's listener can outlive its summary connection.
-                Left::Crashed if closed_since(&dir.join("events.jsonl"), *from) => Left::Exited,
-                Left::Crashed => Left::Crashed,
-                Left::Exited => Left::Exited,
+                Left::Crashed => {
+                    let mut exited = false;
+                    let scanned = log::lines_from(dir, *from, |line| {
+                        if matches!(
+                            log::kind_of(line).as_deref(),
+                            Some("fiber_exited" | "rewound")
+                        ) {
+                            exited = true;
+                        }
+                    });
+                    if scanned.is_some() && exited {
+                        Left::Exited
+                    } else {
+                        Left::Crashed
+                    }
+                }
             });
         // The row is written before `session_left` is sent, so a client
         // that sees the crash finds it in `recent`. `tracked` still holds
@@ -718,7 +735,7 @@ pub(crate) fn answer(
 /// How a session whose directory is `dir` left: `exited` when its log's
 /// last line is `fiber_exited` or `rewound`, otherwise `crashed`.
 fn how_left(dir: &Path) -> Left {
-    match last_kind(&dir.join("events.jsonl")).as_deref() {
+    match log::last_kind(dir).as_deref() {
         Some("fiber_exited" | "rewound") => Left::Exited,
         _ => Left::Crashed,
     }
@@ -730,46 +747,6 @@ fn how_left(dir: &Path) -> Left {
 #[cfg_attr(false, mutants::skip)]
 fn may_be_unseen(now: &SessionStatus) -> bool {
     matches!(now.state, SessionState::Idle) && now.parent.is_none()
-}
-
-/// The `kind` of `log`'s last line, read from at most [`TAIL`] bytes of
-/// its end. `None` when it cannot be read or does not parse.
-pub(crate) fn last_kind(log: &Path) -> Option<String> {
-    let mut file = File::open(log).ok()?;
-    let len = file.metadata().ok()?.len();
-    let from = len.saturating_sub(TAIL);
-    file.seek(SeekFrom::Start(from)).ok()?;
-    let mut tail = Vec::new();
-    file.read_to_end(&mut tail).ok()?;
-    let body = tail.strip_suffix(b"\n").unwrap_or(&tail);
-    let mut lines = body.rsplitn(2, |byte| *byte == b'\n');
-    let line = lines.next()?;
-    // The whole tail is one line only when it is the whole file.
-    if lines.next().is_none() && from > 0 {
-        return None;
-    }
-    kind_of(line)
-}
-
-/// Whether `log` holds a `fiber_exited` or `rewound` line from byte `from`
-/// on.
-fn closed_since(log: &Path, from: u64) -> bool {
-    let Ok(mut file) = File::open(log) else {
-        return false;
-    };
-    if file.seek(SeekFrom::Start(from)).is_err() {
-        return false;
-    }
-    BufReader::new(file)
-        .split(b'\n')
-        .map_while(Result::ok)
-        .any(|line| matches!(kind_of(&line).as_deref(), Some("fiber_exited" | "rewound")))
-}
-
-/// The `kind` of one log line. `None` when it does not parse.
-pub(crate) fn kind_of(line: &[u8]) -> Option<String> {
-    let value: Value = serde_json::from_slice(line).ok()?;
-    value.get("kind")?.as_str().map(str::to_owned)
 }
 
 /// The payload of a `session_status` line; `None` for any other line.

@@ -78,6 +78,7 @@ pub(crate) fn completed_event(text: &str) -> Event {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -213,7 +214,10 @@ pub(crate) fn handoff_done(outcome: contract::events::Outcome, note: &[&str]) ->
 pub(crate) fn text_of(input: &Input) -> &str {
     match input {
         Input::User { text, .. } | Input::Assistant { text, .. } => text,
-        other @ (Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. }) => {
+        other @ (Input::Reasoning { .. }
+        | Input::ToolCall { .. }
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. }) => {
             panic!("not a message: {other:?}")
         }
     }

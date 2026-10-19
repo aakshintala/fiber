@@ -193,6 +193,14 @@ pub(crate) struct ModelPicker {
     /// Which `Stale` or `Every` read runs, if one does: the picker shows
     /// "refreshing…" beside its lists.
     pub(crate) refreshing: Option<Refresh>,
+    /// The catalogue reads owed but not yet answered, at most two:
+    /// the reader runs one read with at most one queued behind it, and
+    /// a failed spawn stays busy until its errors are consumed, so takes
+    /// past that merge into the queued slot and answer once. Each
+    /// answer counts one down; the mark clears only when none is owed,
+    /// so a queued read starting after an older answer keeps showing
+    /// "refreshing…" until its own answer lands.
+    owed: usize,
     /// `scoped_models`: the references the picker shows; empty means
     /// every installed model (`docs/configuration.md`, "Keys").
     pub(crate) scoped: Vec<String>,
@@ -239,12 +247,18 @@ impl ModelPicker {
     /// Stores a read's answer: the catalogue, or the error with the old
     /// catalogue kept. What the loop owes is taken, never cleared here:
     /// an answer to the startup read must not drop a meanwhile opened
-    /// picker's `Stale`. A replacement reconciles the open picker by
-    /// model reference: the selection stays on its model, each touched
-    /// chip stays on its level's name, every other row preselects, and
-    /// a removed selection clamps into the answered catalogue.
+    /// picker's `Stale`. One owed read answered counts the owed reads
+    /// down, and the mark clears only when none is owed: an older
+    /// answer never drops a queued read's mark. A replacement reconciles
+    /// the open picker by model reference: the selection stays on its
+    /// model, each touched chip stays on its level's name, every other
+    /// row preselects, and a removed selection clamps into the answered
+    /// catalogue.
     pub(crate) fn store(&mut self, result: Result<Catalogue, String>) {
-        self.refreshing = None;
+        self.owed = self.owed.saturating_sub(1);
+        if self.owed == 0 {
+            self.refreshing = None;
+        }
         let incoming = match result {
             Ok(catalogue) => catalogue,
             Err(error) => {
@@ -386,15 +400,40 @@ impl ModelPicker {
         };
     }
 
-    /// The read the loop owes, if one is owed.
+    /// The read the loop owes, if one is owed. Taking a read counts one
+    /// more owed while fewer than two are: the reader runs one read with
+    /// at most one queued behind it, so takes past that merge into the
+    /// queued slot and answer once. Only a `Stale` or `Every` read shows
+    /// "refreshing…": the startup `Cached` read shows "Reading the
+    /// model lists…" instead.
     pub(crate) fn take_read(&mut self) -> Option<Refresh> {
         let read = self.want.take();
-        // Only a `Stale` or `Every` read shows "refreshing…": the startup
-        // `Cached` read shows "Reading the model lists…" instead.
+        if read.is_some() {
+            self.count_owed();
+        }
         if matches!(read, Some(Refresh::Stale | Refresh::Every)) {
             self.refreshing = read;
         }
         read
+    }
+
+    /// Counts the startup read as owed while fewer than two are: the
+    /// loop asks it directly, not through `take_read`, so its answer
+    /// counts down with the rest. An answer to the startup read landing
+    /// after a meanwhile taken read then keeps that read's mark, instead
+    /// of clearing it early.
+    pub(crate) fn note_asked(&mut self) {
+        self.count_owed();
+    }
+
+    /// Counts one more owed read, up to the two the reader can owe at
+    /// once: its running read and its one queued slot. A failed spawn
+    /// counts as the running one until its errors are consumed, so the
+    /// bound holds with no assumed cap on failures: takes past that
+    /// merge into the queued slot, so they answer once and count nothing
+    /// more; each answer then pairs with exactly one counted read.
+    fn count_owed(&mut self) {
+        self.owed = (self.owed + 1).min(2);
     }
 
     /// Opens the picker fresh: the selection on the on-screen model, else

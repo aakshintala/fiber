@@ -306,19 +306,6 @@ use crate::lua::{
 /// How long a test waits for one exchange or signal before failing.
 const WAIT: Duration = Duration::from_secs(5);
 
-/// Runs `f` on its own thread and waits under [`WAIT`], so a call that
-/// never returns fails the test instead of hanging it.
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _sent = tx.send(f());
-    });
-    Deadline::after(WAIT)
-        .recv(&rx)
-        .expect("waited for the exchange")
-}
-
 /// A clock returning `stamps` in order, then repeating the last: controlled
 /// milestones with no real time and no asynchronous advance.
 struct Script {
@@ -678,7 +665,7 @@ fn cap_boundaries_hold_on_both_paths() {
             ProviderServer::start_responding(move |_| Response::status(status, body.clone()))
                 .unwrap();
         let request = get(&server.url(), None);
-        let plain = within({
+        let plain = fakes::within("perform", fakes::MUST_SUCCEED_WITHIN, {
             let request = HttpRequest {
                 method: request.method.clone(),
                 url: request.url.clone(),
@@ -690,7 +677,7 @@ fn cap_boundaries_hold_on_both_paths() {
         });
         let (sink, _) = Watching::new();
         let held = sink.clone();
-        let seen = within({
+        let seen = fakes::within("perform_observed", fakes::MUST_SUCCEED_WITHIN, {
             let request = HttpRequest {
                 method: "GET".to_owned(),
                 url: server.url(),
@@ -1242,8 +1229,10 @@ fn spawn_failure_starts_no_request_or_record() {
     let ext = LuaExtension::new("ext", dir.path(), dir.path(), clock)
         .with_diagnostics(sink.clone() as Arc<dyn DebugLog>);
     fail_next_spawn_for("sf");
-    let err =
-        within(move || ext.provider_call("sf", "models", serde_json::Value::Null)).unwrap_err();
+    let err = fakes::within("ext.provider_call", fakes::MUST_SUCCEED_WITHIN, move || {
+        ext.provider_call("sf", "models", serde_json::Value::Null)
+    })
+    .unwrap_err();
     assert_eq!(err.code(), ErrorCode::IoFailed);
     assert!(server.requests().is_empty(), "a failed spawn sends nothing");
     assert!(sink.records().is_empty());
@@ -1460,7 +1449,7 @@ fn late_workers_emit_once_and_drop_late_replies() {
         "the expired callback returns its timeout: {err:?}"
     );
     // The next callback runs on the live VM.
-    within({
+    fakes::within("ext.hook", fakes::MUST_SUCCEED_WITHIN, {
         let ext = Arc::clone(&ext);
         move || ext.hook("turn_start", 0, serde_json::Value::Null)
     })

@@ -23,8 +23,9 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::fake::{FakeSession, status, status_line};
-use crate::recent::{Left, RecentRow, session_dir};
+use crate::recent::{Left, RecentRow};
 use crate::testkit::{args, id};
+use log::session_dir;
 
 /// One named deadline per wait: the hub answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -57,7 +58,8 @@ impl Temp {
     /// made when `dir`.
     fn exited(&self, n: u64, project: &str, name: &str, parent: Option<&str>, dir: bool) {
         if dir {
-            fs::create_dir_all(session_dir(&self.dir, project, &id(n))).unwrap();
+            fs::create_dir_all(session_dir(&self.dir, project, &contract::SessionId(id(n))))
+                .unwrap();
         }
         let row = RecentRow {
             session_id: contract::SessionId(id(n)),

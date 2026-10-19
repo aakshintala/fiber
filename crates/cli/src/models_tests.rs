@@ -15,8 +15,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use crate::CliError;
 use contract::clock::Clock;
-use contract::shapes::Failure;
 use serde_json::{Value, json};
 
 use super::{providers_and_config, refresh_named, refresh_run, run};
@@ -177,7 +177,7 @@ impl Setup {
         json: bool,
         spawn: &dyn Fn(Vec<String>) -> std::io::Result<()>,
         clock: std::sync::Arc<dyn contract::clock::Clock>,
-    ) -> (Result<(), Failure>, String, String) {
+    ) -> (Result<(), CliError>, String, String) {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let home = self.home();

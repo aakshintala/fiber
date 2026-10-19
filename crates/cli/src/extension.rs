@@ -11,11 +11,99 @@ use std::path::{Path, PathBuf};
 
 use contract::clock::Clock;
 use contract::shapes::Failure;
-use extensions::{Origin, Provenance, Request};
+use extensions::{Origin, Provenance, Request, approved_extension, approved_extensions};
 
 use crate::{failed, finish, finish_code, write_line};
 
 mod approve;
+
+/// The extensions installed and the outcome text for the model picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstPartyInstall {
+    /// Each extension put in place.
+    pub installed: Vec<String>,
+    /// The install summary, one line per element.
+    pub summary: Vec<String>,
+    /// Providers whose selected credential is missing or unreadable.
+    pub login: Vec<LoginNeed>,
+}
+
+/// A provider needing a key, or whose key could not be checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginNeed {
+    /// The provider to pass to `fiber login`.
+    pub provider: String,
+    /// A credential-read failure; absent when the key is missing.
+    pub error: Option<String>,
+}
+
+/// Installs the first-party package serving a provider, without asking.
+pub fn install_first_party(
+    home: &Path,
+    config: &config::Config,
+    provider: &str,
+    fiber_version: &str,
+    origin: &Origin,
+    clock: &dyn Clock,
+) -> Result<FirstPartyInstall, Failure> {
+    let package = extensions::serving_package(provider).ok_or_else(|| {
+        doors::failure(
+            contract::ErrorCode::InvalidArguments,
+            format!("No first-party package serves the provider `{provider}`."),
+        )
+    })?;
+    let plan = plan_request(
+        home,
+        Request::Install(package.to_owned()),
+        fiber_version,
+        origin,
+        clock,
+    )?;
+    let summary = plan
+        .damaged()
+        .iter()
+        .map(extensions::Damaged::skipped)
+        .chain(
+            approve::summary_text(&summaries(&plan))
+                .lines()
+                .map(str::to_owned),
+        )
+        .collect();
+    let (providers, _) = extensions::Providers::load_planned(home, &plan)
+        .map_err(|error| failed(error.code(), error))?;
+    let names: std::collections::BTreeSet<_> = plan
+        .items()
+        .flat_map(|item| item.providers.iter().map(|data| data.name.as_str()))
+        .collect();
+    let credentials = config.credentials();
+    let mut login = Vec::new();
+    for name in names {
+        let Some(data) = providers.get(name) else {
+            continue;
+        };
+        let label = credentials.credential_label(data);
+        let need = match credentials.key_presence(data, &label, &|var| std::env::var(var).ok()) {
+            Ok(config::Presence::Present | config::Presence::Unchecked) => None,
+            Ok(config::Presence::Absent | config::Presence::Empty) => Some(LoginNeed {
+                provider: name.to_owned(),
+                error: None,
+            }),
+            Err(error) => Some(LoginNeed {
+                provider: name.to_owned(),
+                error: Some(error.to_string()),
+            }),
+        };
+        if let Some(need) = need {
+            login.push(need);
+        }
+    }
+    let installed = plan.commit().map_err(|error| failed(error.code(), error))?;
+    Ok(FirstPartyInstall {
+        installed,
+        summary,
+        login,
+    })
+}
 
 struct ScopedInstall {
     workspace: PathBuf,
@@ -106,17 +194,21 @@ pub fn extension_update(name: Option<&str>, fiber_version: &str, clock: &dyn Clo
     finish_code(ran)
 }
 
-/// `fiber extension remove <name>`: removes an extension, the
-/// dependencies nothing else uses, and their data and settings, asking
-/// first in a terminal.
+/// `fiber extension remove <name>`: in the launch project, never's a
+/// declared repository extension for its current content, so it is not
+/// offered again until its content changes; anything else removes a
+/// personal install, asking first in a terminal.
 pub fn extension_remove(name: &str, clock: &dyn Clock) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
-            remove(
+            let workspace =
+                std::env::current_dir().map_err(|e| failed(contract::ErrorCode::IoFailed, e))?;
+            remove_in(
                 &home,
+                &workspace,
                 name,
                 clock,
                 Io {
@@ -156,11 +248,23 @@ pub fn extension_reinstall(name: &str, fiber_version: &str, clock: &dyn Clock) -
 }
 
 /// `fiber extension list`: one line per installed extension: name,
-/// version and commit.
+/// version and commit; then one line per approved repository extension
+/// of the launch project: name, version, `repository`, the project,
+/// the declared path and the approved content hash.
 pub fn extension_list(clock: &dyn Clock) -> i32 {
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
-        .and_then(|home| list(&home, clock, &mut io::stdout().lock()));
+        .and_then(|home| {
+            let workspace =
+                std::env::current_dir().map_err(|e| failed(contract::ErrorCode::IoFailed, e))?;
+            list_in(
+                &home,
+                &workspace,
+                clock,
+                &mut io::stdout().lock(),
+                &mut io::stderr(),
+            )
+        });
     finish(ran)
 }
 
@@ -241,6 +345,125 @@ fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32
     Ok(0)
 }
 
+/// Whether the workspace's repository declares an extension: the project
+/// key costs a `git` call, so it is computed only then (ruling 17). A
+/// declaration that does not read still counts as declaring, so the
+/// repository path reports the failure as today.
+fn declares_extensions(workspace: &Path) -> bool {
+    match config::declared(workspace) {
+        Ok(declared) => !declared.extensions.is_empty(),
+        Err(_) => true,
+    }
+}
+
+/// The launch project's key, or `None` when the workspace declares no
+/// extension and the repository path is skipped.
+fn repository_project(
+    home: &Path,
+    workspace: &Path,
+) -> Result<Option<config::ProjectKey>, Failure> {
+    if !declares_extensions(workspace) {
+        return Ok(None);
+    }
+    crate::project_of(home, workspace).map(|(_, project)| Some(project))
+}
+
+/// `fiber extension list` in `workspace`: the personal lines, then one
+/// row per declared extension this project approved, at its current
+/// content: name, version, `repository`, the project, the declared
+/// path and the content hash. A declaration that does not read names
+/// itself once and leaves the personal lines alone.
+fn list_in(
+    home: &Path,
+    workspace: &Path,
+    clock: &dyn Clock,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), Failure> {
+    let Some(project) = repository_project(home, workspace)? else {
+        return list(home, clock, out);
+    };
+    let approved = match approved_extensions(home, &project, workspace, clock) {
+        Ok(approved) => approved,
+        Err(e) => {
+            writeln!(err, "fiber: {e}").unwrap_or(());
+            Vec::new()
+        }
+    };
+    list(home, clock, out)?;
+    for entry in &approved {
+        // A closed stdout leaves nobody to tell.
+        write_line(
+            out,
+            &format!(
+                "{} {} repository {} {} {}",
+                entry.name,
+                entry.version,
+                doors::project(workspace).display(),
+                entry.path,
+                entry.hash
+            ),
+        )
+        .unwrap_or(());
+    }
+    Ok(())
+}
+
+/// `fiber extension remove <name>` in `workspace`: a declared extension
+/// whose current content this project approved is recorded never for
+/// that content, so it is not offered again until its content changes;
+/// the pinned copy, a personal install of the same name and its data
+/// stay. Anything else falls through to the personal removal, asking
+/// first in a terminal.
+fn remove_in(
+    home: &Path,
+    workspace: &Path,
+    typed: &str,
+    clock: &dyn Clock,
+    io: Io<'_>,
+) -> Result<i32, Failure> {
+    let Io {
+        terminal,
+        input,
+        err,
+    } = io;
+    let project = repository_project(home, workspace)?;
+    let found = match &project {
+        Some(project) => match approved_extension(home, project, workspace, typed, clock) {
+            Ok(found) => found,
+            Err(e) => {
+                writeln!(err, "fiber: {e}").unwrap_or(());
+                None
+            }
+        },
+        None => None,
+    };
+    let (Some(project), Some((item, digest))) = (project, found) else {
+        return remove(
+            home,
+            typed,
+            clock,
+            Io {
+                terminal,
+                input,
+                err,
+            },
+        );
+    };
+    if !approve::remove_approved(std::slice::from_ref(&item.name), &[], terminal, input, err)? {
+        writeln!(err, "fiber: nothing was removed.").unwrap_or(());
+        return Ok(1);
+    }
+    extensions::Store::never_in(home, &project, &item, &digest).map_err(|e| failed(e.code(), e))?;
+    writeln!(
+        err,
+        "fiber: removed {} from this project; it is not offered again until its content changes",
+        item.name
+    )
+    .unwrap_or(());
+    Ok(0)
+}
+
 fn list(home: &Path, clock: &dyn Clock, out: &mut dyn Write) -> Result<(), Failure> {
     let listing = extensions::list(home, clock).map_err(|e| failed(e.code(), e))?;
     for hit in &listing.damaged {
@@ -286,16 +509,8 @@ fn plan_request<'c>(
     extensions::plan(home, &request, fiber_version, origin, clock).map_err(|e| failed(e.code(), e))
 }
 
-fn commit_plan(
-    home: &Path,
-    scope: Option<&ScopedInstall>,
-    plan: extensions::Plan<'_>,
-    terminal: bool,
-    input: &mut dyn BufRead,
-    err: &mut dyn Write,
-) -> Result<Option<Vec<String>>, Failure> {
-    let summaries: Vec<approve::InstallSummary> = plan
-        .items()
+fn summaries(plan: &extensions::Plan<'_>) -> Vec<approve::InstallSummary> {
+    plan.items()
         .map(|item| approve::InstallSummary {
             name: item.name.clone(),
             source: item.source(),
@@ -323,7 +538,18 @@ fn commit_plan(
             carries: item.carries(),
             staged: item.staged().to_path_buf(),
         })
-        .collect();
+        .collect()
+}
+
+fn commit_plan(
+    home: &Path,
+    scope: Option<&ScopedInstall>,
+    plan: extensions::Plan<'_>,
+    terminal: bool,
+    input: &mut dyn BufRead,
+    err: &mut dyn Write,
+) -> Result<Option<Vec<String>>, Failure> {
+    let summaries = summaries(&plan);
     if !approve::install_approved(&summaries, terminal, input, err)? {
         return Ok(None);
     }
@@ -357,3 +583,7 @@ fn commit_plan(
 #[cfg(test)]
 #[path = "extension_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "extension_repo_tests.rs"]
+mod repo_tests;

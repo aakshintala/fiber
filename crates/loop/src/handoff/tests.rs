@@ -139,6 +139,17 @@ fn an_input_estimates_a_quarter_of_its_bytes_rounded_up() {
 }
 
 #[test]
+fn a_tool_search_result_estimates_its_rendered_text() {
+    assert_eq!(
+        estimate(&Input::ToolSearchResult {
+            action_id: ActionId("a_1".into()),
+            loaded: vec!["a".into(), "b".into()],
+        }),
+        4
+    );
+}
+
+#[test]
 fn a_tool_call_estimates_its_name_and_arguments() {
     // `read` is 4 bytes and `{"a":1}` is 7.
     assert_eq!(estimate(&call("read", json!({"a": 1}))), 3);
@@ -744,6 +755,7 @@ fn a_provider_run_record_carrying_a_skill_renders_raw_and_loads_nothing() {
         changed_by: None,
         provider_item: Some(json!({"type": "hosted_tool_call"})),
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     render_into(
         &mut carry,
@@ -792,6 +804,7 @@ fn an_inner_calls_completion_loads_no_skill() {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     render_into(&mut carry, &mut conversation, &done, Some(&inner));
     assert!(carry.skills.is_empty());

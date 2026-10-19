@@ -225,6 +225,8 @@ A test advances a fake clock only after a signal that the code under test is
 waiting on that clock (past its own clock check); a parked caller alone is not
 that signal. A test advances a fake clock to a named park only through
 `fakes::clock::FakeClock::advance_when_parked`, naming the expected instant;
+a poll driver that is the clock's only mover uses
+`fakes::clock::FakeClock::try_advance_when_parked` instead;
 the ban on raw advances lands with their migration in a later pull request.
 A test creates every watcher, log watch or registration before it starts the
 thread whose event it waits for. That second rule is a review rule: no helper

@@ -34,6 +34,31 @@ fn install(home: &Path) {
 }
 
 #[test]
+fn provider_install_rejects_invalid_argument_shapes_and_unknown_providers() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let workspace = dirs.workspace("provider-install");
+    let seam = Seam::with_origin(
+        home.clone(),
+        std::sync::Arc::new(extensions::Origin::new("git", |_| {
+            panic!("invalid request must not fetch")
+        })),
+    );
+    for args in [
+        json!({"workspace":workspace}),
+        json!({"provider":"openai"}),
+        json!({"workspace":workspace,"provider":"openai","extra":true}),
+        json!({"workspace":"relative","provider":"openai"}),
+        json!({"workspace":workspace,"provider":1}),
+        json!({"workspace":workspace,"provider":"scripted"}),
+    ] {
+        let error = call(&seam, "install_provider", args).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidArguments);
+    }
+    assert!(!home.join("extensions").exists());
+}
+
+#[test]
 fn remote_operations_round_trip_their_wire_shapes() {
     let dirs = Dirs::new();
     let home = dirs.home();
@@ -1214,6 +1239,7 @@ fn remote_operation_documentation_lists_the_complete_wire_surface() {
             "store_key",
             "reviewer_models",
             "models",
+            "install_provider",
             "set_reviewer",
             "reviewer_notes",
             "save_reviewer_notes",

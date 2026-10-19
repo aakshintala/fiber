@@ -7,6 +7,7 @@ use serde_json::Value;
 use super::super::{App, Effect, Link, Phase, mint, session_command};
 use super::{refusal, refusal_code};
 use crate::home::{Level, Subs};
+use crate::keyset::Context;
 use contract::SessionId;
 
 /// This connection's subscriptions: the level per session, the session
@@ -55,11 +56,13 @@ impl Subscriptions {
 
     /// Opens the gate for `session`: the first stage's acknowledgement
     /// is `ack` when a first-stage subscribe went out, and `None` when
-    /// the connection already holds `summary`, when the raise is due at
-    /// once. `held` keeps the screen's rows: the tail read is skipped
+    /// the connection already holds accepted `summary`, when the raise
+    /// is due at once. An in-flight `summary` supplies its existing id.
+    /// `held` keeps the screen's rows: the tail read is skipped
     /// and the raise goes out after the first frame draws, once the
     /// preview is up. Until the raise's acknowledgement the gate holds.
     pub(super) fn gate(&mut self, session: SessionId, ack: Option<String>, held: bool) {
+        let ack = ack.or_else(|| self.levels.pending_summary(&session).map(str::to_owned));
         self.opening = Some(match ack {
             Some(ack) => Opening::Summary { session, ack, held },
             None => Opening::Due { session, held },
@@ -210,13 +213,31 @@ impl App {
     /// with the session left running, then lowered to `summary` when this
     /// connection holds it at `full` and its row is live. `/close` keeps
     /// `go_home` and lowers nothing: a command for an exited session
-    /// would resume it.
+    /// would resume it. The session left is remembered as the one home
+    /// came from, so the back key and its hint stay live; with none
+    /// attached, home keeps the session it came from.
     pub(in crate::app) fn leave(&mut self) -> Effect {
         let attached = self.session().cloned();
+        // `go_home` resets before the session clears, so the value is
+        // saved first and put back when nothing was attached.
+        let came_from = self.home.as_ref().and_then(|home| home.came_from.clone());
         self.go_home();
+        // Home's list focus is requested per entry: a plain leave
+        // lands on the entry bar, and the callers that focus a row ask
+        // for it after. Without this a leave re-pins the last row focus
+        // requested, so `/new` would land back on the left row.
+        if let Some(home) = self.home.as_mut() {
+            home.focus_list = None;
+        }
         let Some(session) = attached else {
+            if let Some(home) = self.home.as_mut() {
+                home.came_from = came_from;
+            }
             return Effect::None;
         };
+        if let Some(home) = self.home.as_mut() {
+            home.came_from = Some(session.clone());
+        }
         let lowers = self.link == Link::Up
             && self.home.as_ref().is_some_and(|home| {
                 home.subs.expected(&session) == Some(Level::Full)
@@ -230,6 +251,64 @@ impl App {
         } else {
             Effect::None
         }
+    }
+
+    /// Whether home's back key goes somewhere: home came from a session
+    /// whose row is still live. A session that exited or closed, or a
+    /// row that vanished, hides the hint and leaves the key untaken.
+    pub(in crate::app) fn came_from_live(&self) -> bool {
+        self.home.as_ref().is_some_and(|home| {
+            home.came_from.as_ref().is_some_and(|came_from| {
+                home.sessions
+                    .row(came_from)
+                    .is_some_and(|row| row.left.is_none())
+            })
+        })
+    }
+
+    /// Goes home on the attached session's row: `leave`, then focus
+    /// that row once home draws, expanding its project when the row is
+    /// an exited one hidden behind more. With no row for the session,
+    /// or no session on screen, home keeps its focus.
+    pub(in crate::app) fn leave_on_row(&mut self) -> Effect {
+        let key = self
+            .session()
+            .and_then(|session| self.home.as_ref()?.sessions.row(session))
+            .map(|row| row.key);
+        let effect = self.leave();
+        if let Some(key) = key
+            && self.on_home()
+        {
+            self.focus_row(key);
+        }
+        effect
+    }
+
+    /// Goes back to the session home came from: `None` unless home
+    /// draws with an empty box, the key context is the input box or the
+    /// conversation, no completion panel or steering selection is open,
+    /// no notice overlay is up, and the came-from session is live. No
+    /// chip test: the `→` caller checks focus, and Esc goes back with
+    /// a chip focused. Otherwise the came-from row opens as one from
+    /// home does; with the link down or a `start` in flight that open
+    /// is a no-op, and the key stays taken.
+    pub(in crate::app) fn go_back(&mut self) -> Option<Effect> {
+        if !self.on_home()
+            || !self.draft.is_empty()
+            || self.completions().is_some()
+            || !matches!(self.key_context(), Context::Input | Context::Conversation)
+            || self.notice_overlay().is_some()
+            || !self.came_from_live()
+        {
+            return None;
+        }
+        let key = self
+            .home
+            .as_ref()
+            .and_then(|home| home.came_from.clone())
+            .and_then(|came_from| self.home.as_ref()?.sessions.row(&came_from))
+            .map(|row| row.key)?;
+        Some(self.open_entry(key))
     }
 
     /// Opens the row with `key` while home draws.
@@ -370,9 +449,11 @@ impl App {
 
     /// Folds an accepted subscribe on `session`'s stream past the gate:
     /// a session held at `full` reconciles first, then the first stage's
-    /// subscribe keeps the gate and makes the raise due, and the raise's
-    /// subscribe ends the gate and its line goes on to `on_line`. Some
-    /// with the lines to send, or `None` when the gate ended.
+    /// subscribe keeps the gate and makes the raise due, sending the
+    /// `commands` line once the subscribe is accepted and never after a
+    /// refusal, and the raise's subscribe ends the gate and its line
+    /// goes on to `on_line`. Some with the lines to send, or `None`
+    /// when the gate ended.
     pub(super) fn subscribe_accepted(
         &mut self,
         session: &SessionId,
@@ -392,13 +473,14 @@ impl App {
                 .and_then(|home| home.subs.opening.as_ref())
                 .is_some_and(|opening| matches!(opening, Opening::Summary { .. }));
             if due {
-                if let Some(home) = self.home.as_mut() {
-                    let opening = home.subs.opening.take();
-                    if let Some(Opening::Summary { session, held, .. }) = opening {
+                if let Some(Opening::Summary { session, held, .. }) =
+                    self.home.as_mut().and_then(|home| home.subs.opening.take())
+                {
+                    let line = self.ask_commands(&session);
+                    if let Some(home) = self.home.as_mut() {
                         home.subs.opening = Some(Opening::Due { session, held });
-                    } else {
-                        home.subs.opening = opening;
                     }
+                    return Some(vec![line]);
                 }
                 return Some(Vec::new());
             }

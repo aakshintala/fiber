@@ -201,7 +201,8 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     request
@@ -266,6 +267,11 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 "call_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
                 "name": call.name,
                 "arguments": arguments_text(&call.arguments),
+            })),
+            Input::ToolSearchResult { action_id, loaded } => Some(json!({
+                "type": "function_call_output",
+                "call_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
+                "output": contract::provider::loaded_text(loaded),
             })),
             // The flag is ignored: OpenAI's Responses API defines no error
             // field on a function-call output (openai-openapi

@@ -494,8 +494,13 @@ impl Runner {
     /// left to finish on its own.
     fn await_drain(&self, drain: &mpsc::Receiver<Option<FiberExited>>) -> Option<FiberExited> {
         let deadline = later(self.clock.as_ref(), self.bound);
+        // Taken under the lock but run past it: the hook blocks while the
+        // test's driver stages the 1 s move, which needs no lock here but
+        // must not wait on one this thread holds.
         #[cfg(test)]
-        if let Some(hook) = lock(&AFTER_DRAIN_DEADLINE).take() {
+        let hook = lock(&AFTER_DRAIN_DEADLINE).take();
+        #[cfg(test)]
+        if let Some(hook) = hook {
             hook();
         }
         loop {

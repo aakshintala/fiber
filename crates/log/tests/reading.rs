@@ -21,7 +21,7 @@ use std::time::Duration;
 use common::*;
 use contract::Envelope;
 use fakes::Deadline;
-use log::{Log, Watcher, lines, read};
+use log::{Log, Watcher, complete_len_of, lines, read};
 
 fn kinds(lines: &[Envelope]) -> Vec<&str> {
     lines.iter().map(|l| l.kind.as_str()).collect()
@@ -617,4 +617,26 @@ fn a_catch_up_across_a_corrupt_evicted_region_returns_the_lines_before_it() {
     assert!(failure.contains("line 501"), "{failure}");
     assert_eq!(got, written[..500]);
     assert!(end.is_none());
+}
+
+#[test]
+fn attach_on_a_large_log_reads_a_bounded_tail() {
+    // Criterion 3: an attach on a multi-MiB log reads a bounded tail,
+    // never the whole log. A 4 MiB log through the public API ends one
+    // past its last newline, past a torn tail.
+    let tmp = TestDir::new("attach-tail");
+    let dir = tmp.session(&id("s_1"));
+    fs::create_dir_all(&dir).unwrap();
+    let line = b"{\"kind\":\"x\",\"p\":\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}\n";
+    let target = 4 * 1024 * 1024;
+    let mut bytes = Vec::with_capacity(target + 8);
+    while bytes.len() + line.len() + 4 <= target {
+        bytes.extend_from_slice(line);
+    }
+    bytes.extend_from_slice(b"torn");
+    fs::write(dir.join("events.jsonl"), &bytes).unwrap();
+    let end = complete_len_of(&dir);
+    assert_eq!(end, (bytes.len() - 4) as u64);
+    assert!(end < bytes.len() as u64, "the torn tail is dropped");
+    assert!(end > (bytes.len() - 100) as u64, "the tail stays bounded");
 }

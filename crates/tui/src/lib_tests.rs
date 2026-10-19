@@ -1736,7 +1736,8 @@ fn opening_a_row_by_key_calls_on_attach() {
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
-    let (_, commands) = command(reader, "the commands command");
+    feed(&mut lp, vec![session_accepted(&subscribe["id"])]);
+    let (_, commands) = command(reader, "the commands command after subscribe acceptance");
     assert_eq!(commands["command"], "commands");
     assert_eq!(commands["session_id"], "s_aaaaaaaaaaaaaaaa");
     let seen = || attached.lock().map(|held| held.clone()).unwrap_or_default();
@@ -2572,6 +2573,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the cached read release: {err}"));
         seen_in.lock().unwrap().push(refresh);
         Ok(crate::Catalogue {
+            installable: Vec::new(),
             models: vec![crate::ModelEntry {
                 reference: "acme/m1".to_owned(),
                 provider: "acme".to_owned(),
@@ -2692,6 +2694,7 @@ mod motion;
 /// terminal: no other frame draws `qq`.
 fn one_model() -> crate::Catalogue {
     crate::Catalogue {
+        installable: Vec::new(),
         models: vec![crate::ModelEntry {
             reference: "zz/qq".to_owned(),
             provider: "zz".to_owned(),

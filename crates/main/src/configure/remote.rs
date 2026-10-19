@@ -392,6 +392,25 @@ impl hub::Machine for Seam {
                 }
                 Value::Object(value)
             }
+            "install_provider" => {
+                a.shape(&["workspace", "provider"], &[])?;
+                let installed = self
+                    .install_provider(a.workspace()?, a.string("provider")?, clock)
+                    .map_err(from_view)?;
+                let login: Vec<_> = installed
+                    .login
+                    .into_iter()
+                    .map(|need| {
+                        let mut value =
+                            Map::from_iter([("provider".to_owned(), json!(need.provider))]);
+                        if let Some(error) = need.error {
+                            drop(value.insert("error".to_owned(), json!(error)));
+                        }
+                        Value::Object(value)
+                    })
+                    .collect();
+                json!({"installed":installed.installed,"summary":installed.summary,"login":login})
+            }
             "models" => {
                 a.shape(&["workspace"], &["refresh"])?;
                 // An absent `refresh` reads the cached lists; a present

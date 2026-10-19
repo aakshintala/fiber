@@ -215,6 +215,7 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
         | Delivery::ExtensionExec(_)
         | Delivery::InnerCall(_)
         | Delivery::ExtensionLog(_)
+        | Delivery::ProposeNotes(..)
         | Delivery::ExtensionJob(..)
         | Delivery::ExtensionUsage(_) => {
             panic!("no job runs here")
@@ -1050,6 +1051,224 @@ fn corrupt(dir: &Path, index: usize) {
         .unwrap();
 }
 
+fn history_chain(opened: &Opened) -> (PathBuf, PathBuf) {
+    use serde_json::json;
+    let root = opened.sessions.join("s_0000000000000000");
+    let ancestor = opened.sessions.join("s_aaaaaaaaaaaaaaaa");
+    let payload = |from: Value| {
+        let mut payload = json!({"workspace":"/w", "variables":{
+            "path":"/usr/bin", "names":[], "source":"inherited"}});
+        if !from.is_null() {
+            payload["forked_from"] = from;
+        }
+        payload
+    };
+    for (dir, id, from, count) in [
+        (&root, "s_0000000000000000", Value::Null, 8),
+        (
+            &ancestor,
+            "s_aaaaaaaaaaaaaaaa",
+            json!({"session_id":"s_0000000000000000", "seq":3}),
+            305,
+        ),
+    ] {
+        fs::create_dir_all(dir).unwrap();
+        let lines: String = (0..count)
+            .map(|seq| {
+                let (kind, body) = if seq == 0 {
+                    ("session_started", payload(from.clone()))
+                } else {
+                    ("step_started", json!({}))
+                };
+                format!(
+                    "{}\n",
+                    json!({"kind":kind,"session_id":id,"seq":seq,
+                "ts":0,"schema_version":1,"payload":body})
+                )
+            })
+            .collect();
+        fs::write(dir.join("events.jsonl"), lines).unwrap();
+    }
+    let event = Event::SessionStarted(
+        serde_json::from_value(payload(
+            json!({"session_id":"s_aaaaaaaaaaaaaaaa", "seq":299}),
+        ))
+        .unwrap(),
+    );
+    opened.log.append(&event, None, None).unwrap();
+    (root, ancestor)
+}
+
+fn history_page(client: &Client, args: Value) -> Value {
+    let line = serde_json::json!({"id":"c_page", "command":"history", "args":args});
+    send(client, &line.to_string());
+    response(client, "c_page")
+}
+
+#[test]
+fn history_pages_ancestors_to_each_continuation_point() {
+    use serde_json::json;
+    let opened = Opened::open(vec![]);
+    let (root, ancestor) = history_chain(&opened);
+    for seq in 300..305 {
+        corrupt(&ancestor, seq);
+    }
+    let socket = opened.socket.clone();
+    let own = opened.id.0.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            let a = "s_aaaaaaaaaaaaaaaa";
+            let cases = [
+                (json!({"session_id":a}), (44..=299).collect::<Vec<_>>()),
+                (json!({"session_id":a,"to_seq":400}), (44..=299).collect()),
+                (json!({"session_id":a,"to_seq":299}), (44..=299).collect()),
+                (json!({"session_id":a,"to_seq":298}), (43..=298).collect()),
+                (json!({"session_id":a,"to_seq":10}), (0..=10).collect()),
+                (json!({"session_id":a,"from_seq":298}), vec![298, 299]),
+                (json!({"session_id":a,"from_seq":299}), vec![299]),
+                (
+                    json!({"session_id":a,"from_seq":290,"to_seq":400}),
+                    (290..=299).collect(),
+                ),
+                (json!({"session_id":a,"from_seq":5,"to_seq":5}), vec![5]),
+                (json!({"session_id":a,"from_seq":5,"to_seq":6}), vec![5, 6]),
+                (
+                    json!({"session_id":"s_0000000000000000"}),
+                    (0..=3).collect(),
+                ),
+                (json!({"session_id":own,"from_seq":0}), vec![0]),
+            ];
+            for (index, (args, expected)) in cases.into_iter().enumerate() {
+                // Accepted command ids are unique; rejected ones may be retried.
+                let id = format!("c_page_{index}");
+                send(
+                    &client,
+                    &json!({"id":id,"command":"history","args":args}).to_string(),
+                );
+                let answer = response(&client, &id);
+                assert_eq!(kind(&answer), "command_accepted", "{answer}");
+                let lines = answer["payload"]["result"]["lines"].as_array().unwrap();
+                assert_eq!(seqs(lines), expected, "{args}");
+                assert!(
+                    lines
+                        .iter()
+                        .all(|line| matches!(kind(line), "session_started" | "step_started"))
+                );
+            }
+            for (args, message) in [
+                (json!({"session_id":a,"from_seq":300}), PAST.to_owned()),
+                (
+                    json!({"session_id":a,"from_seq":5,"to_seq":3}),
+                    REVERSED.to_owned(),
+                ),
+                (
+                    json!({"session_id":"s_ffffffffffffffff"}),
+                    "Session s_ffffffffffffffff is neither this session nor one it continues."
+                        .to_owned(),
+                ),
+            ] {
+                assert_eq!(
+                    rejection(&history_page(&client, args)),
+                    ("invalid_arguments", message.as_str())
+                );
+            }
+            // Malformed ids are refused before even a broken chain is read.
+            fs::remove_dir_all(&root).unwrap();
+            for id in [
+                "../x",
+                "s_AAAAAAAAAAAAAAAA",
+                "s_aaaaaaaaaaaaaaa",
+                "s_aaaaaaaaaaaaaaaaa",
+                "s_gggggggggggggggg",
+                "s_aaaaaaaaaaaaaaa/",
+                "s_aaaaaaaaaaaaaaa:",
+                "s_aaaaaaaaaaaaaaa`",
+            ] {
+                let message = format!(
+                    "{id} is not a session id: one is `s_` followed by 16 lowercase hex digits."
+                );
+                assert_eq!(
+                    rejection(&history_page(&client, json!({"session_id":id}))),
+                    ("invalid_arguments", message.as_str())
+                );
+            }
+            // An explicit own id never reads the chain.
+            send(
+                &client,
+                &json!({"id":"c_own", "command":"history","args":{"session_id":own,"from_seq":0}})
+                    .to_string(),
+            );
+            assert_eq!(
+                response(&client, "c_own")["payload"]["result"]["lines"][0]["seq"],
+                0
+            );
+            assert_eq!(
+                rejection(&history_page(&client, json!({"session_id":a}))),
+                ("invalid_arguments", UNFIT)
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn history_checks_only_the_requested_segments_window_and_bound() {
+    use serde_json::json;
+    let opened = Opened::open(vec![]);
+    let (_root, ancestor) = history_chain(&opened);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            corrupt(&ancestor, 43);
+            let last = json!({"id":"c_last","command":"history","args":{"session_id":"s_aaaaaaaaaaaaaaaa"}});
+            send(&client, &last.to_string());
+            let answer = response(&client, "c_last");
+            assert_eq!(
+                seqs(answer["payload"]["result"]["lines"].as_array().unwrap()),
+                (44..=299).collect::<Vec<_>>()
+            );
+            let before = json!({"session_id":"s_aaaaaaaaaaaaaaaa","to_seq":298});
+            assert_eq!(
+                rejection(&history_page(&client, before)),
+                ("invalid_arguments", UNFIT)
+            );
+            let bytes = fs::read_to_string(ancestor.join("events.jsonl")).unwrap();
+            fs::write(
+                ancestor.join("events.jsonl"),
+                format!("{}\n", bytes.lines().next().unwrap()),
+            )
+            .unwrap();
+            let truncated = json!({"session_id":"s_aaaaaaaaaaaaaaaa"});
+            assert_eq!(
+                rejection(&history_page(&client, truncated)),
+                ("invalid_arguments", UNFIT)
+            );
+            let root = json!({"id":"c_root","command":"history","args":{"session_id":"s_0000000000000000"}});
+            send(&client, &root.to_string());
+            let answer = response(&client, "c_root");
+            assert_eq!(
+                seqs(answer["payload"]["result"]["lines"].as_array().unwrap()),
+                vec![0, 1, 2, 3]
+            );
+            fs::remove_dir_all(&ancestor).unwrap();
+            let missing = json!({"session_id":"s_aaaaaaaaaaaaaaaa"});
+            assert_eq!(
+                rejection(&history_page(&client, missing)),
+                ("invalid_arguments", UNFIT)
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
 #[test]
 fn history_reads_only_its_window_of_the_log() {
     let opened = Opened::open(vec![]);
@@ -1307,6 +1526,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ProposeNotes(..)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
                 | Delivery::Shell(..)
@@ -1348,6 +1568,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ProposeNotes(..)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
                 | Delivery::Shell(..)
@@ -1441,6 +1662,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ProposeNotes(..)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
                 | Delivery::Shell(..)
@@ -1539,6 +1761,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ProposeNotes(..)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
                 | Delivery::Shell(..)
@@ -1584,6 +1807,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ProposeNotes(..)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
                 | Delivery::Shell(..)
@@ -2989,7 +3213,7 @@ fn job_input_line(id: &str, job_id: &str, text: &str) -> String {
 struct WritableJobs {
     inner: Arc<FakeJobs>,
     clock: Arc<FakeClock>,
-    stuck: Mutex<Vec<(contract::JobId, mpsc::Sender<()>)>>,
+    stuck: Mutex<Vec<(contract::JobId, mpsc::Sender<std::thread::ThreadId>)>>,
 }
 
 impl WritableJobs {
@@ -3004,7 +3228,7 @@ impl WritableJobs {
 
     /// Parks the next `write` to `job_id` until the session clock moves a
     /// second on. Returns a receiver that fires once the write parks.
-    fn stick(&self, job_id: &contract::JobId) -> mpsc::Receiver<()> {
+    fn stick(&self, job_id: &contract::JobId) -> mpsc::Receiver<std::thread::ThreadId> {
         let (tx, rx) = mpsc::channel();
         self.stuck.lock().unwrap().push((job_id.clone(), tx));
         rx
@@ -3080,7 +3304,7 @@ impl Jobs for WritableJobs {
             // The test moves the clock only after this fires, so the
             // deadline is computed and the waker subscribed before any
             // advance.
-            let _sent = entered.send(());
+            let _sent = entered.send(thread::current().id());
             loop {
                 // The writer's own clock check: past it before parking.
                 if self.clock.now() >= until {
@@ -3302,14 +3526,15 @@ fn job_stop_is_answered_after_a_stuck_job_input_times_out() {
             send(&client, &job_input_line("c_in", &job_id, "x"));
             // The reader is stuck in the write: parked inside the clock
             // wait, past its own check, before the clock moves.
-            Deadline::after(DEADLINE)
+            let writer = Deadline::after(DEADLINE)
                 .recv(&parked)
                 .expect("the write parked in the terminal");
-            assert!(
-                clock.await_parked_unbounded(DEADLINE),
-                "the write did not park on the session clock"
+            clock.advance_when_parked(
+                None,
+                Some(writer),
+                Duration::from_secs(2),
+                &Deadline::after(DEADLINE),
             );
-            clock.advance(Duration::from_secs(2));
             let rejected = response(&client, "c_in");
             assert_eq!(
                 rejection(&rejected),

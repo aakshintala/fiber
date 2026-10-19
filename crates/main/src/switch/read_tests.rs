@@ -11,7 +11,7 @@
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -2226,9 +2226,22 @@ fn settle_on_thread(
     finished
 }
 
-/// The bound each negative settle receive waits: a settle that may answer
-/// does so in milliseconds, so silence for this long proves it is held.
-const SHORT: Duration = Duration::from_secs(2);
+/// Proves the settle is still waiting: it parks on the `FakeClock` at
+/// `until`, so it ran its checks and found work left (`done` false, the
+/// clock short of its end) and cannot answer without a wake, and its
+/// answer channel is still empty. A settle that answered early never
+/// parks, so the park wait fails naming `what` instead of hanging.
+#[track_caller]
+fn still_settling(clock: &FakeClock, until: Instant, settled: &mpsc::Receiver<bool>, what: &str) {
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the settle parks at its wait: {what}"
+    );
+    assert!(
+        matches!(settled.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "settle answered early: {what}"
+    );
+}
 
 /// One park acknowledgement's wait of the drive's shared deadline: a
 /// re-park after an advance lands in milliseconds, so expiry re-checks
@@ -2270,9 +2283,13 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
     reads.pause_at_reap(reaping, reap_freed);
     reads.cancel();
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
-    assert!(
-        Deadline::after(SHORT).recv(&settled).is_err(),
-        "settle returned with a spawn in flight"
+    // No group is listed yet, so the settle parks at its bound: reaching
+    // the park proves it saw the raised count and cannot answer yet.
+    still_settling(
+        &clock,
+        clock.origin() + doors::SHUTDOWN_BOUND,
+        &settled,
+        "a spawn in flight holds the settle",
     );
     release.send(()).expect("the spawn's release");
     Deadline::after(DEADLINE)
@@ -2289,13 +2306,14 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
         groups
     );
     let pgid = groups[0];
-    // The settle holds on the raised count while the reap is held: one
-    // bounded negative receive covers the whole hold, so a settle that
-    // answered on the kill alone fails here. One deadline for the whole
-    // hold, never one per receive.
-    assert!(
-        Deadline::after(DEADLINE).recv(&settled).is_err(),
-        "settle returned with the late child unreaped"
+    // The spawn listed its group before the reap pause, so the cancelled
+    // settle re-parks at its poll: reaching the park proves it saw the
+    // raised count and cannot answer on the kill alone.
+    still_settling(
+        &clock,
+        clock.origin() + GROUP_POLL,
+        &settled,
+        "the late child unreaped holds the settle",
     );
     free_reap.send(()).expect("the reap's release");
     // The late kill landed while the reap was held, so the shell is
@@ -2359,8 +2377,8 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
 
 /// The settle waits for the late child's reap, not just its kill: the
 /// spawn stops between the kill and the wait, and the settle holds until
-/// the reap releases it. A decrement at the relock answers early and turns
-/// the negative receive red.
+/// the reap releases it. A settle that ignored the count would answer at
+/// once instead of parking, so the park proof below turns red.
 #[test]
 fn settle_waits_for_the_late_childs_reap() {
     let root = fakes::TempDir::new("fiber-read-settle-reap");
@@ -2390,14 +2408,17 @@ fn settle_waits_for_the_late_childs_reap() {
         .recv(&is_reaping)
         .expect("the spawn reached its reap");
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
-    // The leader is killed but not yet reaped: the count is still raised.
-    assert!(
-        Deadline::after(SHORT).recv(&settled).is_err(),
-        "settle returned before the late child's reap"
+    // The leader is killed but not yet reaped: the count is still raised,
+    // and the listed group parks the cancelled settle at its poll.
+    still_settling(
+        &clock,
+        clock.origin() + GROUP_POLL,
+        &settled,
+        "the late child's reap holds the settle",
     );
     free_reap.send(()).expect("the reap's release");
     assert!(
-        Deadline::after(Duration::from_secs(3))
+        Deadline::after(DEADLINE)
             .recv(&settled)
             .expect("the settle"),
         "settle waits out the reap"
@@ -2485,10 +2506,10 @@ fn settle_gives_up_at_the_bound() {
         clock.await_parked_since(&mark, Some(end), DEADLINE),
         "the settle parked again short of its bound"
     );
-    assert!(
-        Deadline::after(SHORT).recv(&settled).is_err(),
-        "settle answered short of its bound"
-    );
+    // One nanosecond short of the bound the settle still parks with no
+    // answer: the park repeats the check above, and the empty channel
+    // proves it has not answered yet.
+    still_settling(&clock, end, &settled, "the settle short of its bound");
     clock.advance(Duration::from_nanos(1));
     assert!(
         !Deadline::after(DEADLINE)

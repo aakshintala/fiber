@@ -150,11 +150,9 @@ fn summary_line(kind: &str) -> bool {
 }
 
 pub(crate) fn write_line(stream: &mut dyn Write, line: &Envelope) -> std::io::Result<()> {
-    let mut bytes = serde_json::to_vec(line)
+    let bytes = serde_json::to_vec(line)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    bytes.push(b'\n');
-    stream.write_all(&bytes)?;
-    stream.flush()
+    support::framing::write_line(stream, &bytes)
 }
 
 /// A control line for `session`, such as the one that stops its writer.

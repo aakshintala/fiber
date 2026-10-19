@@ -240,3 +240,7 @@ Fiber: {provider} credential {credential} has used {percent}% of its {window} qu
 ## quota-notice-reset
 
 Fiber: {provider} credential {credential} has used {percent}% of its {window} quota, which resets at {resets_at}.
+
+## search-cancelled
+
+The search was cancelled; no tool was loaded.

@@ -556,6 +556,10 @@ fn samples() -> Vec<(&'static str, Value)> {
             "content": []}}),
         ),
         (
+            "tool_call_completed",
+            json!({"status": "completed", "content": content, "loaded": ["b", "a"]}),
+        ),
+        (
             "permission_requested",
             json!({"request_id": "r", "effects": [], "reversible": true,
             "paths": ["/a"], "step": "review",
@@ -1500,6 +1504,33 @@ fn provider_item_is_read_from_a_hosted_call_and_absent_from_an_ordinary_one() {
     assert!(written.get("provider_item").is_none(), "{written}");
 }
 
+/// The tools a search loaded, on `tool_call_completed`: `None` writes no
+/// key, `Some` keeps the tool's order, and a line without the key reads
+/// `None`.
+#[test]
+fn loaded_reads_from_a_search_result_and_is_absent_from_any_other() {
+    let result = |payload: Value| match read("tool_call_completed", payload).unwrap() {
+        Some(Event::ToolCallCompleted(done)) => done,
+        other => panic!("{other:?}"),
+    };
+    let none = result(json!({"status": "completed", "content": []}));
+    assert_eq!(none.loaded, None);
+    let written = serde_json::to_value(&none).unwrap();
+    assert!(written.get("loaded").is_none(), "{written}");
+    let empty = result(json!({"status": "completed", "content": [], "loaded": []}));
+    assert_eq!(empty.loaded, Some(vec![]));
+    assert_eq!(
+        serde_json::to_value(&empty).unwrap(),
+        json!({"status": "completed", "content": [], "loaded": []})
+    );
+    let ordered = result(json!({"status": "completed", "content": [], "loaded": ["b", "a"]}));
+    assert_eq!(ordered.loaded, Some(vec!["b".to_owned(), "a".to_owned()]));
+    assert_eq!(
+        serde_json::to_value(&ordered).unwrap(),
+        json!({"status": "completed", "content": [], "loaded": ["b", "a"]})
+    );
+}
+
 #[test]
 fn kept_reads_from_a_cut_result_and_is_absent_from_an_uncut_one() {
     let result = |payload: Value| match read("tool_call_completed", payload).unwrap() {
@@ -1739,7 +1770,51 @@ fn an_empty_skills_result_reads_as_skills() {
 }
 
 #[test]
+fn notes_results_write_and_read_evidence_proposals_and_optional_error() {
+    use crate::notes::{Evidence, Proposed};
+    let result = CommandResult::ProposeNotes {
+        evidence: vec![Evidence::Files {
+            text: "remote".into(),
+        }],
+        proposed: vec![Proposed::new("ours".into(), vec![0]).unwrap()],
+        error: None,
+    };
+    let wire = json!({"evidence":[{"kind":"files","text":"remote"}],"proposed":[{"text":"ours","cites":[0]}]});
+    assert_eq!(serde_json::to_value(&result).unwrap(), wire);
+    assert_eq!(result_of(json!({"command_id":"c","result":wire})), result);
+    for evidence in [
+        vec![],
+        vec![Evidence::Answer {
+            text: "answer".into(),
+        }],
+    ] {
+        let result = CommandResult::ProposeNotes {
+            evidence: evidence.clone(),
+            proposed: Vec::new(),
+            error: Some(Box::new(crate::shapes::Failure {
+                code: crate::ErrorCode::BudgetExceeded,
+                message: "spent".into(),
+                retry_after_ms: None,
+                provider: None,
+            })),
+        };
+        let wire = json!({"evidence":evidence,"proposed":[],"error":{"code":"budget_exceeded","message":"spent"}});
+        assert_eq!(serde_json::to_value(&result).unwrap(), wire);
+        assert_eq!(result_of(json!({"command_id":"c","result":wire})), result);
+    }
+    let empty = json!({"evidence":[],"proposed":[]});
+    assert!(matches!(
+        result_of(json!({"command_id":"c","result":empty})),
+        CommandResult::ProposeNotes { .. }
+    ));
+}
+
+#[test]
 fn every_other_result_still_reads_as_its_own_variant() {
+    assert!(matches!(
+        result_of(json!({"command_id":"c","result":{"evidence":[],"proposed":[]}})),
+        CommandResult::ProposeNotes { .. }
+    ));
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {"text": "t"}})),
         CommandResult::OfferedFile { text: "t".into() }

@@ -48,6 +48,7 @@ fn entry(reference: &str) -> ModelEntry {
 
 fn catalogue() -> Catalogue {
     Catalogue {
+        installable: Vec::new(),
         models: vec![entry("acme/m1")],
         notices: vec!["a cached provider is gone".to_owned()],
         lists: Vec::new(),
@@ -78,6 +79,7 @@ fn a_read_error_is_one_notice_and_keeps_the_catalogue() {
 fn catalogue_notices_are_pushed_once_per_read() {
     let mut app = home();
     let catalogue = Catalogue {
+        installable: Vec::new(),
         models: vec![entry("acme/m1")],
         notices: vec!["first".to_owned(), "second".to_owned()],
         lists: Vec::new(),
@@ -165,6 +167,7 @@ fn newest_code(app: &App) -> String {
 /// `acme/m2` with none, `zeta/z1` with one.
 fn three() -> Catalogue {
     Catalogue {
+        installable: Vec::new(),
         models: vec![
             ModelEntry {
                 reference: "acme/m1".to_owned(),
@@ -459,6 +462,26 @@ fn refreshing_shows_until_the_answer() {
 }
 
 #[test]
+fn startup_read_keeps_a_meanwhile_openers_mark() {
+    use crate::catalogue::Refresh;
+    let mut app = home();
+    // The startup ask counts as owed, so its answer never drops a
+    // meanwhile opened picker's mark.
+    app.note_catalogue_read();
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert_eq!(app.take_reads(), Some(Refresh::Stale));
+    assert_eq!(app.model_picker.refreshing, Some(Refresh::Stale));
+    // The startup read answers first, while the open read still runs:
+    // one owed read stays, so the mark stays.
+    app.on_models(Err("gone".to_owned()));
+    assert_eq!(app.model_picker.refreshing, Some(Refresh::Stale));
+    // Its own answer clears the mark.
+    app.on_models(Err("gone".to_owned()));
+    assert_eq!(app.model_picker.refreshing, None);
+    assert_eq!(app.take_reads(), None);
+}
+
+#[test]
 fn the_picker_is_a_picker_context() {
     let mut app = App::new(PathBuf::from("/w"));
     let user: serde_json::Map<String, serde_json::Value> =
@@ -670,6 +693,7 @@ fn usage_line(
 /// Thirty models on one provider, without levels.
 fn thirty() -> Catalogue {
     Catalogue {
+        installable: Vec::new(),
         models: (0..30)
             .map(|at| {
                 let reference = format!("acme/m{at:02}");
@@ -1802,6 +1826,7 @@ fn a_suffix_named_model_is_not_chosen_by_mistake() {
     // `p/m` at `high` still names the exact reference, with the level as
     // an override.
     let catalogue = Catalogue {
+        installable: Vec::new(),
         models: vec![
             ModelEntry {
                 reference: "p/m".to_owned(),

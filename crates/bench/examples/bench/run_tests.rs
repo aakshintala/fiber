@@ -106,6 +106,7 @@ fn startup_finishes_at_the_first_session_status_after_extensions_loaded() {
 fn a_startup_timing_starts_at_the_clock_read_just_before_the_spawn() {
     let clock = fakes::clock::FakeClock::new();
     let before = clock.now();
+    // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
     clock.advance(Duration::from_millis(7));
     let proc = Proc::spawn(&mut Command::new("true"), &*clock).unwrap();
     assert_eq!(proc.spawned, before + Duration::from_millis(7));

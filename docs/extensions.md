@@ -643,7 +643,9 @@ exactly. An expected `null` matches a missing field or a field set to `null`.
 A case may add `config`, written as the temporary home's global
 configuration. `host.http` and `host.exec` list requests and replies in order.
 An HTTP reply has `status` and `body`, or an `error` with `code` and `message`.
-An exec reply has `code`, `stdout` and `stderr`. Requests match the fields the
+An exec reply has `stdout` and `stderr` and either `code` or `signal`, an
+integer signal number the extension sees as a name such as `SIGKILL`.
+Requests match the fields the
 case gives; a mismatch, an unscripted call or an unused reply fails the case.
 These host replies prevent network requests and program execution.
 
@@ -1726,7 +1728,8 @@ the personal install loads everywhere else. The order is the one skills use:
 repository before personal ("Skills" in `docs/system-prompt.md`). It holds for
 first-party extensions too. A `notice` with code `extension_shadowed` names both
 versions, so a personal install that is newer than the repository's copy is
-visible.
+visible. Two repository copies of one name load the same way: the first
+declared loads, and the same notice names both versions.
 
 **An extension can be scoped to projects.** `fiber extension install --project`
 installs it for the current project only: it loads in that project's sessions

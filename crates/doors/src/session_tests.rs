@@ -742,7 +742,12 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
         done_rx.try_recv().is_err(),
         "close has not returned before the grace passes"
     );
-    let mark = clock.advance_marked(super::GRACE.saturating_sub(Duration::from_millis(1)));
+    let mark = clock.advance_when_parked(
+        Some(until),
+        None,
+        super::GRACE.saturating_sub(Duration::from_millis(1)),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         clock.await_parked_since(&mark, Some(until), DEADLINE),
         "close waits again one millisecond short of the grace"
@@ -751,7 +756,12 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
         done_rx.try_recv().is_err(),
         "close has not returned one millisecond before the grace"
     );
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(until),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE)
         .recv(&done_rx)
         .expect("close returns once the grace has passed");
@@ -1293,6 +1303,7 @@ fn a_clock_move_delivers_cancelled_and_nothing_before() {
         Deadline::after(DEADLINE)
             .recv(&entered_rx)
             .expect("the receiver is blocked");
+        // No thread parks on the clock; the move fires a wake.
         clock.advance(Duration::from_millis(1));
     });
     opened
@@ -1423,10 +1434,11 @@ fn a_shell_registered_after_close_is_cancelled() {
     let (done_tx, done_rx) = mpsc::channel();
     let session = opened.session;
     let log = opened.log;
-    thread::spawn(move || {
+    let close = thread::spawn(move || {
         session.close(log);
         if let Ok(()) = done_tx.send(()) {}
     });
+    let close_thread = close.thread().id();
     assert!(
         clock.await_parked(until, DEADLINE),
         "close is past the shell snapshot and waiting out the grace"
@@ -1438,7 +1450,12 @@ fn a_shell_registered_after_close_is_cancelled() {
         .recv(&entered_rx)
         .expect("the shell registered after close");
     assert!(saw.load(Ordering::Relaxed), "the tool saw its cancel");
-    clock.advance(super::GRACE);
+    clock.advance_when_parked(
+        Some(until),
+        Some(close_thread),
+        super::GRACE,
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE)
         .recv(&done_rx)
         .expect("close returned without the tool's timeout");

@@ -93,6 +93,9 @@ pub struct Catalogue {
     pub notices: Vec<String>,
     /// One list time per installed provider.
     pub lists: Vec<ListAge>,
+    /// Each first-party provider no installed extension declares, sorted by
+    /// name (`docs/extensions.md`, "A fresh install").
+    pub installable: Vec<String>,
 }
 
 /// How thorough a model-list read is.
@@ -139,8 +142,12 @@ impl Reader {
 
     /// Asks as [`Reader::ask`] does, with the thread spawn as a closure
     /// so tests fail it. A failed spawn fails every owed read with the
-    /// same `terminal:` message and frees the reader, so a later ask
-    /// spawns again; nothing stays queued.
+    /// same `terminal:` message but leaves the reader busy until the loop
+    /// consumes those errors: freeing now would let a later ask start
+    /// over the unconsumed errors, owing three answers (the failure's
+    /// error, the running read, the queued one) while the picker counts
+    /// two. Each error's [`Reader::done`] frees the reader and starts
+    /// what waited meanwhile; nothing stays queued.
     pub(crate) fn ask_with(
         &mut self,
         refresh: Refresh,
@@ -176,10 +183,13 @@ impl Reader {
         ) {
             Ok(_) => {}
             Err(source) => {
-                // No read runs, so every owed read fails alike: the asked
-                // one, and the queued one when one waits. The reader is
-                // free again, and nothing stays queued.
-                self.running = false;
+                // No thread runs, but the reader stays busy until the
+                // loop consumes these errors: each one answers an owed
+                // read, and freeing now would let a later ask start over
+                // the unconsumed errors. The asked one fails, and the
+                // queued one when one waits; nothing stays queued, and
+                // each error's `done` frees the reader and starts what
+                // waited meanwhile.
                 let queued = self.queued.take();
                 let message = format!("terminal: could not start the model-list reader: {source}");
                 drop(out.send(crate::Input::Models(Err(message.clone()))));

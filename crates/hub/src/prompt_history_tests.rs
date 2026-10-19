@@ -86,7 +86,12 @@ fn ok_page(home: &Home, args: Value) -> (Vec<String>, Option<u64>) {
 }
 
 fn read_with(bytes: &[u8], end: u64, chunk: usize) -> (Vec<String>, Option<u64>) {
-    let (prompts, before) = read_back(&mut Cursor::new(bytes), end, chunk).unwrap();
+    let (prompts, before) = read_back(&mut Cursor::new(bytes), end, chunk, PAGE, |line| {
+        serde_json::from_slice(line)
+            .ok()
+            .filter(|value| matches!(value, Value::Object(_)))
+    })
+    .unwrap();
     (texts(&prompts), before)
 }
 

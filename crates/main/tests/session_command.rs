@@ -1405,6 +1405,14 @@ fn a_resumed_session_raises_its_request_again_and_a_reply_runs_the_call() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
+    // Half-close the write side after the close: the session ends the
+    // connection without waiting out the writer grace.
+    client
+        .write
+        .lock()
+        .unwrap()
+        .shutdown(std::net::Shutdown::Write)
+        .unwrap();
     let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
@@ -1852,19 +1860,18 @@ fn a_pasted_image_is_stored_logged_by_path_and_sent_as_an_image_part() {
 #[test]
 fn a_steered_image_is_applied_and_sent_on_the_next_request() {
     let setup = Setup::new_with_fm_root();
-    // The first reply runs `sleep 5`, so the turn stays open seconds
-    // after the prompt: the steer, pasted behind it, is delivered and
-    // applied at the step boundary, inside the turn. The reply is held
+    // The first reply runs a short shell call. The reply is held
     // until a `tools` answer proves the steer - image and all - is
     // stored and queued, so the image is in the inbox before the
-    // sleeping call's step ends: the test forces the order instead of
-    // racing the 5 s sleep. A standing rule allows the command without
-    // asking.
+    // first step ends: the hold and the `tools` answer force the
+    // order, and the steer is delivered and applied at the step
+    // boundary, inside the turn. A standing rule allows the command
+    // without asking.
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_1",
             "shell",
-            &json!({"command": "sleep 5"}),
+            &json!({"command": "echo hi"}),
         )]),
         hello(),
     ])
@@ -1875,7 +1882,7 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
         setup.home().join("rules"),
         format!(
             "{}\n",
-            json!({"decision": "allow", "tool": "shell", "prefix": "sleep 5"})
+            json!({"decision": "allow", "tool": "shell", "prefix": "echo hi"})
         ),
     )
     .unwrap();
@@ -1907,8 +1914,8 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
     // the image and queues the steer. `tools` is answered on the reader
     // thread, in line order, so its answer proves the steer - image and
     // all - was processed and queued before the release lets the reply
-    // through: the test forces the order instead of racing the 5 s
-    // sleep. (Waiting for the steer's own acceptance here would
+    // through: the hold and the `tools` answer force the order.
+    // (Waiting for the steer's own acceptance here would
     // deadlock: the loop answers it at the next step boundary, which
     // needs the held reply.)
     send(&client, r#"{"id":"c_tools","command":"tools"}"#);

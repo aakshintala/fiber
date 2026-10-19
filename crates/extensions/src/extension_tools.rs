@@ -13,7 +13,7 @@ use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Ask, Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value};
 
-use crate::lua::{DeclaredTool, effects_from};
+use crate::lua::{DeclaredTool, effects_from, urls_from};
 use crate::{Error, LuaExtension};
 
 /// One tool a Lua extension registered with `fiber.tool`.
@@ -74,8 +74,8 @@ impl Tool for LuaTool {
     /// (`docs/permissions.md`, "What a rule matches").
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
         let name = &self.declared.name;
-        let declared = match &self.declared.effects {
-            Some(declared) => declared.clone(),
+        let (declared, hosts) = match &self.declared.effects {
+            Some(fixed) => (fixed.declared.clone(), fixed.hosts.clone()),
             None => {
                 let value = self
                     .extension
@@ -98,7 +98,7 @@ impl Tool for LuaTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
-            hosts: None,
+            hosts,
         })
     }
 
@@ -174,7 +174,9 @@ fn failed_output(error: Failure) -> Output {
 /// What `run` returned, as a result (`docs/extensions.md`, "Registering"):
 /// a string is one text part; a table whose `type` is set is one text part;
 /// any other table holds `content` (a string or a list of text parts) and
-/// may hold `details`, `error = { code, message }` and `control`. Anything
+/// may hold `details`, `error = { code, message }`, `control` and
+/// `hosts_surfaced`, the hosts the result surfaced as `http` or `https`
+/// URLs (`docs/tools.md`, "What a result carries"). Anything
 /// else says what was wrong, for the caller's message.
 fn output_from(value: Value) -> Result<Output, String> {
     let mut map = match value {
@@ -188,12 +190,18 @@ fn output_from(value: Value) -> Result<Output, String> {
         Value::Number(_) => return Err("a number".to_owned()),
         Value::Array(_) => return Err("a list with no `content`".to_owned()),
     };
+    let hosts_surfaced = match map.remove("hosts_surfaced") {
+        None => Vec::new(),
+        Some(value) => urls_from(&value).ok_or_else(|| {
+            "a `hosts_surfaced` that is not a list of http or https URLs".to_owned()
+        })?,
+    };
     if let Some(key) = map
         .keys()
         .find(|key| !matches!(key.as_str(), "content" | "details" | "error" | "control"))
     {
         return Err(format!(
-            "`{key}`, which is not `content`, `details`, `error` or `control`"
+            "`{key}`, which is not `content`, `details`, `error`, `control` or `hosts_surfaced`"
         ));
     }
     let content = match map.remove("content") {
@@ -215,6 +223,7 @@ fn output_from(value: Value) -> Result<Output, String> {
         error,
         details: map.remove("details"),
         control,
+        hosts_surfaced,
         ..Output::default()
     })
 }

@@ -143,6 +143,7 @@ fn choose_session_model(app: &mut App) {
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::CtrlL, now), crate::app::Effect::None);
     app.on_models(Ok(crate::catalogue::Catalogue {
+        installable: Vec::new(),
         models: vec![crate::catalogue::ModelEntry {
             reference: "test/model".to_owned(),
             provider: "test".to_owned(),
@@ -2228,8 +2229,19 @@ fn only_the_selected_completion_sits_on_the_bar() {
         let x = u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX);
         buf[(x, y)].bg
     };
-    assert_eq!(cell(at("Goes home."), "home"), accent, "{drawn}");
-    assert_eq!(cell(at("Goes home with"), "new"), surface, "{drawn}");
+    assert_eq!(
+        cell(at("Goes home, focused on the session"), "home"),
+        accent,
+        "{drawn}"
+    );
+    assert_eq!(
+        cell(
+            at("Goes home with the cursor in the input box, to pick"),
+            "new"
+        ),
+        surface,
+        "{drawn}"
+    );
 }
 
 #[test]

@@ -749,6 +749,7 @@ impl Loop {
             servers,
             spilled,
             hosts_surfaced,
+            loaded,
         } = output;
         // The call's output reached `finish`: its turn entry leaves the
         // map, so the map holds only calls whose output has not.
@@ -779,7 +780,9 @@ impl Loop {
             .partition(|part| matches!(part, ContentPart::Text { .. }));
         // A running call keeps running until its tool returns, then
         // completes with what the tool gave, `cancelled` instead of
-        // `completed`. A tool that returned an error keeps `failed` with
+        // `completed`. A cancelled search that loaded tools completes
+        // with the `search-cancelled` line instead (`docs/tools.md`,
+        // "Tool search"). A tool that returned an error keeps `failed` with
         // that error: those outcomes are never `cancelled`. The hooks see
         // the status the completion carries.
         let mut status = if error.is_some() {
@@ -808,6 +811,20 @@ impl Loop {
             }
             crate::naming::Named::Write(named) => Some(named),
         };
+        // A cancelled search loads nothing: its text is the one
+        // `search-cancelled` line and no image survives, so the hooks and
+        // the cap see the line the model would be sent. A `before_tool`
+        // rewrite line would claim the call ran with its arguments, so it
+        // is dropped: the completion is exactly the line. With `loaded`
+        // `None` the content is as the tool gave it.
+        let mut rewritten = rewritten;
+        if status == CallStatus::Cancelled && loaded.is_some() {
+            text = vec![ContentPart::Text {
+                text: crate::prompt::message("search-cancelled").to_owned(),
+            }];
+            images = Vec::new();
+            rewritten = None;
+        }
         let ran = super::hooks::Ran {
             tool,
             arguments,
@@ -829,6 +846,14 @@ impl Loop {
         {
             self.write(&Event::SessionNamed(named), turn, Some(id))?;
         }
+        // `loaded` travels only when the call completed and the shaping
+        // kept the tool's output: any other status or a withheld result
+        // carries none.
+        let loaded = if status == CallStatus::Completed && !shaped.withheld {
+            loaded
+        } else {
+            None
+        };
         Ok((
             ToolCallCompleted {
                 status,
@@ -842,6 +867,7 @@ impl Loop {
                 content: shaped.content,
                 changed_by: shaped.changed_by,
                 hosts_surfaced,
+                loaded,
                 ..completed(String::new(), None)
             },
             shaped.state,

@@ -178,20 +178,19 @@ pub(crate) fn request(
     command: &str,
     args: serde_json::Map<String, Value>,
 ) -> Result<Value, Failure> {
-    let mut line = json!({"id": command_id, "command": command, "args": args}).to_string();
-    line.push('\n');
+    let line = json!({"id": command_id, "command": command, "args": args}).to_string();
     let lost = |e: io::Error| failed(ErrorCode::IoFailed, format!("the hub: {e}"));
-    read.get_mut().write_all(line.as_bytes()).map_err(lost)?;
-    let mut buf = String::new();
+    support::framing::write_line(read.get_mut(), line.as_bytes()).map_err(lost)?;
     loop {
-        buf.clear();
-        if read.read_line(&mut buf).map_err(lost)? == 0 {
+        let Some(buf) =
+            support::framing::read_line(read, support::framing::MAX_LINE).map_err(lost)?
+        else {
             return Err(failed(
                 ErrorCode::IoFailed,
                 format!("the hub closed the connection before answering `{command}`"),
             ));
-        }
-        let Ok(mut answer) = serde_json::from_str::<HubLine>(&buf) else {
+        };
+        let Ok(mut answer) = serde_json::from_slice::<HubLine>(&buf) else {
             continue;
         };
         let field = |key: &str| answer.payload.get(key).and_then(Value::as_str);

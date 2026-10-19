@@ -35,6 +35,32 @@ fn summary() -> InstallSummary {
 }
 
 #[test]
+fn summary_text_is_the_prompt_text_without_the_question() {
+    assert_eq!(
+        summary_text(&[summary()]),
+        "Install github.com/aakshintala/fiber/providers/opencode from /src/opencode\nVersion v1.2.0\nProvider opencode: https://opencode.ai/zen/go/v1, https://opencode.ai/zen/v1\n"
+    );
+}
+
+#[test]
+fn summary_text_keeps_multiple_summaries_and_update_changes() {
+    let update = InstallSummary {
+        changes: Some(" b.lua | 1 +\n".into()),
+        ..summary()
+    };
+    let dep = InstallSummary {
+        name: "github.com/acme/dep".into(),
+        version: "v1.4.0".into(),
+        providers: Vec::new(),
+        ..summary()
+    };
+    assert_eq!(
+        summary_text(&[update, dep]),
+        "Update github.com/aakshintala/fiber/providers/opencode from /src/opencode\nVersion v1.2.0\nChanges since the installed commit:\n b.lua | 1 +\nProvider opencode: https://opencode.ai/zen/go/v1, https://opencode.ai/zen/v1\nInstall github.com/acme/dep from /src/opencode\nVersion v1.4.0\nIt registers no provider.\n"
+    );
+}
+
+#[test]
 fn an_install_in_a_terminal_shows_its_summary_and_goes_ahead_only_on_yes() {
     for (answer, approved) in [
         ("y\n", true),

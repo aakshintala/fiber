@@ -1459,6 +1459,7 @@ fn an_open_batch_gets_no_fixed_result() {
         .filter_map(|input| match input {
             Input::ToolCall { action_id, .. } => Some(action_id.0.as_str()),
             Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. }
             | Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. } => None,
@@ -1522,6 +1523,7 @@ fn without_a_suspend_the_same_batch_gets_fixed_results() {
             } if text.contains("never ran") => Some((action_id.0.as_str(), text.as_str())),
             Input::ToolCall { .. }
             | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. }
             | Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. } => None,
@@ -1581,6 +1583,7 @@ fn a_call_outside_the_open_batch_still_gets_its_fixed_result() {
             } if text.contains("never ran") => Some(action_id.0.as_str()),
             Input::ToolCall { .. }
             | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. }
             | Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. } => None,
@@ -2899,7 +2902,8 @@ fn a_completed_call_in_the_window_is_not_in_the_batch() {
             Input::ToolCall { .. }
             | Input::User { .. }
             | Input::Assistant { .. }
-            | Input::Reasoning { .. } => None,
+            | Input::Reasoning { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     assert_eq!(results.len(), 2);
@@ -2964,7 +2968,8 @@ fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     let notice = |id: &str| format!("Fiber: background job {id} ended: failed.\n{ORPHANED}");
@@ -3562,7 +3567,10 @@ fn a_resume_after_a_completed_handoff_sends_the_note_and_what_came_after_only() 
         .iter()
         .filter_map(|input| match input {
             Input::User { text, .. } | Input::Assistant { text, .. } => Some(text.as_str()),
-            Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. } => None,
+            Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     assert!(seen[0].contains("new-os"), "{seen:?}");
@@ -4641,7 +4649,7 @@ fn a_pinned_history_fails_the_naming_call() {
         .iter()
         .find_map(|input| match input {
             Input::ToolResult { text, is_error, .. } if *is_error => Some(text.clone()),
-            Input::ToolResult { .. } => None,
+            Input::ToolResult { .. } | Input::ToolSearchResult { .. } => None,
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }

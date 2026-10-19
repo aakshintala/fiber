@@ -48,6 +48,10 @@ pub(crate) fn reader(
 /// The error keeps its code, so the hub answers `config_invalid` for an
 /// invalid configuration and the code the failure names otherwise; only
 /// the local adapter above flattens it to text.
+#[allow(
+    clippy::result_large_err,
+    reason = "the read's error names its data by value; the error path is cold"
+)]
 pub(crate) fn catalogue(
     home: PathBuf,
     workspace: PathBuf,
@@ -75,6 +79,10 @@ pub(crate) fn catalogue(
 /// in the background for `Stale` and `Every`. `load` starts the Lua
 /// providers; a `Cached` read never calls it. `Err` names why nothing
 /// could be read; a failed refresh is a notice, and the cached list stays.
+#[allow(
+    clippy::result_large_err,
+    reason = "the read's error names its data by value; the error path is cold"
+)]
 pub(crate) fn read(
     home: &Path,
     workspace: &Path,
@@ -83,8 +91,17 @@ pub(crate) fn read(
     load: &dyn Fn(&Config) -> SessionExtensions,
     run: config::Runner<'_>,
 ) -> Result<tui::Catalogue, cli::ModelListsError> {
-    let (providers, config, notices) = cli::model_lists(home, workspace, mode(refresh), load, run)?;
+    let (providers, config, mut notices) =
+        cli::model_lists(home, workspace, mode(refresh), load, run)?;
+    let installable = match extensions::not_installed_providers(home) {
+        Ok(names) => names.into_iter().map(str::to_owned).collect(),
+        Err(error) => {
+            notices.push(error.to_string());
+            Vec::new()
+        }
+    };
     Ok(tui::Catalogue {
+        installable,
         models: entries(&providers, &config),
         // The ages read after the refresh above ran, so a refreshed
         // list reads fresh.

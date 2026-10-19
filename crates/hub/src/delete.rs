@@ -13,8 +13,6 @@
 //! directory being removed.
 
 use std::collections::BTreeSet;
-use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io;
 use std::path::PathBuf;
 use std::sync::PoisonError;
 
@@ -24,7 +22,7 @@ use serde_json::{Map, Value};
 use crate::connection::{Hub, Refused};
 use crate::feed::invalid;
 use crate::relay::valid_session_id;
-use crate::resume::{find_log, not_found};
+use crate::resume::not_found;
 
 /// `delete`: removes `session`, and with `cascade` every session that
 /// continues it, dependents first. With `cascade`, `expect` holds the set
@@ -71,21 +69,21 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     // Held until every removal ends.
     let mut locks = Vec::with_capacity(set.len());
     for (id, dir) in &set {
-        match take_lock(dir) {
-            Ok(lock) => locks.push(lock),
-            Err(TryLockError::WouldBlock) => {
+        match log::try_hold(dir) {
+            Ok(log::Hold::Held(lock)) => locks.push(lock),
+            Ok(log::Hold::Busy) => {
                 return Err(Refused {
                     code: ErrorCode::SessionHeld,
                     message: format!("Session `{}` is held by another process.", id.0),
                 });
             }
-            Err(TryLockError::Error(error)) => return Err(io_failed(id, &error)),
+            Err(error) => return Err(io_failed(id, &error)),
         }
     }
     // Discovery order puts each session after the one it continues, so in
     // reverse no survivor points at a removed session.
-    for (id, dir) in set.iter().rev() {
-        remove(dir).map_err(|error| io_failed(id, &error))?;
+    for ((id, dir), lock) in set.iter().zip(locks.iter()).rev() {
+        log::delete_session(dir, lock).map_err(|error| io_failed(id, &error))?;
         hub.feed.forget(&id.0);
     }
     drop(locks);
@@ -159,34 +157,14 @@ fn confirm(set_ids: &BTreeSet<&SessionId>, expect: &BTreeSet<&SessionId>) -> Res
 }
 
 /// `session`'s directory: a real directory, never a link, holding its log.
+/// The link check precedes the lock, which would create `session.lock`
+/// inside whatever `dir` names, so a linked directory stays untouched.
 fn session_dir(hub: &Hub, session: &SessionId) -> Option<PathBuf> {
-    let dir = find_log(&hub.home, session)?.parent()?.to_path_buf();
-    fs::symlink_metadata(&dir)
-        .is_ok_and(|meta| meta.is_dir())
-        .then_some(dir)
+    let (_, dir) = crate::recent::lookup_logged(&hub.home, session)?;
+    log::is_plain_dir(&dir).then_some(dir)
 }
 
-/// The session's lock, created if absent and taken without waiting.
-fn take_lock(dir: &std::path::Path) -> Result<File, TryLockError> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(dir.join("session.lock"))
-        .map_err(TryLockError::Error)?;
-    file.try_lock()?;
-    Ok(file)
-}
-
-/// Removes the log, then the rest of the directory. `remove_dir_all`
-/// removes a link inside it without following it.
-fn remove(dir: &std::path::Path) -> io::Result<()> {
-    fs::remove_file(dir.join("events.jsonl"))?;
-    fs::remove_dir_all(dir)
-}
-
-fn io_failed(session: &SessionId, error: &io::Error) -> Refused {
+fn io_failed(session: &SessionId, error: &impl std::fmt::Display) -> Refused {
     Refused {
         code: ErrorCode::IoFailed,
         message: format!("Session `{}` could not be deleted: {error}.", session.0),

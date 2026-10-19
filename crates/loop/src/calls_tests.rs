@@ -35,7 +35,7 @@ use serde_json::{Map, Value, json};
 
 use super::register;
 use crate::permission::{Verdict, fast_path, judge};
-use crate::{Loop, Model};
+use crate::{Loop, Model, TurnCancel};
 use log::Log;
 
 /// A tool known only by its name and description.
@@ -942,6 +942,7 @@ fn scrubbed(request: &ModelRequest, homes: &[String]) -> (Option<usize>, Vec<Inp
                 call.arguments =
                     serde_json::from_str(&scrub(&call.arguments.to_string(), homes)).unwrap();
             }
+            Input::ToolSearchResult { action_id, .. } => action_id.0 = "a_".into(),
             Input::ToolResult {
                 action_id, text, ..
             } => {
@@ -2095,4 +2096,243 @@ fn a_cancelled_call_still_runs_its_settle_before_its_completion() {
     for line in &five[1..] {
         assert_eq!(line.action_id.as_ref(), Some(&action));
     }
+}
+
+/// A tool returning `output`, cancelling the turn first when `cancel` is
+/// set, so a cancelled call still returns at once.
+struct Searching {
+    output: Output,
+    cancel: Option<Arc<TurnCancel>>,
+}
+
+impl Tool for Searching {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "searcher".to_owned(),
+            description: "Returns a search-shaped output.".to_owned(),
+            input_schema: json!({"type": "object", "additionalProperties": false}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(reads())
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        if let Some(cancel) = &self.cancel {
+            assert!(cancel.cancel());
+        }
+        self.output.clone()
+    }
+}
+
+/// One `searcher` call returning `output`, then `Done.`. When `cancel_turn`
+/// is set the tool cancels the turn before it returns.
+fn search_turn(output: Output, cancel_turn: bool) -> Ran {
+    let cancel = Arc::new(TurnCancel::default());
+    let tool = Searching {
+        output,
+        cancel: cancel_turn.then(|| Arc::clone(&cancel)),
+    };
+    run_turn(
+        vec![Arc::new(tool)],
+        vec![
+            calls("Checking.", &["searcher"]),
+            fakes::Scripted::text("Done."),
+        ],
+        cancel,
+    )
+}
+
+/// The `tool_call_completed` of `ran`, which holds exactly one.
+fn searched_completed(ran: &Ran) -> &Envelope {
+    ran.lines
+        .iter()
+        .filter(|line| line.seq.is_some())
+        .find(|line| line.kind == "tool_call_completed")
+        .expect("a tool_call_completed")
+}
+
+#[test]
+fn a_completed_search_carries_its_loaded_names() {
+    let ran = search_turn(
+        Output {
+            content: vec![ContentPart::Text {
+                text: "Loaded: b, a.".into(),
+            }],
+            loaded: Some(vec!["b".into(), "a".into()]),
+            ..Output::default()
+        },
+        false,
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let completed = searched_completed(&ran);
+    assert_eq!(completed.payload["status"], "completed");
+    assert_eq!(completed.payload["loaded"], json!(["b", "a"]));
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "Loaded: b, a."}])
+    );
+}
+
+#[test]
+fn a_completed_search_with_no_match_writes_an_empty_loaded() {
+    let ran = search_turn(
+        Output {
+            content: vec![ContentPart::Text {
+                text: "No deferred tool matched the query.".into(),
+            }],
+            loaded: Some(vec![]),
+            ..Output::default()
+        },
+        false,
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    let completed = searched_completed(&ran);
+    assert_eq!(completed.payload["status"], "completed");
+    assert_eq!(completed.payload["loaded"], json!([]));
+}
+
+#[test]
+fn a_failed_search_carries_no_loaded() {
+    let ran = search_turn(
+        Output {
+            content: vec![ContentPart::Text {
+                text: "Loaded: b, a.".into(),
+            }],
+            loaded: Some(vec!["b".into(), "a".into()]),
+            error: Some(Failure {
+                code: ErrorCode::ToolError,
+                message: "boom".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            ..Output::default()
+        },
+        false,
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    let completed = searched_completed(&ran);
+    assert_eq!(completed.payload["status"], "failed");
+    assert!(completed.payload.get("loaded").is_none());
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "Loaded: b, a."}])
+    );
+}
+
+#[test]
+fn a_cancelled_search_completes_with_the_cancel_line() {
+    let ran = search_turn(
+        Output {
+            content: vec![
+                ContentPart::Text {
+                    text: "Loaded: a.".into(),
+                },
+                ContentPart::Image {
+                    path: "artifacts/shot.png".into(),
+                    mime_type: "image/png".into(),
+                    width: 1,
+                    height: 1,
+                },
+            ],
+            loaded: Some(vec!["a".into()]),
+            ..Output::default()
+        },
+        true,
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Interrupted));
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    let completed = searched_completed(&ran);
+    assert_eq!(completed.payload["status"], "cancelled");
+    assert!(completed.payload.get("loaded").is_none());
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "The search was cancelled; no tool was loaded."}])
+    );
+}
+
+#[test]
+fn a_cancelled_search_with_no_match_completes_with_the_cancel_line() {
+    let ran = search_turn(
+        Output {
+            content: vec![ContentPart::Text {
+                text: "No deferred tool matched the query.".into(),
+            }],
+            loaded: Some(vec![]),
+            ..Output::default()
+        },
+        true,
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Interrupted));
+    let completed = searched_completed(&ran);
+    assert_eq!(completed.payload["status"], "cancelled");
+    assert!(completed.payload.get("loaded").is_none());
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "The search was cancelled; no tool was loaded."}])
+    );
+}
+
+#[test]
+fn a_cancelled_call_without_loaded_keeps_its_content() {
+    let ran = search_turn(
+        Output {
+            content: vec![ContentPart::Text {
+                text: "ok\n".into(),
+            }],
+            ..Output::default()
+        },
+        true,
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Interrupted));
+    let completed = searched_completed(&ran);
+    assert_eq!(completed.payload["status"], "cancelled");
+    assert!(completed.payload.get("loaded").is_none());
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "ok\n"}])
+    );
 }

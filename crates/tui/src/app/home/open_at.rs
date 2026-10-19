@@ -14,7 +14,11 @@ impl App {
     /// Opens `session` the way a row opens (`docs/tui.md`, "Home"):
     /// through the hub, so an exited session is resumed by it and a
     /// refusal shows on home. The first stage, one `summary` unless the
-    /// connection already holds `summary`, goes out now; the `full`
+    /// connection already holds `summary`, goes out now; the `commands`
+    /// line follows once that subscribe is accepted, so a refused open
+    /// sends nothing else and starts no second process. An existing
+    /// in-flight `summary` gates the line too; only an already accepted
+    /// `summary` lets it ride in the batch. The `full`
     /// raise follows the first frame. The raise's acknowledgement ends
     /// the gate. With `held` the screen keeps its rows for a reconnect:
     /// home is reset without clearing them, nothing is read, and the
@@ -47,7 +51,11 @@ impl App {
             ack = Some(id);
             lines.push(line);
         }
-        lines.push(self.ask_commands(&session));
+        // No new subscribe is needed when summary is already expected,
+        // but an in-flight summary must still be accepted first.
+        if ack.is_none() && !self.subscribe_pending(&session) {
+            lines.push(self.ask_commands(&session));
+        }
         if let Some(home) = self.home.as_mut() {
             home.subs.gate(session, ack, held);
         }
@@ -55,8 +63,9 @@ impl App {
     }
 
     /// The launch's session open, going out with home's first `feed` and
-    /// `recent` once the link is up: one `full` subscribe for the
-    /// session and its commands, through the same path as a row.
+    /// `recent` once the link is up: one `summary` subscribe for the
+    /// session, its `commands` following the subscribe's acceptance,
+    /// through the same path as a row.
     /// Anything else, and a second call, sends nothing: the launch opens
     /// at most once. A list launch stays armed until the first `recent`
     /// answer spends it.

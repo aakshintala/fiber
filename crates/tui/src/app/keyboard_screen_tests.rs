@@ -368,6 +368,7 @@ fn ctrl_c_twice_within_the_window_quits_with_the_screen_open() {
     assert!(app.keys_screen_open());
     assert_eq!(tap_at(&mut app, "ctrl+c", clock.now()), Effect::None);
     assert!(app.hint());
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(
         QUIT_WINDOW
             .checked_sub(Duration::from_millis(1))
@@ -452,6 +453,7 @@ fn ctrl_c_with_the_notice_overlay_open_still_clears_then_quits() {
     app.open_more_notices();
     assert_eq!(tap_at(&mut app, "ctrl+c", clock.now()), Effect::None);
     assert!(app.hint());
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(
         QUIT_WINDOW
             .checked_sub(Duration::from_millis(1))

@@ -165,6 +165,26 @@ pub struct ReviewerModels {
     pub notices: Vec<String>,
 }
 
+/// The installed extensions and the outcome text for the model picker.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderInstall {
+    /// Each extension put in place.
+    pub installed: Vec<String>,
+    /// The install summary, one line per element.
+    pub summary: Vec<String>,
+    /// Providers whose selected credential is missing or unreadable.
+    pub login: Vec<LoginNeed>,
+}
+
+/// A provider needing a key, or whose key could not be checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginNeed {
+    /// The provider to pass to `fiber login`.
+    pub provider: String,
+    /// A credential-read failure; absent when the key is missing.
+    pub error: Option<String>,
+}
+
 /// One notes layer's file with its own `reviewer.context` text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotesFile {
@@ -338,6 +358,17 @@ pub struct ToolSwitches {
 /// screen's workspace. Its methods are grouped by the view that calls
 /// them.
 pub trait Configure: Send + Sync {
+    // The model picker.
+
+    /// Installs the first-party package serving `provider`, without asking.
+    /// Runs only off the loop thread: the install fetches and blocks.
+    fn install_provider(
+        &self,
+        workspace: &Path,
+        provider: &str,
+        clock: Arc<dyn Clock>,
+    ) -> Result<ProviderInstall, ConfigureError>;
+
     // `/settings`.
 
     /// Every configuration key with its effective value and layer, for

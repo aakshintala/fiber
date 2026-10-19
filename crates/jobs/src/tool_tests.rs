@@ -841,7 +841,12 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
         "the wait returned before its deadline"
     );
     // Exactly the deadline: `now > until` would leave the wait parked.
-    clock.advance(Duration::from_millis(timeout_ms));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(timeout_ms),
+        &Deadline::after(DEADLINE),
+    );
     let output = Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("the timeout returned");
@@ -1312,7 +1317,12 @@ fn write_parks_at(arguments: Value, wait: Duration) {
     );
     assert!(rx.try_recv().is_err(), "the write returned before its wait");
     // One millisecond short is not the wait.
-    let mark = clock.advance_marked(wait.checked_sub(Duration::from_millis(1)).unwrap());
+    let mark = clock.advance_when_parked(
+        Some(deadline),
+        None,
+        wait.checked_sub(Duration::from_millis(1)).unwrap(),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         clock.await_parked_since(&mark, Some(deadline), DEADLINE),
         "the write waits again a millisecond short: {:?}",
@@ -1322,7 +1332,12 @@ fn write_parks_at(arguments: Value, wait: Duration) {
         rx.try_recv().is_err(),
         "the write returned a millisecond early"
     );
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     let output = Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("the write returned");

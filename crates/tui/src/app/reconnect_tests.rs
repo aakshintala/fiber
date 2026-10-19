@@ -466,6 +466,14 @@ fn reconnecting_sends_feed_and_recent_again() {
     assert_ne!(after[1]["id"], before[1]["id"]);
 }
 
+/// A reconnect's summary acceptance releases its fresh commands request.
+fn accept_reopen(app: &mut App, subscribe: &Value) -> Value {
+    let sent = parsed(&app.on_line(accepted(S_A, &id_of(subscribe))));
+    assert_eq!(names(&sent), ["commands"]);
+    assert_eq!(sent[0]["session_id"], S_A);
+    sent[0].clone()
+}
+
 #[test]
 fn reconnecting_reopens_the_attached_session_and_keeps_the_draft() {
     let mut app = home();
@@ -479,13 +487,14 @@ fn reconnecting_reopens_the_attached_session_and_keeps_the_draft() {
     assert_eq!(lines[0]["command"], "subscribe");
     assert_eq!(lines[0]["session_id"], S_A);
     assert_eq!(lines[0]["args"]["level"], "summary");
-    assert_eq!(lines[1]["command"], "commands");
+    assert_eq!(lines[1]["command"], "prompt");
     assert_eq!(app.session().map(|session| session.0.as_str()), Some(S_A));
     assert_eq!(app.draft(), "half typed");
+    accept_reopen(&mut app, &lines[0]);
 }
 
 #[test]
-fn the_wire_after_hub_hello_is_subscribe_commands_kept_feed_recent() {
+fn the_wire_after_hub_hello_gates_commands_after_subscribe_kept_feed_recent() {
     let mut app = home();
     linked(&mut app);
     started(&mut app, S_A);
@@ -499,17 +508,11 @@ fn the_wire_after_hub_hello_is_subscribe_commands_kept_feed_recent() {
     let values = parsed(&lines);
     assert_eq!(
         names(&values),
-        [
-            "subscribe",
-            "commands",
-            "prompt",
-            "feed",
-            "recent",
-            "sessions"
-        ]
+        ["subscribe", "prompt", "feed", "recent", "sessions"]
     );
     // The attached session's kept line needs no subscribe of its own.
-    assert_eq!(lines[2], prompt);
+    assert_eq!(lines[1], prompt);
+    accept_reopen(&mut app, &values[0]);
 }
 
 /// A turn of `session`: its prompt and its reply, durable.
@@ -593,10 +596,8 @@ fn an_accepted_command_is_not_resent() {
     let opening = started(&mut app, S_A);
     fold(&mut app, accepted(S_A, &prompt_id(&opening)));
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(
-        names(&lines),
-        ["subscribe", "commands", "feed", "recent", "sessions"]
-    );
+    assert_eq!(names(&lines), ["subscribe", "feed", "recent", "sessions"]);
+    accept_reopen(&mut app, &lines[0]);
 }
 
 #[test]
@@ -609,10 +610,8 @@ fn a_rejected_command_is_not_resent() {
         refused(S_A, &prompt_id(&opening), "busy", "Busy."),
     );
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(
-        names(&lines),
-        ["subscribe", "commands", "feed", "recent", "sessions"]
-    );
+    assert_eq!(names(&lines), ["subscribe", "feed", "recent", "sessions"]);
+    accept_reopen(&mut app, &lines[0]);
 }
 
 #[test]
@@ -624,15 +623,9 @@ fn an_answer_for_another_id_keeps_the_line() {
     let lines = parsed(&reconnect(&mut app));
     assert_eq!(
         names(&lines),
-        [
-            "subscribe",
-            "commands",
-            "prompt",
-            "feed",
-            "recent",
-            "sessions"
-        ]
+        ["subscribe", "prompt", "feed", "recent", "sessions"]
     );
+    accept_reopen(&mut app, &lines[0]);
 }
 
 #[test]
@@ -653,11 +646,12 @@ fn subscribe_and_commands_are_not_resent() {
             .iter()
             .filter(|name| *name == "commands")
             .count(),
-        1
+        0
     );
-    // Both are the reopen's own, with new ids.
+    // Commands goes out only after this subscribe is accepted, with a fresh id.
     assert_ne!(lines[0]["id"], opening[0]["id"]);
-    assert_ne!(lines[1]["id"], opening[1]["id"]);
+    let commands = accept_reopen(&mut app, &lines[0]);
+    assert_ne!(commands["id"], opening[1]["id"]);
 }
 
 #[test]
@@ -718,7 +712,6 @@ fn two_kept_commands_for_one_other_session_share_one_subscribe() {
         names(&values),
         [
             "subscribe",
-            "commands",
             "prompt",
             "subscribe",
             "cancel",
@@ -729,10 +722,11 @@ fn two_kept_commands_for_one_other_session_share_one_subscribe() {
         ]
     );
     assert_eq!(values[0]["session_id"], S_A);
-    assert_eq!(values[3]["session_id"], S_B);
-    assert_eq!(values[3]["args"]["level"], "summary");
-    assert_eq!(values[4]["id"], "c_1");
-    assert_eq!(values[5]["id"], "c_2");
+    assert_eq!(values[2]["session_id"], S_B);
+    assert_eq!(values[2]["args"]["level"], "summary");
+    assert_eq!(values[3]["id"], "c_1");
+    assert_eq!(values[4]["id"], "c_2");
+    accept_reopen(&mut app, &values[0]);
 }
 
 #[test]
@@ -908,10 +902,8 @@ fn an_unwritten_line_still_fails_back_to_the_draft() {
     app.write_failed(lines.get(2..).unwrap_or_default());
     assert_eq!(app.draft(), "hi");
     let again = parsed(&reconnect(&mut app));
-    assert_eq!(
-        names(&again),
-        ["subscribe", "commands", "feed", "recent", "sessions"]
-    );
+    assert_eq!(names(&again), ["subscribe", "feed", "recent", "sessions"]);
+    accept_reopen(&mut app, &again[0]);
 }
 
 #[test]
@@ -985,8 +977,9 @@ fn subs_start_empty_after_a_reconnect() {
     let open = parsed(&sent(&mut app, |app| {
         app.home_click(Spot::Entry(first_key(app)))
     }));
-    assert_eq!(names(&open), ["subscribe", "commands"]);
-    fold(&mut app, accepted(S_B, &id_of(&open[0])));
+    assert_eq!(names(&open), ["subscribe"]);
+    let commands = parsed(&fold(&mut app, accepted(S_B, &id_of(&open[0]))));
+    assert_eq!(names(&commands), ["commands"]);
     app.go_home();
     reconnect(&mut app);
     // The new connection holds nothing for it: the stop subscribes first.

@@ -20,7 +20,7 @@ use std::time::Duration;
 use common::{Setup, install_lua};
 use contract::shapes::ContentPart;
 use contract::tool::{Output, Tool};
-use extensions::{ExecEntry, ExecReply, HostScript, LuaExtension, LuaTool};
+use extensions::{ExecEnd, ExecEntry, ExecReply, HostScript, LuaExtension, LuaTool};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder};
@@ -212,7 +212,7 @@ fn a_scripted_case_sees_the_program_as_written() {
         vec![ExecEntry {
             request: json!({ "program": "bin/mybin", "args": [] }),
             reply: Ok(ExecReply {
-                code: 0,
+                end: ExecEnd::Code(0),
                 stdout: "scripted\n".to_owned(),
                 stderr: String::new(),
             }),

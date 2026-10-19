@@ -82,7 +82,7 @@ fn finish_past_one_park<D>(
     release_again: mpsc::Sender<()>,
 ) -> D {
     let mut poll = fake
-        .origin()
+        .now()
         .checked_add(GROUP_POLL)
         .expect("the poll is countable");
     loop {
@@ -516,14 +516,16 @@ fn the_watcher_settles_an_in_flight_spawn_before_it_finishes() {
         }
     });
     // Held: the spawn is still counted, so the settle the watcher runs
-    // cannot finish yet.
-    assert!(
-        Deadline::after(SHORT).recv(&is_fired).is_err(),
-        "the watcher finished before the spawn settled"
-    );
+    // cannot finish yet. The park comes first: reaching the pause proves
+    // the pass found work left, so the empty channel proves the watcher
+    // did not finish while the spawn stays held.
     Deadline::after(DEADLINE)
         .recv(&is_parked)
-        .expect("the settle reached its park");
+        .expect("the settle reached its park (the watcher finished before the spawn settled)");
+    assert!(
+        matches!(is_fired.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the watcher finished before the spawn settled"
+    );
     // Armed while the first pass is still held, so the next pass pauses
     // too: reaching it proves the first park woke on the bump, with the
     // clock frozen, before any advance below. A probe that still sees the
@@ -726,8 +728,8 @@ impl Drop for ReleaseOnDrop {
     }
 }
 
-/// How long the reaper stays held in the slow-drop test: longer than the
-/// 3 s bound the guards used to take, shorter than `DEADLINE`.
+/// How long the reaper stays held in the slow-drop test, in injected time:
+/// past the old 3 s bound, short of the shutdown end the settle parks at.
 const HELD_FOR: Duration = Duration::from_secs(4);
 
 #[test]
@@ -736,8 +738,9 @@ fn the_terminal_watcher_cancels_and_settles_without_exiting() {
 }
 
 /// A reaper held past the old 3 s bound still lets the terminal watcher's
-/// drop complete: the hold ends on a bounded receive on the wall clock, and
-/// the drop must finish within its bound after the release.
+/// drop complete: the fake clock passes the hold while the reaper stays
+/// held, the drop cannot complete meanwhile, and the drop must finish
+/// within its bound after the release.
 #[test]
 fn a_reaper_held_past_the_old_bound_still_lets_the_terminal_watcher_drop_complete() {
     terminal_watcher_run(Some(HELD_FOR));
@@ -910,12 +913,6 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
     // A third signal still exits nothing: the process is here to drop
     // the guard.
     signal_hook::low_level::raise(SIGTERM).expect("the test's third raise");
-    // Armed while the first pass is still held, so the next pass pauses
-    // too: reaching it proves the first park woke on the bumps, with the
-    // clock frozen, before any advance below.
-    let (parked_again, is_parked_again) = mpsc::channel::<()>();
-    let (resume_again, held_again) = mpsc::channel::<()>();
-    reads.pause_at_settle_park(parked_again, held_again);
     // The guard's drop joins the watcher: started on its own thread, the
     // test receives it within its bound, so a hang fails here instead of
     // hanging the binary. A probe that still sees the group alive after
@@ -928,22 +925,49 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
         dropped.send(()).unwrap_or(());
     });
     if let Some(held_for) = held_for {
-        // The hold ends on a bounded receive on the wall clock, with the
-        // first pass still at its pause: nothing sends on it, so it must
-        // time out. The sender stays bound past the receive, so only a
-        // timeout can end the hold.
-        let (_never, never) = mpsc::channel::<()>();
+        // The reaper stays held while the fake clock passes the old
+        // bound one poll at a time: each pass parks at its poll, so each
+        // advance lands exactly on the named instant, and the empty
+        // channel proves the drop cannot complete while the group stays
+        // listed. The hold stays short of the shutdown end, so the settle
+        // still parks instead of giving up.
+        releases.release_settle();
         assert!(
-            Deadline::after(held_for).recv(&never).is_err(),
-            "the hold ended before {held_for:?}"
+            fake.await_parked(fake.origin() + GROUP_POLL, DEADLINE),
+            "the settle parked at its poll with the reaper held"
         );
         assert!(
-            !drop_by.left().is_zero(),
-            "the hold left no time for the guard's drop"
+            matches!(is_dropped.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "the guard's drop finished with the reaper held"
+        );
+        let hold_end = fake.origin() + held_for;
+        let mut poll = fake.origin() + GROUP_POLL;
+        let mut mark =
+            fake.advance_when_parked(Some(poll), None, GROUP_POLL, &Deadline::after(DEADLINE));
+        poll = poll.checked_add(GROUP_POLL).expect("the hold is countable");
+        while poll <= hold_end {
+            mark =
+                fake.advance_when_parked(Some(poll), None, GROUP_POLL, &Deadline::after(DEADLINE));
+            poll = poll.checked_add(GROUP_POLL).expect("the hold is countable");
+        }
+        assert!(
+            fake.await_parked_since(&mark, Some(hold_end + GROUP_POLL), DEADLINE),
+            "the settle parked again past the old bound"
+        );
+        assert!(
+            matches!(is_dropped.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "the guard's drop finished past the old bound"
         );
     }
+    // Armed before the reaper's release, so the next pass pauses too:
+    // reaching it proves the parked pass woke on the bumps before any
+    // advance below. In the held run the clock already passed the hold
+    // above; the helper starts its drive from now.
+    let (parked_again, is_parked_again) = mpsc::channel::<()>();
+    let (resume_again, held_again) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked_again, held_again);
     releases.release_reaper();
-    // Both bumps land before the settle resumes: the reaper's and the
+    // Both bumps land before the next pass resumes: the reaper's and the
     // stdout reader's, each noted after its bump. One deadline drains the
     // one stream; nothing else bumps afterwards.
     let drain = Deadline::after(DEADLINE);

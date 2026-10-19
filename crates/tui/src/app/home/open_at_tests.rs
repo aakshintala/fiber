@@ -170,15 +170,12 @@ fn a_session_launch_sends_nothing_before_the_link_is_up() {
 fn a_session_launch_opens_with_the_first_feed_and_recent() {
     let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
     let lines = commands(app.on_line(hello()));
-    assert_eq!(lines.len(), 4);
+    assert_eq!(lines.len(), 3);
     assert_eq!(lines[0]["command"], "feed");
     assert_eq!(lines[1]["command"], "recent");
     assert_eq!(lines[2]["command"], "subscribe");
     assert_eq!(lines[2]["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(lines[2]["args"]["level"], "summary");
-    assert_eq!(lines[3]["command"], "commands");
-    assert_eq!(lines[3]["session_id"], "s_aaaaaaaaaaaaaaaa");
-    assert_ne!(lines[2]["id"], lines[3]["id"]);
     assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
     assert!(spent(&app));
 }
@@ -186,7 +183,7 @@ fn a_session_launch_opens_with_the_first_feed_and_recent() {
 #[test]
 fn a_second_hello_sends_no_second_open() {
     let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
-    assert_eq!(commands(app.on_line(hello())).len(), 4);
+    assert_eq!(commands(app.on_line(hello())).len(), 3);
     assert!(app.on_line(hello()).is_empty());
     assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
 }
@@ -359,14 +356,13 @@ fn a_session_launch_with_a_label_puts_it_on_the_first_subscribe() {
         Some("work".to_owned()),
     ));
     let lines = commands(app.on_line(hello()));
-    assert_eq!(lines.len(), 4);
+    assert_eq!(lines.len(), 3);
     assert_eq!(lines[2]["command"], "subscribe");
     assert_eq!(
         lines[2]["args"],
         json!({"level": "summary", "credential": "work"}),
         "the complete args ride on the first subscribe"
     );
-    assert_eq!(lines[3]["command"], "commands");
     assert!(spent(&app), "the launch carries the label once");
     // Spent: a second hello sends no second open, label or not.
     assert!(app.on_line(hello()).is_empty());
@@ -454,11 +450,11 @@ fn a_running_refusal_notice_between_acceptances_keeps_the_screen_attached() {
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
-    // The first acceptance lands, then the switch refusal as a notice.
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
-            .is_empty()
-    );
+    // The first acceptance lands, releasing the `commands` line, then
+    // the switch refusal as a notice.
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
     assert!(
         app.on_line(notice("s_aaaaaaaaaaaaaaaa", "no credential named `nope`"))
             .is_empty()
@@ -491,10 +487,9 @@ fn a_gated_non_notice_line_is_dropped_without_a_notice() {
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
-            .is_empty()
-    );
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
     // A gated line that is not a notice is dropped without becoming
     // one: only an opening notice reports while the replay stays
     // gated, so `||` here would file a spurious `rejected` notice.
@@ -507,16 +502,13 @@ fn a_gated_non_notice_line_is_dropped_without_a_notice() {
 }
 
 #[test]
-fn an_open_sends_summary_and_commands_and_no_full() {
+fn an_open_sends_summary_and_no_full() {
     let mut app = home_at(OpenAt::Home);
     let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "subscribe");
     assert_eq!(lines[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(lines[0]["args"], json!({"level": "summary"}));
-    assert_eq!(lines[1]["command"], "commands");
-    assert_eq!(lines[1]["session_id"], "s_aaaaaaaaaaaaaaaa");
-    assert_ne!(lines[0]["id"], lines[1]["id"]);
     // The first stage is in flight: no `full` goes out before its ack.
     assert!(app.take_raise().is_none());
     assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
@@ -525,6 +517,12 @@ fn an_open_sends_summary_and_commands_and_no_full() {
 #[test]
 fn an_open_with_summary_expected_sends_no_subscribe() {
     let mut app = home_at(OpenAt::Home);
+    let subscribe = app.subscribe(&id("s_aaaaaaaaaaaaaaaa"), Level::Summary);
+    let subscribe: Value = serde_json::from_str(&subscribe).unwrap_or_else(|err| panic!("{err}"));
+    let ack = subscribe["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
     let lines =
         commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), Some(Level::Summary), None, false));
     assert_eq!(lines.len(), 1);
@@ -561,10 +559,9 @@ fn the_first_stage_ack_keeps_the_gate_and_makes_the_raise_due() {
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
-            .is_empty()
-    );
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
     assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
     assert!(
         !app.subscribe_pending(&id("s_aaaaaaaaaaaaaaaa")),
@@ -591,10 +588,9 @@ fn the_raise_ack_ends_the_gate_and_the_first_stage_ack_does_not() {
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
-            .is_empty()
-    );
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
     assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
     let raise = raise_line(&mut app);
     let last = raise["id"]
@@ -620,10 +616,9 @@ fn the_raise_ack_needs_its_own_session_and_ack() {
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
-            .is_empty()
-    );
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
     let raise = raise_line(&mut app);
     let last = raise["id"]
         .as_str()
@@ -697,10 +692,9 @@ fn a_rejected_first_stage_or_raise_fails_the_open() {
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
-            .is_empty()
-    );
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
     let raise = raise_line(&mut app);
     let last = raise["id"]
         .as_str()
@@ -723,10 +717,9 @@ fn home_during_the_open_sends_no_raise() {
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
-            .is_empty()
-    );
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
     assert_eq!(app.leave(), Effect::None, "the level is `summary`");
     assert!(app.on_home());
     assert!(app.take_raise().is_none(), "leaving drops the open");
@@ -734,6 +727,69 @@ fn home_during_the_open_sends_no_raise() {
         !app.subscribe_pending(&id("s_aaaaaaaaaaaaaaaa")),
         "no `full` in flight"
     );
+}
+
+#[test]
+fn an_open_sends_commands_only_after_the_subscribe_ack() {
+    // The `commands` line waits for the subscribe's acceptance: a
+    // refused open sends nothing else, so no second process starts
+    // behind the refusal.
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    assert!(
+        lines.iter().all(|line| line["command"] != "commands"),
+        "commands waits for the subscribe ack, got {lines:?}"
+    );
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
+    assert_eq!(send[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(refused(first, "held by another process"))
+            .is_empty(),
+        "a refused subscribe sends no commands"
+    );
+}
+
+#[test]
+fn an_open_waits_for_an_existing_summary_subscribe() {
+    for accepted in [true, false] {
+        let mut app = home_at(OpenAt::Home);
+        let session = id("s_aaaaaaaaaaaaaaaa");
+        let subscribe = app.subscribe(&session, Level::Summary);
+        let subscribe: Value =
+            serde_json::from_str(&subscribe).unwrap_or_else(|err| panic!("{err}"));
+        let ack = subscribe["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("summary id"));
+        let lines = app.open_session(session.clone(), Some(Level::Summary), None, false);
+        assert!(lines.is_empty(), "commands waits for acceptance: {lines:?}");
+        assert!(app.take_raise().is_none());
+        assert!(app.gated(&session));
+        let answer = if accepted {
+            session_accepted("s_aaaaaaaaaaaaaaaa", ack)
+        } else {
+            refused(ack, "held by another process")
+        };
+        let sent = commands(app.on_line(answer));
+        if accepted {
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0]["command"], "commands");
+            assert_eq!(sent[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+        } else {
+            assert!(sent.is_empty(), "a refused subscribe sends no commands");
+            assert!(app.on_home());
+            assert!(app.take_raise().is_none());
+        }
+    }
 }
 
 #[test]
@@ -759,10 +815,9 @@ fn an_open_from_a_held_full_sends_summary_then_the_raise_later() {
     let first = subscribes[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
-    assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
-            .is_empty()
-    );
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
     let raise = raise_line(&mut app);
     assert_eq!(raise["args"], json!({"level": "full"}));
     let last = raise["id"]

@@ -16,11 +16,22 @@ pub struct HttpEntry {
     pub reply: Result<(u16, Vec<u8>), (ErrorCode, String)>,
 }
 
-/// The result of a scripted `host.exec` run.
+/// How a scripted `host.exec` run ended: its exit code or the signal
+/// that ended it, shaped like a real run's (`host.rs` sets only the
+/// present one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecEnd {
+    /// The process exit code.
+    Code(i32),
+    /// The signal number that ended the process.
+    Signal(i32),
+}
+
+/// The result of a scripted `host.exec` run: how it ended and both streams.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecReply {
-    /// The process exit code.
-    pub code: i32,
+    /// How the run ended.
+    pub end: ExecEnd,
     /// Standard output.
     pub stdout: String,
     /// Standard error.

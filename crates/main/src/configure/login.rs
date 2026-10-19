@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::clock::Clock;
+use contract::shapes::Failure;
 
 use super::from_failure;
 use tui::{BrowserLogin, ConfigureError, LoginKind, LoginShow, LoginTarget, Stored};
@@ -50,7 +51,8 @@ struct SeamLogin {
 
 impl BrowserLogin for SeamLogin {
     fn run(&self) -> Result<Stored, ConfigureError> {
-        let providers = cli::providers_in(&self.home).map_err(super::from_failure)?;
+        let providers =
+            cli::providers_in(&self.home).map_err(|e| super::from_failure(Failure::from(e)))?;
         cli::browser_login(
             &self.home,
             &providers,
@@ -65,7 +67,7 @@ impl BrowserLogin for SeamLogin {
             path,
             replaced: false,
         })
-        .map_err(super::from_failure)
+        .map_err(|e| super::from_failure(Failure::from(e)))
     }
 
     fn cancel(&self) {
@@ -103,20 +105,20 @@ pub(super) fn reviewer_models(
     name: &str,
     clock: Arc<dyn Clock>,
 ) -> Result<tui::ReviewerModels, ConfigureError> {
-    let providers = cli::providers_in(home).map_err(super::from_failure)?;
+    let providers = cli::providers_in(home).map_err(|e| super::from_failure(Failure::from(e)))?;
     cli::reviewer_models(home, &providers, name, clock)
         .map(|choices| tui::ReviewerModels {
             models: choices.models,
             selected: choices.selected,
             notices: choices.notices,
         })
-        .map_err(super::from_failure)
+        .map_err(|e| super::from_failure(Failure::from(e)))
 }
 
 /// Saves `id` as provider `name`'s reviewer: one main-owned global
 /// write. Save errors name the key.
 pub(super) fn set_reviewer(home: &Path, name: &str, id: &str) -> Result<(), ConfigureError> {
-    cli::set_reviewer(home, name, id).map_err(super::from_failure)
+    cli::set_reviewer(home, name, id).map_err(|e| super::from_failure(Failure::from(e)))
 }
 
 /// The installed providers as key rows, then the declared secrets.
@@ -141,7 +143,7 @@ pub(super) fn targets(home: &Path) -> Result<Vec<LoginTarget>, ConfigureError> {
                 })
                 .collect()
         })
-        .map_err(from_failure)
+        .map_err(|e| from_failure(Failure::from(e)))
 }
 
 /// Stores `key` for provider or secret `name`, under `label` for a
@@ -157,7 +159,7 @@ pub(super) fn store(
             path: stored.path,
             replaced: stored.replaced,
         })
-        .map_err(from_failure)
+        .map_err(|e| from_failure(Failure::from(e)))
 }
 
 #[cfg(test)]

@@ -64,12 +64,6 @@ fn the_wait_ends_on_a_new_response_or_cancel() {
 }
 
 #[test]
-fn no_cancel_never_cancels() {
-    use contract::tool::Cancel;
-    assert!(!super::NoCancel.is_cancelled());
-}
-
-#[test]
 fn deadline_is_now_plus_timeout_and_saturates() {
     let clock = fakes::clock::FakeClock::new();
     let now = clock.now();

@@ -63,21 +63,24 @@ impl Loop {
     /// When billed spend has reached `budget.usd`, the turn fails and the
     /// request is not sent (`docs/loop.md`, "Spending budget").
     pub(crate) fn over_budget(&self) -> Option<TurnCompleted> {
+        self.budget_failure()
+            .map(|failure| ended(TurnOutcome::Failed, Some(failure)))
+    }
+
+    /// The same budget refusal for turn steps and separate model requests.
+    pub(crate) fn budget_failure(&self) -> Option<Failure> {
         let limit = self.budget?;
         if self.ledger.spend() < limit {
             return None;
         }
-        Some(ended(
-            TurnOutcome::Failed,
-            Some(Failure {
-                code: ErrorCode::BudgetExceeded,
-                message: format!(
-                    "The session reached its spending budget of ${limit:.2} (budget.usd)."
-                ),
-                retry_after_ms: None,
-                provider: None,
-            }),
-        ))
+        Some(Failure {
+            code: ErrorCode::BudgetExceeded,
+            message: format!(
+                "The session reached its spending budget of ${limit:.2} (budget.usd)."
+            ),
+            retry_after_ms: None,
+            provider: None,
+        })
     }
 
     /// Stops the session's running delegates when the turn ends

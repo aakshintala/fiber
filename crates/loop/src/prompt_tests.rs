@@ -166,8 +166,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        5756,
-        0x9beea9cef13596cc,
+        5824,
+        0x5b3e8974e46fa5d9,
     );
 }
 
@@ -222,6 +222,7 @@ fn messages_md_holds_every_section_the_doc_names() {
         "skill-removed",
         "quota-notice",
         "quota-notice-reset",
+        "search-cancelled",
     ] {
         assert!(
             !message(name).is_empty(),
@@ -233,6 +234,14 @@ fn messages_md_holds_every_section_the_doc_names() {
 #[test]
 fn an_unknown_message_is_empty() {
     assert_eq!(message("no-such-section"), "");
+}
+
+#[test]
+fn a_cancelled_search_reads_its_result_line() {
+    assert_eq!(
+        message("search-cancelled"),
+        "The search was cancelled; no tool was loaded."
+    );
 }
 
 #[test]

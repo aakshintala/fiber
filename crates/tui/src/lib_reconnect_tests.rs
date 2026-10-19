@@ -78,12 +78,12 @@ fn signalled(rx: &Receiver<()>, what: &str, wait: &Deadline) {
     }
 }
 
-/// Runs the terminal on a pty with `connect` and `clock`: the pty pair,
-/// and the exit code once it quits. The hub thread starts once the first
-/// frame is read.
+/// Runs the terminal on `pair`'s pty with `connect` and `clock`: the exit
+/// code once it quits. The hub thread starts once the first frame is
+/// read. The caller opens the pair and watches it first, so every watch
+/// precedes the thread start.
 #[track_caller]
-fn spawn_run(connect: crate::Connect, clock: &Arc<FakeClock>) -> (Pair, Receiver<i32>) {
-    let pair = open();
+fn spawn_run(connect: crate::Connect, clock: &Arc<FakeClock>, pair: &Pair) -> Receiver<i32> {
     let slave = pair
         .slave
         .try_clone()
@@ -98,7 +98,7 @@ fn spawn_run(connect: crate::Connect, clock: &Arc<FakeClock>) -> (Pair, Receiver
             done.send(code).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    (pair, finished)
+    finished
 }
 
 /// Ctrl+C twice, then the exit code within [`DEADLINE`].
@@ -119,8 +119,9 @@ fn run_reconnects_after_a_drop_with_backoff_on_the_fake_clock() {
     let (again, theirs_again) = pair();
     let clock = FakeClock::new();
     let (connect, called, _gone) = dial(vec![(ours, hello()), (again, hello())]);
-    let (mut pair, finished) = spawn_run(connect, &clock);
+    let mut pair = open();
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8], b"lost" as &[u8]]);
+    let finished = spawn_run(connect, &clock, &pair);
     watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     signalled(&called, "the first connect", &Deadline::after(DEADLINE));
     let reader = BufReader::new(
@@ -139,7 +140,12 @@ fn run_reconnects_after_a_drop_with_backoff_on_the_fake_clock() {
         "waited {DEADLINE:?} for the backoff to park on the clock"
     );
     assert!(called.try_recv().is_err());
-    clock.advance(HALF);
+    clock.advance_when_parked(
+        Some(clock.origin() + HALF),
+        None,
+        HALF,
+        &Deadline::after(DEADLINE),
+    );
     signalled(&called, "the reconnect", &Deadline::after(DEADLINE));
     let (_, feed) = command(BufReader::new(theirs_again), "the feed after reconnecting");
     assert_eq!(feed["command"], "feed");
@@ -169,8 +175,9 @@ fn a_prompt_in_flight_is_resent_after_reconnecting() {
     let (again, theirs_again) = pair();
     let clock = FakeClock::new();
     let (connect, called, _gone) = dial(vec![(ours, hello()), (again, hello())]);
-    let (mut pair, finished) = spawn_run(connect, &clock);
+    let mut pair = open();
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
+    let finished = spawn_run(connect, &clock, &pair);
     watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     signalled(&called, "the first connect", &Deadline::after(DEADLINE));
     let reader = BufReader::new(
@@ -196,21 +203,40 @@ fn a_prompt_in_flight_is_resent_after_reconnecting() {
     // The hub hangs up before it answers the prompt.
     drop(reader);
     drop(theirs);
-    assert!(
-        clock.await_parked(clock.origin() + HALF, DEADLINE),
-        "waited {DEADLINE:?} for the backoff to park on the clock"
+    clock.advance_when_parked(
+        Some(clock.origin() + HALF),
+        None,
+        HALF,
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(HALF);
     signalled(&called, "the reconnect", &Deadline::after(DEADLINE));
+    let mut replies = theirs_again
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
     let reader = BufReader::new(theirs_again);
     let (reader, subscribe) = command(reader, "the subscribe after reconnecting");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
-    let (reader, commands) = command(reader, "the commands after reconnecting");
-    assert_eq!(commands["command"], "commands");
-    let (_, resent) = command(reader, "the resent prompt");
+    let (reader, resent) = command(reader, "the resent prompt");
     assert_eq!(resent, prompt);
+    let (reader, feed) = command(reader, "the reconnect feed");
+    assert_eq!(feed["command"], "feed");
+    let (reader, recent) = command(reader, "the reconnect recent");
+    assert_eq!(recent["command"], "recent");
+    let (reader, sessions) = command(reader, "the reconnect sessions");
+    assert_eq!(sessions["command"], "sessions");
+    writeln!(
+        replies,
+        "{}",
+        serde_json::json!({
+            "kind": "command_accepted", "ts": 0, "schema_version": contract::SCHEMA_VERSION,
+            "session_id": "s_aaaaaaaaaaaaaaaa", "payload": {"command_id": subscribe["id"]}
+        })
+    )
+    .unwrap_or_else(|err| panic!("summary acceptance: {err}"));
+    let (_, commands) = command(reader, "commands after subscribe acceptance");
+    assert_eq!(commands["command"], "commands");
     assert_eq!(quit(&mut pair, &finished, &Deadline::after(DEADLINE)), 0);
 }
 
@@ -221,8 +247,9 @@ fn run_stops_retrying_after_a_refused_schema() {
     newer.schema_version = contract::SCHEMA_VERSION + 1;
     let clock = FakeClock::new();
     let (connect, called, gone) = dial(vec![(ours, newer)]);
-    let (mut pair, finished) = spawn_run(connect, &clock);
+    let mut pair = open();
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8], b"schema" as &[u8]]);
+    let finished = spawn_run(connect, &clock, &pair);
     watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     signalled(&called, "the first connect", &Deadline::after(DEADLINE));
     watched(&frames, "the refusal notice", &Deadline::after(DEADLINE));
@@ -239,8 +266,9 @@ fn run_stops_retrying_after_a_refused_schema() {
 fn quitting_during_backoff_ends_the_hub_thread() {
     let clock = FakeClock::new();
     let (connect, called, gone) = dial(Vec::new());
-    let (mut pair, finished) = spawn_run(connect, &clock);
+    let mut pair = open();
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
+    let finished = spawn_run(connect, &clock, &pair);
     watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     signalled(&called, "the first connect", &Deadline::after(DEADLINE));
     assert!(

@@ -74,6 +74,109 @@ impl Drop for Hub {
 }
 
 #[test]
+fn provider_install_uses_the_worker_wire_shape_and_decodes_the_outcome() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let answer = hub.call("install_provider", json!({"workspace":"/remote/ws","provider":"openai"}), json!({"installed":["x"],"summary":["s"],"login":[{"provider":"openai"},{"provider":"codex","error":"e"}]}), |r| r.install_provider(Path::new("/remote/ws"), "openai", fakes::clock::FakeClock::new())).unwrap();
+    assert_eq!(
+        answer,
+        crate::ProviderInstall {
+            installed: vec!["x".into()],
+            summary: vec!["s".into()],
+            login: vec![
+                crate::LoginNeed {
+                    provider: "openai".into(),
+                    error: None
+                },
+                crate::LoginNeed {
+                    provider: "codex".into(),
+                    error: Some("e".into())
+                }
+            ]
+        }
+    );
+    let empty = hub
+        .call(
+            "install_provider",
+            json!({"workspace":"/remote/ws","provider":"openai"}),
+            json!({"installed":[],"summary":[],"login":[]}),
+            |r| {
+                r.install_provider(
+                    Path::new("/remote/ws"),
+                    "openai",
+                    fakes::clock::FakeClock::new(),
+                )
+            },
+        )
+        .unwrap();
+    assert_eq!(empty, crate::ProviderInstall::default());
+}
+
+#[test]
+fn provider_install_refuses_malformed_outcomes() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    for answer in [
+        json!({"installed":[],"summary":[]}),
+        json!({"installed":[],"summary":[],"login":["openai"]}),
+        json!({"installed":"x","summary":[],"login":[]}),
+        json!({"installed":[1],"summary":[],"login":[]}),
+        json!({"installed":[],"summary":"s","login":[]}),
+        json!({"installed":[],"summary":[1],"login":[]}),
+        json!({"installed":[],"summary":[],"login":"openai"}),
+        json!({"installed":[],"summary":[],"login":[{}]}),
+        json!({"installed":[],"summary":[],"login":[{"provider":1}]}),
+        json!({"installed":[],"summary":[],"login":[{"provider":"openai","error":null}]}),
+        json!({"installed":[],"summary":[],"login":[{"provider":"openai","error":1}]}),
+    ] {
+        let error = hub
+            .call(
+                "install_provider",
+                json!({"workspace":"/remote/ws","provider":"openai"}),
+                answer,
+                |r| {
+                    r.install_provider(
+                        Path::new("/remote/ws"),
+                        "openai",
+                        fakes::clock::FakeClock::new(),
+                    )
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::IoFailed);
+        assert_eq!(
+            error.message,
+            "The install_provider answer could not be read."
+        );
+    }
+}
+
+#[test]
+fn provider_install_preserves_rejection_code_and_message() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let deadline = Deadline::start();
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.install_provider(
+            Path::new("/remote/ws"),
+            "openai",
+            fakes::clock::FakeClock::new(),
+        ))
+        .unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "provider install request");
+    assert_eq!(
+        line["args"],
+        json!({"operation":"install_provider","workspace":"/remote/ws","provider":"openai"})
+    );
+    hub.reject(&line, "fetch_failed", "source unavailable");
+    let error = deadline
+        .recv_or_fail(&rx, "provider install rejection")
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::FetchFailed);
+    assert_eq!(error.message, "source unavailable");
+}
+
+#[test]
 fn each_configure_operation_uses_the_hub_wire_shape() {
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
     let w = Path::new("/remote/ws");
@@ -742,6 +845,7 @@ fn catalogue_answers_decode_field_for_field() {
     assert_eq!(
         catalogue,
         Catalogue {
+            installable: Vec::new(),
             models: vec![
                 ModelEntry {
                     reference: "acme/m1".to_owned(),
@@ -817,6 +921,16 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
         )
         .unwrap();
     assert!(catalogue.models.is_empty());
+    assert!(catalogue.installable.is_empty());
+    let installable = hub
+        .call(
+            "models",
+            args.clone(),
+            json!({"models": [], "notices": [], "lists": [], "installable": ["openai"]}),
+            |r| r.models(Refresh::Cached),
+        )
+        .unwrap();
+    assert_eq!(installable.installable, ["openai"]);
     let catalogue = hub
         .call(
             "models",
@@ -831,6 +945,14 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
     assert_eq!(catalogue.models[0].levels, vec!["low".to_owned()]);
     // Each malformed answer is an io_failed naming models, with no partial catalogue.
     for (what, answer) in [
+        (
+            "installable not an array",
+            json!({"models": [], "notices": [], "lists": [], "installable": "openai"}),
+        ),
+        (
+            "installable not strings",
+            json!({"models": [], "notices": [], "lists": [], "installable": [1]}),
+        ),
         (
             "a model without reference",
             json!({"models": [{"provider": "a", "id": "m", "levels": [], "roles": []}],

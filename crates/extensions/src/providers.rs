@@ -182,28 +182,17 @@ pub fn leave_out_invalid(
 }
 
 /// Reads every model's `prompt_addendum` file against `dir`, by model id.
-/// A file that cannot be read is one `extension_failed` notice naming
-/// `extension`, so `load` and `add_lua` share the one loop.
+/// Callers reject a staged package or leave an installed package out with
+/// an `extension_failed` notice when a file cannot be read.
 fn read_addenda(
     dir: &Path,
     models: &[ModelData],
-    extension: &str,
-) -> Result<BTreeMap<String, String>, Notice> {
+) -> Result<BTreeMap<String, String>, config::ConfigError> {
     let mut addenda = BTreeMap::new();
     for model in models {
         if let Some(relative) = model.prompt_addendum.as_deref() {
-            match config::read_package_text(dir, relative, "prompt_addendum") {
-                Ok(text) => {
-                    addenda.insert(model.id.clone(), text);
-                }
-                Err(e) => {
-                    return Err(Notice {
-                        code: ErrorCode::ExtensionFailed,
-                        message: e.to_string(),
-                        extension: Some(extension.to_owned()),
-                    });
-                }
-            }
+            let text = config::read_package_text(dir, relative, "prompt_addendum")?;
+            addenda.insert(model.id.clone(), text);
         }
     }
     Ok(addenda)
@@ -278,7 +267,7 @@ impl Providers {
     /// numbers. Each damaged directory leaves one `extension_failed`
     /// notice naming it and the fix, before the healthy entries' notices.
     pub fn load(home: &Path) -> Result<(Self, Vec<Notice>), Error> {
-        Self::load_with(home, |_| true)
+        Self::load_with(home, |_: &str| true, &crate::RepositorySet::default())
     }
 
     /// Reads the installed providers enabled by the effective configuration.
@@ -287,15 +276,75 @@ impl Providers {
         home: &Path,
         config: &config::Config,
     ) -> Result<(Self, Vec<Notice>), Error> {
-        Self::load_with(home, |name| crate::is_enabled(config, name))
+        Self::load_with(
+            home,
+            |name: &str| crate::is_enabled(config, name),
+            &crate::RepositorySet::default(),
+        )
+    }
+
+    /// Reads the session's providers from the merged personal and
+    /// repository entries: an approved repository copy replaces the
+    /// personal install of the same name, with one notice naming both,
+    /// whether or not it is enabled. A damaged personal install keeps
+    /// its `extension_failed` notice.
+    pub fn load_repository(
+        home: &Path,
+        config: &config::Config,
+        repository: &crate::RepositorySet,
+    ) -> Result<(Self, Vec<Notice>), Error> {
+        Self::load_with(
+            home,
+            |name: &str| crate::is_enabled(config, name),
+            repository,
+        )
+    }
+
+    /// Reads the provider table an install will put in place before committing.
+    pub fn load_planned(home: &Path, plan: &crate::Plan<'_>) -> Result<(Self, Vec<Notice>), Error> {
+        let mut entries = crate::installed::read_entries(home)?;
+        let notices = entries
+            .damaged
+            .iter()
+            .map(|hit| Notice {
+                code: ErrorCode::ExtensionFailed,
+                message: hit.to_string(),
+                extension: Some(short_name(&hit.name).to_owned()),
+            })
+            .collect();
+        entries
+            .found
+            .retain(|entry| !plan.items().any(|item| item.name == entry.installed.name));
+        let (installed, _) =
+            crate::repository::candidates(entries.found, &crate::RepositorySet::default(), &|_| {
+                true
+            });
+        let mut candidates: Vec<_> = installed
+            .into_iter()
+            .map(|candidate| (candidate, false))
+            .collect();
+        for item in plan.items() {
+            candidates.push((
+                crate::repository::Candidate {
+                    name: item.name.clone(),
+                    version: item.version.clone(),
+                    dir: item.staged().to_path_buf(),
+                    manifest: item.manifest.clone(),
+                    key: crate::install::slug(&item.name)?,
+                },
+                true,
+            ));
+        }
+        candidates.sort_by(|(a, _), (b, _)| a.key.cmp(&b.key));
+        Self::load_candidates(home, candidates, notices)
     }
 
     fn load_with(
         home: &Path,
         enabled: impl Fn(&str) -> bool,
+        repository: &crate::RepositorySet,
     ) -> Result<(Self, Vec<Notice>), Error> {
         let entries = crate::installed::read_entries(home)?;
-        let mut providers = Self::default();
         let mut notices = Vec::new();
         // A damaged directory contributes no provider, model or secret:
         // one notice naming it and the fix, in the order `read_entries`
@@ -307,12 +356,28 @@ impl Providers {
                 extension: Some(short_name(&hit.name).to_owned()),
             });
         }
-        for entry in entries.found {
-            let dir = entry.dir;
-            let manifest = entry.manifest;
-            if !enabled(&manifest.name) {
-                continue;
-            }
+        // An approved repository copy replaces the personal install of
+        // the same name: the merged list carries both in slug order, with
+        // one notice per shadowed install.
+        let (merged, mut shadows) =
+            crate::repository::candidates(entries.found, repository, &enabled);
+        notices.append(&mut shadows);
+        Self::load_candidates(
+            home,
+            merged.into_iter().map(|candidate| (candidate, false)),
+            notices,
+        )
+    }
+
+    fn load_candidates(
+        home: &Path,
+        candidates: impl IntoIterator<Item = (crate::repository::Candidate, bool)>,
+        mut notices: Vec<Notice>,
+    ) -> Result<(Self, Vec<Notice>), Error> {
+        let mut providers = Self::default();
+        for (candidate, staged) in candidates {
+            let dir = candidate.dir;
+            let manifest = candidate.manifest;
             if manifest.api != API {
                 notices.push(Notice {
                     code: ErrorCode::ExtensionIncompatible,
@@ -369,8 +434,8 @@ impl Providers {
             let mut buffered: Vec<(ProviderData, BTreeMap<String, String>)> = Vec::new();
             let mut failed: Option<Notice> = None;
             // The built-in provider's name is reserved: a package that
-            // claims it is left out, with one notice, like a bad addendum
-            // leaves its providers out.
+            // claims it keeps none of its providers, with one
+            // `extension_failed` notice naming the package.
             datas.retain(|data| {
                 if data.name != scripted::SCRIPTED {
                     return true;
@@ -390,10 +455,17 @@ impl Providers {
                 // one of its files succeeds: a bad addendum leaves out all
                 // of its providers, with one notice, and other extensions
                 // load (`docs/system-prompt.md`, "Extension texts").
-                match read_addenda(&dir, &data.models, &manifest.name) {
+                match read_addenda(&dir, &data.models) {
                     Ok(addenda) => buffered.push((data, addenda)),
-                    Err(notice) => {
-                        failed = Some(notice);
+                    Err(error) => {
+                        if staged {
+                            return Err(Error::Config(error));
+                        }
+                        failed = Some(Notice {
+                            code: ErrorCode::ExtensionFailed,
+                            message: error.to_string(),
+                            extension: Some(manifest.name.clone()),
+                        });
                         break;
                     }
                 }
@@ -625,9 +697,15 @@ impl Providers {
         let notices = self.admit(&name, extension, &mut models);
         // The addenda resolve against the Lua extension's package
         // directory, replacing the data file's with the final models.
-        let addenda = match read_addenda(provider.dir(), &models, extension) {
+        let addenda = match read_addenda(provider.dir(), &models) {
             Ok(addenda) => addenda,
-            Err(notice) => return vec![notice],
+            Err(error) => {
+                return vec![Notice {
+                    code: ErrorCode::ExtensionFailed,
+                    message: error.to_string(),
+                    extension: Some(extension.to_owned()),
+                }];
+            }
         };
         match self.by_name.get_mut(&name) {
             Some(data) => {

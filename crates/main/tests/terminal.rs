@@ -1536,6 +1536,24 @@ fn events_bytes(setup: &support::Setup, id: &str) -> Vec<u8> {
     fs::read(sessions(setup).join(id).join("events.jsonl")).unwrap()
 }
 
+/// The kinds of the complete lines in raw log `bytes`, in order: a
+/// trailing partial line is still arriving and never counts, and a
+/// line that is not JSON reports itself instead of panicking, so a
+/// failing whole-log assertion prints kinds, not two byte arrays.
+fn kinds_of_bytes(bytes: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let complete = text.rfind('\n').map_or("", |end| &text[..=end]);
+    complete
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|line| line.get("kind").and_then(Value::as_str).map(str::to_owned))
+                .unwrap_or_else(|| format!("unparsed: {line}"))
+        })
+        .collect()
+}
+
 /// The kinds of the session's log, in order.
 fn event_kinds(events: &[Value]) -> Vec<&str> {
     events
@@ -2080,10 +2098,12 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
         1,
         "the refused resume sends no new request"
     );
-    assert_eq!(
-        events_bytes(&setup, &id),
-        before,
-        "the refused resume appends nothing to the log"
+    let after = events_bytes(&setup, &id);
+    assert!(
+        after == before,
+        "the refused resume appends nothing to the log: after kinds {:?}, before kinds {:?}",
+        kinds_of_bytes(&after),
+        kinds_of_bytes(&before),
     );
     assert_config_unchanged(&setup, &before_config);
     quit_clean(run);

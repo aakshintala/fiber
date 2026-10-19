@@ -170,6 +170,7 @@ fn parts(
         reads,
         log::diag::Process::Session,
         extensions::StateSeed::new(),
+        crate::session_extensions::RepositoryScope::default(),
     )
 }
 

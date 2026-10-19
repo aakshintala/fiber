@@ -206,6 +206,7 @@ fn the_models_prose_reasoning_and_results_are_left_out() {
             changed_by: None,
             provider_item: None,
             hosts_surfaced: Vec::new(),
+            loaded: None,
         }),
     ] {
         render_reviewed(&mut reviewed, &event, Some(&action), Some(Seq(20)));
@@ -657,7 +658,8 @@ fn the_effects_item_names_the_call_under_review() {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => panic!(
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => panic!(
                 "the effects item is a user message, got {:?}",
                 conversation[2]
             ),

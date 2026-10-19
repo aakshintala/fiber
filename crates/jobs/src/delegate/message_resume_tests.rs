@@ -24,6 +24,7 @@ use super::super::Watched;
 use super::{DelegateMessage, LastSeq, Launch, Steer, Steered, Watch};
 use crate::registry::Registry;
 use crate::support::{delegate_finished, delegate_started, ended_ok, exited};
+use crate::timing_tests::{Step, try_step};
 use contract::Envelope;
 
 /// How long a test waits on the wall clock before it fails.
@@ -372,18 +373,42 @@ fn park_ahead(clock: &FakeClock) -> Option<Instant> {
 
 /// Advances the fake clock only from the runner's own park: a park at
 /// most one poll ahead moves time to its `until`; anything further ahead
-/// is the drain wait and is never advanced. Ends when `stop` is set,
-/// which the single wall-clock wait below sets on every outcome.
-fn drive(clock: &FakeClock, stop: &AtomicBool) {
-    while !stop.load(Ordering::Relaxed) {
-        match park_ahead(clock) {
+/// is the drain wait and is never advanced. Each pass advances to the
+/// park it just read, through `try_advance_when_parked`; a pass that
+/// finds no fresh park loops, and a pass that finds a park at another
+/// instant carries that instant into the next pass. Ends when `stop` is
+/// set, which the single wall-clock wait below sets on every outcome,
+/// and fails at the driver's own deadline naming the wait.
+fn drive(clock: &FakeClock, stop: &AtomicBool, deadline: fakes::Deadline) {
+    let mut carried: Option<Instant> = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        if deadline.left().is_zero() {
+            panic!(
+                "the runner never reported; now={:?} parked={:?}",
+                clock.now(),
+                clock.parked()
+            );
+        }
+        let mut candidate = carried.take();
+        if candidate.is_some_and(|watched| watched <= clock.now()) {
+            candidate = None;
+        }
+        match candidate.or_else(|| park_ahead(clock)) {
             Some(until) => {
                 let now = clock.now();
                 match until.checked_duration_since(now) {
                     // The runner's poll horizon: a park further ahead is
                     // the drain wait, which its own end wakes.
                     Some(gap) if gap <= Duration::from_secs(1) => {
-                        clock.advance(gap);
+                        match try_step(clock, until, gap) {
+                            Step::Moved | Step::NoPark => {}
+                            Step::Next(watched) => {
+                                carried = Some(watched);
+                            }
+                        }
                     }
                     _ => thread::yield_now(),
                 }
@@ -408,9 +433,10 @@ fn take_notice(rig: &ResumeRig) -> contract::inbox::JobNotice {
 fn reported(rig: &ResumeRig) -> contract::inbox::JobNotice {
     let stop = AtomicBool::new(false);
     let clock = Arc::clone(&rig.clock);
+    let deadline = fakes::Deadline::after(DEADLINE);
     thread::scope(|scope| {
-        scope.spawn(|| drive(&clock, &stop));
-        let result = fakes::Deadline::after(DEADLINE).recv(&rig.inbox);
+        scope.spawn(|| drive(&clock, &stop, deadline));
+        let result = deadline.recv(&rig.inbox);
         stop.store(true, Ordering::Relaxed);
         match result {
             Ok(Delivery::Job(notice)) => notice,
@@ -942,7 +968,6 @@ fn gone_resumes_once_the_run_ends_during_the_backoff() {
     );
     end_resume_run(finish, &id, "Done.");
     let _run1 = take_notice(&rig);
-    rig.clock.advance(Duration::from_millis(50));
     let output = answered(&rx);
     handle.join().unwrap();
     assert!(output.error.is_none());
@@ -964,12 +989,17 @@ fn closing_after_a_committed_gone_resumes_once_the_run_ends() {
     let (id, finish) = open_resume_delegate(&rig, &output_path);
     let watchdog = Watchdog::matching("fiber-message-closing-gone");
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi", CancelToken::new());
+    let backoff = rig.clock.now() + Duration::from_millis(50);
     assert!(
-        rig.clock
-            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
+        rig.clock.await_parked(backoff, DEADLINE),
         "the call parks its backoff"
     );
-    rig.clock.advance(Duration::from_millis(50));
+    rig.clock.advance_when_parked(
+        Some(backoff),
+        None,
+        Duration::from_millis(50),
+        &fakes::Deadline::after(DEADLINE),
+    );
     // The closing rejection clears the committed mark; the closing wait
     // follows on the session clock.
     let at = rig.clock.now() + BOUND;

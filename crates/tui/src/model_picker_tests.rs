@@ -186,6 +186,7 @@ fn a_model_with_no_levels_has_no_chip() {
 fn the_selection_stays_on_its_model_across_the_toggle() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -215,6 +216,7 @@ fn the_selection_stays_on_its_model_across_the_toggle() {
 fn move_chip_from_no_chip_takes_the_near_end_and_marks_touched() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -241,6 +243,7 @@ fn move_chip_from_no_chip_takes_the_near_end_and_marks_touched() {
 fn move_chip_on_a_model_with_no_levels_does_nothing() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -259,6 +262,7 @@ fn move_chip_on_a_model_with_no_levels_does_nothing() {
 fn toggle_moves_the_selection_to_the_first_row_when_its_model_hides() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -278,6 +282,7 @@ fn toggle_moves_the_selection_to_the_first_row_when_its_model_hides() {
 fn open_over(models: Vec<ModelEntry>) -> ModelPicker {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models,
             notices: Vec::new(),
             lists: Vec::new(),
@@ -297,6 +302,7 @@ fn a_replacement_inserting_before_the_selection_keeps_its_model() {
     let mut models = vec![entry("acme/m0", &["low"], Some("low"), None)];
     models.extend(catalogue());
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -321,6 +327,7 @@ fn a_replacement_removing_the_selected_model_clamps() {
     let mut models = catalogue();
     models.pop();
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -334,6 +341,7 @@ fn a_replacement_removing_the_selected_model_clamps() {
     let mut models = catalogue();
     models.remove(1);
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -357,6 +365,7 @@ fn chips_follow_the_level_name_across_a_replacement() {
     models[0].levels = vec!["high".to_owned(), "low".to_owned()];
     models[1].levels = vec!["high".to_owned(), "low".to_owned()];
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -374,6 +383,7 @@ fn an_open_before_the_first_answer_preselects_the_current_model() {
     picker.open(Mode::Choose, Some(("acme/m2", Some("low"))));
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -410,6 +420,7 @@ fn page_keys_move_by_the_height_less_one_clamped() {
 fn page_keys_do_nothing_closed_empty_or_without_height() {
     let mut closed = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -422,6 +433,7 @@ fn page_keys_do_nothing_closed_empty_or_without_height() {
     // A scope matching nothing lists no rows to page over.
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -455,6 +467,7 @@ fn the_status_says_reading_until_the_first_answer() {
     );
     // A running refresh beside a catalogue shows on its own line.
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -500,6 +513,7 @@ fn frame_row_clicks_select_without_choosing() {
     models[0].roles = vec!["review".to_owned()];
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models,
             notices: Vec::new(),
             lists: Vec::new(),
@@ -536,6 +550,7 @@ fn the_first_chip_click_follows_the_roles_cell() {
     model.roles.push("review".to_owned());
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: vec![model],
             notices: Vec::new(),
             lists: Vec::new(),
@@ -555,6 +570,7 @@ fn the_first_chip_click_follows_the_roles_cell() {
 fn each_chip_click_advances_one_cell() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: vec![entry("acme/m1", &["low", "high"], None, None)],
             notices: Vec::new(),
             lists: Vec::new(),
@@ -679,6 +695,7 @@ fn start_args_carry_the_model_exactly_with_a_level_override() {
 fn choice_is_none_while_closed_or_with_no_scoped_row() {
     let closed = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -688,6 +705,7 @@ fn choice_is_none_while_closed_or_with_no_scoped_row() {
     assert!(closed.choice(false).is_none());
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -705,6 +723,7 @@ fn clicks_choose_at_the_row_and_chip() {
     models[0].roles = vec!["review".to_owned()];
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models,
             notices: Vec::new(),
             lists: Vec::new(),
@@ -774,6 +793,7 @@ fn an_open_checklist_starts_marked_from_the_list() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -798,6 +818,7 @@ fn toggle_mark_flips_only_the_selected_row() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -830,6 +851,7 @@ fn adopt_scoped_keeps_touched_rows_and_derives_the_rest() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -880,6 +902,7 @@ fn scope_clicks_toggle_the_mark_cell_and_select_on_any_other() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -919,6 +942,7 @@ fn toggle_mark_with_no_shown_row_changes_nothing() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -943,6 +967,7 @@ fn marks_survive_query_edits() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1034,6 +1059,7 @@ fn a_read_keeps_checklist_marks_by_reference() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1051,6 +1077,7 @@ fn a_read_keeps_checklist_marks_by_reference() {
     models.remove(1);
     models.push(entry("zeta/z9", &["low"], Some("low"), None));
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1068,12 +1095,14 @@ fn a_read_leaves_a_choose_open_without_marks() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
     };
     picker.open(Mode::Choose, None);
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1091,6 +1120,7 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1103,6 +1133,7 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
     // A refresh that briefly empties the catalogue leaves no rows, so
     // no marks either.
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models: Vec::new(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1114,6 +1145,7 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
     // The next answer marks every row from the saved list again, so
     // toggling and saving work.
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1289,6 +1321,7 @@ fn a_replacement_with_a_query_keeps_the_selection_on_the_shown_rows() {
     let mut models = catalogue();
     models.remove(1);
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1332,6 +1365,7 @@ fn the_checklist_filters_every_installed_model() {
 fn open_listed(lists: Vec<crate::catalogue::ListAge>) -> ModelPicker {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists,
@@ -1815,4 +1849,202 @@ fn the_home_choice_marks_only_its_row() {
         .map(|model| model.id.as_str())
         .collect();
     assert_eq!(only, ["m2"]);
+}
+
+#[test]
+fn an_answer_with_nothing_owed_leaves_no_mark_and_keeps_balance() {
+    // Owed 0: an answer with no read out clears no mark, and the next
+    // take/store cycle still balances.
+    let mut picker = open_over(catalogue());
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.refreshing, None);
+    assert_eq!(picker.owed, 0);
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.refreshing, None);
+    assert_eq!(picker.owed, 0);
+    // A taken `Cached` read counts as owed too, without ever marking.
+    picker.want = Some(crate::catalogue::Refresh::Cached);
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Cached));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, None);
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn one_owed_read_clears_the_mark_when_it_answers() {
+    // Owed 1: one read out, and its answer clears the mark.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Stale));
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn a_second_owed_read_keeps_the_mark_until_it_answers() {
+    // Owed 2: a refresh queued behind a running read. The older answer
+    // counts down without clearing, so the queued read keeps its mark
+    // until its own answer lands.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    picker.store(Err("the first read's group died".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err("the second read's group died".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn the_startup_read_counts_as_owed_until_it_answers() {
+    // The startup ask bypasses `take_read`, so it counts through
+    // `note_asked`: its answer landing after a meanwhile taken read keeps
+    // that read's mark.
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            installable: Vec::new(),
+            models: catalogue(),
+            notices: Vec::new(),
+            lists: Vec::new(),
+        },
+        ..ModelPicker::default()
+    };
+    picker.note_asked();
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, None);
+    picker.open(Mode::Choose, None);
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    assert_eq!(picker.owed, 2);
+    // The startup read answers first, while the open read still runs.
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Stale));
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn takes_merged_into_the_queued_slot_answer_once() {
+    // Two Ctrl+R presses while a `Stale` read runs merge into the one
+    // queued slot and answer once: the third take counts nothing more,
+    // so two answers clear the mark instead of leaking one owed read.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    picker.store(Err("the running read died".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err("the queued read died".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn a_failed_queued_start_answers_its_single_owed_read() {
+    // The queued start's spawn failure sends one error for the whole
+    // queue (`catalogue::Reader::ask_with`): it answers the one counted
+    // queued read, clearing the mark instead of leaking it.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    // The running read answers, then the queued start fails to spawn.
+    picker.store(Err("the running read died".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err(
+        "terminal: could not start the model-list reader: no thread".to_owned(),
+    ));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn a_failed_spawn_followed_by_two_asks_keeps_the_mark_until_the_last_answer() {
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+
+    use crate::Input;
+    use crate::catalogue::{ReadModels, Reader, Refresh};
+    // #2738's P1: a failed spawn's error waits unconsumed while two
+    // later takes ask. Both wait on the busy reader (one queued, one
+    // merged) instead of starting over the error, so two answers arrive
+    // for two owed reads and the mark holds until the last one.
+    let read: ReadModels = Arc::new(|_| Ok(Catalogue::default()));
+    let mut reader = Reader::new(Some(read));
+    let (tx, rx) = mpsc::channel();
+    let spawns = Arc::new(Mutex::new(0usize));
+    let counting = || {
+        let spawns = Arc::clone(&spawns);
+        move |_: std::thread::Builder,
+              _: Box<dyn FnOnce() + Send + 'static>|
+              -> std::io::Result<std::thread::JoinHandle<()>> {
+            *spawns.lock().unwrap() += 1;
+            Err(std::io::Error::other("no thread"))
+        }
+    };
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(Refresh::Stale));
+    reader.ask_with(Refresh::Stale, &tx, counting());
+    // Two Ctrl+R presses before the failure's error is consumed.
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(Refresh::Every));
+    reader.ask_with(Refresh::Every, &tx, counting());
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(Refresh::Every));
+    reader.ask_with(Refresh::Every, &tx, counting());
+    assert_eq!(picker.owed, 2);
+    assert_eq!(picker.refreshing, Some(Refresh::Every));
+    // Only the failed start spawned: the next ask queued, the third
+    // merged into it. Without the fix the second ask spawns again, and
+    // the two counted answers clear the mark before the third lands.
+    assert_eq!(*spawns.lock().unwrap(), 1);
+    // The failure's error answers first, keeping the queued read's mark.
+    let wait = fakes::Deadline::after(Duration::from_secs(10));
+    let first = match wait.recv(&rx) {
+        Ok(Input::Models(result)) => result,
+        Ok(_) => panic!("the failed spawn: the failure, not anything else"),
+        Err(error) => panic!("waited 10s for the failure: {error}"),
+    };
+    match &first {
+        Err(message) => assert_eq!(
+            message,
+            "terminal: could not start the model-list reader: no thread"
+        ),
+        Ok(_) => panic!("the failed spawn: the failure, not an answer"),
+    }
+    picker.store(first);
+    reader.done(&tx);
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(Refresh::Every));
+    // The queued read runs now and answers last, clearing the mark.
+    let second = match wait.recv(&rx) {
+        Ok(Input::Models(result)) => result,
+        Ok(_) => panic!("the queued read: an answer, not anything else"),
+        Err(error) => panic!("waited 10s for the queued read: {error}"),
+    };
+    assert!(second.is_ok());
+    picker.store(second);
+    reader.done(&tx);
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }

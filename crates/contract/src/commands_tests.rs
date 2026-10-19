@@ -101,6 +101,8 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
         json!({"id": "c", "command": "history", "args": {}}),
         json!({"id": "c", "command": "history", "args": {"to_seq": 10}}),
+        json!({"id": "c", "command": "history", "args": {"session_id": "s_0123456789abcdef", "to_seq": 10}}),
+        json!({"id": "c", "command": "history", "args": {"session_id": "s_0123456789abcdef", "from_seq": 0, "to_seq": 10}}),
         json!({"id": "c", "command": "artifact_page", "args": {"path": "artifacts/a_3.txt", "offset": 0}}),
         json!({"id": "c", "command": "artifact_page", "args": {"path": "artifacts/a_3.txt", "offset": 4096}}),
         json!({"id": "c", "command": "model",
@@ -458,18 +460,24 @@ fn history_args_that_do_not_fit_are_invalid_arguments() {
     assert_eq!(
         line.command,
         Command::History(HistoryArgs {
+            session_id: None,
             from_seq: None,
             to_seq: None,
         })
     );
     assert!(parse(r#"{"id":"c","command":"history","args":{"from_seq":"0"}}"#).is_err());
     assert!(parse(r#"{"id":"c","command":"history","args":{"from_seq":0,"extra":true}}"#).is_err());
+    for session_id in [json!(5), json!(["s"]), json!({})] {
+        let line = json!({"id":"c","command":"history","args":{"session_id":session_id}});
+        assert!(parse(&line.to_string()).is_err(), "{line}");
+    }
     assert!(parse(r#"{"id":"c","command":"history","args":{"to_seq":"5"}}"#).is_err());
     assert!(parse(r#"{"id":"c","command":"history","args":{"to_seq":5,"extra":true}}"#).is_err());
 }
 
 #[test]
 fn an_optional_arg_set_to_null_is_invalid_arguments() {
+    assert!(parse(r#"{"id":"c","command":"history","args":{"session_id":null}}"#).is_err());
     assert!(
         parse(r#"{"id":"c","command":"history","args":{"from_seq":0,"to_seq":null}}"#).is_err()
     );

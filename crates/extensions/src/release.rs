@@ -8,16 +8,16 @@
 
 mod unpack;
 
-use std::fs::{self, DirBuilder};
+use std::fs::{self};
 use std::io::{self, ErrorKind};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use contract::clock::Clock;
 
 use crate::Error;
-use crate::install::{Provenance, Record, check, commit_all, copy, io, remove, stage};
+use crate::install::{
+    Provenance, Record, Scratch, check, commit_all, copy, io, remove, stage, unique_name,
+};
 use crate::installed::lock;
 use crate::prepare::{download, hex};
 use unpack::{LIMITS, unpack};
@@ -26,11 +26,6 @@ use unpack::{LIMITS, unpack};
 pub(crate) const DOCS: &str = "fiber-docs.tar.gz";
 /// The release's first-party extensions archive.
 pub(crate) const EXTENSIONS: &str = "fiber-extensions.tar.gz";
-
-/// How many scratch directory names a call tries before it fails.
-const SCRATCH_TRIES: usize = 64;
-
-static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 /// The release whose docs and first-party extensions are put in place.
 #[derive(Debug, Clone)]
@@ -72,8 +67,8 @@ pub(crate) fn install_release_with(
     let extensions = fetch(release, EXTENSIONS)?;
     verify(release, DOCS, &docs)?;
     verify(release, EXTENSIONS, &extensions)?;
-    let scratch = scratch(&std::env::temp_dir())?;
-    let docs_dir = scratch.unpack(&docs.bytes, DOCS, "docs")?;
+    let scratch = Scratch::create(&std::env::temp_dir(), "fiber-release", 0o700)?;
+    let docs_dir = unpack_into(&scratch, &docs.bytes, DOCS, "docs")?;
     if fs::read_dir(&docs_dir)
         .map_err(io(&docs_dir))?
         .next()
@@ -81,7 +76,7 @@ pub(crate) fn install_release_with(
     {
         return Err(bad(DOCS, "holds no entries".into()));
     }
-    let extensions_dir = scratch.unpack(&extensions.bytes, EXTENSIONS, "extensions")?;
+    let extensions_dir = unpack_into(&scratch, &extensions.bytes, EXTENSIONS, "extensions")?;
     let shorts = layout(&extensions_dir, &release.version)?;
 
     config::create_fiber_home(home)?;
@@ -101,14 +96,14 @@ pub(crate) fn install_release_with(
             floor: None,
         };
         let source = extensions_dir.join(short);
-        let (_, _, paths) = stage(home, scratch.n, &source, &release.version, &record)?;
+        let (_, _, paths) = stage(home, &source, &release.version, &record)?;
         staging.0.push(paths.fresh.clone());
         staged.push(paths);
         names.push(name);
     }
-    let pid = std::process::id();
-    let fresh = home.join(format!(".docs.{pid}.{}.new", scratch.n));
-    let old = home.join(format!(".docs.{pid}.{}.old", scratch.n));
+    let stem = unique_name(".docs");
+    let fresh = home.join(format!("{stem}.new"));
+    let old = home.join(format!("{stem}.old"));
     remove(&fresh)?;
     staging.0.push(fresh.clone());
     copy(&docs_dir, &fresh)?;
@@ -258,45 +253,12 @@ fn swap_docs(
     Ok(())
 }
 
-/// A directory only this call uses, removed when it is dropped. `n` also
-/// names this call's staging directories.
-struct Scratch {
-    path: PathBuf,
-    n: usize,
-}
-
-impl Scratch {
-    /// Unpacks `archive` into a new `<scratch>/<sub>/`.
-    fn unpack(&self, archive: &[u8], name: &str, sub: &str) -> Result<PathBuf, Error> {
-        let into = self.path.join(sub);
-        fs::create_dir(&into).map_err(io(&into))?;
-        unpack(archive, &into, name, &LIMITS)?;
-        Ok(into)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        remove(&self.path).unwrap_or(());
-    }
-}
-
-/// Makes `<dir>/fiber-release-<pid>-<n>`, mode 0700, with a name no other
-/// call has: a name already taken moves on to the next `n`.
-fn scratch(dir: &Path) -> Result<Scratch, Error> {
-    let pid = std::process::id();
-    for _ in 0..SCRATCH_TRIES {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = dir.join(format!("fiber-release-{pid}-{n}"));
-        match DirBuilder::new().mode(0o700).create(&path) {
-            Ok(()) => return Ok(Scratch { path, n }),
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(io(&path)(e)),
-        }
-    }
-    Err(io(dir)(io::Error::other(
-        "every scratch directory name tried is taken",
-    )))
+/// Unpacks `archive` into a new `<scratch>/<sub>/`.
+fn unpack_into(scratch: &Scratch, archive: &[u8], name: &str, sub: &str) -> Result<PathBuf, Error> {
+    let into = scratch.path().join(sub);
+    fs::create_dir(&into).map_err(io(&into))?;
+    unpack(archive, &into, name, &LIMITS)?;
+    Ok(into)
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ impl super::Seam {
         Ok(json!({
             "models": catalogue.models.iter().map(entry).collect::<Vec<_>>(),
             "notices": catalogue.notices,
+            "installable": catalogue.installable,
             "lists": catalogue.lists.iter().map(age).collect::<Vec<_>>(),
         }))
     }

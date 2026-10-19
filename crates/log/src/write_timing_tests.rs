@@ -126,15 +126,18 @@ fn timers_stamp_at_each_call_s_completion() {
     let (dir, clock, log) = timed("log-write-stamps");
     let advancing = Arc::clone(&clock);
     before_sync(move || {
+        // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
         advancing.advance(Duration::from_millis(5));
     });
     let advancing = Arc::clone(&clock);
     after_sync(move || {
+        // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
         advancing.advance(Duration::from_millis(7));
         None
     });
     let advancing = Arc::clone(&clock);
     before_emit(move || {
+        // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
         advancing.advance(Duration::from_millis(50));
     });
     log.append(&synced(), None, None).unwrap();

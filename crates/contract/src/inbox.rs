@@ -172,6 +172,8 @@ pub enum Delivery {
     /// writes it as `shell_command` at the drain that takes it, then
     /// answers `Ok(None)` (`docs/invocation.md`, "Shell").
     Shell(crate::events::ShellCommand, Ack),
+    /// Proposes reviewer-note lines between turns, without conversation.
+    ProposeNotes(crate::notes::NotesAsk, Ack),
 }
 
 /// News that a background job ended, sent by the session's jobs registry.

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use contract::{Envelope, Seq};
+use contract::{Envelope, Seq, SessionId};
 
 use crate::offsets::{After, Offsets, Page};
 use crate::{EVENTS, Error, io_at, open_log};
@@ -114,6 +114,229 @@ impl Iterator for Lines {
 /// before a torn tail.
 pub(crate) fn complete_len(bytes: &[u8]) -> usize {
     bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1)
+}
+
+/// The most of a log's end read to find its last line or scan it back:
+/// `fiber_exited` and `rewound` are far shorter, so a longer last line
+/// is neither.
+const TAIL: u64 = 64 * 1024;
+
+/// Whether `id` is one normal path component: non-empty with no
+/// separator, never `.` or `..`. The check sits where the path is
+/// joined, so no caller can escape `sessions/`.
+fn valid_id(id: &SessionId) -> bool {
+    if id.0.is_empty() {
+        return false;
+    }
+    let mut parts = std::path::Path::new(&id.0).components();
+    matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
+}
+
+/// The first project in key order holding `id`, with `logged` choosing
+/// the predicate: a directory, or a directory with a log file. One
+/// `read_dir` of `projects/` per call; no `sessions/` is ever scanned.
+fn walk(home: &Path, id: &SessionId, logged: bool) -> Option<(String, PathBuf)> {
+    if !valid_id(id) {
+        return None;
+    }
+    let mut projects: Vec<(String, PathBuf)> = std::fs::read_dir(home.join("projects"))
+        .ok()?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let key = entry.file_name().to_string_lossy().into_owned();
+            Some((key, entry.path()))
+        })
+        .collect();
+    projects.sort_by(|a, b| a.0.cmp(&b.0));
+    projects.into_iter().find_map(|(key, project)| {
+        let dir = project.join("sessions").join(&id.0);
+        let held = if logged {
+            dir.join(EVENTS).is_file()
+        } else {
+            dir.is_dir()
+        };
+        held.then_some((key, dir))
+    })
+}
+
+/// Finds session `id`'s directory under any project: its project key
+/// and `home/projects/<key>/sessions/<id>`, the first project in key
+/// order where that path is a directory. `None` when `projects/` is
+/// unreadable, no project holds it, or `id` is not one normal path
+/// component.
+pub fn find_session(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
+    walk(home, id, false)
+}
+
+/// As [`find_session`], but a project counts only when
+/// `sessions/<id>/events.jsonl` is a file: the filter runs per project
+/// before the first is chosen, so a log-less directory cannot mask a
+/// later log.
+pub fn find_logged_session(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
+    walk(home, id, true)
+}
+
+/// The `kind` of one JSON log line. `None` when it does not parse or
+/// holds no string `kind`.
+pub fn kind_of(line: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(line).ok()?;
+    value.get("kind")?.as_str().map(str::to_owned)
+}
+
+/// The `kind` of the log's last line, read from at most [`TAIL`] bytes
+/// of its end. A final line without a trailing newline counts when it
+/// parses. `None` when the log is missing, unreadable, empty, the last
+/// line does not parse, or the last line is longer than the window.
+pub fn last_kind(dir: &Path) -> Option<String> {
+    let mut file = File::open(dir.join(EVENTS)).ok()?;
+    let len = file.metadata().ok()?.len();
+    let from = len.saturating_sub(TAIL);
+    use std::io::{Read, Seek, SeekFrom};
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).ok()?;
+    let body = tail.strip_suffix(b"\n").unwrap_or(&tail);
+    let mut lines = body.rsplitn(2, |byte| *byte == b'\n');
+    let line = lines.next()?;
+    // The whole tail is one line only when it is the whole file.
+    if lines.next().is_none() && from > 0 {
+        return None;
+    }
+    kind_of(line)
+}
+
+/// One past the last `\n` in the log, or 0 when it has none, is empty,
+/// is missing or cannot be read. Never the raw length: a torn tail is
+/// discarded, and a resumed writer truncates a partial line before
+/// appending, so the resumed `fiber_exited` can land at that line's
+/// start. Reads backwards from the end in [`TAIL`]-sized chunks,
+/// stopping at the first chunk holding a newline.
+pub fn complete_len_of(dir: &Path) -> u64 {
+    let file = match File::open(dir.join(EVENTS)) {
+        Ok(file) => file,
+        Err(_) => return 0,
+    };
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    complete_len_in(file, len).unwrap_or(0)
+}
+
+/// The work behind [`complete_len_of`], over an open log, so a test can
+/// count reads.
+fn complete_len_in(reader: impl std::io::Read + std::io::Seek, len: u64) -> std::io::Result<u64> {
+    use std::io::SeekFrom;
+    let mut reader = reader;
+    if len == 0 {
+        return Ok(0);
+    }
+    let mut end = len;
+    while end != 0 {
+        let start = end.saturating_sub(TAIL);
+        reader.seek(SeekFrom::Start(start))?;
+        let size = usize::try_from(end - start)
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "log too long"))?;
+        let mut chunk = vec![0_u8; size];
+        reader.read_exact(&mut chunk)?;
+        if let Some(at) = chunk.iter().rposition(|b| *b == b'\n') {
+            return Ok(start + at as u64 + 1);
+        }
+        end = start;
+    }
+    Ok(0)
+}
+
+/// The complete lines (newline stripped, empty lines dropped) inside the
+/// last [`TAIL`] bytes. A last line with no trailing newline is torn and
+/// dropped. A first line is dropped when the window starts mid-line
+/// (the byte before the window is not `\n`), kept when the window
+/// starts right after a newline. Empty when the log cannot be read.
+pub fn tail_lines(dir: &Path) -> Vec<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match File::open(dir.join(EVENTS)) {
+        Ok(file) => file,
+        Err(_) => return Vec::new(),
+    };
+    let len = match file.metadata().map(|meta| meta.len()) {
+        Ok(len) => len,
+        Err(_) => return Vec::new(),
+    };
+    let from = len.saturating_sub(TAIL);
+    let mid_line = if from > 0 {
+        let mut probe = [0; 1];
+        if file
+            .seek(SeekFrom::Start(from - 1))
+            .and_then(|_| file.read_exact(&mut probe))
+            .is_err()
+        {
+            return Vec::new();
+        }
+        probe[0] != b'\n'
+    } else {
+        false
+    };
+    if file.seek(SeekFrom::Start(from)).is_err() {
+        return Vec::new();
+    }
+    let mut tail = Vec::new();
+    if file.read_to_end(&mut tail).is_err() {
+        return Vec::new();
+    }
+    let mut parts = tail.split(|byte| *byte == b'\n');
+    // The bytes after the last newline are torn.
+    parts.next_back();
+    if mid_line {
+        parts.next();
+    }
+    parts
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_vec())
+        .collect()
+}
+
+/// Where a scan of the log from `from` ended, and whether the log was
+/// replaced under the offset.
+pub struct Scan {
+    /// One past the last complete line handed over (`from` when none).
+    pub end: u64,
+    /// The file was shorter than `from` and was read from 0 instead.
+    pub restarted: bool,
+}
+
+/// Hands `each` every complete line (newline stripped) from byte `from`
+/// to the end of the last complete line, one at a time, never the whole
+/// file. A partial tail is not handed over and `end` stays before it.
+/// A file shorter than `from` was replaced: reads from 0 with
+/// `restarted`. `None` when the log cannot be opened or seeked; a read
+/// error ends the scan at the last complete line.
+pub fn lines_from(dir: &Path, from: u64, mut each: impl FnMut(&[u8])) -> Option<Scan> {
+    use std::io::{BufRead, Seek, SeekFrom};
+    let file = File::open(dir.join(EVENTS)).ok()?;
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let (mut read, restarted) = if len < from { (0, true) } else { (from, false) };
+    let mut reader = BufReader::new(file);
+    if reader.seek(SeekFrom::Start(read)).is_err() {
+        return None;
+    }
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let Some((&last, line)) = buf.split_last() else {
+                    break;
+                };
+                if last != b'\n' {
+                    break;
+                }
+                each(line);
+                read += buf.len() as u64;
+            }
+        }
+    }
+    Some(Scan {
+        end: read,
+        restarted,
+    })
 }
 
 // debt: 1,024 is picked, not measured. The queue grows only as lines

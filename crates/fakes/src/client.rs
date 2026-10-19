@@ -1,7 +1,7 @@
 //! A second client on a session's socket (`docs/testing.md`, "Fakes").
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
@@ -75,11 +75,8 @@ impl Client {
     /// session sees the line as the client typed it.
     pub fn send(&self, line: &str) -> std::io::Result<()> {
         let mut stream = lock(&self.write);
-        stream.write_all(line.as_bytes())?;
-        if !line.ends_with('\n') {
-            stream.write_all(b"\n")?;
-        }
-        stream.flush()
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        support::framing::write_line(&mut *stream, line.as_bytes())
     }
 
     /// Sends one command line as [`Client::send`] does, every blocking write
@@ -242,7 +239,6 @@ fn read_lines(
     blocked: Option<mpsc::Sender<()>>,
 ) {
     let mut read = BufReader::new(stream);
-    let mut buf = Vec::new();
     loop {
         {
             let guard = lock(&state);
@@ -257,20 +253,13 @@ fn read_lines(
                 Ok(()) | Err(_) => {}
             }
         }
-        buf.clear();
-        match read.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => {
+        match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => {
                 lock(&state).closed = true;
                 ready.notify_all();
                 return;
             }
-            Ok(_) => {
-                while buf
-                    .last()
-                    .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
-                {
-                    buf.pop();
-                }
+            Ok(Some(buf)) => {
                 let text = String::from_utf8_lossy(&buf).into_owned();
                 lock(&state).lines.push_back(text);
                 ready.notify_all();

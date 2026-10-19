@@ -46,6 +46,26 @@ fn scale_1_holds_1081_tool_calls() {
 }
 
 #[test]
-fn scale_1_is_4918219_bytes() {
-    assert_eq!(paging_session(1).len(), 4_918_219);
+fn scale_1_is_5071459_bytes() {
+    assert_eq!(paging_session(1).len(), 5_071_459);
+}
+
+#[test]
+fn scale_1_lines_decode_against_the_contract() {
+    for (index, line) in paging_session(1).lines().enumerate() {
+        let line_number = index + 1;
+        let envelope: contract::Envelope = serde_json::from_str(line)
+            .unwrap_or_else(|err| panic!("line {line_number} does not parse: {err}"));
+        let decoded = contract::events::Event::from_envelope(&envelope).unwrap_or_else(|err| {
+            panic!(
+                "line {line_number} ({}) does not decode: {err}",
+                envelope.kind
+            )
+        });
+        assert!(
+            decoded.is_some(),
+            "line {line_number} ({}) is unknown to the contract",
+            envelope.kind
+        );
+    }
 }

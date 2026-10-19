@@ -623,6 +623,9 @@ fn a_person_handoff_turn_with_no_input_ends_completed_after_the_hook_note() {
                 Input::User { text, .. } | Input::Assistant { text, .. } => text.len(),
                 Input::Reasoning { text, .. } | Input::ToolResult { text, .. } => text.len(),
                 Input::ToolCall { call, .. } => call.name.len() + call.arguments.to_string().len(),
+                Input::ToolSearchResult { loaded, .. } => {
+                    contract::provider::loaded_text(loaded).len()
+                }
             };
             bytes.div_ceil(4) as u64
         })
@@ -711,7 +714,8 @@ fn an_overflow_handoff_hands_the_hook_the_moved_results() {
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
-            | Input::ToolCall { .. } => None,
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     assert_eq!(results.len(), 2);
@@ -1004,7 +1008,10 @@ fn parking(tokens: u64) -> Scripted {
 fn text_of(input: &Input) -> &str {
     match input {
         Input::User { text, .. } | Input::Assistant { text, .. } => text,
-        other @ (Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. }) => {
+        other @ (Input::Reasoning { .. }
+        | Input::ToolCall { .. }
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. }) => {
             panic!("not a message: {other:?}")
         }
     }

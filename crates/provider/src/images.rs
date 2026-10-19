@@ -154,7 +154,10 @@ pub(crate) fn input_size(body: &[u8], request: &ModelRequest, text_only: bool) -
         && request.conversation.iter().any(|input| match input {
             Input::User { images, .. } => !images.is_empty(),
             Input::ToolResult { images, pdfs, .. } => !images.is_empty() || !pdfs.is_empty(),
-            Input::Assistant { .. } | Input::Reasoning { .. } | Input::ToolCall { .. } => false,
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => false,
         });
     InputSize {
         bytes: u64::try_from(body.len()).unwrap_or(u64::MAX),

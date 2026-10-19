@@ -6,7 +6,9 @@
 //! also hosts the Lua runtime a Lua extension runs in (`docs/extensions.md`,
 //! "Lua extensions"), and a provider's Lua: `models()`, `credential()` and
 //! `sign()` (`docs/model-routing.md`, "Model discovery", "Signing a request"
-//! and "Credentials").
+//! and "Credentials"). A shutdown stops every running extension callback
+//! through [`stop_every_callback`], so an in-flight hook and its `host.exec`
+//! group end as a tool call's does (`docs/invocation.md`, "Shutdown").
 
 mod attend;
 #[cfg(test)]
@@ -86,15 +88,17 @@ use contract::ErrorCode;
 
 pub use contract::hook::StateSeed;
 pub use extension_tools::LuaTool;
+pub use first_party::{not_installed_providers, serving_package};
 pub use git::{Origin, SHORT_NAMES, full_name, is_path};
 pub use hooks::SessionExtensions;
 pub use host::Session;
-pub use host::script::{ExecEntry, ExecReply, HostScript, HttpEntry, json_matches};
+pub use host::script::{ExecEnd, ExecEntry, ExecReply, HostScript, HttpEntry, json_matches};
 pub use install::Provenance;
 pub use installed::{
     Damaged, Installed, Listing, Removal, is_enabled, list, package_names, removal,
 };
 pub use login::login_provider;
+pub use lua::hub::stop_every_callback;
 pub use lua::{LuaExtension, MEMORY_CAP};
 pub use lua_provider::{
     CredentialPair, LoggedIn, LoginMethod, LuaProvider, ModelsArg, Quota, QuotaEntry,
@@ -106,9 +110,10 @@ pub use prepare::platform;
 pub use providers::{Model, Providers, StartedRefresh, leave_out_invalid, refresh_lists};
 pub use release::{Release, install_release};
 pub use repository::{
-    ApprovedServer, CopyHold, CopyRemoval, Decision, Fetch, Index, KeptCopy, Pending, RepoItem,
-    ServerApproval, SessionOffer, SpawnGuard, Store, declared_items, hash, kind_name,
-    mcp_server_item, pending, repository_servers,
+    ApprovedExtension, ApprovedServer, CopyHold, CopyRemoval, Decision, Fetch, Index, KeptCopy,
+    Pending, RepoItem, RepositorySet, ServerApproval, SessionOffer, SpawnGuard, Store,
+    approved_extension, approved_extensions, declared_items, hash, kind_name, mcp_server_item,
+    pending, repository_servers,
 };
 pub use startable::{context_window, protocol_refusal, takes, thinking_refusal};
 

@@ -19,7 +19,7 @@ const PAGE: usize = 256;
 
 /// How many bytes one backward read takes: 64 KiB. A literal, since the
 /// size changes no answer, only how many reads one takes.
-const CHUNK: usize = 65_536;
+pub(crate) const CHUNK: usize = 65_536;
 
 const UNFIT: &str = "The arguments do not fit this command.";
 const UNREADABLE: &str = "The prompt history could not be read.";
@@ -84,16 +84,34 @@ fn page(file: &Path, before: Option<u64>) -> io::Result<Page> {
     };
     let len = opened.metadata()?.len();
     let end = before.map_or(len, |before| before.min(len));
-    read_back(&mut opened, end, CHUNK)
+    read_back(&mut opened, end, CHUNK, PAGE, |line| {
+        serde_json::from_slice(line)
+            .ok()
+            .filter(|value| matches!(value, Value::Object(_)))
+    })
 }
 
 /// Reads `file` backward from `end`, `chunk` bytes at a time, collecting
-/// the whole lines that end at or before `end`, newest first, until a page
-/// is full or the file's start is reached. The bytes after the last
-/// newline before `end` are a fragment, a write in progress or a mid-line
-/// `before`, and are skipped. A line that is not a JSON object is skipped.
-fn read_back(file: &mut (impl Read + Seek), end: u64, chunk: usize) -> io::Result<Page> {
-    let mut prompts = Vec::new();
+/// the whole lines that end at or before `end`, newest first, until
+/// `limit` values are held or the file's start is reached. The bytes
+/// after the last newline before `end` are a fragment, a write in
+/// progress or a mid-line `before`, and are skipped. A line `parse`
+/// skips is skipped and does not count toward `limit`. An empty file
+/// (`end == 0`) is empty; `limit` and `chunk` are caller constants, so a
+/// zero one is a bug and debug-asserted.
+pub(crate) fn read_back<T>(
+    file: &mut (impl Read + Seek),
+    end: u64,
+    chunk: usize,
+    limit: usize,
+    parse: impl Fn(&[u8]) -> Option<T>,
+) -> io::Result<(Vec<T>, Option<u64>)> {
+    debug_assert!(limit > 0);
+    debug_assert!(chunk > 0);
+    if end == 0 {
+        return Ok((Vec::new(), None));
+    }
+    let mut found = Vec::new();
     // `held` is the bytes from `start` up to the newline that ends the
     // next line to collect, or up to `end` while no newline is found.
     let mut held: Vec<u8> = Vec::new();
@@ -104,18 +122,20 @@ fn read_back(file: &mut (impl Read + Seek), end: u64, chunk: usize) -> io::Resul
             // `line` is the newline at `at` and the line after it.
             let line = held.split_off(at);
             if ended {
-                collect(&mut prompts, line.get(1..).unwrap_or_default());
-                if prompts.len() == PAGE {
-                    return Ok((prompts, Some(start + at as u64 + 1)));
+                if let Some(value) = parse(line.get(1..).unwrap_or_default()) {
+                    found.push(value);
+                }
+                if found.len() == limit {
+                    return Ok((found, Some(start + at as u64 + 1)));
                 }
             }
             ended = true;
         }
         if start == 0 {
-            if ended {
-                collect(&mut prompts, &held);
+            if ended && let Some(value) = parse(&held) {
+                found.push(value);
             }
-            return Ok((prompts, None));
+            return Ok((found, None));
         }
         let take = start.min(chunk as u64);
         start -= take;
@@ -124,13 +144,6 @@ fn read_back(file: &mut (impl Read + Seek), end: u64, chunk: usize) -> io::Resul
         file.read_exact(&mut bytes)?;
         bytes.extend_from_slice(&held);
         held = bytes;
-    }
-}
-
-/// Adds `line` to `prompts` when it is a JSON object.
-fn collect(prompts: &mut Vec<Value>, line: &[u8]) {
-    if let Ok(value @ Value::Object(_)) = serde_json::from_slice(line) {
-        prompts.push(value);
     }
 }
 
