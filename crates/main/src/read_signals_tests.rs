@@ -742,6 +742,9 @@ impl Drop for ReleaseOnDrop {
 /// How long the reaper stays held in the slow-drop test, in injected time:
 /// past the old 3 s bound, short of the shutdown end the settle parks at.
 const HELD_FOR: Duration = Duration::from_secs(4);
+/// Where the stand-in parks in the slow-drop test, in injected time: an
+/// instant the held-run drive never reaches, which ends near the hold.
+const STANDIN_PARK: Duration = Duration::from_secs(30);
 
 #[test]
 fn the_terminal_watcher_cancels_and_settles_without_exiting() {
@@ -881,16 +884,6 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
         .reaper
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some(reaper_release);
-    // The held run holds the credential wait before its timeout park,
-    // so the drive below starts with only the settle parked; the plain
-    // run never arms it, and the wait runs free there.
-    let credential_hold: Option<(mpsc::Receiver<()>, mpsc::Sender<()>)> =
-        held_for.is_some().then(|| {
-            let (entered, is_entered) = mpsc::channel::<()>();
-            let (release, freed) = mpsc::channel::<()>();
-            reads.pause_at_credential_park(entered, freed);
-            (is_entered, release)
-        });
     let (noted, notes) = mpsc::channel::<()>();
     reads.note_completions(noted);
     // The first pass pauses before its park: reaching it proves the pass
@@ -953,20 +946,33 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
         // listed. The hold stays short of the shutdown end, so the settle
         // still parks instead of giving up.
         releases.release_settle();
+        // A thread the test owns parks beside the settle at an instant
+        // the drive never reaches: with the drive watching every thread
+        // it would fail the first advance, as the credential park did in
+        // CI. `await_parked` returns only after the park registered, so
+        // the stand-in is in place before the drive looks: no race.
+        let (standin_stop, standin_halt) = mpsc::channel::<()>();
+        let (standin_done, standin_finished) = mpsc::channel::<()>();
+        let standin_clock = Arc::clone(&fake);
+        let standin = std::thread::spawn(move || {
+            standin_clock.wait_until(Some(standin_clock.origin() + STANDIN_PARK), &mut |_| {
+                match standin_halt.recv() {
+                    Ok(()) | Err(_) => {}
+                }
+            });
+            standin_done.send(()).unwrap_or(());
+        });
         assert!(
-            fake.await_parked(fake.origin() + GROUP_POLL, DEADLINE),
-            "the settle parked at its poll with the reaper held"
+            fake.await_parked(fake.origin() + STANDIN_PARK, DEADLINE),
+            "the stand-in parked at its instant"
         );
         assert!(
             matches!(is_dropped.try_recv(), Err(mpsc::TryRecvError::Empty)),
             "the guard's drop finished with the reaper held"
         );
-        // Only the settle parks at its poll: the credential thread is
-        // either held at its pause, which intercepts every pre-cancel
-        // pass before its 30 s park, or past the cancel on its reaper's
-        // answer, which parks nowhere. Naming the settle's thread keeps
-        // any park by another thread from failing the drive, as
-        // `finish_past_one_park` does.
+        // Every advance names the settle's thread through `mark_parked`,
+        // as `finish_past_one_park` does, so the stand-in's park cannot
+        // fail the drive.
         let hold_end = fake.origin() + held_for;
         let mut poll = fake.origin() + GROUP_POLL;
         let settle = fake
@@ -1002,17 +1008,14 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
             matches!(is_dropped.try_recv(), Err(mpsc::TryRecvError::Empty)),
             "the guard's drop finished past the old bound"
         );
-        // The drive is done: release the credential thread's hold. A
-        // thread held at its pause reaches its park with a stale
-        // generation, so the park ends at once and the wait takes the
-        // cancel path onto its reaper's answer, released below; a thread
-        // that never reached the pause is already there or never started.
-        // Dropping the hold's ends releases any arrival still to come.
-        let (_is_credential_entered, credential_release) =
-            credential_hold.expect("the held run armed the credential pause");
-        credential_release
-            .send(())
-            .expect("the credential thread's release");
+        // The drive is done: end the stand-in through its channel, never
+        // through the clock, and join it before the settle runs again.
+        // The `recv` below bounds the wait on its exit.
+        standin_stop.send(()).expect("the stand-in's release");
+        Deadline::after(DEADLINE)
+            .recv(&standin_finished)
+            .expect("the stand-in's exit");
+        standin.join().expect("the stand-in's thread");
     }
     // Armed before the reaper's release, so the next pass pauses too:
     // reaching it proves the parked pass woke on the bumps before any
