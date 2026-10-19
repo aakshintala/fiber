@@ -348,3 +348,70 @@ fn opening_the_view_retries_after_a_refusal() {
     assert_eq!(retry[0]["args"], json!({"fetch": true}));
     assert_ne!(retry[0]["id"], lines[0]["id"]);
 }
+
+#[test]
+fn a_rejected_query_leaves_the_cached_rows_drawn() {
+    let mut app = attached();
+    let panel = first(&mut app);
+    let quota = json!([{"provider": "codex", "credential": "work", "credit": {"remaining": 4.2}}]);
+    app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id": panel, "result": {"quota": quota, "notice_at": 70.0}}),
+    ));
+    // A rejected panel query keeps the last answer's rows drawn.
+    let line = app.quota_focus().unwrap();
+    let id = serde_json::from_str::<Value>(&line).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        queries(app.on_line(session_line(
+            "command_rejected",
+            json!({"command_id": id, "code": "denied", "message": "No."})
+        )))
+        .is_empty()
+    );
+    assert_eq!(
+        serde_json::to_value(&app.panel_state.quota.rows).unwrap(),
+        quota
+    );
+    // A rejected view fetch keeps them too.
+    let lines = sent(app.quota_view());
+    let id = lines[0]["id"].as_str().unwrap().to_owned();
+    assert!(
+        queries(app.on_line(session_line(
+            "command_rejected",
+            json!({"command_id": id, "code": "denied", "message": "No."})
+        )))
+        .is_empty()
+    );
+    assert_eq!(
+        serde_json::to_value(&app.panel_state.quota.rows).unwrap(),
+        quota
+    );
+}
+
+#[test]
+fn a_foreign_quota_answer_updates_rows_without_clearing_the_flight() {
+    let mut app = attached();
+    let id = first(&mut app);
+    // Another surface's quota answer folds into the card, while the
+    // panel's own flight stays up for its own answer.
+    let quota = json!([{"provider": "codex", "credential": "work", "credit": {"remaining": 4.2}}]);
+    assert!(
+        queries(app.on_line(session_line(
+            "command_accepted",
+            json!({"command_id": "c_other", "result": {"quota": quota, "notice_at": 70.0}})
+        )))
+        .is_empty()
+    );
+    assert_eq!(
+        serde_json::to_value(&app.panel_state.quota.rows).unwrap(),
+        quota
+    );
+    assert_eq!(app.panel_state.quota.notice_at, 70.0);
+    assert!(app.panel_state.quota.fetching());
+    assert!(app.quota_focus().is_none());
+    answer(&mut app, &id);
+    assert!(app.quota_focus().is_some());
+}

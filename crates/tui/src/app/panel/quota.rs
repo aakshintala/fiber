@@ -44,10 +44,11 @@ impl Query {
         };
     }
 
+    /// A refusal ends the flight but leaves the cached rows drawn: the
+    /// view keeps showing its last answer under a rejected refetch.
     pub(super) fn refuse(&mut self, id: &str) {
         if matches!(&self.ask, Ask::Asked(asked) | Ask::Fetching(asked) if asked.0 == id) {
             self.ask = Ask::Refused;
-            self.rows.clear();
         }
     }
 
@@ -78,15 +79,19 @@ impl App {
     pub(super) fn panel_quota(&mut self, envelope: &Envelope, ended: bool) -> Option<String> {
         match envelope.kind.as_str() {
             "command_accepted" => {
-                if let Some(accepted) = super::super::read!(envelope, CommandAccepted)
-                    && matches!(&self.panel_state.quota.ask, Ask::Asked(id) | Ask::Fetching(id) if *id == accepted.command_id)
-                {
-                    self.panel_state.quota.ask = Ask::Idle;
-                    self.panel_state.quota.answered = self.motion().now_instant();
-                    self.panel_state.quota.rows.clear();
+                if let Some(accepted) = super::super::read!(envelope, CommandAccepted) {
+                    // Every quota answer folds into the card, whatever
+                    // asked for it: the view's fetch redraws the panel
+                    // card too. Only the panel's own flight is cleared by
+                    // its id.
                     if let Some(CommandResult::Quota { quota, notice_at }) = accepted.result {
                         self.panel_state.quota.rows = quota;
                         self.panel_state.quota.notice_at = notice_at;
+                    }
+                    if matches!(&self.panel_state.quota.ask, Ask::Asked(id) | Ask::Fetching(id) if *id == accepted.command_id)
+                    {
+                        self.panel_state.quota.ask = Ask::Idle;
+                        self.panel_state.quota.answered = self.motion().now_instant();
                     }
                 }
             }
