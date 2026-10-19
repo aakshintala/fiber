@@ -375,10 +375,7 @@ fiber.tool("slow", {
         .recv(&went)
         .expect("waited for the effects function to start");
     assert!(
-        clock.await_parked(
-            asked + Duration::from_millis(100) + GRACE,
-            WAIT
-        ),
+        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
         "waited for the effects call to park at its grace"
     );
     clock.advance_when_parked(
@@ -512,10 +509,7 @@ fiber.tool("spin", {
         .recv(&went)
         .expect("waited for spin to start");
     assert!(
-        clock.await_parked(
-            asked + Duration::from_millis(100) + GRACE,
-            WAIT
-        ),
+        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
         "waited for spin to park at its grace"
     );
     clock.advance_when_parked(
@@ -1122,10 +1116,7 @@ fiber.tool("count", {
     cancel.cancel();
     assert_eq!(ran(&queued, &Deadline::after(WAIT)), cancelled());
     assert!(
-        clock.await_parked(
-            asked + Duration::from_millis(100) + GRACE,
-            WAIT
-        ),
+        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
         "waited for spin to park at its grace"
     );
     clock.advance_when_parked(
