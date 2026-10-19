@@ -112,7 +112,8 @@ impl std::fmt::Display for Miss {
 /// it never reads again. [`FakeClock::advance`], [`FakeClock::advance_marked`],
 /// [`FakeClock::advance_when_parked`],
 /// [`FakeClock::advance_when_parked_threads`],
-/// [`FakeClock::advance_when_parked_then`] and [`Clock::sleep`] are the only
+/// [`FakeClock::advance_when_parked_then`],
+/// [`FakeClock::try_advance_when_parked`] and [`Clock::sleep`] are the only
 /// things that move it.
 pub struct FakeClock {
     origin: Instant,
