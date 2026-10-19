@@ -55,11 +55,13 @@ impl Subscriptions {
 
     /// Opens the gate for `session`: the first stage's acknowledgement
     /// is `ack` when a first-stage subscribe went out, and `None` when
-    /// the connection already holds `summary`, when the raise is due at
-    /// once. `held` keeps the screen's rows: the tail read is skipped
+    /// the connection already holds accepted `summary`, when the raise
+    /// is due at once. An in-flight `summary` supplies its existing id.
+    /// `held` keeps the screen's rows: the tail read is skipped
     /// and the raise goes out after the first frame draws, once the
     /// preview is up. Until the raise's acknowledgement the gate holds.
     pub(super) fn gate(&mut self, session: SessionId, ack: Option<String>, held: bool) {
+        let ack = ack.or_else(|| self.levels.pending_summary(&session).map(str::to_owned));
         self.opening = Some(match ack {
             Some(ack) => Opening::Summary { session, ack, held },
             None => Opening::Due { session, held },
@@ -370,9 +372,11 @@ impl App {
 
     /// Folds an accepted subscribe on `session`'s stream past the gate:
     /// a session held at `full` reconciles first, then the first stage's
-    /// subscribe keeps the gate and makes the raise due, and the raise's
-    /// subscribe ends the gate and its line goes on to `on_line`. Some
-    /// with the lines to send, or `None` when the gate ended.
+    /// subscribe keeps the gate and makes the raise due, sending the
+    /// `commands` line once the subscribe is accepted and never after a
+    /// refusal, and the raise's subscribe ends the gate and its line
+    /// goes on to `on_line`. Some with the lines to send, or `None`
+    /// when the gate ended.
     pub(super) fn subscribe_accepted(
         &mut self,
         session: &SessionId,
@@ -392,13 +396,14 @@ impl App {
                 .and_then(|home| home.subs.opening.as_ref())
                 .is_some_and(|opening| matches!(opening, Opening::Summary { .. }));
             if due {
-                if let Some(home) = self.home.as_mut() {
-                    let opening = home.subs.opening.take();
-                    if let Some(Opening::Summary { session, held, .. }) = opening {
+                if let Some(Opening::Summary { session, held, .. }) =
+                    self.home.as_mut().and_then(|home| home.subs.opening.take())
+                {
+                    let line = self.ask_commands(&session);
+                    if let Some(home) = self.home.as_mut() {
                         home.subs.opening = Some(Opening::Due { session, held });
-                    } else {
-                        home.subs.opening = opening;
                     }
+                    return Some(vec![line]);
                 }
                 return Some(Vec::new());
             }

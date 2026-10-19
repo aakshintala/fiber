@@ -2396,3 +2396,20 @@ fn a_removed_workspace_resumes_in_its_recorded_repository_through_serve() {
     assert_eq!(starter.resumed(), [(sid(), repository)]);
     assert!(!temp.hub_log().contains(SECRET), "no path in the log");
 }
+
+#[test]
+fn a_refused_labelled_subscribe_asks_once() {
+    // The guard for the terminal's refused open: the hub tries the
+    // asked label once, so `asked()` stays `[Some("nope")]`.
+    let temp = Temp::new();
+    temp.recorded();
+    let exited = failure(ErrorCode::CredentialMissing, "no credential label `nope`");
+    let starter = FakeStarter::exit_with(&temp.dir, exited);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe_with("c_1", "full", Some("nope"));
+    let rejected = client.next("the rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_1");
+    assert_eq!(starter.asked(), [Some("nope".to_owned())]);
+}

@@ -226,10 +226,11 @@ fn opening(last: u64) -> App {
         .find(|line| line["command"] == "subscribe")
         .unwrap_or_else(|| panic!("a summary subscribe"));
     let summary_id = summary["id"].as_str().unwrap_or_else(|| panic!("an id"));
-    assert!(
-        app.on_line(session_accepted(SESSION, summary_id))
-            .is_empty()
-    );
+    let sent = app.on_line(session_accepted(SESSION, summary_id));
+    assert_eq!(sent.len(), 1);
+    let commands: Value = serde_json::from_str(&sent[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(commands["command"], "commands");
+    assert_eq!(commands["session_id"], SESSION);
     let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
         .unwrap_or_else(|panic| panic!("{panic}"));
     assert_eq!(raise["command"], "subscribe");
@@ -942,10 +943,11 @@ fn an_empty_log_opens_no_pass() {
         .find(|line| line["command"] == "subscribe")
         .unwrap_or_else(|| panic!("a summary subscribe"));
     let summary_id = summary["id"].as_str().unwrap_or_else(|| panic!("an id"));
-    assert!(
-        app.on_line(session_accepted(SESSION, summary_id))
-            .is_empty()
-    );
+    let sent = app.on_line(session_accepted(SESSION, summary_id));
+    assert_eq!(sent.len(), 1);
+    let commands: Value = serde_json::from_str(&sent[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(commands["command"], "commands");
+    assert_eq!(commands["session_id"], SESSION);
     let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
         .unwrap_or_else(|panic| panic!("{panic}"));
     assert!(app.attached_screen().frozen());
@@ -1806,10 +1808,11 @@ fn reading() -> App {
         .find(|line| line["command"] == "subscribe")
         .unwrap_or_else(|| panic!("a summary subscribe"));
     let summary_id = summary["id"].as_str().unwrap_or_else(|| panic!("an id"));
-    assert!(
-        app.on_line(session_accepted(SESSION, summary_id))
-            .is_empty()
-    );
+    let sent = app.on_line(session_accepted(SESSION, summary_id));
+    assert_eq!(sent.len(), 1);
+    let commands: Value = serde_json::from_str(&sent[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(commands["command"], "commands");
+    assert_eq!(commands["session_id"], SESSION);
     assert!(app.tail_due().is_some(), "the tail read starts");
     assert!(
         matches!(app.overlay, Overlay::Reading(_)),
