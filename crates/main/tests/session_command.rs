@@ -1405,6 +1405,14 @@ fn a_resumed_session_raises_its_request_again_and_a_reply_runs_the_call() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
+    // Half-close the write side after the close: the session ends the
+    // connection without waiting out the writer grace.
+    client
+        .write
+        .lock()
+        .unwrap()
+        .shutdown(std::net::Shutdown::Write)
+        .unwrap();
     let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
