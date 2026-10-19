@@ -218,6 +218,7 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline() {
     // observed. The send below models the loop releasing the ask at
     // `until` with `NoAnswer`: the handler declines, then its own
     // deadline wins over any response delivered meanwhile.
+    // No code under test waits on the clock here; the call thread is blocked in the held ask, past its stale park at the deadline (ruling 6179406086).
     setup.fake.advance(timeout);
     send.send(Answered::NoAnswer).expect("the ask ends");
     assert_eq!(
@@ -466,6 +467,7 @@ fn a_deadline_after_an_elicitation_times_out_despite_the_response() {
     // The clock advances only now that the ask and the response are both
     // observed: the handler declines, then its own deadline wins over the
     // response delivered meanwhile.
+    // No code under test waits on the clock here; the call thread is blocked in the held ask, past its stale park at the deadline (ruling 6179406086).
     setup.fake.advance(timeout);
     send.send(Answered::NoAnswer).expect("the ask ends");
     assert_eq!(
