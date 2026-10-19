@@ -40,7 +40,7 @@ fn admissions_count_only_running_delegates_and_reuse_ended_slots() {
             shells.push(registry.open(opening("shell")).unwrap());
         }
         let called = AtomicBool::new(false);
-        let answer = registry.admit(|| {
+        let answer = registry.admit(false, || {
             called.store(true, Ordering::SeqCst);
             Ok::<_, ()>(open_delegate(&registry))
         });
@@ -52,7 +52,7 @@ fn admissions_count_only_running_delegates_and_reuse_ended_slots() {
             end_run(finish, &id, "done");
             assert!(
                 registry
-                    .admit(|| Ok::<_, ()>(open_delegate(&registry)))
+                    .admit(false, || Ok::<_, ()>(open_delegate(&registry)))
                     .is_ok()
             );
         }
@@ -60,12 +60,12 @@ fn admissions_count_only_running_delegates_and_reuse_ended_slots() {
     let (_dir, registry) = world();
     let _running: Vec<_> = (0..9).map(|_| open_delegate(&registry)).collect();
     assert!(matches!(
-        registry.admit(|| Err::<(), _>("spawn failed")),
+        registry.admit(false, || Err::<(), _>("spawn failed")),
         Err(super::Admit::Start("spawn failed"))
     ));
     assert!(
         registry
-            .admit(|| Ok::<_, ()>(open_delegate(&registry)))
+            .admit(false, || Ok::<_, ()>(open_delegate(&registry)))
             .is_ok()
     );
 }
@@ -105,7 +105,7 @@ fn concurrent_admissions_hold_the_gate_through_recording() {
     let (a_tx, a_rx) = mpsc::channel();
     let a = Arc::clone(&registry);
     thread::spawn(move || {
-        let answer = a.admit(|| {
+        let answer = a.admit(false, || {
             entered_tx.send(()).unwrap();
             let _released = release_rx.recv();
             Ok::<_, ()>(open_delegate(&a))
@@ -120,7 +120,7 @@ fn concurrent_admissions_hold_the_gate_through_recording() {
     let (b_tx, b_rx) = mpsc::channel();
     let b = Arc::clone(&registry);
     thread::spawn(move || {
-        b_tx.send(b.admit(|| Ok::<_, ()>(open_delegate(&b))))
+        b_tx.send(b.admit(false, || Ok::<_, ()>(open_delegate(&b))))
             .unwrap();
     });
     assert!(

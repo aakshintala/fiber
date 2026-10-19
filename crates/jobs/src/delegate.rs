@@ -318,11 +318,19 @@ impl DelegateSpawn {
             }
         };
         let admitted = self.registry.admit(
+            extension.is_some(),
             #[allow(
                 clippy::result_large_err,
                 reason = "every jobs boundary returns the crate's error enum by value"
             )]
             || {
+                // An extension start after an end path's sweep began
+                // spawns nothing: the check sits above `bind`, under the
+                // start gate `admit` holds, and a model start never reads
+                // the flag.
+                if extension.is_some() && self.registry.extension_starts_closed() {
+                    return Err(JobsError::ExtensionStartsClosed);
+                }
                 if extension.is_some() && !self.registry.has_inbox() {
                     return Err(JobsError::NoInbox);
                 }
@@ -428,6 +436,7 @@ impl DelegateSpawn {
                 }
                 Ok(output)
             }
+            Err(crate::registry::runs::Admit::Closed) => Err(JobsError::ExtensionStartsClosed),
             Err(crate::registry::runs::Admit::Full) => Err(JobsError::DelegatesFull),
             Err(crate::registry::runs::Admit::Start(error)) => Err(error),
         }

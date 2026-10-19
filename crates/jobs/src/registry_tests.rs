@@ -184,6 +184,7 @@ fn open_without_the_registry_arc_records_nothing() {
             jobs: Vec::new(),
             inbox: None,
             foreground: Vec::new(),
+            extension_starts_closed: false,
         }),
         park: Parker::new(),
         start_gate: Mutex::new(()),
@@ -1604,5 +1605,145 @@ fn stop_delegates_stops_only_running_delegates() {
         registry.stop_delegates(),
         0,
         "an ended delegate sends nothing"
+    );
+}
+
+#[test]
+fn retain_extensions_stops_only_unlisted_extension_jobs_once() {
+    let (_dir, registry) = world();
+    let flag_a = stopped();
+    let id_a = super::mint_job_id();
+    let _finish_a = registry.open_extension_started(
+        id_a.clone(),
+        "a".into(),
+        "scan".into(),
+        "/child/events.jsonl".into(),
+        stop_of(&flag_a),
+        delegate_started(&id_a.0),
+    );
+    let flag_b = stopped();
+    let id_b = super::mint_job_id();
+    let finish_b = registry.open_extension_started(
+        id_b.clone(),
+        "b".into(),
+        "scan".into(),
+        "/child/events.jsonl".into(),
+        stop_of(&flag_b),
+        delegate_started(&id_b.0),
+    );
+    let model_flag = stopped();
+    let model_id = super::mint_job_id();
+    let (_started, _model_finish) = registry.open_started(
+        model_id.clone(),
+        "delegate_spawn".into(),
+        "scan".into(),
+        "/child/events.jsonl".into(),
+        stop_of(&model_flag),
+        delegate_started(&model_id.0),
+    );
+    let shell_flag = stopped();
+    let mut shell_opening = opening("npm test");
+    shell_opening.stop = stop_of(&shell_flag);
+    let _shell = registry.open(shell_opening).unwrap();
+    // Only `b` is unlisted, so only its stop is sent, once.
+    assert_eq!(registry.retain_extensions(&["a".into()]), 1);
+    assert!(flag_b.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!flag_a.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!model_flag.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!shell_flag.load(std::sync::atomic::Ordering::SeqCst));
+    // A sent stop is not sent again.
+    assert_eq!(registry.retain_extensions(&["a".into()]), 0);
+    // An ended job sends nothing and counts nothing.
+    finish_b.report(ended_ok(&id_b.0), Some(delegate_finished(&id_b.0, "Done.")));
+    assert_eq!(registry.retain_extensions(&["a".into()]), 0);
+    assert!(!flag_a.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn retain_extensions_with_no_loaded_names_stops_every_extension_job() {
+    let (_dir, registry) = world();
+    let flag_a = stopped();
+    let id_a = super::mint_job_id();
+    let _finish_a = registry.open_extension_started(
+        id_a.clone(),
+        "a".into(),
+        "scan".into(),
+        "/child/events.jsonl".into(),
+        stop_of(&flag_a),
+        delegate_started(&id_a.0),
+    );
+    let flag_b = stopped();
+    let id_b = super::mint_job_id();
+    let _finish_b = registry.open_extension_started(
+        id_b.clone(),
+        "b".into(),
+        "scan".into(),
+        "/child/events.jsonl".into(),
+        stop_of(&flag_b),
+        delegate_started(&id_b.0),
+    );
+    assert_eq!(registry.retain_extensions(&[]), 2);
+    assert!(flag_a.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(flag_b.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn retain_extensions_waits_for_a_start_holding_the_gate_then_stops_it() {
+    let (_dir, registry) = world();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let held = Arc::clone(&registry);
+    let (started_tx, started_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let answer = held.admit(true, || {
+            entered_tx.send(()).unwrap();
+            let _released = release_rx.recv();
+            let id = super::mint_job_id();
+            let flag = stopped();
+            let finish = held.open_extension_started(
+                id.clone(),
+                "gone".into(),
+                "scan".into(),
+                "/child/events.jsonl".into(),
+                stop_of(&flag),
+                delegate_started(&id.0),
+            );
+            Ok::<_, ()>((id, finish, flag))
+        });
+        started_tx.send(answer).unwrap();
+    });
+    let wait = Deadline::after(DEADLINE);
+    wait.recv(&entered_rx).expect("the start holds the gate");
+    // `retain` takes the same gate, so it cannot return yet.
+    let (retained_tx, retained_rx) = mpsc::channel();
+    let retainer = Arc::clone(&registry);
+    thread::spawn(move || {
+        retained_tx.send(retainer.retain_extensions(&[])).unwrap();
+    });
+    assert!(
+        Deadline::after(Duration::from_millis(100))
+            .recv(&retained_rx)
+            .is_err(),
+        "retain waits on the start gate"
+    );
+    release_tx.send(()).unwrap();
+    let (id, _finish, flag) = wait
+        .recv(&started_rx)
+        .expect("the start recorded")
+        .expect("the start was admitted");
+    assert_eq!(
+        wait.recv(&retained_rx).expect("retain returned"),
+        1,
+        "retain stops the job the closure recorded"
+    );
+    assert!(
+        flag.load(std::sync::atomic::Ordering::SeqCst),
+        "the recorded job got its stop"
+    );
+    assert!(
+        Jobs::running(registry.as_ref())
+            .iter()
+            .any(|running| running == &id),
+        "the job is still listed running"
     );
 }

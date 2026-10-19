@@ -17,12 +17,20 @@ impl Loop {
     /// extension-owned jobs; a shutdown stops every job. The first error wins.
     pub(crate) fn settled(&mut self, result: Result<(), Error>) -> Result<(), Error> {
         if self.shutting_down() {
+            // Refuse later extension-owned starts before the sweep's
+            // first `running()` read, so a start the sweep cannot list
+            // never spawns.
+            self.close_extension_starts();
             let settled = self.settle();
             return result.and(settled);
         }
         if self.rewound {
             return result;
         }
+        // Refuse later extension-owned starts before the sweep's first
+        // `running()` read: a start that passes the check is recorded
+        // first and the sweep stops it.
+        self.close_extension_starts();
         let mut running = self.running();
         if running.is_empty() {
             return result;
@@ -139,6 +147,15 @@ impl Loop {
             for id in running {
                 jobs.stop(id);
             }
+        }
+    }
+
+    /// Refuses every later extension-owned delegate start with `closing`,
+    /// before the end path's first `running()` read. A second call changes
+    /// nothing; with no jobs wired it does nothing.
+    pub(crate) fn close_extension_starts(&self) {
+        if let Some(jobs) = &self.ending.jobs {
+            jobs.close_extension_starts();
         }
     }
 

@@ -296,3 +296,236 @@ fn a_session_id_is_s_and_sixteen_lowercase_hex_digits() {
         assert_eq!(valid_session_id(text), valid, "{text}");
     }
 }
+
+/// The rewind path's closed-starts test (N20 (g)): its own small loop rig
+/// and `Jobs` fake, copying `shutdown_tests.rs`'s `World::new` and
+/// `Listed` shape. The fake models the registry's rule: a held start
+/// signals before the fake's gate is taken, then reads the fake's closed
+/// flag under it.
+mod closed_starts {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "test helpers; a failure is the test's"
+    )]
+
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use contract::commands::RewindArgs;
+    use contract::events::{Event, TurnStarted};
+    use contract::inbox::{Ack, Delivery, Rejection};
+    use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
+    use contract::{CommandId, ErrorCode, JobId, Seq, SessionId};
+    use fakes::Deadline;
+    use fakes::clock::FakeClock;
+
+    use crate::Loop;
+    use crate::inbox::TurnInput;
+
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    struct Listed {
+        ids: Mutex<Vec<JobId>>,
+        order: Mutex<Vec<String>>,
+        gate: Mutex<()>,
+        closed: Mutex<bool>,
+        hold: Mutex<Option<(Sender<()>, Receiver<()>)>>,
+        bound: Mutex<Vec<JobId>>,
+        launched: Mutex<usize>,
+    }
+
+    impl Listed {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                ids: Mutex::new(Vec::new()),
+                order: Mutex::new(Vec::new()),
+                gate: Mutex::new(()),
+                closed: Mutex::new(false),
+                hold: Mutex::new(None),
+                bound: Mutex::new(Vec::new()),
+                launched: Mutex::new(0),
+            })
+        }
+
+        fn hold_start(&self, reached: Sender<()>, release: Receiver<()>) {
+            *self.hold.lock().unwrap() = Some((reached, release));
+        }
+
+        fn start(&self, id: &str) -> Result<JobId, (ErrorCode, String)> {
+            if let Some((reached, release)) = self.hold.lock().unwrap().take() {
+                let _sent = reached.send(());
+                let _released = release.recv();
+            }
+            let _gate = self.gate.lock().unwrap();
+            if *self.closed.lock().unwrap() {
+                return Err((
+                    ErrorCode::Closing,
+                    "The session is ending, so no delegate was started.".into(),
+                ));
+            }
+            let job = JobId(id.into());
+            self.bound.lock().unwrap().push(job.clone());
+            self.ids.lock().unwrap().push(job.clone());
+            *self.launched.lock().unwrap() += 1;
+            Ok(job)
+        }
+    }
+
+    impl Jobs for Listed {
+        fn open(&self, _: Opening) -> Result<Opened, OpenError> {
+            Err(OpenError {
+                path: "unused".into(),
+                source: std::io::Error::other("a listed job is not opened"),
+            })
+        }
+
+        fn stop(&self, _: &JobId) -> bool {
+            false
+        }
+
+        fn stop_delegates(&self) -> usize {
+            0
+        }
+
+        fn background(&self) -> usize {
+            0
+        }
+
+        fn foreground(&self, _: Foreground) {}
+
+        fn running(&self) -> Vec<JobId> {
+            self.order.lock().unwrap().push("running".into());
+            self.ids.lock().unwrap().clone()
+        }
+
+        fn deliver_to(&self, _: Sender<Delivery>) {}
+
+        fn close_extension_starts(&self) {
+            let _gate = self.gate.lock().unwrap();
+            *self.closed.lock().unwrap() = true;
+            self.order.lock().unwrap().push("close".into());
+        }
+    }
+
+    struct Rig {
+        _home: fakes::TempDir,
+        _inbox: Sender<Delivery>,
+        looped: Loop,
+    }
+
+    fn rig(jobs: Arc<Listed>) -> Rig {
+        let home = fakes::TempDir::new("fiber-rewind-close");
+        let workspace = home.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let fake = FakeClock::new();
+        let clock: Arc<dyn contract::clock::Clock> = fake.clone();
+        let log = Arc::new(
+            log::Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap(),
+        );
+        let (inbox, rx) = mpsc::channel();
+        let looped = Loop::start(
+            crate::Session {
+                log,
+                provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+                model: crate::Model {
+                    reference: "fake/model".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                prompt: crate::prompt::PromptInputs::new(
+                    home.path().to_path_buf(),
+                    "/bin/sh".into(),
+                    home.path()
+                        .join("s_test/events.jsonl")
+                        .display()
+                        .to_string(),
+                    clock,
+                    fakes::CONTEXT_WINDOW,
+                ),
+                inbox: rx,
+                tools: Vec::new(),
+                permissions: crate::Permissions {
+                    workspace: workspace.display().to_string(),
+                    credentials: home.path().join("credentials"),
+                    credential_files: Vec::new(),
+                    rules: Arc::new(fakes::NoRules),
+                },
+            },
+            None,
+        )
+        .unwrap()
+        .jobs(jobs as Arc<dyn Jobs>);
+        Rig {
+            _home: home,
+            _inbox: inbox,
+            looped,
+        }
+    }
+
+    #[test]
+    fn a_start_held_past_the_rewind_sweep_is_refused_closed() {
+        let jobs = Listed::new();
+        let mut rig = rig(Arc::clone(&jobs));
+        // One turn in the log, so point 0 is a step boundary: the next
+        // line starts a turn.
+        rig.looped
+            .write(
+                &Event::TurnStarted(TurnStarted { input: vec![] }),
+                None,
+                None,
+            )
+            .unwrap();
+        let (reached_tx, reached_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        jobs.hold_start(reached_tx, release_rx);
+        let (result_tx, result_rx) = mpsc::channel();
+        let starter = Arc::clone(&jobs);
+        std::thread::spawn(move || {
+            let _sent = result_tx.send(starter.start("j_new"));
+        });
+        let wait = Deadline::after(DEADLINE);
+        wait.recv(&reached_rx)
+            .expect("the start holds at the pause point");
+        let (ack_tx, ack_rx) = mpsc::channel();
+        let ack = Ack(Box::new(move |result: Result<_, Rejection>| {
+            let _sent = ack_tx.send(result.map(|_| ()));
+        }));
+        rig.looped
+            .take_rewind(
+                CommandId("c_1".into()),
+                RewindArgs {
+                    from_session_id: None,
+                    seq: Some(Seq(0)),
+                    summarise: false,
+                },
+                ack,
+                &TurnInput::of(Vec::new()),
+            )
+            .unwrap();
+        wait.recv(&ack_rx)
+            .expect("the rewind is acknowledged")
+            .expect("the rewind is accepted");
+        // The close runs beside `close_admission`, before
+        // `stop_jobs_for_rewind`'s first `running()` read.
+        let order = jobs.order.lock().unwrap().clone();
+        assert!(
+            order.len() >= 2 && order[0] == "close" && order[1] == "running",
+            "{order:?}"
+        );
+        drop(release_tx);
+        let Err((code, message)) = wait.recv(&result_rx).expect("the start answered") else {
+            panic!("the held start is refused");
+        };
+        assert_eq!(code, ErrorCode::Closing);
+        assert_eq!(
+            message,
+            "The session is ending, so no delegate was started."
+        );
+        assert!(jobs.bound.lock().unwrap().is_empty());
+        assert_eq!(*jobs.launched.lock().unwrap(), 0);
+        assert!(jobs.running().is_empty());
+    }
+}

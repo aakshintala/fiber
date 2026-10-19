@@ -95,6 +95,11 @@ pub enum JobsError {
         crate::registry::runs::DELEGATE_CAP
     )]
     DelegatesFull,
+    /// An extension-owned delegate start arrived after an end path began
+    /// its sweep: a normal end, a shutdown or a rewind. Nothing was
+    /// started.
+    #[error("The session is ending, so no delegate was started.")]
+    ExtensionStartsClosed,
     /// The steer or resume message is empty or all whitespace.
     #[error("`message` must not be empty.")]
     MessageEmpty,
@@ -287,6 +292,7 @@ impl JobsError {
             Self::NoInbox => ErrorCode::ToolError,
             Self::SpawnFailed { .. } => ErrorCode::ToolError,
             Self::DelegatesFull => ErrorCode::ToolError,
+            Self::ExtensionStartsClosed => ErrorCode::Closing,
             Self::MessageEmpty => ErrorCode::InvalidArguments,
             Self::UnknownJob { .. } => ErrorCode::InvalidArguments,
             Self::NotDelegate { .. } => ErrorCode::InvalidArguments,

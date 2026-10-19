@@ -107,6 +107,10 @@ struct Inner {
     inbox: Option<Sender<Delivery>>,
     /// Running foreground calls, held weakly (`Jobs::foreground`).
     foreground: Vec<Weak<dyn Fn() -> bool + Send + Sync>>,
+    /// The loop set this on an end path, before that path's first
+    /// `running()` read: every later extension-owned delegate start is
+    /// refused with `closing`. Set once, never cleared.
+    extension_starts_closed: bool,
 }
 
 struct Job {
@@ -182,6 +186,7 @@ impl Registry {
                 jobs: Vec::new(),
                 inbox: None,
                 foreground: Vec::new(),
+                extension_starts_closed: false,
             }),
             park: Parker::new(),
             start_gate: Mutex::new(()),
@@ -307,6 +312,44 @@ impl Registry {
     /// Whether a session has wired its inbox for delegate starts and ends.
     pub(crate) fn has_inbox(&self) -> bool {
         lock(&self.inner).inbox.is_some()
+    }
+
+    /// Whether the loop closed extension-owned delegate starts on an end
+    /// path. Reads the flag under `inner`; the admit closure calls it
+    /// while it already holds `start_gate`.
+    pub(crate) fn extension_starts_closed(&self) -> bool {
+        lock(&self.inner).extension_starts_closed
+    }
+
+    /// Sends the stop of every running job whose `JobStarted.extension` is
+    /// `Some(name)` with `name` not in `loaded`, once per run, and returns
+    /// how many were sent one. Takes `start_gate` before `inner`, the
+    /// order `admit` takes them, so a start is either recorded before this
+    /// reads the jobs or not yet admitted. Calls the stops with `inner`
+    /// released, and releases `start_gate` last. Model jobs, shell jobs,
+    /// ended jobs and jobs already sent a stop are left alone.
+    pub fn retain_extensions(&self, loaded: &[String]) -> usize {
+        let _gate = lock(&self.start_gate);
+        let stops: Vec<Arc<dyn Fn() + Send + Sync>> = {
+            let mut inner = lock(&self.inner);
+            inner
+                .jobs
+                .iter_mut()
+                .filter(
+                    |job| matches!(&job.started.extension, Some(name) if !loaded.contains(name)),
+                )
+                .filter(|job| !job.stop_sent)
+                .filter(|job| matches!(job.phase, Phase::Running))
+                .map(|job| {
+                    job.stop_sent = true;
+                    Arc::clone(&job.stop)
+                })
+                .collect()
+        };
+        for stop in &stops {
+            stop();
+        }
+        stops.len()
     }
 
     /// Records an extension-owned delegate and sends its start under the
@@ -806,6 +849,14 @@ impl contract::jobs::Jobs for Registry {
 
     fn deliver_to(&self, inbox: Sender<Delivery>) {
         lock(&self.inner).inbox = Some(inbox);
+    }
+
+    /// Sets the closed-starts flag under `start_gate`, before the end
+    /// path's first `running()` read. A second call changes nothing. Calls
+    /// nothing while it holds either lock.
+    fn close_extension_starts(&self) {
+        let _gate = lock(&self.start_gate);
+        lock(&self.inner).extension_starts_closed = true;
     }
 }
 

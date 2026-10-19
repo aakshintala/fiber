@@ -161,6 +161,12 @@ fn rows() -> Vec<Row> {
             message: "This session already runs 10 delegates, the most it can run at once, so nothing was started; wait for one with `jobs wait` or stop one with `jobs stop`, then try again.",
         },
         Row {
+            name: "extension starts closed",
+            error: JobsError::ExtensionStartsClosed,
+            code: ErrorCode::Closing,
+            message: "The session is ending, so no delegate was started.",
+        },
+        Row {
             name: "message empty",
             error: JobsError::MessageEmpty,
             code: ErrorCode::InvalidArguments,
