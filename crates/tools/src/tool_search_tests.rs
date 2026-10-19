@@ -209,3 +209,87 @@ fn a_zero_limit_is_an_invalid_argument() {
     );
     assert_eq!(output.loaded, None);
 }
+
+/// Every tool matches `widget`, with identical scores, so the load order
+/// is the name order.
+fn matching_catalogue(count: usize) -> Vec<ToolDefinition> {
+    (0..count)
+        .map(|index| leaf(&format!("cap_{index:02}"), "widget provider"))
+        .collect()
+}
+
+fn matching_search(count: usize) -> ToolSearch {
+    ToolSearch::new(matching_catalogue(count), vec![])
+}
+
+fn widget_query(limit: Value) -> Map<String, Value> {
+    let mut arguments = query("widget");
+    arguments.insert("limit".to_owned(), limit);
+    arguments
+}
+
+#[test]
+fn the_default_cap_at_seven_matching_tools() {
+    let output = run(&matching_search(7), &query("widget"));
+
+    assert_eq!(output.loaded.map(|names| names.len()), Some(7));
+}
+
+#[test]
+fn the_default_cap_at_eight_matching_tools() {
+    let output = run(&matching_search(8), &query("widget"));
+
+    assert_eq!(output.loaded.map(|names| names.len()), Some(8));
+}
+
+#[test]
+fn the_default_cap_at_nine_matching_tools() {
+    let output = run(&matching_search(9), &query("widget"));
+
+    assert_eq!(
+        loaded(&output),
+        Some(vec![
+            "cap_00".to_owned(),
+            "cap_01".to_owned(),
+            "cap_02".to_owned(),
+            "cap_03".to_owned(),
+            "cap_04".to_owned(),
+            "cap_05".to_owned(),
+            "cap_06".to_owned(),
+            "cap_07".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn a_limit_of_one_loads_one() {
+    let output = run(&matching_search(9), &widget_query(json!(1)));
+
+    assert_eq!(loaded(&output), Some(vec!["cap_00".to_owned()]));
+}
+
+#[test]
+fn a_limit_of_two_loads_two() {
+    let output = run(&matching_search(9), &widget_query(json!(2)));
+
+    assert_eq!(
+        loaded(&output),
+        Some(vec!["cap_00".to_owned(), "cap_01".to_owned()])
+    );
+}
+
+#[test]
+fn a_limit_past_the_matches_loads_every_match() {
+    let output = run(&matching_search(9), &widget_query(json!(20)));
+
+    assert_eq!(loaded(&output).map(|names| names.len()), Some(9));
+}
+
+#[test]
+fn a_limit_past_u64_loads_every_match() {
+    let past_u64: Value = serde_json::from_str("18446744073709551616").unwrap();
+    let output = run(&matching_search(9), &widget_query(past_u64));
+
+    assert_eq!(loaded(&output).map(|names| names.len()), Some(9));
+    assert_eq!(output.error, None);
+}

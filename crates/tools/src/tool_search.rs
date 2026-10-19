@@ -55,9 +55,73 @@ impl ToolSearch {
 }
 
 /// The call's arguments, checked against the schema before the call runs.
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct Args {
     query: String,
+    limit: Limit,
+}
+
+/// How many tools to load: the default, an explicit cap, or every match.
+#[derive(Debug)]
+enum Limit {
+    /// No `limit` was passed: load at most 8 tools.
+    Default,
+    /// Load at most this many tools.
+    AtMost(u64),
+    /// A `limit` the JSON reader cannot hold as a `u64`: load every match.
+    Every,
+}
+
+impl<'de> Deserialize<'de> for Args {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            query: String,
+            #[serde(default)]
+            limit: Option<Value>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        if raw.query.is_empty() {
+            return Err(serde::de::Error::custom("query must not be empty"));
+        }
+        let limit = match raw.limit {
+            None => Limit::Default,
+            Some(Value::Number(count)) if count.is_u64() => {
+                let capped = count.as_u64().unwrap_or(u64::MAX);
+                if capped < 1 {
+                    return Err(serde::de::Error::custom("limit must be at least 1"));
+                }
+                Limit::AtMost(capped)
+            }
+            Some(Value::Number(count)) if count.is_i64() => {
+                return Err(serde::de::Error::custom("limit must be at least 1"));
+            }
+            Some(Value::Number(count)) => {
+                let past_u64 = count
+                    .as_f64()
+                    .is_some_and(|float| float.is_finite() && float >= 18446744073709551616.0);
+                if past_u64 {
+                    Limit::Every
+                } else {
+                    return Err(serde::de::Error::custom(
+                        "limit must be an integer of at least 1",
+                    ));
+                }
+            }
+            Some(_) => {
+                return Err(serde::de::Error::custom(
+                    "limit must be an integer of at least 1",
+                ));
+            }
+        };
+        Ok(Args {
+            query: raw.query,
+            limit,
+        })
+    }
 }
 
 /// A tool's document: the tokens of its name, its description and the
@@ -97,7 +161,7 @@ fn tokenize(text: &str) -> Vec<String> {
 
 impl ToolSearch {
     /// The loaded names for `query`, best first, ties by name bytes.
-    fn search(&self, query: &str) -> Vec<String> {
+    fn search(&self, query: &str, limit: Limit) -> Vec<String> {
         let mut terms = tokenize(query);
         terms.sort();
         terms.dedup();
@@ -143,9 +207,14 @@ impl ToolSearch {
                 .total_cmp(&left.1)
                 .then_with(|| left.0.as_bytes().cmp(right.0.as_bytes()))
         });
+        let cap = match limit {
+            Limit::Default => DEFAULT_LIMIT,
+            Limit::AtMost(capped) => usize::try_from(capped).unwrap_or(usize::MAX),
+            Limit::Every => usize::MAX,
+        };
         ranked
             .into_iter()
-            .take(DEFAULT_LIMIT)
+            .take(cap)
             .map(|(name, _)| name.to_owned())
             .collect()
     }
@@ -192,7 +261,7 @@ impl Tool for ToolSearch {
     ) -> Output {
         match crate::tool_util::parsed::<Args>(arguments) {
             Ok(args) => {
-                let names = self.search(&args.query);
+                let names = self.search(&args.query, args.limit);
                 if names.is_empty() {
                     Output {
                         content: vec![ContentPart::Text {
