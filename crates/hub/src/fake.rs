@@ -772,7 +772,7 @@ fn session_serve(stream: UnixStream, shared: &Arc<(Mutex<SessionState>, std::syn
     let mut read = BufReader::new(stream);
     // A probe that sends nothing closes; only a subscriber is held.
     match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
-        Ok(None) | Err(_) => return,
+        Ok(None) | Err(_) => (),
         Ok(Some(buf)) => {
             let text = String::from_utf8_lossy(&buf).into_owned();
             let mut ack = writer.try_clone().map(Some).unwrap_or(None);
