@@ -9,7 +9,7 @@
 mod common;
 
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{Setup, config, write};
 use contract::ErrorCode;
@@ -24,6 +24,17 @@ const WAIT: Duration = Duration::from_secs(5);
 
 /// The extension's grace after a callback's own deadline.
 const GRACE: Duration = Duration::from_secs(1);
+
+/// The thread parked at `at`: exactly one thread waits there.
+#[track_caller]
+fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
+    let mark = clock
+        .mark_parked(at, WAIT)
+        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
+    let threads = mark.threads();
+    assert_eq!(threads.len(), 1, "only one thread parks at {at:?}: {threads:?}");
+    threads.into_iter().next().expect("one parked thread")
+}
 
 /// Where the provider's Lua stops answering.
 #[derive(Clone, Copy, Debug)]
@@ -133,7 +144,29 @@ fn discover(stuck: Stuck, wait_until: Duration) -> (Vec<(ErrorCode, Option<Strin
         clock.await_parked(asked + wait_until + GRACE, WAIT),
         "{stuck:?}: waited for the caller to park at its grace"
     );
-    clock.advance(wait_until);
+    // The stuck `models()` suspends its callback on the wire, so the
+    // scheduler parks at the callback's deadline while the caller waits at
+    // the grace; a stuck load parks only the caller, at the grace. Each
+    // names the park the run actually holds.
+    match stuck {
+        Stuck::InModels => {
+            let scheduler = thread_parked_at(&clock, asked + wait_until);
+            clock.advance_when_parked(
+                Some(asked + wait_until),
+                Some(scheduler),
+                wait_until,
+                &Deadline::after(WAIT),
+            );
+        }
+        Stuck::AtLoad => {
+            clock.advance_when_parked(
+                Some(asked + wait_until + GRACE),
+                None,
+                wait_until,
+                &Deadline::after(WAIT),
+            );
+        }
+    }
     Deadline::after(WAIT).recv_or_fail(&rx, "steps 3 and 4 to answer")
 }
 
