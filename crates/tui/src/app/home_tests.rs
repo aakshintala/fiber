@@ -4546,3 +4546,214 @@ fn the_foot_shows_the_plain_quit_hint_while_armed() {
             .contains(ratatui::style::Modifier::DIM)
     );
 }
+
+/// Attaches `session` with its live row fed, then goes `/home`: the
+/// back key is live for it.
+fn home_from(app: &mut App, session: &str) {
+    start_session(app, session);
+    app.on_line(live(
+        session,
+        "current work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    assert!(matches!(enter_text(app, "/home"), Effect::Send(_)));
+    assert!(app.on_home());
+}
+
+#[test]
+fn the_foot_names_the_back_key_after_home_from_a_live_session() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or Esc back to the session · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_names_the_rebound_back_key() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("close_or_interrupt".to_owned(), json!("f5"));
+    app.set_keys(crate::KeysSetup { user });
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or F5 back to the session · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_leaves_the_back_key_out_when_unbound() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("close_or_interrupt".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_keeps_quit_named_when_the_key_map_is_unbound() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("key_map".to_owned(), json!([]));
+    user.insert("close_or_interrupt".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete deletes an exited one · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_launch_home_foot_names_no_back_key() {
+    let app = home();
+    assert!(!foot(&app).contains("back to the session"));
+}
+
+#[test]
+fn opening_a_row_then_closing_names_no_back_key() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert!(foot(&app).contains("→ or Esc back to the session"));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "other work",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    let key = app
+        .home
+        .as_ref()
+        .and_then(|home| {
+            home.sessions
+                .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
+        })
+        .map(|row| row.key)
+        .expect("row B");
+    open(&mut app, key);
+    let Effect::Send(_) = enter_text(&mut app, "/close") else {
+        panic!("/close sends");
+    };
+    assert!(app.on_home());
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn a_card_switch_then_closing_names_no_back_key() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert!(foot(&app).contains("→ or Esc back to the session"));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "other work",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    // A card switch: the session on screen left, then the card's
+    // session opens as one from home does.
+    let _ = app.leave();
+    let key = app
+        .home
+        .as_ref()
+        .and_then(|home| {
+            home.sessions
+                .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
+        })
+        .map(|row| row.key)
+        .expect("row B");
+    app.open_entry(key);
+    let Effect::Send(_) = enter_text(&mut app, "/close") else {
+        panic!("/close sends");
+    };
+    assert!(app.on_home());
+    assert!(!foot(&app).contains("back to the session"));
+}
+
+#[test]
+fn closing_straight_from_a_session_names_no_back_key() {
+    let mut app = home();
+    linked(&mut app);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let Effect::Send(_) = enter_text(&mut app, "/close") else {
+        panic!("/close sends");
+    };
+    assert!(app.on_home());
+    assert!(!foot(&app).contains("back to the session"));
+}
+
+#[test]
+fn home_on_home_keeps_the_back_key() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let _ = enter_text(&mut app, "/home");
+    assert!(app.on_home());
+    assert!(foot(&app).contains("→ or Esc back to the session"));
+}
+
+#[test]
+fn new_on_home_keeps_the_back_key() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let _ = enter_text(&mut app, "/new");
+    assert!(app.on_home());
+    assert!(foot(&app).contains("→ or Esc back to the session"));
+}
+
+#[test]
+fn the_back_hint_bolds_the_key_and_dims_the_rest() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let screen = app.home_screen().expect("home draws");
+    let span = |content: &str| {
+        screen
+            .foot
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == content)
+            .unwrap_or_else(|| panic!("{content} draws"))
+    };
+    for key in ["→", "Esc"] {
+        let style = span(key).style;
+        assert!(
+            style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+            "{key} is bold"
+        );
+        assert!(
+            !style.add_modifier.contains(ratatui::style::Modifier::DIM),
+            "{key} is not dim"
+        );
+    }
+    for label in [" or ", " back to the session"] {
+        let style = span(label).style;
+        assert!(
+            style.add_modifier.contains(ratatui::style::Modifier::DIM),
+            "{label} is dim"
+        );
+        assert!(
+            !style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+            "{label} is not bold"
+        );
+    }
+}

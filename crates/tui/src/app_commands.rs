@@ -570,6 +570,12 @@ impl App {
         if matches!(self.phase, Phase::Pending { .. }) {
             return false;
         }
+        // Opening a session from home forgets where home came from,
+        // so the back key and its hint go quiet everywhere the next
+        // route home starts: a row open, a card switch, `/close`.
+        if let Some(home) = self.home.as_mut() {
+            home.came_from = None;
+        }
         self.phase = Phase::Starting;
         self.clear_selection();
         // Home keeps no session's images: a late answer or viewer

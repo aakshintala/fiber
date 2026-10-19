@@ -212,13 +212,27 @@ impl App {
     /// with the session left running, then lowered to `summary` when this
     /// connection holds it at `full` and its row is live. `/close` keeps
     /// `go_home` and lowers nothing: a command for an exited session
-    /// would resume it.
+    /// would resume it. The session left is remembered as the one home
+    /// came from, so the back key and its hint stay live; with none
+    /// attached, home keeps the session it came from.
     pub(in crate::app) fn leave(&mut self) -> Effect {
         let attached = self.session().cloned();
+        // `go_home` resets before the session clears, so the value is
+        // saved first and put back when nothing was attached.
+        let came_from = self
+            .home
+            .as_ref()
+            .and_then(|home| home.came_from.clone());
         self.go_home();
         let Some(session) = attached else {
+            if let Some(home) = self.home.as_mut() {
+                home.came_from = came_from;
+            }
             return Effect::None;
         };
+        if let Some(home) = self.home.as_mut() {
+            home.came_from = Some(session.clone());
+        }
         let lowers = self.link == Link::Up
             && self.home.as_ref().is_some_and(|home| {
                 home.subs.expected(&session) == Some(Level::Full)
@@ -232,6 +246,19 @@ impl App {
         } else {
             Effect::None
         }
+    }
+
+    /// Whether home's back key goes somewhere: home came from a session
+    /// whose row is still live. A session that exited or closed, or a
+    /// row that vanished, hides the hint and leaves the key untaken.
+    pub(in crate::app) fn came_from_live(&self) -> bool {
+        self.home.as_ref().is_some_and(|home| {
+            home.came_from.as_ref().is_some_and(|came_from| {
+                home.sessions
+                    .row(came_from)
+                    .is_some_and(|row| row.left.is_none())
+            })
+        })
     }
 
     /// Opens the row with `key` while home draws.
