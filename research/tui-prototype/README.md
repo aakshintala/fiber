@@ -4,7 +4,7 @@ A throwaway ratatui program for [#15](https://github.com/aakshintala/fiber/issue
 
 The prototype has no Fiber process to talk to. Each command it would send (`reply`, `cancel`, `steer`, `steer_amend`, `steer_drop`, `prompt`) shows as a "→ would send" row above the input box and is appended to `--commands FILE`. It then plays Fiber's part: it applies the lines Fiber would write back (`permission_resolved`, `interaction_resolved`, `tool_call_completed`, `turn_completed`, `steering_queue`), so the state after an answer renders. Each command is the line `docs/invocation.md` defines: `id` and `command` at the top, the command's keys under `args`, and `session_id` on a `reply` to a delegate. A cancel first resolves the turn's pending requests (`decided_by: cancel`, `by: fiber`), then completes the open calls and ends the turn `interrupted`; queued steering messages then start the next turn, as `docs/architecture.md`, "Cancellation", says.
 
-`CHECK.md` lists what to judge by eye in Ghostty.
+`CHECK.md` lists what to judge by eye in Ghostty. "The mock" below is the owner's HTML mock, `research/tui-mock/index.html`.
 
 ## Running it
 
