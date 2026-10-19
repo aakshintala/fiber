@@ -991,7 +991,7 @@ use hub::{CallbackTimeouts, Gate, Next, Phase, Shared};
 pub(crate) use hub::{DeclaredHooks, HookPhase};
 #[cfg(test)]
 pub(crate) use schedule::fail_next_spawn_for;
-pub(crate) use tool::{DeclaredTool, effects_from};
+pub(crate) use tool::{DeclaredTool, effects_from, urls_from};
 use vm::{Step, Vm};
 
 pub(crate) use setup::Deadline;
