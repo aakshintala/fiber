@@ -95,7 +95,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "tools"}),
         json!({"id": "c", "command": "commands"}),
         json!({"id": "c", "command": "skills"}),
-        json!({"id": "c", "command": "quota"}),
+        json!({"id": "c", "command": "quota", "args": {"fetch": false}}),
         json!({"id": "c", "command": "credentials"}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
@@ -243,7 +243,6 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         ("tools", Command::Tools),
         ("commands", Command::Commands),
         ("skills", Command::Skills),
-        ("quota", Command::Quota),
         ("credentials", Command::Credentials),
         ("close", Command::Close(CloseArgs { now: false })),
     ] {
@@ -263,7 +262,6 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
     for (name, command) in [
         ("commands", Command::Commands),
         ("skills", Command::Skills),
-        ("quota", Command::Quota),
         ("credentials", Command::Credentials),
     ] {
         let line = CommandLine {
@@ -274,6 +272,50 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
             serde_json::to_string(&line).unwrap(),
             format!(r#"{{"id":"c_1","command":"{name}"}}"#),
             "{name}"
+        );
+    }
+}
+
+/// `quota` takes an all-optional `fetch` key: a missing or empty `args`
+/// reads as `fetch: false` through the missing-or-empty retry in
+/// `CommandLine::deserialize`.
+#[test]
+fn quota_fetch_reads_missing_and_empty_as_false() {
+    for (args, expected) in [
+        (None, Ok(false)),
+        (Some(r#"{}"#), Ok(false)),
+        (Some(r#"{"fetch":false}"#), Ok(false)),
+        (Some(r#"{"fetch":true}"#), Ok(true)),
+        (Some(r#"{"fetch":null}"#), Err(())),
+        (Some(r#"{"fetch":"yes"}"#), Err(())),
+        (Some(r#"{"fetch":1}"#), Err(())),
+        (Some(r#"{"fetch":true,"future":1}"#), Err(())),
+        (Some(r#"{"future":1}"#), Err(())),
+    ] {
+        let line = match args {
+            None => r#"{"id":"c","command":"quota"}"#.to_owned(),
+            Some(args) => format!(r#"{{"id":"c","command":"quota","args":{args}}}"#),
+        };
+        match expected {
+            Ok(fetch) => assert_eq!(
+                parse(&line)
+                    .unwrap_or_else(|e| panic!("{line}: {e}"))
+                    .command,
+                Command::Quota(QuotaArgs { fetch }),
+                "{line}"
+            ),
+            Err(()) => assert!(parse(&line).is_err(), "{line}"),
+        }
+    }
+    for fetch in [false, true] {
+        let line = CommandLine {
+            id: CommandId("c_1".into()),
+            command: Command::Quota(QuotaArgs { fetch }),
+        };
+        assert_eq!(
+            serde_json::to_string(&line).unwrap(),
+            format!(r#"{{"id":"c_1","command":"quota","args":{{"fetch":{fetch}}}}}"#),
+            "fetch {fetch}"
         );
     }
 }
