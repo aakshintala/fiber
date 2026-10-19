@@ -456,6 +456,20 @@ them, the protocol's module subtracts them. OpenRouter's `prompt_tokens`
 includes `cached_tokens`, for example 15 with 14 cached
 (`research/openai-completions-probe`).
 
+Each protocol reads cache reads and writes from these usage fields:
+
+| Protocol | `cache_read` | `cache_write` |
+|---|---|---|
+| `anthropic-messages` | `cache_read_input_tokens` | `cache_creation.ephemeral_5m_input_tokens` under `"5m"`, `cache_creation.ephemeral_1h_input_tokens` under `"1h"` |
+| `openai-completions` | `prompt_tokens_details.cached_tokens` | `prompt_tokens_details.cache_write_tokens`, under the request's cache lifetime |
+| `openai-responses` | `input_tokens_details.cached_tokens` | `input_tokens_details.cache_write_tokens`, under the request's cache lifetime |
+
+OpenAI keeps one 30-minute lifetime and Responses sends no lifetime, so a
+Responses write lands under the lifetime the request carried; the price is the
+same under either key. OpenAI's `input_tokens` includes both counts: a
+cache-warming request reported 2,347 input with 2,344 written, and the next
+reported 2,347 with 2,344 cached (`research/openai-responses-probe`).
+
 Here is the Databricks gateway as an example. It serves about 53 models. Claude
 models work only through its Anthropic route, because its default route rejects
 `reasoning_effort`. So the extension declares each Claude model with
