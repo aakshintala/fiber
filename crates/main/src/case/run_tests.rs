@@ -141,6 +141,26 @@ fn case_run_with_host(
     )
 }
 
+/// The runner carries the parsed `attended` value: flipping it to either
+/// constant breaks the session setup's answerable computation, so both
+/// values are pinned here (mutant `CaseRun::attended -> bool`).
+#[test]
+fn case_run_attended_carries_the_parsed_value() {
+    for attended in [true, false] {
+        let case = CaseRun::with_waits(
+            "run-loop".to_owned(),
+            Vec::new(),
+            Host::default(),
+            Vec::new(),
+            None,
+            attended,
+            fakes::clock::FakeClock::new(),
+            TEST_WAITS,
+        );
+        assert_eq!(case.attended(), attended);
+    }
+}
+
 fn hang_exec_entry(program: &str) -> extensions::ExecEntry {
     extensions::ExecEntry {
         request: json!({"program": program}),

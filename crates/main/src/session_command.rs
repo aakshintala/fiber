@@ -673,11 +673,7 @@ pub(crate) fn run_new(
                 budget,
                 idle,
                 warm,
-                // Only one-turn `fiber ask` runs with no client: the
-                // session command serves clients that may answer
-                // (`docs/permissions.md`, "Headless"). An unattended
-                // session case denies where it would ask a person, as a
-                // headless run does.
+                // One-turn `fiber ask` and unattended session cases run with no client that may answer (`docs/permissions.md`, "Headless").
                 !run_one_turn && case_attended,
                 reviewer,
                 limits,
