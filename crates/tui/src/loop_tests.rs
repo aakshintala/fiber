@@ -1645,10 +1645,14 @@ fn resume_open_replays_the_log_to_the_tail() {
     // The reader signals when it reaches EOF, so the test waits on the
     // reader's answer instead of the drain window alone.
     let (reader_done_tx, reader_done) = mpsc::channel();
+    // Lines the reader forwarded: the stall report reads the count, so
+    // the reader thread reads the socket through the counting wrapper.
+    let reader_lines = Arc::new(AtomicU64::new(0));
+    let reader_count = Arc::clone(&reader_lines);
     std::thread::Builder::new()
         .name("resume-read".to_owned())
         .spawn(move || {
-            crate::link::read_lines(read_end, &read_feed);
+            crate::link::read_lines(CountingRead::new(read_end, reader_count), &read_feed);
             reader_done_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -1657,6 +1661,11 @@ fn resume_open_replays_the_log_to_the_tail() {
     let stream = lines.clone();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
+    // The hub's last step for the stall report: the hub sets each field
+    // and drops the guard before any blocking call, so the panic path
+    // can always read it.
+    let hub_progress = Arc::new(Mutex::new(HubProgress::default()));
+    let hub_step = Arc::clone(&hub_progress);
     // The pause point holding the subscribe answer: the hub signals it
     // reached subscribe, then waits on a channel whose sender the test
     // owns, so the hold needs no deadline of its own. The test sends to
@@ -1673,9 +1682,15 @@ fn resume_open_replays_the_log_to_the_tail() {
             let mut hub_end = hub_end;
             let mut text = String::new();
             let mut write = |value: Value| {
+                if let Ok(mut held) = hub_step.lock() {
+                    held.writing = true;
+                }
                 let mut bytes = serde_json::to_string(&value).unwrap_or_default();
                 bytes.push('\n');
                 hub_end.write_all(bytes.as_bytes()).unwrap_or(());
+                if let Ok(mut held) = hub_step.lock() {
+                    held.writing = false;
+                }
             };
             let hub_ack = |id: &Value, result: Value| {
                 json!({"kind": "command_accepted", "ts": 0,
@@ -1694,6 +1709,9 @@ fn resume_open_replays_the_log_to_the_tail() {
                 if let Ok(mut held) = record.lock() {
                     held.push(command.clone());
                 }
+                if let Ok(mut held) = hub_step.lock() {
+                    held.last_command = command["command"].as_str().unwrap_or("?").to_owned();
+                }
                 let id = command["id"].clone();
                 match command["command"].as_str() {
                     Some("feed") => write(hub_ack(&id, json!({}))),
@@ -1711,6 +1729,9 @@ fn resume_open_replays_the_log_to_the_tail() {
                             write(session_ack(&id, json!({"last_seq": last})));
                             for envelope in &stream {
                                 write(serde_json::to_value(envelope).unwrap_or(Value::Null));
+                                if let Ok(mut held) = hub_step.lock() {
+                                    held.envelopes_streamed += 1;
+                                }
                             }
                             break;
                         }
@@ -1783,8 +1804,31 @@ fn resume_open_replays_the_log_to_the_tail() {
     // no-progress window, so a slow machine folds every chunk within
     // `DRAIN` while the whole log takes what it takes. Panicking drops
     // the release sender, which releases the held loop thread too.
-    let (code, lp) = drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished)
-        .unwrap_or_else(|err| panic!("the loop folded no chunk for {DRAIN:?}: {err}"));
+    // The run thread may have finished between the drain's check and
+    // this re-check: take its value instead of reporting a stale stall.
+    // Otherwise the panic names the run thread's state and each helper
+    // thread's last step, so the next sighting shows which stall
+    // candidate happened.
+    let (code, lp) = match drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished) {
+        Ok(done) => done,
+        Err(err) => match finished.try_recv() {
+            Ok(done) => done,
+            Err(finished_state) => {
+                let hub = hub_progress
+                    .lock()
+                    .map(|held| held.clone())
+                    .unwrap_or_default();
+                let report = stall_report(
+                    &finished_state,
+                    &hub,
+                    &hub_done.try_recv(),
+                    &reader_done.try_recv(),
+                    reader_lines.load(Ordering::Relaxed),
+                );
+                panic!("the loop folded no chunk for {DRAIN:?}: {err}\n{report}");
+            }
+        },
+    };
     drop(fold_release_tx);
     // The hub's writes and the reader's EOF are ready once the loop has
     // returned: hang guards, not drain bounds.
