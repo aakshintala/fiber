@@ -247,15 +247,11 @@ impl CaseRun {
         failures: &mut Vec<String>,
         last_advance_done: bool,
     ) -> Option<contract::Envelope> {
-        let remaining = deadline.saturating_duration_since(self.process_clock.now());
-        // The whole wait in poll slices, counted, so a hang that matches
-        // mid-wait ends it within one slice. The count bounds the wait in
-        // real time: the process clock may be a frozen case clock in tests,
-        // while the watcher below always waits in real time.
-        let mut waits = remaining
-            .as_millis()
-            .div_ceil(GROUP_POLL.as_millis())
-            .max(1);
+        let mut remaining = deadline.saturating_duration_since(self.process_clock.now());
+        // The whole wait in poll slices, so a hang that matches
+        // mid-wait ends it within one slice. The remainder bounds the wait
+        // in real time: the process clock may be a frozen case clock in
+        // tests, while the watcher below always waits in real time.
         loop {
             // Past the last advance a matched hang with a later deadline can
             // never be released: only the runner's advances move the case
@@ -274,8 +270,8 @@ impl CaseRun {
                     return None;
                 }
                 None => {
-                    waits = waits.saturating_sub(1);
-                    if waits == 0 {
+                    remaining = remaining.saturating_sub(GROUP_POLL);
+                    if remaining.is_zero() {
                         let until = self
                             .until
                             .as_ref()
@@ -351,12 +347,11 @@ impl CaseRun {
     ) -> bool {
         let mut stuck = self.host.pending_hangs(self.clock.now());
         stuck.sort_by_key(|stuck| stuck.2);
-        let mut released = false;
+        let released = !stuck.is_empty();
         for (entry, request, deadline) in stuck {
             failures.push(format!(
                 "unmet host call: host.exec[{entry}] hung: request {request} still parked after the last clock advance"
             ));
-            released = true;
             let now = self.clock.now();
             if deadline > now {
                 let wait = deadline.saturating_duration_since(now);
