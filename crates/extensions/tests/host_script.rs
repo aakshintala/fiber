@@ -202,7 +202,7 @@ fiber.provider("host-script", {{ models = {{
                 "cwd": setup.workspace().join(".").display().to_string(),
                 "env": {"FIBER_X": "1"}
             }),
-            reply: Ok(ExecReply {
+            reply: Ok(ExecReply::Completed {
                 end: ExecEnd::Code(7),
                 stdout: "out".to_owned(),
                 stderr: "err".to_owned(),
@@ -324,7 +324,7 @@ fn a_mismatched_env_fails_the_scripted_exec() {
                 "args": ["-c", "exit 0"],
                 "env": {"FIBER_X": "1"}
             }),
-            reply: Ok(ExecReply {
+            reply: Ok(ExecReply::Completed {
                 end: ExecEnd::Code(0),
                 stdout: "ok".to_owned(),
                 stderr: String::new(),
