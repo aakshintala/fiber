@@ -455,10 +455,10 @@ impl Feed {
         // The `c_hub_feed_` prefix keeps the feed's own connection
         // distinct from a relay rejoin.
         let subscribe = format!(
-            "{{\"id\":\"{}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}\n",
+            "{{\"id\":\"{}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}",
             crate::start::mint("c_hub_feed_")
         );
-        if read.get_ref().write_all(subscribe.as_bytes()).is_err() {
+        if support::framing::write_line(&mut read.get_ref(), subscribe.as_bytes()).is_err() {
             return;
         }
         let mut state = lock(&self.state);
