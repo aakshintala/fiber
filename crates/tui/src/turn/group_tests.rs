@@ -1932,6 +1932,46 @@ fn the_renderer_gets_the_width_less_the_gutter() {
     }
 }
 
+/// The gutter edge keeps its branch at six columns: below six the row
+/// is the gutter cut to the width, and at six and above the gutter
+/// precedes the fitted line. The equal case takes the gutter-plus-line
+/// branch; the gutter leaves the line nothing there, so the row is the
+/// gutter alone, while at seven the line's cell follows it.
+#[test]
+fn the_gutter_edge_keeps_its_branch_at_six_columns() {
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls: vec![read_call(1, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    // Five columns: the gutter cut to the width, no rendered text.
+    let (rows, texts) = draw(&group, 5, Some(&bound));
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].0.to_string(), "    1");
+    assert_eq!(texts[1].tail, 0);
+    assert!(texts[1].links.is_empty());
+    // Six columns: the equal case takes the gutter-plus-line branch.
+    let (rows, texts) = draw(&group, 6, Some(&bound));
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].0.to_string(), "    1 ");
+    assert_eq!(texts[1].tail, 0);
+    assert!(texts[1].links.is_empty());
+    // Seven columns: the gutter plus the fitted line's one cell.
+    let (rows, texts) = draw(&group, 7, Some(&bound));
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].0.to_string(), "    1 X");
+    assert_eq!(texts[1].tail, 0);
+    assert!(texts[1].links.is_empty());
+}
+
 /// An error, a wrong shape, and a refused link each fall back to the
 /// built-in row, and the failure is cached: two draws call the fake
 /// once per row.

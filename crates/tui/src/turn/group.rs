@@ -560,36 +560,7 @@ impl Group {
                             } else {
                                 GUTTER_BLANK.to_owned()
                             };
-                            // The gutter precedes the line, so every link
-                            // range moves right by its six cells.
-                            let (row, text) = if max < 6 {
-                                (
-                                    Line::from(vec![dim_span(crate::format::cut(&mark, max))]),
-                                    RowText::plain(),
-                                )
-                            } else {
-                                let mut spans = vec![dim_span(mark)];
-                                spans.extend(line.line.spans.clone());
-                                let links = line
-                                    .links
-                                    .iter()
-                                    .map(|(range, to)| {
-                                        (
-                                            range.start.saturating_add(6)
-                                                ..range.end.saturating_add(6),
-                                            to.clone(),
-                                        )
-                                    })
-                                    .collect();
-                                (
-                                    Line::from(spans),
-                                    RowText {
-                                        tail: line.pad,
-                                        links,
-                                        ..RowText::plain()
-                                    },
-                                )
-                            };
+                            let (row, text) = gutter_row(mark, line, max);
                             out.push_text((row, Some(Target::Call(call.id))), text);
                         }
                     }
@@ -776,6 +747,51 @@ const GUTTER_BLANK: &str = "      ";
 /// An opened call or thought's indent: eight columns (`docs/tui.md`,
 /// "Tool groups and the ledger").
 const INDENT: &str = "        ";
+
+/// One rendered ledger line with its six-column gutter: the gutter cut
+/// to the width when the width holds no more, else the gutter before
+/// the fitted line, with every link range moved right by its six cells.
+// Exempt: at width 6 the fitted line is always empty (it is fitted to
+// the width less the six-column gutter, 0), so both arms draw the
+// byte-identical gutter-only row and no test through the seam can tell
+// `<` from `<=`. Widths 5, 6 and 7 stay pinned by
+// `the_gutter_edge_keeps_its_branch_at_six_columns`.
+#[cfg_attr(false, mutants::skip)]
+fn gutter_row(
+    mark: String,
+    line: &crate::ext::spans::FittedLine,
+    max: usize,
+) -> (Line<'static>, RowText) {
+    // The gutter precedes the line, so every link range moves right by
+    // its six cells.
+    if max < 6 {
+        (
+            Line::from(vec![dim_span(crate::format::cut(&mark, max))]),
+            RowText::plain(),
+        )
+    } else {
+        let mut spans = vec![dim_span(mark)];
+        spans.extend(line.line.spans.clone());
+        let links = line
+            .links
+            .iter()
+            .map(|(range, to)| {
+                (
+                    range.start.saturating_add(6)..range.end.saturating_add(6),
+                    to.clone(),
+                )
+            })
+            .collect();
+        (
+            Line::from(spans),
+            RowText {
+                tail: line.pad,
+                links,
+                ..RowText::plain()
+            },
+        )
+    }
+}
 
 /// A dim span.
 pub(super) fn dim_span(text: String) -> Span<'static> {
