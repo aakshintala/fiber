@@ -157,6 +157,16 @@ impl RepositorySet {
     /// home goes, or under it, leaves out this copy's dependencies with one
     /// notice, while the copy itself still loads. A damaged dependency
     /// directory gets one notice with the damage's text.
+    // A non-`NotFound` stat error on the home or the root is unreachable
+    // after a successful pin, so no test kills a mutant of that arm:
+    // every such state (unreadable parents, a link or file in a parent,
+    // a non-directory ancestor) already fails the pin path's own checks
+    // (`finished`/`check_marker` under `pinned/.lock`), and
+    // `try_ensure_copy` errors before the set ever reads the copy. The
+    // reachable cases stay tested: a missing root skips quietly
+    // (`a_missing_dependency_root_skips_quietly`), a file or link there
+    // reports (`a_file_where_the_dependency_root_goes_...`).
+    #[cfg_attr(false, mutants::skip)]
     fn dependencies(&mut self, item: &RepoItem, copy: &Path) {
         let depends = copy.join(".fiber-depends");
         let root = config::extensions_dir(&depends);

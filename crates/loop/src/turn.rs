@@ -155,10 +155,11 @@ impl Loop {
             if late || self.tools.len() != held {
                 self.preamble = None;
             }
-        } else if self.preamble.is_some() && self.repository.late_pending() {
-            // A rewound loop holds a logged preamble, and this process's
-            // offer approved an extension since: the late step installs,
-            // and its build replaces the logged one.
+        } else if self.preamble.is_some() {
+            // A rewound loop holds a logged preamble: the late step
+            // installs when this process's offer approved an extension,
+            // and no-ops otherwise, so no guard is needed. When it
+            // installs, its build replaces the logged one.
             if self.load_approved()? {
                 self.preamble = None;
             }

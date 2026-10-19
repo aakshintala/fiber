@@ -122,12 +122,6 @@ impl State {
             ..Self::default()
         }
     }
-
-    /// Whether the late step still has to run: this process's offer
-    /// recorded an approval of an extension, and a preparer is set.
-    pub(crate) fn late_pending(&self) -> bool {
-        self.approved_extension && self.late.is_some()
-    }
 }
 
 /// The offers a log holds: the items skipped for the session, and the
