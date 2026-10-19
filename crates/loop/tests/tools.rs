@@ -1177,6 +1177,7 @@ fn hosted_action() -> contract::provider::ReplyAction {
             changed_by: None,
             provider_item: Some(search_result_block()),
             hosts_surfaced: vec!["https://www.rust-lang.org/".into()],
+            loaded: None,
         },
     })
 }

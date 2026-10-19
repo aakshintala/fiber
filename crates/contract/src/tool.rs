@@ -251,6 +251,11 @@ pub struct Output {
     /// what it holds in memory (`docs/tools.md`, "Result and output").
     /// Only the shell sets it.
     pub spilled: Option<Spilled>,
+    /// The tools a search loaded, by name, best first, ties by name;
+    /// `Some(vec![])` when it matched nothing; `None` on every other
+    /// output. An output never sets both `loaded` and `spilled`: only the
+    /// shell spills, and it never loads.
+    pub loaded: Option<Vec<String>>,
 }
 
 /// Takes this call's prefix of a job's queue of unwritten records, which

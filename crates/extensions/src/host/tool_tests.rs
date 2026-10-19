@@ -175,6 +175,7 @@ fn completed(text: &str) -> Box<ToolCallCompleted> {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -193,6 +194,7 @@ fn denied(reason: &str) -> Box<ToolCallCompleted> {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -216,6 +218,7 @@ fn failed(code: contract::ErrorCode, message: &str) -> Box<ToolCallCompleted> {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -365,6 +368,7 @@ fn a_cancelled_outcome_is_an_ordinary_return() {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     let (runner, _entered) = FakeRunner::scripted(vec![Ok(cancelled)]);
     assert_eq!(

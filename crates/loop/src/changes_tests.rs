@@ -899,6 +899,7 @@ fn finished(action: &str) -> Envelope {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     action_envelope("tool_call_completed", &event, action)
 }

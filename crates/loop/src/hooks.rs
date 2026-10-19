@@ -53,6 +53,9 @@ pub(crate) struct Shaped {
     pub(crate) kept: Option<Vec<[u64; 2]>>,
     pub(crate) changed_by: Option<Vec<String>>,
     pub(crate) error: Option<contract::shapes::Failure>,
+    /// True exactly when the completion carries none of the tool's own
+    /// output: under a shutdown, a `Withheld` answer or a failed hook.
+    pub(crate) withheld: bool,
 }
 
 impl Loop {
@@ -117,6 +120,7 @@ impl Loop {
                 kept: None,
                 changed_by: None,
                 error: None,
+                withheld: true,
             });
         }
         if ran.spilled.is_some() {
@@ -179,6 +183,7 @@ impl Loop {
                 kept: None,
                 changed_by: None,
                 error: None,
+                withheld: true,
             },
             AfterToolOutcome::Changed {
                 content,
@@ -251,6 +256,7 @@ impl Loop {
             kept,
             changed_by: None,
             error: None,
+            withheld: false,
         })
     }
 
@@ -368,6 +374,7 @@ impl Loop {
                 kept,
                 changed_by: None,
                 error: None,
+                withheld: false,
             },
             AfterToolOutcome::Failed(failure) => {
                 let shaped = Shaped::failed(failure);
@@ -388,6 +395,7 @@ impl Loop {
                     kept: None,
                     changed_by: None,
                     error: None,
+                    withheld: true,
                 }
             }
             AfterToolOutcome::Changed {
@@ -435,6 +443,7 @@ impl Loop {
                     kept,
                     changed_by: None,
                     error: None,
+                    withheld: false,
                 }
             }
         };
@@ -523,6 +532,7 @@ impl Loop {
                 kept,
                 changed_by: None,
                 error: None,
+                withheld: false,
             },
             AfterToolOutcome::Failed(failure) => return Ok(Shaped::failed(failure)),
             // Its only content is the line: images go too.
@@ -536,6 +546,7 @@ impl Loop {
                 kept: None,
                 changed_by: None,
                 error: None,
+                withheld: true,
             },
             AfterToolOutcome::Changed {
                 content,
@@ -582,6 +593,7 @@ impl Loop {
                             kept,
                             changed_by: None,
                             error: None,
+                            withheld: false,
                         }
                     }
                 }
@@ -738,6 +750,7 @@ impl Shaped {
                 provider: None,
                 retry_after_ms: None,
             }),
+            withheld: true,
         }
     }
 

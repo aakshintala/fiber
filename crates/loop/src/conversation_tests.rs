@@ -904,6 +904,7 @@ fn a_job_record_under_an_action_does_not_flush_its_call() {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     let lines = vec![
         line("tool_call_requested", &requested, Some("a_1")),
@@ -944,6 +945,7 @@ fn result(text: &str) -> Event {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -1035,6 +1037,7 @@ fn image_result() -> Event {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -1118,6 +1121,7 @@ fn pdf_result() -> Event {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -1454,6 +1458,7 @@ mod window {
             changed_by: None,
             provider_item: None,
             hosts_surfaced: Vec::new(),
+            loaded: None,
         })
     }
 
@@ -2174,6 +2179,7 @@ fn skilled_result(status: contract::events::CallStatus, name: &str, path: &str) 
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 

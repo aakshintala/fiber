@@ -100,7 +100,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 (defined in `docs/events.md`):
 
 - `content`: text and image parts. It is exactly what the model is sent,
-  including after an `after_tool` hook has rewritten it. The hook runs on the
+  except for a `tool_search` result: each protocol renders that from `loaded`
+  ("Tool search"), and `content` holds the text form. That holds after an
+  `after_tool` hook has rewritten it. The hook runs on the
   full output before the cut, so the completed line and the artifact both hold
   what the hook returned (`docs/extensions.md`, "Hooks"). A foreground `shell`
   call's output past 1 MiB is cut before the hook runs ("Result and output").
@@ -1529,6 +1531,8 @@ its tools are deferred, change only when the preamble is built.
   name), fixed when the preamble is built.
 - A search is an ordinary tool call. A resume or fork re-sends its result
   byte for byte.
+- A cancelled search loads nothing; its result is the line "The search was
+  cancelled; no tool was loaded."
 - A loaded tool stays loaded until a handoff, which restarts the conversation
   after the preamble (`docs/handoff.md`); after that the model searches again.
 - A call to a deferred tool that was never loaded runs like any other call,

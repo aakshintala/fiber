@@ -635,7 +635,7 @@ Durable. The call's outcome.
 | `reason` | string | no | on `denied`, why; an open set, and an unknown reason is a generic denial |
 | `error` | `error` | no | on `failed` |
 | `process` | `process` | no | on any call that ran a process |
-| `content` | content parts | yes | exactly what the model is sent (`docs/tools.md`, "What a result carries") |
+| `content` | content parts | yes | exactly what the model is sent, except a `tool_search` result, rendered from `loaded` (`docs/tools.md`, "What a result carries") |
 | `details` | any JSON | no | data for clients, such as an edit's diff; never sent to the model |
 | `artifact` | string | no | the full output's path, when the result was cut or a hook returned text for it |
 | `kept` | array | no | when the result was cut, the byte ranges of the full output that `content` holds, each `[start, end]` (integers, `end` exclusive), in order (`docs/tools.md`, "Bounded results") |
@@ -644,6 +644,7 @@ Durable. The call's outcome.
 | `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 | `hosts_surfaced` | array of strings | no | the hosts the result surfaced, as URLs, which become known in the session (`docs/tools.md`, "What a result carries"); absent when empty |
+| `loaded` | array of strings | no | the tools a search loaded, by name, best first, ties by name; `[]` when it matched nothing; absent on every other result, and when an `after_tool` hook failed (`docs/tools.md`, "Tool search") |
 
 A failed model call is an assistant message that completed with a failed
 outcome and an `error`; the retry is a new action. Its codes

@@ -206,6 +206,7 @@ fn the_models_prose_reasoning_and_results_are_left_out() {
             changed_by: None,
             provider_item: None,
             hosts_surfaced: Vec::new(),
+            loaded: None,
         }),
     ] {
         render_reviewed(&mut reviewed, &event, Some(&action), Some(Seq(20)));
