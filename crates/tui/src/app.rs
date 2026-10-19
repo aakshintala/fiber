@@ -252,6 +252,9 @@ pub(crate) struct App {
     /// The installed ledger renderer, if any: shared with the screen's
     /// pages, so one install reaches every page they draw.
     handle: Handle,
+    /// Every extension and slot already named by the fallback notice:
+    /// each reports once, until the reload command clears the set again.
+    renderer_reported: BTreeSet<(String, String)>,
     /// The first Ctrl+C, waiting for the second. Its hint shows while set.
     armed_at: Option<Instant>,
     /// Whether detection saw kitty's keyboard flags.
@@ -347,6 +350,7 @@ impl App {
             notices: Notices::default(),
             screen: Screen::new(),
             handle: Handle::default(),
+            renderer_reported: BTreeSet::new(),
             armed_at: None,
             kitty: false,
             queue: Queue::default(),

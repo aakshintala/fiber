@@ -3715,6 +3715,12 @@ struct Fake {
     lines: usize,
     styled: bool,
     fail_edits: bool,
+    /// Every render fails under `extension`.
+    fail_all: bool,
+    /// The `Failure.extension` a failure names.
+    extension: String,
+    /// One more slot the fake fills besides the catch-all.
+    extra_slot: Option<String>,
 }
 
 impl Fake {
@@ -3727,13 +3733,25 @@ impl Fake {
             lines,
             styled: false,
             fail_edits: false,
+            fail_all: false,
+            extension: "fake".to_owned(),
+            extra_slot: None,
+        }
+    }
+
+    /// A fake whose every render fails under `extension`.
+    fn failing(extension: &str) -> Self {
+        Fake {
+            fail_all: true,
+            extension: extension.to_owned(),
+            ..Fake::lines(1)
         }
     }
 }
 
 impl Renderer for Fake {
     fn fills(&self, slot: &str) -> bool {
-        slot == "ledger_row"
+        slot == "ledger_row" || self.extra_slot.as_deref() == Some(slot)
     }
 
     fn render(
@@ -3746,6 +3764,13 @@ impl Renderer for Fake {
         let key = format!("{slot} {input:?}");
         *self.calls.borrow_mut() += 1;
         *self.per_input.borrow_mut().entry(key.clone()).or_insert(0) += 1;
+        if self.fail_all {
+            self.failed.borrow_mut().insert(key);
+            return Err(Failure {
+                extension: self.extension.clone(),
+                message: "always fails".to_owned(),
+            });
+        }
         if self.fail_edits && matches!(input, Input::LedgerRow(row) if row.name == "edit") {
             self.failed.borrow_mut().insert(key);
             return Err(Failure {
@@ -4006,4 +4031,128 @@ fn a_fresh_copy_shares_the_renderer_with_an_empty_cache() {
     assert!(calls() > 0, "an empty cache calls");
     assert!(!joined(&mut fresh, &lines).is_empty());
     assert_eq!(calls(), 0, "the second draw hits");
+}
+
+/// The notice text of every shown notice, oldest first.
+fn notice_texts(app: &App) -> Vec<(String, String)> {
+    app.notices()
+        .into_iter()
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { code, text, .. } => Some((code, text)),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect()
+}
+
+/// Fifty failing ledger rows in one slot report exactly one notice:
+/// it names the extension, the slot and the message under
+/// `hook_failed`. A repeated draw calls nothing, adds none, and draws
+/// the frame again once, then not again.
+#[test]
+fn many_failures_in_one_slot_report_exactly_one_notice() {
+    let lines = session(2, true);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    app.install_renderer(Rc::new(Fake::failing("fake")));
+    // Walk the whole session so every ledger row fails once.
+    while app.scroll().0 > 0 {
+        search(&app);
+        app.on_key(Key::PageUp, now());
+        frame(&mut app, &lines);
+    }
+    search(&app);
+    let failed = calls();
+    assert!(failed >= 50, "fifty rows fail, got {failed}");
+    // A new failure draws the frame again with its notice.
+    assert!(app.drawn(&[]), "a new failure draws again");
+    assert_eq!(
+        notice_texts(&app),
+        [(
+            "hook_failed".to_owned(),
+            "extension fake could not draw ledger_row: always fails; \
+             the built-in row is drawn"
+                .to_owned(),
+        )]
+    );
+    // A cached failure on a repeated draw adds none, and the frame
+    // with no new notice draws only once.
+    search(&app);
+    assert_eq!(calls(), 0, "cached failures call nothing");
+    assert!(!app.drawn(&[]), "no new failure draws nothing again");
+    assert!(!app.drawn(&[]), "still nothing new");
+    assert_eq!(notice_texts(&app).len(), 1);
+}
+
+/// The reported set is keyed by extension and slot: the same extension
+/// failing again adds nothing, a second extension in the same slot and
+/// a second slot each report again.
+#[test]
+fn a_second_extension_and_a_second_slot_report_again() {
+    let lines = session(2, true);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    app.use_renderer(Rc::new(Fake::failing("alpha")));
+    search(&app);
+    assert!(app.drawn(&[]));
+    assert_eq!(notice_texts(&app).len(), 1);
+    // The same extension failing again reports nothing: its pair is
+    // already in the set, even across a reinstall that clears the cache.
+    app.use_renderer(Rc::new(Fake::failing("alpha")));
+    search(&app);
+    assert!(!app.drawn(&[]), "a reported pair adds nothing");
+    assert_eq!(notice_texts(&app).len(), 1);
+    // A second extension in the same slot reports again.
+    app.use_renderer(Rc::new(Fake::failing("beta")));
+    search(&app);
+    assert!(app.drawn(&[]));
+    let texts = notice_texts(&app);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(
+        texts[1]
+            .1
+            .contains("extension beta could not draw ledger_row:"),
+        "{texts:?}"
+    );
+    // A second slot under the first extension reports again, while the
+    // already-reported slot stays silent.
+    let mut shell = Fake::failing("alpha");
+    shell.extra_slot = Some("ledger_row:read".to_owned());
+    app.use_renderer(Rc::new(shell));
+    search(&app);
+    assert!(app.drawn(&[]));
+    let texts = notice_texts(&app);
+    assert_eq!(texts.len(), 3, "{texts:?}");
+    assert!(
+        texts[2].1.contains("could not draw ledger_row:read:"),
+        "{texts:?}"
+    );
+}
+
+/// The reload command clears the reported set through the slash path:
+/// the same extension failing again reports anew.
+#[test]
+fn reload_reports_the_same_failure_again() {
+    let lines = session(1, true);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    app.use_renderer(Rc::new(Fake::failing("alpha")));
+    search(&app);
+    assert!(app.drawn(&[]));
+    assert_eq!(notice_texts(&app).len(), 1);
+    for ch in "/reload".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    let _ = app.on_key(Key::Enter, now());
+    // The same extension failing again is new again: one more notice.
+    app.use_renderer(Rc::new(Fake::failing("alpha")));
+    search(&app);
+    assert!(app.drawn(&[]));
+    let texts = notice_texts(&app);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(
+        texts[1]
+            .1
+            .contains("extension alpha could not draw ledger_row:"),
+        "{texts:?}"
+    );
 }

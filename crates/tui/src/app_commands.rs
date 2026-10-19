@@ -510,7 +510,12 @@ impl App {
                 self.send_command("handoff", args)
             }
             "name" => self.send_command("name", Some(json!({ "text": rest }))),
-            "reload" => self.send_command("reload", None),
+            "reload" => {
+                // A reloaded extension draws again: its next failure
+                // reports anew.
+                self.renderer_reported.clear();
+                self.send_command("reload", None)
+            }
             "close" => self.close(),
             "quit" => self.quit(),
             "approvals" => {

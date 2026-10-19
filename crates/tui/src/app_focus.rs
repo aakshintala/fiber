@@ -24,6 +24,10 @@ impl App {
     /// focus and is drawn again. A chip stays focused behind the model
     /// picker, whose swapped view carries no home targets.
     pub(crate) fn drawn(&mut self, targets: &[Target]) -> bool {
+        // A renderer's failure falls back to the built-in row and names
+        // itself once per extension and slot, so the frame with a new
+        // notice draws again with it.
+        let failed = self.drain_renderer_failures();
         self.stops = targets.to_vec();
         let resumed = self.home_drawn(targets);
         let chip_held = self.on_home()
@@ -42,7 +46,31 @@ impl App {
             self.cancel_pending_turn();
             return true;
         }
-        resumed
+        resumed || failed
+    }
+
+    /// The attached screen's renderer failures since the last frame:
+    /// one `hook_failed` notice per extension and slot not yet named,
+    /// whether one was pushed. A repeated failure of a cached input
+    /// finds its pair in the set and adds nothing.
+    fn drain_renderer_failures(&mut self) -> bool {
+        let mut pushed = false;
+        for (slot, failure) in self.attached_screen_mut().pages_mut().take_failures() {
+            if self
+                .renderer_reported
+                .insert((failure.extension.clone(), slot.clone()))
+            {
+                self.notices.push(
+                    "hook_failed",
+                    format!(
+                        "extension {} could not draw {slot}: {}; the built-in row is drawn",
+                        failure.extension, failure.message
+                    ),
+                );
+                pushed = true;
+            }
+        }
+        pushed
     }
 
     /// Sets where the panel and the rail are drawn.
