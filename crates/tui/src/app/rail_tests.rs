@@ -1093,6 +1093,171 @@ fn plus_goes_home_with_that_projects_workspace() {
     assert_eq!(app.focused(), None);
 }
 
+/// A header's "N ✓" sits in drawn order right after its "+": Up
+/// from the card reaches the count, then the chip, and Down walks
+/// back.
+#[test]
+fn done_sits_in_drawn_order_right_after_plus() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(B, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    // Down holds on the last stop.
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+}
+
+/// A click on "N ✓" opens home with focus on the project's first
+/// exited row.
+#[test]
+fn clicking_done_opens_home_on_the_first_exited_row() {
+    let mut app = opened(&[A, B, C], A);
+    app.on_line(left(B, "exited"));
+    app.on_line(left(C, "exited"));
+    // The launch group's "N ✓" is keyed by its first card, as "+" is.
+    let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
+    assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.focused(), None);
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    // The feed reversed lists the later row first, so C's row is the
+    // project's first exited row.
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(HomeSpot::Entry(row_key(&app, C))))
+    );
+}
+
+/// Enter on a focused "N ✓" does what a click does: home with focus
+/// on the project's first exited row, clearing the rail's focus.
+#[test]
+fn enter_on_done_opens_home_on_the_first_exited_row() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(B, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
+    let effect = stroke_press(&mut app, plain(Code::Enter));
+    assert!(matches!(effect, Effect::Send(_)), "{effect:?}");
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(HomeSpot::Entry(row_key(&app, B))))
+    );
+}
+
+/// A click on "0 ✓" leaves home with no row focus: a plain `leave`
+/// lands on the entry bar.
+#[test]
+fn clicking_done_with_no_exits_lands_home_unfocused() {
+    let mut app = opened(&[A, B], A);
+    let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
+    assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.focused(), None);
+}
+
+/// A click on "N ✓" expands `more` hiding exited rows: the first
+/// exited row lands focused even with four exits behind a collapsed
+/// project.
+#[test]
+fn clicking_done_expands_more_around_the_first_exited_row() {
+    const E: &str = "s_eeeeeeeeeeeeeeee";
+    let mut app = opened(&[A, B, C, D, E], A);
+    for session in [B, C, D, E] {
+        app.on_line(left(session, "exited"));
+    }
+    // Four exits collapse the project to three shown behind `more`.
+    let hidden = app.home.as_ref().and_then(|home| {
+        home.sessions
+            .sections(home.launch_project())
+            .into_iter()
+            .find(|section| section.project == "-w")
+            .map(|section| section.hidden())
+    });
+    assert_eq!(hidden, Some(1));
+    let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
+    assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
+    assert!(app.on_home());
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    // The feed reversed lists the latest row first, and the project
+    // stands expanded.
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(HomeSpot::Entry(row_key(&app, E))))
+    );
+    let hidden = app.home.as_ref().and_then(|home| {
+        home.sessions
+            .sections(home.launch_project())
+            .into_iter()
+            .find(|section| section.project == "-w")
+            .map(|section| section.hidden())
+    });
+    assert_eq!(hidden, Some(0));
+}
+
+/// Focusing "N ✓" above a deep scroll shows its header row: the
+/// settle reveals one row above the card's top for the header stop.
+#[test]
+fn focusing_done_above_a_deep_scroll_shows_its_header() {
+    let mut app = tall_two_groups();
+    let sessions = ten();
+    let last = sessions.last().expect("ten sessions").clone();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    for _ in 0..11 {
+        assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    }
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, &last))));
+    for _ in 0..8 {
+        assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    }
+    let first_other = sessions.get(1).expect("a second session").clone();
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, &first_other))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, &first_other))));
+    // The settle scrolled the header into view: the next frame draws it.
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let shown = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        shown
+            .iter()
+            .any(|target| target.id == TargetId::Rail(Spot::Done(key(&app, &first_other)))),
+        "the settle reveals the focused done"
+    );
+}
+
 #[test]
 fn a_resolved_request_ends_the_wait() {
     let mut app = two_waiting();
@@ -1570,18 +1735,25 @@ fn down_moves_in_drawn_order_across_two_project_groups() {
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
-    // Down stops at every stop, the next group's "+" included.
+    // Down stops at every stop, the next group's "+" and "N ✓"
+    // included.
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, C))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
     // Down holds on the last stop.
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
 }
@@ -1591,15 +1763,21 @@ fn up_from_the_first_card_reaches_plus_and_down_on_the_last_holds() {
     let mut app = two_projects();
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
@@ -1744,7 +1922,7 @@ fn dismissing_the_focused_card_clears_it() {
 }
 
 /// `A` on screen but crashed, with `B` live: Tab walks the card, then
-/// "+", then "×".
+/// "+", "N ✓", then "×".
 fn crashed_on_screen() -> App {
     let mut app = opened(&[A, B], A);
     app.on_line(left(A, "crashed"));
@@ -1766,6 +1944,9 @@ fn tab_walks_the_card_then_plus_then_cross() {
         "the hint follows the focused stop"
     );
     assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
+    assert_eq!(app.focused(), None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Dismiss(key(&app, A))));
     assert_eq!(app.focused(), None);
     assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
@@ -1783,7 +1964,12 @@ fn shift_tab_walks_the_walk_back() {
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Dismiss(key(&app, A))));
+    stroke_press(&mut app, shift_tab());
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
+    assert_eq!(app.focused(), None);
     stroke_press(&mut app, shift_tab());
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
     assert_eq!(app.focused(), None);
@@ -1805,11 +1991,15 @@ fn shift_tab_past_a_held_end_moves_on() {
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, C))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
     // Down holds on the last stop, marking it twice: one Shift+Tab
     // still walks past the hold.
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
+    stroke_press(&mut app, shift_tab());
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, C))));
     stroke_press(&mut app, shift_tab());
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     stroke_press(&mut app, shift_tab());
@@ -1846,6 +2036,9 @@ fn enter_on_plus_goes_home_like_a_click() {
     let mut app = hubbed();
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, B))));
     let out = sent(press(&mut app, Key::Enter));
@@ -1927,7 +2120,7 @@ fn losing_a_plus_card_clears_its_plus_focus() {
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     app.on_line(left(C, "exited"));
@@ -1975,7 +2168,7 @@ fn focusing_plus_above_a_deep_scroll_shows_its_header() {
     let sessions = ten();
     let last = sessions.last().expect("ten sessions").clone();
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    for _ in 0..10 {
+    for _ in 0..11 {
         assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     }
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, &last))));
@@ -1984,6 +2177,8 @@ fn focusing_plus_above_a_deep_scroll_shows_its_header() {
     }
     let first_other = sessions.get(1).expect("a second session").clone();
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, &first_other))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, &first_other))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, &first_other))));
     // The settle scrolled the header into view: the next frame draws it.
@@ -2257,7 +2452,7 @@ fn unset_arrows_still_move_a_focused_rail_with_rebound_recall() {
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
@@ -2558,9 +2753,13 @@ fn tab_walks_the_conversation_the_panel_and_the_rail() {
     assert_eq!(app.focused(), None);
     assert_single_focus(&app);
     // Tab walks the rail's stops in drawn order from the on-screen
-    // card: the "+" above it, then the next card.
+    // card: the "+" and "N ✓" above it, then the next card.
     stroke_press(&mut app, plain(Code::Tab));
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    assert_eq!(app.focused(), None);
+    assert_single_focus(&app);
+    stroke_press(&mut app, plain(Code::Tab));
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
     assert_eq!(app.focused(), None);
     assert_single_focus(&app);
     stroke_press(&mut app, plain(Code::Tab));

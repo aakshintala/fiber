@@ -1359,6 +1359,8 @@ fn no_color_a_focused_plus_and_cross_go_bold() {
     app.on_line(left(B, "crashed"));
     press_left(&mut app);
     press(&mut app, Code::Up);
+    assert_eq!(app.rail_state().focused(), Some(Spot::Done(key(&app, A))));
+    press(&mut app, Code::Up);
     assert_eq!(app.rail_state().focused(), Some(Spot::Start(key(&app, A))));
     let (buf, targets) = no_color_drawn(&app);
     let plus = targets
@@ -1370,6 +1372,7 @@ fn no_color_a_focused_plus_and_cross_go_bold() {
         buf[(plus.x, plus.y)].modifier.contains(Modifier::BOLD),
         "the focused plus goes bold"
     );
+    press(&mut app, Code::Down);
     press(&mut app, Code::Down);
     press(&mut app, Code::Down);
     press(&mut app, Code::Down);

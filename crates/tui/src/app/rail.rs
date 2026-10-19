@@ -193,9 +193,11 @@ impl App {
             .min(rows.len().saturating_sub(height));
         if let Some(start) = rows.iter().position(|row| row.start == Some(key)) {
             let end = start.saturating_add(CARD_ROWS);
-            // A focused "+" sits one row above its card's top: the
-            // reveal shows it too.
-            let top = if self.rail_state.focus == Some(Spot::Start(key)) {
+            // A focused "+" or "N ✓" sits one row above its card's
+            // top: the reveal shows it too.
+            let top = if self.rail_state.focus == Some(Spot::Start(key))
+                || self.rail_state.focus == Some(Spot::Done(key))
+            {
                 start.saturating_sub(1)
             } else {
                 start
@@ -247,9 +249,9 @@ impl App {
             .map(|row| row.key)
     }
 
-    /// The rail's stops in drawn order: each group's "+", then each
-    /// card with its "×" (`docs/tui.md`, "The rail"). Only the drawn
-    /// order moves, never feed order.
+    /// The rail's stops in drawn order: each group's "+", then its
+    /// "N ✓", then each card with its "×" (`docs/tui.md`, "The
+    /// rail"). Only the drawn order moves, never feed order.
     fn rail_stops(&self) -> Vec<Spot> {
         let Some((cards, launch)) = self.rail_cards() else {
             return Vec::new();
@@ -259,6 +261,7 @@ impl App {
         for group in crate::view::rail::groups(&cards, launch, &sections) {
             if let Some(first) = group.cards.first() {
                 stops.push(Spot::Start(first.key));
+                stops.push(Spot::Done(first.key));
             }
             for card in &group.cards {
                 stops.push(Spot::Card(card.key));
@@ -592,9 +595,7 @@ impl App {
                 .and_then(|group| group.first_exited)
         });
         let effect = self.leave();
-        if let Some(first) = first
-            && self.on_home()
-        {
+        if let Some(first) = first {
             self.focus_row(first);
         }
         effect
