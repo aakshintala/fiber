@@ -14,13 +14,14 @@ use std::os::unix::fs::PermissionsExt;
 
 use super::*;
 use crate::SessionLock;
+use contract::SessionId;
 
 #[test]
 fn session_dir_joins_home_projects_key_sessions_and_id() {
     let home = fakes::TempDir::new("log-delete-dir");
     let home = home.path();
     assert_eq!(
-        super::super::session_dir(home, "-p", "s_1"),
+        super::super::session_dir(home, "-p", &SessionId("s_1".to_owned())),
         home.join("projects/-p/sessions/s_1")
     );
 }

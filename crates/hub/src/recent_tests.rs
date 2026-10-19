@@ -38,7 +38,7 @@ impl Temp {
     /// A row for session `n` in `project`, with its directory made.
     fn row(&self, n: u64, project: &str, how: Left, state: Option<&str>) -> RecentRow {
         let row = row(n, project, how, state);
-        fs::create_dir_all(session_dir(&self.dir, project, &row.session_id.0)).unwrap();
+        fs::create_dir_all(session_dir(&self.dir, project, &row.session_id)).unwrap();
         row
     }
 

@@ -53,7 +53,7 @@ impl Temp {
     }
 
     fn dir_of(&self, project: &str, n: u64) -> PathBuf {
-        log::session_dir(&self.dir, project, &id(n))
+        log::session_dir(&self.dir, project, &SessionId(id(n)))
     }
 
     /// Session `n` in `project`: its log, `artifacts/` and an unheld lock

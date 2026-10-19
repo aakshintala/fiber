@@ -70,7 +70,7 @@ impl RecentRow {
 
     /// Whether the session's directory is still there.
     pub(crate) fn dir_exists(&self, home: &Path) -> bool {
-        log::dir_exists(&log::session_dir(home, &self.project, &self.session_id.0))
+        log::dir_exists(&log::session_dir(home, &self.project, &self.session_id))
     }
 }
 

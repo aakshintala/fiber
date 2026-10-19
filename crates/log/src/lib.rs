@@ -75,11 +75,11 @@ pub fn project_key(project: &Path) -> String {
 /// The session directory of `id` in `project`: `home/projects/<key>/sessions/<id>`,
 /// a plain join. Rows in `recent.jsonl` are written by Fiber, so no shape
 /// check happens here.
-pub fn session_dir(home: &Path, project: &str, id: &str) -> PathBuf {
+pub fn session_dir(home: &Path, project: &str, id: &SessionId) -> PathBuf {
     home.join("projects")
         .join(project)
         .join("sessions")
-        .join(id)
+        .join(&id.0)
 }
 
 /// Whether the session directory is still there, following links as
