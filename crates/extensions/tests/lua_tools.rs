@@ -13,7 +13,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{Setup, go_module, install_lua};
 use config::{Config, ProjectKey, Sources};
@@ -31,6 +31,21 @@ use serde_json::{Map, Value, json};
 
 /// How long a test waits for a signal or an answer before failing.
 const WAIT: Duration = Duration::from_secs(5);
+
+/// The thread parked at `at`: exactly one thread waits there.
+#[track_caller]
+fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
+    let mark = clock
+        .mark_parked(at, WAIT)
+        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
+    let threads = mark.threads();
+    assert_eq!(
+        threads.len(),
+        1,
+        "only one thread parks at {at:?}: {threads:?}"
+    );
+    threads.into_iter().next().expect("one parked thread")
+}
 
 /// An extension named `fiber.test/<short>` with the entry script `init`.
 fn extension(dir: &Path, short: &str, init: &str, clock: Arc<FakeClock>) -> Arc<LuaExtension> {
@@ -349,6 +364,7 @@ fiber.tool("slow", {
     let went = go_module(dir.path(), "fx");
     let tools = by_name(&ext);
     let slow = Arc::clone(&tools["slow"]);
+    let asked = clock.now();
     let (tx, rx) = mpsc::channel();
     let call = std::thread::spawn(move || {
         let result = slow.effects(&Map::new());
@@ -358,7 +374,19 @@ fiber.tool("slow", {
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the effects function to start");
-    clock.advance(Duration::from_millis(100));
+    assert!(
+        clock.await_parked(
+            asked + Duration::from_millis(100) + GRACE,
+            WAIT
+        ),
+        "waited for the effects call to park at its grace"
+    );
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(100) + GRACE),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         {
             Deadline::after(WAIT).recv(&rx).expect("waited for the effects call");
@@ -478,11 +506,24 @@ fiber.tool("spin", {
     );
     let went = go_module(dir.path(), "spin");
     let tools = by_name(&ext);
+    let asked = clock.now();
     let first = run(&tools["spin"], json!({}));
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for spin to start");
-    clock.advance(Duration::from_millis(100));
+    assert!(
+        clock.await_parked(
+            asked + Duration::from_millis(100) + GRACE,
+            WAIT
+        ),
+        "waited for spin to park at its grace"
+    );
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(100) + GRACE),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         failed(&ran(&first, &Deadline::after(WAIT))),
         (
@@ -538,7 +579,13 @@ fiber.tool("wait", {{
         clock.await_parked(deadline.checked_add(GRACE).unwrap(), WAIT),
         "waited for the caller to see the call parked"
     );
-    clock.advance(Duration::from_millis(100));
+    let scheduler = thread_parked_at(&clock, deadline);
+    clock.advance_when_parked(
+        Some(deadline),
+        Some(scheduler),
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         failed(&ran(&first, &Deadline::after(WAIT))),
         (
@@ -1064,6 +1111,7 @@ fiber.tool("count", {
     );
     let went = go_module(dir.path(), "spin");
     let tools = by_name(&ext);
+    let asked = clock.now();
     let spinning = run(&tools["spin"], json!({}));
     Deadline::after(WAIT)
         .recv(&went)
@@ -1073,7 +1121,19 @@ fiber.tool("count", {
     let queued = run_cancellable(&tools["count"], &cancel);
     cancel.cancel();
     assert_eq!(ran(&queued, &Deadline::after(WAIT)), cancelled());
-    clock.advance(Duration::from_millis(100));
+    assert!(
+        clock.await_parked(
+            asked + Duration::from_millis(100) + GRACE,
+            WAIT
+        ),
+        "waited for spin to park at its grace"
+    );
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(100) + GRACE),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         failed(&ran(&spinning, &Deadline::after(WAIT))).0,
         ErrorCode::Timeout
