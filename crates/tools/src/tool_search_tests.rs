@@ -146,8 +146,10 @@ fn equal_scores_order_by_name_bytes() {
     );
 }
 
-/// A rare-versus-common duel over one query: `alpha` is held by two of
-/// eight tools, `beta` by five. `z_rare` holds the rare term once and is
+/// A rare-versus-common duel over one query: `alpha` is held by three
+/// of eight tools, `beta` by four — names are indexed alongside
+/// descriptions, so the `m_alpha_*` and `m_beta_*` names count too.
+/// `z_rare` holds the rare term once and is
 /// short; `b_common` holds the common term three times. The scores land
 /// within a few percent, so any change to the document frequency, the
 /// IDF ratio, the average length, or the score quotient flips the order.

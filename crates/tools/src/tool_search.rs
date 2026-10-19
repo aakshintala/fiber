@@ -129,20 +129,6 @@ fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// BM25's term-frequency saturation factor: hits scale by this before the
-/// length normalization divides them back down.
-// Exempt: replacing the `+` with `-`/`*` (0.2x, 1.2x) or the `*` with `/`
-// (1/2.2x) only rescales every term score by one positive constant, which
-// keeps the ranked order that `Tool::run` reports; no test through
-// `Tool::run` can tell those three apart. The function's behaviour is still
-// covered: `rank_order_on_the_fixed_catalogue` pins the order and
-// `a_narrow_duel_pins_the_ranking` would fail on the shape-changing
-// `*` to `+` variant (hits + 2.2 weights rare and repeated hits alike).
-#[cfg_attr(false, mutants::skip)]
-fn saturated(hits: f64) -> f64 {
-    hits * (K1 + 1.0)
-}
-
 impl ToolSearch {
     /// The loaded names for `query`, best first, ties by name bytes.
     fn search(&self, query: &str, limit: usize) -> Vec<String> {
@@ -179,7 +165,11 @@ impl ToolSearch {
                 }
                 matched = true;
                 let length = tokens.len() as f64;
-                score += idf * saturated(hits) / (hits + K1 * (1.0 - B + B * length / average));
+                // BM25's `(K1 + 1.0)` factor is left out: it multiplies
+                // every term score by one positive constant, so the
+                // ranked order `Tool::run` reports is unchanged without
+                // it.
+                score += idf * hits / (hits + K1 * (1.0 - B + B * length / average));
             }
             if matched {
                 ranked.push((tool.name.as_str(), score));
