@@ -459,7 +459,7 @@ fn wants_write(written: usize, len: usize) -> bool {
     written < len
 }
 
-fn valid_id(name: &str) -> bool {
+pub(crate) fn valid_id(name: &str) -> bool {
     name.strip_prefix("s_").is_some_and(|hex| {
         hex.len() == 16
             && hex

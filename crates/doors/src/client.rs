@@ -666,7 +666,7 @@ fn history(
     let ancestor = match args.session_id.as_ref().filter(|id| *id != own) {
         None => None,
         Some(id) => {
-            if !valid_session_id(&id.0) {
+            if !crate::sessions::valid_id(&id.0) {
                 return Err(format!(
                     "{} is not a session id: one is `s_` followed by 16 lowercase hex digits.",
                     id.0
@@ -725,15 +725,6 @@ fn history(
         .into_iter()
         .filter(|line| line.seq.is_some_and(|seq| seq.0 <= to))
         .collect())
-}
-
-/// A session id cannot name a path outside the sessions directory.
-fn valid_session_id(text: &str) -> bool {
-    let hex = text.strip_prefix("s_").unwrap_or("");
-    hex.len() == 16
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub(crate) fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {

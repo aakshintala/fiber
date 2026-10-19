@@ -1220,24 +1220,51 @@ fn history_checks_only_the_requested_segments_window_and_bound() {
     let opened = Opened::open(vec![]);
     let (_root, ancestor) = history_chain(&opened);
     let socket = opened.socket.clone();
-    opened.session.run(Vec::new(), Arc::new(|| false), move |_inbox| {
-        let client = Client::connect(&socket).unwrap();
-        subscribe(&client,"c_sub","summary");
-        corrupt(&ancestor, 43);
-        send(&client, &json!({"id":"c_last","command":"history","args":{"session_id":"s_aaaaaaaaaaaaaaaa"}}).to_string());
-        let answer = response(&client,"c_last");
-        assert_eq!(seqs(answer["payload"]["result"]["lines"].as_array().unwrap()), (44..=299).collect::<Vec<_>>());
-        assert_eq!(rejection(&history_page(&client,json!({"session_id":"s_aaaaaaaaaaaaaaaa","to_seq":298}))), ("invalid_arguments",UNFIT));
-        let bytes = fs::read_to_string(ancestor.join("events.jsonl")).unwrap();
-        fs::write(ancestor.join("events.jsonl"), format!("{}\n",bytes.lines().next().unwrap())).unwrap();
-        assert_eq!(rejection(&history_page(&client,json!({"session_id":"s_aaaaaaaaaaaaaaaa"}))), ("invalid_arguments",UNFIT));
-        send(&client, &json!({"id":"c_root","command":"history","args":{"session_id":"s_0000000000000000"}}).to_string());
-        let answer = response(&client,"c_root");
-        assert_eq!(seqs(answer["payload"]["result"]["lines"].as_array().unwrap()), vec![0,1,2,3]);
-        fs::remove_dir_all(&ancestor).unwrap();
-        assert_eq!(rejection(&history_page(&client,json!({"session_id":"s_aaaaaaaaaaaaaaaa"}))), ("invalid_arguments",UNFIT));
-        Ok(())
-    }).unwrap();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "summary");
+            corrupt(&ancestor, 43);
+            let last = json!({"id":"c_last","command":"history","args":{"session_id":"s_aaaaaaaaaaaaaaaa"}});
+            send(&client, &last.to_string());
+            let answer = response(&client, "c_last");
+            assert_eq!(
+                seqs(answer["payload"]["result"]["lines"].as_array().unwrap()),
+                (44..=299).collect::<Vec<_>>()
+            );
+            let before = json!({"session_id":"s_aaaaaaaaaaaaaaaa","to_seq":298});
+            assert_eq!(
+                rejection(&history_page(&client, before)),
+                ("invalid_arguments", UNFIT)
+            );
+            let bytes = fs::read_to_string(ancestor.join("events.jsonl")).unwrap();
+            fs::write(
+                ancestor.join("events.jsonl"),
+                format!("{}\n", bytes.lines().next().unwrap()),
+            )
+            .unwrap();
+            let truncated = json!({"session_id":"s_aaaaaaaaaaaaaaaa"});
+            assert_eq!(
+                rejection(&history_page(&client, truncated)),
+                ("invalid_arguments", UNFIT)
+            );
+            let root = json!({"id":"c_root","command":"history","args":{"session_id":"s_0000000000000000"}});
+            send(&client, &root.to_string());
+            let answer = response(&client, "c_root");
+            assert_eq!(
+                seqs(answer["payload"]["result"]["lines"].as_array().unwrap()),
+                vec![0, 1, 2, 3]
+            );
+            fs::remove_dir_all(&ancestor).unwrap();
+            let missing = json!({"session_id":"s_aaaaaaaaaaaaaaaa"});
+            assert_eq!(
+                rejection(&history_page(&client, missing)),
+                ("invalid_arguments", UNFIT)
+            );
+            Ok(())
+        })
+        .unwrap();
     opened.close();
 }
 
