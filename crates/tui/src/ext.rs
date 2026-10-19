@@ -292,10 +292,10 @@ impl Handle {
             return;
         };
         SLOTS.with(|slots| {
-            if let Ok(mut slots) = slots.try_borrow_mut() {
-                if let Some(entry) = slots.get_mut(&id) {
-                    *entry = Some(renderer);
-                }
+            if let Ok(mut slots) = slots.try_borrow_mut()
+                && let Some(entry) = slots.get_mut(&id)
+            {
+                *entry = Some(renderer);
             }
         });
     }

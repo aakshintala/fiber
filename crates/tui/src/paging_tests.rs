@@ -3809,6 +3809,19 @@ fn search(app: &App) {
     }
 }
 
+/// The renderer's per-input call counts, ordered by input: a stable
+/// order for asserting over the unordered call map.
+fn counts(fake: &Fake) -> Vec<(String, usize)> {
+    let mut ordered: Vec<(String, usize)> = fake
+        .per_input
+        .borrow()
+        .iter()
+        .map(|(input, count)| (input.clone(), *count))
+        .collect();
+    ordered.sort();
+    ordered
+}
+
 /// Renderer calls since the last count.
 fn calls() -> usize {
     crate::work::take().renderer_calls
@@ -3875,7 +3888,7 @@ fn a_new_width_calls_again_and_a_failure_never_calls_again() {
     pages.set_width(100);
     assert!(!joined(&mut pages, &lines).is_empty());
     assert!(calls() > 0, "the new width calls again");
-    for (input, count) in fake.per_input.borrow().iter() {
+    for (input, count) in &counts(&fake) {
         if fake.failed.borrow().contains(input) {
             assert_eq!(*count, 1, "a failing input never calls again");
         } else {
@@ -3885,7 +3898,7 @@ fn a_new_width_calls_again_and_a_failure_never_calls_again() {
     // Back at the old width the entries are gone too: a third call.
     pages.set_width(80);
     assert!(!joined(&mut pages, &lines).is_empty());
-    for (input, count) in fake.per_input.borrow().iter() {
+    for (input, count) in &counts(&fake) {
         if fake.failed.borrow().contains(input) {
             assert_eq!(*count, 1, "a failing input never calls again");
         } else {
@@ -3962,7 +3975,7 @@ fn dropping_a_page_calls_again_on_reload() {
     let range = pages
         .index()
         .pages()
-        .get(0)
+        .first()
         .map(|page| page.first_seq..=page.last_seq);
     if let Some(range) = range {
         pages.load(&history(&lines, &range));
@@ -4021,7 +4034,7 @@ fn a_fresh_copy_shares_the_renderer_with_an_empty_cache() {
     for line in &lines {
         pages.apply(line);
     }
-    assert!(joined(&mut pages, &lines).len() > 0);
+    assert!(!joined(&mut pages, &lines).is_empty());
     // The copy draws through the same install: the same fake is
     // called, once per distinct input, then never again.
     let mut fresh = pages.fresh();
