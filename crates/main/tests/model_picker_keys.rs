@@ -106,26 +106,23 @@ fn picker_catalogue_state(run: &Run, setup: &Setup) -> String {
 /// sighting of the stall says whether the picker opened and whether
 /// a switch already landed.
 #[track_caller]
-fn wait_picker_catalogue(run: &mut Run, setup: &Setup) -> Grid {
+fn wait_picker_catalogue(run: &mut Run, setup: &Setup) {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run.wait_screen("the picker catalogue with gamma", |screen| {
             shows(screen, "gamma") && !shows(screen, "Reading the model lists")
         })
     }));
-    match result {
-        Ok(grid) => grid,
-        Err(payload) => {
-            let base = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| {
-                    payload
-                        .downcast_ref::<&str>()
-                        .map(|held| (*held).to_owned())
-                })
-                .unwrap_or_else(|| "the picker catalogue with gamma".to_owned());
-            panic!("{base}; {}", picker_catalogue_state(run, setup));
-        }
+    if let Err(payload) = result {
+        let base = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|held| (*held).to_owned())
+            })
+            .unwrap_or_else(|| "the picker catalogue with gamma".to_owned());
+        panic!("{base}; {}", picker_catalogue_state(run, setup));
     }
 }
 
