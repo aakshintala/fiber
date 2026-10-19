@@ -319,7 +319,8 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
         ))
         .unwrap();
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(looped.run()).unwrap());
+    let looping = thread::spawn(move || done.send(looped.run()).unwrap());
+    let loop_thread = looping.thread().id();
     // The elicitation's `until` equals the call's deadline: only one call
     // is in flight.
     let requested = tap.wait_until("the elicitation's interaction", |line| {
@@ -330,13 +331,14 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
     // The loop parks at the deadline; the clock advances only on that
     // signal, first to 1 ms short of it.
     assert!(
-        clock.await_parked(deadline, WITHIN),
+        clock.await_thread_parked(loop_thread, Some(deadline), WITHIN),
         "the loop waits on the call's deadline",
     );
-    let mark = clock.advance_marked(Duration::from_secs(60) - Duration::from_millis(1));
-    assert!(
-        clock.await_parked_since(&mark, Some(deadline), WITHIN),
-        "the loop parks at the deadline again",
+    clock.advance_when_parked(
+        Some(deadline),
+        Some(loop_thread),
+        Duration::from_secs(60) - Duration::from_millis(1),
+        &Deadline::after(WITHIN),
     );
     assert!(
         tap.pending()
@@ -344,7 +346,12 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
             .all(|line| line.kind != "interaction_resolved"),
         "nothing resolves before the deadline",
     );
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(deadline),
+        Some(loop_thread),
+        Duration::from_millis(1),
+        &Deadline::after(WITHIN),
+    );
     // Within one deadline: the fiber-resolved decline comes before the
     // call's failed `timeout` completion.
     let resolved = tap.wait_until("the elicitation's resolution", |line| {
