@@ -70,6 +70,8 @@ pub(crate) struct Fold {
     pending: Vec<Waiting>,
     turn_running: bool,
     retrying: bool,
+    /// True once the session accepted `close`: nothing clears it.
+    closing: bool,
     context: Option<u64>,
     ledger: Ledger,
     spend: Usage,
@@ -124,6 +126,7 @@ impl Fold {
             pending: Vec::new(),
             turn_running: false,
             retrying: false,
+            closing: false,
             context: None,
             spend,
             ledger,
@@ -156,6 +159,7 @@ impl Fold {
                     cost: Some(0.0),
                     subscription_cost: 0.0,
                 },
+                closing: false,
                 delegates: 0,
                 jobs: 0,
                 clients: 0,
@@ -174,6 +178,17 @@ impl Fold {
         };
         fold.last = fold.status();
         fold
+    }
+
+    /// Accepts `close`: sets `closing` once and recomputes the status.
+    /// True when the status changed, as `subject` does.
+    pub(crate) fn close(&mut self) -> bool {
+        if self.closing {
+            return false;
+        }
+        self.closing = true;
+        self.last = self.status();
+        true
     }
 
     /// History is folded: reads the jobs and the branch now, and from here
@@ -528,6 +543,7 @@ impl Fold {
             model: self.model.clone(),
             thinking: self.thinking.clone(),
             state: self.state(),
+            closing: self.closing,
             since: self.since.unwrap_or_default(),
             started: self.started,
             calls: self.calls,

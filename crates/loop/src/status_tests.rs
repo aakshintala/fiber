@@ -1801,6 +1801,23 @@ fn the_preamble_leaves_a_pending_approval_waiting() {
 }
 
 #[test]
+fn close_sets_closing_once_and_it_stays() {
+    let mut w = world();
+    w.start();
+    assert!(!w.status().closing);
+    let unclosed = w.status().since;
+    assert!(w.fold.close());
+    let closed = w.status();
+    assert!(closed.closing);
+    assert_eq!(closed.since, unclosed);
+    assert!(!w.fold.close());
+    w.prompt("go");
+    assert!(w.status().closing);
+    w.finish();
+    assert!(w.status().closing);
+}
+
+#[test]
 fn finished_turns_forget_their_tool_names() {
     let mut w = world();
     w.start();
