@@ -118,6 +118,65 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "provider",
     ),
     (
+        "research/bedrock-invoke-probe/raw/adaptive.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-bearer.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-key-id.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-model.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-signature.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/cache-read.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/cache-write.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/cache-write.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/plain.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/plain.eventstream",
+        "main",
+    ),
+    ("research/bedrock-invoke-probe/raw/plain.json", "provider"),
+    (
+        "research/bedrock-invoke-probe/raw/thinking.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/thinking.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/tool.eventstream",
+        "provider",
+    ),
+    ("research/bedrock-invoke-probe/raw/tool.json", "provider"),
+    ("research/bedrock-invoke-probe/raw/ttl-1h.json", "provider"),
+    (
+        "research/bedrock-invoke-probe/raw/validation.json",
+        "provider",
+    ),
+    (
         "research/codex-responses-probe/raw/beta-other.json",
         "provider",
     ),

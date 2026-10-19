@@ -607,14 +607,16 @@ impl Drop for OpenBody {
     }
 }
 
-/// The headers every request sends, in order: `content-type`, `accept`,
-/// each of `fixed` (such as Anthropic's `anthropic-version`, which stays
-/// between `accept` and `user-agent` so an endpoint's own repeat of the
-/// name reads as today), `user-agent`, the auth header when there is one,
-/// each of the endpoint's own headers, then the cache key under
-/// `cache_key_header` when one is set.
+/// The headers every request sends, in order: `content-type`, `accept`
+/// naming the reply's framing (`text/event-stream`, or AWS's
+/// `application/vnd.amazon.eventstream`), each of `fixed` (such as
+/// Anthropic's `anthropic-version`, which stays between `accept` and
+/// `user-agent` so an endpoint's own repeat of the name reads as today),
+/// `user-agent`, the auth header when there is one, each of the endpoint's
+/// own headers, then the cache key under `cache_key_header` when one is set.
 pub(crate) fn base_headers(
     endpoint: &Endpoint,
+    accept: &str,
     fixed: &[(&str, &str)],
     auth: Option<(&str, String)>,
     cache_key_header: Option<&str>,
@@ -622,7 +624,7 @@ pub(crate) fn base_headers(
 ) -> Vec<(String, String)> {
     let mut headers = vec![
         ("content-type".to_owned(), "application/json".to_owned()),
-        ("accept".to_owned(), "text/event-stream".to_owned()),
+        ("accept".to_owned(), accept.to_owned()),
     ];
     headers.extend(
         fixed

@@ -61,6 +61,7 @@ impl Completions {
         let endpoint = &self.endpoint;
         let headers = crate::call::base_headers(
             endpoint,
+            "text/event-stream",
             &[],
             endpoint
                 .key
