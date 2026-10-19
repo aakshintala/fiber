@@ -1168,18 +1168,16 @@ fn done_state(done: &Result<(), mpsc::TryRecvError>) -> &'static str {
 
 /// The stall report for the resume test's drain window expiring: names
 /// whether the run thread is alive (the finished channel is empty) or
-/// gone (disconnected), the hub's last step, both helpers' end states,
-/// and the reader's forwarded-lines count. Pure, so unit tests pin every
-/// word it can print.
+/// gone (disconnected), the hub's last step, and both helpers' end states.
+/// Pure, so unit tests pin every word it can print.
 fn stall_report(
     finished: &mpsc::TryRecvError,
     hub: &HubProgress,
     hub_done: &Result<(), mpsc::TryRecvError>,
     reader_done: &Result<(), mpsc::TryRecvError>,
-    reader_forwarded: u64,
 ) -> String {
     format!(
-        "{finished:?}; hub at {:?} (writing: {}), hub {}; reader {} (lines forwarded: {reader_forwarded})",
+        "{finished:?}; hub at {:?} (writing: {}), hub {}; reader {}",
         hub.last_command,
         hub.writing,
         done_state(hub_done),
@@ -1194,10 +1192,10 @@ fn stall_report_names_a_parked_hub_while_the_run_thread_lives() {
         writing: false,
     };
     let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
-    let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &waiting, &waiting, 0);
+    let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &waiting, &waiting);
     assert_eq!(
         report,
-        "Empty; hub at \"subscribe\" (writing: false), hub waiting; reader waiting (lines forwarded: 0)",
+        "Empty; hub at \"subscribe\" (writing: false), hub waiting; reader waiting",
     );
 }
 
@@ -1208,72 +1206,24 @@ fn stall_report_names_a_gone_run_thread() {
         writing: true,
     };
     let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
-    let report = stall_report(
-        &mpsc::TryRecvError::Disconnected,
-        &hub,
-        &waiting,
-        &waiting,
-        1348,
-    );
+    let report = stall_report(&mpsc::TryRecvError::Disconnected, &hub, &waiting, &waiting);
     assert_eq!(
         report,
-        "Disconnected; hub at \"history\" (writing: true), hub waiting; reader waiting (lines forwarded: 1348)",
+        "Disconnected; hub at \"history\" (writing: true), hub waiting; reader waiting",
     );
 }
 
 #[test]
-fn stall_report_names_finished_helpers_and_their_counts() {
+fn stall_report_names_finished_helpers() {
     let hub = HubProgress {
         last_command: "subscribe".to_owned(),
         writing: false,
     };
-    let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &Ok(()), &Ok(()), 1352);
+    let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &Ok(()), &Ok(()));
     assert_eq!(
         report,
-        "Empty; hub at \"subscribe\" (writing: false), hub done; reader done (lines forwarded: 1352)",
+        "Empty; hub at \"subscribe\" (writing: false), hub done; reader done",
     );
-}
-
-/// Hands one reader output to the loop and counts it when it is a hub
-/// line: the resume test's relay thread runs every `read_lines` output
-/// through it, so the stall report names lines the reader validated,
-/// routed, credit-checked and queued, never bytes the socket yielded
-/// but `read_lines` dropped or buffered. Counts only after the queue
-/// accepts the line, so a gone loop counts nothing. Returns false once
-/// the loop is gone, so the relay stops. Blocks on nothing.
-fn relay_and_count(input: Input, tx: &Sender<Input>, forwarded: &AtomicU64) -> bool {
-    let hub = matches!(input, Input::Hub(_));
-    if tx.send(input).is_err() {
-        return false;
-    }
-    if hub {
-        forwarded.fetch_add(1, Ordering::Relaxed);
-    }
-    true
-}
-
-/// Only hub lines count, and only once the loop queues them: a hub
-/// line arrives counted, anything else passes through uncounted, and
-/// a send to a gone loop reports false without counting.
-#[test]
-fn relay_counts_only_queued_hub_lines() {
-    let (tx, rx) = mpsc::channel();
-    let forwarded = AtomicU64::new(0);
-    assert!(relay_and_count(
-        Input::Hub(Line::Session(line("turn_started", None, None, json!({})))),
-        &tx,
-        &forwarded,
-    ));
-    assert_eq!(forwarded.load(Ordering::Relaxed), 1);
-    assert!(relay_and_count(Input::Disconnected, &tx, &forwarded));
-    assert_eq!(forwarded.load(Ordering::Relaxed), 1);
-    drop(rx);
-    assert!(!relay_and_count(
-        Input::Hub(Line::Session(line("turn_started", None, None, json!({})))),
-        &tx,
-        &forwarded,
-    ));
-    assert_eq!(forwarded.load(Ordering::Relaxed), 1);
 }
 
 /// Drains the run thread chunk by chunk: each fold signal renews the
@@ -1489,28 +1439,11 @@ fn resume_open_replays_the_log_to_the_tail() {
         .unwrap_or_else(|err| panic!("clone: {err}"));
     let read_tx = tx.clone();
     // The reader takes at the loop's credits, so its queue stays
-    // bounded while the loop drains. The relay counts each hub line it
-    // hands to the loop, so the stall report names validated forwards,
-    // never buffered bytes.
-    let (relay_tx, relay_rx) = mpsc::channel();
-    let read_feed = crate::link::Feed::new(relay_tx, lp.hub.credits());
+    // bounded while the loop drains.
+    let read_feed = crate::link::Feed::new(read_tx, lp.hub.credits());
     // The reader signals when it reaches EOF, so the test waits on the
     // reader's answer instead of the drain window alone.
     let (reader_done_tx, reader_done) = mpsc::channel();
-    // Lines the reader forwarded to the loop: the stall report reads
-    // the count, so the relay thread counts each hub line it queues.
-    let reader_forwarded = Arc::new(AtomicU64::new(0));
-    let relay_count = Arc::clone(&reader_forwarded);
-    std::thread::Builder::new()
-        .name("resume-relay".to_owned())
-        .spawn(move || {
-            for input in relay_rx {
-                if !relay_and_count(input, &read_tx, &relay_count) {
-                    break;
-                }
-            }
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
     std::thread::Builder::new()
         .name("resume-read".to_owned())
         .spawn(move || {
@@ -1683,7 +1616,6 @@ fn resume_open_replays_the_log_to_the_tail() {
                             .unwrap_or_default(),
                         &hub_done.try_recv(),
                         &reader_done.try_recv(),
-                        reader_forwarded.load(Ordering::Relaxed),
                     ),
                 ),
             }
