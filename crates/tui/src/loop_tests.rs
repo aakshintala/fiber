@@ -1169,7 +1169,7 @@ fn done_state(done: &Result<(), mpsc::TryRecvError>) -> &'static str {
 /// The stall report for the resume test's drain window expiring: names
 /// whether the run thread is alive (the finished channel is empty) or
 /// gone (disconnected), the hub's last step, and both helpers' end states.
-/// Pure, so unit tests pin every word it can print.
+/// Pure, so unit tests pin its exact output for the covered end states.
 fn stall_report(
     finished: &mpsc::TryRecvError,
     hub: &HubProgress,
