@@ -1941,3 +1941,75 @@ fn a_failed_queued_start_answers_its_single_owed_read() {
     assert_eq!(picker.owed, 0);
     assert_eq!(picker.refreshing, None);
 }
+
+#[test]
+fn a_failed_spawn_followed_by_two_asks_keeps_the_mark_until_the_last_answer() {
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+
+    use crate::Input;
+    use crate::catalogue::{ReadModels, Reader, Refresh};
+    // #2738's P1: a failed spawn's error waits unconsumed while two
+    // later takes ask. Both wait on the busy reader (one queued, one
+    // merged) instead of starting over the error, so two answers arrive
+    // for two owed reads and the mark holds until the last one.
+    let read: ReadModels = Arc::new(|_| Ok(Catalogue::default()));
+    let mut reader = Reader::new(Some(read));
+    let (tx, rx) = mpsc::channel();
+    let spawns = Arc::new(Mutex::new(0usize));
+    let counting = || {
+        let spawns = Arc::clone(&spawns);
+        move |_: std::thread::Builder,
+              _: Box<dyn FnOnce() + Send + 'static>|
+              -> std::io::Result<std::thread::JoinHandle<()>> {
+            *spawns.lock().unwrap() += 1;
+            Err(std::io::Error::other("no thread"))
+        }
+    };
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(Refresh::Stale));
+    reader.ask_with(Refresh::Stale, &tx, counting());
+    // Two Ctrl+R presses before the failure's error is consumed.
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(Refresh::Every));
+    reader.ask_with(Refresh::Every, &tx, counting());
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(Refresh::Every));
+    reader.ask_with(Refresh::Every, &tx, counting());
+    assert_eq!(picker.owed, 2);
+    assert_eq!(picker.refreshing, Some(Refresh::Every));
+    // Only the failed start spawned: the next ask queued, the third
+    // merged into it. Without the fix the second ask spawns again, and
+    // the two counted answers clear the mark before the third lands.
+    assert_eq!(*spawns.lock().unwrap(), 1);
+    // The failure's error answers first, keeping the queued read's mark.
+    let wait = fakes::Deadline::after(Duration::from_secs(10));
+    let first = match wait.recv(&rx) {
+        Ok(Input::Models(result)) => result,
+        Ok(_) => panic!("the failed spawn: the failure, not anything else"),
+        Err(error) => panic!("waited 10s for the failure: {error}"),
+    };
+    match &first {
+        Err(message) => assert_eq!(
+            message,
+            "terminal: could not start the model-list reader: no thread"
+        ),
+        Ok(_) => panic!("the failed spawn: the failure, not an answer"),
+    }
+    picker.store(first);
+    reader.done(&tx);
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(Refresh::Every));
+    // The queued read runs now and answers last, clearing the mark.
+    let second = match wait.recv(&rx) {
+        Ok(Input::Models(result)) => result,
+        Ok(_) => panic!("the queued read: an answer, not anything else"),
+        Err(error) => panic!("waited 10s for the queued read: {error}"),
+    };
+    assert!(second.is_ok());
+    picker.store(second);
+    reader.done(&tx);
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}

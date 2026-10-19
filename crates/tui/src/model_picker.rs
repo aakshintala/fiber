@@ -194,8 +194,9 @@ pub(crate) struct ModelPicker {
     /// "refreshing…" beside its lists.
     pub(crate) refreshing: Option<Refresh>,
     /// The catalogue reads owed but not yet answered, at most two:
-    /// the reader runs one read with at most one queued behind it, so
-    /// takes past that merge into the queued slot and answer once. Each
+    /// the reader runs one read with at most one queued behind it, and
+    /// a failed spawn stays busy until its errors are consumed, so takes
+    /// past that merge into the queued slot and answer once. Each
     /// answer counts one down; the mark clears only when none is owed,
     /// so a queued read starting after an older answer keeps showing
     /// "refreshing…" until its own answer lands.
@@ -426,7 +427,9 @@ impl ModelPicker {
     }
 
     /// Counts one more owed read, up to the two the reader can owe at
-    /// once: its running read and its one queued slot. Takes past that
+    /// once: its running read and its one queued slot. A failed spawn
+    /// counts as the running one until its errors are consumed, so the
+    /// bound holds with no assumed cap on failures: takes past that
     /// merge into the queued slot, so they answer once and count nothing
     /// more; each answer then pairs with exactly one counted read.
     fn count_owed(&mut self) {
