@@ -71,6 +71,7 @@ impl Loop {
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionJob(..)
+            | Delivery::ProposeNotes(..)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
             | Delivery::ExtensionLog(_)
@@ -198,6 +199,7 @@ impl Loop {
             // starts no turn.
             Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
             Delivery::Prompt(_, ack)
+            | Delivery::ProposeNotes(_, ack)
             | Delivery::Steer(_, ack)
             | Delivery::Handoff(_, _, ack)
             | Delivery::Rewind(_, _, ack)

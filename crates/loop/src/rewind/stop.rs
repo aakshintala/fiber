@@ -189,6 +189,7 @@ impl Loop {
             | Delivery::Resolved(..)
             | Delivery::InnerCall(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::ProposeNotes(..)
             | Delivery::ExtensionJob(..)
             | Delivery::ExtensionUsage(_)
             | Delivery::Shell(..)

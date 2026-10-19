@@ -1739,7 +1739,54 @@ fn an_empty_skills_result_reads_as_skills() {
 }
 
 #[test]
+fn notes_results_write_and_read_evidence_proposals_and_optional_error() {
+    use crate::notes::{Evidence, Proposed};
+    let result = CommandResult::ProposeNotes {
+        evidence: vec![Evidence::Files {
+            text: "remote".into(),
+        }],
+        proposed: vec![Proposed {
+            text: "ours".into(),
+            cites: vec![0],
+        }],
+        error: None,
+    };
+    let wire = json!({"evidence":[{"kind":"files","text":"remote"}],"proposed":[{"text":"ours","cites":[0]}]});
+    assert_eq!(serde_json::to_value(&result).unwrap(), wire);
+    assert_eq!(result_of(json!({"command_id":"c","result":wire})), result);
+    for evidence in [
+        vec![],
+        vec![Evidence::Answer {
+            text: "answer".into(),
+        }],
+    ] {
+        let result = CommandResult::ProposeNotes {
+            evidence: evidence.clone(),
+            proposed: Vec::new(),
+            error: Some(Box::new(crate::shapes::Failure {
+                code: crate::ErrorCode::BudgetExceeded,
+                message: "spent".into(),
+                retry_after_ms: None,
+                provider: None,
+            })),
+        };
+        let wire = json!({"evidence":evidence,"proposed":[],"error":{"code":"budget_exceeded","message":"spent"}});
+        assert_eq!(serde_json::to_value(&result).unwrap(), wire);
+        assert_eq!(result_of(json!({"command_id":"c","result":wire})), result);
+    }
+    let empty = json!({"evidence":[],"proposed":[]});
+    assert!(matches!(
+        result_of(json!({"command_id":"c","result":empty})),
+        CommandResult::ProposeNotes { .. }
+    ));
+}
+
+#[test]
 fn every_other_result_still_reads_as_its_own_variant() {
+    assert!(matches!(
+        result_of(json!({"command_id":"c","result":{"evidence":[],"proposed":[]}})),
+        CommandResult::ProposeNotes { .. }
+    ));
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {"text": "t"}})),
         CommandResult::OfferedFile { text: "t".into() }

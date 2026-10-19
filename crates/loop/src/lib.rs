@@ -54,6 +54,7 @@ mod known_hosts;
 mod late_cost;
 mod lifecycle;
 mod naming;
+mod notes;
 mod offer;
 mod opening;
 mod permission;
@@ -236,6 +237,7 @@ pub struct Loop {
     /// The reviewer's cache key: the session's id plus `reviewer`
     /// (`docs/prompt-cache.md`, "Rules for other areas").
     reviewer_key: String,
+    notes_key: String,
     /// How much of `reviewed` the previous reviewer request sent. A
     /// completed handoff resets it, as a resume and a model switch do:
     /// `None` means no earlier prefix may be reused.
@@ -550,6 +552,7 @@ impl Loop {
             cancel: Arc::new(TurnCancel::default()),
             cache_key: root,
             reviewer_key: format!("{session_id}:reviewer"),
+            notes_key: format!("{session_id}:notes"),
             queued: VecDeque::new(),
             call_turns: BTreeMap::new(),
             closing: false,

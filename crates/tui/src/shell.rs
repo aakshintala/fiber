@@ -44,6 +44,7 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         | CommandResult::Skills { .. }
         | CommandResult::Quota { .. }
         | CommandResult::Credentials(_)
+        | CommandResult::ProposeNotes { .. }
         | CommandResult::CredentialSwitch { .. }
         | CommandResult::History { .. }
         | CommandResult::ArtifactPage { .. }
