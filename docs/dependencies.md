@@ -340,7 +340,7 @@ rusqlite carries SQLite's C source.
 | What | Why not a crate |
 |---|---|
 | Server-sent events parsing | a line protocol of a few dozen lines |
-| AWS event-stream framing and its CRC-32 | a fixed binary prelude, typed headers and two checksums, about 150 lines with a 256-entry table; crc32fast, already in the tree through flate2, would add a direct dependency for one table |
+| AWS event-stream framing and its CRC-32 | a fixed binary prelude, typed headers and two checksums, about 200 lines with a 256-entry CRC table; crc32fast, already in the tree through flate2, would add a direct dependency for that one table |
 | MCP's JSON-RPC and both transports | rmcp needs tokio |
 | Checking tool arguments against their input schema | see below |
 | BM25 for `tool_search` | one scoring formula over a few hundred short documents |

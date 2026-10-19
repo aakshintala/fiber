@@ -260,6 +260,14 @@ holds"). The layers merge exactly as Fiber's own keys do.
 
 A separate file means an extension never rewrites the person's `config.json`.
 
+The first-party `bedrock` extension has one setting, `region`: the AWS region
+its models' base URL names, read from `AWS_REGION` when it is unset
+(`docs/model-routing.md`, "A per-account host"). Its credential is not a key
+source. Its `credential()` reads `AWS_BEARER_TOKEN_BEDROCK`, AWS keys from the
+environment, or what `aws configure export-credentials` prints, and the
+credential label, `providers."bedrock".credential`, names the AWS profile
+(`docs/model-routing.md`, "Protocols and providers").
+
 ## Secrets
 
 A secret is a file in `credentials/` in Fiber home, mode 0600. A provider's
@@ -602,6 +610,7 @@ declares") lists:
   | `cache_key_header` | string | `openai-responses`, `openai-completions`, `anthropic-messages`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |
   | `thinking_budget` | boolean | `anthropic-messages` | the thinking level goes in `thinking: {type: "enabled", budget_tokens}` (`docs/model-routing.md`, "Thinking"); absent, it goes in `thinking: {type: "adaptive"}` and `output_config: {effort}` |
   | `bearer` | boolean | `anthropic-messages` | the key goes in `authorization: Bearer`; absent, it goes in `x-api-key` |
+  | `bedrock_invoke` | boolean | `anthropic-messages` | the model is Claude on AWS Bedrock's Invoke API: the request goes to `<base_url>/model/<id>/invoke-with-response-stream` with `anthropic_version` in the body and no `model` or `stream`, the key goes in `authorization: Bearer`, and the reply is read in AWS event-stream framing (`docs/model-routing.md`, "Bedrock Invoke wire facts") |
 
   `openai-completions` always sends `stream_options.include_usage: true`,
   because OpenAI sends no usage without it (`docs/model-routing.md`,
