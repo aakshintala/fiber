@@ -101,12 +101,16 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     run.wait_screen("the reply", |screen| shows(screen, "Hel"));
     run.turn_finished(from);
     let saved = fs::read(setup.home().join("config.json")).unwrap();
-    // Ctrl+L opens the picker: the wait names the open, drawn catalogue.
-    // The open picker draws from the terminal's own view once the turn
-    // closed, so the finished turn above proves the key is taken.
+    // Ctrl+L opens the picker: the open wait names the picker frame
+    // and the catalogue wait names its answered models, so a stall
+    // says whether the picker never opened or the catalogue never
+    // answered. The open picker draws from the terminal's own view
+    // once the turn closed, so the finished turn above proves the key
+    // is taken.
     run.write(b"\x0c");
-    run.wait_screen("the open picker with its catalogue", |screen| {
-        shows(screen, "Type to search") && shows(screen, "gamma")
+    run.wait_screen("the open picker", |screen| shows(screen, "Type to search"));
+    run.wait_screen("the picker catalogue with gamma", |screen| {
+        shows(screen, "gamma") && !shows(screen, "Reading the model lists")
     });
     let opened = run.screen().rows.clone();
     assert!(
