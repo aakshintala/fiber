@@ -29,7 +29,7 @@ pub fn not_installed_providers(home: &std::path::Path) -> Result<Vec<&'static st
 }
 
 /// The short name of the first-party package whose data declares `provider`.
-fn serving_package(provider: &str) -> Option<&'static str> {
+pub fn serving_package(provider: &str) -> Option<&'static str> {
     PROVIDER_PACKAGES
         .iter()
         .find(|(name, _)| *name == provider)

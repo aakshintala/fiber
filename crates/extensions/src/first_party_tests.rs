@@ -1,6 +1,13 @@
 use super::*;
 use std::fs;
 
+#[test]
+fn serving_package_resolves_only_first_party_providers() {
+    assert_eq!(serving_package("opencode-go"), Some("opencode"));
+    assert_eq!(serving_package("openai"), Some("openai"));
+    assert_eq!(serving_package("scripted"), None);
+}
+
 fn expected() -> Vec<&'static str> {
     PROVIDER_PACKAGES.iter().map(|(name, _)| *name).collect()
 }
