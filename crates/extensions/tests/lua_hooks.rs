@@ -124,11 +124,22 @@ fn timed_out<T>(
     let asked = clock.now();
     let answer = ask();
     wait.recv(went).expect("waited for the hook to start");
-    assert!(
-        clock.await_parked(asked + timeout, WAIT),
-        "waited for the caller to park at the hook's deadline"
+    let parked = clock
+        .mark_parked(asked + timeout, WAIT)
+        .expect("the caller parks at the hook's deadline");
+    let parked = parked.threads();
+    assert_eq!(
+        parked.len(),
+        1,
+        "only the caller parks at the hook's deadline"
     );
-    clock.advance(timeout);
+    let caller = parked.into_iter().next().expect("the caller thread");
+    clock.advance_when_parked(
+        Some(asked + timeout),
+        Some(caller),
+        timeout,
+        &Deadline::after(WAIT),
+    );
     Deadline::after(WAIT)
         .recv(&answer)
         .expect("waited for the answer")
@@ -854,11 +865,12 @@ fn a_timer_set_in_init_fires_after_load() {
     // The thread parks at the timer's due: the signal it waits on the
     // clock before the advance.
     let due = clock.now() + Duration::from_millis(50);
-    assert!(
-        clock.await_parked(due, WAIT),
-        "waited {WAIT:?} for the thread to park at the timer due"
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(1000));
     assert_eq!(
         next_line(&fired, "the init timer", &Deadline::after(WAIT)),
         b"x"
@@ -888,22 +900,24 @@ fn after_fires_once() {
     let sentinel = clock.now() + SENTINEL;
     assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
     // The thread parks at the `after` due before the advance.
-    assert!(
-        clock.await_parked(due, WAIT),
-        "waited {WAIT:?} for the thread to park at the timer due"
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(1000));
     assert_eq!(
         next_line(&fired, "the after timer", &Deadline::after(WAIT)),
         b"x"
     );
     // Once the one-shot has ended only the sentinel waits: the thread parks
     // at its due, the signal that it waits on the clock before the advance.
-    assert!(
-        clock.await_parked(sentinel, WAIT),
-        "waited {WAIT:?} for the fired `after` to end and the thread to park"
+    clock.advance_when_parked(
+        Some(sentinel),
+        None,
+        Duration::from_secs(10),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_secs(10));
     assert_eq!(exec_call(&ext, "count").unwrap(), "1");
 }
 
@@ -938,11 +952,12 @@ fn a_fired_after_releases_its_function() {
         "true",
         "a waiting timer holds its function"
     );
-    assert!(
-        clock.await_parked(due, WAIT),
-        "waited {WAIT:?} for the thread to park at the timer due"
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(1000));
     assert_eq!(
         next_line(&fired, "the after timer", &Deadline::after(WAIT)),
         b"x"
@@ -976,11 +991,12 @@ fn every_fires_again_ms_after_each_firing_ends() {
     assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
     // The thread parks at the `every` due before the advance.
     let due = clock.now() + Duration::from_millis(50);
-    assert!(
-        clock.await_parked(due, WAIT),
-        "waited {WAIT:?} for the thread to park at the timer due"
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(1000));
     assert_eq!(
         next_line(&first, "the first firing", &Deadline::after(WAIT)),
         b"x"
@@ -995,14 +1011,24 @@ fn every_fires_again_ms_after_each_firing_ends() {
         "waited {WAIT:?} for the first firing to end and park at its every"
     );
     // The first firing ended at the frozen now, so its `every` is due 50 ms
-    // later: 49 ms must not fire it, 2 ms more must.
-    clock.advance(Duration::from_millis(49));
+    // later: 49 ms must not fire it, 1 ms more must.
+    clock.advance_when_parked(
+        Some(rescheduled),
+        None,
+        Duration::from_millis(49),
+        &Deadline::after(WAIT),
+    );
     no_line(&second, "the second firing 1 ms early");
     assert!(
         clock.await_parked(rescheduled, WAIT),
         "waited {WAIT:?} for the thread to park again at the every's due"
     );
-    clock.advance(Duration::from_millis(2));
+    clock.advance_when_parked(
+        Some(rescheduled),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         next_line(&second, "the second firing", &Deadline::after(WAIT)),
         b"x"
@@ -1036,11 +1062,12 @@ fn cancel_before_the_due_time_stops_it_and_twice_is_a_no_op() {
     assert_eq!(exec_call(&ext, "cancel").unwrap(), "cancelled");
     // With the timer gone only the sentinel waits: the thread parks at its
     // due, the signal that it waits on the clock before the advance.
-    assert!(
-        clock.await_parked(sentinel, WAIT),
-        "waited {WAIT:?} for the thread to park at the sentinel's due"
+    clock.advance_when_parked(
+        Some(sentinel),
+        None,
+        Duration::from_secs(20),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_secs(20));
     no_line(&fired, "the cancelled timer");
 }
 
@@ -1068,11 +1095,12 @@ fn cancel_inside_its_own_every_callback_stops_it() {
     exec_call(&ext, "nop").expect("loading sets the timer");
     // The thread parks at the `every` due before the advance.
     let due = clock.now() + Duration::from_millis(50);
-    assert!(
-        clock.await_parked(due, WAIT),
-        "waited {WAIT:?} for the thread to park at the timer due"
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(1000));
     assert_eq!(
         next_line(&first, "the first firing", &Deadline::after(WAIT)),
         b"x"
@@ -1081,11 +1109,12 @@ fn cancel_inside_its_own_every_callback_stops_it() {
     // rescheduled park, which proves the first firing ended, before the
     // advance.
     let rescheduled = clock.now() + Duration::from_millis(50);
-    assert!(
-        clock.await_parked(rescheduled, WAIT),
-        "waited {WAIT:?} for the first firing to end and park at its every"
+    clock.advance_when_parked(
+        Some(rescheduled),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(1000));
     assert_eq!(
         next_line(&second, "the second firing", &Deadline::after(WAIT)),
         b"x"
@@ -1093,11 +1122,12 @@ fn cancel_inside_its_own_every_callback_stops_it() {
     // The fifo proves the write, not that the cancelling firing ended: once
     // it has, only the sentinel waits and the thread parks at its due, the
     // signal that it waits on the clock before the advance.
-    assert!(
-        clock.await_parked(sentinel, WAIT),
-        "waited {WAIT:?} for the cancelling firing to end and the thread to park"
+    clock.advance_when_parked(
+        Some(sentinel),
+        None,
+        Duration::from_secs(10),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_secs(10));
     no_line(&third, "a third firing after the cancel");
 }
 
@@ -1247,27 +1277,40 @@ fn a_timer_callback_past_its_timeout_ends_and_every_keeps_firing() {
     assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
     // The thread parks at the `every` due before the advance.
     let due = clock.now() + Duration::from_millis(50);
-    assert!(
-        clock.await_parked(due, WAIT),
-        "waited {WAIT:?} for the thread to park at the timer due"
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(1000));
     // The firing starts at the frozen now and parks in its exec: the thread
     // parks at the firing's 200 ms deadline, the signal before the advance.
     let deadline = clock.now() + Duration::from_millis(200);
-    assert!(
-        clock.await_parked(deadline, WAIT),
-        "waited {WAIT:?} for the thread to park at the firing's deadline"
+    let parked = clock
+        .mark_parked(deadline, WAIT)
+        .expect("the firing parks at its deadline");
+    let parked = parked.threads();
+    assert_eq!(parked.len(), 1, "only the firing parks at its deadline");
+    let firing = parked.into_iter().next().expect("the firing thread");
+    clock.advance_when_parked(
+        Some(deadline),
+        Some(firing),
+        Duration::from_millis(200),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(400));
-    // Past its timeout the firing ends, and its `every` is due 50 ms after
+    // At its timeout the firing ends, and its `every` is due 50 ms after
     // that end: the park there proves the end before the next advance.
     let rescheduled = clock.now() + Duration::from_millis(50);
     assert!(
         clock.await_parked(rescheduled, WAIT),
         "waited {WAIT:?} for the timed-out firing to park at its every"
     );
-    clock.advance(Duration::from_millis(500));
+    clock.advance_when_parked(
+        Some(rescheduled),
+        Some(firing),
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         next_line(&second, "the second firing", &Deadline::after(WAIT)),
         b"x"
@@ -1301,11 +1344,12 @@ fn a_timer_has_no_provider_credential_to_refresh() {
     // Both timers come due 50 ms after load: await the park, which proves
     // the thread waits on the clock, before the advance.
     let due = clock.now() + Duration::from_millis(50);
-    assert!(
-        clock.await_parked(due, WAIT),
-        "waited {WAIT:?} for the thread to park at the timer due"
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(1000));
     // The refused refresh ends the firing silently (`docs/extensions.md`:
     // a timer failure is reported nowhere); the `every` keeps firing.
     assert_eq!(
@@ -1357,11 +1401,22 @@ fn a_timer_fires_while_a_hook_waits_on_host_exec() {
         b"x"
     );
     let due = clock.now() + Duration::from_millis(50);
-    assert!(
-        clock.await_parked(due, WAIT),
-        "waited {WAIT:?} for the thread to park at the timer due"
+    let parked = clock
+        .mark_parked(due, WAIT)
+        .expect("the extension thread parks at the timer due");
+    let parked = parked.threads();
+    assert_eq!(
+        parked.len(),
+        1,
+        "only the extension thread parks at the timer due"
     );
-    clock.advance(Duration::from_millis(1000));
+    let extension = parked.into_iter().next().expect("the extension thread");
+    clock.advance_when_parked(
+        Some(due),
+        Some(extension),
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         next_line(
             &tick,
