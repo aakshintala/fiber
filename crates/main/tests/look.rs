@@ -223,6 +223,7 @@ fn a_reader_stops_while_the_terminal_side_stays_open() {
 fn a_reader_past_its_deadline_ends() {
     let clock = Box::leak(Box::new(FakeClock::new()));
     let deadline = Deadline::on(&**clock);
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
     clock.advance(support::WAITS + Duration::from_secs(1));
     assert!(deadline.left().is_zero());
     let (main, terminal) = pair();
@@ -464,6 +465,7 @@ fn until_hub_exits_with_waits_until_the_hub_row_vanishes() {
 fn until_hub_exits_with_panics_naming_what_after_the_deadline() {
     let clock = Box::leak(Box::new(FakeClock::new()));
     let deadline = Deadline::on(&**clock);
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
     clock.advance(support::WAITS + Duration::from_secs(1));
     let dir = fakes::TempDir::new("hub-never-exits");
     let hub_row = "4242 python3 -c 'import os, sys  # hub serve' FIBER_HOME=/tmp/fiber-hub-home";

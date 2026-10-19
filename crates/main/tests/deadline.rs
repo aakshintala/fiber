@@ -59,6 +59,7 @@ fn a_socket_line_takes_what_remains_and_no_more() {
         read_line(&mut reader, deadline, "the first line").unwrap(),
         Some("a\n".to_owned())
     );
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
     clock.advance(Duration::from_secs(40));
     let error = read_line(&mut reader, deadline, "the second line").unwrap_err();
     assert_eq!(error.kind(), ErrorKind::TimedOut);
@@ -74,6 +75,7 @@ fn a_socket_line_takes_what_remains_and_no_more() {
         read_line(&mut reader, deadline, "the first line").unwrap(),
         Some("a\n".to_owned())
     );
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
     clock.advance(Duration::from_secs(40));
     assert_eq!(
         read_line(&mut reader, deadline, "the buffered line").unwrap(),
@@ -88,6 +90,7 @@ fn a_socket_line_takes_what_remains_and_no_more() {
     let mut got = [0; 3];
     (&peer).read_exact(&mut got).unwrap();
     assert_eq!(&got, b"hi\n");
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
     clock.advance(Duration::from_secs(40));
     let error = write_line(&mut mine, deadline, b"no\n", "a late line").unwrap_err();
     assert_eq!(error.kind(), ErrorKind::TimedOut);
@@ -111,6 +114,7 @@ fn bounded_returns_or_expires() {
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);
     assert_eq!(bounded(deadline, "a quick answer", || 5), 5);
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
     clock.advance(Duration::from_secs(40));
     let (_never, blocked) = mpsc::channel::<()>();
     let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {

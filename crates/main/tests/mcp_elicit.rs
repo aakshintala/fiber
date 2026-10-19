@@ -176,6 +176,7 @@ fn read_fifo_past_a_spent_deadline_times_out() {
     mkfifo(&dir, "never-written");
     let clock = Box::leak(Box::new(FakeClock::new()));
     let spent = Deadline::on(&**clock);
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
     clock.advance(support::WAITS);
     assert_eq!(
         read_fifo(spent, dir.join("never-written")),
@@ -645,6 +646,7 @@ fn a_hold_that_never_reaches_the_server_is_named() {
     prompt(setup.deadline, &client);
     let clock = Box::leak(Box::new(FakeClock::new()));
     let spent = Deadline::on(&**clock);
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
     clock.advance(support::WAITS);
     let message = read_held(spent, setup.deadline, &running, &dir, "hold").unwrap_err();
     assert!(message.contains("no `tools/call` for hold"), "{message}",);
