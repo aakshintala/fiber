@@ -803,7 +803,7 @@ exception: its asker lives in a Lua VM that does not survive the exit, so
 `fiber` for each of them, and resuming raises nothing. A request already answered when the signal
 arrives was not pending: its answer stands, and a call it allowed completes
 `cancelled` without running.
-Nothing is written for a call before it has stopped. Then `fiber_exited`
+Nothing is written for a call before it has stopped. Each `host.exec` run that an ended callback started writes its `extension_exec` once its group is empty, before `fiber_exited`. Then `fiber_exited`
 with the exit code and no final message, the socket is unlinked, the lock is
 released, and the process exits.
 

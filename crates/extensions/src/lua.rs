@@ -381,6 +381,11 @@ impl LuaExtension {
         self.hub.set_inbox(inbox);
     }
 
+    /// Stops admission and waits for this VM's admitted exec deliveries.
+    pub(crate) fn wait_for_runs(&self) {
+        self.hub.wait_for_execs();
+    }
+
     /// Whether the extension's VM and thread exist and take calls.
     pub fn is_running(&self) -> bool {
         matches!(

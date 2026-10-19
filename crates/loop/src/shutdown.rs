@@ -120,8 +120,11 @@ impl Loop {
         loop {
             let running = self.running();
             if running.is_empty() {
-                // A job's end is sent before `running` stops listing it, so
-                // what is waiting now holds the last ends.
+                if let Some(hooks) = &self.hooks {
+                    hooks.wait_for_runs();
+                }
+                // A job's end is sent before `running` stops listing it;
+                // extension runs queue their lines before the barrier returns.
                 for delivery in self.inbox.try_iter() {
                     self.settle_one(delivery)?;
                 }

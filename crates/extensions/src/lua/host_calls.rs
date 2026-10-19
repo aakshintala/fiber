@@ -346,16 +346,16 @@ pub(super) fn admit<'a>(
                 let cancel_rx = shared.register_exec(id);
                 let clock = hub.clock_handle();
                 let run_deliver = Deliver::clone(deliver);
+                #[cfg(test)]
+                let target = target.clone();
                 Admitted::Spawning {
                     shared,
                     spawn: Spawn {
                         builder: thread::Builder::new().name(format!("exec {name}")),
                         work: Box::new(move || {
                             let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
-                            // The group is empty or killed and drained past
-                            // here: a cancelled call may return only now.
-                            hub_exec.lock().finish_exec(id);
-                            hub_exec.notify();
+                            #[cfg(test)]
+                            settle_hook(&target, Pause::ExecEnding);
                             match &outcome {
                                 Ok(ran) => send_exec(&hub_exec, meta.as_ref(), ran),
                                 Err(failed) => {
@@ -364,6 +364,12 @@ pub(super) fn admit<'a>(
                                     }
                                 }
                             }
+                            // Queue the line before releasing the callback or
+                            // the shutdown barrier: both may seal its router.
+                            hub_exec.lock().finish_exec(id);
+                            hub_exec.notify();
+                            #[cfg(test)]
+                            settle_hook(&target, Pause::ExecFinished);
                             run_deliver(match outcome {
                                 Ok(ran) => Reply::Exec(Ok(ran)),
                                 Err(failed) => Reply::Exec(Err((failed.code, failed.message))),
@@ -689,6 +695,8 @@ pub(super) fn admit<'a>(
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Pause {
     Admission,
+    ExecEnding,
+    ExecFinished,
     Start,
     TimerDone,
     /// After a delegate start's post-start check, before its reply is delivered.

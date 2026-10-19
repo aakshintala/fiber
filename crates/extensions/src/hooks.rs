@@ -991,6 +991,12 @@ impl Hooks for SessionExtensions {
         handoff::before_handoff(self, handoff)
     }
 
+    fn wait_for_runs(&self) {
+        for extension in &self.lua {
+            extension.wait_for_runs();
+        }
+    }
+
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
         // A later `deliver_to` (a resume hands a new sender) replaces the
         // sender; each extension flushes what ended before the first one.

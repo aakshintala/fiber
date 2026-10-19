@@ -426,6 +426,11 @@ pub trait Hooks: Send + Sync {
     /// Hands the session loop's inbox to the hooks, so a program an
     /// extension ran can be logged as `extension_exec`.
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<crate::inbox::Delivery>);
+
+    /// Returns once every `host.exec` run started by an extension that delivers
+    /// to the session inbox has ended and its `extension_exec` line is queued;
+    /// a provider-only VM is not waited on.
+    fn wait_for_runs(&self) {}
 }
 
 /// Why a session started, as a `session_start` hook is told
