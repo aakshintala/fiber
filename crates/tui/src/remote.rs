@@ -112,10 +112,7 @@ impl Remote {
     /// the `global_file` fallback. The loop path asks, so the read rides
     /// the connection the loop holds.
     pub(crate) fn global_parent(&self) -> Result<PathBuf, ConfigureError> {
-        let file = self.hub_global()?;
-        file.parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| decode::io_error("global_file"))
+        parent_of(self.hub_global()?)
     }
     /// The hub's global file for a worker read: the cached copy when the
     /// loop path has set it, else one `global_file` ask, without writing
@@ -190,15 +187,7 @@ impl Remote {
         // cold read does: no empty path crosses into the hub.
         let workspace = match reading.as_deref() {
             Some(reading) if !reading.as_os_str().is_empty() => self.workspace_as(reading)?,
-            _ => {
-                let file = self.hub_global_worker(&Cancel::default())?;
-                if !file.is_absolute() {
-                    return Err(decode::io_error("global_file"));
-                }
-                file.parent()
-                    .map(Path::to_path_buf)
-                    .ok_or_else(|| decode::io_error("global_file"))?
-            }
+            _ => parent_of(self.hub_global_worker(&Cancel::default())?)?,
         };
         let word = match refresh {
             Refresh::Cached => "cached",
@@ -272,15 +261,16 @@ impl Remote {
         let workspace = self.workspace(workspace)?;
         self.fetch_file_at(workspace, file)
     }
-    /// Fetches an editable hub file with no local workspace: only a file
-    /// under the hub-global parent has an address. A project-scoped file
-    /// is an error on the caller's notice path, and no line is sent.
+    /// Fetches an editable hub file with no local workspace: only a
+    /// hub-global file has an address. A project-scoped file
+    /// (`projects/<key>/...` under Fiber home) is an error on the
+    /// caller's notice path, and no line is sent.
     pub(crate) fn fetch_file_global(
         &self,
         file: &Path,
     ) -> Result<(String, String), ConfigureError> {
         let workspace = self.global_parent()?;
-        if !file.starts_with(&workspace) {
+        if file.starts_with(workspace.join("projects")) {
             return Err(decode::io_error("read_config"));
         }
         self.fetch_file_at(workspace, file)
@@ -313,9 +303,10 @@ impl Remote {
         let workspace = self.workspace(workspace)?;
         self.store_file_at(workspace, file, text, version)
     }
-    /// Writes a hub file with no local workspace: only a file under the
-    /// hub-global parent has an address. A project-scoped file is an error
-    /// on the caller's notice path, and no line is sent.
+    /// Writes a hub file with no local workspace: only a hub-global file
+    /// has an address. A project-scoped file (`projects/<key>/...` under
+    /// Fiber home) is an error on the caller's notice path, and no line
+    /// is sent.
     pub(crate) fn store_file_global(
         &self,
         file: &Path,
@@ -323,7 +314,7 @@ impl Remote {
         version: &str,
     ) -> Result<(), ConfigureError> {
         let workspace = self.global_parent()?;
-        if !file.starts_with(&workspace) {
+        if file.starts_with(workspace.join("projects")) {
             return Err(decode::io_error("write_config"));
         }
         self.store_file_at(workspace, file, text, version)
@@ -345,15 +336,6 @@ impl Remote {
             )
             .map_err(ask_error)?;
         decode::result(&line, "write_config").map(|_| ())
-    }
-    /// Writes one global setting with no local workspace: a client-owned
-    /// key goes to the local client dir, as `set` does; every other key
-    /// writes the hub global file at the hub-global parent.
-    pub(crate) fn set_global(&self, key: &str, text: &str) -> Result<Saved, ConfigureError> {
-        if client_owned(key) {
-            return self.local.set(&self.client_dir, Layer::Global, key, text);
-        }
-        self.call("set",json!({"workspace":self.global_parent()?,"layer":layer_name(Layer::Global),"key":key,"text":text}),Caller::Loop,decode::saved)
     }
     /// The client's global file, for client-owned default rows.
     pub(crate) fn local_global_file(&self) -> PathBuf {
@@ -395,6 +377,17 @@ fn ask_error(error: AskError) -> ConfigureError {
 }
 // debt: three write-side enum matches and decode::layer's reverse match;
 // consolidate into shared tables when a second enum needs wire decoding.
+/// The parent a hub-global file resolves to: an absolute file's
+/// directory, never a workspace. A relative answer is an error naming
+/// `global_file`, so no relative path is ever sent as a workspace.
+fn parent_of(file: PathBuf) -> Result<PathBuf, ConfigureError> {
+    if !file.is_absolute() {
+        return Err(decode::io_error("global_file"));
+    }
+    file.parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| decode::io_error("global_file"))
+}
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Global => "global",

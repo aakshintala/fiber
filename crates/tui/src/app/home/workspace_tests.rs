@@ -1324,20 +1324,13 @@ fn no_workspace_never_reads_the_working_directory() {
             ..Default::default()
         });
         app.set_size(80, 24);
-        // A workspace built from the working directory would surface
-        // here: the carried field, home, and start args all stay none.
-        // The field assert is white-box on purpose: the readers below
-        // prefer home once it is set, so only it catches a
-        // construction that smuggles the directory in.
+        // White-box on purpose: the readers below prefer home once it
+        // is set, so only the field catches a construction that
+        // smuggles the working directory in. (`workspace()`,
+        // `home_workspace()` and the start args stay none by the same
+        // empty-means-none mapping `empty_values_carry_no_workspace`
+        // pins, so they assert nothing new here.)
         assert_eq!(app.workspace, None);
-        assert_eq!(app.workspace(), None);
-        assert_eq!(app.home_workspace(), None);
-        assert!(
-            !app.start_args()
-                .as_object()
-                .unwrap_or_else(|| panic!("start args are an object"))
-                .contains_key("workspace")
-        );
         let area = ratatui::layout::Rect::new(0, 0, 80, 24);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         crate::view::render(&app, area, &mut buf, None);

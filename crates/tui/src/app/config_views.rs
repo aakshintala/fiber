@@ -188,7 +188,7 @@ impl App {
     }
 
     /// Writes one global setting: at the workspace in use through the
-    /// seam, or at the hub-global file with no local workspace. `None`
+    /// seam, or at the hub-global parent with no local workspace. `None`
     /// with no seam or nothing to address; the caller keeps its own
     /// no-seam notice.
     pub(in crate::app) fn write_global(
@@ -199,9 +199,18 @@ impl App {
         let seam = self.config_views.seam.clone()?;
         Some(match self.workspace() {
             Some(workspace) => seam.set(&workspace, Layer::Global, key, text),
+            // With no local workspace the hub-global parent stands in
+            // for the workspace: on a remote terminal the seam is the
+            // remote, so this writes the hub global file, client-owned
+            // keys to the local client dir, as `set` does. A local
+            // terminal names none and has no remote: nothing to address.
             None => {
                 let remote = self.remote()?;
-                remote.set_global(key, text)
+                let parent = match remote.global_parent() {
+                    Ok(parent) => parent,
+                    Err(error) => return Some(Err(error)),
+                };
+                seam.set(&parent, Layer::Global, key, text)
             }
         })
     }

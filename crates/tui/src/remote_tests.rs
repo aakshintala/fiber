@@ -720,6 +720,85 @@ fn fetch_and_store_preserve_text_version_and_stale_rejections() {
 }
 
 #[test]
+fn fetch_file_global_reads_hub_global_files_but_refuses_project_files() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let d = Deadline::start();
+    // A hub-global file resolves the parent, then reads there: the
+    // global file answers once, and the read names the parent.
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.fetch_file_global(Path::new("/hub/rules")))
+            .unwrap();
+    });
+    let line = d.recv_or_fail(&hub.lines, "global file");
+    assert_eq!(line["args"], json!({"operation": "global_file"}));
+    hub.reply(&line, json!({"file": "/hub/config.json"}));
+    let line = d.recv_or_fail(&hub.lines, "read_config");
+    assert_eq!(line["command"], "read_config");
+    assert_eq!(
+        line["args"],
+        json!({"workspace":"/hub","path":"/hub/rules"})
+    );
+    hub.reply(&line, json!({"text":"global\n","version":"v1"}));
+    assert_eq!(
+        d.recv_or_fail(&rx, "fetched copy").unwrap(),
+        ("global\n".into(), "v1".into())
+    );
+    // A project-scoped file has no address without a workspace: the
+    // read fails naming read_config, and no line is sent.
+    for file in ["/hub/projects/p/rules", "/hub/projects/p/config.json"] {
+        let error = hub.remote.fetch_file_global(Path::new(file)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::IoFailed, "file {file}");
+        assert!(
+            error.message.contains("read_config"),
+            "file {file}: {}",
+            error.message
+        );
+    }
+    assert!(hub.lines.try_recv().is_err(), "a project file sent a line");
+}
+
+#[test]
+fn store_file_global_writes_hub_global_files_but_refuses_project_files() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let d = Deadline::start();
+    // A hub-global file resolves the parent, then writes there.
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.store_file_global(Path::new("/hub/rules"), "global\n", "v1"))
+            .unwrap();
+    });
+    let line = d.recv_or_fail(&hub.lines, "global file");
+    assert_eq!(line["args"], json!({"operation": "global_file"}));
+    hub.reply(&line, json!({"file": "/hub/config.json"}));
+    let line = d.recv_or_fail(&hub.lines, "write_config");
+    assert_eq!(line["command"], "write_config");
+    assert_eq!(
+        line["args"],
+        json!({"workspace":"/hub","path":"/hub/rules","text":"global\n","version":"v1"})
+    );
+    hub.reply(&line, json!(null));
+    d.recv_or_fail(&rx, "stored copy").unwrap();
+    // A project-scoped file has no address without a workspace: the
+    // write fails naming write_config, and no line is sent.
+    for file in ["/hub/projects/p/rules", "/hub/projects/p/config.json"] {
+        let error = hub
+            .remote
+            .store_file_global(Path::new(file), "project\n", "v1")
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::IoFailed, "file {file}");
+        assert!(
+            error.message.contains("write_config"),
+            "file {file}: {}",
+            error.message
+        );
+    }
+    assert!(hub.lines.try_recv().is_err(), "a project file sent a line");
+}
+
+#[test]
 fn search_maps_ranked_rows_errors_and_stale_without_taking_credits() {
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
     let d = Deadline::start();
@@ -1189,6 +1268,37 @@ fn catalogue_reads_use_the_workspace_in_use() {
     );
     hub.reply(&line, json!({"models": [], "notices": [], "lists": []}));
     assert!(deadline.recv_or_fail(&rx, "later catalogue").is_ok());
+}
+
+#[test]
+fn an_empty_stored_workspace_reads_at_the_global_file() {
+    use crate::catalogue::Refresh;
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    // No call site stores an empty path, but a stored one still reads
+    // as a cold read does: no empty path crosses into the hub.
+    hub.remote.set_workspace(Some(PathBuf::new()));
+    let deadline = Deadline::start();
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.models(Refresh::Cached)).unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "global file");
+    assert_eq!(line["args"], json!({"operation": "global_file"}));
+    hub.reply(&line, json!({"file": "/hub/.fiber/config.json"}));
+    let line = deadline.recv_or_fail(&hub.lines, "models at global parent");
+    assert_eq!(
+        line["args"],
+        json!({"operation": "models", "workspace": "/hub/.fiber", "refresh": "cached"})
+    );
+    hub.reply(&line, json!({"models": [], "notices": [], "lists": []}));
+    assert!(
+        deadline
+            .recv_or_fail(&rx, "catalogue")
+            .unwrap()
+            .models
+            .is_empty()
+    );
 }
 
 #[test]

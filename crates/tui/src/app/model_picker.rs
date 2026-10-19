@@ -375,9 +375,6 @@ impl App {
         {
             self.model_picker.session_only = None;
         }
-        if self.configure_seam().is_none() {
-            return;
-        }
         for (key, text) in writes {
             match self.write_global(&key, &text) {
                 Some(Ok(_)) => {
@@ -621,24 +618,19 @@ impl App {
         // A string list always serialises; the fallback keeps the save
         // total.
         let text = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_owned());
-        match self.configure_seam() {
-            Some(_) => match self.write_global("scoped_models", &text) {
-                Some(Ok(_)) => {
-                    self.model_picker.scoped = list;
-                    if let Some(home) = self.home.as_mut() {
-                        home.launch.scoped_models = self.model_picker.scoped.clone();
-                    }
+        // `write_global` is `None` with no seam, so one match covers
+        // both: with no seam, or no workspace to address on a local
+        // terminal, nothing changed.
+        match self.write_global("scoped_models", &text) {
+            Some(Ok(_)) => {
+                self.model_picker.scoped = list;
+                if let Some(home) = self.home.as_mut() {
+                    home.launch.scoped_models = self.model_picker.scoped.clone();
                 }
-                Some(Err(error)) => {
-                    self.push_notice("io_failed", format!("Saving scoped_models failed: {error}"));
-                }
-                // No workspace to address on a local terminal: nothing
-                // changed, as with no seam.
-                None => self.push_notice(
-                    "io_failed",
-                    "Saving is not available; nothing changed.".to_owned(),
-                ),
-            },
+            }
+            Some(Err(error)) => {
+                self.push_notice("io_failed", format!("Saving scoped_models failed: {error}"));
+            }
             None => self.push_notice(
                 "io_failed",
                 "Saving is not available; nothing changed.".to_owned(),

@@ -105,13 +105,12 @@ pub(crate) fn run_with(
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
         return Ok(1);
     };
-    // An empty launch directory is no workspace: a remote home carries
-    // none, so no `start` it sends names the current directory.
+    // `App::new` maps an empty launch directory to no workspace, so a
+    // remote home carries none.
     let mut app = App::new(
         launch
             .location
             .workspace()
-            .filter(|workspace| !workspace.as_os_str().is_empty())
             .map(std::path::Path::to_path_buf),
     );
     app.set_zone(jiff::tz::TimeZone::system());
