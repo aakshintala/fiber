@@ -3238,15 +3238,15 @@ fn take_reads_records_the_workspace_in_use() {
     app.set_remote(Arc::clone(&remote));
     app.open_model_picker(Mode::Choose);
     assert_eq!(app.take_reads(), Some(Refresh::Stale));
-    assert_eq!(remote.reading(), PathBuf::from("/w"));
+    assert_eq!(remote.reading(), Some(PathBuf::from("/w")));
     // Without an owed read the recorded workspace is left alone.
     assert_eq!(app.take_reads(), None);
-    assert_eq!(remote.reading(), PathBuf::from("/w"));
+    assert_eq!(remote.reading(), Some(PathBuf::from("/w")));
     // After a workspace choice the next read uses it.
     app.choose_workspace("/hub/p".to_owned());
     app.open_model_picker(Mode::Choose);
     assert_eq!(app.take_reads(), Some(Refresh::Stale));
-    assert_eq!(remote.reading(), PathBuf::from("/hub/p"));
+    assert_eq!(remote.reading(), Some(PathBuf::from("/hub/p")));
 }
 
 #[test]
@@ -3918,7 +3918,7 @@ fn the_deferred_start_pick_reads_models_at_the_chosen_workspace() {
     assert_eq!(selected(&app).as_deref(), Some("hub/m"));
     assert_eq!(
         app.remote().map(|remote| remote.reading()),
-        Some(std::path::PathBuf::from("/hub/p"))
+        Some(Some(std::path::PathBuf::from("/hub/p")))
     );
     quiet(&hub.watcher);
 }
