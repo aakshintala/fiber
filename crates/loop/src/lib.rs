@@ -238,6 +238,7 @@ pub struct Loop {
     /// (`docs/prompt-cache.md`, "Rules for other areas").
     reviewer_key: String,
     /// The session's id plus `:notes`, isolating proposals from conversation and reviewer caches.
+    // debt: missing docs/prompt-cache.md :notes row, Part 3 or 4's doc pass adds that row.
     notes_key: String,
     /// How much of `reviewed` the previous reviewer request sent. A
     /// completed handoff resets it, as a resume and a model switch do:

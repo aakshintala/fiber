@@ -21,7 +21,7 @@ pub enum Topic {
 }
 
 impl Topic {
-    // debt: retain only the planned setup helpers below, Part 4 uses them in the terminal flow.
+    // debt: retain only ALL/heading/question, Part 4 task 4.1 uses them for the planned setup frames.
     /// The setup's topic order.
     pub const ALL: [Self; 5] = [
         Self::SourceControl,
@@ -167,7 +167,7 @@ impl SessionTally {
             text,
         })
     }
-    // debt: retain only the planned tally accessors, Part 4 uses them to render session evidence.
+    // debt: retain only prefix/count/here/all_here, Part 4 task 4.1 uses them for session evidence frames.
     /// The rule prefix counted.
     pub fn prefix(&self) -> &str {
         &self.prefix
