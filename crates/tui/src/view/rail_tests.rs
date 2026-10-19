@@ -162,7 +162,7 @@ fn groups_put_the_launch_project_first_then_first_appearance() {
     let hub = row(2, "-hub", "/work/hub", 0.0, None);
     let site2 = row(3, "-site", "/src/site", 0.0, None);
     let cards = [&site, &fiber, &hub, &site2];
-    let names: Vec<(String, Vec<u64>)> = groups(&cards, Some("-w"))
+    let names: Vec<(String, Vec<u64>)> = groups(&cards, Some("-w"), &[])
         .into_iter()
         .map(|group| {
             (
@@ -185,7 +185,7 @@ fn groups_put_the_launch_project_first_then_first_appearance() {
 fn a_group_is_named_by_its_first_cards_workspace() {
     let first = row(0, "-p", "/work/one/", 0.0, None);
     let second = row(1, "-p", "/work/two", 0.0, None);
-    let named = groups(&[&first, &second], Some("-w"));
+    let named = groups(&[&first, &second], Some("-w"), &[]);
     assert_eq!(named.len(), 1);
     assert_eq!(named[0].name, "one");
 }
@@ -195,7 +195,7 @@ fn spend_sums_live_cards() {
     let one = row(0, "-w", "/w", 1.25, None);
     let two = row(1, "-w", "/w", 0.5, None);
     let crashed = row(2, "-w", "/w", 7.0, Some(Left::Crashed));
-    let summed = groups(&[&one, &two, &crashed], Some("-w"));
+    let summed = groups(&[&one, &two, &crashed], Some("-w"), &[]);
     assert!((summed[0].spend - 1.75).abs() < f64::EPSILON);
 }
 
@@ -252,10 +252,10 @@ fn bar_colour_thresholds() {
     assert_eq!(bar_fill(85), Some(Role::Error.color()));
 }
 
-/// The header row's text and click target: the project name bold in
+/// The header row's text and click targets: the project name bold in
 /// the accent colour, " +" after it starting a session in the
-/// project, and the summed spend right-aligned and dim
-/// (`docs/tui.md`, "The rail").
+/// project, and the summed spend with the exited count right-aligned
+/// and dim (`docs/tui.md`, "The rail").
 #[test]
 fn the_header_names_the_project_then_plus_then_dim_spend() {
     use ratatui::style::Modifier;
@@ -264,7 +264,7 @@ fn the_header_names_the_project_then_plus_then_dim_spend() {
     let header = &drawn[0];
     let text = header.line.to_string();
     assert!(text.starts_with("  fiber +"), "{text:?}");
-    assert!(text.ends_with("$0.00"), "{text:?}");
+    assert!(text.ends_with("$0.00 · 0 ✓"), "{text:?}");
     let spans = &header.line.spans;
     assert_eq!(spans.len(), 5, "{text:?}");
     assert_eq!(spans[0].content, "  ");
@@ -274,15 +274,22 @@ fn the_header_names_the_project_then_plus_then_dim_spend() {
         style(Role::Accent).add_modifier(Modifier::BOLD)
     );
     assert_eq!(spans[2].content, " +");
-    assert_eq!(spans[4].content, "$0.00");
+    assert_eq!(spans[4].content, "$0.00 · 0 ✓");
     assert_eq!(spans[4].style, style(Role::Muted));
     // The "+" starts a session in the project's first card's
-    // session: two margin columns, the name, then a space.
-    assert_eq!(header.spots, vec![(8, 1, 1, Spot::Start(key(&app, A)))]);
+    // session and "0 ✓" opens its exited list: two margin columns,
+    // the name, then a space; the count sits at the right.
+    assert_eq!(
+        header.spots,
+        vec![
+            (8, 1, 1, Spot::Start(key(&app, A))),
+            (35, 3, 1, Spot::Done(key(&app, A))),
+        ]
+    );
 }
 
-/// A project name too long for the header keeps its "+": the name is
-/// cut, never the chip that starts a session.
+/// A project name too long for the header keeps its "+" and its
+/// count: the name is cut, never a chip.
 #[test]
 fn a_long_project_name_keeps_its_plus() {
     let mut app = app(20.0);
@@ -295,9 +302,141 @@ fn a_long_project_name_keeps_its_plus() {
     let header = &drawn[0];
     let text = header.line.to_string();
     assert!(text.contains('+'), "{text:?}");
-    assert!(text.ends_with("$0.00"), "{text:?}");
+    assert!(text.ends_with("$0.00 · 0 ✓"), "{text:?}");
     let plus = u16::try_from(text.find('+').unwrap_or_default()).unwrap_or(u16::MAX);
-    assert_eq!(header.spots, vec![(plus, 1, 1, Spot::Start(key(&app, A)))]);
+    assert_eq!(
+        header.spots,
+        vec![
+            (plus, 1, 1, Spot::Start(key(&app, A))),
+            (35, 3, 1, Spot::Done(key(&app, A))),
+        ]
+    );
+}
+
+/// An exited session leaves the rail but stays in the header's count:
+/// its spend leaves the live sum while "1 ✓" stays beside it, dim.
+#[test]
+fn the_header_counts_one_exited_session_beside_the_spend() {
+    let mut app = two(20.0, json!({}));
+    app.on_line(left(B, "exited"));
+    let drawn = super::rows(&app, 40);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    assert!(text.ends_with("$0.00 · 1 ✓"), "{text:?}");
+    let spans = &header.line.spans;
+    assert_eq!(spans.len(), 5, "{text:?}");
+    assert_eq!(spans[4].content, "$0.00 · 1 ✓");
+    assert_eq!(spans[4].style, style(Role::Muted));
+    assert_eq!(
+        header.spots,
+        vec![
+            (8, 1, 1, Spot::Start(key(&app, A))),
+            (35, 3, 1, Spot::Done(key(&app, A))),
+        ]
+    );
+}
+
+/// Two exits read "2 ✓": the count has no singular form.
+#[test]
+fn the_header_counts_two_exited_sessions() {
+    let mut app = two(20.0, json!({}));
+    app.on_line(status(C, json!({})));
+    app.on_line(left(B, "exited"));
+    app.on_line(left(C, "exited"));
+    let drawn = super::rows(&app, 40);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    assert!(text.ends_with("$0.00 · 2 ✓"), "{text:?}");
+    assert_eq!(
+        header.spots,
+        vec![
+            (8, 1, 1, Spot::Start(key(&app, A))),
+            (35, 3, 1, Spot::Done(key(&app, A))),
+        ]
+    );
+}
+
+/// A crashed session counts in neither the spend nor the exits: its
+/// card stays live on the rail but its spend left with it, and a crash
+/// is not an exit.
+#[test]
+fn a_crashed_session_counts_in_neither_spend_nor_exits() {
+    let mut app = two(20.0, json!({"spend": spend(2.0)}));
+    app.on_line(left(B, "crashed"));
+    let drawn = super::rows(&app, 40);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    assert!(text.ends_with("$0.00 · 0 ✓"), "{text:?}");
+}
+
+/// Each header counts only its own project's exits.
+#[test]
+fn each_header_counts_only_its_own_projects_exits() {
+    let mut app = app(20.0);
+    app.on_line(status(A, json!({})));
+    app.on_line(status(
+        B,
+        json!({"workspace": "/Users/you/work/hub", "project": "-hub"}),
+    ));
+    app.on_line(status(C, json!({})));
+    app.on_line(status(
+        D,
+        json!({"workspace": "/Users/you/work/hub", "project": "-hub"}),
+    ));
+    app.on_line(left(C, "exited"));
+    app.on_line(left(D, "exited"));
+    let drawn = super::rows(&app, 40);
+    // One header and one card per project.
+    assert_eq!(drawn.len(), 14);
+    let launch = &drawn[0];
+    let hub = &drawn[7];
+    assert!(
+        launch.line.to_string().ends_with("$0.00 · 1 ✓"),
+        "{:?}",
+        launch.line.to_string()
+    );
+    assert!(
+        hub.line.to_string().ends_with("$0.00 · 1 ✓"),
+        "{:?}",
+        hub.line.to_string()
+    );
+    assert_eq!(
+        launch.spots,
+        vec![
+            (8, 1, 1, Spot::Start(key(&app, A))),
+            (35, 3, 1, Spot::Done(key(&app, A))),
+        ]
+    );
+    assert_eq!(
+        hub.spots,
+        vec![
+            (6, 1, 1, Spot::Start(key(&app, B))),
+            (35, 3, 1, Spot::Done(key(&app, B))),
+        ]
+    );
+}
+
+/// A narrow header cuts the name but keeps the "+" and the spend
+/// with its count whole.
+#[test]
+fn a_narrow_header_cuts_the_name_but_keeps_plus_and_count_whole() {
+    let app = two(20.0, json!({}));
+    let drawn = super::rows(&app, 22);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    // 22 columns hold 18 text columns: "$0.00 · 0 ✓" keeps its 11,
+    // so the name cuts to 4 less the chip.
+    assert!(text.contains('+'), "{text:?}");
+    assert!(text.ends_with("$0.00 · 0 ✓"), "{text:?}");
+    assert!(!text.contains("fiber"), "{text:?}");
+    let plus = u16::try_from(text.find('+').unwrap_or_default()).unwrap_or(u16::MAX);
+    assert_eq!(
+        header.spots,
+        vec![
+            (plus, 1, 1, Spot::Start(key(&app, A))),
+            (17, 3, 1, Spot::Done(key(&app, A))),
+        ]
+    );
 }
 
 /// A card's third row, when it is not waiting, is a dim "⎇ " followed
@@ -762,17 +901,20 @@ fn targets_cover_each_card_its_cross_and_plus() {
         rail_targets(&targets),
         vec![
             (Spot::Start(a), Rect::new(8, 0, 1, 1)),
+            (Spot::Done(a), Rect::new(35, 0, 3, 1)),
             (Spot::Card(a), Rect::new(0, 2, 39, 4)),
             (Spot::Card(c), Rect::new(0, 8, 39, 4)),
             (Spot::Start(b), Rect::new(6, 13, 1, 1)),
+            (Spot::Done(b), Rect::new(35, 13, 3, 1)),
             (Spot::Card(b), Rect::new(0, 15, 39, 4)),
             (Spot::Dismiss(b), Rect::new(37, 15, 1, 1)),
         ]
     );
     let lines = lines(&rail(&app));
     assert!(lines[0].starts_with("  fiber +"), "{}", lines[0]);
-    assert!(lines[0].ends_with("$0.00"), "{}", lines[0]);
+    assert!(lines[0].ends_with("$0.00 · 0 ✓"), "{}", lines[0]);
     assert!(lines[13].starts_with("  hub +"), "{}", lines[13]);
+    assert!(lines[13].ends_with("$0.00 · 0 ✓"), "{}", lines[13]);
     assert!(lines[15].ends_with('✕'), "{}", lines[15]);
     assert_eq!(lines[15].chars().count(), 38, "{}", lines[15]);
 }

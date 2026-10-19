@@ -2,7 +2,7 @@
 source: crates/tui/src/view/quit_tests.rs
 expression: "screen(&app, 160, 48)"
 ---
-  w +            $0.00
+  w +      $0.00 · 0 ✓
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ 1 ● WORKING       0s
 ▌ fix the parser

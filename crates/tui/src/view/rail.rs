@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use crate::app::App;
 use crate::app::rail::Spot;
 use crate::format;
-use crate::home::{Left, Row, State, title};
+use crate::home::{Left, Row, Section, State, title};
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 
@@ -31,11 +31,21 @@ pub(crate) struct Group<'a> {
     pub(crate) spend: f64,
     /// Its cards, in feed order.
     pub(crate) cards: Vec<&'a Row>,
+    /// The count of the project's exited sessions.
+    pub(crate) exited: usize,
+    /// The key of the project's first exited row, newest first.
+    pub(crate) first_exited: Option<u64>,
 }
 
 /// The cards grouped by project: the launch project's group first, then
-/// each other project in the order its first card appears.
-pub(crate) fn groups<'a>(cards: &[&'a Row], launch_project: Option<&str>) -> Vec<Group<'a>> {
+/// each other project in the order its first card appears. The exited
+/// count and first-exited key of each project come from `sections`,
+/// matched by project.
+pub(crate) fn groups<'a>(
+    cards: &[&'a Row],
+    launch_project: Option<&str>,
+    sections: &[Section<'_>],
+) -> Vec<Group<'a>> {
     let mut projects: Vec<&str> = Vec::new();
     for card in cards {
         if !projects.contains(&card.project.as_str()) {
@@ -67,7 +77,25 @@ pub(crate) fn groups<'a>(cards: &[&'a Row], launch_project: Option<&str>) -> Vec
                 .iter()
                 .filter(|card| card.left.is_none())
                 .fold(0.0, |sum, card| sum + card.spend);
-            Group { name, spend, cards }
+            // A crashed card is not exited either: the count and the
+            // first-exited key come from the exited rows alone.
+            let (exited, first_exited) = sections
+                .iter()
+                .find(|section| section.project == project)
+                .map(|section| {
+                    (
+                        section.exited.len(),
+                        section.exited.first().map(|row| row.key),
+                    )
+                })
+                .unwrap_or((0, None));
+            Group {
+                name,
+                spend,
+                cards,
+                exited,
+                first_exited,
+            }
         })
         .collect()
 }
@@ -135,26 +163,36 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<RailRow> {
     let card_w = width.saturating_sub(1);
     let text = usize::from(card_w).saturating_sub(3);
     let mut out = Vec::new();
-    for group in groups(&cards, launch_project) {
+    let sections = app.rail_sections();
+    for group in groups(&cards, launch_project, &sections) {
         // The header's left keeps the "+" that starts a session in
         // the project: the name is cut to the room left of the
-        // right-aligned spend less the chip (`docs/tui.md`, "The
-        // rail").
+        // right-aligned spend with its "N ✓" less the chip
+        // (`docs/tui.md`, "The rail"). The count stays whole with
+        // the spend, so the name cuts first at narrow widths.
         let spend = format::money(group.spend);
-        let room = text.saturating_sub(format::width(&spend) + 1);
+        let done = format!("{} ✓", group.exited);
+        let right = format!("{spend} · {done}");
+        let room = text.saturating_sub(format::width(&right) + 1);
         let name = format::cut(&group.name, room.saturating_sub(2));
         // The chip follows the two margin columns, the name and a
         // space.
         let plus = 2u16
             .saturating_add(u16::try_from(format::width(&name)).unwrap_or(u16::MAX))
             .saturating_add(1);
+        // The count ends the right side, so it starts the count's
+        // width left of the text's end past the margin columns.
+        let done_w = u16::try_from(format::width(&done)).unwrap_or(u16::MAX);
+        let done_col = 2u16
+            .saturating_add(u16::try_from(text).unwrap_or(u16::MAX))
+            .saturating_sub(done_w);
         let mut header = vec![Span::raw("  ")];
         header.extend(sides(
             vec![
                 Span::styled(name, style(Role::Accent).add_modifier(Modifier::BOLD)),
                 Span::raw(" +"),
             ],
-            vec![Span::styled(spend, style(Role::Muted))],
+            vec![Span::styled(right, style(Role::Muted))],
             text,
         ));
         let spots = group
@@ -162,6 +200,12 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<RailRow> {
             .first()
             .map(|card| (plus, 1, 1, Spot::Start(card.key)))
             .into_iter()
+            .chain(
+                group
+                    .cards
+                    .first()
+                    .map(|card| (done_col, done_w, 1, Spot::Done(card.key))),
+            )
             .collect();
         out.push(RailRow {
             line: Line::from(header),
@@ -538,7 +582,7 @@ pub(crate) fn draw(
                     }
                 }
             }
-            Spot::Start(_) | Spot::Dismiss(_) => {
+            Spot::Start(_) | Spot::Dismiss(_) | Spot::Done(_) => {
                 for target in targets
                     .iter()
                     .filter(|target| target.id == TargetId::Rail(focus))

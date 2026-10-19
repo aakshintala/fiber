@@ -32,6 +32,9 @@ pub(crate) enum Spot {
     /// A project header's "+", by its first card's key: home, with that
     /// card's workspace chosen for the next `start`.
     Start(u64),
+    /// A project header's "N ✓", by its first card's key: home, with
+    /// focus on that project's first exited row.
+    Done(u64),
 }
 
 /// The rail's state behind a small interface.
@@ -42,8 +45,9 @@ pub(crate) struct RailState {
     /// The focused rail stop; None while the input box has focus.
     /// Only one focus exists: while this is set, [`App::focus`] holds
     /// no rail target (`docs/tui.md`, "The rail"). Every click target
-    /// is a focus stop: each card, each project's "+", each crashed
-    /// card's "×" (`docs/tui.md`, "Moving through the conversation").
+    /// is a focus stop: each card, each project's "+" and "N ✓", each
+    /// crashed card's "×" (`docs/tui.md`, "Moving through the
+    /// conversation").
     focus: Option<Spot>,
     /// The stops the rail's focus reached, in order, no two adjacent
     /// alike: Tab walks the earliest drawn stop not yet in it,
@@ -123,6 +127,16 @@ impl App {
         Some((home.sessions.cards(), home.launch_project()))
     }
 
+    /// Each project's exited sessions, in display order: the count
+    /// beside the rail header's spend and the key its "N ✓" opens
+    /// (`docs/tui.md`, "The rail"). Empty without home.
+    pub(crate) fn rail_sections(&self) -> Vec<crate::home::Section<'_>> {
+        let Some(home) = self.home.as_ref() else {
+            return Vec::new();
+        };
+        home.sessions.sections(home.launch_project())
+    }
+
     /// Sets the wall time a card's elapsed time reads, in milliseconds
     /// since the epoch. A frame reads it when it draws; nothing ticks.
     pub(crate) fn set_wall(&mut self, ms: u64) {
@@ -150,7 +164,7 @@ impl App {
                     self.rail_state.focus.is_some_and(|focus| {
                         drawn.iter().any(|row| match focus {
                             Spot::Card(key) => row.start == Some(key),
-                            Spot::Start(_) | Spot::Dismiss(_) => {
+                            Spot::Start(_) | Spot::Dismiss(_) | Spot::Done(_) => {
                                 row.spots.iter().any(|(_, _, _, spot)| *spot == focus)
                             }
                         })
@@ -241,7 +255,8 @@ impl App {
             return Vec::new();
         };
         let mut stops = Vec::new();
-        for group in crate::view::rail::groups(&cards, launch) {
+        let sections = self.rail_sections();
+        for group in crate::view::rail::groups(&cards, launch, &sections) {
             if let Some(first) = group.cards.first() {
                 stops.push(Spot::Start(first.key));
             }
@@ -559,10 +574,32 @@ impl App {
             Spot::Card(key) => self.switch_to(key),
             Spot::Dismiss(key) => self.dismiss_card(key),
             Spot::Start(key) => self.start_in(key),
+            Spot::Done(key) => self.exits_in(key),
         }
     }
 
-    /// ⌥A, the badge and `/approvals` (`docs/tui.md`, "Bindings"): a
+    /// A project header's "N ✓": home, with focus on the project's
+    /// first exited row, expanding it when it hides behind more. With
+    /// no exited row the entry bar keeps focus: a plain `leave`.
+    fn exits_in(&mut self, key: u64) -> Effect {
+        // The stop is keyed by its group's first card, as "+" is:
+        // the group holding that card holds the exited row to open.
+        let first = self.rail_cards().and_then(|(cards, launch)| {
+            let sections = self.rail_sections();
+            crate::view::rail::groups(&cards, launch, &sections)
+                .into_iter()
+                .find(|group| group.cards.first().is_some_and(|card| card.key == key))
+                .and_then(|group| group.first_exited)
+        });
+        let effect = self.leave();
+        if let Some(first) = first
+            && self.on_home()
+        {
+            self.focus_row(first);
+        }
+        effect
+    }
+
     /// put-aside offer opens again, else the approval panel opens at the
     /// first request waiting. With neither, the oldest card waiting other
     /// than the one on screen is switched to, and its request opens when
@@ -751,11 +788,11 @@ impl App {
     }
 }
 
-/// The card a stop belongs to: a card's own key, a "+" its group's
-/// first card's key, a "×" its card's key.
+/// The card a stop belongs to: a card's own key, a "+" or "N ✓" its
+/// group's first card's key, a "×" its card's key.
 fn spot_key(spot: Spot) -> u64 {
     match spot {
-        Spot::Card(key) | Spot::Dismiss(key) | Spot::Start(key) => key,
+        Spot::Card(key) | Spot::Dismiss(key) | Spot::Start(key) | Spot::Done(key) => key,
     }
 }
 
