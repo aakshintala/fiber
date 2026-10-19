@@ -1251,6 +1251,171 @@ fn stall_report_names_finished_helpers_and_their_counts() {
     assert!(report.contains("lines forwarded: 1352"), "{report}");
 }
 
+/// Counts newline bytes flowing through a `Read`: the resume test's
+/// reader thread reads the hub socket through it, so the stall report
+/// can say how many lines the reader forwarded. Delegates every call
+/// and counts only bytes actually returned, so partial reads, errors
+/// and EOF behave exactly like the inner reader. Blocks on nothing.
+struct CountingRead<R> {
+    inner: R,
+    lines: Arc<AtomicU64>,
+}
+
+impl<R> CountingRead<R> {
+    fn new(inner: R, lines: Arc<AtomicU64>) -> Self {
+        Self { inner, lines }
+    }
+}
+
+impl<R: Read> Read for CountingRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        let newlines = buf[..read].iter().filter(|byte| **byte == b'\n').count();
+        self.lines.fetch_add(
+            u64::try_from(newlines).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        Ok(read)
+    }
+}
+
+/// One byte at a time: forces the counting wrapper through partial
+/// reads, so the count pins bytes actually returned, not buffer size.
+struct OneByte<'a> {
+    rest: &'a [u8],
+}
+
+impl Read for OneByte<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let [first, rest @ ..] = self.rest else {
+            return Ok(0);
+        };
+        let [slot, ..] = buf else { return Ok(0) };
+        *slot = *first;
+        self.rest = rest;
+        Ok(1)
+    }
+}
+
+#[test]
+fn counting_read_counts_newlines_through_partial_reads() {
+    let lines = Arc::new(AtomicU64::new(0));
+    let mut counted = CountingRead::new(
+        OneByte {
+            rest: b"a\nb\nno trailing",
+        },
+        Arc::clone(&lines),
+    );
+    let mut text = String::new();
+    counted
+        .read_to_string(&mut text)
+        .unwrap_or_else(|err| panic!("read: {err}"));
+    assert_eq!(text, "a\nb\nno trailing");
+    assert_eq!(lines.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn counting_read_counts_a_bare_newline_run() {
+    let lines = Arc::new(AtomicU64::new(0));
+    let mut counted = CountingRead::new(&b"\n\n\n"[..], Arc::clone(&lines));
+    let mut buf = [0u8; 8];
+    let read = counted
+        .read(&mut buf)
+        .unwrap_or_else(|err| panic!("read: {err}"));
+    assert_eq!(read, 3);
+    assert_eq!(lines.load(Ordering::Relaxed), 3);
+    let read = counted
+        .read(&mut buf)
+        .unwrap_or_else(|err| panic!("read: {err}"));
+    assert_eq!(read, 0);
+    assert_eq!(lines.load(Ordering::Relaxed), 3);
+}
+
+#[test]
+fn counting_read_counts_nothing_without_a_newline() {
+    let lines = Arc::new(AtomicU64::new(0));
+    let mut counted = CountingRead::new(&b"no newline"[..], Arc::clone(&lines));
+    let mut buf = [0u8; 16];
+    let mut total = 0;
+    while total < 10 {
+        let read = counted
+            .read(&mut buf)
+            .unwrap_or_else(|err| panic!("read: {err}"));
+        if read == 0 {
+            break;
+        }
+        total += read;
+    }
+    assert_eq!(total, 10);
+    assert_eq!(lines.load(Ordering::Relaxed), 0);
+}
+
+/// Bytes, then an error: the wrapper counts the bytes it returned and
+/// hands the error through untouched.
+struct ThenError<'a> {
+    rest: Option<&'a [u8]>,
+}
+
+impl Read for ThenError<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.rest.take() {
+            Some(rest) => {
+                let take = rest.len().min(buf.len());
+                buf[..take].copy_from_slice(&rest[..take]);
+                Ok(take)
+            }
+            None => Err(std::io::Error::new(ErrorKind::ConnectionReset, "gone")),
+        }
+    }
+}
+
+#[test]
+fn counting_read_passes_errors_through_after_counting() {
+    let lines = Arc::new(AtomicU64::new(0));
+    let mut counted = CountingRead::new(
+        ThenError {
+            rest: Some(b"a\nb"),
+        },
+        Arc::clone(&lines),
+    );
+    let mut buf = [0u8; 16];
+    let read = counted
+        .read(&mut buf)
+        .unwrap_or_else(|err| panic!("read: {err}"));
+    assert_eq!(read, 3);
+    assert_eq!(lines.load(Ordering::Relaxed), 1);
+    let err = counted
+        .read(&mut buf)
+        .expect_err("the error reaches the caller");
+    assert_eq!(err.kind(), ErrorKind::ConnectionReset);
+    assert_eq!(lines.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn hub_progress_keeps_the_last_write() {
+    let slot = Arc::new(Mutex::new(HubProgress::default()));
+    {
+        let mut held = slot.lock().unwrap_or_else(|err| panic!("lock: {err}"));
+        *held = HubProgress {
+            last_command: "subscribe".to_owned(),
+            writing: false,
+            envelopes_streamed: 0,
+        };
+    }
+    {
+        let mut held = slot.lock().unwrap_or_else(|err| panic!("lock: {err}"));
+        *held = HubProgress {
+            last_command: "history".to_owned(),
+            writing: true,
+            envelopes_streamed: 41,
+        };
+    }
+    let held = slot.lock().unwrap_or_else(|err| panic!("lock: {err}"));
+    assert_eq!(held.last_command, "history");
+    assert!(held.writing);
+    assert_eq!(held.envelopes_streamed, 41);
+}
+
 #[test]
 fn stall_report_names_helpers_gone_without_answering() {
     let hub = HubProgress::default();
