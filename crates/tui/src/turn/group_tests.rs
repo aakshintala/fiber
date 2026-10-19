@@ -2041,6 +2041,42 @@ fn the_six_digit_gutter_at_width_six_is_cut_to_the_width() {
     assert_eq!(cells(&rows[1].0), 6);
 }
 
+/// At step 100000 the gutter is seven cells, so a renderer link shifts
+/// right by seven, not six: at width 20 the link's 0..3 cells land on
+/// 7..10 (#2785).
+#[test]
+fn a_wide_gutter_shifts_extension_links_by_its_own_cells() {
+    let group = Group {
+        sections: vec![Section {
+            step: 100000,
+            calls: vec![read_call(1, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(vec![vec![
+            RawSpan {
+                text: "hel".to_owned(),
+                link: Some("https://example.com".to_owned()),
+                ..RawSpan::default()
+            },
+            raw("lo"),
+        ]])),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 20, Some(&bound));
+    assert_eq!(rows.len(), 2);
+    assert!(rows[1].0.to_string().starts_with("100000 hel"));
+    assert_eq!(cells(&rows[1].0), 20);
+    assert_eq!(
+        texts[1].links,
+        vec![(7..10, "https://example.com".to_owned())]
+    );
+}
+
 /// An error, a wrong shape, and a refused link each fall back to the
 /// built-in row, and the failure is cached: two draws call the fake
 /// once per row.

@@ -515,6 +515,7 @@ impl Group {
             // past six columns; its later rows stay blank but keep the
             // grown width, so every column stays put.
             let gutter_cells = crate::format::width(&gutter);
+            let gutter_shift = u16::try_from(gutter_cells).unwrap_or(u16::MAX);
             let blank = " ".repeat(gutter_cells);
             for (code, attempt) in &section.failed {
                 let gutter = std::mem::replace(&mut gutter, blank.clone());
@@ -536,8 +537,7 @@ impl Group {
                 let input = self.ledger_input(call, &output, flat);
                 // The gutter stays with the terminal: the renderer draws
                 // what follows it with the width less the gutter drawn.
-                let after_gutter =
-                    width.saturating_sub(u16::try_from(gutter_cells).unwrap_or(u16::MAX));
+                let after_gutter = width.saturating_sub(gutter_shift);
                 let builtin = |input: &Input<'_>, w: u16| {
                     let Input::LedgerRow(built) = input;
                     vec![crate::ext::spans::from_ratatui(&self.builtin_row(built, w))]
@@ -566,7 +566,7 @@ impl Group {
                             } else {
                                 blank.clone()
                             };
-                            let (row, text) = gutter_row(mark, line, max);
+                            let (row, text) = gutter_row(mark, gutter_shift, line, max);
                             out.push_text((row, Some(Target::Call(call.id))), text);
                         }
                     }
@@ -753,18 +753,18 @@ const INDENT: &str = "        ";
 
 /// One rendered ledger line with its gutter: the gutter cut to the
 /// width when the width holds no more, else the gutter before the
-/// fitted line, with every link range moved right by the gutter's own
-/// cells.
+/// fitted line, with every link range moved right by the shift, the
+/// gutter's own cells.
 fn gutter_row(
     mark: String,
+    shift: u16,
     line: &crate::ext::spans::FittedLine,
     max: usize,
 ) -> (Line<'static>, RowText) {
     // The gutter precedes the line, so every link range moves right by
-    // the gutter's own cells; past five digits the step's whole number
-    // makes it wider than six columns.
+    // the shift; past five digits the step's whole number makes the
+    // gutter wider than six columns.
     let gutter = crate::format::width(&mark);
-    let shift = u16::try_from(gutter).unwrap_or(u16::MAX);
     if max < gutter {
         (
             Line::from(vec![dim_span(crate::format::cut(&mark, max))]),
