@@ -2546,7 +2546,7 @@ fn clicking_a_picker_row_chooses_its_workspace() {
         app.home_screen()
             .is_some_and(|screen| screen.picker.is_none())
     );
-    assert_eq!(app.workspace(), PathBuf::from("/repo0"));
+    assert_eq!(app.workspace(), Some(PathBuf::from("/repo0")));
 }
 
 /// A short home screen with the picker on its last entry: the fit
@@ -3386,7 +3386,7 @@ fn clicking_a_recent_while_typing_chooses_it() {
         app.home_screen()
             .is_some_and(|screen| screen.picker.is_none())
     );
-    assert_eq!(app.workspace(), PathBuf::from("/repo0"));
+    assert_eq!(app.workspace(), Some(PathBuf::from("/repo0")));
 }
 
 /// Home drawn and painted without colour, with its targets.

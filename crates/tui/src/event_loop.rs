@@ -105,12 +105,14 @@ pub(crate) fn run_with(
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
         return Ok(1);
     };
+    // An empty launch directory is no workspace: a remote home carries
+    // none, so no `start` it sends names the current directory.
     let mut app = App::new(
         launch
             .location
             .workspace()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_default(),
+            .filter(|workspace| !workspace.as_os_str().is_empty())
+            .map(std::path::Path::to_path_buf),
     );
     app.set_zone(jiff::tz::TimeZone::system());
     let mut launch = launch;
@@ -804,7 +806,10 @@ impl<B: Backend> Loop<B> {
         let Some(out) = &self.files_out else {
             return;
         };
-        let workspace = self.app.workspace();
+        // With no local workspace there is no directory to list.
+        let Some(workspace) = self.app.workspace() else {
+            return;
+        };
         let roots = files::Roots::new(workspace.clone(), std::env::var_os("HOME"));
         let search = files::Search::spawn(move || files::list(&workspace), roots, out.clone());
         search.search(self.app.generation(), String::new());

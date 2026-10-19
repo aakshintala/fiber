@@ -1554,7 +1554,8 @@ fn remote_search_app(
     let (tx, inputs) = mpsc::channel();
     router.set_feed(tx, crate::link::Credits::new(64));
     let mut app = connected();
-    app.workspace = workspace.into();
+    // An empty workspace is none: no hub search runs for it.
+    app.workspace = (!workspace.is_empty()).then(|| PathBuf::from(workspace));
     app.set_remote(Arc::new(crate::remote::Remote::new(
         Arc::new(crate::configure_fake::Fake::new(vec![])),
         "/client".into(),

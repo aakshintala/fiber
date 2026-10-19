@@ -285,7 +285,7 @@ fn remote_starts_with_no_workspace_and_cannot_escape() {
     let mut app = remote();
     assert!(picker_open(&app));
     assert!(recents(&app).is_empty());
-    assert_eq!(app.home_workspace(), PathBuf::new());
+    assert_eq!(app.home_workspace(), None);
     assert_eq!(chips(&app)[0], "[no workspace]");
     assert!(app.home_screen().unwrap().chips[0].dim);
     assert!(!app.home_screen().unwrap().picker.unwrap().escapes);
@@ -297,7 +297,7 @@ fn remote_starts_with_no_workspace_and_cannot_escape() {
     assert_eq!(recents(&app), ["/remote/w"]);
     key(&mut app, Key::Down);
     key(&mut app, Key::Enter);
-    assert_eq!(app.home_workspace(), PathBuf::from("/remote/w"));
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/remote/w")));
     assert_eq!(chips(&app)[0], "[w]");
     assert!(!app.home_screen().unwrap().chips[0].dim);
     app.home_click(Spot::Workspace);
@@ -390,7 +390,10 @@ fn remote_sentinel_is_only_a_hub_row_and_uses_hub_git() {
         assert_eq!(recents(&app), ["/sentinel/launch-dir"]);
         key(&mut app, Key::Down);
         key(&mut app, Key::Enter);
-        assert_eq!(app.home_workspace(), PathBuf::from("/sentinel/launch-dir"));
+        assert_eq!(
+            app.home_workspace(),
+            Some(PathBuf::from("/sentinel/launch-dir"))
+        );
         assert_eq!(
             chips(&app).iter().any(|chip| chip.contains("worktree")),
             git
@@ -1161,7 +1164,7 @@ fn remote_with_no_recents_opens_on_the_home_row_and_waits_for_it() {
     key(&mut app, Key::Down);
     assert_eq!(key(&mut app, Key::Enter), Effect::None);
     assert!(!picker_open(&app));
-    assert_eq!(app.home_workspace(), PathBuf::from("/home/me/work"));
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/home/me/work")));
 }
 
 #[test]
@@ -1177,7 +1180,10 @@ fn remote_home_row_tab_descends_into_the_focused_completion() {
     answer(&mut app, &sent[0].0, &["fiber"], "/home/me/work");
     assert_eq!(completions(&app), vec!["fiber".to_owned()]);
     assert_eq!(key(&mut app, Key::Enter), Effect::None);
-    assert_eq!(app.home_workspace(), PathBuf::from("/home/me/work/fiber"));
+    assert_eq!(
+        app.home_workspace(),
+        Some(PathBuf::from("/home/me/work/fiber"))
+    );
 }
 
 #[test]
@@ -1207,7 +1213,7 @@ fn arriving_recents_list_below_the_untouched_home_row() {
     key(&mut app, Key::Down);
     assert_eq!(focused(&app).as_deref(), Some("/remote/w"));
     key(&mut app, Key::Enter);
-    assert_eq!(app.home_workspace(), PathBuf::from("/remote/w"));
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/remote/w")));
 }
 
 #[test]

@@ -4,6 +4,7 @@
 //! reload's cache rebuild costs. One view is open at a time; while it is,
 //! it takes every key but Ctrl+C.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use contract::events::UsageRecorded;
@@ -12,7 +13,7 @@ use contract::{Envelope, SessionId};
 
 use super::{App, Effect};
 use crate::ThemeSetting;
-use crate::configure::{Configure, Layer};
+use crate::configure::{Configure, ConfigureError, Layer, Saved};
 use crate::keys::{Edit, Key};
 use crate::login_view::Login;
 use crate::login_worker::{LoginJob, LoginStart, LoginStep, LoginTicket, LoginWorker};
@@ -143,13 +144,13 @@ impl App {
     /// seam, as `fiber config set` would (`docs/tui.md`, "Layout",
     /// "The rail"). With no seam nothing is saved; a failed save and
     /// each warning is a notice, so it shows on the frame drawn next,
-    /// keeping the live width.
+    /// keeping the live width. With no local workspace the write goes to
+    /// the hub-global file.
     pub(crate) fn save_setting(&mut self, key: &str, value: &str) {
-        let Some(seam) = self.config_views.seam.clone() else {
+        let Some(result) = self.write_global(key, value) else {
             return;
         };
-        let workspace = self.workspace();
-        match seam.set(&workspace, Layer::Global, key, value) {
+        match result {
             Ok(saved) => {
                 for warning in saved.warnings {
                     self.push_notice("config_invalid", warning);
@@ -162,6 +163,49 @@ impl App {
         }
     }
 
+    /// The workspace a configuration view reads: the one in use, or the
+    /// hub-global parent with no local workspace, so the hub sees the same
+    /// workspace string as today's empty-path read. `None` when the
+    /// hub-global read fails (after its notice) or a local terminal names
+    /// none.
+    fn view_workspace(&mut self) -> Option<PathBuf> {
+        match self.workspace() {
+            Some(workspace) => Some(workspace),
+            None => {
+                let remote = self.remote()?;
+                match remote.global_parent() {
+                    Ok(parent) => Some(parent),
+                    Err(error) => {
+                        self.push_notice(
+                            "io_failed",
+                            format!("Could not load configuration: {}", error.message),
+                        );
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    /// Writes one global setting: at the workspace in use through the
+    /// seam, or at the hub-global file with no local workspace. `None`
+    /// with no seam or nothing to address; the caller keeps its own
+    /// no-seam notice.
+    pub(in crate::app) fn write_global(
+        &self,
+        key: &str,
+        text: &str,
+    ) -> Option<Result<Saved, ConfigureError>> {
+        let seam = self.config_views.seam.clone()?;
+        Some(match self.workspace() {
+            Some(workspace) => seam.set(&workspace, Layer::Global, key, text),
+            None => {
+                let remote = self.remote()?;
+                remote.set_global(key, text)
+            }
+        })
+    }
+
     /// Opens `view`, closing any open, its unsaved edit dropped. With no
     /// seam the view says it is not available.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {
@@ -171,7 +215,9 @@ impl App {
         self.config_views.open = None;
         let open = match (self.config_views.seam.clone(), view) {
             (Some(seam), ConfigView::Settings) => {
-                let workspace = self.workspace();
+                let Some(workspace) = self.view_workspace() else {
+                    return Effect::None;
+                };
                 Open::Settings(Settings::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
             (Some(seam), ConfigView::Tools) => {
@@ -181,11 +227,15 @@ impl App {
                 return self.open_asking(seam, "skills", build_skills);
             }
             (Some(seam), ConfigView::Rules) => {
-                let workspace = self.workspace();
+                let Some(workspace) = self.view_workspace() else {
+                    return Effect::None;
+                };
                 Open::Rules(Rules::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
             (Some(seam), ConfigView::Login) => {
-                let workspace = self.workspace();
+                let Some(workspace) = self.view_workspace() else {
+                    return Effect::None;
+                };
                 Open::Login(Login::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
             (None, ConfigView::Settings) => Open::Unavailable("Settings", "/settings"),
@@ -212,7 +262,9 @@ impl App {
         };
         let id = super::mint();
         let line = super::session_command(&id, command, &session, None).to_string();
-        let workspace = self.workspace();
+        let Some(workspace) = self.view_workspace() else {
+            return Effect::None;
+        };
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
         self.config_views.open = Some(build(id, &ctx));
         Effect::Send(vec![line])
@@ -281,7 +333,9 @@ impl App {
         }
         let act = match self.config_views.seam.clone() {
             Some(seam) => {
-                let workspace = self.workspace();
+                let Some(workspace) = self.view_workspace() else {
+                    return Some(Effect::None);
+                };
                 let ctx = self.config_ctx(seam.as_ref(), &workspace);
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.key(key, &ctx),
@@ -303,7 +357,9 @@ impl App {
         self.config_views.open.as_ref()?;
         let act = match self.config_views.seam.clone() {
             Some(seam) => {
-                let workspace = self.workspace();
+                let Some(workspace) = self.view_workspace() else {
+                    return Some(Effect::None);
+                };
                 let ctx = self.config_ctx(seam.as_ref(), &workspace);
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => {
@@ -336,7 +392,9 @@ impl App {
         let act = match (self.config_views.seam.clone(), spot) {
             (_, Spot::Close) => Act::Close,
             (Some(seam), Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
-                let workspace = self.workspace();
+                let Some(workspace) = self.view_workspace() else {
+                    return Effect::None;
+                };
                 let ctx = self.config_ctx(seam.as_ref(), &workspace);
                 match &mut self.config_views.open {
                     Some(Open::Settings(settings)) => settings.click(spot, &ctx),
@@ -379,8 +437,13 @@ impl App {
                 let Some(remote) = self.remote() else {
                     return Effect::OpenFile(file);
                 };
-                let copy = remote
-                    .fetch_file(&self.workspace(), &file)
+                // With no local workspace only a hub-global file has an
+                // address; a project-scoped file fails on the notice path.
+                let fetched = match self.workspace() {
+                    Some(workspace) => remote.fetch_file(&workspace, &file),
+                    None => remote.fetch_file_global(&file),
+                };
+                let copy = fetched
                     .map_err(|error| error.message)
                     .and_then(|(text, version)| {
                         crate::remote::RemoteCopy::create(
@@ -529,14 +592,21 @@ impl App {
     pub(crate) fn config_file_closed(&mut self, result: Result<(), String>) {
         let result =
             if let (Some(remote), Some(copy)) = (self.remote(), self.config_views.copy.take()) {
+                // With no local workspace only a hub-global file has an
+                // address; a project-scoped file fails on the notice path.
+                let workspace = self.workspace();
                 let result = result
                     .and_then(|()| {
                         std::fs::read_to_string(&copy.temp).map_err(|error| error.to_string())
                     })
                     .and_then(|text| {
-                        remote
-                            .store_file(&self.workspace(), &copy.hub, &text, &copy.version)
-                            .map_err(|error| error.message)
+                        let stored = match workspace.as_ref() {
+                            Some(workspace) => {
+                                remote.store_file(workspace, &copy.hub, &text, &copy.version)
+                            }
+                            None => remote.store_file_global(&copy.hub, &text, &copy.version),
+                        };
+                        stored.map_err(|error| error.message)
                     });
                 drop(copy);
                 result
@@ -547,7 +617,9 @@ impl App {
             self.notices.push("io_failed", message);
         }
         if let Some(seam) = self.config_views.seam.clone() {
-            let workspace = self.workspace();
+            let Some(workspace) = self.view_workspace() else {
+                return;
+            };
             let ctx = self.config_ctx(seam.as_ref(), &workspace);
             match &mut self.config_views.open {
                 Some(Open::Settings(settings)) => settings.reread(&ctx),
@@ -572,7 +644,9 @@ impl App {
         let Some(seam) = self.config_views.seam.clone() else {
             return;
         };
-        let workspace = self.workspace();
+        let Some(workspace) = self.view_workspace() else {
+            return;
+        };
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
         match envelope.kind.as_str() {
             "command_accepted" => {

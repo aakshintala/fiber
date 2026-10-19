@@ -391,14 +391,17 @@ fn ownership_and_settings_merge_keep_the_clients_rows_on_the_client() {
 }
 
 #[test]
-fn empty_workspace_uses_the_global_parent_and_caches_per_connection() {
+fn no_workspace_reads_use_the_global_parent_and_cache_per_connection() {
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
     let deadline = Deadline::start();
     for first in [true, false] {
         let (tx, rx) = mpsc::channel();
         let remote = Arc::clone(&hub.remote);
         thread::spawn(move || {
-            tx.send(remote.settings(Path::new(""))).unwrap();
+            let outcome = remote
+                .global_parent()
+                .and_then(|parent| remote.settings(&parent));
+            tx.send(outcome).unwrap_or(());
         });
         if first {
             let line = deadline.recv_or_fail(&hub.lines, "global file");
@@ -795,7 +798,7 @@ fn catalogue_reads_send_the_refresh_word() {
         (Refresh::Every, "every"),
     ] {
         let hub = Hub::new(Arc::new(Fake::new(vec![])));
-        hub.remote.set_workspace(PathBuf::from("/remote/ws"));
+        hub.remote.set_workspace(Some(PathBuf::from("/remote/ws")));
         let catalogue = hub
             .call(
                 "models",
@@ -816,7 +819,7 @@ fn catalogue_reads_send_the_refresh_word() {
 fn catalogue_answers_decode_field_for_field() {
     use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
-    hub.remote.set_workspace(PathBuf::from("/remote/ws"));
+    hub.remote.set_workspace(Some(PathBuf::from("/remote/ws")));
     let catalogue = hub
         .call(
             "models",
@@ -909,7 +912,7 @@ fn catalogue_answers_decode_field_for_field() {
 fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
     use crate::catalogue::Refresh;
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
-    hub.remote.set_workspace(PathBuf::from("/remote/ws"));
+    hub.remote.set_workspace(Some(PathBuf::from("/remote/ws")));
     let args = json!({"workspace": "/remote/ws", "refresh": "cached"});
     // Empty lists are an empty catalogue, and one model with one level reads.
     let catalogue = hub
@@ -1013,7 +1016,7 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
 fn catalogue_rejection_keeps_the_hub_message() {
     use crate::catalogue::Refresh;
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
-    hub.remote.set_workspace(PathBuf::from("/remote/ws"));
+    hub.remote.set_workspace(Some(PathBuf::from("/remote/ws")));
     let deadline = Deadline::start();
     let (tx, rx) = mpsc::channel();
     let remote = Arc::clone(&hub.remote);
@@ -1062,31 +1065,22 @@ fn catalogue_reads_use_the_workspace_in_use() {
             hub.lines.try_recv().is_err(),
             "models sent after a bad global file {file:?}"
         );
-        // The loop path, settings with an empty workspace, agrees.
-        let (tx, rx) = mpsc::channel();
-        let remote = Arc::clone(&hub.remote);
-        thread::spawn(move || {
-            tx.send(remote.settings(Path::new(""))).unwrap_or(());
-        });
-        let line = deadline.recv_or_fail(&hub.lines, "global file for settings");
-        assert_eq!(line["args"], json!({"operation": "global_file"}));
-        hub.reply(&line, json!({"file": file}));
-        let error = deadline
-            .recv_or_fail(&rx, "relative global file on settings")
-            .unwrap_err();
+        // The loop path: settings with an empty workspace is an error
+        // naming workspace, sending nothing, whatever the file answers.
+        let error = hub.remote.settings(Path::new("")).unwrap_err();
         assert_eq!(error.code, ErrorCode::IoFailed, "file {file:?}");
         assert!(
-            error.message.contains("global_file"),
+            error.message.contains("workspace"),
             "file {file:?}: {}",
             error.message
         );
         assert!(
             hub.lines.try_recv().is_err(),
-            "settings sent after a bad global file {file:?}"
+            "settings sent for an empty workspace with file {file:?}"
         );
     }
     // A relative workspace never reaches the wire either.
-    hub.remote.set_workspace(PathBuf::from("rel/dir"));
+    hub.remote.set_workspace(Some(PathBuf::from("rel/dir")));
     let error = hub.remote.models(Refresh::Cached).unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert!(
@@ -1099,7 +1093,7 @@ fn catalogue_reads_use_the_workspace_in_use() {
         "models sent for a relative workspace"
     );
     // A cold read asks global_file, then reads at its parent directory.
-    hub.remote.set_workspace(PathBuf::new());
+    hub.remote.set_workspace(None);
     let (tx, rx) = mpsc::channel();
     let remote = Arc::clone(&hub.remote);
     thread::spawn(move || {
@@ -1149,7 +1143,7 @@ fn catalogue_reads_use_the_workspace_in_use() {
     );
     // A set workspace wins over the cache, per read.
     for workspace in ["/a", "/b"] {
-        hub.remote.set_workspace(PathBuf::from(workspace));
+        hub.remote.set_workspace(Some(PathBuf::from(workspace)));
         let (tx, rx) = mpsc::channel();
         let remote = Arc::clone(&hub.remote);
         thread::spawn(move || {
@@ -1169,7 +1163,7 @@ fn catalogue_reads_use_the_workspace_in_use() {
     }
     // The workspace is copied at the read's start: storing one while a
     // read waits changes only the next read.
-    hub.remote.set_workspace(PathBuf::from("/wait"));
+    hub.remote.set_workspace(Some(PathBuf::from("/wait")));
     let (tx, rx) = mpsc::channel();
     let remote = Arc::clone(&hub.remote);
     thread::spawn(move || {
@@ -1180,7 +1174,7 @@ fn catalogue_reads_use_the_workspace_in_use() {
         line["args"],
         json!({"operation": "models", "workspace": "/wait", "refresh": "cached"})
     );
-    hub.remote.set_workspace(PathBuf::from("/later"));
+    hub.remote.set_workspace(Some(PathBuf::from("/later")));
     hub.reply(&line, json!({"models": [], "notices": [], "lists": []}));
     assert!(deadline.recv_or_fail(&rx, "waiting catalogue").is_ok());
     let (tx, rx) = mpsc::channel();
@@ -1202,7 +1196,7 @@ fn catalogue_reads_wait_for_the_link_and_end_on_reconnect() {
     use crate::catalogue::Refresh;
     let mut hub = Hub::new(Arc::new(Fake::new(vec![])));
     hub.router.detach();
-    hub.remote.set_workspace(PathBuf::from("/remote/ws"));
+    hub.remote.set_workspace(Some(PathBuf::from("/remote/ws")));
     let deadline = Deadline::start();
     let (tx, rx) = mpsc::channel();
     let remote = Arc::clone(&hub.remote);
@@ -1326,7 +1320,7 @@ fn chip_read_takes_the_hub_model_thinking_and_scope() {
     let (tx, rx) = mpsc::channel();
     let remote = Arc::clone(&hub.remote);
     thread::spawn(move || {
-        tx.send(remote.chip(Path::new(""))).unwrap_or(());
+        tx.send(remote.chip_global()).unwrap_or(());
     });
     let line = Deadline::start().recv_or_fail(&hub.lines, "global file");
     assert_eq!(line["command"], "configure");
@@ -1367,7 +1361,7 @@ fn chip_read_quotes_a_dotted_model_in_the_thinking_key() {
     let (tx, rx) = mpsc::channel();
     let remote = Arc::clone(&hub.remote);
     thread::spawn(move || {
-        tx.send(remote.chip(Path::new(""))).unwrap_or(());
+        tx.send(remote.chip_global()).unwrap_or(());
     });
     let line = Deadline::start().recv_or_fail(&hub.lines, "global file");
     assert_eq!(line["command"], "configure");
@@ -1405,7 +1399,7 @@ fn chip_read_unsets_what_is_not_a_value() {
     let (tx, rx) = mpsc::channel();
     let remote = Arc::clone(&hub.remote);
     thread::spawn(move || {
-        tx.send(remote.chip(Path::new(""))).unwrap_or(());
+        tx.send(remote.chip_global()).unwrap_or(());
     });
     let line = Deadline::start().recv_or_fail(&hub.lines, "global file");
     hub.reply(&line, json!({"file": "/hub/config.json"}));
@@ -1438,7 +1432,7 @@ fn chip_read_ignores_non_value_rows_and_other_keys() {
     let (tx, rx) = mpsc::channel();
     let remote = Arc::clone(&hub.remote);
     thread::spawn(move || {
-        tx.send(remote.chip(Path::new(""))).unwrap_or(());
+        tx.send(remote.chip_global()).unwrap_or(());
     });
     let line = Deadline::start().recv_or_fail(&hub.lines, "global file");
     hub.reply(&line, json!({"file": "/hub/config.json"}));
