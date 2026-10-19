@@ -75,6 +75,10 @@ pub(crate) struct Reads {
     /// outside the unit tests.
     #[cfg(test)]
     settle_park_pause: Mutex<Option<SpawnPause>>,
+    /// The `credential` wait's pause before its timeout park, armed by a
+    /// test. Absent outside the unit tests.
+    #[cfg(test)]
+    credential_park_pause: Mutex<Option<SpawnPause>>,
     /// The completion notes a test counts before it releases the settle
     /// park: the reaper thread and the stdout reader thread each send one
     /// after their wake bump. Shared through an `Arc` so the threads own
@@ -539,6 +543,10 @@ impl Reads {
             // before its park, only when a test armed one.
             #[cfg(test)]
             self.checkpoint();
+            // Held only when a test armed a pause, so the test holds the
+            // wait before its park on every run.
+            #[cfg(test)]
+            self.pause_before_credential_park();
             self.wake.park(clock, Some(deadline), seen);
         }
     }
@@ -1006,6 +1014,43 @@ impl Reads {
             .settle_park_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Arms one pause before the next `credential` wait's timeout park:
+    /// the wait sends on `entered` once it passed its checks and blocks
+    /// until `release` arrives, so the test holds the wait before its
+    /// park on every run. The pause is one-shot; a closed sender releases
+    /// it.
+    pub(crate) fn pause_at_credential_park(
+        &self,
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    ) {
+        *self
+            .credential_park_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the `credential` wait reached its timeout park and blocks
+    /// until the test releases it. The slot is taken into a local first
+    /// and the mutex guard dropped before any send or receive blocks, so
+    /// no lock is held across the pause. Runs free unless a test armed a
+    /// pause meanwhile.
+    fn pause_before_credential_park(&self) {
+        let point = self
+            .credential_park_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
     }
 
     /// Reports the settle reached its park and blocks until the test
