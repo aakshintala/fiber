@@ -76,12 +76,12 @@ a 20-thousand-token one fit the same ceiling.
 | Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |
 | `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | — | — | — | — | — |
-| `paging` jig, its session at scale 1 and 160 by 48 | 11,988 KiB peak RSS (measured 2026-10-18, head dbbfc9a7) | Linux x86_64 | measured | — | — | — | — | — |
-| `paging` jig, open pass and first frame | 673 ms (measured 2026-10-18, head dbbfc9a7) | Linux x86_64 | measured | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |
-| `paging` jig, slowest frame that loaded pages | 4.1 ms (measured 2026-10-18, head dbbfc9a7) | Linux x86_64 | measured | 8 ms | 5 ms | 10 ms | 16 % | 4 % |
-| `paging` jig, slowest jump frame | 9.0 ms (measured 2026-10-18, head dbbfc9a7) | Linux x86_64 | measured | 9 ms | 9 ms | 13 ms | 11 % | 5 % |
-| `paging` jig, slowest re-count at a new width | 89.6 ms (measured 2026-10-18, head dbbfc9a7) | Linux x86_64 | measured | 67 ms | 77 ms | 106 ms | 16 % | 8 % |
-| `paging` jig, slowest append frame | 2.6 ms (measured 2026-10-18, head dbbfc9a7) | Linux x86_64 | measured | 7 ms | 4 ms | 6 ms | 56 % | 32 % |
+| `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
+| `paging` jig, open pass and first frame | 1,347 ms | Linux x86_64 | measured | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |
+| `paging` jig, slowest frame that loaded pages | 7 ms | Linux x86_64 | measured | 8 ms | 5 ms | 10 ms | 16 % | 4 % |
+| `paging` jig, slowest jump frame | 11 ms | Linux x86_64 | measured | 9 ms | 9 ms | 13 ms | 11 % | 5 % |
+| `paging` jig, slowest re-count at a new width | 123 ms | Linux x86_64 | measured | 67 ms | 77 ms | 106 ms | 16 % | 8 % |
+| `paging` jig, slowest append frame | 3 ms | Linux x86_64 | measured | 7 ms | 4 ms | 6 ms | 56 % | 32 % |
 | `paging` jig at scale 16, slowest re-count at a new width | 24 times the same run's scale-1 re-count | Linux x86_64 | picked | — | — | — | — | — |
 | `paging` jig at scale 16, a search of the whole session with no match | 24 times the same run's scale-1 search | Linux x86_64 | picked | — | — | — | — | — |
 | Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked | 7 ms | 6 ms | 9 ms | 21 % | 12 % |
