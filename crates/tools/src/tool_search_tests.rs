@@ -146,6 +146,43 @@ fn equal_scores_order_by_name_bytes() {
     );
 }
 
+/// A rare-versus-common duel over one query: `alpha` is held by two of
+/// eight tools, `beta` by five. `z_rare` holds the rare term once and is
+/// short; `b_common` holds the common term three times. The scores land
+/// within a few percent, so any change to the document frequency, the
+/// IDF ratio, the average length, or the score quotient flips the order.
+fn duel_catalogue() -> Vec<ToolDefinition> {
+    vec![
+        leaf("z_rare", "alpha ap0"),
+        leaf("b_common", "beta beta beta bp0"),
+        leaf("m_alpha_filler_one", "alpha aq0 aq1 aq2 aq3 aq4 aq5"),
+        leaf("m_alpha_filler_two", "alpha ar0 ar1 ar2 ar3 ar4 ar5"),
+        leaf("m_beta_filler_one", "beta"),
+        leaf("m_beta_filler_two", "beta"),
+        leaf("m_beta_filler_three", "beta"),
+        leaf("m_neutral_tool", "does nothing special"),
+    ]
+}
+
+#[test]
+fn a_narrow_duel_pins_the_ranking() {
+    let search = ToolSearch::new(duel_catalogue(), vec![]);
+    let output = run(&search, &query("alpha beta"));
+
+    assert_eq!(
+        loaded(&output),
+        Some(vec![
+            "z_rare".to_owned(),
+            "b_common".to_owned(),
+            "m_alpha_filler_one".to_owned(),
+            "m_alpha_filler_two".to_owned(),
+            "m_beta_filler_one".to_owned(),
+            "m_beta_filler_three".to_owned(),
+            "m_beta_filler_two".to_owned(),
+        ])
+    );
+}
+
 #[test]
 fn a_repeated_query_gives_the_same_list() {
     let search = search();
