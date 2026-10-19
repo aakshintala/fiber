@@ -944,24 +944,27 @@ PERL
             .as_raw_pid(),
         i32::try_from(group).unwrap()
     );
-    assert!(
-        clock.await_parked(clock.origin() + case_limit, TEST_WAIT),
-        "runner did not wait on its case deadline"
+    clock.advance_when_parked(
+        Some(clock.origin() + case_limit),
+        None,
+        case_limit,
+        &Deadline::after(TEST_WAIT),
     );
-    clock.advance(case_limit);
     assert_eq!(ready.wait(READY_WAIT), [group]);
-    assert!(
-        clock.await_parked(clock.now() + Duration::from_secs(1), TEST_WAIT),
-        "runner did not wait before its second SIGTERM"
+    clock.advance_when_parked(
+        Some(clock.now() + Duration::from_secs(1)),
+        None,
+        Duration::from_secs(1),
+        &Deadline::after(TEST_WAIT),
     );
-    clock.advance(Duration::from_secs(1));
     assert_eq!(ready.wait(READY_WAIT), [group]);
     let grace_deadline = clock.now() + Duration::from_secs(4);
-    assert!(
-        clock.await_parked(grace_deadline, TEST_WAIT),
-        "runner did not wait through TERM_GRACE after the second signal"
+    clock.advance_when_parked(
+        Some(grace_deadline),
+        None,
+        Duration::from_secs(4),
+        &Deadline::after(TEST_WAIT),
     );
-    clock.advance(Duration::from_secs(4));
 
     let (code, out, err) = Deadline::after(TEST_WAIT).recv(&receive).unwrap();
     assert_eq!(code, 1);
