@@ -442,12 +442,9 @@ fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::
 /// runner that never reaches the drain fails the test instead of hanging
 /// it. The `AFTER_DRAIN_DEADLINE` hook is a pause point between the drain
 /// deadline's computation and its first park: it signals `reached`, then
-/// blocks until `release`. On that signal the driver releases the hook,
-/// then moves 1 s toward the park the runner registers next, through the
-/// helper, so the second lands between computation and registration with
-/// the driver as the clock's only mover. The release must come first: the
-/// helper only moves toward a park the runner holds, and the runner holds
-/// none while it sits in the hook.
+/// blocks until `release`. On that signal the driver advances the clock
+/// 1 s, then releases the hook, so the move lands between computation and
+/// registration with the driver as the clock's only mover.
 #[track_caller]
 fn wake_until_draining(
     clock: &Arc<FakeClock>,
@@ -463,7 +460,6 @@ fn wake_until_draining(
     thread::scope(|scope| {
         scope.spawn(move || {
             let mut carried: Option<Instant> = None;
-            let mut released = false;
             loop {
                 if driver_stop.load(Ordering::Relaxed) {
                     return;
@@ -475,34 +471,13 @@ fn wake_until_draining(
                         driver_clock.parked()
                     );
                 }
-                // Once: the pause-point handshake. The runner sits in the
-                // hook holding no park, so the 1 s cannot move before the
-                // release; the park it registers next is its drain wait.
-                if !released && reached.try_recv().is_ok() {
+                // Each pass first checks the pause-point signal. One thread
+                // moves the clock, so this raw move and the helper move
+                // below never overlap.
+                if reached.try_recv().is_ok() {
+                    // Held runner parks nowhere; testing.md "Waits and timeouts" binds helper advances to a named park, so this raw advance is the one move made while the runner holds at the pause point.
+                    driver_clock.advance(Duration::from_secs(1));
                     let _sent = release.send(());
-                    released = true;
-                    let until = loop {
-                        if driver_stop.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        if deadline.left().is_zero() {
-                            panic!(
-                                "the runner did not reach the drain wait; now={:?} parked={:?}",
-                                driver_clock.now(),
-                                driver_clock.parked()
-                            );
-                        }
-                        match park_ahead(&driver_clock) {
-                            Some(until) => break until,
-                            None => thread::yield_now(),
-                        }
-                    };
-                    match try_step(&driver_clock, until, Duration::from_secs(1)) {
-                        Step::Moved | Step::NoPark => {}
-                        Step::Next(watched) => {
-                            carried = Some(watched);
-                        }
-                    }
                     continue;
                 }
                 let mut candidate = carried.take();
@@ -1103,10 +1078,10 @@ fn a_delayed_drain_still_feeds_the_fold() {
     let rig = rig(vec![]);
     // A pause point between the drain deadline's computation and its first
     // park: the hook signals it has been reached, then blocks until the
-    // driver releases it. The driver releases it and moves 1 s toward the
-    // park the runner registers next, so the second lands between
-    // computation and registration with the driver as the clock's only
-    // mover. Both channels exist before the hook is installed, so before
+    // driver releases it. The driver advances the clock 1 s, then releases
+    // the hook, so the move lands between computation and registration with
+    // the driver as the clock's only mover. Both channels exist before the
+    // hook is installed, so before
     // `rig.start` starts the runner that runs it. The release wait fails
     // closed, like the pause points in `fakes::clock`: if the driver is
     // gone without releasing, the runner panics instead of parking past
