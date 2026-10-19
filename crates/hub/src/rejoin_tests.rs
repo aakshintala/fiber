@@ -1155,9 +1155,8 @@ fn log_bytes(lines: &[&str]) -> Vec<u8> {
 
 fn log_file(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     fs::create_dir_all(dir).unwrap();
-    let path = dir.join(name);
-    fs::write(&path, bytes).unwrap();
-    path
+    fs::write(dir.join(name), bytes).unwrap();
+    dir.to_path_buf()
 }
 
 fn kind_line(kind: &str) -> String {
@@ -1172,8 +1171,8 @@ fn a_fiber_started_past_the_offset_makes_it_live() {
         "events.jsonl",
         &log_bytes(&[&kind_line("session_started"), &kind_line("fiber_started")]),
     );
-    let len = fs::metadata(&log).unwrap().len();
-    let mark = advance(mark_for(Some(log), 0, false, 3));
+    let len = fs::metadata(log.join("events.jsonl")).unwrap().len();
+    let mark = step(mark_for(Some(log), 0, false, 3));
     assert!(mark.live);
     assert_eq!((mark.read, mark.epoch), (len, 3));
 }
@@ -1186,8 +1185,8 @@ fn a_later_fiber_exited_ends_it() {
         "events.jsonl",
         &log_bytes(&[&kind_line("fiber_started"), &kind_line("fiber_exited")]),
     );
-    let len = fs::metadata(&log).unwrap().len();
-    let mark = advance(mark_for(Some(log), 0, true, 1));
+    let len = fs::metadata(log.join("events.jsonl")).unwrap().len();
+    let mark = step(mark_for(Some(log), 0, true, 1));
     assert!(!mark.live);
     assert_eq!(mark.read, len);
 }
@@ -1200,7 +1199,7 @@ fn a_later_rewound_ends_it() {
         "events.jsonl",
         &log_bytes(&[&kind_line("fiber_started"), &kind_line("rewound")]),
     );
-    let mark = advance(mark_for(Some(log), 0, true, 1));
+    let mark = step(mark_for(Some(log), 0, true, 1));
     assert!(!mark.live);
 }
 
@@ -1212,14 +1211,14 @@ fn other_kinds_change_nothing() {
         "events.jsonl",
         &log_bytes(&[&kind_line("session_status"), "not json\n"]),
     );
-    let len = fs::metadata(&log).unwrap().len();
-    let live = advance(mark_for(Some(log.clone()), 0, true, 1));
+    let len = fs::metadata(log.join("events.jsonl")).unwrap().len();
+    let live = step(mark_for(Some(log.clone()), 0, true, 1));
     assert!(live.live, "other lines keep a live mark live");
     assert_eq!(
         live.read, len,
         "even an invalid line is consumed past its newline"
     );
-    let dead = advance(mark_for(Some(log), 0, false, 1));
+    let dead = step(mark_for(Some(log), 0, false, 1));
     assert!(!dead.live, "other lines keep a quiet mark quiet");
 }
 
@@ -1230,19 +1229,19 @@ fn a_last_line_without_its_newline_is_not_consumed() {
     let mut bytes = full.as_bytes().to_vec();
     bytes.extend_from_slice(b"{\"kind\":\"fiber_exited\"");
     let log = log_file(held.path(), "events.jsonl", &bytes);
-    let mark = advance(mark_for(Some(log.clone()), 0, false, 1));
+    let mark = step(mark_for(Some(log.clone()), 0, false, 1));
     assert!(mark.live, "the completed start counts");
     assert_eq!(
         mark.read,
         full.len() as u64,
         "the offset stays before the partial tail"
     );
-    fs::write(&log, [bytes, b"}\n".to_vec()].concat()).unwrap();
-    let again = advance(mark);
+    fs::write(log.join("events.jsonl"), [bytes, b"}\n".to_vec()].concat()).unwrap();
+    let again = step(mark);
     assert!(!again.live, "once completed, the exit counts");
     assert_eq!(
         again.read,
-        fs::metadata(&log).unwrap().len(),
+        fs::metadata(log.join("events.jsonl")).unwrap().len(),
         "the completed tail is consumed"
     );
 }
@@ -1256,18 +1255,18 @@ fn bytes_before_the_offset_are_never_read() {
         "events.jsonl",
         &log_bytes(&[&first, &kind_line("session_status")]),
     );
-    let mark = advance(mark_for(Some(log), first.len() as u64, false, 1));
+    let mark = step(mark_for(Some(log), first.len() as u64, false, 1));
     assert!(!mark.live, "a start before the offset leaves it quiet");
 }
 
 #[test]
 fn a_missing_log_is_not_live_and_keeps_its_offset() {
     let held = fakes::TempDir::new("jl");
-    let missing = held.path().join("gone.jsonl");
-    let mark = advance(mark_for(Some(missing), 12, false, 1));
+    let missing = held.path().join("gone");
+    let mark = step(mark_for(Some(missing), 12, false, 1));
     assert!(!mark.live);
     assert_eq!((mark.read, mark.epoch), (12, 1));
-    let mark = advance(mark_for(None, 12, false, 1));
+    let mark = step(mark_for(None, 12, false, 1));
     assert!(!mark.live);
     assert_eq!((mark.read, mark.epoch), (12, 1));
 }
@@ -1280,9 +1279,12 @@ fn a_log_shorter_than_the_offset_was_replaced() {
         "events.jsonl",
         &log_bytes(&[&kind_line("fiber_started")]),
     );
-    let mark = advance(mark_for(Some(log.clone()), 10_000, false, 1));
+    let mark = step(mark_for(Some(log.clone()), 10_000, false, 1));
     assert!(mark.live, "the new file is read from its start");
-    assert_eq!(mark.read, fs::metadata(&log).unwrap().len());
+    assert_eq!(
+        mark.read,
+        fs::metadata(log.join("events.jsonl")).unwrap().len()
+    );
 }
 
 #[test]
@@ -1293,8 +1295,8 @@ fn a_log_exactly_as_long_as_the_offset_was_not_replaced() {
         "events.jsonl",
         &log_bytes(&[&kind_line("fiber_exited")]),
     );
-    let len = fs::metadata(&log).unwrap().len();
-    let mark = advance(mark_for(Some(log), len, true, 1));
+    let len = fs::metadata(log.join("events.jsonl")).unwrap().len();
+    let mark = step(mark_for(Some(log), len, true, 1));
     assert!(mark.live, "nothing past the offset: the mark stays live");
     assert_eq!(mark.read, len, "and its offset stays put");
 }
@@ -1316,7 +1318,7 @@ fn a_mark_sits_on_the_last_complete_line() {
     let started = serde_json::to_string(&fiber_started(&sid)).unwrap();
     truncated.extend_from_slice(format!("{started}\n").as_bytes());
     fs::write(temp.log_dir(&sid).join("events.jsonl"), truncated).unwrap();
-    let mark = advance(mark);
+    let mark = step(mark);
     assert!(mark.live, "the resumed start is past the mark");
 }
 
@@ -1328,18 +1330,21 @@ fn a_partial_tail_is_read_again_until_it_completes() {
     bytes.extend_from_slice(b"{\"kind\":\"fiber_started\"");
     let log = log_file(held.path(), "events.jsonl", &bytes);
     let len = bytes.len() as u64;
-    let mark = advance(mark_for(Some(log.clone()), 0, false, 1));
+    let mark = step(mark_for(Some(log.clone()), 0, false, 1));
     assert_eq!(mark.read, first.len() as u64);
     assert!(!mark.live);
     // No new bytes: the same mark comes back, so consumed bytes are never
     // read again.
-    let same = advance(mark.clone());
+    let same = step(mark.clone());
     assert_eq!((same.read, same.live), (mark.read, mark.live));
-    fs::write(&log, [bytes, b"}\n".to_vec()].concat()).unwrap();
-    assert!(len < fs::metadata(&log).unwrap().len());
-    let done = advance(mark);
+    fs::write(log.join("events.jsonl"), [bytes, b"}\n".to_vec()].concat()).unwrap();
+    assert!(len < fs::metadata(log.join("events.jsonl")).unwrap().len());
+    let done = step(mark);
     assert!(done.live);
-    assert_eq!(done.read, fs::metadata(&log).unwrap().len());
+    assert_eq!(
+        done.read,
+        fs::metadata(log.join("events.jsonl")).unwrap().len()
+    );
 }
 
 #[test]

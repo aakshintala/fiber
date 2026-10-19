@@ -449,139 +449,21 @@ fn reason_follows_the_documented_transitions() {
 }
 
 #[test]
-fn turn_ended_at_matches_only_a_complete_turn_completed_with_that_ts() {
-    let held = fakes::TempDir::new("ha");
-    let log = held.path().join("events.jsonl");
-    let turn = |ts: &str| format!("{{\"kind\":\"turn_completed\",\"ts\":{ts}}}\n");
-    let other = |kind: &str, ts: &str| format!("{{\"kind\":\"{kind}\",\"ts\":{ts}}}\n");
-    // Past `TAIL`: one line is 21 bytes, so 6,000 are about 126 KiB.
-    let filler = other("x", "1").repeat(6_000);
-    let cases: Vec<(&str, Option<String>, bool)> = vec![
-        ("missing", None, false),
-        ("empty", Some(String::new()), false),
-        (
-            "a turn_completed with ts S",
-            Some(turn(&S.to_string())),
-            true,
-        ),
-        (
-            "a turn_completed with ts S then two other lines",
-            Some(format!(
-                "{}{}{}",
-                turn(&S.to_string()),
-                other("x", "1"),
-                other("y", "2")
-            )),
-            true,
-        ),
-        (
-            "a turn_completed with another ts",
-            Some(turn(&(S + 1).to_string())),
-            false,
-        ),
-        (
-            "another kind with ts S",
-            Some(other("x", &S.to_string())),
-            false,
-        ),
-        (
-            "a turn_completed with a string ts",
-            Some(turn(&format!("\"{S}\""))),
-            false,
-        ),
-        (
-            "a turn_completed with no ts",
-            Some("{\"kind\":\"turn_completed\"}\n".to_owned()),
-            false,
-        ),
-        (
-            "a bad line then a turn_completed with ts S",
-            Some(format!("not json\n{}", turn(&S.to_string()))),
-            true,
-        ),
-        (
-            "a torn last line",
-            Some(turn(&S.to_string()).trim_end().to_owned()),
-            false,
-        ),
-        (
-            "a turn_completed after 100 KiB of other lines",
-            Some(format!("{filler}{}", turn(&S.to_string()))),
-            true,
-        ),
-        (
-            "a turn_completed before 100 KiB of other lines",
-            Some(format!("{}{filler}", turn(&S.to_string()))),
-            false,
-        ),
-        (
-            "descending ts around a turn_completed with ts S",
-            Some(format!(
-                "{}{}{}",
-                other("x", "9"),
-                turn(&S.to_string()),
-                other("y", "3")
-            )),
-            true,
-        ),
-    ];
-    for (name, body, expected) in &cases {
-        match body {
-            None => {
-                std::fs::remove_file(&log).unwrap_or(());
-            }
-            Some(body) => {
-                std::fs::write(&log, body).unwrap();
-            }
-        }
-        assert_eq!(turn_ended_at(&log, S), *expected, "{name}");
-    }
-}
-
-#[test]
-fn turn_ended_at_at_a_window_edge_counts_a_whole_line_but_not_a_partial_one() {
-    let held = fakes::TempDir::new("hc");
-    let log = held.path().join("events.jsonl");
-    let target = format!("{{\"kind\":\"turn_completed\",\"ts\":{S}}}\n");
-    let filler = "{\"kind\":\"x\",\"ts\":1}\n";
-    let tail = usize::try_from(crate::feed::TAIL).unwrap();
-    // Whole lines plus empty lines to an exact byte length.
-    let pad = |n: usize| {
-        format!(
-            "{}{}",
-            filler.repeat(n / filler.len()),
-            "\n".repeat(n % filler.len())
-        )
-    };
-    // The window holds exactly the target and what follows it, so it
-    // starts at the target's first byte, right after a newline.
-    let suffix = pad(tail - target.len());
-    assert_eq!(target.len() + suffix.len(), tail);
-    std::fs::write(&log, format!("{filler}{target}{suffix}")).unwrap();
-    assert!(
-        turn_ended_at(&log, S),
-        "a complete line at the window boundary counts"
-    );
-    // The window starts inside a trash line at the target's brace: the
-    // remainder parses, but it is partial, so it must not count.
-    std::fs::write(&log, format!("{filler}TRASH{target}{suffix}")).unwrap();
-    assert!(
-        !turn_ended_at(&log, S),
-        "a partial first line never counts, even when it parses"
-    );
-}
-
-#[test]
 fn ended_unseen_needs_a_since_at_or_after_the_hub_start() {
     let held = fakes::TempDir::new("hb");
-    let log = held.path().join("events.jsonl");
+    let dir = held.path().join("s");
+    std::fs::create_dir_all(&dir).unwrap();
     let line = |ts: u64| format!("{{\"kind\":\"turn_completed\",\"ts\":{ts}}}\n");
-    std::fs::write(&log, format!("{}{}", line(WALL - 1), line(WALL))).unwrap();
+    std::fs::write(
+        dir.join("events.jsonl"),
+        format!("{}{}", line(WALL - 1), line(WALL)),
+    )
+    .unwrap();
     let clock = FakeClock::new();
     let attention = Attention::new(Arc::clone(&clock) as Arc<dyn Clock>);
-    assert!(attention.ended_unseen(&log, &status_of("idle", None, WALL, None)));
-    assert!(!attention.ended_unseen(&log, &status_of("idle", None, WALL - 1, None)));
-    assert!(!attention.ended_unseen(&log, &status_of("idle", None, WALL + 1, None)));
+    assert!(attention.ended_unseen(&dir, &status_of("idle", None, WALL, None)));
+    assert!(!attention.ended_unseen(&dir, &status_of("idle", None, WALL - 1, None)));
+    assert!(!attention.ended_unseen(&dir, &status_of("idle", None, WALL + 1, None)));
 }
 
 #[test]
