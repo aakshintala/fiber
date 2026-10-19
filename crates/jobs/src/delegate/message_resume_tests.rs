@@ -16,7 +16,7 @@ use contract::inbox::Delivery;
 use contract::jobs::{Jobs as _, Stop, Taken};
 use contract::tool::{Answered, Ask, Asking, Output, Tool};
 use contract::{ActionId, ErrorCode, JobId, SessionId};
-use fakes::clock::FakeClock;
+use fakes::clock::{FakeClock, Miss};
 use fakes::{CancelToken, Recorder, TempDir, Watchdog};
 use serde_json::{Map, Value, json};
 
@@ -31,6 +31,11 @@ const DEADLINE: Duration = Duration::from_secs(5);
 
 /// The stop bound and closing wait the tests run with, on the fake clock.
 const BOUND: Duration = Duration::from_secs(5);
+
+/// One wait inside `try_advance_when_parked` for a fresh park: a poll
+/// pause, not a deadline. At most 100 ms, so a driver whose runner left
+/// its park without a clock move sees its end condition within one pause.
+const PAUSE: Duration = Duration::from_millis(100);
 
 /// The resuming call's action, from its `Ask`.
 fn action() -> ActionId {
@@ -372,18 +377,53 @@ fn park_ahead(clock: &FakeClock) -> Option<Instant> {
 
 /// Advances the fake clock only from the runner's own park: a park at
 /// most one poll ahead moves time to its `until`; anything further ahead
-/// is the drain wait and is never advanced. Ends when `stop` is set,
-/// which the single wall-clock wait below sets on every outcome.
-fn drive(clock: &FakeClock, stop: &AtomicBool) {
-    while !stop.load(Ordering::Relaxed) {
-        match park_ahead(clock) {
+/// is the drain wait and is never advanced. Each pass advances to the
+/// park it just read, through `try_advance_when_parked`; a pass that
+/// finds no fresh park loops, and a pass that finds a park at another
+/// instant carries that instant into the next pass. Ends when `stop` is
+/// set, which the single wall-clock wait below sets on every outcome,
+/// and fails at the driver's own deadline naming the wait.
+fn drive(clock: &FakeClock, stop: &AtomicBool, deadline: fakes::Deadline) {
+    let mut carried: Option<Instant> = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        if deadline.left().is_zero() {
+            panic!(
+                "the runner never reported; now={:?} parked={:?}",
+                clock.now(),
+                clock.parked()
+            );
+        }
+        let mut candidate = carried.take();
+        if candidate.is_some_and(|watched| watched <= clock.now()) {
+            candidate = None;
+        }
+        match candidate.or_else(|| park_ahead(clock)) {
             Some(until) => {
                 let now = clock.now();
                 match until.checked_duration_since(now) {
                     // The runner's poll horizon: a park further ahead is
                     // the drain wait, which its own end wakes.
                     Some(gap) if gap <= Duration::from_secs(1) => {
-                        clock.advance(gap);
+                        match clock.try_advance_when_parked(Some(until), None, gap, PAUSE) {
+                            Ok(_) => {}
+                            Err(Miss::NoPark) => {}
+                            Err(Miss::Mismatch {
+                                watched: (_, Some(watched)),
+                                ..
+                            }) => {
+                                carried = Some(watched);
+                            }
+                            Err(
+                                miss @ Miss::Mismatch {
+                                    watched: (_, None), ..
+                                },
+                            ) => {
+                                panic!("{miss}; now={:?} parked={:?}", clock.now(), clock.parked());
+                            }
+                        }
                     }
                     _ => thread::yield_now(),
                 }
@@ -408,9 +448,10 @@ fn take_notice(rig: &ResumeRig) -> contract::inbox::JobNotice {
 fn reported(rig: &ResumeRig) -> contract::inbox::JobNotice {
     let stop = AtomicBool::new(false);
     let clock = Arc::clone(&rig.clock);
+    let deadline = fakes::Deadline::after(DEADLINE);
     thread::scope(|scope| {
-        scope.spawn(|| drive(&clock, &stop));
-        let result = fakes::Deadline::after(DEADLINE).recv(&rig.inbox);
+        scope.spawn(|| drive(&clock, &stop, deadline));
+        let result = deadline.recv(&rig.inbox);
         stop.store(true, Ordering::Relaxed);
         match result {
             Ok(Delivery::Job(notice)) => notice,
