@@ -463,7 +463,10 @@ fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
         1,
         "only one thread parks at {at:?}: {threads:?}"
     );
-    threads.into_iter().next().expect("one parked thread")
+    match threads.into_iter().next() {
+        Some(id) => id,
+        None => panic!("one parked thread"),
+    }
 }
 
 /// Waits until `callers` callers wait past `deadline` and `threads` extension
