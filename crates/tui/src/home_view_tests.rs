@@ -143,6 +143,7 @@ fn choose_session_model(app: &mut App) {
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::CtrlL, now), crate::app::Effect::None);
     app.on_models(Ok(crate::catalogue::Catalogue {
+        installable: Vec::new(),
         models: vec![crate::catalogue::ModelEntry {
             reference: "test/model".to_owned(),
             provider: "test".to_owned(),

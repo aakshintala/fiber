@@ -64,6 +64,7 @@ fn scoped_home(scoped: &[&str]) -> App {
 /// `acme/m2` with none, `zeta/z1` with one, `zeta/z2` with two.
 fn catalogue() -> Catalogue {
     Catalogue {
+        installable: Vec::new(),
         models: vec![
             ModelEntry {
                 reference: "acme/m1".to_owned(),
@@ -213,6 +214,7 @@ fn model_picker_no_models() {
 fn model_picker_long_list_scrolls_to_the_selection() {
     let mut app = attached(80, 24);
     app.on_models(Ok(Catalogue {
+        installable: Vec::new(),
         models: (0..30)
             .map(|at| {
                 let provider = ["acme", "zeta", "apex"][at % 3];

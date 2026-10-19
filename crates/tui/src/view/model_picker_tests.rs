@@ -36,6 +36,7 @@ fn attached(width: u16, height: u16) -> App {
 /// and a tiered price. No list times: every section reads unknown.
 fn catalogue() -> Catalogue {
     Catalogue {
+        installable: Vec::new(),
         models: vec![
             ModelEntry {
                 reference: "acme/m1".to_owned(),

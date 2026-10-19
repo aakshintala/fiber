@@ -80,6 +80,7 @@ fn entry(reference: &str, levels: &[&str]) -> ModelEntry {
 /// Two models: `acme/m1` with two levels, `acme/m2` with none.
 fn catalogue() -> Catalogue {
     Catalogue {
+        installable: Vec::new(),
         models: vec![entry("acme/m1", &["low", "high"]), entry("acme/m2", &[])],
         notices: Vec::new(),
         lists: Vec::new(),

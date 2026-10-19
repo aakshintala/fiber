@@ -88,6 +88,7 @@ use contract::ErrorCode;
 
 pub use contract::hook::StateSeed;
 pub use extension_tools::LuaTool;
+pub use first_party::{not_installed_providers, serving_package};
 pub use git::{Origin, SHORT_NAMES, full_name, is_path};
 pub use hooks::SessionExtensions;
 pub use host::Session;

@@ -390,6 +390,10 @@ fn decode_age(value: &Value) -> Option<ListAge> {
 /// anywhere fails the answer, so no partial catalogue is ever stored.
 fn decode_models(value: &Value) -> Option<Catalogue> {
     Some(Catalogue {
+        installable: match value.get("installable") {
+            None => Vec::new(),
+            Some(names) => serde_json::from_value(names.clone()).ok()?,
+        },
         models: value
             .get("models")?
             .as_array()?
@@ -421,6 +425,22 @@ pub(crate) fn client_owned(key: &str) -> bool {
     matches!(first, "keys" | "tui")
 }
 impl Configure for Remote {
+    fn install_provider(
+        &self,
+        workspace: &Path,
+        provider: &str,
+        _clock: Arc<dyn Clock>,
+    ) -> Result<crate::ProviderInstall, ConfigureError> {
+        let cancel = Cancel::default();
+        let workspace = self.workspace_as(workspace, Caller::Worker(&cancel))?;
+        self.call(
+            "install_provider",
+            json!({"workspace":workspace,"provider":provider}),
+            Caller::Worker(&cancel),
+            decode::install,
+        )
+    }
+
     fn settings(&self, workspace: &Path) -> Result<Vec<SettingRow>, ConfigureError> {
         let workspace = self.workspace(workspace)?;
         let mut hub = self.call(

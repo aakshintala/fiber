@@ -91,8 +91,17 @@ pub(crate) fn read(
     load: &dyn Fn(&Config) -> SessionExtensions,
     run: config::Runner<'_>,
 ) -> Result<tui::Catalogue, cli::ModelListsError> {
-    let (providers, config, notices) = cli::model_lists(home, workspace, mode(refresh), load, run)?;
+    let (providers, config, mut notices) =
+        cli::model_lists(home, workspace, mode(refresh), load, run)?;
+    let installable = match extensions::not_installed_providers(home) {
+        Ok(names) => names.into_iter().map(str::to_owned).collect(),
+        Err(error) => {
+            notices.push(error.to_string());
+            Vec::new()
+        }
+    };
     Ok(tui::Catalogue {
+        installable,
         models: entries(&providers, &config),
         // The ages read after the refresh above ran, so a refreshed
         // list reads fresh.

@@ -40,20 +40,8 @@ pub(crate) struct InstallSummary {
     pub staged: PathBuf,
 }
 
-/// Whether `fiber extension install` goes ahead (`docs/extensions.md`, "Installing"):
-/// in a terminal it writes each of `summaries` to `out` and asks once, and
-/// only `y` or `yes` goes ahead; `s` shows every file and asks again.
-/// Without a terminal it goes ahead without asking.
-pub(crate) fn install_approved(
-    summaries: &[InstallSummary],
-    terminal: bool,
-    input: &mut dyn BufRead,
-    out: &mut dyn Write,
-) -> Result<bool, Failure> {
-    if !terminal {
-        return Ok(true);
-    }
-    let io = |e: io::Error| failure(ErrorCode::IoFailed, format!("the terminal: {e}"));
+/// The summary shown before the install question.
+pub(crate) fn summary_text(summaries: &[InstallSummary]) -> String {
     let mut text = String::new();
     for summary in summaries {
         let verb = if summary.changes.is_some() {
@@ -93,7 +81,25 @@ pub(crate) fn install_approved(
             text.push_str(&format!("Carries {line}\n"));
         }
     }
-    out.write_all(text.as_bytes()).map_err(io)?;
+    text
+}
+
+/// Whether `fiber extension install` goes ahead (`docs/extensions.md`, "Installing"):
+/// in a terminal it writes each of `summaries` to `out` and asks once, and
+/// only `y` or `yes` goes ahead; `s` shows every file and asks again.
+/// Without a terminal it goes ahead without asking.
+pub(crate) fn install_approved(
+    summaries: &[InstallSummary],
+    terminal: bool,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<bool, Failure> {
+    if !terminal {
+        return Ok(true);
+    }
+    let io = |e: io::Error| failure(ErrorCode::IoFailed, format!("the terminal: {e}"));
+    out.write_all(summary_text(summaries).as_bytes())
+        .map_err(io)?;
     loop {
         out.write_all(b"Go ahead? [y/N/s to show the full source] ")
             .and_then(|()| out.flush())

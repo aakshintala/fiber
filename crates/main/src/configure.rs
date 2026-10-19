@@ -5,6 +5,7 @@
 //! installed extension's. The
 //! terminal loads configuration with no `-c`, so no row comes from one.
 
+mod install;
 mod login;
 mod models;
 mod remote;
@@ -26,6 +27,7 @@ use crate::switch::Reads;
 /// The seam over Fiber home.
 pub(crate) struct Seam {
     home: PathBuf,
+    origin: Arc<extensions::Origin>,
     /// The process's shared credential reads: a `models` refresh runs
     /// its credential commands through these, so one cancel reaches
     /// them all.
@@ -40,8 +42,17 @@ impl Seam {
     pub(crate) fn new(home: PathBuf) -> Self {
         Self {
             home,
+            origin: Arc::new(extensions::Origin::github()),
             reads: Arc::new(Reads::default()),
             locks: Arc::new(::tools::PathLocks::new()),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_origin(home: PathBuf, origin: Arc<extensions::Origin>) -> Self {
+        Self {
+            origin,
+            ..Self::new(home)
         }
     }
 
@@ -190,6 +201,15 @@ fn row(config: &Config, info: config::SettingInfo) -> SettingRow {
 }
 
 impl tui::Configure for Seam {
+    fn install_provider(
+        &self,
+        workspace: &Path,
+        provider: &str,
+        clock: Arc<dyn contract::clock::Clock>,
+    ) -> Result<tui::ProviderInstall, ConfigureError> {
+        install::provider(self, workspace, provider, clock)
+    }
+
     fn settings(&self, workspace: &Path) -> Result<Vec<SettingRow>, ConfigureError> {
         let config = self.load(workspace)?;
         Ok(config

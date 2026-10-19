@@ -419,6 +419,7 @@ fn keys_notices_are_config_invalid() {
 fn catalogue_notices_are_model_invalid_and_a_read_error_is_io_failed() {
     let mut app = attached();
     app.on_models(Ok(crate::catalogue::Catalogue {
+        installable: Vec::new(),
         models: Vec::new(),
         notices: vec!["a cached provider is gone".to_owned()],
         lists: Vec::new(),

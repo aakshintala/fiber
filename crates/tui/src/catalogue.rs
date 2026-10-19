@@ -93,6 +93,9 @@ pub struct Catalogue {
     pub notices: Vec<String>,
     /// One list time per installed provider.
     pub lists: Vec<ListAge>,
+    /// Each first-party provider no installed extension declares, sorted by
+    /// name (`docs/extensions.md`, "A fresh install").
+    pub installable: Vec<String>,
 }
 
 /// How thorough a model-list read is.
