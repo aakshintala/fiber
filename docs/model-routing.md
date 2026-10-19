@@ -524,8 +524,10 @@ and OAuth"), and `cost()` only after a call has ended ("Cost").
 ### Signing a request
 
 A provider may declare a Lua `sign()` function for a scheme that signs each
-request, such as AWS SigV4. It receives the method, the URL, the headers and
-the SHA-256 of the body, and returns headers to add. It cannot change the body. If `sign()` fails or
+request, such as AWS SigV4. It receives the method, the URL, the headers, the
+SHA-256 of the body and the time, in whole Unix seconds from the extension's
+clock, since SigV4 signs over the time and Lua has no clock of its own. It
+returns headers to add. It cannot change the body. If `sign()` fails or
 returns headers Fiber cannot use, the call fails with `credential_failed`, and
 is not retried.
 SigV4's chain of HMACs uses the `host.hmac_sha256` host call
