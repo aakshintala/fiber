@@ -913,6 +913,11 @@ fn a_no_proxy_bypass_times_the_direct_socket() {
     assert_eq!(capture.ends(), 1, "the direct scope drops once");
 }
 
+/// The offset from `now` at which the gated keep parks: a minute out,
+/// past the test's millisecond advances but inside the same park the
+/// helper waits for.
+const PARK_AFTER: Duration = Duration::from_secs(60);
+
 /// A keep that advances the fake clock at fixed points: the second
 /// address's stop check parks past its clock check until the test
 /// advances 3 ms, and `keep` parks again until the test advances 4 ms.
@@ -942,9 +947,8 @@ impl GatedKeep {
     /// releases the wait: the acknowledgement runs after the check, so
     /// the advance can only land inside the scope.
     fn park(&self, ack: &mpsc::Sender<()>, release: &Mutex<mpsc::Receiver<()>>) {
-        self.clock.wait_until(
-            Some(self.clock.now() + Duration::from_secs(60)),
-            &mut |_| {
+        self.clock
+            .wait_until(Some(self.clock.now() + PARK_AFTER), &mut |_| {
                 assert_eq!(
                     self.capture.ends(),
                     0,
@@ -956,8 +960,7 @@ impl GatedKeep {
                 Deadline::after(EACH_WITHIN)
                     .recv(&release.lock().unwrap())
                     .expect("the test advances the clock wait");
-            },
-        );
+            });
     }
 }
 
@@ -1065,12 +1068,24 @@ fn the_scope_covers_the_attempts_and_the_keep() {
     Deadline::after(EACH_WITHIN)
         .recv(&gates.stop_ack_rx)
         .expect("the second stop check parks");
-    clock.advance(Duration::from_millis(3));
+    let park = clock.now() + PARK_AFTER;
+    clock.advance_when_parked(
+        Some(park),
+        None,
+        Duration::from_millis(3),
+        &Deadline::after(EACH_WITHIN),
+    );
     gates.stop_release_tx.send(()).unwrap();
     Deadline::after(EACH_WITHIN)
         .recv(&gates.keep_ack_rx)
         .expect("the keep parks");
-    clock.advance(Duration::from_millis(4));
+    let park = clock.now() + PARK_AFTER;
+    clock.advance_when_parked(
+        Some(park),
+        None,
+        Duration::from_millis(4),
+        &Deadline::after(EACH_WITHIN),
+    );
     gates.keep_release_tx.send(()).unwrap();
     let outcome = Deadline::after(EACH_WITHIN).recv_or_fail(&done_rx, "the gated open to return");
     outcome.expect("the gated group connects");
@@ -1113,12 +1128,24 @@ fn a_refused_keep_keeps_the_same_scope() {
     Deadline::after(EACH_WITHIN)
         .recv(&gates.stop_ack_rx)
         .expect("the second stop check parks");
-    clock.advance(Duration::from_millis(3));
+    let park = clock.now() + PARK_AFTER;
+    clock.advance_when_parked(
+        Some(park),
+        None,
+        Duration::from_millis(3),
+        &Deadline::after(EACH_WITHIN),
+    );
     gates.stop_release_tx.send(()).unwrap();
     Deadline::after(EACH_WITHIN)
         .recv(&gates.keep_ack_rx)
         .expect("the keep parks");
-    clock.advance(Duration::from_millis(4));
+    let park = clock.now() + PARK_AFTER;
+    clock.advance_when_parked(
+        Some(park),
+        None,
+        Duration::from_millis(4),
+        &Deadline::after(EACH_WITHIN),
+    );
     gates.keep_release_tx.send(()).unwrap();
     let failed = Deadline::after(EACH_WITHIN).recv_or_fail(&done_rx, "the refused call to return");
     assert!(

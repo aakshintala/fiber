@@ -2989,7 +2989,7 @@ fn job_input_line(id: &str, job_id: &str, text: &str) -> String {
 struct WritableJobs {
     inner: Arc<FakeJobs>,
     clock: Arc<FakeClock>,
-    stuck: Mutex<Vec<(contract::JobId, mpsc::Sender<()>)>>,
+    stuck: Mutex<Vec<(contract::JobId, mpsc::Sender<std::thread::ThreadId>)>>,
 }
 
 impl WritableJobs {
@@ -3004,7 +3004,7 @@ impl WritableJobs {
 
     /// Parks the next `write` to `job_id` until the session clock moves a
     /// second on. Returns a receiver that fires once the write parks.
-    fn stick(&self, job_id: &contract::JobId) -> mpsc::Receiver<()> {
+    fn stick(&self, job_id: &contract::JobId) -> mpsc::Receiver<std::thread::ThreadId> {
         let (tx, rx) = mpsc::channel();
         self.stuck.lock().unwrap().push((job_id.clone(), tx));
         rx
@@ -3080,7 +3080,7 @@ impl Jobs for WritableJobs {
             // The test moves the clock only after this fires, so the
             // deadline is computed and the waker subscribed before any
             // advance.
-            let _sent = entered.send(());
+            let _sent = entered.send(thread::current().id());
             loop {
                 // The writer's own clock check: past it before parking.
                 if self.clock.now() >= until {
@@ -3302,14 +3302,15 @@ fn job_stop_is_answered_after_a_stuck_job_input_times_out() {
             send(&client, &job_input_line("c_in", &job_id, "x"));
             // The reader is stuck in the write: parked inside the clock
             // wait, past its own check, before the clock moves.
-            Deadline::after(DEADLINE)
+            let writer = Deadline::after(DEADLINE)
                 .recv(&parked)
                 .expect("the write parked in the terminal");
-            assert!(
-                clock.await_parked_unbounded(DEADLINE),
-                "the write did not park on the session clock"
+            clock.advance_when_parked(
+                None,
+                Some(writer),
+                Duration::from_secs(2),
+                &Deadline::after(DEADLINE),
             );
-            clock.advance(Duration::from_secs(2));
             let rejected = response(&client, "c_in");
             assert_eq!(
                 rejection(&rejected),
