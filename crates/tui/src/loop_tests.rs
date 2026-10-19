@@ -1147,14 +1147,13 @@ fn two_finished_lines_in_one_batch_write_both_notifications_in_order() {
 const DRAIN: Duration = Duration::from_secs(5);
 
 /// The resume test's hub thread's last step: the last command name it
-/// read, whether a socket write is in progress, and how many replay
-/// envelopes it has streamed. The hub sets each field and drops the
-/// guard before any blocking call, so the panic path can always read it.
+/// read and whether a socket write is in progress. The hub sets each
+/// field and drops the guard before any blocking call, so the panic
+/// path can always read it.
 #[derive(Clone, Debug, Default)]
 struct HubProgress {
     last_command: String,
     writing: bool,
-    envelopes_streamed: u64,
 }
 
 /// One helper thread's end state from its done channel: finished, still
@@ -1170,24 +1169,23 @@ fn done_state(done: &Result<(), mpsc::TryRecvError>) -> &'static str {
 /// The stall report for the resume test's drain window expiring: names
 /// whether the run thread is alive (the finished channel is empty) or
 /// gone (disconnected), the hub's last step, both helpers' end states,
-/// and the reader's lines-read count. Pure, so unit tests pin every
+/// and the reader's forwarded-lines count. Pure, so unit tests pin every
 /// word it can print.
 fn stall_report(
     finished: &mpsc::TryRecvError,
     hub: &HubProgress,
     hub_done: &Result<(), mpsc::TryRecvError>,
     reader_done: &Result<(), mpsc::TryRecvError>,
-    reader_lines: u64,
+    reader_forwarded: u64,
 ) -> String {
     let run = match finished {
         mpsc::TryRecvError::Empty => "run thread alive",
         mpsc::TryRecvError::Disconnected => "run thread gone",
     };
     format!(
-        "{run} (finished channel {finished:?}); hub at {:?} (writing: {}, envelopes streamed: {}), hub {}; reader {} (lines read: {reader_lines})",
+        "{run} (finished channel {finished:?}); hub at {:?} (writing: {}), hub {}; reader {} (lines forwarded: {reader_forwarded})",
         hub.last_command,
         hub.writing,
-        hub.envelopes_streamed,
         done_state(hub_done),
         done_state(reader_done),
     )
@@ -1198,7 +1196,6 @@ fn stall_report_names_a_parked_hub_while_the_run_thread_lives() {
     let hub = HubProgress {
         last_command: "subscribe".to_owned(),
         writing: false,
-        envelopes_streamed: 0,
     };
     let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
     let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &waiting, &waiting, 0);
@@ -1206,10 +1203,9 @@ fn stall_report_names_a_parked_hub_while_the_run_thread_lives() {
     assert!(report.contains("Empty"), "{report}");
     assert!(report.contains("subscribe"), "{report}");
     assert!(report.contains("writing: false"), "{report}");
-    assert!(report.contains("envelopes streamed: 0"), "{report}");
     assert!(report.contains("hub waiting"), "{report}");
     assert!(report.contains("reader waiting"), "{report}");
-    assert!(report.contains("lines read: 0"), "{report}");
+    assert!(report.contains("lines forwarded: 0"), "{report}");
 }
 
 #[test]
@@ -1217,7 +1213,6 @@ fn stall_report_names_a_gone_run_thread() {
     let hub = HubProgress {
         last_command: "history".to_owned(),
         writing: true,
-        envelopes_streamed: 900,
     };
     let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
     let report = stall_report(
@@ -1232,8 +1227,7 @@ fn stall_report_names_a_gone_run_thread() {
     assert!(report.contains("Disconnected"), "{report}");
     assert!(report.contains("history"), "{report}");
     assert!(report.contains("writing: true"), "{report}");
-    assert!(report.contains("envelopes streamed: 900"), "{report}");
-    assert!(report.contains("lines read: 1348"), "{report}");
+    assert!(report.contains("lines forwarded: 1348"), "{report}");
 }
 
 #[test]
@@ -1241,112 +1235,94 @@ fn stall_report_names_finished_helpers_and_their_counts() {
     let hub = HubProgress {
         last_command: "subscribe".to_owned(),
         writing: false,
-        envelopes_streamed: 1348,
     };
     let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &Ok(()), &Ok(()), 1352);
     assert!(report.contains("run thread alive"), "{report}");
     assert!(report.contains("hub done"), "{report}");
     assert!(report.contains("reader done"), "{report}");
-    assert!(report.contains("envelopes streamed: 1348"), "{report}");
-    assert!(report.contains("lines read: 1352"), "{report}");
+    assert!(report.contains("lines forwarded: 1352"), "{report}");
 }
 
-/// Counts newline bytes flowing through a `Read`: the resume test's
-/// reader thread reads the hub socket through it, so the stall report
-/// can say how many lines the reader read from the socket: bytes the
-/// socket yielded, including any the `BufReader` above has buffered but
-/// `read_lines` has not yet validated or forwarded. Delegates every call
-/// and counts only bytes actually returned, so partial reads, errors
-/// and EOF behave exactly like the inner reader. Blocks on nothing.
-struct CountingRead<R> {
-    inner: R,
-    lines: Arc<AtomicU64>,
-}
-
-impl<R> CountingRead<R> {
-    fn new(inner: R, lines: Arc<AtomicU64>) -> Self {
-        Self { inner, lines }
+/// Hands one reader output to the loop and counts it when it is a hub
+/// line: the resume test's relay thread runs every `read_lines` output
+/// through it, so the stall report names lines the reader validated,
+/// routed, credit-checked and queued, never bytes the socket yielded
+/// but `read_lines` dropped or buffered. Counts only after the queue
+/// accepts the line, so a gone loop counts nothing. Returns false once
+/// the loop is gone, so the relay stops. Blocks on nothing.
+fn relay_and_count(input: Input, tx: &Sender<Input>, forwarded: &AtomicU64) -> bool {
+    let hub = matches!(input, Input::Hub(_));
+    if tx.send(input).is_err() {
+        return false;
     }
-}
-
-impl<R: Read> Read for CountingRead<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read = self.inner.read(buf)?;
-        let newlines = buf[..read].iter().filter(|byte| **byte == b'\n').count();
-        self.lines.fetch_add(
-            u64::try_from(newlines).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
-        Ok(read)
+    if hub {
+        forwarded.fetch_add(1, Ordering::Relaxed);
     }
+    true
 }
 
-/// A short buffer already forces partial reads: `Read for &[u8]`
-/// returns at most the buffer's length, so the count pins bytes
-/// actually returned across reads and at EOF, with no fake reader.
+/// Only hub lines count, and only once the loop queues them: a hub
+/// line arrives counted, anything else passes through uncounted, and
+/// a send to a gone loop reports false without counting.
 #[test]
-fn counting_read_counts_newlines_across_short_reads() {
-    let lines = Arc::new(AtomicU64::new(0));
-    let mut counted = CountingRead::new(&b"a\nb\nno trailing"[..], Arc::clone(&lines));
-    let mut buf = [0u8; 3];
-    let read = counted
-        .read(&mut buf)
-        .unwrap_or_else(|err| panic!("read: {err}"));
-    assert_eq!(read, 3);
-    assert_eq!(&buf, b"a\nb");
-    assert_eq!(lines.load(Ordering::Relaxed), 1);
-    let mut rest = Vec::new();
-    counted
-        .read_to_end(&mut rest)
-        .unwrap_or_else(|err| panic!("read: {err}"));
-    assert_eq!(rest, b"\nno trailing");
-    assert_eq!(lines.load(Ordering::Relaxed), 2);
-    let read = counted
-        .read(&mut buf)
-        .unwrap_or_else(|err| panic!("read: {err}"));
-    assert_eq!(read, 0);
-    assert_eq!(lines.load(Ordering::Relaxed), 2);
+fn relay_counts_only_queued_hub_lines() {
+    let (tx, rx) = mpsc::channel();
+    let forwarded = AtomicU64::new(0);
+    assert!(relay_and_count(
+        Input::Hub(Line::Session(line("turn_started", None, None, json!({})))),
+        &tx,
+        &forwarded,
+    ));
+    assert_eq!(forwarded.load(Ordering::Relaxed), 1);
+    assert!(relay_and_count(Input::Disconnected, &tx, &forwarded));
+    assert_eq!(forwarded.load(Ordering::Relaxed), 1);
+    drop(rx);
+    assert!(!relay_and_count(
+        Input::Hub(Line::Session(line("turn_started", None, None, json!({})))),
+        &tx,
+        &forwarded,
+    ));
+    assert_eq!(forwarded.load(Ordering::Relaxed), 1);
 }
 
-/// Bytes, then an error: the wrapper counts the bytes it returned and
-/// hands the error through untouched.
-struct ThenError<'a> {
-    rest: Option<&'a [u8]>,
-}
-
-impl Read for ThenError<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self.rest.take() {
-            Some(rest) => {
-                let take = rest.len().min(buf.len());
-                buf[..take].copy_from_slice(&rest[..take]);
-                Ok(take)
-            }
-            None => Err(std::io::Error::new(ErrorKind::ConnectionReset, "gone")),
+/// A dropped line is never a forward: one garbage line and one session
+/// line carry two newlines but forward once, so a newline counter
+/// would report two here.
+#[test]
+fn forwarded_count_skips_lines_the_reader_drops() {
+    let envelope = line("turn_started", Some(0), None, json!({"input": []}));
+    let mut bytes = b"not json\n".to_vec();
+    bytes.extend_from_slice(
+        serde_json::to_string(&envelope)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    bytes.push(b'\n');
+    let (forward_tx, forward_rx) = mpsc::channel();
+    let feed = crate::link::Feed::new(forward_tx, crate::link::Credits::new(usize::MAX));
+    crate::link::read_lines(&bytes[..], &feed);
+    drop(feed);
+    let (tx, rx) = mpsc::channel();
+    let forwarded = AtomicU64::new(0);
+    for input in forward_rx {
+        if !relay_and_count(input, &tx, &forwarded) {
+            break;
         }
     }
-}
-
-#[test]
-fn counting_read_passes_errors_through_after_counting() {
-    let lines = Arc::new(AtomicU64::new(0));
-    let mut counted = CountingRead::new(
-        ThenError {
-            rest: Some(b"a\nb"),
-        },
-        Arc::clone(&lines),
-    );
-    let mut buf = [0u8; 16];
-    let read = counted
-        .read(&mut buf)
-        .unwrap_or_else(|err| panic!("read: {err}"));
-    assert_eq!(read, 3);
-    assert_eq!(lines.load(Ordering::Relaxed), 1);
-    let err = counted
-        .read(&mut buf)
-        .expect_err("the error reaches the caller");
-    assert_eq!(err.kind(), ErrorKind::ConnectionReset);
-    assert_eq!(lines.load(Ordering::Relaxed), 1);
+    drop(tx);
+    let mut hubs = 0;
+    let mut disconnects = 0;
+    for input in rx {
+        if matches!(input, Input::Hub(_)) {
+            hubs += 1;
+        } else if matches!(input, Input::Disconnected) {
+            disconnects += 1;
+        } else {
+            panic!("the reader forwards only hub lines and its disconnect");
+        }
+    }
+    assert_eq!((hubs, disconnects), (1, 1));
+    assert_eq!(forwarded.load(Ordering::Relaxed), 1);
 }
 
 #[test]
@@ -1395,13 +1371,19 @@ fn take_finish_or_stall<T>(
     hub: &HubProgress,
     hub_done: &Result<(), mpsc::TryRecvError>,
     reader_done: &Result<(), mpsc::TryRecvError>,
-    reader_lines: u64,
+    reader_forwarded: u64,
 ) -> Result<T, String> {
     match finished.try_recv() {
         Ok(done) => Ok(done),
         Err(finished_state) => Err(format!(
             "{drain_err}\n{}",
-            stall_report(&finished_state, hub, hub_done, reader_done, reader_lines),
+            stall_report(
+                &finished_state,
+                hub,
+                hub_done,
+                reader_done,
+                reader_forwarded
+            ),
         )),
     }
 }
@@ -1437,7 +1419,6 @@ fn no_finish_by_the_recheck_reports_the_stall() {
     let hub = HubProgress {
         last_command: "subscribe".to_owned(),
         writing: false,
-        envelopes_streamed: 0,
     };
     let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
     let err = match take_finish_or_stall(
@@ -1644,20 +1625,32 @@ fn resume_open_replays_the_log_to_the_tail() {
         .unwrap_or_else(|err| panic!("clone: {err}"));
     let read_tx = tx.clone();
     // The reader takes at the loop's credits, so its queue stays
-    // bounded while the loop drains.
-    let read_feed = crate::link::Feed::new(read_tx, lp.hub.credits());
+    // bounded while the loop drains. The relay counts each hub line it
+    // hands to the loop, so the stall report names validated forwards,
+    // never buffered bytes.
+    let (relay_tx, relay_rx) = mpsc::channel();
+    let read_feed = crate::link::Feed::new(relay_tx, lp.hub.credits());
     // The reader signals when it reaches EOF, so the test waits on the
     // reader's answer instead of the drain window alone.
     let (reader_done_tx, reader_done) = mpsc::channel();
-    // Lines the reader read from the socket: the stall report reads the
-    // count, so the reader thread reads the socket through the counting
-    // wrapper.
-    let reader_lines = Arc::new(AtomicU64::new(0));
-    let reader_count = Arc::clone(&reader_lines);
+    // Lines the reader forwarded to the loop: the stall report reads
+    // the count, so the relay thread counts each hub line it queues.
+    let reader_forwarded = Arc::new(AtomicU64::new(0));
+    let relay_count = Arc::clone(&reader_forwarded);
+    std::thread::Builder::new()
+        .name("resume-relay".to_owned())
+        .spawn(move || {
+            for input in relay_rx {
+                if !relay_and_count(input, &read_tx, &relay_count) {
+                    break;
+                }
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
     std::thread::Builder::new()
         .name("resume-read".to_owned())
         .spawn(move || {
-            crate::link::read_lines(CountingRead::new(read_end, reader_count), &read_feed);
+            crate::link::read_lines(read_end, &read_feed);
             reader_done_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -1734,9 +1727,6 @@ fn resume_open_replays_the_log_to_the_tail() {
                             write(session_ack(&id, json!({"last_seq": last})));
                             for envelope in &stream {
                                 write(serde_json::to_value(envelope).unwrap_or(Value::Null));
-                                if let Ok(mut held) = hub_step.lock() {
-                                    held.envelopes_streamed += 1;
-                                }
                             }
                             break;
                         }
@@ -1825,7 +1815,7 @@ fn resume_open_replays_the_log_to_the_tail() {
                 .unwrap_or_default(),
             &hub_done.try_recv(),
             &reader_done.try_recv(),
-            reader_lines.load(Ordering::Relaxed),
+            reader_forwarded.load(Ordering::Relaxed),
         ) {
             Ok(done) => done,
             Err(report) => panic!("{report}"),
