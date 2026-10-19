@@ -4758,6 +4758,54 @@ fn the_back_hint_bolds_the_key_and_dims_the_rest() {
     }
 }
 
+/// A steering queue with one row for `session`.
+fn steering_queue(session: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "steering_queue".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"messages": [{
+            "content": [{"type": "text", "text": "steer me"}],
+            "source": "driver",
+            "command_id": "c_1",
+        }]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+#[test]
+fn slash_new_from_a_session_with_a_focused_steering_row_lands_on_the_entry_bar() {
+    let mut app = home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "current work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(steering_queue("s_aaaaaaaaaaaaaaaa"));
+    app.select_steering(0);
+    assert_eq!(app.draft(), "steer me");
+    // Esc returns to the box, clearing the steering selection, so
+    // `/new` can be typed.
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(app.draft(), "");
+    assert!(matches!(enter_text(&mut app, "/new"), Effect::Send(_)));
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.draft(), "");
+}
+
 /// The row key of `session` on home.
 fn row_key(app: &App, session: &str) -> u64 {
     app.home

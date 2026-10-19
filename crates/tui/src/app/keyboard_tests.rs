@@ -490,6 +490,50 @@ fn ctrl_n_goes_home_with_an_empty_draft_as_slash_new() {
 }
 
 #[test]
+fn ctrl_n_from_a_focused_item_lands_on_the_entry_bar() {
+    let mut app = groups(1, 80, 24);
+    app.set_home(launch());
+    type_text(&mut app, "hi");
+    frame(&mut app);
+    assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
+    assert!(app.focused().is_some());
+    assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.focused().is_none());
+    assert_eq!(app.draft(), "");
+}
+
+#[test]
+fn ctrl_n_from_a_steering_row_lands_on_the_entry_bar() {
+    let mut app = homed(80, 24);
+    app.on_line(steering_queue());
+    app.select_steering(0);
+    assert_eq!(app.draft(), "steer me");
+    assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.focused().is_none());
+    assert_eq!(app.draft(), "");
+}
+
+#[test]
+fn ctrl_n_with_the_rail_focused_leaves_nothing_focused() {
+    let mut app = homed(80, 24);
+    app.on_line(live(SESSION));
+    let key = app
+        .home
+        .as_ref()
+        .and_then(|home| home.sessions.row(&contract::SessionId(SESSION.to_owned())))
+        .map(|row| row.key)
+        .expect("SESSION row");
+    app.set_rail_focus(crate::app::rail::Spot::Card(key));
+    assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.rail_state().focused().is_none());
+    assert!(app.focused().is_none());
+    assert_eq!(app.draft(), "");
+}
+
+#[test]
 fn ctrl_n_from_the_conversation_leaves_focus_unset() {
     let mut app = groups(1, 80, 24);
     app.set_home(launch());
