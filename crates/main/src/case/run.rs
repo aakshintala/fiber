@@ -12,6 +12,7 @@ use contract::extension::Drive;
 use contract::inbox::Ack;
 use log::{Log, Watcher};
 use serde_json::{Map, Value};
+use support::group::GROUP_POLL;
 
 use super::clock::CaseClock;
 use super::format::{Case, ClockAdvance, Host, Selector, SessionCase};
@@ -146,13 +147,17 @@ impl CaseRun {
         let mut seen_order = Vec::<String>::new();
         let mut advance = 0;
         let mut reached_until = false;
+        let mut released = false;
 
         if !self.apply_advances(None, &mut advance, &mut failures) {
-            self.close(&driver, &cancel, &mut failures);
+            released |= self.close(&driver, &cancel, &mut failures);
         }
         while !reached_until && failures.is_empty() {
-            let Some(line) = self.next_event(&mut watcher, deadline, &mut failures) else {
-                self.close(&driver, &cancel, &mut failures);
+            let last_advance_done = advance >= self.advances.len();
+            let Some(line) =
+                self.next_event(&mut watcher, deadline, &mut failures, last_advance_done)
+            else {
+                released |= self.close(&driver, &cancel, &mut failures);
                 break;
             };
             let durable = line.is_durable();
@@ -163,7 +168,7 @@ impl CaseRun {
             *occurrence = occurrence.saturating_add(1);
             seen_order.push(line.kind.clone());
             if !self.apply_advances(Some((&line.kind, *occurrence)), &mut advance, &mut failures) {
-                self.close(&driver, &cancel, &mut failures);
+                released |= self.close(&driver, &cancel, &mut failures);
                 break;
             }
             reached_until = self.is_until(&line.kind, *occurrence);
@@ -174,17 +179,19 @@ impl CaseRun {
                 break;
             }
             if reached_until {
-                self.close(&driver, &cancel, &mut failures);
+                released |= self.close(&driver, &cancel, &mut failures);
             }
         }
 
-        if reached_until && !has_fiber_exited(&events) {
+        if (reached_until || released) && !has_fiber_exited(&events) {
             let exit_deadline = self
                 .process_clock
                 .now()
                 .checked_add(self.waits.close)
                 .unwrap_or_else(|| self.process_clock.now());
-            while let Some(line) = self.next_event(&mut watcher, exit_deadline, &mut failures) {
+            while let Some(line) =
+                self.next_event(&mut watcher, exit_deadline, &mut failures, false)
+            {
                 seen_order.push(line.kind.clone());
                 if line.is_durable() {
                     events.push(serde_json::to_value(&line).unwrap_or(Value::Null));
@@ -238,29 +245,51 @@ impl CaseRun {
         watcher: &mut Watcher,
         deadline: Instant,
         failures: &mut Vec<String>,
+        last_advance_done: bool,
     ) -> Option<contract::Envelope> {
         let remaining = deadline.saturating_duration_since(self.process_clock.now());
-        match watcher.recv_timeout(remaining) {
-            Some(Ok(Some(line))) => Some(line),
-            Some(Ok(None)) => {
-                failures.push("the session log ended before the case completed".to_owned());
-                None
+        // The whole wait in poll slices, counted, so a hang that matches
+        // mid-wait ends it within one slice. The count bounds the wait in
+        // real time: the process clock may be a frozen case clock in tests,
+        // while the watcher below always waits in real time.
+        let mut waits = remaining
+            .as_millis()
+            .div_ceil(GROUP_POLL.as_millis())
+            .max(1);
+        loop {
+            // Past the last advance a matched hang with a later deadline can
+            // never be released: only the runner's advances move the case
+            // clock. End the wait so close can name and release it.
+            if last_advance_done && !self.host.pending_hangs(self.clock.now()).is_empty() {
+                return None;
             }
-            Some(Err(error)) => {
-                failures.push(format!("reading the session log: {error}"));
-                None
-            }
-            None => {
-                let until = self
-                    .until
-                    .as_ref()
-                    .map(|selector| format!("{} occurrence {}", selector.kind, selector.nth))
-                    .unwrap_or_else(|| "turn_completed or turn_failed".to_owned());
-                failures.push(format!(
-                    "{}: wait for until event {until} expired after {:?}",
-                    self.name, self.waits.until
-                ));
-                None
+            match watcher.recv_timeout(remaining.min(GROUP_POLL)) {
+                Some(Ok(Some(line))) => return Some(line),
+                Some(Ok(None)) => {
+                    failures.push("the session log ended before the case completed".to_owned());
+                    return None;
+                }
+                Some(Err(error)) => {
+                    failures.push(format!("reading the session log: {error}"));
+                    return None;
+                }
+                None => {
+                    waits = waits.saturating_sub(1);
+                    if waits == 0 {
+                        let until = self
+                            .until
+                            .as_ref()
+                            .map(|selector| {
+                                format!("{} occurrence {}", selector.kind, selector.nth)
+                            })
+                            .unwrap_or_else(|| "turn_completed or turn_failed".to_owned());
+                        failures.push(format!(
+                            "{}: wait for until event {until} expired after {:?}",
+                            self.name, self.waits.until
+                        ));
+                        return None;
+                    }
+                }
             }
         }
     }
@@ -283,6 +312,15 @@ impl CaseRun {
                 break;
             }
             let index = next.saturating_add(1);
+            if let Some(hang) = entry.hang {
+                // Hold the advance until the named entry matches as a hang,
+                // so the advance lands on the hang's park instead of an
+                // earlier wait on the same deadline.
+                if let Err(reason) = self.host.wait_hang_matched(hang, self.waits.advance) {
+                    failures.push(format!("clock advance[{index}]: {reason}"));
+                    return false;
+                }
+            }
             let duration = Duration::from_millis(entry.advance_ms);
             if let Err(reason) = self.clock.advance_when_parked(duration, self.waits.advance) {
                 failures.push(format!("clock advance[{index}]: {reason}"));
@@ -300,12 +338,33 @@ impl CaseRun {
         }
     }
 
+    /// Closes the session, releasing stuck hangs first. Past the last clock
+    /// entry a matched hang with a later deadline is stuck: this names each
+    /// one, advances to its own deadline in deadline order so its callback
+    /// ends at its timeout, then runs the plain close. Returns whether any
+    /// hang was released.
     fn close(
         &self,
         driver: &Arc<dyn Drive>,
         cancel: &Arc<r#loop::TurnCancel>,
         failures: &mut Vec<String>,
-    ) {
+    ) -> bool {
+        let mut stuck = self.host.pending_hangs(self.clock.now());
+        stuck.sort_by_key(|stuck| stuck.2);
+        let mut released = false;
+        for (entry, request, deadline) in stuck {
+            failures.push(format!(
+                "unmet host call: host.exec[{entry}] hung: request {request} still parked after the last clock advance"
+            ));
+            released = true;
+            let now = self.clock.now();
+            if deadline > now {
+                let wait = deadline.saturating_duration_since(now);
+                if let Err(reason) = self.clock.advance_when_parked(wait, self.waits.advance) {
+                    failures.push(format!("host.exec[{entry}]: {reason}"));
+                }
+            }
+        }
         let (answer, received) = mpsc::channel();
         driver.drive(
             "case-runner",
@@ -331,6 +390,7 @@ impl CaseRun {
                 cancel.cancel();
             }
         }
+        released
     }
 }
 

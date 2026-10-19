@@ -207,7 +207,7 @@ impl HostScript {
     /// case clock. Called while the hub lock is held, before the worker
     /// spawns, so the runner's hold cannot miss it. Wakes every waiter in
     /// [`HostScript::wait_hang_matched`].
-    pub(crate) fn hang_matched(&self, index: usize, request: &Value, deadline: Instant) {
+    pub fn hang_matched(&self, index: usize, request: &Value, deadline: Instant) {
         let mut state = lock(&self.state);
         state.hangs.push(HangMatch {
             entry: index,
