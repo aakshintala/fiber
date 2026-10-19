@@ -11,7 +11,7 @@
 use std::fmt::Display;
 use std::ops::Range;
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::RawSpan;
@@ -184,8 +184,8 @@ pub(crate) fn from_ratatui(spans: &[Span<'_>]) -> Vec<RawSpan> {
             let style = span.style;
             RawSpan {
                 text: span.content.to_string(),
-                fg: role_name(style.fg),
-                bg: role_name(style.bg),
+                fg: role_name(&style, false),
+                bg: role_name(&style, true),
                 bold: style.add_modifier.contains(Modifier::BOLD),
                 dim: style.add_modifier.contains(Modifier::DIM),
                 italic: style.add_modifier.contains(Modifier::ITALIC),
@@ -197,12 +197,12 @@ pub(crate) fn from_ratatui(spans: &[Span<'_>]) -> Vec<RawSpan> {
         .collect()
 }
 
-/// The role `marker` names, when it is one.
-fn role_name(marker: Option<Color>) -> Option<String> {
-    match marker {
-        Some(Color::Indexed(index)) => Role::from_index(index).map(|role| role.name().to_owned()),
-        _ => None,
-    }
+/// The role `style` names on its foreground or background, when it is
+/// one. Only the theme names colours (`docs/tui.md`, "Themes"): the
+/// marker's type stays inferred here, and the theme reads it.
+fn role_name(style: &Style, background: bool) -> Option<String> {
+    let marker = if background { style.bg } else { style.fg };
+    Role::of_marker(marker).map(|role| role.name().to_owned())
 }
 
 #[cfg(test)]

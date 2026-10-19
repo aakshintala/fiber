@@ -330,6 +330,16 @@ impl Role {
         Self::ALL.get(usize::from(index)).copied()
     }
 
+    /// The role `marker` holds, if it holds one: what a built-in row's
+    /// span names when the seam reads it back. Only the theme names
+    /// colours (`docs/tui.md`, "Themes").
+    pub(crate) fn of_marker(marker: Option<Color>) -> Option<Role> {
+        match marker {
+            Some(Color::Indexed(index)) => Self::from_index(index),
+            _ => None,
+        }
+    }
+
     /// This role's hover-lift marker: what a hovered or focused click
     /// target takes on this role's tint (`docs/tui.md`, palette,
     /// `hover`). The look resolves it to the tint 0x14 lighter on each
