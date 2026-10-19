@@ -48,7 +48,10 @@ The `paging` rows measure the `tui` crate's `paging` jig (`docs/testing.md`,
 it holds in memory, standing in for the hub's log; its memory row covers that
 copy. It runs no provider extension and no compiled-in tool: it measures the
 terminal's paging and drawing alone, so the fresh-install load above does not
-apply to it.
+apply to it. On 2026-10-18 a fresh run on head `dbbfc9a7` (see #2680)
+measured 11,988 KiB peak RSS, 673 ms open, 4.1 ms load, 9.0 ms jump,
+89.6 ms re-count and 2.6 ms append at scale 1, with scale-16 ratios of
+11.1x re-count and 16.1x search against 24x allowed.
 
 Memory follows the context window, not the transcript. After a handoff the
 session holds the handoff note and what came after it, and a resumed session
