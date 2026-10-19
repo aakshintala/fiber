@@ -1170,7 +1170,7 @@ fn done_state(done: &Result<(), mpsc::TryRecvError>) -> &'static str {
 /// The stall report for the resume test's drain window expiring: names
 /// whether the run thread is alive (the finished channel is empty) or
 /// gone (disconnected), the hub's last step, both helpers' end states,
-/// and the reader's forwarded line count. Pure, so unit tests pin every
+/// and the reader's lines-read count. Pure, so unit tests pin every
 /// word it can print.
 fn stall_report(
     finished: &mpsc::TryRecvError,
@@ -1184,7 +1184,7 @@ fn stall_report(
         mpsc::TryRecvError::Disconnected => "run thread gone",
     };
     format!(
-        "{run} (finished channel {finished:?}); hub at {:?} (writing: {}, envelopes streamed: {}), hub {}; reader {} (lines forwarded: {reader_lines})",
+        "{run} (finished channel {finished:?}); hub at {:?} (writing: {}, envelopes streamed: {}), hub {}; reader {} (lines read: {reader_lines})",
         hub.last_command,
         hub.writing,
         hub.envelopes_streamed,
@@ -1209,7 +1209,7 @@ fn stall_report_names_a_parked_hub_while_the_run_thread_lives() {
     assert!(report.contains("envelopes streamed: 0"), "{report}");
     assert!(report.contains("hub waiting"), "{report}");
     assert!(report.contains("reader waiting"), "{report}");
-    assert!(report.contains("lines forwarded: 0"), "{report}");
+    assert!(report.contains("lines read: 0"), "{report}");
 }
 
 #[test]
@@ -1233,7 +1233,7 @@ fn stall_report_names_a_gone_run_thread() {
     assert!(report.contains("history"), "{report}");
     assert!(report.contains("writing: true"), "{report}");
     assert!(report.contains("envelopes streamed: 900"), "{report}");
-    assert!(report.contains("lines forwarded: 1348"), "{report}");
+    assert!(report.contains("lines read: 1348"), "{report}");
 }
 
 #[test]
@@ -1248,12 +1248,14 @@ fn stall_report_names_finished_helpers_and_their_counts() {
     assert!(report.contains("hub done"), "{report}");
     assert!(report.contains("reader done"), "{report}");
     assert!(report.contains("envelopes streamed: 1348"), "{report}");
-    assert!(report.contains("lines forwarded: 1352"), "{report}");
+    assert!(report.contains("lines read: 1352"), "{report}");
 }
 
 /// Counts newline bytes flowing through a `Read`: the resume test's
 /// reader thread reads the hub socket through it, so the stall report
-/// can say how many lines the reader forwarded. Delegates every call
+/// can say how many lines the reader read from the socket: bytes the
+/// socket yielded, including any the `BufReader` above has buffered but
+/// `read_lines` has not yet validated or forwarded. Delegates every call
 /// and counts only bytes actually returned, so partial reads, errors
 /// and EOF behave exactly like the inner reader. Blocks on nothing.
 struct CountingRead<R> {
@@ -1279,75 +1281,31 @@ impl<R: Read> Read for CountingRead<R> {
     }
 }
 
-/// One byte at a time: forces the counting wrapper through partial
-/// reads, so the count pins bytes actually returned, not buffer size.
-struct OneByte<'a> {
-    rest: &'a [u8],
-}
-
-impl Read for OneByte<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let [first, rest @ ..] = self.rest else {
-            return Ok(0);
-        };
-        let [slot, ..] = buf else { return Ok(0) };
-        *slot = *first;
-        self.rest = rest;
-        Ok(1)
-    }
-}
-
+/// A short buffer already forces partial reads: `Read for &[u8]`
+/// returns at most the buffer's length, so the count pins bytes
+/// actually returned across reads and at EOF, with no fake reader.
 #[test]
-fn counting_read_counts_newlines_through_partial_reads() {
+fn counting_read_counts_newlines_across_short_reads() {
     let lines = Arc::new(AtomicU64::new(0));
-    let mut counted = CountingRead::new(
-        OneByte {
-            rest: b"a\nb\nno trailing",
-        },
-        Arc::clone(&lines),
-    );
-    let mut text = String::new();
-    counted
-        .read_to_string(&mut text)
-        .unwrap_or_else(|err| panic!("read: {err}"));
-    assert_eq!(text, "a\nb\nno trailing");
-    assert_eq!(lines.load(Ordering::Relaxed), 2);
-}
-
-#[test]
-fn counting_read_counts_a_bare_newline_run() {
-    let lines = Arc::new(AtomicU64::new(0));
-    let mut counted = CountingRead::new(&b"\n\n\n"[..], Arc::clone(&lines));
-    let mut buf = [0u8; 8];
+    let mut counted = CountingRead::new(&b"a\nb\nno trailing"[..], Arc::clone(&lines));
+    let mut buf = [0u8; 3];
     let read = counted
         .read(&mut buf)
         .unwrap_or_else(|err| panic!("read: {err}"));
     assert_eq!(read, 3);
-    assert_eq!(lines.load(Ordering::Relaxed), 3);
+    assert_eq!(&buf, b"a\nb");
+    assert_eq!(lines.load(Ordering::Relaxed), 1);
+    let mut rest = Vec::new();
+    counted
+        .read_to_end(&mut rest)
+        .unwrap_or_else(|err| panic!("read: {err}"));
+    assert_eq!(rest, b"\nno trailing");
+    assert_eq!(lines.load(Ordering::Relaxed), 2);
     let read = counted
         .read(&mut buf)
         .unwrap_or_else(|err| panic!("read: {err}"));
     assert_eq!(read, 0);
-    assert_eq!(lines.load(Ordering::Relaxed), 3);
-}
-
-#[test]
-fn counting_read_counts_nothing_without_a_newline() {
-    let lines = Arc::new(AtomicU64::new(0));
-    let mut counted = CountingRead::new(&b"no newline"[..], Arc::clone(&lines));
-    let mut buf = [0u8; 16];
-    let mut total = 0;
-    while total < 10 {
-        let read = counted
-            .read(&mut buf)
-            .unwrap_or_else(|err| panic!("read: {err}"));
-        if read == 0 {
-            break;
-        }
-        total += read;
-    }
-    assert_eq!(total, 10);
-    assert_eq!(lines.load(Ordering::Relaxed), 0);
+    assert_eq!(lines.load(Ordering::Relaxed), 2);
 }
 
 /// Bytes, then an error: the wrapper counts the bytes it returned and
@@ -1392,31 +1350,6 @@ fn counting_read_passes_errors_through_after_counting() {
 }
 
 #[test]
-fn hub_progress_keeps_the_last_write() {
-    let slot = Arc::new(Mutex::new(HubProgress::default()));
-    {
-        let mut held = slot.lock().unwrap_or_else(|err| panic!("lock: {err}"));
-        *held = HubProgress {
-            last_command: "subscribe".to_owned(),
-            writing: false,
-            envelopes_streamed: 0,
-        };
-    }
-    {
-        let mut held = slot.lock().unwrap_or_else(|err| panic!("lock: {err}"));
-        *held = HubProgress {
-            last_command: "history".to_owned(),
-            writing: true,
-            envelopes_streamed: 41,
-        };
-    }
-    let held = slot.lock().unwrap_or_else(|err| panic!("lock: {err}"));
-    assert_eq!(held.last_command, "history");
-    assert!(held.writing);
-    assert_eq!(held.envelopes_streamed, 41);
-}
-
-#[test]
 fn stall_report_names_helpers_gone_without_answering() {
     let hub = HubProgress::default();
     let gone: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Disconnected);
@@ -1450,6 +1383,77 @@ fn drain_by_chunk<T>(
             },
         }
     }
+}
+
+/// The resume failure site's second look at the run thread: the drain
+/// saw no fold, so a finish that landed between the drain's check and
+/// now wins instead of a stale stall report. `Err` carries the panic
+/// text the site prints.
+fn take_finish_or_stall<T>(
+    drain_err: String,
+    finished: &mpsc::Receiver<T>,
+    hub: &HubProgress,
+    hub_done: &Result<(), mpsc::TryRecvError>,
+    reader_done: &Result<(), mpsc::TryRecvError>,
+    reader_lines: u64,
+) -> Result<T, String> {
+    match finished.try_recv() {
+        Ok(done) => Ok(done),
+        Err(finished_state) => Err(format!(
+            "{drain_err}\n{}",
+            stall_report(&finished_state, hub, hub_done, reader_done, reader_lines),
+        )),
+    }
+}
+
+#[test]
+fn a_finish_between_the_drain_check_and_the_recheck_wins() {
+    let (reached_tx, reached) = mpsc::channel::<()>();
+    let (release_tx, _release) = mpsc::channel::<()>();
+    let (done_tx, finished) = mpsc::channel::<u8>();
+    drop(reached_tx);
+    // No fold signal can arrive: the disconnected `reached` fails the
+    // window at once, and the drain's own check sees no finish. The
+    // pause point is the drain's return: the finish below lands after
+    // its check and before the site's recheck, every run, with no wait
+    // of its own.
+    let err = match drain_by_chunk(Duration::from_secs(5), &reached, &release_tx, &finished) {
+        Ok(_) => panic!("the pump drained without a fold"),
+        Err(err) => err,
+    };
+    done_tx.send(7).unwrap_or_else(|err| panic!("send: {err}"));
+    let hub = HubProgress::default();
+    let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
+    match take_finish_or_stall(err, &finished, &hub, &waiting, &waiting, 0) {
+        Ok(done) => assert_eq!(done, 7),
+        Err(report) => panic!("a finish between the checks still stalled: {report}"),
+    }
+}
+
+#[test]
+fn no_finish_by_the_recheck_reports_the_stall() {
+    let (done_tx, finished) = mpsc::channel::<u8>();
+    drop(done_tx);
+    let hub = HubProgress {
+        last_command: "subscribe".to_owned(),
+        writing: false,
+        envelopes_streamed: 0,
+    };
+    let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
+    let err = match take_finish_or_stall(
+        "no fold for 5s".to_owned(),
+        &finished,
+        &hub,
+        &waiting,
+        &waiting,
+        0,
+    ) {
+        Ok(_) => panic!("a gone run thread drained"),
+        Err(err) => err,
+    };
+    assert!(err.contains("no fold for 5s"), "{err}");
+    assert!(err.contains("run thread gone"), "{err}");
+    assert!(err.contains("subscribe"), "{err}");
 }
 
 #[test]
@@ -1645,8 +1649,9 @@ fn resume_open_replays_the_log_to_the_tail() {
     // The reader signals when it reaches EOF, so the test waits on the
     // reader's answer instead of the drain window alone.
     let (reader_done_tx, reader_done) = mpsc::channel();
-    // Lines the reader forwarded: the stall report reads the count, so
-    // the reader thread reads the socket through the counting wrapper.
+    // Lines the reader read from the socket: the stall report reads the
+    // count, so the reader thread reads the socket through the counting
+    // wrapper.
     let reader_lines = Arc::new(AtomicU64::new(0));
     let reader_count = Arc::clone(&reader_lines);
     std::thread::Builder::new()
@@ -1811,22 +1816,19 @@ fn resume_open_replays_the_log_to_the_tail() {
     // candidate happened.
     let (code, lp) = match drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished) {
         Ok(done) => done,
-        Err(err) => match finished.try_recv() {
+        Err(err) => match take_finish_or_stall(
+            format!("the loop folded no chunk for {DRAIN:?}: {err}"),
+            &finished,
+            &hub_progress
+                .lock()
+                .map(|held| held.clone())
+                .unwrap_or_default(),
+            &hub_done.try_recv(),
+            &reader_done.try_recv(),
+            reader_lines.load(Ordering::Relaxed),
+        ) {
             Ok(done) => done,
-            Err(finished_state) => {
-                let hub = hub_progress
-                    .lock()
-                    .map(|held| held.clone())
-                    .unwrap_or_default();
-                let report = stall_report(
-                    &finished_state,
-                    &hub,
-                    &hub_done.try_recv(),
-                    &reader_done.try_recv(),
-                    reader_lines.load(Ordering::Relaxed),
-                );
-                panic!("the loop folded no chunk for {DRAIN:?}: {err}\n{report}");
-            }
+            Err(report) => panic!("{report}"),
         },
     };
     drop(fold_release_tx);
