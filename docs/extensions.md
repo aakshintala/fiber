@@ -347,7 +347,7 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   be non-empty and free of `=` and NUL, and a value free of NUL.
   `extension_exec` does not log it. Inside a
   tool call, the tool's declared `executes` effect is what the permission
-  decision judges. Outside one, in a hook, watcher, timer or command, it runs
+  decision judges. Outside one, in a hook, watcher, timer, command or provider callback, it runs
   without asking: the person approved the extension, and a process extension
   can start programs unseen anyway. Fiber logs each such run as
   `extension_exec` (`docs/events.md`), so the session shows it happened.

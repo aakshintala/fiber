@@ -1444,6 +1444,183 @@ end }})"#,
     unpause_settle();
 }
 
+/// One `fiber.provider` registration whose `models` runs `host.exec` before
+/// returning an empty list, so a provider callback's run is what the
+/// session inbox must carry as `extension_exec`.
+fn exec_models(provider: &str) -> String {
+    format!(
+        "fiber.provider(\"{provider}\", {{ models = {{ timeout = 5000,\n\
+           run = function() host.exec(\"sh\", {{\"-c\", \"exit 0\"}}) return {{}} end }},\n\
+           credential = {{ timeout = 1000,\n\
+           run = function() return {{ token = \"t\", expires_at = 1893456000 }} end }} }})\n"
+    )
+}
+
+/// Drops every loaded provider handle while the test holds the only session
+/// reference, so the next `start_provider` starts a fresh VM.
+fn drop_providers(session: &mut Arc<SessionExtensions>) {
+    Arc::get_mut(session)
+        .expect("the test holds the only Arc")
+        .retain_lua_providers(&[]);
+}
+
+/// Holds each provider `host.exec` at its end: the arrival proves the run
+/// was admitted and ended before the shutdown wait could close admission.
+fn hold_provider_exec() -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    use crate::lua::{Pause, Target, pause_settle};
+    let (arrived, arrival) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let released = std::sync::Mutex::new(released);
+    pause_settle(Arc::new(move |target, pause| {
+        if pause == Pause::ExecEnding && matches!(target, Target::Provider { .. }) {
+            let _sent = arrived.send(());
+            let _released = released.lock().unwrap().recv();
+        }
+    }));
+    (arrival, release)
+}
+
+/// Runs `models()` off to the side: the call blocks while its exec is held,
+/// so the test thread stays free to start the shutdown wait first.
+fn spawn_models(
+    provider: Arc<crate::LuaProvider>,
+) -> mpsc::Receiver<Result<Vec<config::ModelData>, crate::Error>> {
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = done.send(provider.models(&ModelsArg::default()));
+    });
+    result
+}
+
+/// Starts the session's shutdown wait off to the side. The caller checks the
+/// waiter is still running then releases the held exec and joins the waiter
+/// under the hang guard: the wait cannot return while the exec is held, and
+/// returns once the hold lifts and the line queues.
+fn spawn_waiter(session: &Arc<SessionExtensions>) -> mpsc::Receiver<()> {
+    let waiter = Arc::clone(session);
+    let (started_tx, started) = mpsc::channel();
+    let (done, returned) = mpsc::channel();
+    thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        waiter.wait_for_runs();
+        let _sent = done.send(());
+    });
+    Deadline::after(WAIT)
+        .recv(&started)
+        .expect("the waiter started");
+    assert!(
+        Deadline::after(Duration::from_millis(200))
+            .recv(&returned)
+            .is_err(),
+        "the shutdown wait blocks on the held provider exec"
+    );
+    returned
+}
+
+/// The held provider exec's line, read without waiting: it was queued before
+/// the shutdown wait returned, and the wait returning proves nothing unless
+/// the line is already here.
+fn provider_exec_line(rx: &mpsc::Receiver<contract::inbox::Delivery>) {
+    let contract::inbox::Delivery::ExtensionExec(line) = rx
+        .try_recv()
+        .expect("the provider exec line is queued before the wait returns")
+    else {
+        panic!("expected extension_exec");
+    };
+    assert_eq!(line.program, "sh");
+    assert_eq!(line.process.exit_code, Some(0));
+}
+
+/// Birth order (and hook fixture) for a provider-exec shutdown test: swept
+/// means the VM is born before the inbox exists, retained means it is born
+/// after, and shared means the provider lends the hook's VM.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProviderBirth {
+    Swept,
+    Retained,
+    Shared,
+}
+
+/// Runs the held-exec shutdown wait for `birth`, covering what the three
+/// provider-exec tests share: the wait stays pending while the exec is held,
+/// then returns `Stopped` for `models()` once the hold lifts with the exec's
+/// line already queued.
+fn drive_provider_exec(init: Option<&str>, birth: ProviderBirth) {
+    use crate::lua::unpause_settle;
+    let home = Home::new();
+    let script = exec_models("p");
+    home.install("prov", init, &[("p", script.as_str())]);
+    let mut session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (provider, rx) = match birth {
+        ProviderBirth::Swept => {
+            drop_providers(&mut session);
+            // The fresh VM is born before any inbox exists; the sweep in
+            // `deliver_to` must still reach it.
+            let provider = start(&home, &session, "fiber.test/prov", "p").unwrap();
+            let (tx, rx) = mpsc::channel();
+            session.deliver_to(tx);
+            (provider, rx)
+        }
+        ProviderBirth::Retained => {
+            let (tx, rx) = mpsc::channel();
+            session.deliver_to(tx);
+            drop_providers(&mut session);
+            // The fresh VM is born after the inbox exists; the birth attach
+            // must hand it the retained sender.
+            let provider = start(&home, &session, "fiber.test/prov", "p").unwrap();
+            (provider, rx)
+        }
+        ProviderBirth::Shared => {
+            // The extension stays for its hook, so `start_provider` lends its
+            // VM; the shared VM must carry the line exactly once.
+            let provider = start(&home, &session, "fiber.test/prov", "p").unwrap();
+            let (tx, rx) = mpsc::channel();
+            session.deliver_to(tx);
+            (provider, rx)
+        }
+    };
+    let (arrival, release) = hold_provider_exec();
+    let models = spawn_models(provider);
+    Deadline::after(WAIT)
+        .recv(&arrival)
+        .expect("the provider exec ended before its delivery");
+    let waiter = spawn_waiter(&session);
+    release.send(()).unwrap();
+    Deadline::after(WAIT)
+        .recv(&waiter)
+        .expect("the shutdown wait returned after the release");
+    // The shutdown wait stops the VM first, so the suspended `models()`
+    // answers `Stopped` while its exec's line is still queued.
+    assert!(matches!(
+        Deadline::after(WAIT)
+            .recv(&models)
+            .expect("models() returned"),
+        Err(crate::Error::Stopped { .. })
+    ));
+    provider_exec_line(&rx);
+    if birth == ProviderBirth::Shared {
+        assert!(rx.try_recv().is_err(), "the shared VM hands its line once");
+    }
+    unpause_settle();
+}
+
+#[test]
+fn provider_exec_born_before_deliver_to_is_swept_and_waited_on() {
+    drive_provider_exec(None, ProviderBirth::Swept);
+}
+
+#[test]
+fn provider_exec_born_after_deliver_to_uses_the_retained_inbox() {
+    drive_provider_exec(None, ProviderBirth::Retained);
+}
+
+#[test]
+fn provider_exec_sharing_a_hook_vm_is_logged_once() {
+    let hook = tagging("prov", "transform");
+    drive_provider_exec(Some(&hook), ProviderBirth::Shared);
+}
+
 fn hold_init(url: &str) -> String {
     format!(
         "fiber.command(\"hold\", {{ timeout = 8000, run = function() local r = host.http({{ url = \"{url}\" }}) host.status(\"late\") host.log(\"late\") host.emit({{x=1}}) return r.body end }})\n"
