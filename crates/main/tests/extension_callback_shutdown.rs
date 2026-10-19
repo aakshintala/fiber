@@ -334,6 +334,7 @@ fn sigterm_stops_an_after_tool_callback_and_its_exec_group() {
 /// runs in its own watched group and its output arrives under a short
 /// bound, so a `ps` that never exits is killed and reported, never read
 /// as running.
+// debt: stopped-state poll shells out to `ps` instead of `rustix::process::waitid`: waitid needs siginfo/ECHILD plumbing and drops the kill-and-report hang-proofing above. Upgrade trigger: a second stopped-state poll in main tests, which moves both onto one shared waitid helper.
 #[track_caller]
 fn is_stopped(deadline: Deadline, pid: u32) -> bool {
     let mut command = Command::new("ps");
@@ -343,6 +344,7 @@ fn is_stopped(deadline: Deadline, pid: u32) -> bool {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .env_clear()
+        .envs(fakes::check_run())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default());
     let (child, watchdog) = support::spawn_watched(&mut command);
     let ps_group = child.id();
@@ -408,6 +410,7 @@ fn a_sigterm_landing_inside_the_blocking_read_still_runs_the_trap() {
     // The expansion stops the shell itself before it blocks, so the
     // SIGTERM below lands inside the blocking read on every run.
     let script = exec_script(&mark, ready.path(), &hold, "kill -STOP $$; ");
+    // debt: manual process-group, drop guard and watchdog instead of `support::spawn_watched`, which forgets its guard at once and kills only on process death. Upgrade trigger: spawn_watched keeps a drop guard, or a third manual setup appears, which moves all three onto the helper.
     let mut command = Command::new("sh");
     command
         .args(["-c", &script])
@@ -416,6 +419,7 @@ fn a_sigterm_landing_inside_the_blocking_read_still_runs_the_trap() {
         .stderr(Stdio::null())
         .process_group(0)
         .env_clear()
+        .envs(fakes::check_run())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default());
     let mut child = command.spawn().unwrap();
     let group = child.id();
