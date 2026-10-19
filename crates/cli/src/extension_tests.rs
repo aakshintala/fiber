@@ -615,7 +615,7 @@ fn first_party_install_keeps_fetch_failures_and_cleans_staging() {
             &*clock,
         )
         .unwrap_err();
-        assert_eq!(error.code, ErrorCode::FetchFailed);
+        assert_eq!(error.code, ErrorCode::ExtensionNotFound);
         assert!(
             extensions::list(&setup.home(), &*clock)
                 .unwrap()
