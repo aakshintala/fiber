@@ -76,10 +76,7 @@ impl Mark {
 pub enum Miss {
     /// No fresh selected park arrived within the pause.
     NoPark,
-    /// A watched fresh selected park sits at another instant: `watched` is
-    /// the park that failed the wait, even when it has since left, and
-    /// `parked` holds every parked thread with its instant at the look, in
-    /// park order, possibly empty when the mismatching park already left.
+    /// A watched fresh selected park sits at another instant.
     Mismatch {
         /// The park that failed the wait, even when it has since left.
         watched: (ThreadId, Option<Instant>),
@@ -107,6 +104,7 @@ impl std::fmt::Display for Miss {
         }
     }
 }
+
 /// A clock a test drives. `Arc<FakeClock>` coerces to `Arc<dyn Clock>`.
 /// [`FakeClock::new`] reads the process clock once, as an arbitrary origin
 /// it never reads again. [`FakeClock::advance`], [`FakeClock::advance_marked`],
@@ -253,7 +251,6 @@ impl FakeClock {
     /// made after the code under test reports its result is legitimate and
     /// may advance. Tests assert on that result, not on no advance after end.
     #[track_caller]
-    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
     pub fn advance_when_parked(
         &self,
         expected: Option<Instant>,
@@ -265,11 +262,7 @@ impl FakeClock {
             Some(id) => Select::Thread(id),
             None => Select::Count(1),
         };
-        match self.advance_when_parked_core(expected, select, advance, deadline, false, &mut || {})
-        {
-            Ok(mark) => mark,
-            Err(miss) => panic!("{miss}"),
-        }
+        self.advance_when_parked_strict(expected, select, advance, deadline, &mut || {})
     }
 
     /// Waits for exactly `count` threads to hold a fresh park at `expected`,
@@ -309,17 +302,13 @@ impl FakeClock {
             drop(state);
             panic!("{report}");
         }
-        match self.advance_when_parked_core(
+        self.advance_when_parked_strict(
             expected,
             Select::Count(count),
             advance,
             deadline,
-            false,
             &mut || {},
-        ) {
-            Ok(mark) => mark,
-            Err(miss) => panic!("{miss}"),
-        }
+        )
     }
 
     /// [`FakeClock::advance_when_parked`], running `hook` after the park is
@@ -338,7 +327,6 @@ impl FakeClock {
     /// A hook panic unwinds to the caller with its payload and leaves time
     /// unmoved; no subscribed waker is called.
     #[track_caller]
-    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
     pub fn advance_when_parked_then(
         &self,
         expected: Option<Instant>,
@@ -352,11 +340,27 @@ impl FakeClock {
             None => Select::Count(1),
         };
         let mut hook = Some(hook);
-        match self.advance_when_parked_core(expected, select, advance, deadline, false, &mut || {
+        self.advance_when_parked_strict(expected, select, advance, deadline, &mut || {
             if let Some(hook) = hook.take() {
                 hook();
             }
-        }) {
+        })
+    }
+
+    /// The strict form of the loop behind every `advance_when_parked` wait:
+    /// the soft path never returns `Err`, so the miss becomes the wait's
+    /// panic at the caller's line.
+    #[track_caller]
+    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+    fn advance_when_parked_strict(
+        &self,
+        expected: Option<Instant>,
+        select: Select,
+        advance: Duration,
+        deadline: &crate::deadline::Deadline,
+        hook: &mut dyn FnMut(),
+    ) -> Mark {
+        match self.advance_when_parked_core(expected, select, advance, deadline, false, hook) {
             Ok(mark) => mark,
             Err(miss) => panic!("{miss}"),
         }
@@ -403,7 +407,7 @@ impl FakeClock {
                 expected,
                 select,
                 advance,
-                "the pause must be at least 1",
+                "the pause must be non-zero",
                 None,
             );
             drop(state);

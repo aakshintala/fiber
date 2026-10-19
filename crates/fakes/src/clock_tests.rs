@@ -1260,9 +1260,10 @@ fn mark_parked_returns_the_park_that_arrives_after_it_starts() {
 /// worker sends `Ok(mark)` on success and `Err(message)` on failure, so the
 /// test receives the outcome through its deadline instead of joining a
 /// thread that a bug would hang.
-fn run_advance_worker(
-    work: impl FnOnce() -> super::Mark + Send + 'static,
-) -> mpsc::Receiver<Result<super::Mark, String>> {
+fn run_worker<T>(work: impl FnOnce() -> T + Send + 'static) -> mpsc::Receiver<Result<T, String>>
+where
+    T: Send + 'static,
+{
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
@@ -1290,29 +1291,7 @@ fn run_advance_when_parked(
     deadline: Deadline,
 ) -> mpsc::Receiver<Result<super::Mark, String>> {
     let clock = Arc::clone(clock);
-    run_advance_worker(move || clock.advance_when_parked(expected, thread, advance, &deadline))
-}
-
-fn run_try_advance_worker(
-    work: impl FnOnce() -> Result<super::Mark, super::Miss> + Send + 'static,
-) -> mpsc::Receiver<Result<Result<super::Mark, super::Miss>, String>> {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
-        let outcome = outcome.map_err(|payload| {
-            if let Some(message) = payload.downcast_ref::<String>() {
-                message.clone()
-            } else if let Some(message) = payload.downcast_ref::<&str>() {
-                (*message).to_string()
-            } else {
-                "a panic without a message".to_string()
-            }
-        });
-        match tx.send(outcome) {
-            Ok(()) | Err(mpsc::SendError(_)) => {}
-        }
-    });
-    rx
+    run_worker(move || clock.advance_when_parked(expected, thread, advance, &deadline))
 }
 
 fn run_try_advance_when_parked(
@@ -1323,7 +1302,7 @@ fn run_try_advance_when_parked(
     pause: Duration,
 ) -> mpsc::Receiver<Result<Result<super::Mark, super::Miss>, String>> {
     let clock = Arc::clone(clock);
-    run_try_advance_worker(move || clock.try_advance_when_parked(expected, thread, advance, pause))
+    run_worker(move || clock.try_advance_when_parked(expected, thread, advance, pause))
 }
 
 /// Channel-held parks in sequence; dropping the release sender ends the
@@ -3131,9 +3110,7 @@ fn run_advance_when_parked_threads(
     deadline: Deadline,
 ) -> mpsc::Receiver<Result<super::Mark, String>> {
     let clock = Arc::clone(clock);
-    run_advance_worker(move || {
-        clock.advance_when_parked_threads(expected, count, advance, &deadline)
-    })
+    run_worker(move || clock.advance_when_parked_threads(expected, count, advance, &deadline))
 }
 
 #[test]
@@ -3784,9 +3761,7 @@ fn run_advance_when_parked_then(
     hook: impl FnOnce() + Send + 'static,
 ) -> mpsc::Receiver<Result<super::Mark, String>> {
     let clock = Arc::clone(clock);
-    run_advance_worker(move || {
-        clock.advance_when_parked_then(expected, thread, advance, &deadline, hook)
-    })
+    run_worker(move || clock.advance_when_parked_then(expected, thread, advance, &deadline, hook))
 }
 
 /// A subscriber that reports the fake clock's `now()` at each wake.
