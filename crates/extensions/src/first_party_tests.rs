@@ -1,3 +1,8 @@
+#![allow(
+    clippy::expect_used,
+    reason = "test fixtures; failures must stop the test"
+)]
+
 use super::*;
 use std::fs;
 
@@ -15,7 +20,7 @@ fn expected() -> Vec<&'static str> {
 #[test]
 fn empty_home_offers_every_first_party_provider() {
     let home = fakes::TempDir::new("first-party-empty");
-    let offered = not_installed_providers(home.path()).unwrap();
+    let offered = not_installed_providers(home.path()).expect("test fixture operation succeeds");
     assert_eq!(offered, expected());
     assert!(offered.contains(&"openai"));
     assert!(offered.contains(&"opencode-go"));
@@ -28,9 +33,9 @@ fn empty_home_offers_every_first_party_provider() {
 
 fn source(root: &std::path::Path) -> std::path::PathBuf {
     let dir = root.join("source");
-    fs::create_dir_all(dir.join("providers")).unwrap();
-    fs::write(dir.join("extension.json"), r#"{"name":"fiber.test/custom","version":"0.1.0","fiber":"0.1.0","api":1,"providers":{"openai":["https://example.com"]}}"#).unwrap();
-    fs::write(dir.join("providers/openai.json"), r#"{"name":"openai","protocol":"openai-chat","base_url":"https://example.com","models":[]}"#).unwrap();
+    fs::create_dir_all(dir.join("providers")).expect("test fixture operation succeeds");
+    fs::write(dir.join("extension.json"), r#"{"name":"fiber.test/custom","version":"0.1.0","fiber":"0.1.0","api":1,"providers":{"openai":["https://example.com"]}}"#).expect("test fixture operation succeeds");
+    fs::write(dir.join("providers/openai.json"), r#"{"name":"openai","protocol":"openai-chat","base_url":"https://example.com","models":[]}"#).expect("test fixture operation succeeds");
     dir
 }
 
@@ -48,11 +53,11 @@ fn installed_declaration_removes_only_its_provider() {
             &crate::Origin::github(),
             &*fakes::clock::FakeClock::new(),
         )
-        .unwrap()
+        .expect("test fixture operation succeeds")
         .commit()
-        .unwrap();
+        .expect("test fixture operation succeeds");
     });
-    let offered = not_installed_providers(&home).unwrap();
+    let offered = not_installed_providers(&home).expect("test fixture operation succeeds");
     assert_eq!(
         offered,
         expected()
@@ -68,9 +73,10 @@ fn damaged_directory_declares_nothing() {
     let root = fakes::TempDir::new("first-party-damaged");
     let src = source(root.path());
     let home = root.path().join("home");
-    fs::create_dir_all(home.join("extensions")).unwrap();
-    fs::rename(src, home.join("extensions/fiber.test-custom")).unwrap();
-    let offered = not_installed_providers(&home).unwrap();
+    fs::create_dir_all(home.join("extensions")).expect("test fixture operation succeeds");
+    fs::rename(src, home.join("extensions/fiber.test-custom"))
+        .expect("test fixture operation succeeds");
+    let offered = not_installed_providers(&home).expect("test fixture operation succeeds");
     assert_eq!(offered, expected());
     assert!(!offered.contains(&"scripted"));
 }
