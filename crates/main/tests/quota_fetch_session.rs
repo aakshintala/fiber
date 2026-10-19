@@ -302,3 +302,101 @@ fn a_hot_window_notices_rearms_and_notices_again_across_resumes() {
     drop(client);
     hub.lock().unwrap().take().unwrap().kill_and_wait();
 }
+
+/// The `/lua-quota` gate: armed after the turn answers, open on the
+/// test's release, counting the fetches held in between.
+struct QuotaGate {
+    armed: bool,
+    open: bool,
+    gated: usize,
+}
+
+/// Quits the run's terminal and waits for it, as `panel_look.rs` does.
+fn quit(run: support::pty::Run) {
+    let mut run = run;
+    run.write(b"\x03\x03\r");
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+/// `/quota` opens the quota view, marks the in-flight fetch, and shows
+/// the fetched values: the view's fetch waits on a gate the test
+/// releases, so the mark draws deterministically (`docs/tui.md`,
+/// "The quota view").
+#[test]
+fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
+    use std::sync::Condvar;
+    let setup = Setup::new();
+    // Armed after the turn answers: quota hits before that (the session
+    // start's fetch, the turn's own read) answer at once, while the
+    // view's later fetch waits for the test's release, so the fetching
+    // mark stays up until the test has seen it.
+    let quota_gate: Arc<(Mutex<QuotaGate>, Condvar)> = Arc::new((
+        Mutex::new(QuotaGate {
+            armed: false,
+            open: false,
+            gated: 0,
+        }),
+        Condvar::new(),
+    ));
+    let server = ProviderServer::start_responding({
+        let quota_gate = Arc::clone(&quota_gate);
+        move |request| match request.path.as_str() {
+            "/lua-models" | "/lua-token" => Response::status(200, "{}"),
+            "/lua-quota" => {
+                let (lock, cvar) = &*quota_gate;
+                let mut guard = lock.lock().unwrap();
+                if guard.armed {
+                    // The view's fetch: hold it until the release.
+                    guard.gated += 1;
+                    let _guard = cvar.wait_while(guard, |gate| !gate.open).unwrap();
+                }
+                Response::status(200, "42")
+            }
+            "/v1/responses" => hello(),
+            _ => Response::status(500, "unrouted"),
+        }
+    })
+    .unwrap();
+    let url = server.url();
+    install_test_provider(&setup, &url);
+    // The loader fetches only configured credential labels.
+    fs::create_dir_all(setup.home().join("credentials/test")).unwrap();
+    fs::write(setup.home().join("credentials/test/work"), "test-key").unwrap();
+    configure(&setup, "test/m1");
+    // The hub exits at once once the terminal quits, so the run's
+    // wait does not sit out the default thirty idle minutes.
+    let config_path = setup.home().join("config.json");
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    config["hub"] = json!({"idle_exit_ms": 200});
+    fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+    let mut run = support::pty::Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    // The box starts a session and the turn answers at once; the
+    // session start's fetch takes longer and stays in flight.
+    run.write(b"hi\r");
+    run.wait_screen("the answered turn", |grid| grid.contents.contains("Hello."));
+    // Arm the gate before the view's fetch: only it can arrive now.
+    quota_gate.0.lock().unwrap().armed = true;
+    run.write(b"/quota\r");
+    run.wait_screen("the view's fetching mark", |grid| {
+        grid.contents.contains("fetching")
+    });
+    // The mark is up, so the view's fetch is in flight: release it.
+    {
+        let (lock, cvar) = &*quota_gate;
+        lock.lock().unwrap().open = true;
+        cvar.notify_all();
+    }
+    let shown = run.wait_screen("the fetched quota", |grid| {
+        !grid.contents.contains("fetching")
+    });
+    assert!(shown.contents.contains("Quota"), "{}", shown.contents);
+    assert!(shown.contents.contains("test · work"), "{}", shown.contents);
+    assert!(shown.contents.contains("58%"), "{}", shown.contents);
+    // The gate held the view's fetch until the release: the mark the
+    // test saw was the fetch in flight, not a frame's flicker.
+    assert_eq!(quota_gate.0.lock().unwrap().gated, 1, "one gated fetch");
+    quit(run);
+}
