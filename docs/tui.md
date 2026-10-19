@@ -2208,7 +2208,7 @@ itself is a separate client of the hub, not a TUI extension.
 A slot receives what its built-in renderer receives, and all of it comes from
 the event stream. A ledger row, for example, receives the call's name,
 arguments, status, exit code, duration, line count, `changes` and error, folded
-from its `tool_call_*` events. No slot sees the terminal's internals.
+from its `tool_call_*` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
 
 `layout` places regions and never draws them. It receives the screen's size
 and returns a rectangle for each region it shows. A region it leaves out is not
@@ -2250,7 +2250,7 @@ The terminal builds the cells and the plain text from the same spans, so what
 is drawn and what is selected, copied or searched cannot differ. It measures
 width by grapheme cluster and cuts or pads each line to the width, so an
 extension cannot overflow its slot or move its neighbours. A span whose text
-holds a control character is the wrong shape.
+holds a control character is the wrong shape. So is a `link` whose scheme is not `http`, `https` or `mailto`, and an `fg` or `bg` that is not a colour role.
 
 In the screen-reader mode ("Screen readers") the input carries `flat = true`.
 The terminal drops every style, and a renderer should return one line for the
@@ -2352,7 +2352,7 @@ the extension author's cost to keep down.
 - **An error or a wrong shape** falls back to the built-in for that item. The
   failure is cached against the item's input, so the renderer is not called
   again until that input changes. One notice names the extension, the slot
-  and the Lua error, the first time only. A key or click handler that errors
+  and the Lua error, once for each extension and slot until `/reload`. A key or click handler that errors
   counts as not having handled the input. An extension's own view or overlay
   has no built-in, so it closes.
 - **A timeout** switches the extension off in this terminal until `/reload`

@@ -293,6 +293,7 @@ fn check(steps: Steps, tail: Tail) -> Result<(), TestCaseError> {
                 } if action_id.0 == *id => Some((text.as_str(), *is_error)),
                 Input::ToolCall { .. }
                 | Input::ToolResult { .. }
+                | Input::ToolSearchResult { .. }
                 | Input::User { .. }
                 | Input::Assistant { .. }
                 | Input::Reasoning { .. } => None,

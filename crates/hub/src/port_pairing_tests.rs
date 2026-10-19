@@ -169,7 +169,16 @@ fn a_code_exactly_ten_minutes_old_pairs() {
     let client = helloed(port, None);
     let code = mint(&hub, "phone");
     // The counted connection keeps the idle wait free of a deadline; no waiter is released.
-    clock.advance(Duration::from_secs(600));
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the idle wait parks with no deadline"
+    );
+    clock.advance_when_parked(
+        None,
+        None,
+        Duration::from_secs(600),
+        &Deadline::after(DEADLINE),
+    );
     pair(&client, &code);
     drop(client);
     stop(&hub, &got, &done);
@@ -182,7 +191,16 @@ fn a_code_past_ten_minutes_fails() {
     let (port, hub, got, done) = serve_with_port(&temp, vec![], Arc::clone(&clock));
     let client = helloed(port, None);
     let code = mint(&hub, "phone");
-    clock.advance(Duration::from_secs(600) + TICK);
+    assert!(
+        clock.await_parked_unbounded(DEADLINE),
+        "the idle wait parks with no deadline"
+    );
+    clock.advance_when_parked(
+        None,
+        None,
+        Duration::from_secs(600) + TICK,
+        &Deadline::after(DEADLINE),
+    );
     client.text(&json!({"id":"p","command":"pair","args":{"code":code}}).to_string());
     let deadline = Deadline::after(DEADLINE);
     let refused = text(deadline, &client);
@@ -574,7 +592,12 @@ fn self_revocation_waits_for_the_output_pump_before_shutting_tcp() {
     if !finished_before_deadline {
         let reparked = clock.await_parked_since(&mark, Some(end), PAIR_WAIT);
         if reparked {
-            clock.advance(STOP_CLOSE_WAIT);
+            clock.advance_when_parked_threads(
+                Some(end),
+                2,
+                STOP_CLOSE_WAIT,
+                &Deadline::after(PAIR_WAIT),
+            );
         }
         Deadline::after(DEADLINE).recv_or_fail(&rx, "finish observes pump completion");
     }
@@ -608,7 +631,12 @@ fn a_local_revoke_announces_without_waiting_for_the_clock() {
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
             let parked = clock.await_parked_count(end, 2, PAIR_WAIT);
             if parked {
-                clock.advance(STOP_CLOSE_WAIT);
+                clock.advance_when_parked_threads(
+                    Some(end),
+                    2,
+                    STOP_CLOSE_WAIT,
+                    &Deadline::after(PAIR_WAIT),
+                );
             }
             wire_value(
                 Deadline::after(DEADLINE),
@@ -668,7 +696,7 @@ fn finishing_a_revoke_returns_at_its_deadline_with_an_undrained_web() {
     assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
     client.shutdown(Shutdown::Write).unwrap_or(());
 
-    clock.advance(STOP_CLOSE_WAIT);
+    clock.advance_when_parked_threads(Some(end), 2, STOP_CLOSE_WAIT, &Deadline::after(PAIR_WAIT));
     let returned_at_deadline = Deadline::after(Duration::from_millis(250))
         .recv(&served)
         .is_ok();
@@ -728,7 +756,12 @@ fn revoke_watchdog_closes_a_live_device_at_the_deadline_while_answer_is_blocked(
     let watchdog_waited = clock.await_parked(end, PAIR_WAIT);
     let closed_before_deadline = closed_rx.try_recv().is_ok();
     let closed_at_deadline = if watchdog_waited {
-        clock.advance(STOP_CLOSE_WAIT);
+        clock.advance_when_parked(
+            Some(end),
+            None,
+            STOP_CLOSE_WAIT,
+            &Deadline::after(PAIR_WAIT),
+        );
         Deadline::after(Duration::from_millis(250))
             .recv(&closed_rx)
             .is_ok()
@@ -802,7 +835,7 @@ fn attach_web_stores_the_handle_finish_waits_for_its_drain() {
         rx.try_recv().is_err(),
         "finish waits for the attached web to drain"
     );
-    clock.advance(STOP_CLOSE_WAIT);
+    clock.advance_when_parked_threads(Some(end), 2, STOP_CLOSE_WAIT, &Deadline::after(PAIR_WAIT));
     Deadline::after(DEADLINE).recv_or_fail(&rx, "finish returns at its deadline");
     drop((peer, web));
 }

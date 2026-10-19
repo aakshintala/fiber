@@ -101,6 +101,7 @@ pub(crate) fn estimate(input: &Input) -> u64 {
         | Input::Reasoning { text, .. }
         | Input::ToolResult { text, .. } => text.len(),
         Input::ToolCall { call, .. } => call.name.len() + call.arguments.to_string().len(),
+        Input::ToolSearchResult { loaded, .. } => contract::provider::loaded_text(loaded).len(),
     };
     u64::try_from(bytes).unwrap_or(u64::MAX).div_ceil(4)
 }

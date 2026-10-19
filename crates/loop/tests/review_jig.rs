@@ -117,7 +117,8 @@ fn texts(request: &ModelRequest) -> Vec<String> {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => {
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => {
                 panic!("a reviewer request holds user inputs, got {input:?}")
             }
         })

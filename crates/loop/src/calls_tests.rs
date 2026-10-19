@@ -942,6 +942,7 @@ fn scrubbed(request: &ModelRequest, homes: &[String]) -> (Option<usize>, Vec<Inp
                 call.arguments =
                     serde_json::from_str(&scrub(&call.arguments.to_string(), homes)).unwrap();
             }
+            Input::ToolSearchResult { action_id, .. } => action_id.0 = "a_".into(),
             Input::ToolResult {
                 action_id, text, ..
             } => {

@@ -304,7 +304,8 @@ fn a_job_the_old_session_left_running_is_no_orphan_in_the_new_one() {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => true,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => true,
         }),
         "no job notice reaches the model"
     );
@@ -772,7 +773,8 @@ fn a_rewind_of_a_rewind_folds_both_points_in_order() {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     let mut ordered = texts.iter();
@@ -830,7 +832,8 @@ fn a_rewind_through_the_chain_holds_no_line_of_the_middle_session() {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     assert!(texts.iter().any(|text| text.contains("one")));
@@ -895,7 +898,10 @@ fn an_image_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
             Input::User { images, .. } | Input::ToolResult { images, .. } => {
                 Some(images.as_slice())
             }
-            Input::Assistant { .. } | Input::Reasoning { .. } | Input::ToolCall { .. } => None,
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .flatten()
         .collect();
@@ -991,7 +997,8 @@ fn a_pdf_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
-            | Input::ToolCall { .. } => None,
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .flatten()
         .collect();
@@ -1414,7 +1421,10 @@ fn an_ancestor_summary_keeps_the_entire_cut_path() {
         .iter()
         .filter_map(|input| match input {
             Input::User { text, .. } | Input::Assistant { text, .. } => Some(text.as_str()),
-            Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. } => None,
+            Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     for text in [
@@ -1512,7 +1522,10 @@ fn a_summary_reads_through_a_handoff_without_its_note_request() {
         .iter()
         .filter_map(|input| match input {
             Input::User { text, .. } | Input::Assistant { text, .. } => Some(text.as_str()),
-            Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. } => None,
+            Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     for text in ["hi", "working", "Done.", "again", "Again."] {
@@ -3196,7 +3209,8 @@ fn user_text(input: &Input) -> &str {
         other @ (Input::Assistant { .. }
         | Input::Reasoning { .. }
         | Input::ToolCall { .. }
-        | Input::ToolResult { .. }) => panic!("not a user message: {other:?}"),
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. }) => panic!("not a user message: {other:?}"),
     }
 }
 
@@ -3355,7 +3369,8 @@ fn a_rewound_session_before_a_handoff_ignores_it() {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => true,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => true,
         }),
         "no handoff note reaches the rewound session"
     );

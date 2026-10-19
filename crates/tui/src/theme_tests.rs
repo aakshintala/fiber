@@ -408,6 +408,44 @@ fn light_cell(cell: &str, role: Role) -> Shade {
 }
 
 #[test]
+fn from_name_round_trips_every_role() {
+    for role in Role::ALL {
+        assert_eq!(Role::from_name(role.name()), Some(role), "{}", role.name());
+    }
+}
+
+#[test]
+fn from_name_rejects_anything_but_the_exact_spelling() {
+    for name in ["Success", "#ff0000", "", "success ", "no_such_role"] {
+        assert_eq!(Role::from_name(name), None, "{name:?}");
+    }
+}
+
+#[test]
+fn of_marker_round_trips_every_role_and_nothing_else() {
+    use ratatui::style::Color;
+    for role in Role::ALL {
+        assert_eq!(
+            Role::of_marker(Some(role.color())),
+            Some(role),
+            "{}",
+            role.name()
+        );
+    }
+    assert_eq!(Role::of_marker(None), None);
+    for marker in [
+        Color::Reset,
+        Color::Red,
+        Color::Rgb(1, 2, 3),
+        Color::Indexed(37),
+        Color::Indexed(255),
+        Role::Text.lifted(),
+    ] {
+        assert_eq!(Role::of_marker(Some(marker)), None, "{marker:?}");
+    }
+}
+
+#[test]
 fn the_light_theme_is_the_doc_table() {
     let doc = include_str!("../../../docs/tui.md");
     let names: Vec<&str> = Role::ALL.into_iter().map(Role::name).collect();

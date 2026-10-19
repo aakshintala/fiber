@@ -459,7 +459,8 @@ fn person_text(reviewed: &[Reviewed]) -> Vec<&str> {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => panic!("a reviewer item is always a user item"),
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => panic!("a reviewer item is always a user item"),
         })
         .collect()
 }

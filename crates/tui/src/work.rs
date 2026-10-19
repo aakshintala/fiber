@@ -36,6 +36,8 @@ pub struct Work {
     pub search_order_pages: usize,
     /// Shell candidates examined while placing shell output for a draw.
     pub shell_visits: usize,
+    /// Renderer calls: one per cache miss that called the renderer.
+    pub renderer_calls: usize,
 }
 
 thread_local! {

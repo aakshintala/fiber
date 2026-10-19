@@ -133,7 +133,8 @@ fn a_slash_prompt_runs_a_servers_prompt() {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .unwrap();
     assert_eq!(expanded, "Fetched.");

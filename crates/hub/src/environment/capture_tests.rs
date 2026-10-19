@@ -552,11 +552,12 @@ fn a_hanging_shell_times_out_on_the_fake_clock() {
     let cancel = Cancel::new();
     let done = capture_on_thread(fake.inherited(), Arc::clone(&clock), Arc::clone(&cancel));
     let watchdog = fake.watchdog();
-    assert!(
-        clock.await_parked(origin + CAPTURE_DEADLINE, WITHIN),
-        "the capture waits on the deadline"
+    clock.advance_when_parked(
+        Some(origin + CAPTURE_DEADLINE),
+        None,
+        CAPTURE_DEADLINE,
+        &Deadline::after(WITHIN),
     );
-    clock.advance(CAPTURE_DEADLINE);
     assert_eq!(
         outcome_of(&done, "the hanging capture"),
         Err(Failed::TimedOut)
@@ -576,20 +577,24 @@ fn the_deadline_fires_at_or_after_ten_seconds() {
     let cancel = Cancel::new();
     let done = capture_on_thread(fake.inherited(), Arc::clone(&clock), Arc::clone(&cancel));
     let watchdog = fake.watchdog();
-    assert!(
-        clock.await_parked(origin + CAPTURE_DEADLINE, WITHIN),
-        "the capture waits on the deadline"
-    );
-    clock.advance(
+    clock.advance_when_parked(
+        Some(origin + CAPTURE_DEADLINE),
+        None,
         CAPTURE_DEADLINE
             .checked_sub(Duration::from_millis(1))
             .expect("ten seconds minus a millisecond"),
+        &Deadline::after(WITHIN),
     );
     assert!(
         Deadline::after(QUIET).recv(&done).is_err(),
         "no result before the deadline"
     );
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(origin + CAPTURE_DEADLINE),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         outcome_of(&done, "the hanging capture"),
         Err(Failed::TimedOut)
@@ -666,11 +671,12 @@ fn a_timeout_with_a_held_output_still_returns() {
     let cancel = Cancel::new();
     let done = capture_on_thread(fake.inherited(), Arc::clone(&clock), Arc::clone(&cancel));
     let watchdog = fake.watchdog();
-    assert!(
-        clock.await_parked(origin + CAPTURE_DEADLINE, WITHIN),
-        "the capture waits on the deadline"
+    clock.advance_when_parked(
+        Some(origin + CAPTURE_DEADLINE),
+        None,
+        CAPTURE_DEADLINE,
+        &Deadline::after(WITHIN),
     );
-    clock.advance(CAPTURE_DEADLINE);
     assert_eq!(
         outcome_of(&done, "the hanging capture"),
         Err(Failed::TimedOut)

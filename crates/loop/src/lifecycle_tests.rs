@@ -2020,7 +2020,8 @@ fn a_turn_start_context_is_logged_before_the_first_step_and_sent_after_the_promp
             contract::provider::Input::Assistant { .. }
             | contract::provider::Input::Reasoning { .. }
             | contract::provider::Input::ToolCall { .. }
-            | contract::provider::Input::ToolResult { .. } => {
+            | contract::provider::Input::ToolResult { .. }
+            | contract::provider::Input::ToolSearchResult { .. } => {
                 panic!("a user message: {input:?}")
             }
         })
@@ -2440,7 +2441,8 @@ fn a_session_start_context_is_logged_before_turn_started_and_sent_first() {
             input @ (contract::provider::Input::Assistant { .. }
             | contract::provider::Input::Reasoning { .. }
             | contract::provider::Input::ToolCall { .. }
-            | contract::provider::Input::ToolResult { .. }) => {
+            | contract::provider::Input::ToolResult { .. }
+            | contract::provider::Input::ToolSearchResult { .. }) => {
                 panic!("a user message: {input:?}")
             }
         })

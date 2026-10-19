@@ -194,6 +194,11 @@ impl Role {
         }
     }
 
+    /// The role named `name`, spelled exactly as [`Role::name`] spells it.
+    pub(crate) fn from_name(name: &str) -> Option<Role> {
+        Self::ALL.into_iter().find(|role| role.name() == name)
+    }
+
     /// A background role: a tint a surface sits on.
     pub(crate) fn tint(self) -> bool {
         match self {
@@ -284,6 +289,16 @@ impl Role {
     /// The role whose marker index is `index`, if one is.
     pub(crate) fn from_index(index: u8) -> Option<Role> {
         Self::ALL.get(usize::from(index)).copied()
+    }
+
+    /// The role `marker` holds, if it holds one: what a built-in row's
+    /// span names when the seam reads it back. Only the theme names
+    /// colours (`docs/tui.md`, "Themes").
+    pub(crate) fn of_marker(marker: Option<Color>) -> Option<Role> {
+        match marker {
+            Some(Color::Indexed(index)) => Self::from_index(index),
+            _ => None,
+        }
     }
 
     /// This role's hover-lift marker: what a hovered or focused click

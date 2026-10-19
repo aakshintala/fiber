@@ -43,6 +43,63 @@ use probes::Recorded;
 use harness::{gemini_completed as completed_reply, gemini_sse as stream, run, sent_body};
 const REFERENCE: &str = "gemini/gemini-3.1-flash-lite";
 
+#[test]
+fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
+    let server = ProviderServer::start(vec![
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+    ])
+    .unwrap();
+    let ep = endpoint(&server);
+    for model in [ep.reference(), "other/model".into()] {
+        let mut req = request();
+        req.conversation.push(Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            model: model.clone(),
+            call: ToolCallRequested {
+                name: "tool_search".into(),
+                arguments: json!({"query":"q"}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+        });
+        req.conversation.push(Input::ToolSearchResult {
+            action_id: ActionId("a_1".into()),
+            loaded: vec!["a".into(), "b".into()],
+        });
+
+        let protocol = Gemini::new(ep.clone());
+        run(protocol.call(&req)).0.unwrap();
+        req.conversation[2] = Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: "Loaded: a, b.".into(),
+            is_error: false,
+            images: vec![],
+            pdfs: vec![],
+        };
+        run(protocol.call(&req)).0.unwrap();
+        let requests = server.requests();
+        let pair = &requests[requests.len() - 2..];
+        assert_eq!(pair[0].body, pair[1].body, "{model}");
+        let body: Value = serde_json::from_slice(&pair[0].body).unwrap();
+        if model == ep.reference() {
+            assert_eq!(
+                body["contents"][2]["parts"][0]["functionResponse"]["response"],
+                json!({"output":"Loaded: a, b."})
+            );
+        } else {
+            assert_eq!(
+                body["contents"][0]["parts"][2]["text"],
+                "The tool tool_search returned:\nLoaded: a, b."
+            );
+        }
+    }
+}
+
 fn research(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../research/google-generative-ai-probe")

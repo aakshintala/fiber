@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use super::target_id;
 use crate::app::Target;
+use crate::ext::{Input, LedgerRow, RowError, Status};
 use crate::format::{Kind, Kinds, count, dim, heading, kind, label, opened, summary};
 use crate::markdown::style;
 use crate::rows::{RowText, Rows};
@@ -77,8 +78,8 @@ pub(crate) struct Call {
     pub(crate) open: bool,
     /// A `permission_requested` for it is open.
     pub(crate) asking: bool,
-    /// It had `tool_call_started`.
-    pub(crate) started: bool,
+    /// When it started and how long it took: a denied call never starts.
+    pub(crate) timing: Timing,
     /// The question form it raised.
     pub(crate) asked: Option<super::answers::Asked>,
 }
@@ -120,7 +121,33 @@ pub(crate) struct CallResult {
     pub(crate) content: String,
 }
 
+/// When a call started and how long it took: one field, so no call can
+/// hold two timings at once (`docs/code-quality.md`, "Types").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Timing {
+    /// No `tool_call_started` and no completion.
+    #[default]
+    Unstarted,
+    /// Started and not completed: the start's timestamp.
+    Started(u64),
+    /// Completed: the completion's timestamp less the start's, in milliseconds.
+    Took(u64),
+}
+
 impl Call {
+    /// Whether the call started: a cut turn's started call may have run.
+    pub(crate) fn has_started(&self) -> bool {
+        !matches!(self.timing, Timing::Unstarted)
+    }
+
+    /// How long the call took, in milliseconds: some only once completed.
+    pub(crate) fn duration_ms(&self) -> Option<u64> {
+        match self.timing {
+            Timing::Took(took) => Some(took),
+            Timing::Unstarted | Timing::Started(_) => None,
+        }
+    }
+
     /// The result's JSON text, when the wire carried details.
     pub(crate) fn details_text(&self) -> Option<&str> {
         self.result
@@ -477,7 +504,9 @@ impl Group {
     /// right-aligned to end at `width` (`docs/tui.md`, "Tool groups and
     /// the ledger"). The model calls that failed come first, then the
     /// step's thinking. Each call's images draw under its row, before its
-    /// opened detail.
+    /// opened detail. A renderer bound to the rows draws what follows the
+    /// gutter with the width less 6; without one, or when it falls back,
+    /// the built-in row draws.
     fn ledger(&self, width: u16, layout: &crate::image::Layout, out: &mut Rows) {
         let max = usize::from(width);
         for section in &self.sections {
@@ -497,50 +526,57 @@ impl Group {
             }
             for call in &section.calls {
                 let gutter = std::mem::replace(&mut gutter, GUTTER_BLANK.to_owned());
-                let kind = kind(&call.name, &call.arguments);
-                // The glyph: what the call is doing, or how it ended. A
-                // call that started and never completed may have run.
-                let (glyph, glyph_style) = match call.status {
-                    None if self.cut && call.started => ("?", style(Role::Attention)),
-                    None => ("○", style(Role::Attention)),
-                    Some(CallStatus::Completed) => ("✓", style(Role::Success)),
-                    Some(CallStatus::Cancelled) => {
-                        ("⊘", Style::default().add_modifier(Modifier::DIM))
-                    }
-                    Some(CallStatus::Failed) | Some(CallStatus::Denied) => {
-                        ("✗", Style::default().add_modifier(Modifier::DIM))
-                    }
+                let output = first_result_line(call.content());
+                let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
+                let input = self.ledger_input(call, &output, flat);
+                // Six columns of gutter stay with the terminal: the
+                // renderer draws what follows it with the width less 6.
+                let after_gutter = width.saturating_sub(6);
+                let builtin = |input: &Input<'_>, w: u16| {
+                    let Input::LedgerRow(built) = input;
+                    vec![crate::ext::spans::from_ratatui(&self.builtin_row(built, w))]
                 };
-                let result = self.result(call);
-                // Six columns of gutter, the glyph, one space and nine of
-                // kind leave the target and the result `max - 19` cells.
-                // The target is cut with "…" to what the result leaves;
-                // with no room for even one cell the target is left out
-                // and the result is cut instead.
-                let room = max.saturating_sub(19 + spans_width(&result));
-                let mut row = vec![
-                    dim_span(gutter),
-                    Span::styled(glyph, glyph_style),
-                    Span::raw(" "),
-                    Span::styled(format!("{:<9}", kind.word()), style(Role::Info)),
-                ];
-                if room >= 1 {
-                    row.push(Span::raw(pad_target(
-                        &summary(&call.name, &call.arguments),
-                        room,
-                    )));
-                    row.push(Span::raw("  "));
-                    row.extend(result);
-                } else {
-                    row.push(Span::raw("  "));
-                    row.extend(fit(result, max.saturating_sub(19)));
+                let wrapped = Input::LedgerRow(input);
+                let rendered = out.seam.as_ref().and_then(|seam| {
+                    let renderer = seam.handle.get()?;
+                    // The tool's own slot beats the catch-all, with no
+                    // notice: a renderer that fills neither costs one
+                    // fills call per candidate slot and nothing else.
+                    let specific = format!("ledger_row:{}", call.name);
+                    let slot = if renderer.fills(&specific) {
+                        specific
+                    } else if renderer.fills("ledger_row") {
+                        "ledger_row".to_owned()
+                    } else {
+                        return None;
+                    };
+                    out.ext_lines(&slot, &wrapped, after_gutter, &builtin)
+                });
+                match rendered {
+                    Some(fitted) => {
+                        for (index, line) in fitted.iter().enumerate() {
+                            let mark = if index == 0 {
+                                gutter.clone()
+                            } else {
+                                GUTTER_BLANK.to_owned()
+                            };
+                            let (row, text) = gutter_row(mark, line, max);
+                            out.push_text((row, Some(Target::Call(call.id))), text);
+                        }
+                    }
+                    None => {
+                        let Input::LedgerRow(built) = &wrapped;
+                        let row = fit(
+                            {
+                                let mut row = vec![dim_span(gutter)];
+                                row.extend(self.builtin_row(built, after_gutter));
+                                row
+                            },
+                            max,
+                        );
+                        out.push((Line::from(row), Some(Target::Call(call.id))));
+                    }
                 }
-                // Below twenty columns the gutter, the glyph, the kind,
-                // the gap and one result cell do not fit. The row is cut
-                // to `width` with "…" as its last step, so no row is
-                // wider than `width` whatever the step number.
-                let row = fit(row, max);
-                out.push((Line::from(row), Some(Target::Call(call.id))));
                 crate::turn::images::call_rows(&call.images, width, layout, out);
                 if out.open_scope(Target::Call(call.id), call.open) {
                     super::opened::rows(call, width, out);
@@ -550,41 +586,131 @@ impl Group {
         }
     }
 
+    /// A call's renderer input: everything the built-in row reads, folded
+    /// from its events, without the step's gutter. A started call of a cut
+    /// turn has status unknown; a failed call carries its headline's code
+    /// and message.
+    fn ledger_input<'a>(&self, call: &'a Call, output: &'a str, flat: bool) -> LedgerRow<'a> {
+        let status = match call.status {
+            Some(CallStatus::Completed) => Status::Completed,
+            Some(CallStatus::Failed) => Status::Failed,
+            Some(CallStatus::Denied) => Status::Denied,
+            Some(CallStatus::Cancelled) => Status::Cancelled,
+            None if self.cut && call.has_started() => Status::Unknown,
+            None if call.has_started() => Status::Running,
+            None => Status::Pending,
+        };
+        let error = match call.status {
+            Some(CallStatus::Failed) => Some(match call.headline().split_once(": ") {
+                Some((code, message)) => RowError { code, message },
+                None => RowError {
+                    code: "",
+                    message: call.headline(),
+                },
+            }),
+            _ => None,
+        };
+        let answer = call
+            .asked
+            .as_ref()
+            .and_then(|asked| asked.suffix())
+            .map(|suffix| suffix.strip_prefix(" · ").unwrap_or(suffix));
+        LedgerRow {
+            name: &call.name,
+            arguments: &call.arguments,
+            status,
+            exit: call.exit,
+            duration_ms: call.duration_ms(),
+            lines: call.lines,
+            changes: &call.changes,
+            error,
+            output,
+            answer,
+            flat,
+        }
+    }
+
+    /// The row without its gutter and without the final fit: the glyph,
+    /// the call's kind, its target, and its result, drawn in the width
+    /// past the gutter. The built-in path prepends the gutter and fits
+    /// the whole row to `width`, exactly as it drew before.
+    fn builtin_row(&self, row: &LedgerRow<'_>, after_gutter: u16) -> Vec<Span<'static>> {
+        let kind = kind(row.name, row.arguments);
+        // The glyph: what the call is doing, or how it ended. A
+        // call that started and never completed may have run.
+        let (glyph, glyph_style) = match row.status {
+            Status::Completed => ("✓", style(Role::Success)),
+            Status::Cancelled => ("⊘", Style::default().add_modifier(Modifier::DIM)),
+            Status::Failed | Status::Denied => ("✗", Style::default().add_modifier(Modifier::DIM)),
+            Status::Unknown => ("?", style(Role::Attention)),
+            Status::Pending | Status::Running => ("○", style(Role::Attention)),
+        };
+        let result = self.builtin_result(row);
+        // Six columns of gutter, the glyph, one space and nine of
+        // kind leave the target and the result `after_gutter - 13`
+        // cells. The target is cut with "…" to what the result leaves;
+        // with no room for even one cell the target is left out
+        // and the result is cut instead.
+        let room = usize::from(after_gutter).saturating_sub(13 + spans_width(&result));
+        let mut out = vec![
+            Span::styled(glyph, glyph_style),
+            Span::raw(" "),
+            Span::styled(format!("{:<9}", kind.word()), style(Role::Info)),
+        ];
+        if room >= 1 {
+            out.push(Span::raw(pad_target(
+                &summary(row.name, row.arguments),
+                room,
+            )));
+            out.push(Span::raw("  "));
+            out.extend(result);
+        } else {
+            out.push(Span::raw("  "));
+            out.extend(fit(result, usize::from(after_gutter).saturating_sub(13)));
+        }
+        out
+    }
+
     /// A call's result: what the ledger row ends with (`docs/tui.md`,
     /// "Tool groups and the ledger"). An edit's counts are in the added
     /// and removed colours; every other result is dim, except a running
     /// call and an ask waiting on the person, which are in `attention`.
-    fn result(&self, call: &Call) -> Vec<Span<'static>> {
+    fn builtin_result(&self, row: &LedgerRow<'_>) -> Vec<Span<'static>> {
         // The person's answer to a form replaces the status.
-        if let Some(answered) = call.asked.as_ref().and_then(|asked| asked.suffix()) {
-            return vec![dim_span(
-                answered.strip_prefix(" · ").unwrap_or(answered).to_owned(),
-            )];
+        if let Some(answer) = row.answer {
+            return vec![dim_span(answer.to_owned())];
         }
-        match call.status {
-            None => {
-                if self.cut && call.started {
-                    return vec![dim_span("? may have run; not run again".to_owned())];
-                }
-                if matches!(kind(&call.name, &call.arguments), Kind::Ask(_)) {
+        match row.status {
+            Status::Unknown => {
+                return vec![dim_span("? may have run; not run again".to_owned())];
+            }
+            Status::Pending | Status::Running => {
+                if matches!(kind(row.name, row.arguments), Kind::Ask(_)) {
                     return vec![Span::styled("waiting on you", style(Role::Attention))];
                 }
                 return vec![Span::styled("running", style(Role::Attention))];
             }
-            Some(CallStatus::Cancelled) => return vec![dim_span("cancelled".to_owned())],
-            Some(CallStatus::Denied) => return vec![dim_span("denied".to_owned())],
-            Some(CallStatus::Failed) => {
-                if call.headline().is_empty() {
-                    return vec![dim_span(first_result_line(call.content()))];
-                }
-                return vec![dim_span(call.headline().to_owned())];
+            Status::Cancelled => return vec![dim_span("cancelled".to_owned())],
+            Status::Denied => return vec![dim_span("denied".to_owned())],
+            Status::Failed => {
+                let headline = match row.error {
+                    Some(error) if !error.message.is_empty() => {
+                        if error.code.is_empty() {
+                            error.message.to_owned()
+                        } else {
+                            format!("{}: {}", error.code, error.message)
+                        }
+                    }
+                    _ => row.output.to_owned(),
+                };
+                return vec![dim_span(headline)];
             }
-            Some(CallStatus::Completed) => {}
+            Status::Completed => {}
         }
-        if matches!(kind(&call.name, &call.arguments), Kind::Edit | Kind::Write)
-            && !call.changes.is_empty()
+        if matches!(kind(row.name, row.arguments), Kind::Edit | Kind::Write)
+            && !row.changes.is_empty()
         {
-            let (added, removed) = call.changes.iter().fold((0u64, 0u64), |(a, r), c| {
+            let (added, removed) = row.changes.iter().fold((0u64, 0u64), |(a, r), c| {
                 (a.saturating_add(c.added), r.saturating_add(c.removed))
             });
             return vec![
@@ -593,15 +719,15 @@ impl Group {
                 Span::styled(format!("−{removed}"), style(Role::Removed)),
             ];
         }
-        match kind(&call.name, &call.arguments) {
-            Kind::Read => vec![dim_span(count(call.lines, "line", "lines"))],
-            Kind::Search => vec![dim_span(count(call.lines, "match", "matches"))],
-            Kind::List => vec![dim_span(count(call.lines, "path", "paths"))],
-            Kind::Shell if call.exit.is_some() => {
-                let exit = call.exit.unwrap_or(0);
+        match kind(row.name, row.arguments) {
+            Kind::Read => vec![dim_span(count(row.lines, "line", "lines"))],
+            Kind::Search => vec![dim_span(count(row.lines, "match", "matches"))],
+            Kind::List => vec![dim_span(count(row.lines, "path", "paths"))],
+            Kind::Shell if row.exit.is_some() => {
+                let exit = row.exit.unwrap_or(0);
                 vec![dim_span(format!(
                     "exit {exit} · {}",
-                    count(call.lines, "line", "lines")
+                    count(row.lines, "line", "lines")
                 ))]
             }
             Kind::Edit
@@ -610,7 +736,7 @@ impl Group {
             | Kind::Delegate
             | Kind::Jobs
             | Kind::Ask(_)
-            | Kind::Other => vec![dim_span(first_result_line(call.content()))],
+            | Kind::Other => vec![dim_span(row.output.to_owned())],
         }
     }
 }
@@ -621,6 +747,45 @@ const GUTTER_BLANK: &str = "      ";
 /// An opened call or thought's indent: eight columns (`docs/tui.md`,
 /// "Tool groups and the ledger").
 const INDENT: &str = "        ";
+
+/// One rendered ledger line with its six-column gutter: the gutter cut
+/// to the width when the width holds no more, else the gutter before
+/// the fitted line, with every link range moved right by its six cells.
+fn gutter_row(
+    mark: String,
+    line: &crate::ext::spans::FittedLine,
+    max: usize,
+) -> (Line<'static>, RowText) {
+    // The gutter precedes the line, so every link range moves right by
+    // its six cells.
+    if max < 6 {
+        (
+            Line::from(vec![dim_span(crate::format::cut(&mark, max))]),
+            RowText::plain(),
+        )
+    } else {
+        let mut spans = vec![dim_span(mark)];
+        spans.extend(line.line.spans.clone());
+        let links = line
+            .links
+            .iter()
+            .map(|(range, to)| {
+                (
+                    range.start.saturating_add(6)..range.end.saturating_add(6),
+                    to.clone(),
+                )
+            })
+            .collect();
+        (
+            Line::from(spans),
+            RowText {
+                tail: line.pad,
+                links,
+                ..RowText::plain()
+            },
+        )
+    }
+}
 
 /// A dim span.
 pub(super) fn dim_span(text: String) -> Span<'static> {

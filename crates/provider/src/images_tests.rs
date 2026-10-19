@@ -29,6 +29,26 @@ fn content(text: &str, images: &[ImageRef], session_dir: &std::path::Path) -> se
 }
 
 #[test]
+fn image_and_pdf_text_files_pin_every_byte() {
+    assert_eq!(
+        include_bytes!("../prompt/image-left-out.md").as_slice(),
+        b"[Image {path} left out: this model does not take images.]\n"
+    );
+    assert_eq!(
+        include_bytes!("../prompt/image-unreadable.md").as_slice(),
+        b"[Image {path} could not be read.]\n"
+    );
+    assert_eq!(
+        include_bytes!("../prompt/pdf-left-out.md").as_slice(),
+        b"[PDF {path} left out: this model does not take images.]\n"
+    );
+    assert_eq!(
+        include_bytes!("../prompt/pdf-unreadable.md").as_slice(),
+        b"[PDF {path} could not be read.]\n"
+    );
+}
+
+#[test]
 fn no_image_leaves_the_content_a_plain_string() {
     assert_eq!(
         content("done\n", &[], std::path::Path::new("/nowhere")),
@@ -393,6 +413,21 @@ fn input_size_counts_a_pdf_as_media_unless_text_only() {
         InputSize {
             bytes: 3,
             media: false,
+        }
+    );
+}
+
+#[test]
+fn input_size_counts_tool_search_results_as_text_not_media() {
+    let request = sized_request(vec![Input::ToolSearchResult {
+        action_id: contract::ActionId("a_1".into()),
+        loaded: vec!["a".into(), "b".into()],
+    }]);
+    assert_eq!(
+        input_size(b"abc", &request, false),
+        InputSize {
+            bytes: 3,
+            media: false
         }
     );
 }

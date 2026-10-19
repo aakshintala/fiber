@@ -161,6 +161,18 @@ fn message(conversation: &[Input], input: &Input) -> Option<Value> {
                 call.name, call.arguments
             ))],
         ),
+        Input::ToolSearchResult { action_id, loaded } => {
+            return message(
+                conversation,
+                &Input::ToolResult {
+                    action_id: action_id.clone(),
+                    text: contract::provider::loaded_text(loaded),
+                    is_error: false,
+                    images: Vec::new(),
+                    pdfs: Vec::new(),
+                },
+            );
+        }
         Input::ToolResult {
             action_id,
             text,
@@ -203,7 +215,8 @@ fn action_name<'a>(conversation: &'a [Input], action: &contract::ActionId) -> Op
         | Input::Assistant { .. }
         | Input::Reasoning { .. }
         | Input::ToolCall { .. }
-        | Input::ToolResult { .. } => None,
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. } => None,
     })
 }
 

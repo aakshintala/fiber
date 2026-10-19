@@ -13,6 +13,28 @@ use base64::engine::general_purpose::STANDARD;
 use contract::provider::{ImageRef, Input, InputSize, ModelRequest, PdfRef};
 use serde_json::{Value, json};
 
+/// The image line when the model does not take images
+/// (`docs/system-prompt.md`, "The texts").
+const IMAGE_LEFT_OUT: &str = include_str!("../prompt/image-left-out.md").trim_ascii_end();
+
+/// The image line when the stored file cannot be read
+/// (`docs/system-prompt.md`, "The texts"). A PDF page that cannot be read
+/// uses this text too.
+const IMAGE_UNREADABLE: &str = include_str!("../prompt/image-unreadable.md").trim_ascii_end();
+
+/// The PDF line when the model does not take images
+/// (`docs/system-prompt.md`, "The texts").
+const PDF_LEFT_OUT: &str = include_str!("../prompt/pdf-left-out.md").trim_ascii_end();
+
+/// The PDF line when the stored file cannot be read
+/// (`docs/system-prompt.md`, "The texts").
+const PDF_UNREADABLE: &str = include_str!("../prompt/pdf-unreadable.md").trim_ascii_end();
+
+/// Fills `{path}` in a prompt template with the stored file's path.
+fn fill(template: &str, path: &str) -> String {
+    template.replace("{path}", path)
+}
+
 /// One stored image, base64-encoded for the wire.
 pub(crate) struct Encoded {
     /// Its type, such as `image/png`.
@@ -70,13 +92,7 @@ pub(crate) fn prepare(
     let mut encoded = Vec::new();
     for image in images {
         if text_only {
-            append_line(
-                &mut text,
-                &format!(
-                    "[Image {} left out: this model does not take images.]",
-                    image.path
-                ),
-            );
+            append_line(&mut text, &fill(IMAGE_LEFT_OUT, &image.path));
             continue;
         }
         match encoded_image(image, session_dir) {
@@ -84,28 +100,19 @@ pub(crate) fn prepare(
                 mime_type: image.mime_type.clone(),
                 data,
             }),
-            None => append_line(
-                &mut text,
-                &format!("[Image {} could not be read.]", image.path),
-            ),
+            None => append_line(&mut text, &fill(IMAGE_UNREADABLE, &image.path)),
         }
     }
     let mut documents = Vec::new();
     for pdf in pdfs {
         if text_only {
-            append_line(
-                &mut text,
-                &format!(
-                    "[PDF {} left out: this model does not take images.]",
-                    pdf.path
-                ),
-            );
+            append_line(&mut text, &fill(PDF_LEFT_OUT, &pdf.path));
             continue;
         }
         match form {
             PdfForm::Native => match encoded_pdf(pdf, session_dir) {
                 Some((filename, data)) => documents.push(Document { filename, data }),
-                None => append_line(&mut text, &format!("[PDF {} could not be read.]", pdf.path)),
+                None => append_line(&mut text, &fill(PDF_UNREADABLE, &pdf.path)),
             },
             PdfForm::Pages => {
                 for page in pdf.pages.iter().flatten() {
@@ -114,10 +121,7 @@ pub(crate) fn prepare(
                             mime_type: page.mime_type.clone(),
                             data,
                         }),
-                        None => append_line(
-                            &mut text,
-                            &format!("[Image {} could not be read.]", page.path),
-                        ),
+                        None => append_line(&mut text, &fill(IMAGE_UNREADABLE, &page.path)),
                     }
                 }
             }
@@ -154,7 +158,10 @@ pub(crate) fn input_size(body: &[u8], request: &ModelRequest, text_only: bool) -
         && request.conversation.iter().any(|input| match input {
             Input::User { images, .. } => !images.is_empty(),
             Input::ToolResult { images, pdfs, .. } => !images.is_empty() || !pdfs.is_empty(),
-            Input::Assistant { .. } | Input::Reasoning { .. } | Input::ToolCall { .. } => false,
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => false,
         });
     InputSize {
         bytes: u64::try_from(body.len()).unwrap_or(u64::MAX),
