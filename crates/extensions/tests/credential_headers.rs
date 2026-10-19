@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use common::{Setup, header, pair, script_provider, sign_with, write};
 use contract::ErrorCode;
+use contract::clock::Clock;
 use contract::signing::{SignRequest, Signer};
 use extensions::{LuaExtension, LuaProvider, REFRESH_BEFORE};
 use fakes::Deadline;
@@ -34,6 +35,9 @@ use serde_json::json;
 /// (`docs/testing.md`, "Waits and timeouts").
 const WAIT: Duration = Duration::from_secs(5);
 const CALL_DEADLINE: Duration = Duration::from_secs(5);
+
+/// The grace past a call's own deadline that a parked caller waits.
+const GRACE: Duration = Duration::from_secs(1);
 
 /// The fake clock's wall at construction: 2023-11-14T22:13:20Z.
 const WALL: u64 = 1_700_000_000;
@@ -171,7 +175,8 @@ fn a_refresh_replaces_the_token_and_its_headers_together() {
         header(&first, "chatgpt-account-id"),
         Some("acct-1".to_owned())
     );
-    // Into the refresh window, still short of expiry.
+    // Into the refresh window, still short of expiry. No code under test
+    // waits on the clock here; the sign call returned (ruling 6179406086).
     clock.advance(
         Duration::from_secs(3600)
             .checked_sub(REFRESH_BEFORE)
@@ -437,10 +442,13 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     })
     .unwrap();
     assert_eq!(unused.expose(), "tok-unused");
+    // No code under test waits on the clock here; the token call returned
+    // (ruling 6179406086).
     clock.advance(Duration::from_secs(301));
+    let asked = clock.now();
     let (done, first) = mpsc::channel();
     let held = Arc::clone(&signer);
-    std::thread::spawn(move || {
+    let held_thread = std::thread::spawn(move || {
         let url = "http://127.0.0.1:1/v1/responses";
         done.send(held.sign(&SignRequest {
             method: "POST",
@@ -455,7 +463,19 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
         "the call with seventeen values reaches its held sign request"
     );
 
-    clock.advance(Duration::from_secs(301));
+    // The held sign's caller parks at its deadline plus the grace; the
+    // scheduler parks at the deadline, so the caller is named.
+    let park = asked + Duration::from_secs(36_000) + GRACE;
+    assert!(
+        clock.await_thread_parked(held_thread.thread().id(), Some(park), WAIT),
+        "the held sign parked past its check at its grace"
+    );
+    clock.advance_when_parked(
+        Some(park),
+        Some(held_thread.thread().id()),
+        Duration::from_secs(301),
+        &Deadline::after(WAIT),
+    );
     let second = sign_with(&signer, &[]).unwrap();
     assert_eq!(
         header(&second, "authorization"),
@@ -526,9 +546,10 @@ fn a_running_call_values_are_reported_until_it_finishes() {
     let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock.clone()));
     let provider = LuaProvider::new(extension, "p");
     let signer = signer_of(&provider);
+    let asked = clock.now();
     let (done, first) = mpsc::channel();
     let held = Arc::clone(&signer);
-    std::thread::spawn(move || {
+    let held_thread = std::thread::spawn(move || {
         let url = "http://127.0.0.1:1/v1/responses".to_owned();
         let result = held.sign(&SignRequest {
             method: "POST",
@@ -543,9 +564,21 @@ fn a_running_call_values_are_reported_until_it_finishes() {
         "waited for the first sign to block on the held server"
     );
     // Seventeen synchronous refreshes while the first call runs: its two
-    // values are never dropped, whatever newer values arrive.
+    // values are never dropped, whatever newer values arrive. The held
+    // sign's caller parks at its deadline plus the grace; the scheduler
+    // parks at the deadline, so the caller is named.
+    let park = asked + Duration::from_secs(36_000) + GRACE;
     for round in 1..=17_u32 {
-        clock.advance(Duration::from_secs(301));
+        assert!(
+            clock.await_thread_parked(held_thread.thread().id(), Some(park), WAIT),
+            "round {round}: the held sign parked past its check at its grace"
+        );
+        clock.advance_when_parked(
+            Some(park),
+            Some(held_thread.thread().id()),
+            Duration::from_secs(301),
+            &Deadline::after(WAIT),
+        );
         let headers = sign_with(&signer, &[]).unwrap();
         assert_eq!(
             header(&headers, "authorization"),
@@ -646,19 +679,33 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
                 body: b"{}",
             });
             done.send((call, result)).unwrap_or(());
-        });
+        })
     };
 
     // Each held request is a barrier: no call returns until the test releases
     // its server, and each bounded wait proves the call reached that point.
-    launch(1, Arc::clone(&signer), done.clone());
+    // Call 1's caller parks at its deadline plus the grace; the scheduler
+    // parks at the deadline, so call 1 is named. Round 1's call may not have
+    // parked when round 2 advances, so the precondition await is mandatory.
+    let asked1 = clock.now();
+    let held1 = launch(1, Arc::clone(&signer), done.clone());
     assert!(
         first_call.await_requests(1, CALL_DEADLINE),
         "call 1 reached its held sign request"
     );
     for call in 2..=17 {
-        clock.advance(Duration::from_secs(301));
-        launch(call, Arc::clone(&signer), done.clone());
+        let park1 = asked1 + Duration::from_secs(36_000) + GRACE;
+        assert!(
+            clock.await_thread_parked(held1.thread().id(), Some(park1), WAIT),
+            "call {call}: call 1 parked past its check at its grace"
+        );
+        clock.advance_when_parked(
+            Some(park1),
+            Some(held1.thread().id()),
+            Duration::from_secs(301),
+            &Deadline::after(WAIT),
+        );
+        let _held = launch(call, Arc::clone(&signer), done.clone());
         assert!(
             later_calls.await_requests(call - 1, CALL_DEADLINE),
             "call {call} reached its held sign request"
@@ -894,14 +941,28 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
         let provider = LuaProvider::new(extension, "p");
         let signer = signer_of(&provider);
         let (done, finished) = mpsc::channel();
-        let mut threads = Vec::with_capacity(calls);
+        let asked = clock.now();
+        let mut threads: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(calls);
         for round in 1..=calls {
             // The advance comes before the spawn: a clock move between a
             // thread's spawn and its call's start would end that call at
             // its deadline before it runs (`docs/testing.md`, "Waits and
-            // timeouts").
+            // timeouts"). The first call's caller parks at its deadline
+            // plus the grace; the scheduler parks at the deadline, so the
+            // first call is named. Round 1's call may not have parked when
+            // round 2 advances, so the precondition await is mandatory.
             if round > 1 {
-                clock.advance(Duration::from_secs(301));
+                let park = asked + Duration::from_secs(36_000) + GRACE;
+                assert!(
+                    clock.await_thread_parked(threads[0].thread().id(), Some(park), WAIT),
+                    "calls {calls}: round {round} waits for the first sign to park at its grace"
+                );
+                clock.advance_when_parked(
+                    Some(park),
+                    Some(threads[0].thread().id()),
+                    Duration::from_secs(301),
+                    &Deadline::after(WAIT),
+                );
             }
             let signing = Arc::clone(&signer);
             let completed = done.clone();
