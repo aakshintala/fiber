@@ -1227,6 +1227,56 @@ fn clicking_done_expands_more_around_the_first_exited_row() {
     assert_eq!(hidden, Some(0));
 }
 
+/// The #2438 focus-table row this ticket adds back: `"N ✓" in a
+/// rail project header → the project's first exited row`, entered by
+/// click and by key, with Esc and `→` returning to the session left.
+#[test]
+fn done_lands_on_the_first_exited_row_and_the_back_key_returns() {
+    let mut app = opened(&[A, B, C], A);
+    app.on_line(left(B, "exited"));
+    app.on_line(left(C, "exited"));
+    // By click: home with the first exited row focused ...
+    let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
+    assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
+    ack(&mut app, &out);
+    assert!(app.on_home());
+    framed(&mut app);
+    framed(&mut app);
+    // The feed reversed lists the later row first, so C's row is the
+    // project's first exited row.
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(HomeSpot::Entry(row_key(&app, C))))
+    );
+    // ... and Esc returns to the session left, asking for its commands.
+    let out = sent(press(&mut app, Key::Esc));
+    assert_eq!(out, vec![asks_commands(&out[0]["id"], A)]);
+    assert_eq!(on_screen(&app), Some(A));
+    assert!(!app.on_home());
+    // By key: the same landing through Enter on the focused "N ✓" ...
+    framed(&mut app);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Done(key(&app, A))));
+    let effect = stroke_press(&mut app, plain(Code::Enter));
+    // A is only at `summary` after the round trip, so leaving sends
+    // nothing: the landing is the focus it carries.
+    assert_eq!(effect, Effect::None);
+    assert!(app.on_home());
+    framed(&mut app);
+    framed(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(HomeSpot::Entry(row_key(&app, C))))
+    );
+    // ... and → returns to the session left, asking for its commands.
+    let out = sent(stroke_press(&mut app, plain(Code::Right)));
+    assert_eq!(out, vec![asks_commands(&out[0]["id"], A)]);
+    assert_eq!(on_screen(&app), Some(A));
+    assert!(!app.on_home());
+}
+
 /// Focusing "N ✓" above a deep scroll shows its header row: the
 /// settle reveals one row above the card's top for the header stop.
 #[test]
