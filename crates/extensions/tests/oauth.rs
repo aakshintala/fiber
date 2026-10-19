@@ -891,11 +891,13 @@ fn poll_repeats_at_the_interval_until_the_token() {
     ]);
     let rx = start(&ext, "poll", &server.url());
     for step in [5, 10] {
-        assert!(
-            env.clock.await_parked(wake(&env, step), WAIT),
-            "the poll never parked for its {step}-second wake within {WAIT:?}"
+        let poller = thread_parked_at(&env.clock, wake(&env, step));
+        env.clock.advance_when_parked(
+            Some(wake(&env, step)),
+            Some(poller),
+            Duration::from_secs(5),
+            &Deadline::after(WAIT),
         );
-        env.clock.advance(Duration::from_secs(5));
     }
     let token: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(token["access_token"], "at");
@@ -923,14 +925,26 @@ fn poll_slow_down_adds_five_seconds() {
         env.clock.await_parked(wake(&env, 10), WAIT),
         "the slowed poll never parked for its 10-second wake within {WAIT:?}"
     );
-    env.clock.advance(Duration::from_secs(5));
+    let poller = thread_parked_at(&env.clock, wake(&env, 10));
+    env.clock.advance_when_parked(
+        Some(wake(&env, 10)),
+        Some(poller),
+        Duration::from_secs(5),
+        &Deadline::after(WAIT),
+    );
     // Still waiting on the instant 10 s out.
     assert!(
         env.clock.await_parked(wake(&env, 10), WAIT),
         "the slowed poll left its 10-second wake early within {WAIT:?}"
     );
     assert_eq!(server.request_count(), 1);
-    env.clock.advance(Duration::from_secs(5));
+    let poller = thread_parked_at(&env.clock, wake(&env, 10));
+    env.clock.advance_when_parked(
+        Some(wake(&env, 10)),
+        Some(poller),
+        Duration::from_secs(5),
+        &Deadline::after(WAIT),
+    );
     let token: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(token["access_token"], "at");
     assert_eq!(server.request_count(), 2);
@@ -956,6 +970,8 @@ fn poll_raises_a_terminal_error_or_an_unusable_reply() {
     }
 }
 
+/// A poll woken past its 5 s sleep by the run's 60 s timeout: the late wake
+/// past the sleep is the behaviour under test.
 #[test]
 fn poll_that_times_out_while_sleeping_is_a_timeout() {
     let env = Env::new();
@@ -966,6 +982,8 @@ fn poll_that_times_out_while_sleeping_is_a_timeout() {
         env.clock.await_parked(wake(&env, 5), WAIT),
         "the poll never parked for its 5-second sleep within {WAIT:?}"
     );
+    // Late wake past the 5 s poll park to the 60 s deadline; the park is
+    // proven just above (ruling 6261259790).
     env.clock.advance(TIMEOUT);
     assert!(matches!(
         finish(&rx, &Deadline::after(WAIT)),
@@ -1390,11 +1408,13 @@ fn a_person_who_detaches_between_polls_stops_the_next_poll() {
     ]);
     let provider = env.provider(&ext, &server, "poll");
     let rx = start_token(&provider);
-    assert!(
-        env.clock.await_parked(wake(&env, 5), WAIT),
-        "the poll never parked for its 5-second sleep within {WAIT:?}"
+    let poller = thread_parked_at(&env.clock, wake(&env, 5));
+    env.clock.advance_when_parked(
+        Some(wake(&env, 5)),
+        Some(poller),
+        Duration::from_secs(5),
+        &Deadline::after(WAIT),
     );
-    env.clock.advance(Duration::from_secs(5));
     let error = finish(&rx, &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.poll"), "{error}");
@@ -1816,11 +1836,13 @@ fn poll_with_pending_waits_through_the_listed_statuses() {
     ]);
     let rx = start(&ext, "poll_pending", &server.url());
     for step in [5, 10] {
-        assert!(
-            env.clock.await_parked(wake(&env, step), WAIT),
-            "the poll never parked for its {step}-second wake within {WAIT:?}"
+        let poller = thread_parked_at(&env.clock, wake(&env, step));
+        env.clock.advance_when_parked(
+            Some(wake(&env, step)),
+            Some(poller),
+            Duration::from_secs(5),
+            &Deadline::after(WAIT),
         );
-        env.clock.advance(Duration::from_secs(5));
     }
     let token: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(token["access_token"], "at");
