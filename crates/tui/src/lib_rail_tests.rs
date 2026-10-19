@@ -79,6 +79,7 @@ fn the_loop_gives_the_app_the_wall_time() {
     lp.app.on_line(live(B, since));
     feed(&mut lp, vec![Input::Resize]);
     assert!(shown(&lp).contains("16s"), "{}", shown(&lp));
+    // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
     clock.advance(Duration::from_secs(60));
     feed(&mut lp, vec![Input::Resize]);
     assert!(shown(&lp).contains("1m"), "{}", shown(&lp));

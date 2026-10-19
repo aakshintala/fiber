@@ -170,16 +170,25 @@ fn an_armed_ticker_sends_one_tick_at_its_deadline() {
     let (tx, rx) = mpsc::channel();
     let _finished = run(&ticker, clock.clone(), tx);
     ticker.arm(Some(at));
-    parked(&clock, at);
     // Short of the deadline the thread parks again, and nothing arrives.
-    let mark = clock.advance_marked(Duration::from_millis(119));
+    let mark = clock.advance_when_parked(
+        Some(at),
+        None,
+        Duration::from_millis(119),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         clock.await_parked_since(&mark, Some(at), DEADLINE),
         "waited {DEADLINE:?} for the ticker to park again"
     );
     // Nothing sent yet: an empty channel, not a dead thread.
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(at),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert!(matches!(tick(&rx, &Deadline::after(DEADLINE)), Input::Tick));
 }
 
@@ -193,8 +202,7 @@ fn a_second_deadline_waits_for_the_first_ticks_ack() {
     let (tx, rx) = mpsc::channel();
     let _finished = run(&ticker, clock.clone(), tx);
     ticker.arm(Some(at));
-    parked(&clock, at);
-    clock.advance(TICK);
+    clock.advance_when_parked(Some(at), None, TICK, &Deadline::after(DEADLINE));
     assert!(matches!(tick(&rx, &Deadline::after(DEADLINE)), Input::Tick));
     // Re-armed in the past, but the first tick is unacked: the "no tick
     // before the ack" half lives in `gate_step_table`'s in-flight row, so
@@ -218,10 +226,9 @@ fn rearming_moves_the_deadline() {
     let _finished = run(&ticker, clock.clone(), tx);
     ticker.arm(Some(first));
     ticker.arm(Some(moved));
-    parked(&clock, moved);
     // Past the first deadline the thread still parks at the moved one,
     // and nothing arrives.
-    let mark = clock.advance_marked(TICK);
+    let mark = clock.advance_when_parked(Some(moved), None, TICK, &Deadline::after(DEADLINE));
     assert!(
         clock.await_parked_since(&mark, Some(moved), DEADLINE),
         "waited {DEADLINE:?} for the ticker to park again"
@@ -322,8 +329,7 @@ fn a_started_thread_sends_what_its_ticker_arms() {
     let mut thread = TickThread::idle();
     thread.start(shared, tx);
     thread.arm(Some(at));
-    parked(&clock, at);
-    clock.advance(TICK);
+    clock.advance_when_parked(Some(at), None, TICK, &Deadline::after(DEADLINE));
     assert!(matches!(tick(&rx, &Deadline::after(DEADLINE)), Input::Tick));
     thread.ack();
     thread.stop();
