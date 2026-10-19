@@ -1920,6 +1920,74 @@ fn closing_returns_when_the_observer_ends_before_it_answers() {
         .expect("closing returns after the observer ends");
 }
 
+/// `Tap::closing` waits for the observer to publish `closing`: held at its
+/// first jobs read, the queued signal proves the request reached the
+/// handshake, yet the call has not returned; released, it returns and the
+/// latest status carries `closing`. A no-wait `closing` returns before
+/// the release, so the not-returned assertion fails.
+#[test]
+fn close_ack_waits_for_the_queued_closing_publication() {
+    let root = fakes::TempDir::new("status-closing-queued");
+    let log = Arc::new(
+        log::Log::create(
+            root.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    let (held, observer_held) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let held_read = Mutex::new(Some((held, released)));
+    let status = super::start(
+        &log,
+        Fold::new(
+            "-w".to_owned(),
+            "/w".to_owned(),
+            "fake/m".to_owned(),
+            None,
+            Box::new(move || {
+                if let Some((held, released)) = held_read.lock().unwrap().take() {
+                    held.send(()).unwrap();
+                    // The test's own wait fails first and drops the sender, which releases this hold.
+                    match released.recv() {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
+                Vec::new()
+            }),
+            Box::new(|| None),
+            Box::new(|| 0),
+        ),
+    )
+    .expect("an observer");
+    Deadline::after(DEADLINE)
+        .recv(&observer_held)
+        .expect("the observer is held");
+    let mut tap = status.tap();
+    let (queued_tx, queued_rx) = std::sync::mpsc::channel::<()>();
+    tap.announce_queued(queued_tx);
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        tap.closing();
+        done_tx.send(()).unwrap();
+    });
+    Deadline::after(DEADLINE)
+        .recv(&queued_rx)
+        .expect("the close request is queued");
+    assert!(
+        done_rx.try_recv().is_err(),
+        "closing waits for the observer to publish closing"
+    );
+    release.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("closing returns after the observer publishes closing");
+    let latest = log.latest("session_status").expect("a session_status");
+    assert_eq!(latest.payload["closing"].as_bool(), Some(true));
+    status.stop();
+}
+
 #[test]
 fn finished_turns_forget_their_tool_names() {
     let mut w = world();

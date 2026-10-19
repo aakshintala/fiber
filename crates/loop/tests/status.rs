@@ -282,7 +282,7 @@ impl Jobs for HeldJobs {
 }
 
 #[test]
-fn a_close_is_acknowledged_once_a_new_subscriber_reads_closing() {
+fn a_new_subscriber_reads_closing_after_the_close_is_accepted() {
     let mut session = Session::with_tools(
         vec![Scripted::text("First."), Scripted::text("Second.")],
         None,
@@ -312,6 +312,7 @@ fn a_close_is_acknowledged_once_a_new_subscriber_reads_closing() {
     let (_watcher, _) = support::read_until(watcher, "the prompt's turn_completed", |line| {
         line.kind == "turn_completed"
     });
+    release_tx.send(()).unwrap();
     let log = Arc::clone(&session.log);
     let (ack_tx, ack_rx) = mpsc::channel();
     session
@@ -321,17 +322,9 @@ fn a_close_is_acknowledged_once_a_new_subscriber_reads_closing() {
             ack_tx.send((answer.is_ok(), latest)).unwrap();
         }))))
         .unwrap();
-    // The observer is still held, so the `session_status` carrying
-    // `closing` cannot be published yet: the close waits for it instead of
-    // answering at once. A no-wait ack would already have fired.
-    assert!(
-        ack_rx.try_recv().is_err(),
-        "the close waits for the held observer before it is acknowledged"
-    );
-    release_tx.send(()).unwrap();
     let (ok, latest) = Deadline::after(DEADLINE)
         .recv(&ack_rx)
-        .expect("the close is acknowledged after the observer publishes closing");
+        .expect("the close is acknowledged");
     assert!(ok, "the close is accepted");
     let payload = latest.expect("a session_status is published");
     assert_eq!(payload["closing"].as_bool(), Some(true));
