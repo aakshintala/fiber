@@ -188,7 +188,7 @@ fn a_row_draws_name_hint_description_and_tag() {
     let home = all.iter().find(|row| row.name == "home");
     assert_eq!(
         home.map(Row::line),
-        Some("/home  Goes home.  command".to_owned())
+        Some("/home  Goes home, focused on the session on screen's row.  command".to_owned())
     );
 }
 

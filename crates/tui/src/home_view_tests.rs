@@ -2228,8 +2228,8 @@ fn only_the_selected_completion_sits_on_the_bar() {
         let x = u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX);
         buf[(x, y)].bg
     };
-    assert_eq!(cell(at("Goes home."), "home"), accent, "{drawn}");
-    assert_eq!(cell(at("Goes home with"), "new"), surface, "{drawn}");
+    assert_eq!(cell(at("Goes home, focused on the session"), "home"), accent, "{drawn}");
+    assert_eq!(cell(at("Goes home with the cursor in the input box, to pick"), "new"), surface, "{drawn}");
 }
 
 #[test]
