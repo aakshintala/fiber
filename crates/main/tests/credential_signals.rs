@@ -147,6 +147,13 @@ fn picker_read_asked(screen: &Grid) -> bool {
         .any(|row| row.contains("refreshing") || row.contains("Reading the model lists"))
 }
 
+/// Whether the grid shows the picker's filter query `query`: the filter
+/// row draws `›` and the query bold once the loop handled the typing.
+fn picker_query_shown(screen: &Grid, query: &str) -> bool {
+    let needle = format!("› {query}");
+    screen.rows.iter().any(|row| row.contains(&needle))
+}
+
 /// Installs the ruling-4 fixture under `home`: a provider `acme` serving
 /// `m1` from its data file, with a Lua handle registering no `credential`
 /// (so the read falls through to the command source), a cached list dated
@@ -645,5 +652,57 @@ fn sighup_to_the_terminal_while_a_picker_read_runs_exits_129_and_kills_its_group
     assert_eq!(exited.status.code(), Some(129));
     assert!(fakes::group_empties(pgid, setup.deadline.left()));
     group.stand_down(setup.deadline.cleanup());
+    matching.stand_down(setup.deadline.cleanup());
+}
+
+/// Deterministic repro for #2738: a queued catalogue read restarts
+/// without its asked mark, so the picker's asked wait reaches its
+/// deadline on every run. The first read hangs in its credential command
+/// (its ready line proves it runs instead of queuing behind the startup
+/// cached read); a refresh while it hangs queues a wider read behind it,
+/// and killing the first read's group answers it with an error, which
+/// clears the mark and starts the queued read markless. The store that
+/// clears the mark on an older read's answer, and the queued start
+/// without one, live in the picker's rendering (`crates/tui`), not in
+/// this file.
+#[test]
+fn queued_picker_read_restarts_without_its_asked_mark_2738() {
+    let setup = support::Setup::new();
+    let ready = Ready::new(setup.root.path());
+    let fifo = ready.path().to_path_buf();
+    let matching = Watchdog::matching(&fifo.display().to_string());
+    install(
+        &setup.home(),
+        &format!("sleep 600 & echo $$ > '{}'; wait", fifo.display()),
+    );
+    let mut run = Run::spawn(&setup, 120, 32, &[], &[("TERM", "xterm-256color")]);
+    run.ready();
+    // Ctrl+L opens the picker, whose catalogue read is asked through the
+    // process's shared reads.
+    run.write(b"\x0c");
+    run.wait_screen("the open picker", picker_open);
+    let first = ready.wait(setup.deadline.left())[0];
+    // Ctrl+R queues a wider read behind the hanging one; the typed query
+    // proves the loop handled the refresh first, since it handles its
+    // inputs in order.
+    run.write(b"\x12");
+    run.write(b"x");
+    run.wait_screen("the picker's filter query", |screen| {
+        picker_query_shown(screen, "x")
+    });
+    // Killing the first read's group answers it with an error and starts
+    // the queued read: the second ready line proves the queued read runs
+    // its credential command.
+    support::kill_group(setup.deadline, first, "KILL").unwrap();
+    let second = ready.wait(setup.deadline.left())[0];
+    let second_group = Watchdog::group(second);
+    // The restarted read hangs in its credential command with no mark:
+    // this wait reaches its deadline while the bug stands.
+    run.wait_screen("the picker's asked catalogue read", picker_read_asked);
+    support::kill_pid(setup.deadline, run.id(), "HUP").unwrap();
+    let exited = run.wait();
+    assert_eq!(exited.status.code(), Some(129));
+    assert!(fakes::group_empties(second, setup.deadline.left()));
+    second_group.stand_down(setup.deadline.cleanup());
     matching.stand_down(setup.deadline.cleanup());
 }

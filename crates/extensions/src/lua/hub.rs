@@ -13,7 +13,7 @@
 //! Dropping the extension stops it. Stopped is final.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use contract::RequestId;
@@ -67,6 +67,32 @@ pub(super) enum Window {
 #[cfg(test)]
 type WindowHook = Arc<dyn Fn(&Hub, Window) + Send + Sync>;
 
+/// Every live extension hub, weakly held: a shutdown stops each one, so a
+/// callback in flight answers `Stopped` and its admitted `host.exec` runs
+/// stop as on a cancel. Pruned on every stop; entries whose hub is gone
+/// drop out.
+static HUBS: Mutex<Vec<Weak<Hub>>> = Mutex::new(Vec::new());
+
+/// Stops every live extension hub with `Stopped`, as a shutdown stops a
+/// tool call's group (`docs/invocation.md`, "Shutdown"): each callback in
+/// flight answers `Stopped`, each admitted `host.exec` run stops with
+/// SIGTERM, SIGKILL 800 ms later for a group still alive, and every waiter
+/// wakes. The session's shutdown calls this beside stopping jobs; hubs
+/// created after it are the next session's, once this process is gone.
+/// Takes the registry lock, then each hub's lock in turn, and nothing
+/// while holding either: no waiter takes the registry lock under a hub
+/// lock, so the order never inverts.
+pub fn stop_every_callback() {
+    let live: Vec<Arc<Hub>> = {
+        let mut hubs = HUBS.lock().unwrap_or_else(PoisonError::into_inner);
+        hubs.retain(|hub| hub.upgrade().is_some());
+        hubs.iter().filter_map(Weak::upgrade).collect()
+    };
+    for hub in live {
+        hub.stop_for_shutdown();
+    }
+}
+
 impl Hub {
     /// The hub every waiter and the extension's thread share, subscribed to
     /// `clock` so a move of that clock wakes them.
@@ -83,6 +109,9 @@ impl Hub {
         let cloned = Arc::clone(&hub);
         let wake: Arc<dyn Wake> = cloned;
         clock.subscribe(Arc::downgrade(&wake));
+        HUBS.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::downgrade(&hub));
         hub
     }
 
@@ -241,6 +270,36 @@ impl Hub {
                 job.held = false;
             }
         }
+        self.notify();
+    }
+
+    /// Stops this hub for a shutdown, keeping its router: every callback in
+    /// flight answers `Stopped`, every admitted `host.exec` run stops
+    /// without the Lua thread, and every waiter wakes. Later deliveries
+    /// still route, so a run that ends as it stops is still recorded.
+    fn stop_for_shutdown(&self) {
+        let unsent = {
+            let mut shared = self.lock();
+            let unsent = if !matches!(shared.phase, Phase::Stopped(_)) {
+                shared.stop(StopReason::Stopped)
+            } else {
+                Vec::new()
+            };
+            // Every call still on the hub is cancelled with it, so `judge`
+            // waits for an admitted `host.exec` run's end before answering
+            // `Stopped`, as for a cancelled tool call. The hook path never
+            // sees the turn's cancel itself, so the stop marks its calls.
+            let started: Vec<u64> = shared
+                .calls
+                .iter()
+                .filter_map(|(id, progress)| {
+                    matches!(progress, Progress::Started { .. }).then_some(*id)
+                })
+                .collect();
+            shared.cancelled.extend(started);
+            unsent
+        };
+        drop(unsent);
         self.notify();
     }
 
@@ -559,6 +618,16 @@ impl Shared {
     ) -> (Next, Vec<Delivery>) {
         // Stopped is final for every waiter, one holding a result included.
         if let Phase::Stopped(reason) = &self.phase {
+            // A stopped call the shutdown cancelled, whose admitted
+            // `host.exec` run is still going, waits for the run's end, as a
+            // cancelled tool call does (`judge_tool`): the shutdown already
+            // stopped the run with SIGTERM, and the caller must not return
+            // — the process must not exit — before the run answers. The
+            // run's end notifies, and the next judge answers `Stopped`. An
+            // uncancelled call still fails at once.
+            if self.exec_pending(id) && self.cancelled.contains(&id) {
+                return (Next::Sleep(None), Vec::new());
+            }
             let e = reason.error(name);
             self.forget(id);
             return (Next::Return(Err(e)), Vec::new());
@@ -734,5 +803,193 @@ impl Wake for Hub {
         // judged and not yet parked cannot miss this wake.
         let _guard = self.lock();
         self.changed.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SHUTDOWN_EXTENSION: &str = "fiber.test/shutdown";
+    const CHILD: &str = "FIBER_HUB_STOP_EVERY_CALLBACK_CHILD";
+    const CHILD_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// A real command callback suspended in an admitted `host.exec` run.
+    /// The ready FIFO fixes the process-start point; the second FIFO keeps
+    /// the shell in its process group without a real-clock hold.
+    struct RunningExec {
+        _dir: fakes::TempDir,
+        _ready: fakes::children::Ready,
+        extension: Arc<super::super::LuaExtension>,
+        group: u32,
+        completed: std::sync::mpsc::Receiver<Result<String, crate::Error>>,
+        watchdog: fakes::Watchdog,
+    }
+
+    fn running_exec() -> RunningExec {
+        let dir = fakes::TempDir::new("fiber-lua-hub-shutdown");
+        let ready = fakes::children::Ready::new(dir.path());
+        let blocked = dir.path().join("blocked.fifo");
+        fakes::fifo(&blocked);
+        let init = format!(
+            r#"fiber.command("run", {{ timeout = 60000, run = function()
+  host.exec("sh", {{ "-c", "echo $$ > \"$0\"; read _ < \"$1\"", {ready:?}, {blocked:?} }})
+  return "finished"
+end }})
+"#,
+            ready = ready.path().display().to_string(),
+            blocked = blocked.display().to_string(),
+        );
+        std::fs::write(dir.path().join("init.lua"), init).unwrap();
+        let extension = Arc::new(super::super::LuaExtension::new(
+            SHUTDOWN_EXTENSION,
+            dir.path(),
+            dir.path(),
+            fakes::clock::FakeClock::new(),
+        ));
+        let caller = Arc::clone(&extension);
+        let (tx, completed) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(tx.send(caller.command("run", "")));
+        });
+        let group = ready.wait(fakes::MUST_SUCCEED_WITHIN)[0];
+        let watchdog = fakes::Watchdog::group(group);
+        {
+            let shared = extension.hub.lock();
+            assert!(
+                shared.calls.iter().any(|(id, progress)| {
+                    matches!(progress, Progress::Started { .. }) && shared.exec_pending(*id)
+                }),
+                "the real callback is waiting on its admitted host.exec run"
+            );
+        }
+        assert!(
+            fakes::kill_group(group, "0").unwrap(),
+            "the exec process group is live before shutdown"
+        );
+        RunningExec {
+            _dir: dir,
+            _ready: ready,
+            extension,
+            group,
+            completed,
+            watchdog,
+        }
+    }
+
+    fn assert_shutdown_stopped(running: RunningExec) {
+        let result = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&running.completed)
+            .expect("the callback completes after shutdown");
+        assert!(
+            matches!(
+                result,
+                Err(crate::Error::Stopped { ref extension }) if extension == SHUTDOWN_EXTENSION
+            ),
+            "the callback answers Stopped: {result:?}"
+        );
+        assert!(
+            !fakes::kill_group(running.group, "0").unwrap(),
+            "the exec process group is empty when the callback completes"
+        );
+        running.watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+    }
+
+    /// `stop_every_callback` reaches a real command callback and its
+    /// running `host.exec` process group. This test runs in a child process
+    /// because shutdown deliberately stops every hub in the process.
+    #[test]
+    fn stop_every_callback_stops_an_in_flight_exec_and_its_call() {
+        let name = std::thread::current().name().unwrap().to_owned();
+        if in_child(&name) {
+            return;
+        }
+        let running = running_exec();
+        stop_every_callback();
+        assert_shutdown_stopped(running);
+    }
+
+    /// `stop_for_shutdown` stops a real command callback's admitted
+    /// `host.exec` run, waits for its process group to empty, and completes
+    /// the callback as `Stopped`.
+    #[test]
+    fn stop_for_shutdown_signals_an_in_flight_exec_and_marks_its_call() {
+        let running = running_exec();
+        running.extension.hub.stop_for_shutdown();
+        assert_shutdown_stopped(running);
+    }
+
+    /// Runs the global-shutdown test alone so it cannot stop hubs owned by
+    /// unrelated unit tests in the parent test process.
+    fn in_child(name: &str) -> bool {
+        if std::env::var_os(CHILD).is_some() {
+            return false;
+        }
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(tx.send(child.wait_with_output().unwrap()));
+        });
+        let output = match fakes::Deadline::after(CHILD_WAIT).recv(&rx) {
+            Ok(output) => output,
+            Err(_) => {
+                fakes::within(
+                    "kill -KILL on the child",
+                    fakes::MUST_SUCCEED_WITHIN,
+                    move || {
+                        drop(fakes::kill_pid(pid, "KILL"));
+                    },
+                );
+                panic!("waited {CHILD_WAIT:?} for the isolated shutdown test");
+            }
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "the isolated shutdown test failed: {stdout}\n{stderr}"
+        );
+        assert!(
+            stdout.contains("1 passed"),
+            "the child ran exactly the shutdown test: {stdout}"
+        );
+        true
+    }
+
+    /// `stop_for_shutdown` on an already-stopped hub changes nothing: the
+    /// stored reason stays, and a queued call the shutdown never started
+    /// stays uncancelled. Without the `!` the stop would re-run and
+    /// overwrite the reason with `Stopped`, failing here.
+    #[test]
+    fn stop_for_shutdown_leaves_a_stopped_hub_unchanged() {
+        let hub = Hub::new(fakes::clock::FakeClock::new());
+        let id = {
+            let mut shared = hub.lock();
+            let now = hub.clock().now();
+            let id = shared.push(Target::Tool("t".to_owned()), serde_json::Value::Null, now);
+            shared.phase = Phase::Stopped(StopReason::Abandoned {
+                extension: "ext".to_owned(),
+                callback: "hook".to_owned(),
+            });
+            id
+        };
+        hub.stop_for_shutdown();
+        let shared = hub.lock();
+        assert!(
+            matches!(&shared.phase, Phase::Stopped(StopReason::Abandoned { .. })),
+            "the stored reason stays"
+        );
+        assert!(
+            !shared.cancelled.contains(&id),
+            "the queued call stays uncancelled"
+        );
     }
 }

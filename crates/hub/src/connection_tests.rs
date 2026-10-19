@@ -91,10 +91,31 @@ impl Client {
         self.write.flush().unwrap();
     }
 
-    /// The next line, parsed: the blocking read runs on a thread and its
-    /// result is received under one deadline, never parking the test
-    /// thread past the wait. Panics past the deadline naming the wait.
-    fn next(&mut self, what: &str) -> Value {
+    /// A `status` command padded with trailing spaces to `total` bytes,
+    /// then one line feed: trailing spaces parse as whitespace.
+    fn send_padded(&mut self, id: &str, total: usize) {
+        let mut bytes = serde_json::to_vec(&command(id, "status", json!({}))).unwrap();
+        assert!(bytes.len() < total, "the padded line must grow");
+        bytes.resize(total, b' ');
+        bytes.push(b'\n');
+        self.write.write_all(&bytes).unwrap();
+        self.write.flush().unwrap();
+    }
+
+    /// The same, with no line feed: the hub reads an unfinished line.
+    fn send_padded_no_lf(&mut self, total: usize) {
+        let mut bytes = serde_json::to_vec(&command("c_9", "status", json!({}))).unwrap();
+        assert!(bytes.len() < total, "the padded line must grow");
+        bytes.resize(total, b' ');
+        self.write.write_all(&bytes).unwrap();
+        self.write.flush().unwrap();
+    }
+
+    /// One socket line under one deadline: the blocking read runs on a
+    /// thread and its result is received under one deadline, never parking
+    /// the test thread past the wait. Panics past the deadline naming the
+    /// wait.
+    fn read_deadline(&mut self, what: &str) -> (std::io::Result<usize>, String) {
         let (done_tx, done_rx) = mpsc::channel();
         thread::scope(|scope| {
             scope.spawn(|| {
@@ -102,13 +123,30 @@ impl Client {
                 let outcome = self.read.read_line(&mut text);
                 done_tx.send((outcome, text)).unwrap_or(());
             });
-            let (outcome, text) = Deadline::after(DEADLINE)
+            Deadline::after(DEADLINE)
                 .recv(&done_rx)
-                .unwrap_or_else(|_| panic!("never received {what}"));
-            outcome.unwrap_or_else(|_| panic!("never received {what}"));
-            assert!(!text.is_empty(), "the hub closed before {what}");
-            serde_json::from_str(&text).unwrap()
+                .unwrap_or_else(|_| panic!("never received {what}"))
         })
+    }
+
+    /// The next read is end of file within one deadline, with no answer
+    /// before it.
+    fn closed(&mut self, what: &str) {
+        let (outcome, text) = self.read_deadline(what);
+        let n = outcome.unwrap_or_else(|_| panic!("the hub never closes {what}"));
+        assert!(
+            text.is_empty(),
+            "the hub answers before it closes {what}: {text}"
+        );
+        assert_eq!(n, 0, "the hub never closes {what}");
+    }
+
+    /// The next line, parsed.
+    fn next(&mut self, what: &str) -> Value {
+        let (outcome, text) = self.read_deadline(what);
+        outcome.unwrap_or_else(|_| panic!("never received {what}"));
+        assert!(!text.is_empty(), "the hub closed before {what}");
+        serde_json::from_str(&text).unwrap()
     }
 
     fn hello(&mut self) -> Value {
@@ -294,6 +332,33 @@ fn status_counts_both_open_connections() {
     second.send(&command("c_1", "status", json!({})));
     let (_, result) = accepted(&second.next("the acknowledgement"));
     assert_eq!(result.get("clients"), Some(&json!(2)));
+}
+
+#[test]
+fn client_lines_end_at_the_cap_before_any_parse() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    hub.line_cap.store(256, Ordering::SeqCst);
+    // Just below and exactly at the cap, the padded status is answered.
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send_padded("c_1", 255);
+    let (id, _) = accepted(&client.next("the 255-byte acknowledgement"));
+    assert_eq!(id, "c_1");
+    client.send_padded("c_2", 256);
+    let (id, _) = accepted(&client.next("the 256-byte acknowledgement"));
+    assert_eq!(id, "c_2");
+    // One byte past the cap with no line feed, the hub closes with no answer.
+    let mut over = Client::connect(&hub);
+    over.hello();
+    over.send_padded_no_lf(257);
+    over.closed("after the over-long line with no feed");
+    // One byte past the cap with a line feed, the valid JSON is refused
+    // unparsed: the hub closes with no answer.
+    let mut framed = Client::connect(&hub);
+    framed.hello();
+    framed.send_padded("c_3", 257);
+    framed.closed("after the over-long framed line");
 }
 
 #[test]

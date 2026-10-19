@@ -31,7 +31,7 @@
 //! that closes the connection gets `stream_closed` and loses the kept
 //! level first (`crate::closed`).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::AtomicBool;
@@ -700,7 +700,6 @@ fn relay(
         mut reopen,
     } = owned;
     let mut read = BufReader::new(reader);
-    let mut buf = Vec::new();
     let mut exiting = false;
     // Set once the session closes its socket: only then does the
     // connection follow a `rewound` to the next session. A client that
@@ -712,13 +711,14 @@ fn relay(
         if let Some(before_read) = lock(&order.before_read).take() {
             before_read();
         }
-        buf.clear();
-        match read.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => {
+        match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => {
                 ended = true;
                 break;
             }
-            Ok(_) => {
+            Ok(Some(mut buf)) => {
+                // The forwarded line keeps its one trailing line feed.
+                buf.push(b'\n');
                 let mut ack = acknowledgement(&buf);
                 let replayed_ack = muted(ack.as_ref(), &replayed);
                 #[cfg(test)]
@@ -893,9 +893,10 @@ fn line_bytes(line: &Map<String, Value>) -> Option<Vec<u8>> {
 }
 
 fn write_all(stream: &UnixStream, bytes: &[u8]) -> std::io::Result<()> {
-    let mut stream = stream;
-    stream.write_all(bytes)?;
-    stream.flush()
+    // Pre-framed buffers carry their line feed; the writer takes the line.
+    let line = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    let mut out: &UnixStream = stream;
+    support::framing::write_line(&mut out, line)
 }
 
 #[cfg(test)]

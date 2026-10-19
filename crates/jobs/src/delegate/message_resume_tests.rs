@@ -942,7 +942,6 @@ fn gone_resumes_once_the_run_ends_during_the_backoff() {
     );
     end_resume_run(finish, &id, "Done.");
     let _run1 = take_notice(&rig);
-    rig.clock.advance(Duration::from_millis(50));
     let output = answered(&rx);
     handle.join().unwrap();
     assert!(output.error.is_none());
@@ -964,12 +963,17 @@ fn closing_after_a_committed_gone_resumes_once_the_run_ends() {
     let (id, finish) = open_resume_delegate(&rig, &output_path);
     let watchdog = Watchdog::matching("fiber-message-closing-gone");
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi", CancelToken::new());
+    let backoff = rig.clock.now() + Duration::from_millis(50);
     assert!(
-        rig.clock
-            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
+        rig.clock.await_parked(backoff, DEADLINE),
         "the call parks its backoff"
     );
-    rig.clock.advance(Duration::from_millis(50));
+    rig.clock.advance_when_parked(
+        Some(backoff),
+        None,
+        Duration::from_millis(50),
+        &fakes::Deadline::after(DEADLINE),
+    );
     // The closing rejection clears the committed mark; the closing wait
     // follows on the session clock.
     let at = rig.clock.now() + BOUND;

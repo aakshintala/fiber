@@ -319,7 +319,8 @@ One JSON object per line. Its keys follow the rules of `docs/events.md`,
 
 A line that is not a JSON object, has no string `id` or `command`, has
 `args` of the wrong type, or has a key not in this table, is rejected
-`malformed`. `args` with a missing key, a key of the wrong type or a
+`malformed`. A client line longer than the framing cap (64 MiB) closes the
+connection with no answer. `args` with a missing key, a key of the wrong type or a
 key the command does not take is rejected `invalid_arguments`, so an older
 Fiber says no to a newer client's key instead of ignoring it.
 
@@ -763,6 +764,9 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
   ("Stopping a command"). Groups are signalled together, never one after
   another. Six groups that ignore SIGTERM took 0.81 s in parallel and 4.85 s
   in sequence (macOS arm64, `research/shutdown/probe5_nested_kill_cost.py`).
+- Every extension callback in flight ends, and every `host.exec` process
+  group it started gets SIGTERM with the rest: a group still alive 800 ms
+  later gets SIGKILL, as a tool call's does.
 - A Fiber delegate is a session process, and SIGTERM starts its own shutdown.
   Its parent waits for it to exit, up to the bound, rather than sending
   SIGKILL at 800 ms, so the delegate stops its own commands and writes its

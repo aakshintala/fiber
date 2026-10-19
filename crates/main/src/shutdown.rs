@@ -61,6 +61,11 @@ pub(crate) fn start(
     let stopper = session.stopper();
     let started = signals.start(
         Box::new(move |code| {
+            // A shutdown stops every running extension callback and its
+            // `host.exec` group as it stops a tool call's: SIGTERM now,
+            // SIGKILL 800 ms later for a group still alive
+            // (`docs/invocation.md`, "Shutdown").
+            extensions::stop_every_callback();
             // The code first: the loop reads it once the stopper wakes it.
             turn.shutdown(code);
             reads.cancel();
