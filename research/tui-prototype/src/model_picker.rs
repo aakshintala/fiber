@@ -4,7 +4,7 @@
 
 use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
-use crate::{Act, BLUE, ORANGE, Row, SPIN, Ui, bold, dim, fg, hot_row, panel, row, sp, width};
+use crate::{Act, BLUE, ORANGE, RED, Row, SPIN, Ui, bold, dim, fg, hot_row, panel, row, sp, width};
 use ratatui::style::{Modifier, Style};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use unicode_width::UnicodeWidthStr;
@@ -363,6 +363,8 @@ pub enum Install {
     Missing,
     /// the install runs; the row reads installing with the spinner
     Installing,
+    /// the install failed; the row stays and shows the error
+    Failed { error: &'static str },
 }
 
 /// The catalogue on screen: the hub's on a remote terminal, else the
@@ -579,6 +581,17 @@ pub(crate) const CASES: &[Case<State>] = &[
         check: "the same row below the installed sections reading `⟳ installing` with the spinner in attention, its models still dim; same panel, bar and legend.",
         build: || State {
             install: Some(Install::Installing),
+            ..base()
+        },
+    },
+    Case {
+        name: "install-failed",
+        help: "the not-installed row keeping its install error",
+        check: "the same row below the installed sections still marked not installed, with an indented error line in error under its dim models; same panel, bar and legend.",
+        build: || State {
+            install: Some(Install::Failed {
+                error: "fetch failed: connection reset",
+            }),
             ..base()
         },
     },
@@ -1091,10 +1104,11 @@ fn footer(s: &State) -> Row {
 /// The not-installed provider's rows below the installed sections: the
 /// row with the gutter and the name in accent, then its models dim with
 /// no prices and no thinking chips, since nothing installed has either.
-/// While the install runs the mark gives way to the spinner in attention.
+/// While the install runs the mark gives way to the spinner in attention;
+/// a failed install keeps the row and adds its error in error underneath.
 fn pending_rows(s: &State, p: &Provider, install: Install) -> Vec<Row> {
     let mark = match install {
-        Install::Missing => sp(" · not installed", dim()),
+        Install::Missing | Install::Failed { .. } => sp(" · not installed", dim()),
         Install::Installing => sp(format!(" ⟳ installing {} ", spin(s)), fg(ORANGE)),
     };
     let mut out = vec![
@@ -1111,6 +1125,9 @@ fn pending_rows(s: &State, p: &Provider, install: Install) -> Vec<Row> {
             spans.push(sp(format!("[{r}] "), dim()));
         }
         out.push(row(spans));
+    }
+    if let Install::Failed { error } = install {
+        out.push(row(vec![sp(format!("    ✗ {error}"), fg(RED))]));
     }
     out
 }
@@ -2644,6 +2661,46 @@ mod tests {
         // Nothing failed or finished here.
         for word in ["\u{2713} installed", "\u{2717}", "needs a credential"] {
             assert!(!t.contains(word), "running case draws {word}");
+        }
+    }
+
+    #[test]
+    fn the_failed_row_stays_and_shows_its_error_in_error() {
+        let rows = view(&for_case("install-failed"), 100);
+        let t = text(&rows);
+        assert!(t.contains("databricks"), "missing the failed provider");
+        assert!(
+            t.contains("not installed"),
+            "the failed row leaves the not-installed section"
+        );
+        assert!(
+            t.contains("fetch failed: connection reset"),
+            "the error line is missing"
+        );
+        // The error reads indented in the error role, on its own row.
+        let row = rows
+            .iter()
+            .find(|r| plain(r).contains("connection reset"))
+            .unwrap();
+        assert!(
+            plain(row).starts_with("    "),
+            "the error is not an indented second row"
+        );
+        assert!(
+            !plain(row).contains("not installed"),
+            "the error shares the provider row"
+        );
+        for sp in row.spans.iter().filter(|sp| !sp.content.trim().is_empty()) {
+            assert_eq!(sp.style.fg, Some(RED), "the error is not in error");
+        }
+        // Nothing still runs or finished here.
+        for word in [
+            "installing",
+            "\u{25cb}",
+            "\u{2713} installed",
+            "needs a credential",
+        ] {
+            assert!(!t.contains(word), "failed case draws {word}");
         }
     }
 
