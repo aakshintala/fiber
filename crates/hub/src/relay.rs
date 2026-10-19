@@ -32,9 +32,6 @@
 //! level first (`crate::closed`).
 
 use std::io::BufReader;
-// The relay tests read socket lines through this module's scope.
-#[cfg(test)]
-use std::io::BufRead;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::AtomicBool;

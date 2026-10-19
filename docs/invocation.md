@@ -319,7 +319,8 @@ One JSON object per line. Its keys follow the rules of `docs/events.md`,
 
 A line that is not a JSON object, has no string `id` or `command`, has
 `args` of the wrong type, or has a key not in this table, is rejected
-`malformed`. `args` with a missing key, a key of the wrong type or a
+`malformed`. A client line longer than the framing cap (64 MiB) closes the
+connection with no answer. `args` with a missing key, a key of the wrong type or a
 key the command does not take is rejected `invalid_arguments`, so an older
 Fiber says no to a newer client's key instead of ignoring it.
 

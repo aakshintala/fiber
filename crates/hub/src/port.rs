@@ -10,9 +10,6 @@
 //! while the connection thread reads frames into the pair.
 
 use std::io::{self, BufReader, Write};
-// The port tests read socket lines through this module's scope.
-#[cfg(test)]
-use std::io::BufRead;
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};

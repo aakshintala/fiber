@@ -111,9 +111,11 @@ impl Client {
         self.write.flush().unwrap();
     }
 
-    /// The next read is end of file within one deadline, with no answer
-    /// before it: the blocking read runs on a thread, as `next` does.
-    fn closed(&mut self, what: &str) {
+    /// One socket line under one deadline: the blocking read runs on a
+    /// thread and its result is received under one deadline, never parking
+    /// the test thread past the wait. Panics past the deadline naming the
+    /// wait.
+    fn read_deadline(&mut self, what: &str) -> (std::io::Result<usize>, String) {
         let (done_tx, done_rx) = mpsc::channel();
         thread::scope(|scope| {
             scope.spawn(|| {
@@ -121,36 +123,30 @@ impl Client {
                 let outcome = self.read.read_line(&mut text);
                 done_tx.send((outcome, text)).unwrap_or(());
             });
-            let (outcome, text) = Deadline::after(DEADLINE)
+            Deadline::after(DEADLINE)
                 .recv(&done_rx)
-                .unwrap_or_else(|_| panic!("the hub never closes {what}"));
-            let n = outcome.unwrap_or_else(|_| panic!("the hub never closes {what}"));
-            assert!(
-                text.is_empty(),
-                "the hub answers before it closes {what}: {text}"
-            );
-            assert_eq!(n, 0, "the hub never closes {what}");
+                .unwrap_or_else(|_| panic!("never received {what}"))
         })
     }
 
-    /// The next line, parsed: the blocking read runs on a thread and its
-    /// result is received under one deadline, never parking the test
-    /// thread past the wait. Panics past the deadline naming the wait.
+    /// The next read is end of file within one deadline, with no answer
+    /// before it.
+    fn closed(&mut self, what: &str) {
+        let (outcome, text) = self.read_deadline(what);
+        let n = outcome.unwrap_or_else(|_| panic!("the hub never closes {what}"));
+        assert!(
+            text.is_empty(),
+            "the hub answers before it closes {what}: {text}"
+        );
+        assert_eq!(n, 0, "the hub never closes {what}");
+    }
+
+    /// The next line, parsed.
     fn next(&mut self, what: &str) -> Value {
-        let (done_tx, done_rx) = mpsc::channel();
-        thread::scope(|scope| {
-            scope.spawn(|| {
-                let mut text = String::new();
-                let outcome = self.read.read_line(&mut text);
-                done_tx.send((outcome, text)).unwrap_or(());
-            });
-            let (outcome, text) = Deadline::after(DEADLINE)
-                .recv(&done_rx)
-                .unwrap_or_else(|_| panic!("never received {what}"));
-            outcome.unwrap_or_else(|_| panic!("never received {what}"));
-            assert!(!text.is_empty(), "the hub closed before {what}");
-            serde_json::from_str(&text).unwrap()
-        })
+        let (outcome, text) = self.read_deadline(what);
+        outcome.unwrap_or_else(|_| panic!("never received {what}"));
+        assert!(!text.is_empty(), "the hub closed before {what}");
+        serde_json::from_str(&text).unwrap()
     }
 
     fn hello(&mut self) -> Value {
