@@ -220,6 +220,58 @@ fn a_point_past_the_parents_end_is_a_pointer_from_lines() {
 }
 
 #[test]
+fn range_caps_the_window_at_the_point() {
+    let (_home, dir) = chain_fixture("range");
+    let segments = history(&dir).unwrap();
+    let root = &segments[0];
+    for (from, max, expected) in [
+        (1, 1, vec![1]),
+        (0, 10, vec![0, 1, 2]),
+        (2, 10, vec![2]),
+        (3, 10, vec![]),
+        (0, 0, vec![]),
+    ] {
+        let lines = root.range(from, max).unwrap();
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.seq.as_ref().unwrap().0)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn range_parses_only_the_window_and_stops_scanning_at_the_point() {
+    let (_home, dir) = chain_fixture("range-corrupt");
+    let segments = history(&dir).unwrap();
+    let root = &segments[0];
+    corrupt(&root.dir, 1);
+    corrupt(&root.dir, 3);
+    let lines = root.range(2, 1).unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].seq, Some(Seq(2)));
+    assert!(root.range(1, 1).is_err());
+}
+
+#[test]
+fn range_refuses_a_short_log_unless_from_is_past_the_point() {
+    let (_home, dir) = chain_fixture("range-short");
+    let mut segments = history(&dir).unwrap();
+    let root = &mut segments[0];
+    root.to = Some(Seq(6));
+    for from in [0, 5, 6] {
+        let error = root.range(from, 1).unwrap_err();
+        assert!(matches!(error, Error::Pointer { .. }));
+        assert!(error.to_string().contains("s_aaaaaaaaaaaaaaaa"));
+    }
+    assert!(root.range(7, 1).unwrap().is_empty());
+    root.to = Some(Seq(5));
+    assert_eq!(root.range(5, 1).unwrap()[0].seq, Some(Seq(5)));
+}
+
+#[test]
 fn lines_holds_the_point_and_nothing_past_it() {
     let (_home, dir) = chain_fixture("window");
     let root = dir.parent().unwrap().join("s_aaaaaaaaaaaaaaaa");

@@ -96,6 +96,14 @@ impl Segment {
     /// "Resume"). Fails [`Error::Pointer`] when the log ends before
     /// `to`: the pointer names a line the log does not hold.
     pub fn lines(&self, from: u64) -> Result<Vec<Envelope>, Error> {
+        self.range(from, usize::MAX)
+    }
+
+    /// At most `max` durable lines from `from`, bounded by `to` inclusive.
+    /// Scans only up to the point and parses only the returned window.
+    /// Empty when `from` is past `to`; otherwise a log ending before `to`
+    /// fails with [`Error::Pointer`].
+    pub fn range(&self, from: u64, max: usize) -> Result<Vec<Envelope>, Error> {
         let end = self.to.as_ref().map_or(u64::MAX, |to| to.0);
         if from > end {
             return Ok(Vec::new());
@@ -112,7 +120,7 @@ impl Segment {
             });
         }
         // The scan stopped at `to`, so the table holds nothing past it.
-        offsets.range(from, usize::MAX)
+        offsets.range(from, max)
     }
 }
 
