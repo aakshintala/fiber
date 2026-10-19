@@ -8,13 +8,12 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use config::{Config, Layer, ProjectKey, Sources};
-use contract::ErrorCode;
 use contract::events::Notice;
 use contract::shapes::Failure;
 use extensions::Providers;
 use serde_json::Value;
 
-use crate::{failed, project_of, with_dirs, write_line};
+use crate::{CliError, project_of, with_dirs, write_line};
 
 /// Prints each notice as one line on standard error: exactly the notice's
 /// message, nothing else (`docs/configuration.md`, "When Fiber reads
@@ -33,15 +32,14 @@ fn run_get(
     key: &str,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let (_, project) = project_of(home, workspace)?;
     let config = Config::load(Sources {
         home: home.to_path_buf(),
         workspace: workspace.to_path_buf(),
         project,
         overrides: Vec::new(),
-    })
-    .map_err(|e| failed(e.code(), e))?;
+    })?;
     // Each notice as one line on stderr: this load's, then the installed
     // providers', each once per command run.
     let mut notices: Vec<Notice> = config.notices().to_vec();
@@ -55,26 +53,26 @@ fn run_get(
     if key == "reviewer.context" {
         let notes = config.reviewer_context();
         if notes.is_empty() {
-            writeln!(err, "`{key}` is not set.")
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("standard error: {e}")))?;
+            writeln!(err, "`{key}` is not set.").map_err(CliError::StandardError)?;
             return Ok(());
         }
-        write_line(out, &notes)?;
+        write_line(out, &notes).map_err(CliError::from)?;
         return Ok(());
     }
     match config.get(key, None) {
         Some((value, source)) => {
-            let text = serde_json::to_string(&value)
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("a value for `{key}`: {e}")))?;
-            write_line(out, &format!("{text} from {source}"))?;
+            let text = serde_json::to_string(&value).map_err(|source| CliError::ConfigValue {
+                key: key.to_owned(),
+                source,
+            })?;
+            write_line(out, &format!("{text} from {source}")).map_err(CliError::from)?;
             Ok(())
         }
-        None if !config::known_key(key) => Err(crate::usage(format!(
-            "`{key}` is not a configuration key. Run `fiber --help` for usage."
-        ))),
+        None if !config::known_key(key) => Err(CliError::ConfigKeyUnknown {
+            key: key.to_owned(),
+        }),
         None => {
-            writeln!(err, "`{key}` is not set.")
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("standard error: {e}")))?;
+            writeln!(err, "`{key}` is not set.").map_err(CliError::StandardError)?;
             Ok(())
         }
     }
@@ -91,7 +89,7 @@ fn run_set(
     key: &str,
     value: &str,
     err: &mut dyn Write,
-) -> Result<PathBuf, Failure> {
+) -> Result<PathBuf, CliError> {
     let (_, project) = project_of(home, workspace)?;
     let parsed = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
     let mut notices = Vec::new();
@@ -112,8 +110,7 @@ fn run_set(
             notices.extend(config.notices().iter().cloned());
         }
     }
-    let file = config::set(home, workspace, &project, layer, key, parsed)
-        .map_err(|e| failed(e.code(), e))?;
+    let file = config::set(home, workspace, &project, layer, key, parsed)?;
     print_notices(err, &notices);
     Ok(file)
 }
@@ -130,7 +127,7 @@ pub fn config_set_text(
     text: &str,
 ) -> Result<(Vec<String>, PathBuf), Failure> {
     let mut err = Vec::new();
-    let file = run_set(home, workspace, layer, key, text, &mut err)?;
+    let file = run_set(home, workspace, layer, key, text, &mut err).map_err(Failure::from)?;
     Ok((
         String::from_utf8_lossy(&err)
             .lines()
@@ -152,8 +149,8 @@ fn check_model(
     project: &ProjectKey,
     typed: &str,
     err: &mut dyn Write,
-) -> Result<Vec<Notice>, Failure> {
-    let (providers, loading) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
+) -> Result<Vec<Notice>, CliError> {
+    let (providers, loading) = Providers::load(home)?;
     let mut notices = loading;
     // Without a cached list the reference is accepted unchecked: one
     // naming a provider that is not installed, or one installed with an
@@ -196,12 +193,10 @@ fn check_model(
         project: project.clone(),
         overrides: Vec::new(),
     })
-    .map_err(|e| failed(e.code(), e))?;
+    .map_err(CliError::from)?;
     notices.extend(config.notices().iter().cloned());
     let mut providers = providers;
-    let _notices = providers
-        .fill_placeholders(&config, &|name| std::env::var(name).ok())
-        .map_err(|e| failed(e.code(), e))?;
+    let _notices = providers.fill_placeholders(&config, &|name| std::env::var(name).ok())?;
     match providers.resolve(typed) {
         Ok(_) => Ok(notices),
         Err(e @ extensions::Error::Unconfigured { .. }) => {
@@ -211,28 +206,18 @@ fn check_model(
         Err(extensions::Error::UnknownModel { .. } | extensions::Error::ModelMissing { .. }) => {
             Err(no_model(&providers, typed))
         }
-        Err(e @ extensions::Error::Ambiguous { .. }) => {
-            Err(failed(ErrorCode::ModelAmbiguous, e.to_string()))
-        }
-        Err(e) => Err(failed(e.code(), e.to_string())),
+        Err(e @ extensions::Error::Ambiguous { .. }) => Err(CliError::ModelAmbiguous(e)),
+        Err(e) => Err(CliError::from(e)),
     }
 }
 
 /// The `no_model` failure: what was typed, the closest installed
 /// references, and where to list them.
-fn no_model(providers: &Providers, typed: &str) -> Failure {
-    let near: Vec<String> = closest(providers, typed);
-    let mut message = format!("No installed model matches `{typed}`.");
-    if !near.is_empty() {
-        let listed = near
-            .iter()
-            .map(|reference| format!("`{reference}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        message.push_str(&format!(" Closest: {listed}."));
+fn no_model(providers: &Providers, typed: &str) -> CliError {
+    CliError::ModelNone {
+        typed: typed.to_owned(),
+        closest: closest(providers, typed),
     }
-    message.push_str(" Run `fiber models` to list them.");
-    failed(ErrorCode::NoModel, message)
 }
 
 /// Up to 3 installed `provider/model` references nearest the typed text,

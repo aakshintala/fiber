@@ -47,10 +47,15 @@ fn an_empty_value_is_a_usage_error_and_stores_nothing() {
     setup.declare("acme", &[NAME]);
     let (result, err) = setup.login(Some(NAME), false, "", &mut Fake::new("  \n"));
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::Usage);
-    assert_eq!(
-        e.message,
-        "No value was given; nothing was stored. Run `fiber --help` for usage."
+    assert!(
+        matches!(
+            e,
+            CliError::StoreRefused {
+                refusal: Refusal::NoValueGiven,
+                hint: true,
+            }
+        ),
+        "{e:?}"
     );
     assert_eq!(err, "");
     assert!(!file(&setup, NAME).exists());
@@ -63,9 +68,18 @@ fn as_with_a_declared_secret_is_a_usage_error_that_reads_nothing() {
     let mut keys = Fake::new(KEY);
     let (result, err) = setup.login_as(Some(NAME), Some("work"), false, "", &mut keys);
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::Usage);
+    assert!(
+        matches!(
+            e,
+            CliError::StoreRefused {
+                refusal: Refusal::AsOnlyForProvider { .. },
+                hint: true,
+            }
+        ),
+        "{e:?}"
+    );
     assert_eq!(
-        e.message,
+        e.to_string(),
         "--as applies only to a provider, and `acme.api_key` is a declared secret. Run `fiber --help` for usage."
     );
     assert_eq!(err, "");
@@ -79,10 +93,19 @@ fn an_unknown_name_is_a_usage_error_listing_the_providers_and_the_secrets() {
         let mut keys = Fake::new(KEY);
         let (result, _) = setup.login(Some("acme.api_kye"), false, "", &mut keys);
         let e = failed(result);
-        assert_eq!(e.code, ErrorCode::Usage);
+        assert!(
+            matches!(
+                e,
+                CliError::StoreRefused {
+                    refusal: Refusal::UnknownName { .. },
+                    hint: true,
+                }
+            ),
+            "{e:?}"
+        );
         assert_eq!(keys.asked, 0);
         assert!(!setup.home().join("credentials").exists());
-        e.message
+        e.to_string()
     };
     let prefix = "`acme.api_kye` is neither an installed provider nor a declared secret; ";
     let suffix = ". Run `fiber --help` for usage.";
@@ -129,17 +152,19 @@ fn a_name_that_is_both_a_provider_and_a_secret_logs_in_to_the_provider() {
     assert_eq!(setup.stored("acme", "default").as_deref(), Some(KEY));
     // Neither the menu nor the unknown-name message lists it as a secret.
     let (result, err) = setup.login(None, true, "\n", &mut Fake::new(KEY));
-    assert_eq!(failed(result).code, ErrorCode::Usage);
+    assert!(matches!(failed(result), CliError::NothingChosen));
     assert_eq!(
         err,
         "Providers:\n  1) acme\nProvider or secret, by number or name: "
     );
     let (result, _) = setup.login(Some("nope"), false, "", &mut Fake::new(KEY));
-    assert!(
-        failed(result)
-            .message
-            .contains("no installed extension declares a secret"),
-    );
+    assert!(matches!(
+        failed(result),
+        CliError::StoreRefused {
+            refusal: Refusal::UnknownName { .. },
+            hint: true,
+        }
+    ),);
 }
 
 fn secret_menu_setup() -> Setup {
@@ -168,7 +193,7 @@ fn the_menu_offers_the_secrets_after_the_providers_and_stores_a_pick() {
     // One past the last secret is no pick.
     let setup = secret_menu_setup();
     let (result, _) = setup.login(None, true, "4\n", &mut Fake::new("v1"));
-    assert!(failed(result).message.contains("is neither a listed"));
+    assert!(matches!(failed(result), CliError::ChoiceUnknown { .. }));
 }
 
 #[test]
@@ -190,13 +215,15 @@ fn a_menu_pick_of_a_secret_with_as_is_a_usage_error_that_reads_nothing() {
     let mut keys = Fake::new(KEY);
     let (result, _) = setup.login_as(None, Some("work"), true, "3\n", &mut keys);
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::Usage);
     assert!(
-        e.message.starts_with(
-            "--as applies only to a provider, and `acme.api_key` is a declared secret."
+        matches!(
+            e,
+            CliError::StoreRefused {
+                refusal: Refusal::AsOnlyForProvider { .. },
+                hint: true,
+            }
         ),
-        "{}",
-        e.message
+        "{e:?}"
     );
     assert_eq!(keys.asked, 0);
     assert!(!setup.home().join("credentials").exists());
@@ -220,8 +247,8 @@ fn a_declared_secret_over_a_providers_directory_fails_and_leaves_it() {
     let mut keys = Fake::new("other");
     let (result, err) = setup.login(Some("opencode"), false, "", &mut keys);
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::ConfigInvalid, "{}", e.message);
-    assert!(!e.message.contains("other"));
+    assert!(matches!(e, CliError::Config(_)), "{e:?}");
+    assert!(!e.to_string().contains("other"));
     assert_eq!(err, "");
     assert_eq!(keys.asked, 0);
     assert_eq!(setup.stored("opencode", "default").as_deref(), Some(KEY));

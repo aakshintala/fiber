@@ -13,15 +13,15 @@ use std::time::Duration;
 
 use config::{Config, Sources, get_global, replace_global};
 use contract::clock::Clock;
-use contract::shapes::Failure;
-use doors::failure;
 use extensions::{Browser, Providers, login_provider};
+
+use crate::CliError;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::Errno;
 use serde_json::Value;
 
-use super::{config_failure, installed};
+use super::installed;
 
 /// The reviewer choice for one provider: its models as local IDs, in the
 /// provider's order, never padded with a stale saved ID, with the saved or
@@ -53,7 +53,7 @@ pub(crate) fn reviewer_key(name: &str) -> String {
 /// display/parse syntax cannot represent `name`: a name it cannot
 /// round-trip, such as one holding both a dot and a quote, never becomes a
 /// dotted path. The credential and every config byte stay as they were.
-fn reviewer_segments(name: &str) -> Result<Vec<String>, Failure> {
+fn reviewer_segments(name: &str) -> Result<Vec<String>, CliError> {
     let key = reviewer_key(name);
     let expected = vec![
         "providers".to_owned(),
@@ -62,10 +62,7 @@ fn reviewer_segments(name: &str) -> Result<Vec<String>, Failure> {
     ];
     match config::path::parse(&key) {
         Some(segments) if segments == expected => Ok(segments),
-        _ => Err(failure(
-            contract::ErrorCode::ConfigInvalid,
-            format!("`{key}` cannot name a provider reviewer: the name is not one path segment."),
-        )),
+        _ => Err(CliError::ReviewerNameUnrepresentable { key: key.clone() }),
     }
 }
 
@@ -141,10 +138,10 @@ pub fn reviewer_models(
     providers: &Providers,
     name: &str,
     clock: Arc<dyn Clock>,
-) -> Result<ReviewerModels, Failure> {
+) -> Result<ReviewerModels, CliError> {
     let data = installed(providers, name)?.clone();
     let key = reviewer_key(name);
-    let selected = match get_global(home, &key).map_err(config_failure)? {
+    let selected = match get_global(home, &key)? {
         Some(value) => value.as_str().map(str::to_owned),
         None => None,
     }
@@ -168,8 +165,7 @@ pub fn reviewer_models(
         workspace: home.to_path_buf(),
         project,
         overrides: Vec::new(),
-    })
-    .map_err(config_failure)?;
+    })?;
     let lua = match login_provider(
         home,
         providers,
@@ -216,12 +212,15 @@ pub fn reviewer_models(
 /// Saves `id` as provider `name`'s reviewer, exactly as listed: no
 /// discovery rerun, no second list check, so a stale Enter still lands.
 /// Names the key on failure; the stored credential stays either way.
-pub fn set_reviewer(home: &Path, name: &str, id: &str) -> Result<(), Failure> {
+pub fn set_reviewer(home: &Path, name: &str, id: &str) -> Result<(), CliError> {
     let key = reviewer_key(name);
     reviewer_segments(name)?;
     replace_global(home, &key, Some(Value::String(id.to_owned())))
         .map(|_| ())
-        .map_err(|e| failure(e.code(), format!("could not save `{key}`: {e}")))
+        .map_err(|source| CliError::ReviewerNotSaved {
+            key: key.clone(),
+            source,
+        })
 }
 
 /// How long one terminal prompt wait blocks before rechecking the

@@ -17,9 +17,9 @@ use std::thread;
 use std::time::Duration;
 
 use config::CredentialFile;
-use contract::ErrorCode;
-use contract::shapes::Failure;
 use extensions::{Browser, LoginMethod, Providers};
+
+use crate::{CliError, Refusal};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{OauthReply, OauthServer, jwt};
@@ -320,7 +320,7 @@ fn browser_flow(
     browser: &Arc<RedirectBrowser>,
     opened: &mpsc::Receiver<String>,
     server: &OauthServer,
-) -> Result<String, Failure> {
+) -> Result<String, CliError> {
     let _ = server;
     let (tx, rx) = mpsc::channel();
     let (home, providers, label) = (setup.home(), providers.clone(), label.map(str::to_owned));
@@ -376,7 +376,7 @@ fn port_of(url: &str) -> u16 {
         .unwrap()
 }
 
-fn failed(result: Result<String, Failure>) -> Failure {
+fn failed(result: Result<String, CliError>) -> CliError {
     result.unwrap_err()
 }
 
@@ -440,11 +440,15 @@ fn an_as_label_already_stored_is_refused_before_anything_opens() {
         setup.clock(),
         &LoginCancel::default(),
     ));
-    assert_eq!(error.code, ErrorCode::Usage);
     assert!(
-        error.message.contains("--as"),
-        "{message}",
-        message = error.message
+        matches!(
+            error,
+            CliError::StoreRefused {
+                refusal: Refusal::AlreadyStored { .. },
+                hint: true,
+            }
+        ),
+        "{error:?}"
     );
     assert!(browser.opened.lock().unwrap().is_empty());
     assert_eq!(server.request_count(), 0);
@@ -463,11 +467,15 @@ fn an_email_label_already_stored_is_refused_after_the_flow_naming_as() {
     let error = failed(browser_flow(
         &setup, &providers, None, &browser, &opened, &server,
     ));
-    assert_eq!(error.code, ErrorCode::Usage);
     assert!(
-        error.message.contains("--as"),
-        "{message}",
-        message = error.message
+        matches!(
+            error,
+            CliError::StoreRefused {
+                refusal: Refusal::AlreadyStored { .. },
+                hint: true,
+            }
+        ),
+        "{error:?}"
     );
     assert_eq!(setup.stored(EMAIL).unwrap()["token"], json!("old"));
 }
@@ -488,12 +496,7 @@ fn a_browser_login_while_another_holds_the_label_lock_is_io_failed() {
     let error = failed(browser_flow(
         &setup, &providers, None, &browser, &opened, &server,
     ));
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert!(
-        error.message.contains("another login"),
-        "{message}",
-        message = error.message
-    );
+    assert!(matches!(error, CliError::LoginRunning { .. }), "{error:?}");
     assert!(setup.stored(EMAIL).is_none());
     drop(held);
 }
@@ -509,11 +512,9 @@ fn an_email_that_is_no_label_is_a_usage_error_naming_as() {
     let error = failed(browser_flow(
         &setup, &providers, None, &browser, &opened, &server,
     ));
-    assert_eq!(error.code, ErrorCode::Usage);
     assert!(
-        error.message.contains("--as"),
-        "{message}",
-        message = error.message
+        matches!(error, CliError::LabelNotStorable { .. }),
+        "{error:?}"
     );
     assert!(setup.stored("a.lock").is_none());
 }
@@ -530,7 +531,7 @@ fn a_failed_global_write_deletes_the_stored_file() {
     let error = failed(browser_flow(
         &setup, &providers, None, &browser, &opened, &server,
     ));
-    assert_eq!(error.code, ErrorCode::ConfigInvalid, "{error:?}");
+    assert!(matches!(error, CliError::Config(_)), "{error:?}");
     assert!(setup.stored(EMAIL).is_none());
 }
 
@@ -652,11 +653,9 @@ fn device_on_a_declared_secret_is_a_usage_error() {
         },
     );
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::Usage);
     assert!(
-        error.message.contains("--device"),
-        "{message}",
-        message = error.message
+        matches!(error, CliError::DeviceNeedsBrowserProvider),
+        "{error:?}"
     );
 }
 
@@ -757,7 +756,7 @@ fn run_login_with(
     terminal: bool,
     device: bool,
     input: &str,
-) -> (Result<(), Failure>, String, u64) {
+) -> (Result<(), CliError>, String, u64) {
     let (done, finished) = mpsc::channel();
     let input = input.to_owned();
     thread::spawn(move || {
@@ -894,11 +893,9 @@ fn device_on_a_key_provider_is_a_usage_error() {
         },
     );
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::Usage);
     assert!(
-        error.message.contains("--device"),
-        "{message}",
-        message = error.message
+        matches!(error, CliError::DeviceNeedsBrowserProvider),
+        "{error:?}"
     );
 }
 
@@ -931,12 +928,8 @@ fn run_login_of_a_key_provider_with_device_is_a_usage_failure() {
     assert_eq!(output.status.code(), Some(2), "{output:?}");
 }
 
-fn cancelled_of(error: &Failure) {
-    assert_eq!(error.code, ErrorCode::AuthenticationFailed, "{error:?}");
-    assert_eq!(
-        error.message, "the login was cancelled; nothing was stored.",
-        "{error:?}"
-    );
+fn cancelled_of(error: &CliError) {
+    assert!(matches!(error, CliError::LoginCancelled), "{error:?}");
 }
 
 #[test]
@@ -946,7 +939,7 @@ fn a_commit_before_any_cancel_runs_the_store() {
     let value = cancel
         .commit(|| {
             ran = true;
-            Ok::<_, Failure>(7)
+            Ok::<_, CliError>(7)
         })
         .unwrap();
     assert_eq!(value, 7);
@@ -961,7 +954,7 @@ fn a_commit_after_cancel_refuses_without_running_the_store() {
     let error = cancel
         .commit(|| {
             ran = true;
-            Ok::<_, Failure>(7)
+            Ok::<_, CliError>(7)
         })
         .unwrap_err();
     cancelled_of(&error);
@@ -1021,7 +1014,7 @@ fn a_cancel_during_the_store_waits_for_it() {
                     .lock()
                     .unwrap()
                     .push("store-inside-stop".to_owned());
-                Ok::<_, Failure>(())
+                Ok::<_, CliError>(())
             });
             log_for_stop.lock().unwrap().push("stopped".to_owned());
             stopped_tx.send(()).unwrap();
@@ -1035,7 +1028,7 @@ fn a_cancel_during_the_store_waits_for_it() {
             entered_tx.send(()).unwrap();
             release_rx.recv().expect("the release arrives");
             log_for_commit.lock().unwrap().push("stored".to_owned());
-            Ok::<_, Failure>(7)
+            Ok::<_, CliError>(7)
         });
         commit_tx.send(result).unwrap();
     });
@@ -1191,8 +1184,16 @@ fn login_with_refusal_never_asks_for_a_reviewer() {
     let (result, output, position) =
         run_login_with(setup.home(), providers, setup.clock(), true, false, "1\n");
     let failure = result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("--as"), "{}", failure.message);
+    assert!(
+        matches!(
+            failure,
+            CliError::StoreRefused {
+                refusal: Refusal::AlreadyStored { .. },
+                hint: true,
+            }
+        ),
+        "{failure:?}"
+    );
     assert!(!output.contains("Reviewer"), "{output}");
     assert_eq!(position, 0, "the refused login read no reviewer answer");
 }

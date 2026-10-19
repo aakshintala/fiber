@@ -10,16 +10,13 @@ use std::sync::{Arc, Mutex};
 
 use config::read_credential;
 use contract::clock::Clock;
-use contract::shapes::Failure;
-use doors::failure;
 use extensions::{Browser, LoginMethod, Providers, SystemBrowser, login_provider};
 
+use crate::CliError;
+
 /// Why a cancelled login fails: it stored nothing.
-fn cancelled() -> Failure {
-    failure(
-        contract::ErrorCode::AuthenticationFailed,
-        "the login was cancelled; nothing was stored.",
-    )
+fn cancelled() -> CliError {
+    CliError::LoginCancelled
 }
 
 /// Serializes a browser login's cancel against its credential commit: the
@@ -56,7 +53,7 @@ impl LoginCancel {
 
     /// Registers the stop for the running flow: after a cancel it runs at
     /// once, outside the mutex, and reports cancelled.
-    fn started(&self, stop: Box<dyn FnOnce() + Send>) -> Result<(), Failure> {
+    fn started(&self, stop: Box<dyn FnOnce() + Send>) -> Result<(), CliError> {
         let run_now = match self.state.lock() {
             Ok(mut state) => {
                 if state.cancelled {
@@ -77,7 +74,7 @@ impl LoginCancel {
 
     /// Runs the store step under the mutex, refusing without running it
     /// when cancelled: a cancel during the commit waits for it.
-    fn commit<T>(&self, store: impl FnOnce() -> Result<T, Failure>) -> Result<T, Failure> {
+    fn commit<T>(&self, store: impl FnOnce() -> Result<T, CliError>) -> Result<T, CliError> {
         let guard = match self.state.lock() {
             Ok(guard) => guard,
             Err(_) => return Err(cancelled()),
@@ -91,10 +88,7 @@ impl LoginCancel {
     }
 }
 
-use super::{
-    LockedStoreFailure, LoginIo, StoreFailure, already_stored, chosen_label, config_failure,
-    installed, store_locked, stored_name, usage_with_hint,
-};
+use super::{LoginIo, already_stored, chosen_label, installed, store_locked, stored_name};
 
 /// The system browser as `fiber login` runs it: a person is attached,
 /// whatever stdin is, since a person ran the command
@@ -142,39 +136,45 @@ pub fn browser_login(
     browser: Arc<dyn Browser>,
     clock: Arc<dyn Clock>,
     cancel: &LoginCancel,
-) -> Result<String, Failure> {
+) -> Result<String, CliError> {
     let data = installed(providers, name)?;
     let stored = stored_name(data);
     if let Some(label) = label
-        && read_credential(home, stored, label)
-            .map_err(config_failure)?
-            .is_some()
+        && read_credential(home, stored, label)?.is_some()
     {
-        return Err(usage_with_hint(already_stored(name, stored, label)));
+        return Err(CliError::StoreRefused {
+            refusal: already_stored(name, stored, label),
+            hint: true,
+        });
     }
-    let provider = login_provider(home, providers, name, browser, clock)
-        .map_err(|e| failure(e.code(), e.to_string()))?;
+    let provider = login_provider(home, providers, name, browser, clock)?;
     let stop = {
         let provider = std::sync::Arc::clone(&provider);
         Box::new(move || provider.stop()) as Box<dyn FnOnce() + Send>
     };
     cancel.started(stop)?;
-    let logged = provider
-        .login(stored, label, method)
-        .map_err(|e| failure(e.code(), e.to_string()))?;
+    let logged = provider.login(stored, label, method)?;
     cancel.commit(|| {
         let label = chosen_label(label, logged.email.as_deref());
         store_locked(home, data, label, |lock| {
-            lock.write(logged.stored.as_value())
-                .map_err(config_failure)?;
+            lock.write(logged.stored.as_value())?;
             Ok(())
         })
-        .map_err(|error| match error {
-            LockedStoreFailure::Config(_) => usage_with_hint(format!(
-                "`{label}` is not a label `fiber login` can store; pass one with `--as <label>`."
-            )),
-            LockedStoreFailure::Store(StoreFailure::Refused(message)) => usage_with_hint(message),
-            LockedStoreFailure::Store(StoreFailure::Failed(failure)) => failure,
+        // Only the build error maps: every later lock, read, write and
+        // global error passes through as store_locked built it.
+        .map_err(|error| {
+            if matches!(error, CliError::CredentialFile(_)) {
+                CliError::LabelNotStorable {
+                    label: label.to_owned(),
+                }
+            } else if let CliError::StoreRefused { refusal, .. } = error {
+                CliError::StoreRefused {
+                    refusal,
+                    hint: true,
+                }
+            } else {
+                error
+            }
         })
     })
 }
@@ -186,7 +186,7 @@ pub(crate) fn login_with(
     io: &mut LoginIo<'_>,
     name: &str,
     label: Option<&str>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let method = if io.device {
         LoginMethod::Device
     } else {
@@ -209,7 +209,7 @@ pub(crate) fn login_with(
         super::post_store_reviewer(io, name, &format!("fiber: stored {path}"))?;
     } else {
         std::io::Write::write_fmt(io.err, format_args!("fiber: stored {path}\n"))
-            .map_err(super::terminal_failure)?;
+            .map_err(CliError::Terminal)?;
     }
     Ok(())
 }
