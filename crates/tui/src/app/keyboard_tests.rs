@@ -715,6 +715,23 @@ fn esc_closes_a_notice_without_going_back() {
 }
 
 #[test]
+fn an_open_workspace_picker_keeps_go_back_empty() {
+    let mut app = backed();
+    app.home_click(Spot::Workspace);
+    assert!(app.home_modal());
+    assert!(app.completions().is_none());
+    assert_eq!(app.draft(), "");
+    assert_eq!(app.key_context(), Context::Overlay);
+    // The picker takes Esc ahead of the back key, so no press reaches
+    // the gate: call it directly. Overlay context with no completions
+    // must not go back; `&&` in place of the `||` below would open
+    // SESSION here.
+    assert!(app.go_back().is_none());
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
 fn a_selected_steering_row_keeps_right_and_esc_from_going_back() {
     let mut app = homed(80, 24);
     app.on_line(live(SESSION));
