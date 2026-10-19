@@ -292,7 +292,7 @@ host.http(opts)                    -- one HTTP request; returns { status, body }
 host.model(opts)                   -- one model request; returns { text, usage }
 host.exec(program, args, opts)     -- run a program; returns { exit_code, signal, stdout, stderr }
 host.tool(name, args)              -- run a tool the session can call; returns its outcome
-host.delegate(spec, on_finished)   -- start a delegate job; returns its job_id
+host.delegate(spec, { timeout, run })  -- start a delegate job; returns its job_id
 host.fs.read / write / list / stat / mkdir / remove / rename
 host.config.get(key) / host.config.set(key, value, scope)   -- scope: "machine" or "project"
 host.data_dir(scope)               -- "machine" or "project"
@@ -356,7 +356,33 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
 - **`host.delegate`** takes the arguments the model's delegate tool takes and
   starts a job the session owns, with the same limits and the same stop
   (`docs/delegates.md`). `job_started` names the extension. The delegate's
-  final message goes to `on_finished`, not to the model.
+  final message goes to `run`, not to the model. `run` gets the message
+  after the `after_tool` hooks, as an inner call's output is.
+  `spec` carries the delegate tool's keys (`description`, `prompt`,
+  `model`, and the optional `isolation`, `workspace` and `timeout_ms`),
+  as a JSON object: a list, or a value `to_json` refuses, raises the
+  string `host.delegate: `spec` json: <reason>` before the call yields.
+  The second argument is checked like every other registration: it must be
+  a table, `timeout` a whole number of milliseconds above 0, and `run` a
+  function, else the call raises `host.delegate: `spec` must be a table`,
+  `host.delegate: `timeout` must be a whole number of milliseconds above
+  0` or `host.delegate: `run` must be a function`. These are errors in
+  the calling code, raised as strings, before any service call. A refusal
+  from the service reaches Lua as `error({ code, message })`: the codes
+  and messages are the start's, `depth_exceeded`, `invalid_arguments`,
+  `credential_missing` and `tool_error` (`docs/errors.md`).
+  From a command, a hook, a timer or a tool call it starts the delegate;
+  from a provider function, a search function or an effects function it
+  raises `invalid_arguments` (`host.delegate: not available here`) and
+  starts nothing. While the entry script runs it raises `closing`.
+  Once the session's end has begun stopping its jobs, on a normal end, a
+  shutdown or a rewind, it raises `closing` and starts nothing. The end
+  wakes nothing and is not shown to the model, `jobs list` lists the job,
+  and `delegate_message` refuses it. A reload keeps the delegates running,
+  a removal cancels them, and an abandoned VM's delegates are cancelled.
+  Before the session runs, and after a reload until the new set's hub has
+  its inbox, it raises `closing` with `host.delegate: the session is not
+  running yet`.
 - **`host.fs`** reads and writes anywhere, as a process can. The per-path lock
   Fiber's own file tools take is offered (`docs/architecture.md`, "Tool calls
   in a step").
@@ -927,7 +953,8 @@ returned `content` over the cap is cut with a notice naming it.
 `after_tool` also runs on every job delivery: a job's completion notice, each
 batch of a monitor's lines, and a delegate's full, unbounded final message (`docs/tools.md`,
 "Background jobs"). It gets the tool name of the call that started the job, and
-`delivery` says what arrived: `completion`, `monitor` or `delegate`. When a
+`delivery` says what arrived: `completion`, `monitor` or `delegate`. A job
+an extension started with `host.delegate` passes `""` as the tool name. When a
 job ends, it runs once more on the job's whole output file, with `delivery`
 `output_file`, and the artifact text it returns replaces the file. A Fiber
 delegate's `events.jsonl` is another session's log, so the `output_file` pass
@@ -1377,7 +1404,8 @@ each to finish, within its timeout. That is where a worklog or a memory
 written at session end runs. It writes to the extension's data directory
 (`docs/state.md`, "What each part holds"), not to extension state: these
 deliveries come after `fiber_exited`, the last line the log takes, so
-`state.set`, `state.unset` and `host.drive` fail with code `closing`. A process extension then has its manifest's
+`state.set`, `state.unset`, `host.drive` and `host.delegate` fail with
+code `closing`. A process extension then has its manifest's
 `exit_timeout_ms` to finish, and after that gets the shutdown sequence every
 child gets: SIGTERM, 800 ms, then SIGKILL (`docs/invocation.md`, "Shutdown").
 

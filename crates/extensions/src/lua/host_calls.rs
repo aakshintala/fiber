@@ -155,6 +155,7 @@ pub(super) fn admit<'a>(
     request: Request,
     driver: Option<Arc<dyn contract::extension::Drive>>,
     model: Option<Arc<dyn contract::model::HostModel>>,
+    delegate: Option<Arc<dyn contract::extension::HostDelegate>>,
     deliver: &Deliver,
 ) -> Admitted<'a> {
     let name = start.name.as_str();
@@ -504,6 +505,105 @@ pub(super) fn admit<'a>(
                 }
             }
         }
+        Request::Delegate { arguments, handle } => {
+            // The target comes first, as the `Request::Model` arm does: a
+            // provider function, a search function or an effects function
+            // never reaches the service.
+            match target {
+                Target::Provider { .. } | Target::Search(_) | Target::Effects(_) => {
+                    drop(shared);
+                    Admitted::Replied(Reply::Delegate(Err((
+                        contract::ErrorCode::InvalidArguments,
+                        "host.delegate: not available here".to_owned(),
+                    ))))
+                }
+                Target::Tool(_)
+                | Target::Command(_)
+                | Target::Hook { .. }
+                | Target::Timer { .. } => match delegate {
+                    // No service is injected: only a sealed hub sees this;
+                    // it answers `closing`, as `host.drive` does.
+                    None => {
+                        drop(shared);
+                        Admitted::Replied(Reply::Delegate(Err((
+                            contract::ErrorCode::Closing,
+                            "host.delegate: the session is closing".to_owned(),
+                        ))))
+                    }
+                    Some(service) => {
+                        if shared.abandoned {
+                            // An abandoned hub's leaked thread may still run
+                            // Lua: its start spawns nothing.
+                            drop(shared);
+                            Admitted::Replied(Reply::Delegate(Err((
+                                contract::ErrorCode::Closing,
+                                "host.delegate: this extension was stopped".to_owned(),
+                            ))))
+                        } else if !shared.router.has_inbox() {
+                            // Before the session's loop wires the inbox a start
+                            // would get `NoInbox`: fail closed instead, before
+                            // the service is called.
+                            drop(shared);
+                            Admitted::Replied(Reply::Delegate(Err((
+                                contract::ErrorCode::Closing,
+                                "host.delegate: the session is not running yet".to_owned(),
+                            ))))
+                        } else {
+                            // Suspended before the spawn: the service calls
+                            // `bind` under its own start gate, so the reply can
+                            // arrive before a spawn returns, and a reply for an
+                            // unparked id is dropped. No off-thread wait to
+                            // cancel: the suspended callback's deadline bounds
+                            // the call, and a late answer is dropped.
+                            let worker = Arc::clone(hub);
+                            let delegate_deliver = Deliver::clone(deliver);
+                            let extension = name.to_owned();
+                            #[cfg(test)]
+                            let target = target.clone();
+                            Admitted::Spawning {
+                                shared,
+                                spawn: Spawn {
+                                    builder: thread::Builder::new()
+                                        .name(format!("delegate {name}")),
+                                    work: Box::new(move || {
+                                        let mut bound: Option<contract::JobId> = None;
+                                        let mut bind = |id: &contract::JobId| {
+                                            bound = Some(id.clone());
+                                            worker.bind_delegate(id.clone(), handle);
+                                        };
+                                        match service.start(&extension, &arguments, &mut bind) {
+                                            Ok(id) => {
+                                                // The post-start check: an
+                                                // abandon between `bind` and
+                                                // the job's record found no
+                                                // job to stop, so end it here.
+                                                worker.cancel_delegate_if_abandoned(&service, &id);
+                                                #[cfg(test)]
+                                                settle_hook(&target, Pause::DelegateChecked);
+                                                delegate_deliver(Reply::Delegate(Ok(id)));
+                                            }
+                                            Err(failed) => {
+                                                // A start that fails after
+                                                // `bind` leaves no binding
+                                                // for an abandon to cancel.
+                                                if let Some(id) = bound {
+                                                    worker.unbind_delegate(&id);
+                                                }
+                                                delegate_deliver(Reply::Delegate(Err((
+                                                    failed.code,
+                                                    failed.message,
+                                                ))));
+                                            }
+                                        }
+                                    }),
+                                    exec: false,
+                                },
+                            }
+                        }
+                    }
+                },
+            }
+        }
         Request::Lock => {
             // A command, hook, timer or tool holds no provider credential: calling
             // `refresh` there is an error in the calling code, raised as
@@ -591,6 +691,8 @@ pub(crate) enum Pause {
     Admission,
     Start,
     TimerDone,
+    /// After a delegate start's post-start check, before its reply is delivered.
+    DelegateChecked,
 }
 
 /// A test's pause inside `settle`: called with the suspending target.

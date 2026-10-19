@@ -278,12 +278,12 @@ impl Hub {
     /// without the Lua thread, and every waiter wakes. Later deliveries
     /// still route, so a run that ends as it stops is still recorded.
     fn stop_for_shutdown(&self) {
-        let unsent = {
+        let unsent: Unsent = {
             let mut shared = self.lock();
             let unsent = if !matches!(shared.phase, Phase::Stopped(_)) {
-                shared.stop(StopReason::Stopped)
+                shared.stop(StopReason::Stopped).into()
             } else {
-                Vec::new()
+                Unsent::default()
             };
             // Every call still on the hub is cancelled with it, so `judge`
             // waits for an admitted `host.exec` run's end before answering
@@ -304,19 +304,48 @@ impl Hub {
     }
 
     /// Records the extension's drop under the same lock that routes
-    /// deliveries: anything routed after this is dropped.
+    /// deliveries: anything routed after this is dropped. A drop cancels
+    /// no delegate: the session's end owns stopping those.
     pub(crate) fn dispose(&self, _name: &str) {
-        let unsent = {
+        let unsent: Unsent = {
             let mut shared = self.lock();
             shared.router.dispose();
             if !matches!(shared.phase, Phase::Stopped(_)) {
-                shared.stop(StopReason::Stopped)
+                shared.stop(StopReason::Stopped).into()
             } else {
-                Vec::new()
+                Unsent::default()
             }
         };
         drop(unsent);
         self.notify();
+    }
+
+    /// Records the delegate `id` against its `run` handle: the service
+    /// calls `bind` before any child spawns, under the registry's start
+    /// gate, so an abandon after this cancels it.
+    pub(crate) fn bind_delegate(&self, id: contract::JobId, handle: u64) {
+        self.lock().delegates.insert(id, handle);
+    }
+
+    /// Forgets the delegate `id`: its start failed after `bind` ran, so no
+    /// abandon may cancel it.
+    pub(crate) fn unbind_delegate(&self, id: &contract::JobId) {
+        self.lock().delegates.remove(id);
+    }
+
+    /// Cancels the delegate `id` when the extension was abandoned while its
+    /// start ran: an abandon between `bind` and the job's record found no
+    /// job to stop, so the post-start check ends it. A hub stopped any
+    /// other way keeps its delegate running.
+    pub(crate) fn cancel_delegate_if_abandoned(
+        &self,
+        service: &Arc<dyn contract::extension::HostDelegate>,
+        id: &contract::JobId,
+    ) {
+        let abandoned = self.lock().abandoned;
+        if abandoned {
+            service.cancel(std::slice::from_ref(id));
+        }
     }
 
     /// Ends a timer firing: an `every` that was not cancelled fires again
@@ -380,6 +409,52 @@ pub(crate) struct Shared {
     /// worker). One slot is enough: only one call runs on the thread at a
     /// time, and parking or settling the watched hook disarms it.
     pub(super) abandon: Option<AbandonWatch>,
+    /// Each started delegate job against its `run` handle, inserted by
+    /// `bind` before any child spawns. A failed start after `bind` removes
+    /// its entry; an abandon takes every entry to cancel.
+    pub(super) delegates: HashMap<contract::JobId, u64>,
+    /// Set by `abandon`: a leaked thread of this VM may still run Lua, and
+    /// its `host.delegate` is refused from here on.
+    pub(super) abandoned: bool,
+}
+
+/// What a waiter drops after it releases the hub lock: the deliveries
+/// stopping declined, and the delegate jobs an abandon took to cancel.
+/// Only an abandon fills the ids, and every abandon answers, so the arms
+/// that drop theirs while they still hold the lock always carry none:
+/// dropping one there sends no cancel.
+#[derive(Default)]
+pub(super) struct Unsent {
+    deliveries: Vec<Delivery>,
+    service: Option<Arc<dyn contract::extension::HostDelegate>>,
+    ids: Vec<contract::JobId>,
+}
+
+impl From<Vec<Delivery>> for Unsent {
+    fn from(deliveries: Vec<Delivery>) -> Self {
+        Self {
+            deliveries,
+            service: None,
+            ids: Vec::new(),
+        }
+    }
+}
+
+impl Drop for Unsent {
+    fn drop(&mut self) {
+        // Every arm that carries ids drops the guard first, so the cancel
+        // never runs under the hub lock; the service takes no lock of its
+        // own while the guard is held. The deliveries drop with the value.
+        let deliveries = std::mem::take(&mut self.deliveries);
+        let service = self.service.take();
+        let ids = std::mem::take(&mut self.ids);
+        drop(deliveries);
+        if !ids.is_empty()
+            && let Some(service) = service
+        {
+            service.cancel(&ids);
+        }
+    }
 }
 
 /// A hook or command still on the thread after its caller answered `Timeout` at its
@@ -469,18 +544,20 @@ impl Shared {
         provider: &str,
         asked: Instant,
         now: Instant,
-    ) -> (Next, Vec<Delivery>) {
+    ) -> (Next, Unsent) {
         if let Phase::Stopped(reason) = &self.phase {
-            return (Next::Return(Err(reason.error(name))), Vec::new());
+            return (Next::Return(Err(reason.error(name))), Unsent::default());
         }
         let callback = format!("providers/{provider}.lua");
         let until = match self.loads.get(provider) {
             Some(ProviderLoad::Absent) => {
-                return (Next::Return(Ok(Value::Bool(false))), Vec::new());
+                return (Next::Return(Ok(Value::Bool(false))), Unsent::default());
             }
-            Some(ProviderLoad::Loaded) => return (Next::Return(Ok(Value::Bool(true))), Vec::new()),
+            Some(ProviderLoad::Loaded) => {
+                return (Next::Return(Ok(Value::Bool(true))), Unsent::default());
+            }
             Some(ProviderLoad::Failed(reason)) => {
-                return (Next::Return(Err(reason.error(name))), Vec::new());
+                return (Next::Return(Err(reason.error(name))), Unsent::default());
             }
             Some(ProviderLoad::Queued { asked }) => asked.checked_add(LOAD_TIMEOUT),
             Some(ProviderLoad::Running { abandon_at }) => {
@@ -490,10 +567,10 @@ impl Shared {
                         callback,
                     };
                     let error = reason.error(name);
-                    let unsent = self.stop(reason);
+                    let unsent = self.abandon(reason);
                     return (Next::Return(Err(error)), unsent);
                 }
-                return (Next::Sleep(*abandon_at), Vec::new());
+                return (Next::Sleep(*abandon_at), Unsent::default());
             }
             None => asked.checked_add(LOAD_TIMEOUT),
         };
@@ -506,7 +583,7 @@ impl Shared {
                     callback,
                     timeout_ms: timeout_ms(LOAD_TIMEOUT),
                 })),
-                Vec::new(),
+                Unsent::default(),
             );
         }
         let (gate, unsent) = self.gate(name, now);
@@ -580,8 +657,8 @@ impl Shared {
     /// extension. A waiter that finds the entry script past its grace
     /// abandons it. Returns what stopping declined, for the caller to drop
     /// once the hub lock is released; empty unless this call abandoned.
-    pub(super) fn gate(&mut self, name: &str, now: Instant) -> (Gate<'_>, Vec<Delivery>) {
-        let mut unsent = Vec::new();
+    pub(super) fn gate(&mut self, name: &str, now: Instant) -> (Gate<'_>, Unsent) {
+        let mut unsent = Unsent::default();
         if let Phase::Registering { abandon_at } = self.phase
             && expired(abandon_at, now)
         {
@@ -589,10 +666,12 @@ impl Shared {
             // process exits, and a credential lock its VM holds with it; Rust
             // cannot stop a thread. Cap abandoned VMs per session if leaked
             // threads or locks show (docs/performance.md).
-            unsent = self.stop(StopReason::Abandoned {
-                extension: name.to_owned(),
-                callback: ENTRY.to_owned(),
-            });
+            unsent = self
+                .stop(StopReason::Abandoned {
+                    extension: name.to_owned(),
+                    callback: ENTRY.to_owned(),
+                })
+                .into();
         }
         let gate = match &self.phase {
             // No thread is coming: a caller starts the thread before it
@@ -615,7 +694,7 @@ impl Shared {
         target: &Target,
         asked: Instant,
         now: Instant,
-    ) -> (Next, Vec<Delivery>) {
+    ) -> (Next, Unsent) {
         // Stopped is final for every waiter, one holding a result included.
         if let Phase::Stopped(reason) = &self.phase {
             // A stopped call the shutdown cancelled, whose admitted
@@ -626,11 +705,11 @@ impl Shared {
             // run's end notifies, and the next judge answers `Stopped`. An
             // uncancelled call still fails at once.
             if self.exec_pending(id) && self.cancelled.contains(&id) {
-                return (Next::Sleep(None), Vec::new());
+                return (Next::Sleep(None), Unsent::default());
             }
             let e = reason.error(name);
             self.forget(id);
-            return (Next::Return(Err(e)), Vec::new());
+            return (Next::Return(Err(e)), Unsent::default());
         }
         // A watched hook or command still running past its grace: its caller took
         // `Timeout` at its deadline and is gone, and the worker may be
@@ -646,7 +725,7 @@ impl Shared {
                 callback: watch.target.to_string(),
             };
             let error = reason.error(name);
-            let unsent = self.stop(reason);
+            let unsent = self.abandon(reason);
             return (Next::Return(Err(error)), unsent);
         }
         if !matches!(
@@ -658,7 +737,7 @@ impl Shared {
                     Some(Progress::Done(result)) => result,
                     _ => Err(stopped(name)),
                 }),
-                Vec::new(),
+                Unsent::default(),
             );
         }
         let (gate, mut unsent) = self.gate(name, now);
@@ -692,7 +771,7 @@ impl Shared {
                     callback: target.to_string(),
                 };
                 let error = reason.error(name);
-                let unsent = self.stop(reason);
+                let unsent = self.abandon(reason);
                 return (Next::Return(Err(error)), unsent);
             }
             // A hook or command past its timeout has failed: the caller takes the
@@ -743,7 +822,7 @@ impl Shared {
             );
         }
         // debt: as in `gate`, the abandoned thread leaks until the process exits.
-        unsent = self.stop(StopReason::Stopped);
+        unsent = self.abandon(StopReason::Stopped);
         (
             Next::Return(Err(Error::Abandoned {
                 extension: name.to_owned(),
@@ -785,6 +864,28 @@ impl Shared {
             unsent.extend(self.decline(request));
         }
         unsent
+    }
+
+    /// Abandons the extension with `reason` and cancels its bound
+    /// delegates: a VM abandoned mid-session must not keep a delegate
+    /// running on its leaked thread. Runs `stop`, marks the hub abandoned
+    /// and takes every binding with the router's service, for the caller
+    /// to drop after it releases the hub lock, so the cancel never runs
+    /// under it.
+    pub(super) fn abandon(&mut self, reason: StopReason) -> Unsent {
+        let deliveries = self.stop(reason);
+        self.abandoned = true;
+        let ids: Vec<contract::JobId> = std::mem::take(&mut self.delegates).into_keys().collect();
+        let service = if ids.is_empty() {
+            None
+        } else {
+            self.router.delegate.clone()
+        };
+        Unsent {
+            deliveries,
+            service,
+            ids,
+        }
     }
 
     /// Drops the call `id`: its caller has stopped waiting. An in-flight

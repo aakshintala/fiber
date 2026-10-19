@@ -6,9 +6,8 @@ use std::thread;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 
-use super::hub::{Progress, Run};
+use super::hub::{Progress, Run, Unsent};
 use super::*;
-use contract::inbox::Delivery;
 
 /// Wall-clock bound on a wait for the VM, a server, or a thread.
 const WAIT: Duration = Duration::from_secs(5);
@@ -289,7 +288,7 @@ fn ready(commands: &[(&str, u64)]) -> Shared {
     in_phase(Phase::Ready(timeouts))
 }
 
-fn returned(next: (Next, Vec<Delivery>)) -> Result<Value, Error> {
+fn returned(next: (Next, Unsent)) -> Result<Value, Error> {
     match next.0 {
         Next::Return(result) => result,
         Next::Sleep(until) => panic!("slept until {until:?}"),

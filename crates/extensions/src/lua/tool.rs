@@ -12,7 +12,6 @@ use std::sync::{Arc, MutexGuard};
 use std::time::{Duration, Instant};
 
 use contract::clock::Wake;
-use contract::inbox::Delivery;
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::{Bound, Cancel, InnerCalls};
 use mlua::{Function, Lua, Table, Value as LuaValue};
@@ -21,7 +20,7 @@ use serde_json::Value;
 use crate::extension_tools::LuaTool;
 use crate::{Error, host};
 
-use super::hub::{Hub, Progress, Run};
+use super::hub::{Hub, Progress, Run, Unsent};
 use super::{LuaExtension, Next, Phase, Shared, Target};
 
 /// The longest tool name a provider accepts (`docs/mcp.md`, "Tools and
@@ -562,7 +561,7 @@ impl Hub {
 
 /// What a tool call's caller does next: as [`Shared::judge`] says, or
 /// `None` once the call was cancelled.
-type Judged = (Option<Next>, Vec<Delivery>);
+type Judged = (Option<Next>, Unsent);
 
 impl Shared {
     /// Cancels the call `id`: a queued call is dropped and ends cancelled; a
@@ -647,19 +646,19 @@ impl Shared {
             && self.cancelled.contains(&id)
             && !matches!(self.phase, Phase::Ready(_))
         {
-            return (Some(Next::Sleep(None)), Vec::new());
+            return (Some(Next::Sleep(None)), Unsent::default());
         }
         let cancelled = self.cancelled.contains(&id);
         match self.calls.get(&id) {
             Some(Progress::Cancelled) => {
                 self.calls.remove(&id);
-                return (None, Vec::new());
+                return (None, Unsent::default());
             }
             Some(Progress::Started {
                 run: Run::Parked | Run::LoginWait,
                 ..
             }) if cancelled && matches!(self.phase, Phase::Ready(_)) => {
-                return (Some(Next::Sleep(None)), Vec::new());
+                return (Some(Next::Sleep(None)), Unsent::default());
             }
             _ => {}
         }

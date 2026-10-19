@@ -1307,6 +1307,7 @@ fn a_failed_oauth_start_delivers_its_failure_after_releasing_the_lock() {
                 | Reply::Drive(_)
                 | Reply::Exec(_)
                 | Reply::Model(_)
+                | Reply::Delegate(_)
                 | Reply::Query(_)
                 | Reply::Lock(_)
                 | Reply::Ask(_)
@@ -1764,3 +1765,780 @@ fn a_finished_command_records_no_timer_done() {
 
 /// How long a test waits for a timer or a parked call under its fake clock.
 const WAIT_FOR_TIMER: Duration = Duration::from_secs(5);
+
+/// A `HostDelegate` for the abandon tests: `start` reports its call and
+/// waits for the test's answer, `cancel` records the ids and whether the
+/// hub lock was free when it ran. A cancel under the hub lock would find
+/// the lock held; every abandon path drops its `Unsent` after it releases
+/// the lock, so the cancel always finds it free.
+struct AbandonDelegate {
+    hub: std::sync::Mutex<Option<std::sync::Weak<Hub>>>,
+    arrived: std::sync::mpsc::Sender<(String, serde_json::Map<String, serde_json::Value>)>,
+    answer: std::sync::Mutex<std::sync::mpsc::Receiver<DelegateAnswer>>,
+    cancels: std::sync::Mutex<Vec<Vec<contract::JobId>>>,
+    free_at_cancel: std::sync::Mutex<Vec<bool>>,
+    starts: std::sync::atomic::AtomicUsize,
+}
+
+/// What a held `start` answers once the test releases it: the started id,
+/// which the fake binds first, or a failure, likewise after a bind.
+enum DelegateAnswer {
+    Id(contract::JobId),
+    Fail(contract::JobId, contract::shapes::Failure),
+}
+
+impl contract::extension::HostDelegate for AbandonDelegate {
+    fn start(
+        &self,
+        extension: &str,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+        bind: &mut dyn FnMut(&contract::JobId),
+    ) -> Result<contract::JobId, contract::shapes::Failure> {
+        self.starts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.arrived
+            .send((extension.to_owned(), arguments.clone()))
+            .expect("the test waits for the start");
+        match self
+            .answer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .recv()
+        {
+            Ok(DelegateAnswer::Id(id)) => {
+                bind(&id);
+                Ok(id)
+            }
+            Ok(DelegateAnswer::Fail(id, failure)) => {
+                bind(&id);
+                Err(failure)
+            }
+            Err(_) => panic!("the test answers every start it waits for"),
+        }
+    }
+
+    fn cancel(&self, ids: &[contract::JobId]) -> usize {
+        let free = self
+            .hub
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|hub| hub.upgrade())
+            .is_some_and(|hub| hub.try_lock().is_some());
+        self.free_at_cancel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(free);
+        self.cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(ids.to_vec());
+        ids.len()
+    }
+
+    fn retain(&self, _loaded: &[String]) -> usize {
+        0
+    }
+}
+
+/// A `start` the fake reports: the extension's name and its arguments.
+type DelegateArrival = (String, serde_json::Map<String, serde_json::Value>);
+
+/// The `Reply::Delegate` from `reply_rx`, failing the test on any other
+/// reply: every delegate-worker test below waits on exactly one.
+#[track_caller]
+fn delegate_reply(
+    reply_rx: &std::sync::mpsc::Receiver<crate::host::Reply>,
+    what: &str,
+) -> Result<contract::JobId, (contract::ErrorCode, String)> {
+    match fakes::Deadline::after(WAIT_FOR_TIMER)
+        .recv(reply_rx)
+        .expect("the reply arrives")
+    {
+        crate::host::Reply::Delegate(outcome) => outcome,
+        crate::host::Reply::Http(_)
+        | crate::host::Reply::Ask(_)
+        | crate::host::Reply::Drive(_)
+        | crate::host::Reply::Exec(_)
+        | crate::host::Reply::Tool(_)
+        | crate::host::Reply::Model(_)
+        | crate::host::Reply::Query(_)
+        | crate::host::Reply::Lock(_)
+        | crate::host::Reply::Slept => panic!("{what}"),
+    }
+}
+
+/// Watches `hub`'s delegates with a fresh fake: sets it as the service and
+/// records `j_1` and `j_2` as bound. Returns the fake with the channels its
+/// `start` reports and waits on.
+fn watch_delegates(
+    hub: &Arc<Hub>,
+) -> (
+    Arc<AbandonDelegate>,
+    std::sync::mpsc::Receiver<DelegateArrival>,
+    std::sync::mpsc::Sender<DelegateAnswer>,
+) {
+    let (arrived_tx, arrived_rx) = std::sync::mpsc::channel();
+    let (answer_tx, answer_rx) = std::sync::mpsc::channel();
+    let fake = Arc::new(AbandonDelegate {
+        hub: std::sync::Mutex::new(Some(Arc::downgrade(hub))),
+        arrived: arrived_tx,
+        answer: std::sync::Mutex::new(answer_rx),
+        cancels: std::sync::Mutex::new(Vec::new()),
+        free_at_cancel: std::sync::Mutex::new(Vec::new()),
+        starts: std::sync::atomic::AtomicUsize::new(0),
+    });
+    hub.set_delegate(fake.clone());
+    {
+        let mut shared = hub.lock();
+        shared
+            .delegates
+            .insert(contract::JobId("j_1".to_owned()), 1);
+        shared
+            .delegates
+            .insert(contract::JobId("j_2".to_owned()), 2);
+    }
+    (fake, arrived_rx, answer_tx)
+}
+
+/// The ids each cancel call carried, sorted: one abandon cancels every
+/// binding it took, in one call.
+fn cancelled(fake: &AbandonDelegate) -> Vec<Vec<String>> {
+    let cancels = fake
+        .cancels
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cancels
+        .iter()
+        .map(|ids| {
+            let mut names: Vec<String> = ids.iter().map(|id| id.0.clone()).collect();
+            names.sort();
+            names
+        })
+        .collect()
+}
+
+/// Every cancel ran after the hub lock was released, never under it.
+fn assert_cancelled_free(fake: &AbandonDelegate, bound: &[&str]) {
+    let expected: Vec<String> = bound.iter().map(|name| name.to_string()).collect();
+    assert_eq!(
+        cancelled(fake),
+        vec![expected],
+        "the abandon cancels every binding in one call"
+    );
+    assert!(
+        fake.free_at_cancel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .all(|free| *free),
+        "the cancel runs after the hub lock is released"
+    );
+}
+
+/// An abandon past the grace of the watched hook cancels the hub's bound
+/// delegates, and fails the caller abandoned.
+#[test]
+fn an_abandoned_watch_cancels_its_bound_delegates() {
+    use super::super::hub::Next;
+
+    let (hub, _watched, target, _timeout, deadline) = armed_hook();
+    let fake = watch_delegates(&hub).0;
+    let at = deadline
+        .checked_add(GRACE)
+        .and_then(|at| at.checked_add(Duration::from_millis(1)))
+        .unwrap();
+    let unsent = {
+        let mut shared = hub.lock();
+        let probe = shared.push(target.clone(), serde_json::Value::Null, at);
+        match shared.judge("ext", probe, &target, at, at) {
+            (Next::Return(Err(Error::Abandoned { .. })), unsent) => unsent,
+            _ => panic!("the armed watch past its grace abandons the VM"),
+        }
+    };
+    drop(unsent);
+    assert_cancelled_free(&fake, &["j_1", "j_2"]);
+}
+
+/// A hook still on the thread past its grace abandons the VM and cancels
+/// its bound delegates, even with no watch armed before this judge.
+#[test]
+fn a_hook_running_past_its_grace_cancels_its_bound_delegates() {
+    use super::super::declared::DeclaredCommand;
+    use super::super::hub::Next;
+
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    let target = Target::Command("spin".to_owned());
+    let timeout = Duration::from_millis(50);
+    let now = hub.clock().now();
+    let asked = now.checked_sub(timeout).unwrap();
+    let deadline = asked.checked_add(timeout).unwrap();
+    let fake = watch_delegates(&hub).0;
+    let unsent = {
+        let mut shared = hub.lock();
+        shared.phase = Phase::Ready(Default::default());
+        if let Phase::Ready(timeouts) = &mut shared.phase {
+            timeouts.commands.insert(
+                "spin".to_owned(),
+                DeclaredCommand {
+                    timeout,
+                    description: String::new(),
+                },
+            );
+        } else {
+            panic!("not ready");
+        }
+        let id = shared.push(target.clone(), serde_json::Value::Null, asked);
+        shared.queue.clear();
+        shared.calls.insert(
+            id,
+            Progress::Started {
+                deadline: Some(deadline),
+                run: Run::Running,
+            },
+        );
+        let at = deadline
+            .checked_add(GRACE)
+            .and_then(|at| at.checked_add(Duration::from_millis(1)))
+            .unwrap();
+        match shared.judge("ext", id, &target, asked, at) {
+            (Next::Return(Err(Error::Abandoned { .. })), unsent) => unsent,
+            _ => panic!("the hook past its grace abandons the VM"),
+        }
+    };
+    drop(unsent);
+    assert_cancelled_free(&fake, &["j_1", "j_2"]);
+}
+
+/// A search backend still on the thread past its grace is abandoned with
+/// `Stopped`, and still cancels its bound delegates: the cancel is keyed
+/// on the abandon site, not the reason.
+#[test]
+fn a_search_running_past_its_grace_cancels_its_bound_delegates() {
+    use super::super::hub::Next;
+
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    let target = Target::Search("s".to_owned());
+    let timeout = Duration::from_millis(50);
+    let now = hub.clock().now();
+    let asked = now.checked_sub(timeout).unwrap();
+    let deadline = asked.checked_add(timeout).unwrap();
+    let fake = watch_delegates(&hub).0;
+    let unsent = {
+        let mut shared = hub.lock();
+        shared.phase = Phase::Ready(Default::default());
+        if let Phase::Ready(timeouts) = &mut shared.phase {
+            timeouts.search.insert("s".to_owned(), timeout);
+        } else {
+            panic!("not ready");
+        }
+        let id = shared.push(target.clone(), serde_json::Value::Null, asked);
+        shared.queue.clear();
+        shared.calls.insert(
+            id,
+            Progress::Started {
+                deadline: Some(deadline),
+                run: Run::Running,
+            },
+        );
+        let at = deadline
+            .checked_add(GRACE)
+            .and_then(|at| at.checked_add(Duration::from_millis(1)))
+            .unwrap();
+        match shared.judge("ext", id, &target, asked, at) {
+            (Next::Return(Err(Error::Abandoned { .. })), unsent) => unsent,
+            _ => panic!("the search past its grace abandons the VM"),
+        }
+    };
+    drop(unsent);
+    assert_cancelled_free(&fake, &["j_1", "j_2"]);
+}
+
+/// A provider load still running past its abandonment cancels the hub's
+/// bound delegates.
+#[test]
+fn a_provider_load_past_its_abandonment_cancels_its_bound_delegates() {
+    use super::super::hub::{Next, ProviderLoad};
+
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    let fake = watch_delegates(&hub).0;
+    let now = hub.clock().now();
+    let asked = now.checked_sub(Duration::from_millis(50)).unwrap();
+    let unsent = {
+        let mut shared = hub.lock();
+        shared.phase = Phase::Ready(Default::default());
+        shared.loads.insert(
+            "p".to_owned(),
+            ProviderLoad::Running {
+                abandon_at: Some(asked),
+            },
+        );
+        match shared.judge_load("ext", "p", asked, now) {
+            (Next::Return(Err(Error::Abandoned { .. })), unsent) => unsent,
+            _ => panic!("the load past its abandonment abandons the VM"),
+        }
+    };
+    drop(unsent);
+    assert_cancelled_free(&fake, &["j_1", "j_2"]);
+}
+
+/// `dispose` stops the hub but cancels no bound delegate: a reload, a
+/// removal and a session end keep their own stop rules.
+#[test]
+fn dispose_cancels_no_bound_delegate() {
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    let fake = watch_delegates(&hub).0;
+    hub.dispose("ext");
+    assert!(
+        fake.cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty(),
+        "dispose cancels nothing"
+    );
+}
+
+/// A hub ready for a `host.delegate` admit from `target`: phase ready, the
+/// target's timeout declared, an inbox set and the fake as its service.
+fn delegate_rig(
+    target: Target,
+    timeout: Duration,
+) -> (
+    Arc<Hub>,
+    Arc<AbandonDelegate>,
+    std::sync::mpsc::Receiver<DelegateArrival>,
+    std::sync::mpsc::Sender<DelegateAnswer>,
+    fakes::TempDir,
+) {
+    use super::super::declared::{DeclaredCommand, DeclaredHook, HookPhase};
+
+    let dir = fakes::TempDir::new("fiber-schedule-delegate");
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    {
+        let mut shared = hub.lock();
+        shared.phase = Phase::Ready(Default::default());
+        if let Phase::Ready(timeouts) = &mut shared.phase {
+            match &target {
+                Target::Command(name) => {
+                    timeouts.commands.insert(
+                        name.clone(),
+                        DeclaredCommand {
+                            timeout,
+                            description: String::new(),
+                        },
+                    );
+                }
+                Target::Hook { point, .. } => {
+                    timeouts.hooks.by_point.insert(
+                        point.clone(),
+                        vec![DeclaredHook {
+                            phase: HookPhase::Transform,
+                            blocking: false,
+                            timeout,
+                        }],
+                    );
+                }
+                Target::Tool(name) | Target::Effects(name) => {
+                    timeouts.tools.insert(
+                        name.clone(),
+                        super::super::tool::DeclaredTool {
+                            name: name.clone(),
+                            description: String::new(),
+                            input_schema: serde_json::Value::Null,
+                            effects: None,
+                            timeout,
+                            keep: contract::tool::Bound::DEFAULT,
+                        },
+                    );
+                }
+                Target::Search(name) => {
+                    timeouts.search.insert(name.clone(), timeout);
+                }
+                Target::Timer { .. } | Target::Provider { .. } => {}
+            }
+        } else {
+            panic!("not ready");
+        }
+    }
+    let (inbox_tx, _inbox_rx) = std::sync::mpsc::channel();
+    hub.set_inbox(inbox_tx);
+    let (fake, arrived_rx, answer_tx) = watch_delegates(&hub);
+    // The worker tests bind their own ids; clear the rig's two.
+    hub.lock().delegates.clear();
+    (hub, fake, arrived_rx, answer_tx, dir)
+}
+
+/// Admits `Request::Delegate` from `target` on `hub` and runs its worker
+/// to completion on the calling thread, without the hub lock held.
+fn run_delegate_worker(
+    hub: &Arc<Hub>,
+    dir: &std::path::Path,
+    target: Target,
+    fake: &Arc<AbandonDelegate>,
+    reply_tx: std::sync::mpsc::Sender<crate::host::Reply>,
+) {
+    use super::super::host_calls::{Admitted, Call, admit};
+
+    let start = start_in(dir);
+    let request = crate::host::Request::Delegate {
+        arguments: serde_json::Map::new(),
+        handle: 7,
+    };
+    let deliver: crate::oauth::Deliver = Arc::new(move |reply| {
+        reply_tx.send(reply).expect("the test waits for the reply");
+    });
+    let spawn = {
+        let shared = hub.lock();
+        match admit(
+            &start,
+            hub,
+            shared,
+            Call {
+                id: 1,
+                target: &target,
+                deadline: None,
+                http: None,
+            },
+            request,
+            None,
+            None,
+            Some(fake.clone()),
+            &deliver,
+        ) {
+            Admitted::Spawning { shared, spawn } => {
+                drop(shared);
+                spawn
+            }
+            Admitted::Replied(_) => panic!("the worker spawns"),
+            Admitted::Asked { .. }
+            | Admitted::Started(_)
+            | Admitted::Sleep(_)
+            | Admitted::Nothing => panic!("a delegate admit spawns its worker"),
+        }
+    };
+    (spawn.work)();
+}
+
+/// An abandon between `bind` and the job's record cancels the started job
+/// from the post-start check: the abandon's cancel found no job yet.
+#[test]
+fn an_abandon_between_bind_and_record_cancels_the_started_job() {
+    let (hub, fake, arrived_rx, answer_tx, dir) = delegate_rig(
+        Target::Command("go".to_owned()),
+        Duration::from_millis(5_000),
+    );
+    let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+    pause_settle(Arc::new(move |_target, pause| {
+        if pause == Pause::DelegateChecked {
+            checked_tx.send(()).expect("the test waits for the check");
+        }
+    }));
+    let _guard = SettleGuard;
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    let worker = {
+        let hub = Arc::clone(&hub);
+        let fake = Arc::clone(&fake);
+        let dir = dir.path().to_path_buf();
+        std::thread::spawn(move || {
+            run_delegate_worker(
+                &hub,
+                &dir,
+                Target::Command("go".to_owned()),
+                &fake,
+                reply_tx,
+            )
+        })
+    };
+    let (extension, _arguments) = fakes::Deadline::after(WAIT_FOR_TIMER)
+        .recv(&arrived_rx)
+        .expect("the start arrives");
+    assert_eq!(
+        extension, "fiber.test/stopped",
+        "the worker starts for its extension"
+    );
+    {
+        let mut shared = hub.lock();
+        let unsent = shared.abandon(StopReason::Abandoned {
+            extension: "ext".to_owned(),
+            callback: "command go".to_owned(),
+        });
+        drop(shared);
+        drop(unsent);
+    }
+    answer_tx
+        .send(DelegateAnswer::Id(contract::JobId("j_1".to_owned())))
+        .expect("the held start is released");
+    fakes::Deadline::after(WAIT_FOR_TIMER)
+        .recv(&checked_rx)
+        .expect("the worker reaches its post-start check");
+    worker.join().expect("the worker ends");
+    assert_cancelled_free(&fake, &["j_1"]);
+    assert_eq!(
+        delegate_reply(&reply_rx, "the started reply still arrives")
+            .unwrap()
+            .0,
+        "j_1"
+    );
+}
+
+/// A start held across `dispose` is not cancelled: the hub was stopped,
+/// not abandoned, so the start that completes across a reload keeps
+/// running. The started reply still arrives.
+#[test]
+fn a_start_held_across_dispose_is_not_cancelled() {
+    let (hub, fake, arrived_rx, answer_tx, dir) = delegate_rig(
+        Target::Command("go".to_owned()),
+        Duration::from_millis(5_000),
+    );
+    let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+    pause_settle(Arc::new(move |_target, pause| {
+        if pause == Pause::DelegateChecked {
+            checked_tx.send(()).expect("the test waits for the check");
+        }
+    }));
+    let _guard = SettleGuard;
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    let worker = {
+        let hub = Arc::clone(&hub);
+        let fake = Arc::clone(&fake);
+        let dir = dir.path().to_path_buf();
+        std::thread::spawn(move || {
+            run_delegate_worker(
+                &hub,
+                &dir,
+                Target::Command("go".to_owned()),
+                &fake,
+                reply_tx,
+            )
+        })
+    };
+    fakes::Deadline::after(WAIT_FOR_TIMER)
+        .recv(&arrived_rx)
+        .expect("the start arrives");
+    hub.dispose("ext");
+    answer_tx
+        .send(DelegateAnswer::Id(contract::JobId("j_1".to_owned())))
+        .expect("the held start is released");
+    fakes::Deadline::after(WAIT_FOR_TIMER)
+        .recv(&checked_rx)
+        .expect("the worker reaches its post-start check");
+    worker.join().expect("the worker ends");
+    assert!(
+        fake.cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty(),
+        "no abandon means no cancel"
+    );
+    assert_eq!(
+        delegate_reply(&reply_rx, "the started reply still arrives")
+            .unwrap()
+            .0,
+        "j_1"
+    );
+}
+
+/// A start that fails after `bind` leaves no binding for a later abandon
+/// to cancel: the worker removes what the failed start recorded.
+#[test]
+fn a_start_that_fails_after_bind_leaves_no_binding() {
+    let (hub, fake, arrived_rx, answer_tx, dir) = delegate_rig(
+        Target::Command("go".to_owned()),
+        Duration::from_millis(5_000),
+    );
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    answer_tx
+        .send(DelegateAnswer::Fail(
+            contract::JobId("j_9".to_owned()),
+            contract::shapes::Failure {
+                code: contract::ErrorCode::ToolError,
+                message: "ten delegates already run".to_owned(),
+                retry_after_ms: None,
+                provider: None,
+            },
+        ))
+        .expect("the start is answered");
+    run_delegate_worker(
+        &hub,
+        dir.path(),
+        Target::Command("go".to_owned()),
+        &fake,
+        reply_tx,
+    );
+    fakes::Deadline::after(WAIT_FOR_TIMER)
+        .recv(&arrived_rx)
+        .expect("the start arrives");
+    let (code, message) =
+        delegate_reply(&reply_rx, "the failure arrives with its code and message").unwrap_err();
+    assert_eq!(code, contract::ErrorCode::ToolError);
+    assert_eq!(message, "ten delegates already run");
+    assert!(
+        hub.lock().delegates.is_empty(),
+        "the failed start unbound its id"
+    );
+    assert!(
+        fake.cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty(),
+        "no binding means no cancel"
+    );
+}
+
+/// An abandoned hub answers a delegate start `closing` before it spawns
+/// any worker: a leaked VM thread's start spawns nothing.
+#[test]
+fn an_abandoned_hub_refuses_a_delegate_start_closed() {
+    use super::super::host_calls::{Admitted, Call, admit};
+
+    let dir = fakes::TempDir::new("fiber-schedule-delegate-abandoned");
+    let hub = ready_hub();
+    let (fake, _arrived_rx, _answer_tx) = watch_delegates(&hub);
+    hub.lock().delegates.clear();
+    hub.lock().abandoned = true;
+    let (inbox_tx, _inbox_rx) = std::sync::mpsc::channel();
+    hub.set_inbox(inbox_tx);
+    let target = Target::Hook {
+        point: "before_message".to_owned(),
+        index: 0,
+    };
+    let start = start_in(dir.path());
+    let request = crate::host::Request::Delegate {
+        arguments: serde_json::Map::new(),
+        handle: 7,
+    };
+    let deliver: crate::oauth::Deliver = Arc::new(|_| panic!("no reply is delivered"));
+    let shared = hub.lock();
+    match admit(
+        &start,
+        &hub,
+        shared,
+        Call {
+            id: 1,
+            target: &target,
+            deadline: None,
+            http: None,
+        },
+        request,
+        None,
+        None,
+        Some(fake.clone()),
+        &deliver,
+    ) {
+        Admitted::Replied(crate::host::Reply::Delegate(Err((code, message)))) => {
+            assert_eq!(code, contract::ErrorCode::Closing);
+            assert_eq!(message, "host.delegate: this extension was stopped");
+        }
+        Admitted::Asked { .. }
+        | Admitted::Spawning { .. }
+        | Admitted::Started(_)
+        | Admitted::Sleep(_)
+        | Admitted::Nothing
+        | Admitted::Replied(_) => panic!("the abandoned hub answers closing"),
+    }
+    assert_eq!(
+        fake.starts.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no worker means no start call"
+    );
+}
+
+/// A delegate start from a provider function, a search function or an
+/// effects function is refused before any other check: each answers
+/// `invalid_arguments` with zero `start` calls, both with a service set
+/// and with none. A VM with no service would otherwise answer `closing`
+/// from an effects function, hiding the real refusal.
+#[test]
+fn delegate_starts_are_refused_from_provider_search_and_effects() {
+    use super::super::host_calls::{Admitted, Call, admit};
+
+    let refused = [
+        Target::Provider {
+            name: "p".to_owned(),
+            function: "credential",
+            credential: None,
+        },
+        Target::Search("s".to_owned()),
+        Target::Effects("e".to_owned()),
+    ];
+    for target in refused {
+        for serviced in [true, false] {
+            let dir = fakes::TempDir::new("fiber-schedule-delegate-refused");
+            let hub = ready_hub();
+            let (fake, _arrived_rx, _answer_tx) = watch_delegates(&hub);
+            hub.lock().delegates.clear();
+            let delegate =
+                serviced.then(|| fake.clone() as Arc<dyn contract::extension::HostDelegate>);
+            let (inbox_tx, _inbox_rx) = std::sync::mpsc::channel();
+            hub.set_inbox(inbox_tx);
+            let start = start_in(dir.path());
+            let request = crate::host::Request::Delegate {
+                arguments: serde_json::Map::new(),
+                handle: 7,
+            };
+            let deliver: crate::oauth::Deliver = Arc::new(|_| panic!("no reply is delivered"));
+            let shared = hub.lock();
+            match admit(
+                &start,
+                &hub,
+                shared,
+                Call {
+                    id: 1,
+                    target: &target,
+                    deadline: None,
+                    http: None,
+                },
+                request,
+                None,
+                None,
+                delegate,
+                &deliver,
+            ) {
+                Admitted::Replied(crate::host::Reply::Delegate(Err((code, message)))) => {
+                    assert_eq!(code, contract::ErrorCode::InvalidArguments);
+                    assert_eq!(message, "host.delegate: not available here");
+                }
+                Admitted::Asked { .. }
+                | Admitted::Spawning { .. }
+                | Admitted::Started(_)
+                | Admitted::Sleep(_)
+                | Admitted::Nothing
+                | Admitted::Replied(_) => panic!("{target} refuses the delegate start"),
+            }
+            assert_eq!(
+                fake.starts.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "{target} reaches no start"
+            );
+        }
+    }
+}
+
+/// A delegate start from a command, a hook, a timer or a tool call reaches
+/// the service: the worker runs the start and delivers its id.
+#[test]
+fn delegate_starts_from_commands_hooks_timers_and_tools_reach_start() {
+    for target in [
+        Target::Command("go".to_owned()),
+        Target::Hook {
+            point: "before_message".to_owned(),
+            index: 0,
+        },
+        Target::Timer { id: 0 },
+        Target::Tool("t".to_owned()),
+    ] {
+        let (hub, fake, arrived_rx, answer_tx, dir) =
+            delegate_rig(target.clone(), Duration::from_millis(5_000));
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        answer_tx
+            .send(DelegateAnswer::Id(contract::JobId("j_1".to_owned())))
+            .expect("the start is answered");
+        run_delegate_worker(&hub, dir.path(), target.clone(), &fake, reply_tx);
+        let (extension, _arguments) = fakes::Deadline::after(WAIT_FOR_TIMER)
+            .recv(&arrived_rx)
+            .expect("the start arrives");
+        assert_eq!(extension, "fiber.test/stopped");
+        let what = format!("{target} delivers the started id");
+        assert_eq!(delegate_reply(&reply_rx, &what).unwrap().0, "j_1");
+    }
+}

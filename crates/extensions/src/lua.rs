@@ -560,6 +560,14 @@ impl LuaExtension {
         self.hub.set_model(model);
     }
 
+    /// Hands the session's delegate starter to this extension's `host.delegate`.
+    pub(crate) fn set_delegate(
+        &self,
+        delegate: std::sync::Arc<dyn contract::extension::HostDelegate>,
+    ) {
+        self.hub.set_delegate(delegate);
+    }
+
     /// Sets whether a client can answer this extension's `host.ask`.
     pub(crate) fn set_answerable(&self, yes: bool) {
         self.hub.lock().answerable = yes;

@@ -505,6 +505,7 @@ impl Vm {
                     | host::Request::Ask(_)
                     | host::Request::Tool(_)
                     | host::Request::Model(_)
+                    | host::Request::Delegate { .. }
                     | host::Request::Exec(_),
                 ) => return Err(self.yielded()),
             }
@@ -599,6 +600,7 @@ impl Vm {
             | host::Request::Tool(_)
             | host::Request::Drive(_)
             | host::Request::Model(_)
+            | host::Request::Delegate { .. }
             | host::Request::Callback { .. }
             | host::Request::Lock
             | host::Request::Sleep(_) => Ok(request),
