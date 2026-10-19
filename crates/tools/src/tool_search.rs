@@ -2,16 +2,13 @@
 //! deferred tools' names, descriptions and parameter names, loading the
 //! best matches so the model can call them.
 
-use std::sync::Arc;
-
 use contract::emit::Emit;
 use contract::provider::{NO_MATCH, TOOL_SEARCH, ToolDefinition, loaded_text};
-use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::tool_util::{errored, no_effects};
+use crate::tool_util::{errored, no_effects, text_output};
 
 /// The base description, sent when no source names a deferred tool.
 const BASE_DESCRIPTION: &str = "Searches the deferred tools by name, description and parameter names, and loads the best matches so you can call them.";
@@ -28,7 +25,7 @@ const B: f64 = 0.75;
 /// its catalogue immutably, so concurrent calls in one step share no
 /// mutable state.
 pub struct ToolSearch {
-    catalogue: Arc<Vec<ToolDefinition>>,
+    catalogue: Vec<ToolDefinition>,
     description: String,
 }
 
@@ -48,7 +45,7 @@ impl ToolSearch {
             ));
         }
         Self {
-            catalogue: Arc::new(catalogue),
+            catalogue,
             description,
         }
     }
@@ -58,18 +55,8 @@ impl ToolSearch {
 #[derive(Debug)]
 struct Args {
     query: String,
-    limit: Limit,
-}
-
-/// How many tools to load: the default, an explicit cap, or every match.
-#[derive(Debug)]
-enum Limit {
-    /// No `limit` was passed: load at most 8 tools.
-    Default,
-    /// Load at most this many tools.
-    AtMost(u64),
-    /// A `limit` the JSON reader cannot hold as a `u64`: load every match.
-    Every,
+    /// How many tools to load: 8 when absent.
+    limit: usize,
 }
 
 impl<'de> Deserialize<'de> for Args {
@@ -88,29 +75,21 @@ impl<'de> Deserialize<'de> for Args {
             return Err(serde::de::Error::custom("query must not be empty"));
         }
         let limit = match raw.limit {
-            None => Limit::Default,
+            None => DEFAULT_LIMIT,
             Some(Value::Number(count)) if count.is_u64() => {
                 let capped = count.as_u64().unwrap_or(u64::MAX);
                 if capped < 1 {
                     return Err(serde::de::Error::custom("limit must be at least 1"));
                 }
-                Limit::AtMost(capped)
+                usize::try_from(capped).unwrap_or(usize::MAX)
             }
             Some(Value::Number(count)) if count.is_i64() => {
                 return Err(serde::de::Error::custom("limit must be at least 1"));
             }
-            Some(Value::Number(count)) => {
-                let past_u64 = count
-                    .as_f64()
-                    .is_some_and(|float| float.is_finite() && float >= 18446744073709551616.0);
-                if past_u64 {
-                    Limit::Every
-                } else {
-                    return Err(serde::de::Error::custom(
-                        "limit must be an integer of at least 1",
-                    ));
-                }
-            }
+            // Every other JSON value fails: a float is not an integer even
+            // when its value is whole, and a number past `u64` reads back
+            // as a float, so its fraction is already lost and it cannot
+            // prove it was integral.
             Some(_) => {
                 return Err(serde::de::Error::custom(
                     "limit must be an integer of at least 1",
@@ -144,24 +123,29 @@ fn document_tokens(tool: &ToolDefinition) -> Vec<String> {
 /// Splits text into maximal runs of Unicode alphanumerics, lowercased, so
 /// `mcp__fx__echo` gives `mcp`, `fx`, `echo`.
 fn tokenize(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    for character in text.chars() {
-        if character.is_alphanumeric() {
-            current.extend(character.to_lowercase());
-        } else if !current.is_empty() {
-            tokens.push(std::mem::take(&mut current));
-        }
-    }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-    tokens
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// BM25's term-frequency saturation factor: hits scale by this before the
+/// length normalization divides them back down.
+// Exempt: replacing the `+` with `-`/`*` (0.2x, 1.2x) or the `*` with `/`
+// (1/4.84x) only rescales each score by one positive constant, which keeps
+// the ranked order that `Tool::run` reports; no test through `Tool::run`
+// can tell those three apart. The other two mutants are observable and
+// stay pinned by ordinary tests: the zeroing one by
+// `rank_order_on_the_fixed_catalogue`, `*` to `+` by
+// `a_narrow_duel_pins_the_ranking`.
+#[cfg_attr(false, mutants::skip)]
+fn saturated(hits: f64) -> f64 {
+    hits * (K1 + 1.0)
 }
 
 impl ToolSearch {
     /// The loaded names for `query`, best first, ties by name bytes.
-    fn search(&self, query: &str, limit: Limit) -> Vec<String> {
+    fn search(&self, query: &str, limit: usize) -> Vec<String> {
         let mut terms = tokenize(query);
         terms.sort();
         terms.dedup();
@@ -195,7 +179,7 @@ impl ToolSearch {
                 }
                 matched = true;
                 let length = tokens.len() as f64;
-                score += idf * (hits * (K1 + 1.0)) / (hits + K1 * (1.0 - B + B * length / average));
+                score += idf * saturated(hits) / (hits + K1 * (1.0 - B + B * length / average));
             }
             if matched {
                 ranked.push((tool.name.as_str(), score));
@@ -207,14 +191,9 @@ impl ToolSearch {
                 .total_cmp(&left.1)
                 .then_with(|| left.0.as_bytes().cmp(right.0.as_bytes()))
         });
-        let cap = match limit {
-            Limit::Default => DEFAULT_LIMIT,
-            Limit::AtMost(capped) => usize::try_from(capped).unwrap_or(usize::MAX),
-            Limit::Every => usize::MAX,
-        };
         ranked
             .into_iter()
-            .take(cap)
+            .take(limit)
             .map(|(name, _)| name.to_owned())
             .collect()
     }
@@ -264,22 +243,14 @@ impl Tool for ToolSearch {
         match crate::tool_util::parsed::<Args>(arguments) {
             Ok(args) => {
                 let names = self.search(&args.query, args.limit);
-                if names.is_empty() {
-                    Output {
-                        content: vec![ContentPart::Text {
-                            text: NO_MATCH.to_owned(),
-                        }],
-                        loaded: Some(Vec::new()),
-                        ..Output::default()
-                    }
+                let text = if names.is_empty() {
+                    NO_MATCH.to_owned()
                 } else {
-                    Output {
-                        content: vec![ContentPart::Text {
-                            text: loaded_text(&names),
-                        }],
-                        loaded: Some(names),
-                        ..Output::default()
-                    }
+                    loaded_text(&names)
+                };
+                Output {
+                    loaded: Some(names),
+                    ..text_output(text)
                 }
             }
             Err(error) => errored(error),

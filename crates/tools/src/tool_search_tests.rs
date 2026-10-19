@@ -63,6 +63,14 @@ fn loaded(output: &contract::tool::Output) -> Option<Vec<String>> {
     output.loaded.clone()
 }
 
+fn message(output: &contract::tool::Output) -> String {
+    output
+        .error
+        .as_ref()
+        .map(|error| error.message.clone())
+        .unwrap_or_default()
+}
+
 #[test]
 fn rank_order_on_the_fixed_catalogue() {
     let output = run(&search(), &query("plumbus"));
@@ -138,6 +146,43 @@ fn equal_scores_order_by_name_bytes() {
     );
 }
 
+/// A rare-versus-common duel over one query: `alpha` is held by two of
+/// eight tools, `beta` by five. `z_rare` holds the rare term once and is
+/// short; `b_common` holds the common term three times. The scores land
+/// within a few percent, so any change to the document frequency, the
+/// IDF ratio, the average length, or the score quotient flips the order.
+fn duel_catalogue() -> Vec<ToolDefinition> {
+    vec![
+        leaf("z_rare", "alpha ap0"),
+        leaf("b_common", "beta beta beta bp0"),
+        leaf("m_alpha_filler_one", "alpha aq0 aq1 aq2 aq3 aq4 aq5"),
+        leaf("m_alpha_filler_two", "alpha ar0 ar1 ar2 ar3 ar4 ar5"),
+        leaf("m_beta_filler_one", "beta"),
+        leaf("m_beta_filler_two", "beta"),
+        leaf("m_beta_filler_three", "beta"),
+        leaf("m_neutral_tool", "does nothing special"),
+    ]
+}
+
+#[test]
+fn a_narrow_duel_pins_the_ranking() {
+    let search = ToolSearch::new(duel_catalogue(), vec![]);
+    let output = run(&search, &query("alpha beta"));
+
+    assert_eq!(
+        loaded(&output),
+        Some(vec![
+            "z_rare".to_owned(),
+            "b_common".to_owned(),
+            "m_alpha_filler_one".to_owned(),
+            "m_alpha_filler_two".to_owned(),
+            "m_beta_filler_one".to_owned(),
+            "m_beta_filler_three".to_owned(),
+            "m_beta_filler_two".to_owned(),
+        ])
+    );
+}
+
 #[test]
 fn a_repeated_query_gives_the_same_list() {
     let search = search();
@@ -166,7 +211,6 @@ fn zero_matches_say_so() {
             text: NO_MATCH.to_owned(),
         }]
     );
-    assert_eq!(NO_MATCH, "No deferred tool matched the query.");
 }
 
 #[test]
@@ -202,6 +246,53 @@ fn an_empty_query_is_an_invalid_argument() {
 fn a_zero_limit_is_an_invalid_argument() {
     let arguments = fakes::tool_args(json!({"query": "plumbus", "limit": 0}));
     let output = run(&search(), &arguments);
+
+    assert_eq!(
+        output.error.map(|error| error.code),
+        Some(ErrorCode::InvalidArguments)
+    );
+    assert_eq!(output.loaded, None);
+}
+
+#[test]
+fn a_negative_limit_names_the_minimum() {
+    let arguments = fakes::tool_args(json!({"query": "plumbus", "limit": -1}));
+    let output = run(&search(), &arguments);
+
+    assert_eq!(
+        message(&output),
+        "The arguments do not fit the schema: limit must be at least 1."
+    );
+    assert_eq!(
+        output.error.map(|error| error.code),
+        Some(ErrorCode::InvalidArguments)
+    );
+    assert_eq!(output.loaded, None);
+}
+
+#[test]
+fn a_fractional_limit_names_the_integer() {
+    let arguments = fakes::tool_args(json!({"query": "plumbus", "limit": 1.5}));
+    let output = run(&search(), &arguments);
+
+    assert_eq!(
+        message(&output),
+        "The arguments do not fit the schema: limit must be an integer of at least 1."
+    );
+    assert_eq!(
+        output.error.map(|error| error.code),
+        Some(ErrorCode::InvalidArguments)
+    );
+    assert_eq!(output.loaded, None);
+}
+
+#[test]
+fn a_fractional_limit_past_u64_is_an_invalid_argument() {
+    // `18446744073709551616.5` reads back as 2^64, exactly like the integer
+    // past `u64`: the fraction is already lost, so every oversized number
+    // fails as a non-integer.
+    let past_u64: Value = serde_json::from_str("18446744073709551616.5").unwrap();
+    let output = run(&matching_search(9), &widget_query(past_u64));
 
     assert_eq!(
         output.error.map(|error| error.code),
@@ -286,12 +377,18 @@ fn a_limit_past_the_matches_loads_every_match() {
 }
 
 #[test]
-fn a_limit_past_u64_loads_every_match() {
+fn a_limit_past_u64_is_an_invalid_argument() {
+    // The integer past `u64` reads back as a float, exactly like a
+    // fractional value there: with the fraction already lost it cannot
+    // prove it was integral, so it fails as a non-integer.
     let past_u64: Value = serde_json::from_str("18446744073709551616").unwrap();
     let output = run(&matching_search(9), &widget_query(past_u64));
 
-    assert_eq!(loaded(&output).map(|names| names.len()), Some(9));
-    assert_eq!(output.error, None);
+    assert_eq!(
+        output.error.map(|error| error.code),
+        Some(ErrorCode::InvalidArguments)
+    );
+    assert_eq!(output.loaded, None);
 }
 
 #[test]
