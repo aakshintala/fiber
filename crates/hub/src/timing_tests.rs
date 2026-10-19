@@ -586,7 +586,8 @@ fn a_held_retry_then_success_reports_the_whole_wait() {
             "the hub waits a poll after held failure {k}"
         );
         assert!(finished.try_recv().is_err(), "no answer while it waits");
-        temp.clock.advance(HELD_POLL);
+        temp.clock
+            .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     }
     let result = Deadline::after(DEADLINE)
         .recv(&finished)
@@ -613,7 +614,8 @@ fn a_resume_held_past_the_shutdown_bound_reports_the_bound() {
             "the hub waits poll {k} inside the bound"
         );
         assert!(finished.try_recv().is_err(), "no answer before the bound");
-        temp.clock.advance(HELD_POLL);
+        temp.clock
+            .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     }
     let result = Deadline::after(DEADLINE)
         .recv(&finished)
