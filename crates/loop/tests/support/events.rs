@@ -78,6 +78,7 @@ pub(crate) fn completed_event(text: &str) -> Event {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 

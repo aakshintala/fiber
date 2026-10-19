@@ -545,6 +545,7 @@ fn the_window_reader_makes_a_parents_steering_and_tool_result_images_absolute() 
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     write_log(
         &sessions,
@@ -626,6 +627,7 @@ fn the_window_reader_makes_a_parent_pdf_and_its_pages_absolute() {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     let (_home, sessions) = sessions("pdf-rewrite");
     write_log(
@@ -1076,6 +1078,7 @@ fn skilled_completed(status: CallStatus, name: &str, path: &str) -> Event {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 
@@ -1446,6 +1449,7 @@ fn a_provider_run_record_carrying_a_skill_seeds_nothing() {
         changed_by: None,
         provider_item: Some(json!({"type": "hosted_tool_call"})),
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     let lines = vec![
         envelope(A, 0, None, None, &started("/w", None)),

@@ -556,6 +556,10 @@ fn samples() -> Vec<(&'static str, Value)> {
             "content": []}}),
         ),
         (
+            "tool_call_completed",
+            json!({"status": "completed", "content": content, "loaded": ["b", "a"]}),
+        ),
+        (
             "permission_requested",
             json!({"request_id": "r", "effects": [], "reversible": true,
             "paths": ["/a"], "step": "review",
@@ -1498,6 +1502,33 @@ fn provider_item_is_read_from_a_hosted_call_and_absent_from_an_ordinary_one() {
     assert_eq!(ordinary.provider_item, None);
     let written = serde_json::to_value(&ordinary).unwrap();
     assert!(written.get("provider_item").is_none(), "{written}");
+}
+
+/// The tools a search loaded, on `tool_call_completed`: `None` writes no
+/// key, `Some` keeps the tool's order, and a line without the key reads
+/// `None`.
+#[test]
+fn loaded_reads_from_a_search_result_and_is_absent_from_any_other() {
+    let result = |payload: Value| match read("tool_call_completed", payload).unwrap() {
+        Some(Event::ToolCallCompleted(done)) => done,
+        other => panic!("{other:?}"),
+    };
+    let none = result(json!({"status": "completed", "content": []}));
+    assert_eq!(none.loaded, None);
+    let written = serde_json::to_value(&none).unwrap();
+    assert!(written.get("loaded").is_none(), "{written}");
+    let empty = result(json!({"status": "completed", "content": [], "loaded": []}));
+    assert_eq!(empty.loaded, Some(vec![]));
+    assert_eq!(
+        serde_json::to_value(&empty).unwrap(),
+        json!({"status": "completed", "content": [], "loaded": []})
+    );
+    let ordered = result(json!({"status": "completed", "content": [], "loaded": ["b", "a"]}));
+    assert_eq!(ordered.loaded, Some(vec!["b".to_owned(), "a".to_owned()]));
+    assert_eq!(
+        serde_json::to_value(&ordered).unwrap(),
+        json!({"status": "completed", "content": [], "loaded": ["b", "a"]})
+    );
 }
 
 #[test]

@@ -744,6 +744,7 @@ fn a_provider_run_record_carrying_a_skill_renders_raw_and_loads_nothing() {
         changed_by: None,
         provider_item: Some(json!({"type": "hosted_tool_call"})),
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     render_into(
         &mut carry,
@@ -792,6 +793,7 @@ fn an_inner_calls_completion_loads_no_skill() {
         changed_by: None,
         provider_item: None,
         hosts_surfaced: Vec::new(),
+        loaded: None,
     });
     render_into(&mut carry, &mut conversation, &done, Some(&inner));
     assert!(carry.skills.is_empty());

@@ -1158,6 +1158,7 @@ fn hosted_skill() -> Scripted {
         changed_by: None,
         provider_item: Some(json!({"type": "server_tool_result"})),
         hosts_surfaced: Vec::new(),
+        loaded: None,
     };
     let mut end = fakes::reply("");
     end.actions

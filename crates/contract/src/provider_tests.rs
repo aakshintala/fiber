@@ -72,6 +72,7 @@ fn text_joins_text_parts_in_order_and_skips_the_rest() {
                 changed_by: None,
                 provider_item: Some(json!({"type": "web_search_tool_result"})),
                 hosts_surfaced: Vec::new(),
+                loaded: None,
             },
         }),
         ReplyAction::Text(TextCompleted {

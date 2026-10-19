@@ -25,6 +25,7 @@ fn completion() -> Box<ToolCallCompleted> {
             text: "answer".into(),
         }],
         hosts_surfaced: Vec::new(),
+        loaded: None,
     })
 }
 

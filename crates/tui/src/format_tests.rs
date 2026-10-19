@@ -74,6 +74,7 @@ fn headline_of_a_failed_call_is_code_and_message() {
         changed_by: None,
         hosts_surfaced: Vec::new(),
         provider_item: None,
+        loaded: None,
     };
     assert_eq!(headline(&done), "ambiguous_match: boom");
 }
@@ -95,6 +96,7 @@ fn headline_of_a_denied_call_is_its_reason() {
         changed_by: None,
         hosts_surfaced: Vec::new(),
         provider_item: None,
+        loaded: None,
     };
     assert_eq!(headline(&done), "not allowed");
 }
@@ -116,6 +118,7 @@ fn headline_is_empty_for_a_completed_call() {
         changed_by: None,
         hosts_surfaced: Vec::new(),
         provider_item: None,
+        loaded: None,
     };
     assert_eq!(headline(&done), "");
 }
@@ -152,6 +155,7 @@ fn content_text_joins_text_parts_and_skips_images() {
         changed_by: None,
         hosts_surfaced: Vec::new(),
         provider_item: None,
+        loaded: None,
     };
     assert_eq!(content_text(&done), "a\nb");
 }

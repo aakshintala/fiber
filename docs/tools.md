@@ -100,7 +100,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 (defined in `docs/events.md`):
 
 - `content`: text and image parts. It is exactly what the model is sent,
-  including after an `after_tool` hook has rewritten it. The hook runs on the
+  except for a `tool_search` result: each protocol renders that from `loaded`
+  ("Tool search"), and `content` holds the text form. That holds after an
+  `after_tool` hook has rewritten it. The hook runs on the
   full output before the cut, so the completed line and the artifact both hold
   what the hook returned (`docs/extensions.md`, "Hooks"). A foreground `shell`
   call's output past 1 MiB is cut before the hook runs ("Result and output").

@@ -279,7 +279,8 @@ pub struct ToolCallCompleted {
     /// On any call that ran a process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<Process>,
-    /// Exactly what the model is sent.
+    /// Exactly what the model is sent, except a `tool_search` result,
+    /// rendered from `loaded` (`docs/tools.md`, "What a result carries").
     pub content: Vec<ContentPart>,
     /// Data for clients, such as an edit's diff; never sent to the model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -309,6 +310,9 @@ pub struct ToolCallCompleted {
     /// (`docs/tools.md`, "Hosted by the provider").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_item: Option<Value>,
+    /// The tools a search loaded, by name, best first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loaded: Option<Vec<String>>,
 }
 
 /// One file a call changed.

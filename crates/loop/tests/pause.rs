@@ -69,6 +69,7 @@ fn stub(id: &str, result: Value) -> ReplyAction {
             changed_by: None,
             provider_item: Some(result),
             hosts_surfaced: Vec::new(),
+            loaded: None,
         },
     }
 }

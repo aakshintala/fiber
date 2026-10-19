@@ -1550,6 +1550,7 @@ impl contract::tool::InnerCalls for ScriptRunner {
             changed_by: None,
             provider_item: None,
             hosts_surfaced: Vec::new(),
+            loaded: None,
         }))
     }
 }
