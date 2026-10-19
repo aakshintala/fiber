@@ -15,7 +15,7 @@
 #[path = "../tests/support/connect_args.rs"]
 mod connect_args;
 use connect_args::{Args, parse};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode, Stdio};
@@ -64,9 +64,8 @@ fn hub_session(
     let (stream, hello) =
         doors::hub::connect_target(&home, &target, &mut start, clock).map_err(io::Error::other)?;
     let mut stdout = io::stdout();
-    serde_json::to_writer(&mut stdout, &hello).map_err(io::Error::other)?;
-    stdout.write_all(b"\n")?;
-    stdout.flush()?;
+    let hello = serde_json::to_vec(&hello).map_err(io::Error::other)?;
+    support::framing::write_line(&mut stdout, &hello)?;
     relay(Ok(stream), io::stdin(), &mut stdout)
 }
 
@@ -103,26 +102,24 @@ fn relay(
     // The socket closing must not wait on stdin, which may still be blocked.
     drop(incoming);
     let mut reader = BufReader::new(stream);
-    let mut line = String::new();
     loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => stdout.write_all(line.as_bytes())?,
+        match support::framing::read_line(&mut reader, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => break,
+            Ok(Some(line)) => {
+                support::framing::write_line(&mut *stdout, &line)?;
+            }
         }
     }
-    stdout.flush()
+    Ok(())
 }
 
 fn copy_stdin(stdin: impl Read, writer: &mut UnixStream) {
     let mut stdin = BufReader::new(stdin);
-    let mut buf = Vec::new();
     loop {
-        buf.clear();
-        match stdin.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                if writer.write_all(&buf).is_err() || writer.flush().is_err() {
+        match support::framing::read_line(&mut stdin, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => break,
+            Ok(Some(buf)) => {
+                if support::framing::write_line(&mut *writer, &buf).is_err() {
                     break;
                 }
             }
