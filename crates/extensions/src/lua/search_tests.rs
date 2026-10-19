@@ -275,6 +275,10 @@ fn a_spinning_run_past_its_timeout_returns_a_timeout() {
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the backend to spin");
+    assert!(
+        clock.await_parked(asked + Duration::from_millis(100) + crate::lua::GRACE, WAIT),
+        "the caller parked at the grace"
+    );
     clock.advance_when_parked(
         Some(asked + Duration::from_millis(100) + crate::lua::GRACE),
         None,
