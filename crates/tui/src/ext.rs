@@ -68,6 +68,8 @@ impl Ext {
 /// the lines for one input. The terminal calls it on its own thread, and
 /// the renderer makes no host call.
 pub trait Renderer: std::fmt::Debug {
+    /// The extension that draws: the fallback notice names it.
+    fn name(&self) -> &str;
     /// Whether the extension fills exactly this slot name, such as
     /// `ledger_row:shell`.
     fn fills(&self, slot: &str) -> bool;
@@ -240,10 +242,10 @@ fn hash_value(value: &Value, key: &mut DefaultHasher) {
         }
         Value::Object(fields) => {
             5u8.hash(key);
-            let mut ordered: Vec<(&String, &Value)> = fields.iter().collect();
-            ordered.sort_by(|left, right| left.0.cmp(right.0));
-            ordered.len().hash(key);
-            for (name, field) in ordered {
+            // Without `preserve_order` the map is key-ordered, so its
+            // order never depends on insertion.
+            fields.len().hash(key);
+            for (name, field) in fields {
                 name.hash(key);
                 hash_value(field, key);
             }

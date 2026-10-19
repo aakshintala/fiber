@@ -2349,7 +2349,7 @@ the extension author's cost to keep down.
 - **An error or a wrong shape** falls back to the built-in for that item. The
   failure is cached against the item's input, so the renderer is not called
   again until that input changes. One notice names the extension, the slot
-  and the Lua error, once for each extension and slot until the reload command. A key or click handler that errors
+  and the Lua error, once for each extension and slot until `/reload`. A key or click handler that errors
   counts as not having handled the input. An extension's own view or overlay
   has no built-in, so it closes.
 - **A timeout** switches the extension off in this terminal until `/reload`

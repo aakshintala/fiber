@@ -122,7 +122,8 @@ impl Rows {
         let renderer = seam.handle.get()?;
         let page = seam.page;
         let cache = Arc::clone(&seam.cache);
-        cache.lines(page, slot, input, width, || {
+        let extension = renderer.name().to_owned();
+        cache.lines(page, slot, &extension, input, width, || {
             renderer.render(slot, input, width, builtin)
         })
     }

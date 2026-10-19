@@ -45,7 +45,7 @@ fn a_second_draw_reads_the_cache() {
     let arguments = serde_json::json!({"command": "ls"});
     let row = input("shell", "first", &arguments);
     let draw = |width| {
-        cache.lines(0, "ledger_row", &row, width, || {
+        cache.lines(0, "ledger_row", "test", &row, width, || {
             calls.set(calls.get().saturating_add(1));
             Ok(vec![vec![raw("hi")]])
         })
@@ -72,7 +72,7 @@ fn a_failure_falls_back_and_calls_nothing_again() {
     let arguments = serde_json::json!({"command": "ls"});
     let row = input("shell", "first", &arguments);
     let draw = |width| {
-        cache.lines(0, "ledger_row", &row, width, || {
+        cache.lines(0, "ledger_row", "test", &row, width, || {
             calls.set(calls.get().saturating_add(1));
             Err(failed("test", "boom"))
         })
@@ -85,7 +85,7 @@ fn a_failure_falls_back_and_calls_nothing_again() {
     let other = input("shell", "second", &arguments);
     assert!(
         cache
-            .lines(0, "ledger_row", &other, 20, || {
+            .lines(0, "ledger_row", "test", &other, 20, || {
                 calls.set(calls.get().saturating_add(1));
                 Err(failed("test", "boom"))
             })
@@ -102,7 +102,7 @@ fn a_wrong_shape_is_a_cached_failure_listed_once() {
     let arguments = serde_json::json!({"command": "ls"});
     let row = input("shell", "first", &arguments);
     let draw = || {
-        cache.lines(0, "ledger_row", &row, 20, || {
+        cache.lines(0, "ledger_row", "test", &row, 20, || {
             calls.set(calls.get().saturating_add(1));
             Ok(vec![vec![RawSpan {
                 text: "hi".to_owned(),
@@ -117,15 +117,9 @@ fn a_wrong_shape_is_a_cached_failure_listed_once() {
     let listed = cache.take_failures();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed.first().expect("one failure").0, "ledger_row");
-    assert!(
-        listed
-            .first()
-            .expect("one failure")
-            .1
-            .message
-            .contains("fg"),
-        "{listed:?}"
-    );
+    let failure = listed.first().expect("one failure").1.clone();
+    assert_eq!(failure.extension, "test", "{failure:?}");
+    assert!(failure.message.contains("fg"), "{listed:?}");
     assert_eq!(cache.take_failures(), vec![]);
 }
 
@@ -137,12 +131,16 @@ fn an_error_is_listed_once_and_a_hit_lists_nothing() {
     let row = input("shell", "first", &arguments);
     assert!(
         cache
-            .lines(0, "ledger_row", &row, 20, || Err(failed("test", "boom")))
+            .lines(0, "ledger_row", "test", &row, 20, || Err(failed(
+                "test", "boom"
+            )))
             .is_none()
     );
     assert!(
         cache
-            .lines(0, "ledger_row", &row, 20, || Err(failed("test", "boom")))
+            .lines(0, "ledger_row", "test", &row, 20, || Err(failed(
+                "test", "boom"
+            )))
             .is_none()
     );
     let listed = cache.take_failures();
@@ -161,7 +159,7 @@ fn dropping_a_page_calls_that_page_again_only() {
     let arguments = serde_json::json!({"command": "ls"});
     let row = input("shell", "first", &arguments);
     let draw = |page| {
-        cache.lines(page, "ledger_row", &row, 20, || {
+        cache.lines(page, "ledger_row", "test", &row, 20, || {
             calls.set(calls.get().saturating_add(1));
             Ok(vec![vec![raw("hi")]])
         })
@@ -184,7 +182,7 @@ fn dropping_a_page_calls_a_failed_input_again() {
     let arguments = serde_json::json!({"command": "ls"});
     let row = input("shell", "first", &arguments);
     let draw = |page| {
-        cache.lines(page, "ledger_row", &row, 20, || {
+        cache.lines(page, "ledger_row", "test", &row, 20, || {
             calls.set(calls.get().saturating_add(1));
             Err(failed("test", "boom"))
         })
@@ -206,7 +204,7 @@ fn dropping_entries_calls_every_width_again_and_keeps_a_failure() {
     let row = input("shell", "good", &arguments);
     let bad = input("read", "bad", &arguments);
     let draw = |row: &Input<'_>, width| {
-        cache.lines(0, "ledger_row", row, width, || {
+        cache.lines(0, "ledger_row", "test", row, width, || {
             calls.set(calls.get().saturating_add(1));
             if matches!(row, Input::LedgerRow(ledger) if ledger.name == "read") {
                 return Err(failed("test", "boom"));
@@ -235,7 +233,7 @@ fn the_same_input_in_two_slots_calls_twice() {
     let row = input("shell", "first", &arguments);
     for slot in ["ledger_row", "ledger_row:shell"] {
         cache
-            .lines(0, slot, &row, 20, || {
+            .lines(0, slot, "test", &row, 20, || {
                 calls.set(calls.get().saturating_add(1));
                 Ok(vec![vec![raw("hi")]])
             })
@@ -250,7 +248,7 @@ fn a_renderer_may_drop_another_page_while_drawing() {
     let cache = Cache::default();
     let arguments = serde_json::json!({"command": "ls"});
     let row = input("shell", "first", &arguments);
-    let drawn = cache.lines(0, "ledger_row", &row, 20, || {
+    let drawn = cache.lines(0, "ledger_row", "test", &row, 20, || {
         cache.drop_page(1);
         Ok(vec![vec![raw("hi")]])
     });
@@ -266,7 +264,7 @@ fn clear_drops_everything() {
     let arguments = serde_json::json!({"command": "ls"});
     let row = input("shell", "first", &arguments);
     cache
-        .lines(0, "ledger_row", &row, 20, || {
+        .lines(0, "ledger_row", "test", &row, 20, || {
             calls.set(calls.get().saturating_add(1));
             Ok(vec![vec![raw("hi")]])
         })
@@ -274,13 +272,15 @@ fn clear_drops_everything() {
     let bad = input("read", "bad", &arguments);
     assert!(
         cache
-            .lines(0, "ledger_row", &bad, 20, || Err(failed("test", "boom")))
+            .lines(0, "ledger_row", "test", &bad, 20, || Err(failed(
+                "test", "boom"
+            )))
             .is_none()
     );
     cache.clear();
     assert_eq!(cache.take_failures(), vec![]);
     cache
-        .lines(0, "ledger_row", &row, 20, || {
+        .lines(0, "ledger_row", "test", &row, 20, || {
             calls.set(calls.get().saturating_add(1));
             Ok(vec![vec![raw("hi")]])
         })
@@ -298,7 +298,7 @@ fn the_counter_matches_the_renderer_calls() {
     let first = input("shell", "first", &arguments);
     let second = input("shell", "second", &arguments);
     for (row, width) in [(&first, 20), (&first, 20), (&second, 20), (&first, 24)] {
-        shared.lines(0, "ledger_row", row, width, || {
+        shared.lines(0, "ledger_row", "test", row, width, || {
             calls.set(calls.get().saturating_add(1));
             Ok(vec![vec![raw("hi")]])
         });
@@ -306,7 +306,7 @@ fn the_counter_matches_the_renderer_calls() {
     let third = input("shell", "third", &arguments);
     assert!(
         shared
-            .lines(0, "ledger_row", &third, 20, || {
+            .lines(0, "ledger_row", "test", &third, 20, || {
                 calls.set(calls.get().saturating_add(1));
                 Err(failed("test", "boom"))
             })

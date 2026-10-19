@@ -196,46 +196,7 @@ impl Role {
 
     /// The role named `name`, spelled exactly as [`Role::name`] spells it.
     pub(crate) fn from_name(name: &str) -> Option<Role> {
-        Some(match name {
-            "text" => Self::Text,
-            "muted" => Self::Muted,
-            "accent" => Self::Accent,
-            "heading" => Self::Heading,
-            "success" => Self::Success,
-            "warning" => Self::Warning,
-            "error" => Self::Error,
-            "attention" => Self::Attention,
-            "added" => Self::Added,
-            "removed" => Self::Removed,
-            "code_text" => Self::CodeText,
-            "keyword" => Self::Keyword,
-            "string" => Self::String,
-            "comment" => Self::Comment,
-            "number" => Self::Number,
-            "function" => Self::Function,
-            "type" => Self::Type,
-            "constant" => Self::Constant,
-            "operator" => Self::Operator,
-            "info" => Self::Info,
-            "secondary" => Self::Secondary,
-            "rule" => Self::Rule,
-            "scroll" => Self::Scroll,
-            "background" => Self::Background,
-            "panel" => Self::Panel,
-            "surface" => Self::Surface,
-            "surface_raised" => Self::SurfaceRaised,
-            "turn" => Self::Turn,
-            "prompt" => Self::Prompt,
-            "code" => Self::Code,
-            "handoff" => Self::Handoff,
-            "approval" => Self::Approval,
-            "alert" => Self::Alert,
-            "hover" => Self::Hover,
-            "selection" => Self::Selection,
-            "match" => Self::Match,
-            "match_current" => Self::MatchCurrent,
-            _ => return None,
-        })
+        Self::ALL.into_iter().find(|role| role.name() == name)
     }
 
     /// A background role: a tint a surface sits on.

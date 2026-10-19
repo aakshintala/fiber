@@ -3717,6 +3717,8 @@ struct Fake {
     fail_edits: bool,
     /// Every render fails under `extension`.
     fail_all: bool,
+    /// Every render returns the wrong shape under `extension`.
+    wrong_shape: bool,
     /// The `Failure.extension` a failure names.
     extension: String,
     /// One more slot the fake fills besides the catch-all.
@@ -3734,6 +3736,7 @@ impl Fake {
             styled: false,
             fail_edits: false,
             fail_all: false,
+            wrong_shape: false,
             extension: "fake".to_owned(),
             extra_slot: None,
         }
@@ -3747,9 +3750,23 @@ impl Fake {
             ..Fake::lines(1)
         }
     }
+
+    /// A fake whose every render returns the wrong shape under
+    /// `extension`.
+    fn misshapen(extension: &str) -> Self {
+        Fake {
+            wrong_shape: true,
+            extension: extension.to_owned(),
+            ..Fake::lines(1)
+        }
+    }
 }
 
 impl Renderer for Fake {
+    fn name(&self) -> &str {
+        &self.extension
+    }
+
     fn fills(&self, slot: &str) -> bool {
         slot == "ledger_row" || self.extra_slot.as_deref() == Some(slot)
     }
@@ -3770,6 +3787,13 @@ impl Renderer for Fake {
                 extension: self.extension.clone(),
                 message: "always fails".to_owned(),
             });
+        }
+        if self.wrong_shape {
+            return Ok(vec![vec![RawSpan {
+                text: "hi".to_owned(),
+                fg: Some("nope".to_owned()),
+                ..RawSpan::default()
+            }]]);
         }
         if self.fail_edits && matches!(input, Input::LedgerRow(row) if row.name == "edit") {
             self.failed.borrow_mut().insert(key);
@@ -4179,6 +4203,40 @@ fn a_second_extension_and_a_second_slot_report_again() {
     assert_eq!(texts.len(), 3, "{texts:?}");
     assert!(
         texts[2].1.contains("could not draw ledger_row:read:"),
+        "{texts:?}"
+    );
+}
+
+/// Two wrong shapes in one slot report twice: the failure names the
+/// extension that returned it, so a second extension's wrong shape is
+/// a new pair even though the slot already reported.
+#[test]
+fn two_wrong_shapes_in_one_slot_report_twice() {
+    let lines = session(1, true);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    app.use_renderer(Rc::new(Fake::misshapen("alpha")));
+    search(&app);
+    assert!(app.drawn(&[]));
+    let texts = notice_texts(&app);
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(
+        texts[0]
+            .1
+            .contains("extension alpha could not draw ledger_row:"),
+        "{texts:?}"
+    );
+    // A second extension returning the wrong shape in the same slot
+    // reports again: its pair was never named.
+    app.use_renderer(Rc::new(Fake::misshapen("beta")));
+    search(&app);
+    assert!(app.drawn(&[]));
+    let texts = notice_texts(&app);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(
+        texts[1]
+            .1
+            .contains("extension beta could not draw ledger_row:"),
         "{texts:?}"
     );
 }

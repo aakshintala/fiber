@@ -58,13 +58,15 @@ impl Cache {
     /// The renderer's lines for `input` at `width`: a hit returns the
     /// stored lines; a miss calls `call` once and validates what it
     /// returns before storing or drawing any of it. An error or a wrong
-    /// shape stores the failure and returns none, so the item falls back
-    /// to its built-in row. No lock crosses the renderer call, so a
-    /// renderer that calls back into the cache never deadlocks.
+    /// shape stores the failure under `extension` and returns none, so
+    /// the item falls back to its built-in row. No lock crosses the
+    /// renderer call, so a renderer that calls back into the cache never
+    /// deadlocks.
     pub(crate) fn lines(
         &self,
         page: usize,
         slot: &str,
+        extension: &str,
         input: &Input<'_>,
         width: u16,
         call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>,
@@ -97,7 +99,7 @@ impl Cache {
                         slot,
                         hash,
                         Failure {
-                            extension: String::new(),
+                            extension: extension.to_owned(),
                             message: shape.to_string(),
                         },
                     );

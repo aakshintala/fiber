@@ -1561,6 +1561,10 @@ fn raw(text: &str) -> RawSpan {
 }
 
 impl Renderer for Fake {
+    fn name(&self) -> &str {
+        "fake"
+    }
+
     fn fills(&self, slot: &str) -> bool {
         self.fills.borrow().iter().any(|filled| filled == slot)
     }

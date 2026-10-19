@@ -1330,6 +1330,14 @@ impl App {
     /// `use_renderer`, which counts every page again.
     #[cfg(test)]
     pub(crate) fn install_renderer(&mut self, renderer: Rc<dyn Renderer>) {
+        self.set_renderer(renderer);
+    }
+
+    /// Installs `renderer` through the shared handle, creating its slot
+    /// the first time: a renderer installed on another thread resolves
+    /// to nothing there, so moving the app across threads installs
+    /// afresh here.
+    fn set_renderer(&mut self, renderer: Rc<dyn Renderer>) {
         if self.handle.get().is_none() {
             self.handle = Handle::create();
             self.attached_screen_mut().pages_mut().ext.handle = self.handle;
@@ -1338,20 +1346,13 @@ impl App {
     }
 
     /// Installs the ledger renderer: every page counts again under it.
-    /// No production caller yet: Part 3 adapts the extensions VM to it,
-    /// and the PR body says so.
+    /// No production caller yet: Part 3 adapts the extensions VM to it.
     #[allow(
         dead_code,
         reason = "no production caller until Part 3 adapts the extensions VM"
     )]
     pub(crate) fn use_renderer(&mut self, renderer: Rc<dyn Renderer>) {
-        // A renderer installed on another thread resolves to nothing
-        // there, so moving the app across threads installs afresh here.
-        if self.handle.get().is_none() {
-            self.handle = Handle::create();
-            self.attached_screen_mut().pages_mut().ext.handle = self.handle;
-        }
-        self.handle.set(renderer);
+        self.set_renderer(renderer);
         self.attached_screen_mut().pages_mut().renderers_changed();
     }
 

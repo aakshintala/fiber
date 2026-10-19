@@ -671,8 +671,8 @@ impl Group {
             Status::Completed => ("✓", style(Role::Success)),
             Status::Cancelled => ("⊘", Style::default().add_modifier(Modifier::DIM)),
             Status::Failed | Status::Denied => ("✗", Style::default().add_modifier(Modifier::DIM)),
-            Status::Unknown if self.cut => ("?", style(Role::Attention)),
-            Status::Pending | Status::Running | Status::Unknown => ("○", style(Role::Attention)),
+            Status::Unknown => ("?", style(Role::Attention)),
+            Status::Pending | Status::Running => ("○", style(Role::Attention)),
         };
         let result = self.builtin_result(row);
         // Six columns of gutter, the glyph, one space and nine of
@@ -710,10 +710,10 @@ impl Group {
             return vec![dim_span(answer.to_owned())];
         }
         match row.status {
-            Status::Unknown if self.cut => {
+            Status::Unknown => {
                 return vec![dim_span("? may have run; not run again".to_owned())];
             }
-            Status::Unknown | Status::Pending | Status::Running => {
+            Status::Pending | Status::Running => {
                 if matches!(kind(row.name, row.arguments), Kind::Ask(_)) {
                     return vec![Span::styled("waiting on you", style(Role::Attention))];
                 }

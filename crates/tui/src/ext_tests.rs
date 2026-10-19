@@ -7,6 +7,10 @@ use contract::events::FileChange;
 struct Fake;
 
 impl Renderer for Fake {
+    fn name(&self) -> &str {
+        ""
+    }
+
     fn fills(&self, _slot: &str) -> bool {
         false
     }

@@ -55,7 +55,13 @@ impl App {
     /// finds its pair in the set and adds nothing.
     fn drain_renderer_failures(&mut self) -> bool {
         let mut pushed = false;
-        for (slot, failure) in self.attached_screen_mut().pages_mut().take_failures() {
+        for (slot, failure) in self
+            .attached_screen_mut()
+            .pages_mut()
+            .ext
+            .cache
+            .take_failures()
+        {
             if self
                 .renderer_reported
                 .insert((failure.extension.clone(), slot.clone()))
