@@ -183,7 +183,8 @@ fn user(input: &Input) -> &str {
         other @ (Input::Assistant { .. }
         | Input::Reasoning { .. }
         | Input::ToolCall { .. }
-        | Input::ToolResult { .. }) => panic!("expected user input, got {other:?}"),
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. }) => panic!("expected user input, got {other:?}"),
     }
 }
 

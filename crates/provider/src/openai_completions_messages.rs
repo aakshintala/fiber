@@ -41,7 +41,8 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     let call_id = |action_id: &ActionId| {
@@ -82,6 +83,14 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
                     crate::images::PdfForm::Pages,
                 );
                 out.push(message(user_content(prepared)));
+            }
+            Input::ToolSearchResult { action_id, loaded } => {
+                out.push(message(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id(action_id),
+                    "content": contract::provider::loaded_text(loaded),
+                })));
+                last_tool = Some(index);
             }
             // The flag is ignored: Chat Completions defines no error field
             // on a tool message (`ChatCompletionRequestToolMessage`: `role,

@@ -396,7 +396,7 @@ fn serve_captures_first_then_reports_the_fallback() {
     let home = temp.dir.clone();
     let clock_serve = Arc::clone(&clock);
     let (done_tx, done_rx) = mpsc::channel();
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let starter = Arc::new(FakeStarter::hang(&home));
         let result = serve(
             &home,
@@ -426,11 +426,17 @@ fn serve_captures_first_then_reports_the_fallback() {
                 .contains("environment_built")
         }
     });
+    let serve_id = handle.thread().id();
     assert!(
         clock.await_parked(origin + idle, WITHIN),
         "the hub idles past the capture"
     );
-    clock.advance(idle + Duration::from_secs(1));
+    clock.advance_when_parked(
+        Some(origin + idle),
+        Some(serve_id),
+        idle,
+        &Deadline::after(WITHIN),
+    );
     let code = Deadline::after(WITHIN)
         .recv(&done_rx)
         .expect("the hub exits for idleness")

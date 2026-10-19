@@ -19,6 +19,7 @@ use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use contract::clock::Clock;
 use contract::clock::Wake;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -42,6 +43,19 @@ const UNREGISTERED: Duration = Duration::from_secs(3);
 /// notices the wait's end within this bound instead of one more
 /// [`DEADLINE`], as `SLICE` in `crates/doors/tests/socket.rs` does.
 const SLICE: Duration = Duration::from_secs(1);
+
+/// Moves the clock one scan after the scanner parks for it: every move of
+/// the clock in this file is `RUN_SCAN`, so the scanner's park is
+/// `clock.now() + RUN_SCAN` when called.
+#[track_caller]
+fn advance_to_scan(clock: &FakeClock) {
+    clock.advance_when_parked(
+        Some(clock.now() + RUN_SCAN),
+        None,
+        RUN_SCAN,
+        &Deadline::after(DEADLINE),
+    );
+}
 struct Temp {
     dir: PathBuf,
     #[expect(dead_code, reason = "Drop removes the directory")]
@@ -1377,7 +1391,7 @@ fn a_summary_subscription_through_the_hub_follows_a_session_into_its_later_run()
     let resumed = Fake::bind(&temp.dir, &sid);
     resumed.say(&status_line(&sid, "streaming", None));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the rejoin");
     let (_, lines) = resumed.await_conn_where(
@@ -1426,7 +1440,7 @@ fn the_rejoin_replays_the_last_held_level() {
     let resumed = Fake::bind(&temp.dir, &sid);
     resumed.say(&status_line(&sid, "streaming", None));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the rejoin");
     let (_, lines) = resumed.await_conn_where(
@@ -1469,7 +1483,7 @@ fn a_socket_that_accepts_without_a_new_start_gets_no_rejoin() {
     fake.await_closed();
     let rebound = Fake::bind(&temp.dir, &sid);
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the quiet scan");
     assert!(!rebound.has_rejoin(), "no new start, no rejoin");
@@ -1516,7 +1530,7 @@ fn a_running_session_without_a_new_start_gets_no_rejoin() {
     // The close dropped the kept level, so the quiet scan finds no
     // candidate and runs no worker: the scanner parking past the scan
     // proves the scan ran.
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(
         !fake.has_rejoin(),
@@ -1552,7 +1566,7 @@ fn a_run_shorter_than_one_rescan_is_not_rejoined() {
     // sweep connects to nothing.
     temp.append(&sid, &fiber_started(&sid));
     temp.append(&sid, &fiber_exited(&sid));
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(client.try_next().is_none(), "the short run sent nothing");
     // A still later run binds: it rejoins.
@@ -1560,7 +1574,7 @@ fn a_run_shorter_than_one_rescan_is_not_rejoined() {
     let resumed = Fake::bind(&temp.dir, &sid);
     resumed.say(&status_line(&sid, "streaming", None));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the rejoin");
     resumed.await_conn_where(
@@ -1621,7 +1635,7 @@ fn a_connection_without_a_kept_level_gets_no_rejoin() {
     let resumed = Fake::bind(&temp.dir, &sid);
     resumed.say(&status_line(&sid, "streaming", None));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the rejoin");
     resumed.await_conn_where(
@@ -1665,7 +1679,7 @@ fn a_session_with_a_live_relay_is_not_connected_again() {
         "command_accepted"
     );
     temp.append(&sid, &fiber_started(&sid));
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(!fake.has_rejoin(), "the live relay is not duplicated");
 }
@@ -1697,7 +1711,7 @@ fn a_disconnected_connection_gets_no_rejoin() {
     fake.await_closed();
     temp.append(&sid, &fiber_started(&sid));
     let resumed = Fake::bind(&temp.dir, &sid);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(!resumed.has_rejoin(), "a gone connection rejoins nothing");
     await_unregistered(&hub, &clock, "the gone connection");
@@ -1733,7 +1747,7 @@ fn a_delegates_later_run_is_rejoined_without_the_starter() {
     let resumed = Fake::bind(&temp.dir, &sid);
     resumed.say(&status_line(&sid, "streaming", Some(&parent)));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the rejoin");
     resumed.await_conn_where(
@@ -1777,7 +1791,7 @@ fn a_rewound_last_line_never_rejoins_the_old_session() {
     temp.append(&sid, &rewound(&sid, &next));
     let rebound = Fake::bind(&temp.dir, &sid);
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the quiet scan");
     assert!(!rebound.has_rejoin(), "a rewound log rejoins nothing");
@@ -1811,7 +1825,7 @@ fn a_stale_socket_is_skipped_until_a_session_binds() {
     temp.append(&sid, &fiber_started(&sid));
     fs::write(temp.dir.join("run").join(&sid), b"stale").unwrap();
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the quiet scan");
     // A session binds there: the next scan rejoins.
@@ -1819,7 +1833,7 @@ fn a_stale_socket_is_skipped_until_a_session_binds() {
     let resumed = Fake::bind(&temp.dir, &sid);
     resumed.say(&status_line(&sid, "streaming", None));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the rejoin");
     resumed.await_conn_where(
@@ -1931,7 +1945,7 @@ fn route_and_the_sweep_open_only_one_relay() {
     // The sweep runs while route waits: the peer rejoins, and the paused
     // session gets no new connection.
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the sweep's pass");
     resumed_peer.await_conn_where(
@@ -1990,7 +2004,7 @@ fn route_and_the_sweep_open_only_one_relay() {
         release.recv().unwrap_or(());
     }));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(
         Deadline::after(DEADLINE).recv(&paused).is_ok(),
@@ -2053,7 +2067,7 @@ fn a_level_changed_while_the_worker_waits_is_the_one_rejoined() {
         release.recv().unwrap_or(());
     }));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(
         Deadline::after(DEADLINE).recv(&paused).is_ok(),
@@ -2090,7 +2104,7 @@ fn a_level_changed_while_the_worker_waits_is_the_one_rejoined() {
     );
     // The next run is rejoined at the level the connection now holds.
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the next pass");
     let (_, lines) = next.await_conn_where(
@@ -2179,7 +2193,7 @@ fn follow_and_the_sweep_open_only_one_relay() {
     write_log(&temp.dir, &next, &workspace, None, &[fiber_started(&next)]);
     let rebound = Fake::bind(&temp.dir, &next);
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the sweep's pass");
     resumed_peer.await_conn_where(
@@ -2237,7 +2251,7 @@ fn a_paused_worker_blocks_no_scan_and_starts_no_second_worker() {
         paused_tx.send(()).unwrap_or(());
         release.recv().unwrap_or(());
     }));
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(
         Deadline::after(DEADLINE).recv(&paused).is_ok(),
@@ -2245,9 +2259,9 @@ fn a_paused_worker_blocks_no_scan_and_starts_no_second_worker() {
     );
     // Further scans complete while it waits, and start no second worker:
     // the pause is one-shot, so a second worker would connect at once.
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(!resumed.has_rejoin(), "no second worker connected");
     let stopping = Arc::clone(&hub.feed);
@@ -2299,7 +2313,7 @@ fn a_session_with_no_log_at_attach_rejoins_from_its_discovered_start() {
     let resumed = Fake::bind(&temp.dir, &sid);
     resumed.say(&status_line(&sid, "streaming", None));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the rejoin");
     resumed.await_conn_where(
@@ -2346,7 +2360,7 @@ fn a_long_consumed_prefix_still_rejoins_from_the_offset() {
     let resumed = Fake::bind(&temp.dir, &sid);
     resumed.say(&status_line(&sid, "streaming", None));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the rejoin");
     resumed.await_conn_where(
@@ -2391,13 +2405,13 @@ fn a_scan_during_a_pass_queues_none_and_the_notice_follows_busy_clearing() {
         release.recv().unwrap_or(());
     }));
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(
         Deadline::after(DEADLINE).recv(&paused).is_ok(),
         "the worker paused mid-pass"
     );
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(
         done.try_recv().is_err(),
@@ -2417,7 +2431,7 @@ fn a_scan_during_a_pass_queues_none_and_the_notice_follows_busy_clearing() {
     await_pass(&done, "the held pass");
     // The notice is the signal that the next scan queues a pass.
     let done = arm_pass(&hub);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&clock);
     await_scanner(&clock);
     await_pass(&done, "the scan after the notice");
 }

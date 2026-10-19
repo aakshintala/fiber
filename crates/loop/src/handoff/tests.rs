@@ -139,6 +139,17 @@ fn an_input_estimates_a_quarter_of_its_bytes_rounded_up() {
 }
 
 #[test]
+fn a_tool_search_result_estimates_its_rendered_text() {
+    assert_eq!(
+        estimate(&Input::ToolSearchResult {
+            action_id: ActionId("a_1".into()),
+            loaded: vec!["a".into(), "b".into()],
+        }),
+        4
+    );
+}
+
+#[test]
 fn a_tool_call_estimates_its_name_and_arguments() {
     // `read` is 4 bytes and `{"a":1}` is 7.
     assert_eq!(estimate(&call("read", json!({"a": 1}))), 3);

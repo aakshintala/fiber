@@ -77,9 +77,12 @@ fn an_empty_inbox_parks_until_the_idle_deadline() {
     let clock = Arc::clone(&session.clock);
     let deadline = clock.now() + Duration::from_secs(60);
     let finished = spawn_run(&mut session);
-    parked(&clock, deadline, "the idle wait parks until the deadline");
-
-    clock.advance(Duration::from_millis(59_999));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(59_999),
+        &Deadline::after(DEADLINE),
+    );
     // The wake goes first so the reply's acknowledgement shows it was taken.
     wake(&session);
     let rejected = stale_reply(&session);
@@ -99,7 +102,12 @@ fn an_empty_inbox_parks_until_the_idle_deadline() {
         "59.999s does not end the idle wait"
     );
 
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     wake(&session);
     let ran = Deadline::after(DEADLINE)
         .recv(&finished)
@@ -143,12 +151,12 @@ fn the_delay_restarts_after_a_turn() {
     let clock = Arc::clone(&session.clock);
     let origin = clock.now();
     let finished = spawn_run(&mut session);
-    parked(
-        &clock,
-        origin + Duration::from_secs(60),
-        "idle before the first turn",
+    clock.advance_when_parked(
+        Some(origin + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(30),
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(Duration::from_secs(30));
     session.inbox.send(delivery("hi")).unwrap();
     parked(
         &clock,
@@ -174,8 +182,12 @@ fn a_rejected_reply_a_steer_drop_and_a_wake_do_not_move_the_deadline() {
     let clock = Arc::clone(&session.clock);
     let deadline = clock.now() + Duration::from_secs(60);
     let finished = spawn_run(&mut session);
-    parked(&clock, deadline, "idle before the junk");
-    clock.advance(Duration::from_secs(10));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_secs(10),
+        &Deadline::after(DEADLINE),
+    );
 
     let rejected = stale_reply(&session);
     assert!(
@@ -252,11 +264,12 @@ fn no_deadline_never_expires() {
     arm(&mut session, None);
     let clock = Arc::clone(&session.clock);
     let finished = spawn_run(&mut session);
-    assert!(
-        clock.await_parked_unbounded(DEADLINE),
-        "a loop with no idle delay parks with no deadline"
+    let m = clock.advance_when_parked(
+        None,
+        None,
+        Duration::from_secs(24 * 60 * 60),
+        &Deadline::after(DEADLINE),
     );
-    let m = clock.advance_marked(Duration::from_secs(24 * 60 * 60));
     // The wake goes first so the reply's acknowledgement shows it was taken.
     wake(&session);
     let rejected = stale_reply(&session);
@@ -313,13 +326,12 @@ fn an_approval_wait_parks_until_the_idle_deadline_and_writes_nothing_more() {
     let start = clock.now();
     // The turn runs before the approval wait, on the same instant: the
     // deadline is that instant plus the delay.
-    parked(
-        &clock,
-        start + Duration::from_secs(60),
-        "the approval wait parks until the deadline",
+    clock.advance_when_parked(
+        Some(start + Duration::from_secs(60)),
+        None,
+        Duration::from_millis(59_999),
+        &Deadline::after(DEADLINE),
     );
-
-    clock.advance(Duration::from_millis(59_999));
     // The wake goes first so the reply's acknowledgement shows it was taken.
     wake(&session);
     let rejected = stale_reply(&session);
@@ -339,7 +351,12 @@ fn an_approval_wait_parks_until_the_idle_deadline_and_writes_nothing_more() {
         "59.999s does not end the approval wait"
     );
 
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(start + Duration::from_secs(60)),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     wake(&session);
     let ran = Deadline::after(DEADLINE)
         .recv(&finished)

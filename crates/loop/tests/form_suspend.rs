@@ -34,7 +34,7 @@ use contract::tool::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Outpu
 use contract::{ActionId, Envelope, ErrorCode, JobId, RequestId};
 use fakes::Deadline;
 use fakes::Scripted;
-use fakes::clock::FakeClock;
+use fakes::clock::Mark;
 use r#loop::{Error, Loop};
 use serde_json::{Map, Value, json};
 
@@ -393,30 +393,42 @@ const DONE: &[&str] = &[
 /// to `at`.
 fn idle_passes(session: &Session, tap: &Tap, finished: &Finished, at: Instant) {
     let clock = Arc::clone(&session.clock);
-    assert!(
-        clock.await_parked(at, DEADLINE),
-        "the step waits until the idle deadline"
-    );
     let left = at
         .duration_since(clock.now())
         .saturating_sub(Duration::from_millis(1));
-    let mark = clock.advance_marked(left);
+    let mark = clock.advance_when_parked(
+        Some(at),
+        session.turn_thread,
+        left,
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         clock.await_parked_since(&mark, Some(at), DEADLINE),
         "1 ms before it, the step waits again"
     );
     no_resolution(tap);
     still_running(finished);
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(at),
+        session.turn_thread,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
+}
+
+/// Advances a step parked with no deadline by `by`, returning the mark.
+#[track_caller]
+fn advance_step(session: &Session, by: Duration) -> Mark {
+    session
+        .clock
+        .advance_when_parked(None, session.turn_thread, by, &Deadline::after(DEADLINE))
 }
 
 /// Whether the loop thread settles into a wait on the clock, rather than
 /// spinning: a park caught by a zero advance is followed by another park.
-fn settles(clock: &FakeClock) -> bool {
-    clock.await_parked_unbounded(DEADLINE) && {
-        let mark = clock.advance_marked(Duration::ZERO);
-        clock.await_parked_since(&mark, None, DEADLINE)
-    }
+fn settles(session: &Session) -> bool {
+    let mark = advance_step(session, Duration::ZERO);
+    session.clock.await_parked_since(&mark, None, DEADLINE)
 }
 
 #[test]
@@ -454,8 +466,12 @@ fn a_rejected_reply_does_not_move_the_idle_deadline() {
     let at = clock.now() + IDLE;
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    assert!(clock.await_parked(at, DEADLINE), "the step waits until it");
-    clock.advance(IDLE / 2);
+    clock.advance_when_parked(
+        Some(at),
+        session.turn_thread,
+        IDLE / 2,
+        &Deadline::after(DEADLINE),
+    );
     let mark = clock
         .mark_parked(at, DEADLINE)
         .expect("the step waits again");
@@ -497,8 +513,7 @@ fn waits_past_the_idle_delay(later: &'static str) {
     let tap = Tap::new(&session.log);
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    support::await_step_park(&session);
-    let mark = clock.advance_marked(IDLE * 2);
+    let mark = advance_step(&session, IDLE * 2);
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
         "past the idle delay the step still waits with no deadline"
@@ -562,8 +577,7 @@ fn the_idle_delay_counts_from_when_the_earlier_call_completes() {
     let tap = Tap::new(&session.log);
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    support::await_step_park(&session);
-    let mark = clock.advance_marked(IDLE);
+    let mark = advance_step(&session, IDLE);
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
         "the advance leaves the step waiting with no deadline"
@@ -608,8 +622,7 @@ fn a_running_job_keeps_a_pending_form_from_going_idle() {
     let tap = Tap::new(&session.log);
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    support::await_step_park(&session);
-    let mark = clock.advance_marked(IDLE * 2);
+    let mark = advance_step(&session, IDLE * 2);
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
         "past the idle delay the step still waits with no deadline"
@@ -620,6 +633,12 @@ fn a_running_job_keeps_a_pending_form_from_going_idle() {
     jobs.running.store(false, Ordering::SeqCst);
     session.inbox.send(Delivery::Cancelled).unwrap();
     let at = clock.now() + IDLE;
+    // The step re-parks at the deadline only after it sees the wake, so
+    // wait for that park before advancing to it.
+    assert!(
+        session.clock.await_parked(at, DEADLINE),
+        "the step waits until the idle deadline after the job ends"
+    );
     idle_passes(&session, &tap, &finished, at);
 
     assert_eq!(finish(&mut session, &finished), None);
@@ -649,7 +668,7 @@ fn a_shutdown_leaves_a_form_pending_when_it_is_the_last_call_without_a_result() 
     let request = request_id(&tap.wait_for("interaction_requested"));
     session.cancel.shutdown(143);
     assert!(
-        settles(&session.clock),
+        settles(&session),
         "the step waits for the earlier call to stop"
     );
     gate.open();
@@ -810,8 +829,7 @@ fn without_an_idle_delay_a_form_waits_a_day_for_its_answer() {
     let tap = Tap::new(&session.log);
     let finished = start(&mut session);
     let request = request_id(&tap.wait_for("interaction_requested"));
-    support::await_step_park(&session);
-    let mark = clock.advance_marked(Duration::from_secs(24 * 60 * 60));
+    let mark = advance_step(&session, Duration::from_secs(24 * 60 * 60));
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
         "a day later the step still waits with no deadline"
@@ -854,8 +872,7 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
     let finished = start(&mut session);
     let requested = tap.wait_for("interaction_requested");
     assert!(requested.payload.get("resumes").is_none());
-    support::await_step_park(&session);
-    let mark = clock.advance_marked(IDLE * 2);
+    let mark = advance_step(&session, IDLE * 2);
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
         "past the idle delay the step still waits with no deadline"
@@ -988,8 +1005,12 @@ fn suspended_on_form(former: &Arc<Former>) -> (Session, Envelope) {
     let at = session.clock.now() + IDLE;
     let finished = start(&mut session);
     let requested = tap.wait_for("interaction_requested");
-    assert!(session.clock.await_parked(at, DEADLINE), "the step idles");
-    session.clock.advance(IDLE);
+    session.clock.advance_when_parked(
+        Some(at),
+        session.turn_thread,
+        IDLE,
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(finish(&mut session, &finished), None);
     session.events_until("the form's request", |line| {
         line.kind == "interaction_requested"
@@ -1127,6 +1148,12 @@ fn the_idle_delay_in_the_finishing_turn_suspends_on_the_same_request() {
     let at = session.clock.now() + IDLE;
     let finished = run_turn(&mut session);
     tap.wait_for("interaction_requested");
+    // The raised-again step settles at the deadline after it asks, so wait
+    // for that park before advancing to it.
+    assert!(
+        session.clock.await_parked(at, DEADLINE),
+        "the finishing step waits until the idle deadline"
+    );
     idle_passes(&session, &tap, &finished, at);
 
     assert_eq!(finish(&mut session, &finished), None);

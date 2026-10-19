@@ -590,7 +590,8 @@ fn users(request: &ModelRequest) -> Vec<String> {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect()
 }
@@ -1028,7 +1029,8 @@ fn a_resumed_suspended_turn_records_a_waiting_extension_start_first() {
                     Input::User { .. }
                     | Input::Assistant { .. }
                     | Input::Reasoning { .. }
-                    | Input::ToolResult { .. } => None,
+                    | Input::ToolResult { .. }
+                    | Input::ToolSearchResult { .. } => None,
                 })
                 .collect::<Vec<_>>()
         };

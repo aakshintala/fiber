@@ -1031,7 +1031,8 @@ fn run_intake_case(turns: Vec<TurnPlan>) -> Result<(), TestCaseError> {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     for input in inputs
