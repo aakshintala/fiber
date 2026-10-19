@@ -77,6 +77,58 @@ fn shows(screen: &Grid, needle: &str) -> bool {
     screen.rows.iter().any(|row| row.contains(needle))
 }
 
+/// The picker's catalogue stage for a stall report: the current grid
+/// rows plus the session log's `model_changed` lines, so a catalogue
+/// stall says whether the picker opened and whether a switch landed.
+/// Reads under construction are absent, never failures: a missing
+/// session dir or log reads as empty.
+fn picker_catalogue_state(run: &Run, setup: &Setup) -> String {
+    let grid = run.screen().rows.join("\n");
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let mut switches = Vec::new();
+    if let Ok(dirs) = fs::read_dir(&sessions) {
+        for dir in dirs.filter_map(Result::ok) {
+            let log = fs::read_to_string(dir.path().join("events.jsonl")).unwrap_or_default();
+            switches.extend(
+                support::complete_lines(&log)
+                    .into_iter()
+                    .filter(|line| line["kind"] == "model_changed"),
+            );
+        }
+    }
+    format!("catalogue state:\ngrid:\n{grid}\nsession model_changed: {switches:?}")
+}
+
+/// Waits for the open picker to show its answered catalogue with
+/// `gamma`: `gamma` present and the `Reading the model lists` stall
+/// text gone. It keeps `wait_screen`'s deadline and fast-fail path:
+/// on expiry the panic carries the catalogue state, so the next
+/// sighting of the stall says whether the picker opened and whether
+/// a switch already landed.
+#[track_caller]
+fn wait_picker_catalogue(run: &mut Run, setup: &Setup) -> Grid {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run.wait_screen("the picker catalogue with gamma", |screen| {
+            shows(screen, "gamma") && !shows(screen, "Reading the model lists")
+        })
+    }));
+    match result {
+        Ok(grid) => grid,
+        Err(payload) => {
+            let base = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|held| (*held).to_owned())
+                })
+                .unwrap_or_else(|| "the picker catalogue with gamma".to_owned());
+            panic!("{base}; {}", picker_catalogue_state(run, setup));
+        }
+    }
+}
+
 #[test]
 fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     let setup = Setup::new();
@@ -109,9 +161,7 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     // is taken.
     run.write(b"\x0c");
     run.wait_screen("the open picker", |screen| shows(screen, "Type to search"));
-    run.wait_screen("the picker catalogue with gamma", |screen| {
-        shows(screen, "gamma") && !shows(screen, "Reading the model lists")
-    });
+    wait_picker_catalogue(&mut run, &setup);
     let opened = run.screen().rows.clone();
     assert!(
         opened.iter().any(|row| row.contains("Type to search")),
