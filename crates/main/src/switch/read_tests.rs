@@ -75,11 +75,8 @@ fn ready_in(root: &std::path::Path, name: &str) -> Ready {
 /// to what is left of the drive, capped at one poll pause, for the parked
 /// poll instant, then advances past it. No fresh park means the settle
 /// answered instead of re-parking, so the caller re-checks its answer
-/// channel and the drive; a park at the settle's end means it waits out
-/// only the spawn count, so the caller releases the held count and waits
-/// for the answer instead of advancing past the end. Any other park fails
-/// the test. A zero pause never reaches the clock: the caller re-checks
-/// instead.
+/// channel and the drive; a park at another instant fails the test. A zero
+/// pause never reaches the clock: the caller re-checks instead.
 #[track_caller]
 fn poll_step(
     clock: &FakeClock,
@@ -94,10 +91,6 @@ fn poll_step(
     match clock.try_advance_when_parked(Some(parked_at), None, advance, pause) {
         Ok(mark) => Some(mark),
         Err(Miss::NoPark) => None,
-        Err(Miss::Mismatch {
-            watched: (_, Some(at)),
-            ..
-        }) if at == clock.origin() + doors::SHUTDOWN_BOUND => None,
         Err(miss @ Miss::Mismatch { .. }) => {
             panic!("{miss} at {:?}; parked: {:?}", clock.now(), clock.parked())
         }
@@ -2547,7 +2540,23 @@ fn settle_waits_for_the_late_childs_reap() {
             poll <= end,
             "the next poll stays short of the settle's end: {poll:?} past {end:?}"
         );
-        match poll_step(&clock, poll, GROUP_POLL, &Deadline::after(DEADLINE)) {
+        // Like `poll_step`, but an end park also reports no step: only
+        // this drive waits out the spawn count, so only it accepts the
+        // settle parking at its end. `poll_step` still fails any other
+        // park for its other callers.
+        let stepped: Option<Mark> =
+            match clock.try_advance_when_parked(Some(poll), None, GROUP_POLL, PARK_PAUSE) {
+                Ok(mark) => Some(mark),
+                Err(Miss::NoPark) => None,
+                Err(Miss::Mismatch {
+                    watched: (_, Some(at)),
+                    ..
+                }) if at == end => None,
+                Err(miss @ Miss::Mismatch { .. }) => {
+                    panic!("{miss} at {:?}; parked: {:?}", clock.now(), clock.parked())
+                }
+            };
+        match stepped {
             Some(_) => {
                 assert!(
                     listed(&reads).contains(&pgid),
@@ -2565,7 +2574,7 @@ fn settle_waits_for_the_late_childs_reap() {
                 // raised. The park wait proves which without moving the
                 // clock.
                 assert!(
-                    clock.await_parked(end, PARK_PAUSE),
+                    clock.await_parked(end, DEADLINE),
                     "the settle parks at its end once the group is gone"
                 );
                 assert!(
@@ -2579,7 +2588,10 @@ fn settle_waits_for_the_late_childs_reap() {
                     "the held count holds the settle at its end"
                 );
                 free_reaped.send(()).expect("the reaped release");
-                answer = Deadline::after(DEADLINE).recv(&settled).ok();
+                answer = Some(
+                    Deadline::after(DEADLINE)
+                        .recv_or_fail(&settled, "the settle after the count drop"),
+                );
                 break;
             }
         }
