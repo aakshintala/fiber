@@ -189,6 +189,7 @@ fn an_overdue_flight_clears_and_its_late_finish_is_discarded() {
     );
     // Past the flight's 8 s deadline: observing it clears the slot and marks
     // the fetch failed.
+    // No reader exists: seed(..) wrote the cache, and the advance only ages it (ruling 6179406086).
     clock.advance(Duration::from_secs(8));
     let now = clock.now();
     {
@@ -258,6 +259,7 @@ fn an_overdue_finish_with_no_reader_is_discarded() {
     );
     // No reader or trigger runs: the overdue fetch finishes on its own past
     // the 8 s cap, and the completion expires it instead of caching success.
+    // No reader or trigger runs here; the advance only ages the seeded flight (ruling 6179406086).
     clock.advance(Duration::from_secs(8));
     let now = clock.now();
     provider.finish_quota(&pair, 7, Ok(Some(percent("late", 1.0, None))));
@@ -293,6 +295,7 @@ fn finish_at_the_eight_second_boundary() {
     let t0 = clock.now();
     seed(&provider, None, Some(Flight { id: 7, started: t0 }));
     // One nanosecond short of the cap the finish is accepted.
+    // No reader exists; the advance only ages the seeded flight (ruling 6179406086).
     clock.advance(Duration::from_secs(8) - Duration::from_nanos(1));
     let fresh = percent("primary", 10.0, None);
     provider.finish_quota(&pair, 7, Ok(Some(fresh.clone())));
@@ -321,6 +324,7 @@ fn finish_at_the_eight_second_boundary() {
         });
     }
     let started = clock.now();
+    // No reader exists; the advance only ages the seeded flight (ruling 6179406086).
     clock.advance(Duration::from_secs(8));
     let now = clock.now();
     provider.finish_quota(&pair, 8, Ok(Some(percent("late", 1.0, None))));
@@ -503,6 +507,7 @@ fn quota_now_refetches_only_after_the_freshness_boundary() {
         FRESH_FOR.checked_sub(Duration::from_nanos(1)).unwrap(),
         Duration::from_nanos(1),
     ] {
+        // read(..) returned, so no reader is parked; the advance only ages the cache (ruling 6179406086).
         clock.advance(advance);
         assert_eq!(provider.quota_now(&pair(), None), value);
         assert!(
@@ -513,6 +518,7 @@ fn quota_now_refetches_only_after_the_freshness_boundary() {
                 .is_none()
         );
     }
+    // flight.is_none() is asserted above, so no fetch is in flight; the advance only ages the cache (ruling 6179406086).
     clock.advance(Duration::from_nanos(1));
     server.hold();
     assert_eq!(provider.quota_now(&pair(), None), value);
@@ -559,6 +565,7 @@ fn quota_cached_never_starts_a_fetch_even_after_the_freshness_boundary() {
     assert!(server.requests().is_empty());
     let value = QuotaEntry::Reported(percent("primary", 10.0, None));
     assert_eq!(read(&provider), value);
+    // read(..) returned and quota_cached starts no fetch; the advance only ages the cache (ruling 6179406086).
     clock.advance(FRESH_FOR + Duration::from_nanos(1));
     assert_eq!(provider.quota_cached(&pair()), value);
     assert!(
@@ -676,15 +683,16 @@ fn a_fetch_times_out_at_exactly_eight_seconds() {
         "the first fetch"
     );
     // Six minutes on: the cache is due, and the next fetch is held.
+    // The reader thread spawns below; nothing waits on the clock here yet (ruling 6179406086).
     clock.advance(Duration::from_secs(6 * 60));
     server.hold();
     let start = clock.now();
     let until = start + Duration::from_secs(8);
     let (tx, rx) = mpsc::channel();
-    {
+    let reader = {
         let provider = Arc::clone(&provider);
-        std::thread::spawn(move || tx.send(provider.quota(&pair(), None)));
-    }
+        std::thread::spawn(move || tx.send(provider.quota(&pair(), None)))
+    };
     assert!(
         server.await_requests(2, WAIT),
         "the second fetch never reached the server"
@@ -695,14 +703,24 @@ fn a_fetch_times_out_at_exactly_eight_seconds() {
     );
     // One nanosecond short of the cap the reader is still parked: it woke,
     // re-checked, and parked again without a timed wait.
-    let mark = clock.advance_marked(Duration::from_secs(8) - Duration::from_nanos(1));
+    let mark = clock.advance_when_parked(
+        Some(until),
+        Some(reader.thread().id()),
+        Duration::from_secs(8) - Duration::from_nanos(1),
+        &Deadline::after(WAIT),
+    );
     assert!(
         clock.await_parked_since(&mark, Some(until), WAIT),
         "the reader never re-parked at the same deadline"
     );
     assert!(rx.try_recv().is_err(), "the fetch ended before its 8 s cap");
     // The cap itself: `unreachable` with the last value and its age.
-    clock.advance(Duration::from_nanos(1));
+    clock.advance_when_parked(
+        Some(until),
+        Some(reader.thread().id()),
+        Duration::from_nanos(1),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         Deadline::after(WAIT)
             .recv(&rx)
@@ -730,6 +748,7 @@ fn a_failed_fetch_is_unreachable_with_the_last_value_and_its_age() {
     let clock = FakeClock::new();
     let provider = http_quota_provider(&root, &server.url(), Arc::clone(&clock));
     assert_eq!(read(&provider), QuotaEntry::Reported(value.clone()));
+    // read(..) returned; the advance only ages the cache (ruling 6179406086).
     clock.advance(Duration::from_secs(5 * 60 + 1));
     assert_eq!(
         read(&provider),
@@ -765,6 +784,7 @@ fn a_window_reads_as_reset_once_its_reset_time_passes() {
         QuotaEntry::Reported(Quota::Windows(vec![window()])),
         "before the reset"
     );
+    // read(..) returned; the advance only moves the reset boundary (ruling 6179406086).
     clock.advance(Duration::from_secs(60) - Duration::from_nanos(1));
     assert_eq!(
         read(&provider),
@@ -773,6 +793,7 @@ fn a_window_reads_as_reset_once_its_reset_time_passes() {
     );
     // The reset instant itself: the stored value is untouched, only the read
     // maps the window, and the cache is still fresh, so nothing refetches.
+    // read(..) returned and the cache is still fresh, so nothing waits on the clock here (ruling 6179406086).
     clock.advance(Duration::from_nanos(1));
     assert_eq!(
         read(&provider),
@@ -798,6 +819,7 @@ fn an_unreachable_last_value_maps_a_passed_reset_time() {
     assert!(matches!(read(&provider), QuotaEntry::Reported(_)));
     // Past the reset and past freshness: the retry fails, and the last value
     // it carries shows the window as reset.
+    // read(..) returned; the advance only ages the cache (ruling 6179406086).
     clock.advance(Duration::from_secs(6 * 60));
     assert_eq!(
         read(&provider),
@@ -826,11 +848,11 @@ fn a_reader_reports_its_own_flight_when_the_flight_is_replaced() {
         Some(Flight { id: 7, started: t0 }),
     );
     let (tx, rx) = mpsc::channel();
-    {
+    let reader = {
         let provider = Arc::clone(&provider);
         let pair = pair.clone();
-        std::thread::spawn(move || tx.send(provider.quota(&pair, None)));
-    }
+        std::thread::spawn(move || tx.send(provider.quota(&pair, None)))
+    };
     assert!(
         clock.await_parked(t0 + Duration::from_secs(8), WAIT),
         "the reader never parked on flight 7"
@@ -840,7 +862,12 @@ fn a_reader_reports_its_own_flight_when_the_flight_is_replaced() {
     // reader must report on flight 7, not wait on flight 8.
     {
         let mut states = lock(&provider.quotas.state);
-        clock.advance(Duration::from_secs(8));
+        clock.advance_when_parked(
+            Some(t0 + Duration::from_secs(8)),
+            Some(reader.thread().id()),
+            Duration::from_secs(8),
+            &Deadline::after(WAIT),
+        );
         let now = clock.now();
         let cache = states.get_mut(&pair).unwrap();
         assert!(expire_overdue(cache, now, &provider.quotas.parker));
@@ -966,6 +993,7 @@ fn a_model_call_refetches_only_past_five_minutes() {
     );
     // Exactly five minutes old is fresh: neither the call nor a reader
     // refetches.
+    // read(..) returned and nothing refetches; the advance only ages the cache (ruling 6179406086).
     clock.advance(Duration::from_secs(5 * 60));
     let _call = wrapped.call(&crate::test_support::request());
     assert_eq!(
@@ -974,6 +1002,7 @@ fn a_model_call_refetches_only_past_five_minutes() {
     );
     assert_eq!(server.requests().len(), 1);
     // One nanosecond more, and the model call starts the refetch itself.
+    // read(..) returned; the advance only ages the cache past freshness (ruling 6179406086).
     clock.advance(Duration::from_nanos(1));
     let _call = wrapped.call(&crate::test_support::request());
     assert!(
@@ -1459,10 +1488,12 @@ fn the_observed_factory_respects_freshness_for_its_bound_pair() {
         server.requests()[0].path
     );
     // Exactly five minutes old is fresh: the factory starts no refetch.
+    // read(..) returned and nothing refetches; the advance only ages the cache (ruling 6179406086).
     clock.advance(Duration::from_secs(5 * 60));
     let _observed = trigger(2);
     assert_eq!(server.requests().len(), 1);
     // One nanosecond more, and the factory starts the refetch itself.
+    // read(..) returned; the advance only ages the cache past freshness (ruling 6179406086).
     clock.advance(Duration::from_nanos(1));
     let _observed = trigger(3);
     assert!(
