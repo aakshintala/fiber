@@ -1705,6 +1705,7 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
     Deadline::after(WITHIN)
         .recv(&held_rx)
         .expect("the watcher holds before its clock check");
+    // No code under test waits on the clock here; the watcher is held in its first cancel check, before its clock check, so it has not parked (ruling 6179406086).
     rig.clock.advance(Duration::from_secs(61));
     hold_release.send(()).expect("the held watcher is released");
     assert!(
