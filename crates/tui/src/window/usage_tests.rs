@@ -4,8 +4,6 @@
 //! change, so opening a session folds each line with the same work
 //! however long the session is.
 
-use std::path::PathBuf;
-
 use contract::{ActionId, Envelope, Seq, SessionId};
 use serde_json::{Value, json};
 
@@ -89,7 +87,7 @@ fn session(turns: usize, shared: bool) -> Vec<Envelope> {
 /// The work folding `lines` in one batch did, as the loop folds a batch
 /// of hub lines, and how many pages the session has.
 fn fold_work(lines: &[Envelope]) -> (crate::work::Work, usize) {
-    let mut app = App::new(PathBuf::new());
+    let mut app = App::new(None);
     app.set_size(60, 12);
     app.attach(SessionId(SESSION.to_owned()));
     crate::work::take();
