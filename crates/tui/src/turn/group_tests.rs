@@ -971,6 +971,52 @@ fn ledger_rows_never_pass_their_width() {
     // Past five digits the gutter grows, and the row is still cut to
     // the width.
     assert!(rows[3].to_string().starts_with("100000 "));
+    // At step 100000 and width 6 the renderer's row is cut to the
+    // width too, and its links shift by the gutter actually drawn:
+    // every row is at most 6 cells, and every link lands on the cells
+    // drawn.
+    let group = Group {
+        open: true,
+        sections: vec![
+            Section {
+                step: 100_000,
+                calls: vec![read_call(4, "a.rs")],
+                ..Section::default()
+            },
+            Section {
+                step: 1_000_000,
+                calls: vec![read_call(5, "b.rs")],
+                ..Section::default()
+            },
+        ],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(vec![vec![
+            raw("ab"),
+            RawSpan {
+                text: "hel".to_owned(),
+                link: Some("https://example.com".to_owned()),
+                ..RawSpan::default()
+            },
+            raw("lo"),
+        ]])),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 6, Some(&bound));
+    assert_eq!(rows.len(), texts.len());
+    for ((row, _), text) in rows.iter().zip(texts.iter()) {
+        let taken = cells(row);
+        assert!(taken <= 6, "{row:?} is {taken} cells at width 6");
+        for (range, _) in &text.links {
+            assert!(
+                usize::from(range.end) <= taken,
+                "{range:?} lands past the {taken} cells drawn"
+            );
+        }
+    }
 }
 
 /// Thinking rows are dim and italic, cut to the width: "○ Thinking" while
@@ -1972,11 +2018,10 @@ fn the_gutter_edge_keeps_its_branch_at_six_columns() {
     assert!(texts[1].links.is_empty());
 }
 
-/// Current behaviour: at step 100000 the gutter is seven cells, so at
-/// width 6 the ledger row is wider than its width; the follow-up for
-/// the overflow is #2785.
+/// At step 100000 the gutter is seven cells, so at width 6 the row is
+/// the gutter cut to the width, and the row fits (#2785).
 #[test]
-fn the_six_digit_gutter_at_width_six_keeps_today_two_rows() {
+fn the_six_digit_gutter_at_width_six_is_cut_to_the_width() {
     let group = Group {
         sections: vec![Section {
             step: 100000,
@@ -1992,8 +2037,104 @@ fn the_six_digit_gutter_at_width_six_keeps_today_two_rows() {
     let bound = seam(&fake, false);
     let (rows, _) = draw(&group, 6, Some(&bound));
     assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].0.to_string(), "100000");
+    assert_eq!(cells(&rows[1].0), 6);
+}
+
+/// At step 100000 the gutter is seven cells, so a renderer link shifts
+/// right by seven, not six: at width 20 the link's 0..3 cells land on
+/// 7..10 (#2785).
+#[test]
+fn a_wide_gutter_shifts_extension_links_by_its_own_cells() {
+    let group = Group {
+        sections: vec![Section {
+            step: 100000,
+            calls: vec![read_call(1, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(vec![vec![
+            RawSpan {
+                text: "hel".to_owned(),
+                link: Some("https://example.com".to_owned()),
+                ..RawSpan::default()
+            },
+            raw("lo"),
+        ]])),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 20, Some(&bound));
+    assert_eq!(rows.len(), 2);
+    assert!(rows[1].0.to_string().starts_with("100000 hel"));
+    assert_eq!(cells(&rows[1].0), 20);
+    assert_eq!(
+        texts[1].links,
+        vec![(7..10, "https://example.com".to_owned())]
+    );
+}
+
+/// At a width equal to the gutter the row keeps the fitted line: with
+/// `<`, width 7 at step 100000's 7-cell gutter takes the gutter-plus-line
+/// branch, and the link shifts by seven; `<=` would cut the line away.
+/// Through a draw the gutter leaves the line nothing there, so the row is
+/// the gutter only with no links, while width 8 keeps the link (#2785).
+#[test]
+fn the_gutter_equal_width_keeps_the_fitted_line_and_its_link() {
+    let line = crate::ext::spans::FittedLine {
+        line: ratatui::text::Line::from(vec![ratatui::text::Span::raw("ab")]),
+        links: vec![(0..2, "https://example.com".to_owned())],
+        pad: 0,
+    };
+    let (row, text) = super::gutter_row("100000 ".to_owned(), 7, &line, 7);
+    assert_eq!(row.to_string(), "100000 ab");
+    assert_eq!(text.tail, 0);
+    assert_eq!(text.links, vec![(7..9, "https://example.com".to_owned())]);
+    // The other side of the boundary keeps the line too.
+    let (row, text) = super::gutter_row("100000 ".to_owned(), 7, &line, 8);
+    assert_eq!(row.to_string(), "100000 ab");
+    assert_eq!(text.links, vec![(7..9, "https://example.com".to_owned())]);
+    // Through a draw at width 7 the gutter leaves the line nothing, so
+    // the row is the gutter only with no links; at width 8 the link
+    // stays, shifted by seven.
+    let group = Group {
+        sections: vec![Section {
+            step: 100000,
+            calls: vec![read_call(1, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(vec![vec![
+            RawSpan {
+                text: "hel".to_owned(),
+                link: Some("https://example.com".to_owned()),
+                ..RawSpan::default()
+            },
+            raw("lo"),
+        ]])),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 7, Some(&bound));
+    assert_eq!(rows.len(), 2);
     assert_eq!(rows[1].0.to_string(), "100000 ");
     assert_eq!(cells(&rows[1].0), 7);
+    assert_eq!(texts[1].tail, 0);
+    assert!(texts[1].links.is_empty());
+    let (rows, texts) = draw(&group, 8, Some(&bound));
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].0.to_string(), "100000 h");
+    assert_eq!(cells(&rows[1].0), 8);
+    assert_eq!(
+        texts[1].links,
+        vec![(7..8, "https://example.com".to_owned())]
+    );
 }
 
 /// An error, a wrong shape, and a refused link each fall back to the

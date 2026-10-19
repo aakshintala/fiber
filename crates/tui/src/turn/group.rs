@@ -505,33 +505,39 @@ impl Group {
     /// the ledger"). The model calls that failed come first, then the
     /// step's thinking. Each call's images draw under its row, before its
     /// opened detail. A renderer bound to the rows draws what follows the
-    /// gutter with the width less 6; without one, or when it falls back,
-    /// the built-in row draws.
+    /// gutter with the width less the gutter drawn; without one, or when
+    /// it falls back, the built-in row draws.
     fn ledger(&self, width: u16, layout: &crate::image::Layout, out: &mut Rows) {
         let max = usize::from(width);
         for section in &self.sections {
             let mut gutter = format!("{:>5} ", section.step);
+            // A step number longer than five digits widens the gutter
+            // past six columns; its later rows stay blank but keep the
+            // grown width, so every column stays put.
+            let gutter_cells = crate::format::width(&gutter);
+            let gutter_shift = u16::try_from(gutter_cells).unwrap_or(u16::MAX);
+            let blank = " ".repeat(gutter_cells);
             for (code, attempt) in &section.failed {
-                let gutter = std::mem::replace(&mut gutter, GUTTER_BLANK.to_owned());
+                let gutter = std::mem::replace(&mut gutter, blank.clone());
                 let row = format!("{gutter}model call failed · {code} · attempt {attempt}");
                 out.push((dim(row), None));
             }
             for thought in &section.thoughts {
                 thought_rows(
                     thought,
-                    &std::mem::replace(&mut gutter, GUTTER_BLANK.to_owned()),
+                    &std::mem::replace(&mut gutter, blank.clone()),
                     width,
                     out,
                 );
             }
             for call in &section.calls {
-                let gutter = std::mem::replace(&mut gutter, GUTTER_BLANK.to_owned());
+                let gutter = std::mem::replace(&mut gutter, blank.clone());
                 let output = first_result_line(call.content());
                 let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
                 let input = self.ledger_input(call, &output, flat);
-                // Six columns of gutter stay with the terminal: the
-                // renderer draws what follows it with the width less 6.
-                let after_gutter = width.saturating_sub(6);
+                // The gutter stays with the terminal: the renderer draws
+                // what follows it with the width less the gutter drawn.
+                let after_gutter = width.saturating_sub(gutter_shift);
                 let builtin = |input: &Input<'_>, w: u16| {
                     let Input::LedgerRow(built) = input;
                     vec![crate::ext::spans::from_ratatui(&self.builtin_row(built, w))]
@@ -558,9 +564,9 @@ impl Group {
                             let mark = if index == 0 {
                                 gutter.clone()
                             } else {
-                                GUTTER_BLANK.to_owned()
+                                blank.clone()
                             };
-                            let (row, text) = gutter_row(mark, line, max);
+                            let (row, text) = gutter_row(mark, gutter_shift, line, max);
                             out.push_text((row, Some(Target::Call(call.id))), text);
                         }
                     }
@@ -646,7 +652,7 @@ impl Group {
             Status::Pending | Status::Running => ("○", style(Role::Attention)),
         };
         let result = self.builtin_result(row);
-        // Six columns of gutter, the glyph, one space and nine of
+        // Past the gutter, the glyph, one space and nine of
         // kind leave the target and the result `after_gutter - 13`
         // cells. The target is cut with "…" to what the result leaves;
         // with no room for even one cell the target is left out
@@ -741,24 +747,25 @@ impl Group {
     }
 }
 
-/// The gutter left blank: six columns, as `"{:>5} "` is.
-const GUTTER_BLANK: &str = "      ";
-
 /// An opened call or thought's indent: eight columns (`docs/tui.md`,
 /// "Tool groups and the ledger").
 const INDENT: &str = "        ";
 
-/// One rendered ledger line with its six-column gutter: the gutter cut
-/// to the width when the width holds no more, else the gutter before
-/// the fitted line, with every link range moved right by its six cells.
+/// One rendered ledger line with its gutter: the gutter cut to the
+/// width when the width holds no more, else the gutter before the
+/// fitted line, with every link range moved right by the shift, the
+/// gutter's own cells.
 fn gutter_row(
     mark: String,
+    shift: u16,
     line: &crate::ext::spans::FittedLine,
     max: usize,
 ) -> (Line<'static>, RowText) {
     // The gutter precedes the line, so every link range moves right by
-    // its six cells.
-    if max < 6 {
+    // the shift; past five digits the step's whole number makes the
+    // gutter wider than six columns.
+    let gutter = crate::format::width(&mark);
+    if max < gutter {
         (
             Line::from(vec![dim_span(crate::format::cut(&mark, max))]),
             RowText::plain(),
@@ -771,7 +778,7 @@ fn gutter_row(
             .iter()
             .map(|(range, to)| {
                 (
-                    range.start.saturating_add(6)..range.end.saturating_add(6),
+                    range.start.saturating_add(shift)..range.end.saturating_add(shift),
                     to.clone(),
                 )
             })

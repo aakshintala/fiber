@@ -897,16 +897,17 @@ cut with "…", so the duration and the toggle stay put.
 ```
 
 A ledger row is the step's number right-aligned in a five-column dim gutter
-on the step's first row, then a glyph: ○ in `attention` while the call runs or
-waits, ✓ in `success` once it completes, ⊘ dim when cancelled, ✗ dim
-otherwise. Then the call's kind in `info`, padded to nine columns, its target
-cut with "…", and its result: "N lines" for a read, "N matches" for a
-search, "N paths" for a listing, "+N −N" for an edit, "exit N · N lines" for
-a command, otherwise the first line of its output, all dim but the edit's
-counts. A running call reads "running" in `attention`, and an ask waiting on
-the person "waiting on you"; "cancelled", "denied" and a failure's
-"<code>: <message>" are dim. A thinking row is "○ Thinking: <heading>" or "+
-Thought: <heading> · 22s", dim and italic.
+on the step's first row. A step number longer than five digits widens the
+gutter, and the row is cut to its width. Then a glyph: ○ in `attention`
+while the call runs or waits, ✓ in `success` once it completes, ⊘ dim when
+cancelled, ✗ dim otherwise. Then the call's kind in `info`, padded to nine
+columns, its target cut with "…", and its result: "N lines" for a read, "N
+matches" for a search, "N paths" for a listing, "+N −N" for an edit, "exit N
+· N lines" for a command, otherwise the first line of its output, all dim
+but the edit's counts. A running call reads "running" in `attention`, and an
+ask waiting on the person "waiting on you"; "cancelled", "denied" and a
+failure's "<code>: <message>" are dim. A thinking row is "○ Thinking:
+<heading>" or "+ Thought: <heading> · 22s", dim and italic.
 
 ```
     3 + Thought: Finding the flaky lock · 8s
