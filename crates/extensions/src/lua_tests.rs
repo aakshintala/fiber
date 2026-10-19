@@ -1770,7 +1770,8 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
     // deadline naming the wait.
     let (tx, rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
-    thread::spawn(move || tx.send(caller.hook("before_message", 0, serde_json::json!({}))));
+    let caller_thread =
+        thread::spawn(move || tx.send(caller.hook("before_message", 0, serde_json::json!({}))));
     // Withhold the worker's completion past the answer wait below.
     let (hold_tx, hold_rx) = mpsc::channel();
     super::schedule::withhold_hook_completion("fiber.test/withheld", "before_message", hold_rx);
@@ -1791,7 +1792,17 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
         )),
         "waited for the worker to run the hook"
     );
-    clock.advance(Duration::from_millis(50));
+    let timeout_at = clock.origin() + Duration::from_millis(50);
+    assert!(
+        clock.await_thread_parked(caller_thread.thread().id(), Some(timeout_at), WAIT),
+        "waited for the caller to park at its timeout"
+    );
+    clock.advance_when_parked(
+        Some(timeout_at),
+        Some(caller_thread.thread().id()),
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv(&rx)
         .expect("waited for the timeout answer without the worker's delivery")
@@ -1845,7 +1856,7 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
     // deadline naming the wait.
     let (tx, rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
-    thread::spawn(move || tx.send(caller.command("spin", "")));
+    let caller_thread = thread::spawn(move || tx.send(caller.command("spin", "")));
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the command to start");
@@ -1863,7 +1874,17 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
         )),
         "waited for the worker to run the command"
     );
-    clock.advance(Duration::from_millis(50));
+    let timeout_at = clock.origin() + Duration::from_millis(50);
+    assert!(
+        clock.await_thread_parked(caller_thread.thread().id(), Some(timeout_at), WAIT),
+        "waited for the caller to park at its timeout"
+    );
+    clock.advance_when_parked(
+        Some(timeout_at),
+        Some(caller_thread.thread().id()),
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv(&rx)
         .expect("waited for the timeout answer without the worker's delivery")
