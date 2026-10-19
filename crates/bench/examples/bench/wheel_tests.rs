@@ -46,10 +46,12 @@ fn a_frame_before_a_reports_write_cannot_cover_it() {
 fn the_send_stamp_is_read_before_the_write_it_precedes() {
     let clock = fakes::clock::FakeClock::new();
     let origin = clock.now();
+    // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
     clock.advance(Duration::from_millis(10));
     // The write itself moves the clock on by 5 ms, as a real write would
     // while the reader runs: the stamp must still be the 10 ms read first.
     let sent = send_stamped(&*clock, origin, || {
+        // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
         clock.advance(Duration::from_millis(5));
         Ok(())
     })

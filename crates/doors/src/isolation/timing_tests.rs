@@ -220,12 +220,11 @@ fn create_opens_one_stamped_line_and_a_second_open_writes_nothing() {
             let repo = repo("doors-timing-create");
             let clock = FakeClock::new();
             let id = SessionId("s_0123456789abcdef".into());
-            // The code under test waits on the clock here: the add
-            // closure advances the fake clock, as docs/testing.md permits
-            // for a raw advance inside the code under test.
+            // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
             let clock_add = Arc::clone(&clock);
             let add = move |command: &mut Command| -> io::Result<Output> {
                 let out = command.output()?;
+                // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
                 clock_add.advance(Duration::from_millis(7));
                 Ok(out)
             };
@@ -282,6 +281,7 @@ fn recreation_stamp_excludes_the_lock_claim_and_the_downgrade() {
             let clock_add = Arc::clone(&clock);
             let add = move |command: &mut Command| -> io::Result<Output> {
                 let out = command.output()?;
+                // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
                 clock_add.advance(Duration::from_millis(4));
                 Ok(out)
             };
@@ -298,6 +298,7 @@ fn recreation_stamp_excludes_the_lock_claim_and_the_downgrade() {
                 &|creating| {
                     // The downgrade stays outside the stamp: advancing
                     // here must not change the recorded duration.
+                    // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
                     clock_downgrade.advance(Duration::from_millis(9));
                     super::shared::Creating::downgrade(creating)
                 },
