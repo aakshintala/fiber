@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use contract::clock::Clock as _;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
@@ -21,6 +22,9 @@ use super::*;
 
 /// Wall-clock bound on every wait for the extension.
 const WAIT: Duration = Duration::from_secs(5);
+
+/// How long past a deadline the caller waits before it abandons the VM.
+const GRACE: Duration = Duration::from_secs(1);
 
 /// An extension named `fiber.test/t` whose entry script is `init`, in a
 /// fresh temporary directory kept beside it.
@@ -268,12 +272,22 @@ fn a_spinning_run_past_its_timeout_returns_a_timeout() {
         clock.clone(),
     ));
     let spinning = Arc::clone(&ext);
+    let asked = clock.now();
     let spun =
         on_thread(move || spinning.search_run("spin", json!({}), &fakes::CancelToken::new()));
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the backend to spin");
-    clock.advance(Duration::from_millis(100));
+    assert!(
+        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
+        "the caller parked at the grace"
+    );
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(100) + GRACE),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     let Err(Error::Timeout { callback, .. }) =
         Deadline::after(WAIT).recv(&spun).expect("the run returned")
     else {
