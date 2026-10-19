@@ -714,3 +714,30 @@ fn a_search_answers_its_first_window_from_the_whole_log() {
         .expect("a small log settles");
     assert_eq!(absent, 0, "an absent query matches nothing");
 }
+
+#[test]
+fn hover_frames_finds_the_badge_row_at_160_by_48() {
+    let events = include_str!("../examples/hover.jsonl");
+    let (row, _) = crate::hover_frames(events, 160, 48, &[])
+        .unwrap_or_else(|error| panic!("hover_frames: {error}"));
+    let mut app = super::fold(events, 160, 48).unwrap_or_else(|error| panic!("fold: {error}"));
+    app.put_aside();
+    let badge = app.badge().expect("a put-aside request shows a badge");
+    let area = ratatui::layout::Rect::new(0, 0, 160, 48);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let line = crate::view::text(&buf)
+        .lines()
+        .nth(usize::from(row))
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        line.contains(&badge),
+        "row {row} shows {badge:?} in {line:?}"
+    );
+    let (_, bytes) = crate::hover_frames(events, 160, 48, &[(3, row), (3, 0)])
+        .unwrap_or_else(|error| panic!("hover_frames: {error}"));
+    assert_eq!(bytes.len(), 2);
+    assert!(bytes[0] > 0);
+    assert!(bytes[1] > 0);
+}
