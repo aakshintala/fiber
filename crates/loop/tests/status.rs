@@ -271,7 +271,9 @@ impl Jobs for HeldJobs {
             held.send(()).unwrap();
             // The test's own wait fails first and drops the sender, which
             // releases this hold.
-            let _ = released.recv();
+            match released.recv() {
+                Ok(()) | Err(_) => {}
+            }
         }
         vec![JobId("j_1".into())]
     }

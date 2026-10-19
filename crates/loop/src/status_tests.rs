@@ -1886,7 +1886,9 @@ fn closing_returns_when_the_observer_ends_before_it_answers() {
                 if let Some((held, released)) = held_read.lock().unwrap().take() {
                     held.send(()).unwrap();
                     // The test's own wait fails first and drops the sender, which releases this hold.
-                    let _ = released.recv();
+                    match released.recv() {
+                        Ok(()) | Err(_) => {}
+                    }
                 }
                 Vec::new()
             }),
