@@ -1814,6 +1814,10 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
     );
     let timeout_at = clock.origin() + Duration::from_millis(50);
     let caller_id = caller_thread.thread().id();
+    assert!(
+        clock.await_thread_parked(caller_id, Some(timeout_at), WAIT),
+        "waited for the caller to park at its timeout"
+    );
     clock.advance_when_parked(
         Some(timeout_at),
         Some(caller_id),
@@ -1893,6 +1897,10 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
     );
     let timeout_at = clock.origin() + Duration::from_millis(50);
     let caller_id = caller_thread.thread().id();
+    assert!(
+        clock.await_thread_parked(caller_id, Some(timeout_at), WAIT),
+        "waited for the caller to park at its timeout"
+    );
     clock.advance_when_parked(
         Some(timeout_at),
         Some(caller_id),
