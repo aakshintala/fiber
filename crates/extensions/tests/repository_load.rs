@@ -1063,6 +1063,100 @@ fn a_file_where_the_dependency_root_goes_loads_the_package_without_them() {
 }
 
 #[test]
+fn links_and_files_where_dependencies_live_leave_them_out() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    tag_helper(&mut repos, "h");
+    let a = named("fiber.test/a", &[("zzz.test/owner/helper", "1.0")]);
+    let b = named("fiber.test/b", &[("zzz.test/owner/helper", "1.0")]);
+    declare_pkgs(
+        &setup,
+        &[
+            (
+                "a",
+                a,
+                &[(
+                    "init.lua",
+                    "fiber.command('pa', {timeout=1000, run=function() return 'pa' end})\n",
+                )],
+                false,
+            ),
+            (
+                "b",
+                b,
+                &[(
+                    "init.lua",
+                    "fiber.command('pb', {timeout=1000, run=function() return 'pb' end})\n",
+                )],
+                false,
+            ),
+        ],
+    );
+    let clock = FakeClock::new();
+    let a_digest = approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/a",
+    );
+    let b_digest = approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/b",
+    );
+    // A link to a directory is not a real directory, and neither is a
+    // plain file: each copy loads without its dependencies, with one
+    // notice naming the path.
+    let slug = "zzz.test-owner-helper";
+    let a_dep = config::extensions_dir(&copy(&setup, &a_digest).join(".fiber-depends")).join(slug);
+    let target = a_dep.with_file_name(format!("{slug}.real"));
+    fs::rename(&a_dep, &target).unwrap();
+    std::os::unix::fs::symlink(&target, &a_dep).unwrap();
+    let b_dep = config::extensions_dir(&copy(&setup, &b_digest).join(".fiber-depends")).join(slug);
+    fs::remove_dir_all(&b_dep).unwrap();
+    write(&b_dep, "not a directory");
+    let session = load_session(
+        &setup,
+        repository_set(&setup, &repos, &clock, &BTreeSet::new()),
+        &[],
+    );
+    assert_eq!(
+        loaded_names(&session),
+        vec![
+            ("fiber.test/a".to_owned(), "v1.0.0".to_owned()),
+            ("fiber.test/b".to_owned(), "v1.0.0".to_owned()),
+        ]
+    );
+    assert_eq!(command_names(&session), vec!["pa", "pb"]);
+    assert_eq!(
+        session.notices(),
+        vec![
+            Notice {
+                code: ErrorCode::ExtensionFailed,
+                message: format!(
+                    "The repository's approved copy of `fiber.test/a` has a link or a file \
+                     at {}, so its dependencies were not loaded.",
+                    a_dep.display()
+                ),
+                extension: Some("fiber.test/a".to_owned()),
+            },
+            Notice {
+                code: ErrorCode::ExtensionFailed,
+                message: format!(
+                    "The repository's approved copy of `fiber.test/b` has a link or a file \
+                     at {}, so its dependencies were not loaded.",
+                    b_dep.display()
+                ),
+                extension: Some("fiber.test/b".to_owned()),
+            },
+        ]
+    );
+}
+
+#[test]
 fn a_missing_dependency_root_skips_quietly() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
@@ -1272,6 +1366,61 @@ fn merged_entries_load_in_slug_order() {
         ]
     );
     assert!(session.notices().is_empty(), "{:?}", session.notices());
+}
+
+#[test]
+fn repository_entries_sort_by_slug_with_a_name_fallback() {
+    let setup = Setup::new();
+    let repos = Repos::new(&setup);
+    // `zeta` sorts by its slug, while `.dot` has no slug and sorts by
+    // its name, first. Declared the other way round, so declaration
+    // order alone would crown the wrong copy: with empty keys the last
+    // entry wins, and `dot`'s provider data would stand.
+    let mut zeta = package("zeta", "v1.0.0");
+    zeta["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    let mut dot = manifest(".dot");
+    dot["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    declare_pkgs(
+        &setup,
+        &[
+            (
+                "zeta",
+                zeta,
+                &[(
+                    "providers/acme.json",
+                    &provider("acme", &["zeta-model"]).to_string(),
+                )],
+                false,
+            ),
+            (
+                "dot",
+                dot,
+                &[(
+                    "providers/acme.json",
+                    &provider("acme", &["dot-model"]).to_string(),
+                )],
+                false,
+            ),
+        ],
+    );
+    let clock = FakeClock::new();
+    approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/zeta",
+    );
+    approve_kind(&setup, &repos, &clock, OfferedKind::Extension, ".dot");
+    let set = repository_set(&setup, &repos, &clock, &BTreeSet::new());
+    let (providers, notices) = load_providers(&setup, &set, &[]);
+    // The last entry in slug order wins: `.dot`'s name sorts before
+    // `zeta`'s slug, so `zeta`'s copy supplies `acme`.
+    let data = providers.data("acme");
+    let ids: Vec<&str> = data.models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["zeta-model"]);
+    assert_eq!(providers.extension_of("acme"), Some("fiber.test/zeta"));
+    assert!(notices.is_empty(), "{notices:?}");
 }
 
 #[test]
