@@ -630,13 +630,27 @@ fn gone_backs_off_doubling_to_a_capped_second() {
             rig.clock.await_parked(until, DEADLINE),
             "the call parks its backoff"
         );
-        rig.clock.advance(Duration::from_millis(wait - 1));
+        let mark = rig.clock.advance_when_parked(
+            Some(until),
+            None,
+            Duration::from_millis(wait - 1),
+            &fakes::Deadline::after(DEADLINE),
+        );
         assert_eq!(
             rig.script.calls().len(),
             calls + 1,
             "no attempt before its backoff"
         );
-        rig.clock.advance(Duration::from_millis(1));
+        assert!(
+            rig.clock.await_parked_since(&mark, Some(until), DEADLINE),
+            "the call re-parks its backoff"
+        );
+        rig.clock.advance_when_parked(
+            Some(until),
+            None,
+            Duration::from_millis(1),
+            &fakes::Deadline::after(DEADLINE),
+        );
         assert!(
             rig.script.await_calls(calls + 2, DEADLINE),
             "the next attempt ran at its backoff"
@@ -677,12 +691,17 @@ fn a_committed_gone_resends_with_the_same_id() {
         CancelToken::new(),
         Arc::new(Recorder::default()),
     );
+    let backoff = rig.clock.now() + Duration::from_millis(50);
     assert!(
-        rig.clock
-            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
+        rig.clock.await_parked(backoff, DEADLINE),
         "the call parks its backoff"
     );
-    rig.clock.advance(Duration::from_millis(50));
+    rig.clock.advance_when_parked(
+        Some(backoff),
+        None,
+        Duration::from_millis(50),
+        &fakes::Deadline::after(DEADLINE),
+    );
     let output = answered(&rx);
     handle.join().unwrap();
     assert!(output.error.is_none());
@@ -739,7 +758,6 @@ fn a_committed_send_to_an_ended_run_fails_indeterminate_without_resuming() {
     // The run ends under the committed attempt, as another call's resume
     // would end it.
     end_run(finish, &id);
-    rig.clock.advance(Duration::from_millis(50));
     let output = answered(&rx);
     handle.join().unwrap();
     assert_eq!(code_of(&output), ErrorCode::Indeterminate);
@@ -778,7 +796,6 @@ fn a_run_that_changes_under_a_committed_attempt_is_not_sent_twice() {
         Ok(resumed) => resumed,
         Err(_) => panic!("the other resume committed"),
     };
-    rig.clock.advance(Duration::from_millis(50));
     let output = answered(&rx);
     handle.join().unwrap();
     assert_eq!(code_of(&output), ErrorCode::Indeterminate);
@@ -808,12 +825,17 @@ fn a_stale_commit_is_withheld_and_never_resent() {
         CancelToken::new(),
         Arc::new(Recorder::default()),
     );
+    let backoff = rig.clock.now() + Duration::from_millis(50);
     assert!(
-        rig.clock
-            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
+        rig.clock.await_parked(backoff, DEADLINE),
         "the call parks its backoff"
     );
-    rig.clock.advance(Duration::from_millis(50));
+    rig.clock.advance_when_parked(
+        Some(backoff),
+        None,
+        Duration::from_millis(50),
+        &fakes::Deadline::after(DEADLINE),
+    );
     assert!(rig.script.await_calls(2, DEADLINE), "the resend held");
     // Run 1 ends and resumes to run 2 while the resend is held before
     // its commit.
@@ -912,10 +934,13 @@ fn closing_while_the_run_lives_fails_closing_at_the_bound() {
         rig.clock.await_parked(at, DEADLINE),
         "the call parks its closing wait"
     );
-    let mark = rig.clock.advance_marked(
+    let mark = rig.clock.advance_when_parked(
+        Some(at),
+        None,
         BOUND
             .checked_sub(Duration::from_millis(1))
             .expect("the bound exceeds 1 ms"),
+        &fakes::Deadline::after(DEADLINE),
     );
     // The advance woke the closing wait; it re-parks at the same bound
     // past its own clock check. Only then is "still parked" decided,
@@ -925,7 +950,12 @@ fn closing_while_the_run_lives_fails_closing_at_the_bound() {
         "the call re-parks its closing wait"
     );
     assert!(rx.try_recv().is_err(), "bound minus 1 ms still parked");
-    rig.clock.advance(Duration::from_millis(1));
+    rig.clock.advance_when_parked(
+        Some(at),
+        None,
+        Duration::from_millis(1),
+        &fakes::Deadline::after(DEADLINE),
+    );
     let output = answered(&rx);
     handle.join().unwrap();
     assert_eq!(code_of(&output), ErrorCode::Closing);
@@ -1039,7 +1069,6 @@ fn a_cancel_during_the_backoff_delivers_nothing() {
         "the call parks its backoff"
     );
     cancel.cancel();
-    rig.clock.advance(Duration::from_millis(50));
     let output = answered(&rx);
     handle.join().unwrap();
     assert!(output.error.is_none());

@@ -555,7 +555,8 @@ fn wake_retry(rig: &Rig, at: std::time::Instant, gap: Duration, calls: usize) {
         rig.clock.await_parked(at, DEADLINE),
         "the runner parks until {at:?}"
     );
-    rig.clock.advance(gap);
+    rig.clock
+        .advance_when_parked(Some(at), None, gap, &Deadline::after(DEADLINE));
     wait_calls(rig, calls);
 }
 
@@ -1184,7 +1185,12 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
             rig.clock.await_parked_since(&running, Some(at), DEADLINE),
             "the runner parks until {at:?}"
         );
-        rig.clock.advance(Duration::from_millis(gap));
+        rig.clock.advance_when_parked(
+            Some(at),
+            None,
+            Duration::from_millis(gap),
+            &Deadline::after(DEADLINE),
+        );
         wait_calls(&rig, held + 2);
     }
     // The eighth call succeeds; the child binds and its lines flow.
@@ -1256,10 +1262,12 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
     // runner's own park, and the take above the pause saw nothing, because
     // the watch is still gated.
     let at = rig.script.calls()[0];
-    rig.clock
-        .mark_parked(at + super::POLL, DEADLINE)
-        .expect("the runner parks while the watch runs");
-    rig.clock.advance(super::POLL);
+    rig.clock.advance_when_parked(
+        Some(at + super::POLL),
+        None,
+        super::POLL,
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE)
         .recv(&reached_rx)
         .expect("the runner pauses between the take and the launch");
@@ -1286,7 +1294,12 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
             rig.clock.await_parked(at, DEADLINE),
             "the runner parks until {at:?}"
         );
-        rig.clock.advance(Duration::from_millis(gap));
+        rig.clock.advance_when_parked(
+            Some(at),
+            None,
+            Duration::from_millis(gap),
+            &Deadline::after(DEADLINE),
+        );
         wait_calls(&rig, calls);
     }
     // The fourth call returns before the watch folds the envelope:
@@ -1347,10 +1360,12 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
     // runner's own park, and the take above the pause saw nothing, because
     // the watch is still gated.
     let at = rig.script.calls()[0];
-    rig.clock
-        .mark_parked(at + super::POLL, DEADLINE)
-        .expect("the runner parks while the watch runs");
-    rig.clock.advance(super::POLL);
+    rig.clock.advance_when_parked(
+        Some(at + super::POLL),
+        None,
+        super::POLL,
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE)
         .recv(&reached_rx)
         .expect("the runner pauses between the take and the launch");
@@ -1852,15 +1867,23 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         runner.retire(&mut listing);
         let _sent = done_tx.send(());
     });
-    let first_poll = clock.origin() + Duration::from_secs(1);
-    assert!(
-        clock.await_parked(first_poll, DEADLINE),
-        "retire waits on the fake clock"
+    let mut mark = clock.advance_when_parked(
+        Some(clock.origin() + Duration::from_secs(1)),
+        None,
+        super::POLL,
+        &Deadline::after(DEADLINE),
     );
-    let mark = clock.advance_marked(BOUND + Duration::from_secs(1));
+    for k in 2..=BOUND.as_secs() {
+        mark = clock.advance_when_parked(
+            Some(clock.origin() + Duration::from_secs(k)),
+            None,
+            super::POLL,
+            &Deadline::after(DEADLINE),
+        );
+    }
     let after_bound = clock.origin() + BOUND + Duration::from_secs(1);
     assert!(
-        clock.await_parked_since(&mark, Some(after_bound + Duration::from_secs(1)), DEADLINE),
+        clock.await_parked_since(&mark, Some(after_bound), DEADLINE),
         "retire checks the timer and parks again past the bound"
     );
     assert!(kills(pgid) >= 1, "SIGKILL went out past the bound");
@@ -1874,7 +1897,12 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         .recv(&reaped_rx)
         .expect("the killed member was reaped");
 
-    let _mark = clock.advance_marked(Duration::from_secs(1));
+    clock.advance_when_parked(
+        Some(after_bound),
+        None,
+        super::POLL,
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE)
         .recv(&done_rx)
         .expect("retire returned once the group was empty");
@@ -1938,7 +1966,8 @@ fn a_blocked_watch_still_lets_a_stop_through() {
             rig.clock.await_parked(at, DEADLINE),
             "the runner parks until {at:?}"
         );
-        rig.clock.advance(super::POLL);
+        rig.clock
+            .advance_when_parked(Some(at), None, super::POLL, &Deadline::after(DEADLINE));
     }
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Cancelled);
