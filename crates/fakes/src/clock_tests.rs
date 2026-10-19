@@ -6,7 +6,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use contract::clock::{Clock, Wake};
 
-use super::FakeClock;
+use super::{FakeClock, Miss};
 use crate::deadline::Deadline;
 
 fn wall_epoch() -> std::time::SystemTime {
@@ -1291,6 +1291,39 @@ fn run_advance_when_parked(
 ) -> mpsc::Receiver<Result<super::Mark, String>> {
     let clock = Arc::clone(clock);
     run_advance_worker(move || clock.advance_when_parked(expected, thread, advance, &deadline))
+}
+
+fn run_try_advance_worker(
+    work: impl FnOnce() -> Result<super::Mark, super::Miss> + Send + 'static,
+) -> mpsc::Receiver<Result<Result<super::Mark, super::Miss>, String>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+        let outcome = outcome.map_err(|payload| {
+            if let Some(message) = payload.downcast_ref::<String>() {
+                message.clone()
+            } else if let Some(message) = payload.downcast_ref::<&str>() {
+                (*message).to_string()
+            } else {
+                "a panic without a message".to_string()
+            }
+        });
+        match tx.send(outcome) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+fn run_try_advance_when_parked(
+    clock: &Arc<FakeClock>,
+    expected: Option<std::time::Instant>,
+    thread: Option<std::thread::ThreadId>,
+    advance: Duration,
+    pause: Duration,
+) -> mpsc::Receiver<Result<Result<super::Mark, super::Miss>, String>> {
+    let clock = Arc::clone(clock);
+    run_try_advance_worker(move || clock.try_advance_when_parked(expected, thread, advance, pause))
 }
 
 /// Channel-held parks in sequence; dropping the release sender ends the
@@ -4188,4 +4221,840 @@ fn advance_when_parked_then_runs_the_hook_for_the_named_thread_among_several_par
     Deadline::after(Duration::from_secs(5))
         .recv(&exit)
         .expect("the parked thread exits");
+}
+
+#[test]
+fn try_advance_when_parked_advances_a_named_thread_to_a_park_already_present() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let now = clock.now();
+    let step = Duration::from_millis(5);
+    let outcome =
+        run_try_advance_when_parked(&clock, Some(until), Some(id), step, Duration::from_secs(30));
+    let mark = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the soft advance")
+        .expect("the worker never panics on a matching park")
+        .expect("a park already present is Ok");
+    assert!(
+        mark.threads().contains(&id),
+        "the mark holds the named thread"
+    );
+    assert_eq!(clock.now(), now + step, "time moves by exactly the advance");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_advances_without_a_named_thread() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let now = clock.now();
+    let step = Duration::from_millis(5);
+    let outcome =
+        run_try_advance_when_parked(&clock, Some(until), None, step, Duration::from_secs(30));
+    let mark = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the soft advance")
+        .expect("the worker never panics on a matching park")
+        .expect("a park already present is Ok");
+    assert!(
+        mark.threads().contains(&id),
+        "the mark holds the parked thread"
+    );
+    assert_eq!(clock.now(), now + step, "time moves by exactly the advance");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_advances_to_a_park_that_arrives_during_the_pause() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    // The pause proves the helper is waiting before the park arrives: it
+    // fires only with no match or mismatch yet.
+    let (waiting, release_waiter) = clock.pause_next_advance_wait();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+    );
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&waiting, "the helper waiting for a park");
+    release_waiter.send(()).unwrap();
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the soft advance")
+        .expect("the worker never panics on a matching park")
+        .expect("a park that arrives during the pause is Ok");
+    assert_eq!(
+        clock.now(),
+        clock.origin() + Duration::from_millis(5),
+        "time moves by exactly the advance"
+    );
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_matches_a_park_present_when_the_pause_expires() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    // The held pass freezes the helper before its decision, while its pause
+    // keeps running: the park below arrives before the pause expires.
+    let (entered, resume) = clock.pause_next_advance_pass();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_millis(50),
+    );
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&entered, "the helper's pass pause");
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    // A receive longer than the pause expires it while the pass is still
+    // held, so the decision below runs with no time left and a park held.
+    let held = Deadline::after(Duration::from_millis(500)).recv(&outcome);
+    assert!(
+        matches!(held, Err(mpsc::RecvTimeoutError::Timeout)),
+        "nothing answers while the pass is held"
+    );
+    resume.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the expired-pause advance")
+        .expect("the worker never panics on a matching park")
+        .expect("a park present at expiry still matches");
+    assert_eq!(
+        clock.now(),
+        clock.origin() + Duration::from_millis(5),
+        "time moves by exactly the advance"
+    );
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_reports_no_park_when_nothing_parks() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let now = clock.now();
+    let wall = clock.wall();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_millis(50),
+    );
+    let miss = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the NoPark report")
+        .expect("the worker never panics on an empty wait");
+    assert_eq!(
+        miss.expect_err("no park within the pause is a Miss"),
+        Miss::NoPark,
+        "an empty wait reports NoPark"
+    );
+    assert_eq!(clock.now(), now, "a Miss moves no time");
+    assert_eq!(clock.wall(), wall, "a Miss moves no time");
+}
+
+#[test]
+fn try_advance_when_parked_ignores_a_stale_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    // The held park predates this move, so it is stale: it neither matches
+    // nor mismatches.
+    clock.advance(Duration::from_millis(1));
+    let now = clock.now();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_millis(50),
+    );
+    let miss = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the stale-park report")
+        .expect("the worker never panics on a stale park");
+    assert_eq!(
+        miss.expect_err("a stale park is a Miss"),
+        Miss::NoPark,
+        "a stale park reports NoPark"
+    );
+    assert_eq!(clock.now(), now, "a Miss moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_reports_a_mismatch_at_another_instant() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    let (parked, release, exit, id) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let now = clock.now();
+    let wall = clock.wall();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+    );
+    let miss = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the Mismatch report")
+        .expect("the worker never panics on a wrong park");
+    assert_eq!(
+        miss.expect_err("a park at another instant is a Miss"),
+        Miss::Mismatch {
+            watched: (id, Some(wrong)),
+            parked: vec![(id, Some(wrong))],
+        },
+        "the Mismatch names the watched park and every held park"
+    );
+    assert_eq!(clock.now(), now, "a Miss moves no time");
+    assert_eq!(clock.wall(), wall, "a Miss moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_reports_a_mismatch_for_an_unbounded_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, id) = park_once(&clock, None);
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let now = clock.now();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+    );
+    let miss = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the Mismatch report")
+        .expect("the worker never panics on an unbounded park");
+    assert_eq!(
+        miss.expect_err("an unbounded park where a finite instant was named is a Miss"),
+        Miss::Mismatch {
+            watched: (id, None),
+            parked: vec![(id, None)],
+        },
+        "the Mismatch names the unbounded watched park"
+    );
+    assert_eq!(clock.now(), now, "a Miss moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_reports_a_mismatch_where_none_was_named() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let now = clock.now();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        None,
+        None,
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+    );
+    let miss = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the Mismatch report")
+        .expect("the worker never panics on a finite park");
+    assert_eq!(
+        miss.expect_err("a finite park where None was named is a Miss"),
+        Miss::Mismatch {
+            watched: (id, Some(until)),
+            parked: vec![(id, Some(until))],
+        },
+        "the Mismatch names the finite watched park"
+    );
+    assert_eq!(clock.now(), now, "a Miss moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_prefers_a_mismatch_beside_the_right_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    let (wrong_parked, release_wrong, exit_wrong, wrong_id) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&wrong_parked, "the wrong thread to park");
+    let (parked, release, exit, id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the right thread to park");
+    let now = clock.now();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+    );
+    let miss = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the Mismatch report")
+        .expect("the worker never panics on a wrong park");
+    assert_eq!(
+        miss.expect_err("a wrong park beside the right one is a Miss"),
+        Miss::Mismatch {
+            watched: (wrong_id, Some(wrong)),
+            parked: vec![(wrong_id, Some(wrong)), (id, Some(until))],
+        },
+        "a convenient later park never hides the first wrong one"
+    );
+    assert_eq!(clock.now(), now, "a Miss moves no time");
+    release_wrong.send(()).unwrap();
+    release.send(()).unwrap();
+    let exited = Deadline::after(Duration::from_secs(5));
+    exited.recv_or_fail(&exit_wrong, "the wrong thread's exit");
+    exited.recv_or_fail(&exit, "the right thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_with_a_named_thread_ignores_another_threads_wrong_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    let (parked, release, exit, id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the named thread to park");
+    let (other_parked, release_other, exit_other, _) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&other_parked, "the other thread to park");
+    let now = clock.now();
+    let step = Duration::from_millis(5);
+    let outcome =
+        run_try_advance_when_parked(&clock, Some(until), Some(id), step, Duration::from_secs(30));
+    let mark = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the soft advance")
+        .expect("the worker never panics on an unwatched wrong park")
+        .expect("another thread's wrong park is not a Mismatch");
+    assert!(
+        mark.threads().contains(&id),
+        "the mark holds the named thread"
+    );
+    assert_eq!(clock.now(), now + step, "time moves by exactly the advance");
+    release.send(()).unwrap();
+    release_other.send(()).unwrap();
+    let exited = Deadline::after(Duration::from_secs(5));
+    exited.recv_or_fail(&exit, "the named thread's exit");
+    exited.recv_or_fail(&exit_other, "the other thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_reports_a_mismatch_from_the_log_after_the_park_left() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    // The held pass freezes the helper before its decision, so the wrong
+    // park arrives and leaves while the helper is frozen.
+    let (entered, resume) = clock.pause_next_advance_pass();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+    );
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&entered, "the helper's pass pause");
+    let (parked, release, exit, wrong_id) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the wrong thread to park");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the wrong thread's exit");
+    assert!(
+        clock.parked().is_empty(),
+        "the mismatching park left before the helper looked"
+    );
+    let now = clock.now();
+    resume.send(()).unwrap();
+    let miss = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the Mismatch report")
+        .expect("the worker never panics on a logged wrong park");
+    assert_eq!(
+        miss.expect_err("a departed wrong park is still a Miss"),
+        Miss::Mismatch {
+            watched: (wrong_id, Some(wrong)),
+            parked: vec![],
+        },
+        "the log names the departed park; nothing is held"
+    );
+    assert_eq!(clock.now(), now, "a Miss moves no time");
+}
+
+#[test]
+fn miss_display_names_threads_instants_and_the_pause() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked_a, release_a, exit_a, a) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked_a, "the first thread to park");
+    let (parked_b, release_b, exit_b, b) = park_once(&clock, None);
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked_b, "the second thread to park");
+    let mismatch = Miss::Mismatch {
+        watched: (a, Some(until)),
+        parked: vec![(a, Some(until)), (b, None)],
+    };
+    let text = format!("{mismatch}");
+    assert!(
+        text.contains(&format!("watched park {a:?}")),
+        "the Mismatch names the watched park: {text}"
+    );
+    assert!(
+        text.contains(&format!("{a:?}")),
+        "the Mismatch names the first parked thread: {text}"
+    );
+    assert!(
+        text.contains(&format!("{b:?}")),
+        "the Mismatch names the second parked thread: {text}"
+    );
+    assert!(
+        text.contains("at Some("),
+        "the Mismatch reports the finite instant: {text}"
+    );
+    assert!(
+        text.contains("at None"),
+        "the Mismatch reports the unbounded park: {text}"
+    );
+    let no_park = format!("{}", Miss::NoPark);
+    assert!(
+        no_park.contains("pause"),
+        "NoPark names the pause it waited: {no_park}"
+    );
+    release_a.send(()).unwrap();
+    release_b.send(()).unwrap();
+    let exited = Deadline::after(Duration::from_secs(5));
+    exited.recv_or_fail(&exit_a, "the first thread's exit");
+    exited.recv_or_fail(&exit_b, "the second thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_leaves_no_active_wait_after_ok() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the soft advance")
+        .expect("the worker never panics on a matching park")
+        .expect("a park already present is Ok");
+    assert!(
+        !super::lock(&clock.state).watching,
+        "the soft wait stops watching on Ok"
+    );
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    // A strict wait still proceeds: no wait is left active.
+    let later = clock.now() + Duration::from_secs(30);
+    let (parked, release, exit, _) = park_once(&clock, Some(later));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the later thread to park");
+    let strict = run_advance_when_parked(
+        &clock,
+        Some(later),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(30)),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&strict, "the strict advance after Ok")
+        .expect("the clock still advances after a soft Ok");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the later thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_leaves_no_active_wait_after_no_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_millis(50),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the NoPark report")
+        .expect("the worker never panics on an empty wait")
+        .expect_err("no park within the pause is a Miss");
+    assert!(
+        !super::lock(&clock.state).watching,
+        "the soft wait stops watching on NoPark"
+    );
+    // A strict wait still proceeds: no wait is left active.
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let strict = run_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(30)),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&strict, "the strict advance after NoPark")
+        .expect("the clock still advances after a soft NoPark");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_leaves_no_active_wait_after_mismatch() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    let (wrong_parked, release_wrong, exit_wrong, _) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&wrong_parked, "the wrong thread to park");
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the Mismatch report")
+        .expect("the worker never panics on a wrong park")
+        .expect_err("a park at another instant is a Miss");
+    assert!(
+        !super::lock(&clock.state).watching,
+        "the soft wait stops watching on Mismatch"
+    );
+    release_wrong.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit_wrong, "the wrong thread's exit");
+    // A strict wait still proceeds: no wait is left active.
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let strict = run_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(30)),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&strict, "the strict advance after Mismatch")
+        .expect("the clock still advances after a soft Mismatch");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_rejects_a_named_park_at_or_before_now() {
+    // At now: the named park already passed before the wait starts.
+    let clock = FakeClock::new();
+    let at_now = clock.now();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(at_now),
+        None,
+        Duration::from_millis(1),
+        Duration::from_secs(30),
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the at-now rejection")
+        .expect_err("the soft wait rejects a named park at now");
+    assert!(
+        message.contains("already passed"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(clock.now(), at_now, "a rejected wait moves no time");
+    // Before now: a move after the named instant fails the same way.
+    let clock = FakeClock::new();
+    clock.advance(Duration::from_millis(5));
+    let past = clock.origin();
+    let now = clock.now();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(past),
+        None,
+        Duration::from_millis(1),
+        Duration::from_secs(30),
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the before-now rejection")
+        .expect_err("the soft wait rejects a named park before now");
+    assert!(
+        message.contains("already passed"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(clock.now(), now, "a rejected wait moves no time");
+}
+
+#[test]
+fn try_advance_when_parked_rejects_an_advance_past_the_named_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let now = clock.now();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        until.duration_since(now) + Duration::from_secs(1),
+        Duration::from_secs(30),
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the overshoot rejection")
+        .expect_err("the soft wait rejects an advance past the named park");
+    assert!(
+        message.contains("the advance would pass the named instant"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(clock.now(), now, "a rejected wait moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_rejects_an_advance_the_clock_cannot_represent() {
+    let clock = FakeClock::new();
+    let (parked, release, exit, _) = park_once(&clock, None);
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let now = clock.now();
+    let wall = clock.wall();
+    let outcome =
+        run_try_advance_when_parked(&clock, None, None, Duration::MAX, Duration::from_secs(30));
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the overflowing rejection")
+        .expect_err("the soft wait rejects an overflowing advance");
+    let overflow = if clock.origin().checked_add(Duration::MAX).is_none() {
+        "monotonic instant"
+    } else {
+        "wall time"
+    };
+    assert!(
+        message.contains(&format!("overflows the clock's {overflow}")),
+        "the failure names the overflowing clock: {message}"
+    );
+    assert_eq!(clock.now(), now, "a rejected wait moves no time");
+    assert_eq!(clock.wall(), wall, "a rejected wait moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_rejects_a_second_wait_while_one_is_active() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    // The pause proves the first wait is waiting before the soft wait
+    // starts, so the soft wait overlaps it rather than following it.
+    let (waiting, release_waiter) = clock.pause_next_advance_wait();
+    let first = run_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(30)),
+    );
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&waiting, "the first wait's condvar wait");
+    // Release the first waiter before the soft wait starts: the pause holds
+    // the state lock, which the soft wait needs to see the active wait.
+    release_waiter.send(()).unwrap();
+    let second = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&second, "the soft wait's rejection")
+        .expect_err("a soft wait overlapping an active wait is rejected");
+    assert!(
+        message.contains("already active"),
+        "the rejection names the overlap: {message}"
+    );
+    assert!(
+        super::lock(&clock.state).watching,
+        "the rejected soft wait leaves the first wait's log alone"
+    );
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&first, "the first wait's advance")
+        .expect("the first wait still advances after the overlap");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn another_drivers_move_fails_a_soft_advance_wait() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (checked, resume) = clock.pause_next_advance_wait();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(1),
+        Duration::from_secs(30),
+    );
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&checked, "the soft wait's condvar wait");
+    // The pause holds the state lock, so release it before reading now().
+    resume.send(()).unwrap();
+    let before = clock.now();
+    clock.advance_marked(Duration::from_millis(1));
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the other-driver failure")
+        .expect_err("another driver's move still fails a soft wait");
+    assert!(
+        message.contains("time moved during the wait by another driver"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(clock.now(), before + Duration::from_millis(1));
+    assert!(!super::lock(&clock.state).watching);
+}
+
+#[test]
+fn try_advance_when_parked_rejects_several_threads_with_no_thread_named() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked_a, "the first thread to park");
+    let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked_b, "the second thread to park");
+    let now = clock.now();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::from_secs(30),
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the several-threads rejection")
+        .expect_err("the soft wait rejects several unnamed threads");
+    assert!(
+        message.contains("several threads hold a park"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(clock.now(), now, "a rejected wait moves no time");
+    release_a.send(()).unwrap();
+    release_b.send(()).unwrap();
+    let exited = Deadline::after(Duration::from_secs(5));
+    exited.recv_or_fail(&exit_a, "the first thread's exit");
+    exited.recv_or_fail(&exit_b, "the second thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_rejects_a_zero_pause() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let now = clock.now();
+    let outcome = run_try_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Duration::ZERO,
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&outcome, "the zero-pause rejection")
+        .expect_err("a pause of zero never waits");
+    assert!(
+        message.contains("pause"),
+        "the failure names the pause: {message}"
+    );
+    assert_eq!(clock.now(), now, "a rejected wait moves no time");
+    assert!(
+        !super::lock(&clock.state).watching,
+        "the rejected wait never registered"
+    );
+    // The rejected wait never registered: a later wait still proceeds.
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    let step = Duration::from_millis(5);
+    let strict = run_advance_when_parked(
+        &clock,
+        Some(until),
+        None,
+        step,
+        Deadline::after(Duration::from_secs(30)),
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&strict, "the strict advance after a zero pause")
+        .expect("the clock still advances after a rejected pause");
+    assert_eq!(clock.now(), now + step, "time moves by exactly the advance");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+}
+
+#[test]
+fn try_advance_when_parked_names_the_caller_on_a_loud_failure() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    let now = clock.now();
+    let step = until.duration_since(now) + Duration::from_secs(1);
+    let watch = HookWatch::install();
+    let line = line!() + 3;
+    let run = || {
+        clock
+            .try_advance_when_parked(Some(until), None, step, Duration::from_secs(30))
+            .expect_err("the soft wait fails the overshoot loudly");
+    };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    let locations = watch.locations();
+    drop(watch);
+    let message = outcome
+        .expect_err("try_advance_when_parked fails the overshoot")
+        .downcast::<String>()
+        .expect("the helper panics with a message");
+    assert_caller(&locations, line);
+    assert!(
+        message.contains("the advance would pass the named instant"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(clock.now(), now, "a loud failure moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn try_advance_when_parked_names_the_caller_on_a_zero_pause() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let now = clock.now();
+    let watch = HookWatch::install();
+    let line = line!() + 3;
+    let run = || {
+        clock
+            .try_advance_when_parked(Some(until), None, Duration::from_millis(5), Duration::ZERO)
+            .expect_err("the soft wait rejects a zero pause loudly");
+    };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    let locations = watch.locations();
+    drop(watch);
+    let message = outcome
+        .expect_err("try_advance_when_parked rejects a zero pause")
+        .downcast::<String>()
+        .expect("the helper panics with a message");
+    assert_caller(&locations, line);
+    assert!(
+        message.contains("pause"),
+        "the failure names the pause: {message}"
+    );
+    assert_eq!(clock.now(), now, "a rejected wait moves no time");
 }

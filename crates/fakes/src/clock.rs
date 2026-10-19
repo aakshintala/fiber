@@ -361,6 +361,57 @@ impl FakeClock {
         }
     }
 
+    /// The soft form of [`FakeClock::advance_when_parked`] for a poll driver
+    /// that is the clock's only mover: waits up to `pause` of real time for
+    /// a fresh park at `expected`, then advances by `advance` exactly as the
+    /// strict helper does, returning the same [`Mark`]. `None` expects an
+    /// unbounded park; `thread` watches one thread, or all fresh parks
+    /// without a name.
+    ///
+    /// Only two mild failures become values: no fresh selected park within
+    /// `pause` returns `Miss::NoPark`, and a watched park at another instant
+    /// returns `Miss::Mismatch`, holding the watched park and every parked
+    /// thread at the look. A match present when examined wins over expiry.
+    /// Every louder failure still panics at the caller's line, naming every
+    /// parked thread and its instant: validation, an overshoot, a second
+    /// active wait, another driver's move, several fresh threads with no
+    /// thread named, and a zero `pause`. A `Miss` moves no time and closes
+    /// the wait.
+    ///
+    /// `pause` bounds one wait for a fresh park, as the condvar's timeout,
+    /// not a deadline: the driver's own loop holds one `Deadline` and fails
+    /// at it. A very long `pause` never overflows: the bound is read through
+    /// a saturating remaining-time computation.
+    #[track_caller]
+    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+    pub fn try_advance_when_parked(
+        &self,
+        expected: Option<Instant>,
+        thread: Option<ThreadId>,
+        advance: Duration,
+        pause: Duration,
+    ) -> Result<Mark, Miss> {
+        let select = match thread {
+            Some(id) => Select::Thread(id),
+            None => Select::Count(1),
+        };
+        if pause.is_zero() {
+            let state = lock(&self.state);
+            let report = report(
+                &state,
+                expected,
+                select,
+                advance,
+                "the pause must be at least 1",
+                None,
+            );
+            drop(state);
+            panic!("{report}");
+        }
+        let deadline = crate::deadline::Deadline::after(pause);
+        self.advance_when_parked_core(expected, select, advance, &deadline, true, &mut || {})
+    }
+
     /// The loop behind every `advance_when_parked` wait: `select` says which
     /// parks are watched, and `hook` runs under the lock after the park
     /// matched and the move validated, immediately before the move. With
