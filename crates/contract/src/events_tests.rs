@@ -424,7 +424,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "retrying", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 1, "project": "-w", "clients": 0}),
+            "state": "retrying", "closing": true, "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 1, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
@@ -1032,6 +1032,28 @@ fn a_session_status_reads_turns_and_reads_none_without_it() {
     let old: SessionStatus = serde_json::from_value(payload.clone()).unwrap();
     assert_eq!(old.turns, None);
     assert_eq!(serde_json::to_value(&old).unwrap(), payload);
+}
+
+#[test]
+fn a_session_status_writes_closing_only_when_true() {
+    let mut payload = samples()
+        .into_iter()
+        .find(|(kind, _)| *kind == "session_status")
+        .unwrap()
+        .1;
+    payload["closing"] = json!(true);
+    let status: SessionStatus = serde_json::from_value(payload.clone()).unwrap();
+    assert!(status.closing);
+    assert_eq!(serde_json::to_value(&status).unwrap(), payload);
+    payload.as_object_mut().unwrap().remove("closing");
+    let absent: SessionStatus = serde_json::from_value(payload.clone()).unwrap();
+    assert!(!absent.closing);
+    assert_eq!(serde_json::to_value(&absent).unwrap(), payload);
+    payload["closing"] = json!(false);
+    let hidden: SessionStatus = serde_json::from_value(payload.clone()).unwrap();
+    assert!(!hidden.closing);
+    payload.as_object_mut().unwrap().remove("closing");
+    assert_eq!(serde_json::to_value(&hidden).unwrap(), payload);
 }
 
 #[test]

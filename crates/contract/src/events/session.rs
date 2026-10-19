@@ -371,6 +371,9 @@ pub struct SessionStatus {
     /// What the session is doing, with the keys that state carries.
     #[serde(flatten)]
     pub state: SessionState,
+    /// True once the session has accepted `close`; absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closing: bool,
     /// When this state began, as `ts`.
     pub since: u64,
     /// When the session started, as `ts`.
