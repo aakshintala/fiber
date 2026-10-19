@@ -1167,6 +1167,7 @@ mod tests {
         let reader = run.reader.take().expect("the run has a reader");
         assert!(reader.stop(), "expected the reader to stop");
         while run.wakes.try_recv().is_ok() {}
+        // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
         clock.advance(fakes::deadline::WAITS);
         assert!(
             deadline.left().is_zero(),
