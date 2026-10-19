@@ -181,7 +181,7 @@ fn wait_hang_matched_fails_naming_the_entry_when_nothing_matches() {
         "no waiter is waiting for entry 2"
     );
     let error = script
-        .wait_hang_matched(2, Duration::from_millis(20))
+        .wait_hang_matched(2, Duration::ZERO)
         .expect_err("no hang matches entry 2");
     assert!(error.contains("host.exec[2]"), "{error}");
     assert!(error.contains("did not hang within"), "{error}");
