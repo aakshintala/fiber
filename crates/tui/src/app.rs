@@ -7,6 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::hash::{BuildHasher, RandomState};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use contract::events::{
@@ -19,6 +20,7 @@ use jiff::tz::TimeZone;
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
+use crate::ext::{Handle, Renderer};
 use crate::home::Level;
 use crate::input::Draft;
 use crate::keys::Key;
@@ -247,6 +249,12 @@ pub(crate) struct App {
     /// The conversation's size, scroll and pages (`docs/tui.md`, "History
     /// and paging").
     screen: Screen,
+    /// The installed ledger renderer, if any: shared with the screen's
+    /// pages, so one install reaches every page they draw.
+    handle: Handle,
+    /// Every extension and slot already named by the fallback notice:
+    /// each reports once, until the reload command clears the set again.
+    renderer_reported: BTreeSet<(String, String)>,
     /// The first Ctrl+C, waiting for the second. Its hint shows while set.
     armed_at: Option<Instant>,
     /// Whether detection saw kitty's keyboard flags.
@@ -326,7 +334,7 @@ pub(crate) struct App {
 impl App {
     /// An empty app in `workspace`, sized 80x24 until the loop sets it.
     pub(crate) fn new(workspace: PathBuf) -> Self {
-        Self {
+        let mut app = Self {
             passes: Vec::new(),
             overlay: overlay::Overlay::None,
             abandoned_history: BTreeSet::new(),
@@ -341,6 +349,8 @@ impl App {
             pending: HashMap::new(),
             notices: Notices::default(),
             screen: Screen::new(),
+            handle: Handle::default(),
+            renderer_reported: BTreeSet::new(),
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
@@ -372,7 +382,10 @@ impl App {
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),
             motion: crate::motion::Motion::default(),
-        }
+        };
+        // One install reaches every page the screen draws.
+        app.screen.pages_mut().ext.handle = app.handle;
+        app
     }
 
     /// Attaches straight to `session`. The `draw` jig uses it: an events
@@ -1309,6 +1322,38 @@ impl App {
     /// The pages.
     pub(crate) fn pages(&self) -> &Pages {
         self.screen.pages()
+    }
+
+    /// Installs the ledger renderer for tests without recounting: the
+    /// first counted draw calls once per distinct input, which is what
+    /// the paging tests assert. Production installs through
+    /// `use_renderer`, which counts every page again.
+    #[cfg(test)]
+    pub(crate) fn install_renderer(&mut self, renderer: Rc<dyn Renderer>) {
+        self.set_renderer(renderer);
+    }
+
+    /// Installs `renderer` through the shared handle, creating its slot
+    /// the first time: a renderer installed on another thread resolves
+    /// to nothing there, so moving the app across threads installs
+    /// afresh here.
+    fn set_renderer(&mut self, renderer: Rc<dyn Renderer>) {
+        if self.handle.get().is_none() {
+            self.handle = Handle::create();
+            self.attached_screen_mut().pages_mut().ext.handle = self.handle;
+        }
+        self.handle.set(renderer);
+    }
+
+    /// Installs the ledger renderer: every page counts again under it.
+    /// No production caller yet: Part 3 adapts the extensions VM to it.
+    #[allow(
+        dead_code,
+        reason = "no production caller until Part 3 adapts the extensions VM"
+    )]
+    pub(crate) fn use_renderer(&mut self, renderer: Rc<dyn Renderer>) {
+        self.set_renderer(renderer);
+        self.attached_screen_mut().pages_mut().renderers_changed();
     }
 
     /// `toggle_ledgers`: closes every ledger when all are open, else opens

@@ -2391,6 +2391,66 @@ fn a_completed_call_keeps_its_details_artifact_kept_and_signal() {
 }
 
 #[test]
+fn call_timing_measures_start_to_completion() {
+    use contract::events::{CallStatus, ToolCallCompleted, ToolCallRequested};
+    use contract::shapes::ContentPart;
+    fn requested(name: &str) -> ToolCallRequested {
+        ToolCallRequested {
+            name: name.to_owned(),
+            arguments: json!({}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        }
+    }
+    fn completed(status: CallStatus) -> ToolCallCompleted {
+        ToolCallCompleted {
+            status,
+            reason: None,
+            error: None,
+            process: None,
+            content: vec![ContentPart::Text {
+                text: "out".to_owned(),
+            }],
+            details: None,
+            artifact: None,
+            kept: None,
+            changes: None,
+            control: None,
+            changed_by: None,
+            hosts_surfaced: Vec::new(),
+            provider_item: None,
+            loaded: None,
+        }
+    }
+    fn call<'a>(turn: &'a super::Turn, action: &str) -> &'a super::group::Call {
+        turn.groups()
+            .flat_map(|group| group.calls())
+            .find(|call| call.action == action)
+            .expect("the driven call")
+    }
+    let mut fold = super::Fold::default();
+    let mut turn = super::Turn::new(Vec::new(), 0);
+    for action in ["a_1", "a_2", "a_3", "a_4"] {
+        turn.call_requested(action, requested("shell"), 0, &mut fold);
+    }
+    assert!(turn.call_started("a_1", 1_000));
+    assert!(turn.call_completed("a_1", &completed(CallStatus::Completed), 3_500));
+    assert_eq!(call(&turn, "a_1").duration_ms(), Some(2_500));
+    assert!(call(&turn, "a_1").has_started());
+    assert!(turn.call_started("a_2", 1_000));
+    assert_eq!(call(&turn, "a_2").duration_ms(), None);
+    assert!(call(&turn, "a_2").has_started());
+    assert!(turn.call_completed("a_3", &completed(CallStatus::Denied), 3_500));
+    assert_eq!(call(&turn, "a_3").duration_ms(), None);
+    assert!(!call(&turn, "a_3").has_started());
+    assert!(turn.call_started("a_4", 3_500));
+    assert!(turn.call_completed("a_4", &completed(CallStatus::Completed), 1_000));
+    assert_eq!(call(&turn, "a_4").duration_ms(), Some(0));
+}
+
+#[test]
 fn toggle_of_a_call_view_changes_nothing() {
     use contract::events::ToolCallRequested;
     let mut fold = super::Fold::default();

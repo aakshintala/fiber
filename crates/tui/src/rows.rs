@@ -4,12 +4,15 @@
 //! `Vec<Row>`; a plain push is a row that starts a line of its own.
 
 use std::ops::{Deref, Range};
+use std::sync::Arc;
 
 use contract::Seq;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::app::Target;
+use crate::ext::spans::FittedLine;
+use crate::ext::{Bound, Input, RawSpan};
 use crate::surface::{Edges, edge_row};
 use crate::theme::Role;
 use crate::turn::Row;
@@ -84,6 +87,9 @@ pub(crate) struct Rows {
     /// A search draw: every collapsible body draws, open or not
     /// (`docs/tui.md`, "Search": every match is counted at once).
     all_open: bool,
+    /// The renderer seam bound to the page these rows draw on, if any:
+    /// the ledger asks it for each call's lines.
+    pub(crate) seam: Option<Bound>,
 }
 
 impl Rows {
@@ -93,6 +99,33 @@ impl Rows {
             all_open: true,
             ..Self::default()
         }
+    }
+
+    /// Binds the renderer seam these rows draw through.
+    pub(crate) fn with_seam(mut self, seam: Bound) -> Self {
+        self.seam = Some(seam);
+        self
+    }
+
+    /// The bound renderer's lines for `slot`: none without a seam,
+    /// without an installed renderer, or when the item falls back to
+    /// its built-in row. A miss calls the renderer once and validates
+    /// what it returns before storing or drawing any of it.
+    pub(crate) fn ext_lines(
+        &self,
+        slot: &str,
+        input: &Input<'_>,
+        width: u16,
+        builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Option<Arc<Vec<FittedLine>>> {
+        let seam = self.seam.as_ref()?;
+        let renderer = seam.handle.get()?;
+        let page = seam.page;
+        let cache = Arc::clone(&seam.cache);
+        let extension = renderer.name().to_owned();
+        cache.lines(page, slot, &extension, input, width, || {
+            renderer.render(slot, input, width, builtin)
+        })
     }
 
     /// Enters what `target` opens: a collapsible body draws when `open`

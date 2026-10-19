@@ -15,6 +15,7 @@ fn every_field_round_trips_through_take() {
         work.search_pages += 7;
         work.search_order_pages += 8;
         work.shell_visits += 9;
+        work.renderer_calls += 10;
     });
     let work = take();
     assert_eq!(work.reply_renders, 1);
@@ -26,5 +27,6 @@ fn every_field_round_trips_through_take() {
     assert_eq!(work.search_pages, 7);
     assert_eq!(work.search_order_pages, 8);
     assert_eq!(work.shell_visits, 9);
+    assert_eq!(work.renderer_calls, 10);
     assert_eq!(take(), super::Work::default());
 }
