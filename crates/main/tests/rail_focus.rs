@@ -412,6 +412,7 @@ fn hint_lift_reports_which_condition_was_false_on_a_spent_deadline() {
     // An empty grid: all three conditions false.
     let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
     let deadline = support::Deadline::on(&**clock);
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
     clock.advance(support::WAITS);
     assert!(
         deadline.left().is_zero(),
@@ -459,6 +460,7 @@ fn hint_lift_reports_which_condition_was_false_on_a_spent_deadline() {
     let from = run.output().len();
     terminal_side.write_all(HINT_MIDDLE.as_bytes()).unwrap();
     run.wait_bytes(from, HINT_MIDDLE.as_bytes(), "the fed hint");
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
     clock.advance(support::WAITS);
     assert!(
         deadline.left().is_zero(),

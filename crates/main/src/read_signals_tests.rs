@@ -277,6 +277,12 @@ fn repeat_signals_and_the_return_guard_share_the_first_end() {
         .recv(&is_entered)
         .expect("the spawn reached its pause");
     let (is_fired, guard) = arm_recording(&reads, &clock, &[SIGTERM]);
+    let watcher = guard
+        .thread
+        .as_ref()
+        .expect("the signal watcher")
+        .thread()
+        .id();
     signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
     // The exact park pins the stored end: no fresh bound starts here.
     assert!(
@@ -286,8 +292,13 @@ fn repeat_signals_and_the_return_guard_share_the_first_end() {
     // Raised while the first shutdown still parks, so it queues behind
     // it; every finish below carries the same number either way.
     signal_hook::low_level::raise(SIGTERM).expect("the test's second raise");
-    // Past the first end both shutdowns answer `false`.
-    fake.advance(doors::SHUTDOWN_BOUND + Duration::from_secs(1));
+    // At the first end both shutdowns answer `false`.
+    fake.advance_when_parked(
+        Some(end),
+        Some(watcher),
+        doors::SHUTDOWN_BOUND,
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&is_fired)

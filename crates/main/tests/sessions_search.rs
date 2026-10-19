@@ -67,6 +67,7 @@ fn session(sessions: &Path, id: &str, workspace: &Path, events: &[Event]) -> Pat
     let log = log::Log::create(sessions, SessionId(id.to_owned()), clock_dyn).unwrap();
     log.append(&started(workspace), None, None).unwrap();
     for event in events {
+        // No code under test waits on the clock here; it stamps one second between log lines (ruling 6179406086).
         clock.advance(Duration::from_secs(1));
         log.append(event, None, None).unwrap();
     }
