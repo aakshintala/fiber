@@ -200,7 +200,7 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     // a starter on the way up reports a timeout the stall never caused.
     let early = await_stuck(&done_rx, &watching);
     assert!(early.is_none(), "the stall answers only at its deadline");
-    // Past the git deadline the run stops: it parks for the grace, or
+    // At the git deadline the run stops: it parks for the grace, or
     // answers at once when the stall dies on SIGTERM with no grace park.
     // Crosses only poll pauses to the git deadline; the run is proven parked at its poll (ruling 6260728504).
     clock.advance(GIT_DEADLINE);

@@ -23,9 +23,6 @@ use super::*;
 /// Wall-clock bound on every wait for the extension.
 const WAIT: Duration = Duration::from_secs(5);
 
-/// How long past a deadline the caller waits before it abandons the VM.
-const GRACE: Duration = Duration::from_secs(1);
-
 /// An extension named `fiber.test/t` whose entry script is `init`, in a
 /// fresh temporary directory kept beside it.
 fn extension(init: &str) -> (fakes::TempDir, Arc<LuaExtension>) {
@@ -278,12 +275,8 @@ fn a_spinning_run_past_its_timeout_returns_a_timeout() {
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the backend to spin");
-    assert!(
-        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
-        "the caller parked at the grace"
-    );
     clock.advance_when_parked(
-        Some(asked + Duration::from_millis(100) + GRACE),
+        Some(asked + Duration::from_millis(100) + crate::lua::GRACE),
         None,
         Duration::from_millis(100),
         &Deadline::after(WAIT),

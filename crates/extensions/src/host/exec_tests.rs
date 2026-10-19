@@ -296,7 +296,7 @@ fn a_deadline_stop_reports_timed_out() {
     let (_cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), Some(deadline));
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    // Past the callback's deadline the run stops, although nothing
+    // At the callback's deadline the run stops, although nothing
     // dropped its cancel.
     step_to_deadline(&clock, deadline);
     let kill_at = clock.now() + Duration::from_millis(800);
@@ -841,7 +841,7 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
     // The spinner shares this test's group, so the guard matches its argv
     // by pid alone, never the group: a panic anywhere below still kills it.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
-    // Past the deadline the run stops, although nothing dropped its cancel.
+    // At the deadline the run stops, although nothing dropped its cancel.
     step_to_deadline(&clock, deadline);
     let kill_at = clock.now() + Duration::from_millis(800);
     let early = crate::stall::await_grace_or_answer(&clock, &done, kill_at);
@@ -1216,7 +1216,7 @@ fn a_pid_mode_term_stop_reports_sigterm() {
     let pid = ready.wait(DEADLINE)[0];
     // The spinner shares this test's group: match its argv by pid alone.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
-    // Past the deadline the run stops, although nothing dropped its cancel.
+    // At the deadline the run stops, although nothing dropped its cancel.
     step_to_deadline(&clock, deadline);
     let outcome = Deadline::after(DEADLINE).recv(&done);
     if outcome.is_err() {

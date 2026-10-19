@@ -935,7 +935,7 @@ fn a_timed_out_call_drops_its_runner_and_its_late_answer() {
         caller_thread.thread().id(),
         clock.origin() + Duration::from_millis(200) + Duration::from_secs(1),
     );
-    // Past its timeout and the grace: the parked call fails by its deadline.
+    // At its timeout and the grace: the parked call fails by its deadline.
     clock.advance_when_parked(
         Some(clock.origin() + Duration::from_millis(1200)),
         Some(caller_thread.thread().id()),

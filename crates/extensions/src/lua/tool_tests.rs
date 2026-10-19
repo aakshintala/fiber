@@ -23,9 +23,6 @@ use super::*;
 /// Wall-clock bound on every wait for the extension.
 const WAIT: Duration = Duration::from_secs(5);
 
-/// How long past a deadline the caller waits before it abandons the VM.
-const GRACE: Duration = Duration::from_secs(1);
-
 /// An extension named `fiber.test/t` whose entry script is `init`, in a
 /// fresh temporary directory kept beside it.
 fn extension(init: &str) -> (fakes::TempDir, Arc<LuaExtension>) {
@@ -630,7 +627,7 @@ fn a_spinning_tool_holds_the_extensions_hook_until_its_timeout() {
             .is_err(),
         "the hook started while the tool held the thread"
     );
-    let park = asked + Duration::from_millis(100) + GRACE;
+    let park = asked + Duration::from_millis(100) + crate::lua::GRACE;
     let parked = clock
         .mark_parked(park, WAIT)
         .expect("the tool caller parks at the grace");
