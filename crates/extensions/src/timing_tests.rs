@@ -983,6 +983,32 @@ impl Clock for GatedClock {
     }
 }
 
+/// The message of a panic caught on a helper thread: `&str` or `String`,
+/// else a fixed text. The helper must run on its own thread because its
+/// wake takes the hub lock the gated caller holds, so the outcome travels
+/// back over a channel and the test re-panics with it at the call site.
+fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_owned()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "the advance helper failed with an unknown panic payload".to_owned()
+    }
+}
+
+/// Waits for the gated park window: on a miss, drains the helper outcome
+/// and re-panics with its text, so a wrong instant fails with the
+/// helper's park report instead of the receive timeout.
+fn gate_reached(arrived: &mpsc::Receiver<()>, outcome: &mpsc::Receiver<Result<(), String>>) {
+    if Deadline::after(WAIT).recv(arrived).is_err() {
+        match Deadline::after(WAIT).recv(outcome) {
+            Ok(Err(text)) => panic!("the advance helper failed: {text}"),
+            _ => panic!("the caller reached the gated park window"),
+        }
+    }
+}
+
 /// Waits, at most `within` of real time, until the hub lock is free.
 /// `FakeClock::wait_until` records the caller's park and wakes
 /// `await_parked` before its wait closure runs, and the caller still holds
@@ -1032,7 +1058,7 @@ fn worker_emits_only_after_the_guard_releases() {
     let mark = fake.now();
     let provider = LuaProvider::new(Arc::clone(&ext), "rz");
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
+    let models_caller = std::thread::spawn(move || {
         let _sent = tx.send(provider.list_models(&ModelsArg::default()));
     });
     Deadline::after(WAIT)
@@ -1081,14 +1107,21 @@ fn worker_emits_only_after_the_guard_releases() {
     let (advanced_tx, advanced_rx) = mpsc::channel();
     {
         let fake = Arc::clone(&fake);
+        let models_caller = models_caller.thread().id();
         std::thread::spawn(move || {
-            fake.advance(Duration::ZERO);
-            let _ignored = advanced_tx.send(());
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                fake.advance_when_parked(
+                    Some(mark + Duration::from_secs(61)),
+                    Some(models_caller),
+                    Duration::ZERO,
+                    &Deadline::after(WAIT),
+                );
+            }))
+            .map_err(panic_text);
+            let _ignored = advanced_tx.send(outcome);
         });
     }
-    Deadline::after(WAIT)
-        .recv(&gated_arrived)
-        .expect("the caller reached the gated park window");
+    gate_reached(&gated_arrived, &advanced_rx);
     {
         let (done_tx, done_rx) = mpsc::channel();
         {
@@ -1117,7 +1150,8 @@ fn worker_emits_only_after_the_guard_releases() {
     }
     Deadline::after(WAIT)
         .recv(&advanced_rx)
-        .expect("the zero advance returns after the release");
+        .expect("the zero advance returns after the release")
+        .expect("the zero advance succeeded");
     assert!(
         fake.await_parked(mark + Duration::from_secs(61), WAIT),
         "the caller parked past its check"
@@ -1131,7 +1165,12 @@ fn worker_emits_only_after_the_guard_releases() {
     assert!(sink.records().is_empty());
     // Stamps after this advance prove they ran after the pause: a stamp
     // from before it would end 5000 ms later.
-    fake.advance(Duration::from_millis(5000));
+    fake.advance_when_parked(
+        Some(mark + Duration::from_secs(61)),
+        Some(models_caller.thread().id()),
+        Duration::from_millis(5000),
+        &Deadline::after(WAIT),
+    );
     // Both releases go out before either answer is awaited: the frozen
     // scheduler delivers the worker's reply only once the hook resumes it.
     release.send(()).expect("the worker takes its release");
@@ -1175,7 +1214,7 @@ fn gated_park_holds_the_hub_guard() {
     let mark = fake.now();
     let provider = LuaProvider::new(Arc::clone(&ext), "rg");
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
+    let models_caller = std::thread::spawn(move || {
         let _sent = tx.send(provider.list_models(&ModelsArg::default()));
     });
     assert!(
@@ -1193,14 +1232,21 @@ fn gated_park_holds_the_hub_guard() {
     let (notified_tx, notified_rx) = mpsc::channel();
     {
         let fake = Arc::clone(&fake);
+        let models_caller = models_caller.thread().id();
         std::thread::spawn(move || {
-            fake.advance(Duration::ZERO);
-            let _ignored = notified_tx.send(());
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                fake.advance_when_parked(
+                    Some(mark + Duration::from_secs(61)),
+                    Some(models_caller),
+                    Duration::ZERO,
+                    &Deadline::after(WAIT),
+                );
+            }))
+            .map_err(panic_text);
+            let _ignored = notified_tx.send(outcome);
         });
     }
-    Deadline::after(WAIT)
-        .recv(&gated_arrived)
-        .expect("the caller reached the gated park window");
+    gate_reached(&gated_arrived, &notified_rx);
     assert!(
         !ext.hub_unlocked(),
         "the gated caller holds the hub lock while parked"
@@ -1210,7 +1256,8 @@ fn gated_park_holds_the_hub_guard() {
         .expect("the gated window takes its release");
     Deadline::after(WAIT)
         .recv(&notified_rx)
-        .expect("the hub notify returns after the release");
+        .expect("the hub notify returns after the release")
+        .expect("the zero advance succeeded");
     server.release();
     let (models, _) = Deadline::after(WAIT)
         .recv(&rx)
@@ -1312,18 +1359,23 @@ fn expired_before_admission_starts_nothing() {
     // extension ever runs it.
     let mark = clock.now();
     let (expired_tx, expired_rx) = mpsc::channel();
-    {
+    let call_thread = {
         let ext = Arc::clone(&ext);
         std::thread::spawn(move || {
             let answer = ext.provider_call("b", "models", serde_json::Value::Null);
             let _sent = expired_tx.send(answer);
-        });
-    }
+        })
+    };
     assert!(
         clock.await_parked(mark + Duration::from_millis(1000), WAIT),
         "the queued call parked at its deadline"
     );
-    clock.advance(Duration::from_millis(1500));
+    clock.advance_when_parked(
+        Some(mark + Duration::from_millis(1000)),
+        Some(call_thread.thread().id()),
+        Duration::from_millis(1000),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv(&expired_rx)
         .expect("waited for the expiry")
@@ -1416,13 +1468,13 @@ fn late_workers_emit_once_and_drop_late_replies() {
     // The hook suspends on its held request.
     let mark = clock.now();
     let (hook_tx, hook_rx) = mpsc::channel();
-    {
+    let hook_thread = {
         let ext = Arc::clone(&ext);
         std::thread::spawn(move || {
             let answer = ext.hook("before_message", 0, serde_json::Value::Null);
             let _sent = hook_tx.send(answer);
-        });
-    }
+        })
+    };
     assert!(
         hook_server.await_requests(1, WAIT),
         "the hook suspended on HTTP"
@@ -1433,7 +1485,12 @@ fn late_workers_emit_once_and_drop_late_replies() {
     );
     // Past the hook's deadline but inside its grace: its caller takes the
     // timeout and the VM stays up.
-    clock.advance(Duration::from_millis(1500));
+    clock.advance_when_parked(
+        Some(mark + Duration::from_millis(2000)),
+        Some(hook_thread.thread().id()),
+        Duration::from_millis(1500),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv(&hook_rx)
         .expect("waited for the expired hook")
