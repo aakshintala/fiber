@@ -534,6 +534,7 @@ fn a_held_summary_handshake_ends_the_timer_at_bind() {
     );
     // The bind the timer stamps is done, and the acknowledgement it must
     // exclude is still ahead: moving the clock now must change nothing.
+    // No code under test waits on the clock here; start::run is past await_bind and blocks on a socket read for the acknowledgement (ruling 6179406086).
     temp.clock.advance(Duration::from_secs(5));
     release.send(()).unwrap_or(());
     let outcome = Deadline::after(DEADLINE)
@@ -586,7 +587,8 @@ fn a_held_retry_then_success_reports_the_whole_wait() {
             "the hub waits a poll after held failure {k}"
         );
         assert!(finished.try_recv().is_err(), "no answer while it waits");
-        temp.clock.advance(HELD_POLL);
+        temp.clock
+            .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     }
     let result = Deadline::after(DEADLINE)
         .recv(&finished)
@@ -613,7 +615,8 @@ fn a_resume_held_past_the_shutdown_bound_reports_the_bound() {
             "the hub waits poll {k} inside the bound"
         );
         assert!(finished.try_recv().is_err(), "no answer before the bound");
-        temp.clock.advance(HELD_POLL);
+        temp.clock
+            .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     }
     let result = Deadline::after(DEADLINE)
         .recv(&finished)
@@ -1174,6 +1177,7 @@ fn a_failed_transfer_is_stamped_for_the_next_drain() {
     );
     // Deferred cleanup past the failure adds no duration: the stamp was
     // taken at the write, not at the drain.
+    // No code under test waits on the clock here; no thread waits: take_completed_replays is a synchronous call on the test's thread (ruling 6179406086).
     temp.clock.advance(Duration::from_secs(5));
     let failed = lock(&relays).take_completed_replays();
     drop(failed);

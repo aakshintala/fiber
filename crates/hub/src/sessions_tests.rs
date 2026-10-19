@@ -455,7 +455,12 @@ fn the_timer_covers_settlement_and_reports_the_whole_wait() {
         op_timings(&temp.dir).is_empty(),
         "no completed timer while settlement waits"
     );
-    clock.advance(crate::feed::RUN_SCAN);
+    clock.advance_when_parked_threads(
+        Some(until),
+        2,
+        crate::feed::RUN_SCAN,
+        &Deadline::after(DEADLINE),
+    );
     let got = Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("sessions answers")

@@ -116,7 +116,12 @@ fn an_unarmed_wait_never_reaches_a_deadline() {
     let first = First::new(Arc::clone(&setup.hub.tick));
     later(&setup.hub, &setup.relays, held, Arc::clone(&first)).unwrap();
     assert!(setup.clock.await_parked_unbounded(DEADLINE));
-    let mark = setup.clock.advance_marked(Duration::from_secs(3_600));
+    let mark = setup.clock.advance_when_parked(
+        None,
+        None,
+        Duration::from_secs(3_600),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         setup.clock.await_parked_since(&mark, None, DEADLINE),
         "it re-checked and still has no deadline"
@@ -125,7 +130,12 @@ fn an_unarmed_wait_never_reaches_a_deadline() {
     let due = setup.clock.now() + FIRST_PROMPT_WAIT;
     first.arm(due);
     assert!(setup.clock.await_parked(due, DEADLINE));
-    setup.clock.advance(FIRST_PROMPT_WAIT);
+    setup.clock.advance_when_parked(
+        Some(due),
+        None,
+        FIRST_PROMPT_WAIT,
+        &Deadline::after(DEADLINE),
+    );
     assert!(setup.starter.await_received(2, DEADLINE));
     assert_eq!(prompts(&setup.starter), 1);
 }
@@ -158,7 +168,12 @@ fn arm_while_the_waiter_checks_does_not_deadlock() {
         "the waiter read the deadline"
     );
     Deadline::after(DEADLINE).recv(&done).expect("arm returned");
-    setup.clock.advance(FIRST_PROMPT_WAIT);
+    setup.clock.advance_when_parked(
+        Some(due),
+        None,
+        FIRST_PROMPT_WAIT,
+        &Deadline::after(DEADLINE),
+    );
     assert!(setup.starter.await_received(2, DEADLINE));
 }
 
@@ -175,7 +190,12 @@ fn the_bound_removes_its_awaiting_entry() {
         let due = setup.clock.now() + FIRST_PROMPT_WAIT;
         first.arm(due);
         assert!(setup.clock.await_parked(due, DEADLINE));
-        setup.clock.advance(FIRST_PROMPT_WAIT);
+        setup.clock.advance_when_parked(
+            Some(due),
+            None,
+            FIRST_PROMPT_WAIT,
+            &Deadline::after(DEADLINE),
+        );
         assert!(setup.starter.await_received(2 * n, DEADLINE));
         assert_eq!(prompts(&setup.starter), n);
         assert!(lock(&setup.relays).awaiting.is_empty(), "start {n}");

@@ -495,7 +495,8 @@ fn a_label_bearing_subscribe_past_an_exited_process_starts_the_session_on_it() {
         "the hub waits out the exiting process"
     );
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
-    temp.clock.advance(HELD_POLL);
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     // One acknowledgement, the resumed session's.
     assert_eq!(client.acknowledged("the subscribe"), "c_1");
     assert_eq!(starter.asked(), [Some("work".to_owned())]);
@@ -688,7 +689,8 @@ fn a_held_resume_of_an_exited_session_retries_until_the_lock_is_released() {
         );
         assert_eq!(starter.resumed().len(), usize::try_from(k).unwrap());
         assert!(finished.try_recv().is_err(), "no answer while it waits");
-        temp.clock.advance(HELD_POLL);
+        temp.clock
+            .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     }
     let result = Deadline::after(DEADLINE)
         .recv(&finished)
@@ -712,7 +714,8 @@ fn a_resume_held_past_the_shutdown_bound_is_session_held() {
             "the hub waits poll {k} inside the bound"
         );
         assert!(finished.try_recv().is_err(), "no answer before the bound");
-        temp.clock.advance(HELD_POLL);
+        temp.clock
+            .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     }
     let refused = refused(
         Deadline::after(DEADLINE)
@@ -1191,7 +1194,8 @@ fn a_command_answered_closing_after_fiber_exited_reaches_the_resumed_session() {
     );
     assert!(starter.resumed().is_empty());
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
-    temp.clock.advance(HELD_POLL);
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     // One acknowledgement, the resumed session's.
     assert_eq!(client.acknowledged("the reply"), "c_1");
     assert_eq!(starter.resumed().len(), 1);
@@ -1238,7 +1242,8 @@ fn two_commands_answered_closing_reach_one_resumed_session() {
         "the hub waits out the exiting process"
     );
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
-    temp.clock.advance(HELD_POLL);
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     assert_eq!(client.acknowledged("the reply"), "c_1");
     assert_eq!(client.acknowledged("the steer"), "c_2");
     assert_eq!(starter.resumed().len(), 1, "one resume for both");
@@ -1293,7 +1298,8 @@ fn a_command_read_while_a_reroute_opens_follows_it_on_one_connection() {
         .recv(&parked_rx)
         .expect("the third command is routed");
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
-    temp.clock.advance(HELD_POLL);
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     assert_eq!(client.acknowledged("the reply"), "c_1");
     assert_eq!(client.acknowledged("the steer"), "c_2");
     assert_eq!(client.acknowledged("the subscribe"), "c_3");
@@ -1340,6 +1346,7 @@ fn a_command_whose_write_to_the_exiting_relay_fails_follows_the_rerouted_one() {
         .recv(&routed_rx)
         .expect("the second command is queued");
     release_tx.send(()).unwrap_or(());
+    // No code under test waits on the clock here; no reach wait at the move: crates/hub/src/resume.rs:132 is not reached, so the advance is dead (ruling 6179406086).
     temp.clock.advance(HELD_POLL);
     assert_eq!(client.acknowledged("the reply"), "c_1");
     assert_eq!(client.acknowledged("the steer"), "c_2");
@@ -1444,7 +1451,8 @@ fn commands_held_behind_a_failed_reroute_are_each_refused_in_order() {
             temp.clock.await_parked(until, DEADLINE),
             "the hub waits poll {k} inside the bound"
         );
-        temp.clock.advance(HELD_POLL);
+        temp.clock
+            .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     }
     let line = client.next("the first refusal");
     assert_eq!(line["kind"], "command_rejected", "{line}");
@@ -1456,7 +1464,8 @@ fn commands_held_behind_a_failed_reroute_are_each_refused_in_order() {
             temp.clock.await_parked(until, DEADLINE),
             "the hub waits poll {k} inside the second bound"
         );
-        temp.clock.advance(HELD_POLL);
+        temp.clock
+            .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     }
     let line = client.next("the second refusal");
     assert_eq!(line["kind"], "command_rejected", "{line}");
@@ -1532,7 +1541,8 @@ fn an_exiting_process_that_never_ends_is_session_held_past_the_bound() {
             temp.clock.await_parked(until, DEADLINE),
             "the hub waits poll {k} inside the bound"
         );
-        temp.clock.advance(HELD_POLL);
+        temp.clock
+            .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     }
     let line = client.next("the rejection");
     assert_eq!(line["kind"], "command_rejected", "{line}");
@@ -1747,7 +1757,8 @@ fn a_subscribe_answered_closing_after_fiber_exited_is_sent_once() {
         "the hub waits out the exiting process"
     );
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
-    temp.clock.advance(HELD_POLL);
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     // One acknowledgement, the resumed session's.
     assert_eq!(client.acknowledged("the subscribe"), "c_1");
     assert_eq!(starter.resumed().len(), 1);
@@ -2046,7 +2057,8 @@ fn the_last_queued_command_holds_the_relay_until_its_queue_is_empty() {
         let _released = release_rx.recv();
     }));
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
-    temp.clock.advance(HELD_POLL);
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&popped_rx)
@@ -2120,7 +2132,8 @@ fn a_client_that_leaves_drops_the_queue_and_passes_nothing_on() {
         .recv(&gone_rx)
         .expect("the hub drops the disconnected client");
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
-    temp.clock.advance(HELD_POLL);
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&dropped_rx)
@@ -2195,7 +2208,8 @@ fn an_acknowledgement_is_forwarded_before_the_next_queued_command_passes_on() {
         logging.lock().unwrap().push(format!("Popped({id})"));
     }));
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
-    temp.clock.advance(HELD_POLL);
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
     assert_eq!(client.acknowledged("the reply"), "c_1");
     // Armed once the first acknowledgement is read: the next forward is
     // the held acceptance, so the one-shot hook cannot be consumed first
