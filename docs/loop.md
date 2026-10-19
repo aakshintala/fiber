@@ -60,9 +60,11 @@ A reply with no tool call ends the step without a next one ("Ending a turn").
 During a turn the loop reads its inbox at two points only: at a step
 boundary (step 1 above, and the check before a turn ends), and while it waits
 for a person's `reply` to an approval. While it sends a request and streams the
-reply, nothing reads the inbox. While it waits on an approval, everything that
-arrives is answered at once: a `steer` is queued and `steering_queue` written,
-a `steer_drop` takes effect, a `handoff` is accepted, a second `reply` is
+reply, nothing reads the inbox. A `steer` is queued and `steering_queue`
+written at once, and a `steer_drop` takes effect at once, at any point in the
+turn: the thread reading the connection does both (`docs/architecture.md`,
+"One inbox"). While it waits on an approval, everything else that
+arrives is answered at once: a `handoff` is accepted, a second `reply` is
 rejected `stale_request`, and a `close` ends the wait with the request
 unanswerable (`docs/permissions.md`, "Headless"). What these queue (steering
 messages, a handoff, job notices) joins the conversation at the next step
