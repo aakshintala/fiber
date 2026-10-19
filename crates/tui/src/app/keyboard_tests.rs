@@ -577,6 +577,28 @@ fn back_right_with_the_row_focused_goes_back() {
 }
 
 #[test]
+fn back_esc_with_a_chip_focused_goes_back() {
+    let mut app = backed();
+    frame(&mut app);
+    app.focus = None;
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert!(matches!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(
+            Spot::Workspace | Spot::Worktree | Spot::Model | Spot::Thinking
+        ))
+    ));
+    let Effect::Send(lines) = press(&mut app, "esc") else {
+        panic!("Esc goes back");
+    };
+    assert_eq!(attached_session(&lines), SESSION);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+}
+
+#[test]
 fn right_with_a_chip_focused_moves_between_chips() {
     let mut app = backed();
     frame(&mut app);
