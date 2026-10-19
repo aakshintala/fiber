@@ -8,34 +8,39 @@ fn topics_follow_the_notes_order_and_wire_contract() {
             "source_control",
             "### Source control",
             "Which accounts, organisations and repositories are your own or your organisation's?",
+            "which accounts, organisations and repositories are the person's own or their organisation's",
         ),
         (
             "internal_hosts",
             "### Internal hosts",
             "Which internal hosts, registries and services count as inside?",
+            "internal hosts, registries and services that count as inside",
         ),
         (
             "internal_tools",
             "### Internal tools",
             "Which internal tools do you run, and what does running each one do?",
+            "internal tools and what running them does",
         ),
         (
             "routine_actions",
             "### Routine actions",
             "What routine actions, such as squash-merging your own pull requests once CI passes, should the reviewer allow?",
+            "routine actions, such as squash-merging their own pull requests once CI passes",
         ),
         (
             "never",
             "### What must never happen",
             "What must never happen, such as touching infra/prod?",
+            "what must never happen, such as touching infra/prod",
         ),
     ];
-    for (topic, (id, heading, question)) in Topic::ALL.into_iter().zip(expected) {
+    for (topic, (id, heading, question, covers)) in Topic::ALL.into_iter().zip(expected) {
         assert_eq!(to_value(topic).unwrap(), id);
         assert_eq!(from_value::<Topic>(json!(id)).unwrap(), topic);
         assert_eq!(topic.heading(), heading);
         assert_eq!(topic.question(), question);
-        assert!(!topic.covers().is_empty());
+        assert_eq!(topic.covers(), covers);
     }
     assert!(from_value::<Topic>(json!("other")).is_err());
     assert!(from_value::<Topic>(json!(null)).is_err());
@@ -63,7 +68,11 @@ fn tallies_validate_each_boundary_and_describe_the_count() {
     assert_eq!((one.prefix(), one.count(), one.here()), ("p", 1, 0));
     assert!(!one.all_here());
     assert_eq!(one.text(), "1 escalation answered allow for `p`");
+    let mixed = SessionTally::new("p".into(), 14, 3).unwrap();
+    assert_eq!(mixed.count(), 14);
+    assert_eq!(mixed.here(), 3);
     let all = SessionTally::new("p".into(), 2, 2).unwrap();
+    assert_eq!(all.count(), 2);
     assert!(all.all_here());
     assert_eq!(all.text(), "2 escalations answered allow for `p`");
     assert!(SessionTally::new("p".into(), 2, 1).is_some());
