@@ -114,7 +114,8 @@ fn texts(request: &ModelRequest) -> Vec<&str> {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => {
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => {
                 panic!("not a user item: {input:?}")
             }
         })
@@ -444,7 +445,8 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
                 Input::Assistant { .. }
                 | Input::Reasoning { .. }
                 | Input::ToolCall { .. }
-                | Input::ToolResult { .. } => {
+                | Input::ToolResult { .. }
+                | Input::ToolSearchResult { .. } => {
                     panic!("not a user item: {input:?}")
                 }
             })

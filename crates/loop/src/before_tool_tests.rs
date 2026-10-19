@@ -1284,7 +1284,8 @@ fn the_next_request_sends_the_models_call_with_the_lines_result() {
             contract::provider::Input::User { .. }
             | contract::provider::Input::Assistant { .. }
             | contract::provider::Input::Reasoning { .. }
-            | contract::provider::Input::ToolResult { .. } => None,
+            | contract::provider::Input::ToolResult { .. }
+            | contract::provider::Input::ToolSearchResult { .. } => None,
         })
         .expect("the second request carries the tool call");
     assert_eq!(
@@ -1299,7 +1300,8 @@ fn the_next_request_sends_the_models_call_with_the_lines_result() {
             contract::provider::Input::User { .. }
             | contract::provider::Input::Assistant { .. }
             | contract::provider::Input::Reasoning { .. }
-            | contract::provider::Input::ToolCall { .. } => None,
+            | contract::provider::Input::ToolCall { .. }
+            | contract::provider::Input::ToolSearchResult { .. } => None,
         })
         .expect("the second request carries the tool result");
     let line = "Extension fiber.test/guard rewrote this call's arguments; it ran with {\"path\":\"b.txt\"}.";

@@ -178,7 +178,10 @@ fn user(text: &str) -> Input {
 fn text_of(input: &Input) -> &str {
     match input {
         Input::User { text, .. } | Input::Assistant { text, .. } => text,
-        other @ (Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. }) => {
+        other @ (Input::Reasoning { .. }
+        | Input::ToolCall { .. }
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. }) => {
             panic!("not a message: {other:?}")
         }
     }
@@ -1944,7 +1947,8 @@ fn a_provider_overflow_moves_the_last_steps_results_and_hands_off() {
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
-            | Input::ToolCall { .. } => None,
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     assert_eq!(results.len(), 2);

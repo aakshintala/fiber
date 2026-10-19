@@ -336,7 +336,8 @@ fn user_text(input: &contract::provider::Input) -> &str {
         contract::provider::Input::Assistant { .. }
         | contract::provider::Input::Reasoning { .. }
         | contract::provider::Input::ToolCall { .. }
-        | contract::provider::Input::ToolResult { .. } => {
+        | contract::provider::Input::ToolResult { .. }
+        | contract::provider::Input::ToolSearchResult { .. } => {
             panic!("a reviewer item is always a user item")
         }
     }
