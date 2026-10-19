@@ -186,6 +186,7 @@ fn a_model_with_no_levels_has_no_chip() {
 fn the_selection_stays_on_its_model_across_the_toggle() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -215,6 +216,7 @@ fn the_selection_stays_on_its_model_across_the_toggle() {
 fn move_chip_from_no_chip_takes_the_near_end_and_marks_touched() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -241,6 +243,7 @@ fn move_chip_from_no_chip_takes_the_near_end_and_marks_touched() {
 fn move_chip_on_a_model_with_no_levels_does_nothing() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -259,6 +262,7 @@ fn move_chip_on_a_model_with_no_levels_does_nothing() {
 fn toggle_moves_the_selection_to_the_first_row_when_its_model_hides() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -278,6 +282,7 @@ fn toggle_moves_the_selection_to_the_first_row_when_its_model_hides() {
 fn open_over(models: Vec<ModelEntry>) -> ModelPicker {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models,
             notices: Vec::new(),
             lists: Vec::new(),
@@ -297,6 +302,7 @@ fn a_replacement_inserting_before_the_selection_keeps_its_model() {
     let mut models = vec![entry("acme/m0", &["low"], Some("low"), None)];
     models.extend(catalogue());
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -321,6 +327,7 @@ fn a_replacement_removing_the_selected_model_clamps() {
     let mut models = catalogue();
     models.pop();
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -334,6 +341,7 @@ fn a_replacement_removing_the_selected_model_clamps() {
     let mut models = catalogue();
     models.remove(1);
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -357,6 +365,7 @@ fn chips_follow_the_level_name_across_a_replacement() {
     models[0].levels = vec!["high".to_owned(), "low".to_owned()];
     models[1].levels = vec!["high".to_owned(), "low".to_owned()];
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -374,6 +383,7 @@ fn an_open_before_the_first_answer_preselects_the_current_model() {
     picker.open(Mode::Choose, Some(("acme/m2", Some("low"))));
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -410,6 +420,7 @@ fn page_keys_move_by_the_height_less_one_clamped() {
 fn page_keys_do_nothing_closed_empty_or_without_height() {
     let mut closed = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -422,6 +433,7 @@ fn page_keys_do_nothing_closed_empty_or_without_height() {
     // A scope matching nothing lists no rows to page over.
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -455,6 +467,7 @@ fn the_status_says_reading_until_the_first_answer() {
     );
     // A running refresh beside a catalogue shows on its own line.
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -500,6 +513,7 @@ fn frame_row_clicks_select_without_choosing() {
     models[0].roles = vec!["review".to_owned()];
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models,
             notices: Vec::new(),
             lists: Vec::new(),
@@ -536,6 +550,7 @@ fn the_first_chip_click_follows_the_roles_cell() {
     model.roles.push("review".to_owned());
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: vec![model],
             notices: Vec::new(),
             lists: Vec::new(),
@@ -555,6 +570,7 @@ fn the_first_chip_click_follows_the_roles_cell() {
 fn each_chip_click_advances_one_cell() {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: vec![entry("acme/m1", &["low", "high"], None, None)],
             notices: Vec::new(),
             lists: Vec::new(),
@@ -679,6 +695,7 @@ fn start_args_carry_the_model_exactly_with_a_level_override() {
 fn choice_is_none_while_closed_or_with_no_scoped_row() {
     let closed = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -688,6 +705,7 @@ fn choice_is_none_while_closed_or_with_no_scoped_row() {
     assert!(closed.choice(false).is_none());
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),
@@ -705,6 +723,7 @@ fn clicks_choose_at_the_row_and_chip() {
     models[0].roles = vec!["review".to_owned()];
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models,
             notices: Vec::new(),
             lists: Vec::new(),
@@ -774,6 +793,7 @@ fn an_open_checklist_starts_marked_from_the_list() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -798,6 +818,7 @@ fn toggle_mark_flips_only_the_selected_row() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -830,6 +851,7 @@ fn adopt_scoped_keeps_touched_rows_and_derives_the_rest() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -880,6 +902,7 @@ fn scope_clicks_toggle_the_mark_cell_and_select_on_any_other() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -919,6 +942,7 @@ fn toggle_mark_with_no_shown_row_changes_nothing() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -943,6 +967,7 @@ fn marks_survive_query_edits() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1034,6 +1059,7 @@ fn a_read_keeps_checklist_marks_by_reference() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1051,6 +1077,7 @@ fn a_read_keeps_checklist_marks_by_reference() {
     models.remove(1);
     models.push(entry("zeta/z9", &["low"], Some("low"), None));
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1068,12 +1095,14 @@ fn a_read_leaves_a_choose_open_without_marks() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
     };
     picker.open(Mode::Choose, None);
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1091,6 +1120,7 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
         ..ModelPicker::default()
     };
     picker.catalogue = Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1103,6 +1133,7 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
     // A refresh that briefly empties the catalogue leaves no rows, so
     // no marks either.
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models: Vec::new(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1114,6 +1145,7 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
     // The next answer marks every row from the saved list again, so
     // toggling and saving work.
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models: catalogue(),
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1289,6 +1321,7 @@ fn a_replacement_with_a_query_keeps_the_selection_on_the_shown_rows() {
     let mut models = catalogue();
     models.remove(1);
     picker.store(Ok(Catalogue {
+        installable: Vec::new(),
         models,
         notices: Vec::new(),
         lists: Vec::new(),
@@ -1332,6 +1365,7 @@ fn the_checklist_filters_every_installed_model() {
 fn open_listed(lists: Vec<crate::catalogue::ListAge>) -> ModelPicker {
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists,
@@ -1879,6 +1913,7 @@ fn the_startup_read_counts_as_owed_until_it_answers() {
     // that read's mark.
     let mut picker = ModelPicker {
         catalogue: Catalogue {
+            installable: Vec::new(),
             models: catalogue(),
             notices: Vec::new(),
             lists: Vec::new(),

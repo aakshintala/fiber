@@ -35,6 +35,7 @@ fn client_models(calls: Arc<Mutex<usize>>) -> crate::ReadModels {
             *held += 1;
         }
         Ok(Catalogue {
+            installable: Vec::new(),
             models: vec![ModelEntry {
                 reference: "zed/z1".to_owned(),
                 provider: "zed".to_owned(),

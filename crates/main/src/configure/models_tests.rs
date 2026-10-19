@@ -168,6 +168,22 @@ fn result(seam: &Seam, operation: &str, args: Value) -> Value {
     call(seam, operation, args).unwrap().unwrap()
 }
 
+#[test]
+fn hub_models_carries_installable_from_its_home() {
+    let hub = Rig::new("fiber-hub-models-installable");
+    install_data(&hub.home, "custom", "openai", &["m"], &json!({}));
+    let seam = Seam::new(hub.home.clone());
+    let catalogue = result(&seam, "models", json!({"workspace": hub.workspace}));
+    assert_eq!(
+        catalogue["installable"],
+        json!(extensions::not_installed_providers(&hub.home).unwrap())
+    );
+    let offered = catalogue["installable"].as_array().unwrap();
+    assert!(offered.contains(&json!("anthropic")));
+    assert!(!offered.contains(&json!("openai")));
+    assert!(!offered.contains(&json!("scripted")));
+}
+
 fn references(catalogue: &Value) -> Vec<&str> {
     catalogue["models"]
         .as_array()

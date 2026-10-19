@@ -390,6 +390,10 @@ fn decode_age(value: &Value) -> Option<ListAge> {
 /// anywhere fails the answer, so no partial catalogue is ever stored.
 fn decode_models(value: &Value) -> Option<Catalogue> {
     Some(Catalogue {
+        installable: match value.get("installable") {
+            None => Vec::new(),
+            Some(names) => serde_json::from_value(names.clone()).ok()?,
+        },
         models: value
             .get("models")?
             .as_array()?

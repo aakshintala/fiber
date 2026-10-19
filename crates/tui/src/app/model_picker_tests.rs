@@ -48,6 +48,7 @@ fn entry(reference: &str) -> ModelEntry {
 
 fn catalogue() -> Catalogue {
     Catalogue {
+        installable: Vec::new(),
         models: vec![entry("acme/m1")],
         notices: vec!["a cached provider is gone".to_owned()],
         lists: Vec::new(),
@@ -78,6 +79,7 @@ fn a_read_error_is_one_notice_and_keeps_the_catalogue() {
 fn catalogue_notices_are_pushed_once_per_read() {
     let mut app = home();
     let catalogue = Catalogue {
+        installable: Vec::new(),
         models: vec![entry("acme/m1")],
         notices: vec!["first".to_owned(), "second".to_owned()],
         lists: Vec::new(),
@@ -165,6 +167,7 @@ fn newest_code(app: &App) -> String {
 /// `acme/m2` with none, `zeta/z1` with one.
 fn three() -> Catalogue {
     Catalogue {
+        installable: Vec::new(),
         models: vec![
             ModelEntry {
                 reference: "acme/m1".to_owned(),
@@ -690,6 +693,7 @@ fn usage_line(
 /// Thirty models on one provider, without levels.
 fn thirty() -> Catalogue {
     Catalogue {
+        installable: Vec::new(),
         models: (0..30)
             .map(|at| {
                 let reference = format!("acme/m{at:02}");
@@ -1822,6 +1826,7 @@ fn a_suffix_named_model_is_not_chosen_by_mistake() {
     // `p/m` at `high` still names the exact reference, with the level as
     // an override.
     let catalogue = Catalogue {
+        installable: Vec::new(),
         models: vec![
             ModelEntry {
                 reference: "p/m".to_owned(),

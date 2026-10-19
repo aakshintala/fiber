@@ -742,6 +742,7 @@ fn catalogue_answers_decode_field_for_field() {
     assert_eq!(
         catalogue,
         Catalogue {
+            installable: Vec::new(),
             models: vec![
                 ModelEntry {
                     reference: "acme/m1".to_owned(),
@@ -817,6 +818,16 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
         )
         .unwrap();
     assert!(catalogue.models.is_empty());
+    assert!(catalogue.installable.is_empty());
+    let installable = hub
+        .call(
+            "models",
+            args.clone(),
+            json!({"models": [], "notices": [], "lists": [], "installable": ["openai"]}),
+            |r| r.models(Refresh::Cached),
+        )
+        .unwrap();
+    assert_eq!(installable.installable, ["openai"]);
     let catalogue = hub
         .call(
             "models",
@@ -831,6 +842,14 @@ fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
     assert_eq!(catalogue.models[0].levels, vec!["low".to_owned()]);
     // Each malformed answer is an io_failed naming models, with no partial catalogue.
     for (what, answer) in [
+        (
+            "installable not an array",
+            json!({"models": [], "notices": [], "lists": [], "installable": "openai"}),
+        ),
+        (
+            "installable not strings",
+            json!({"models": [], "notices": [], "lists": [], "installable": [1]}),
+        ),
         (
             "a model without reference",
             json!({"models": [{"provider": "a", "id": "m", "levels": [], "roles": []}],

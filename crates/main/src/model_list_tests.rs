@@ -353,7 +353,40 @@ fn no_provider_is_an_empty_catalogue() {
         &fakes::children::grouped_output,
     )
     .unwrap();
-    assert_eq!(catalogue, tui::Catalogue::default());
+    assert!(catalogue.models.is_empty());
+    assert!(catalogue.notices.is_empty());
+    assert!(catalogue.lists.is_empty());
+    assert_eq!(
+        catalogue.installable,
+        extensions::not_installed_providers(&setup.home()).unwrap()
+    );
+    assert!(catalogue.installable.iter().any(|name| name == "openai"));
+    assert!(!catalogue.installable.iter().any(|name| name == "scripted"));
+}
+
+#[test]
+fn installed_first_party_declaration_is_not_installable() {
+    let setup = Setup::new("fiber-model-list-installable");
+    setup.install_data("custom", "openai", &["m"], &json!({}));
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+    )
+    .unwrap();
+    let expected: Vec<String> = extensions::not_installed_providers(&setup.home())
+        .unwrap()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(catalogue.installable, expected);
+    assert!(!catalogue.installable.iter().any(|name| name == "openai"));
+    assert!(!catalogue.installable.iter().any(|name| name == "scripted"));
+    assert_eq!(catalogue.models[0].reference, "openai/m");
 }
 
 #[test]

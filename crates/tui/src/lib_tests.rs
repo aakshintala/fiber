@@ -2573,6 +2573,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the cached read release: {err}"));
         seen_in.lock().unwrap().push(refresh);
         Ok(crate::Catalogue {
+            installable: Vec::new(),
             models: vec![crate::ModelEntry {
                 reference: "acme/m1".to_owned(),
                 provider: "acme".to_owned(),
@@ -2693,6 +2694,7 @@ mod motion;
 /// terminal: no other frame draws `qq`.
 fn one_model() -> crate::Catalogue {
     crate::Catalogue {
+        installable: Vec::new(),
         models: vec![crate::ModelEntry {
             reference: "zz/qq".to_owned(),
             provider: "zz".to_owned(),
