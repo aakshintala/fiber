@@ -317,6 +317,52 @@ pub fn hub_fixture() -> Vec<Provider> {
     ]
 }
 
+/// The not-installed first-party provider the picker offers below the
+/// installed sections: choosing it installs it, and the row then shows
+/// the install's progress, its error or its summary (#2768). Fixture
+/// data only: the name, models and summary below are made up, like the
+/// rest of this file's catalogue.
+pub fn install_fixture() -> Provider {
+    Provider {
+        name: "databricks",
+        updated: "just now",
+        models: vec![
+            Model {
+                id: "dbrx-instruct",
+                name: "DBRX Instruct",
+                roles: vec!["main"],
+                current: false,
+                levels: vec!["low", "medium", "high"],
+                level: Some("medium"),
+                rebuild: "~90k tokens · $0.28",
+                input: Some(2.50),
+                output: Some(10.00),
+                tier: None,
+            },
+            Model {
+                id: "llama-4-maverick",
+                name: "Llama 4 Maverick",
+                roles: vec!["explorer"],
+                current: false,
+                levels: vec!["low", "medium"],
+                level: Some("low"),
+                rebuild: "~76k tokens · $0.09",
+                input: Some(0.60),
+                output: Some(1.80),
+                tier: None,
+            },
+        ],
+    }
+}
+
+/// What the picker's not-installed row shows: the provider below the
+/// installed sections, then while it installs, on failure, and installed.
+#[derive(Clone, Copy)]
+pub enum Install {
+    /// the row sits below the installed sections, marked not installed
+    Missing,
+}
+
 /// The catalogue on screen: the hub's on a remote terminal, else the
 /// local fixture.
 fn catalog(hub: bool) -> Vec<Provider> {
@@ -353,6 +399,9 @@ pub struct State {
     pub session: Option<u64>,
     /// Draw the hub's catalogue, as a remote terminal's picker does.
     pub hub: bool,
+    /// The not-installed first-party provider offered below the installed
+    /// sections; None draws the picker as before.
+    pub install: Option<Install>,
 }
 
 /// Every `--picker` case.
@@ -510,6 +559,15 @@ pub(crate) const CASES: &[Case<State>] = &[
         build: || State {
             focus: 1,
             session: Some(250_000),
+            ..base()
+        },
+    },
+    Case {
+        name: "install-missing",
+        help: "a not-installed provider below the installed ones",
+        check: "three installed providers as in `list`, then below a blank row a `databricks · not installed` row with the name in accent and the mark dim, its two models dim with no prices and no thinking chips; same panel, bar and legend.",
+        build: || State {
+            install: Some(Install::Missing),
             ..base()
         },
     },
@@ -1019,6 +1077,32 @@ fn footer(s: &State) -> Row {
     ])
 }
 
+/// The not-installed provider's rows below the installed sections: the
+/// row with the gutter and the name in accent, then its models dim with
+/// no prices and no thinking chips, since nothing installed has either.
+fn pending_rows(p: &Provider) -> Vec<Row> {
+    let mut out = vec![
+        row(vec![]),
+        row(vec![
+            sp("  ", Style::new()),
+            sp(p.name, fg(BLUE)),
+            sp(" · not installed", dim()),
+        ]),
+    ];
+    for m in &p.models {
+        let mut spans = vec![
+            sp("    ", Style::new()),
+            sp(m.id, dim()),
+            sp(" ", Style::new()),
+        ];
+        for r in &m.roles {
+            spans.push(sp(format!("[{r}] "), dim()));
+        }
+        out.push(row(spans));
+    }
+    out
+}
+
 /// The panel's body at an inner width: controls, dim provider sections with
 /// a blank row between them, and the visible models, the focused one barred.
 fn body(s: &State, inner: usize) -> Vec<Row> {
@@ -1094,6 +1178,9 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
                 }
             }
         }
+    }
+    if matches!(s.install, Some(Install::Missing)) {
+        out.extend(pending_rows(&install_fixture()));
     }
     out
 }
@@ -2457,5 +2544,97 @@ mod tests {
             }
         }
         assert_eq!(picks(&view(&for_case("hub"), 100)), 5);
+    }
+
+    #[test]
+    fn the_missing_row_sits_below_the_installed_sections() {
+        let rows = view(&for_case("install-missing"), 100);
+        let t = text(&rows);
+        assert!(t.contains("databricks"), "missing the pending provider");
+        assert!(
+            t.contains("not installed"),
+            "the pending provider is not marked"
+        );
+        // The row sits below the installed providers: past the last section.
+        let last = t.find("gemini-3-lite").unwrap();
+        assert!(
+            t[last..].contains("databricks"),
+            "the pending row is not below the installed sections"
+        );
+        // Its models draw dim with no prices and no thinking chips.
+        for id in ["dbrx-instruct", "llama-4-maverick"] {
+            assert!(t.contains(id), "missing pending model {id}");
+        }
+        let pending = t.find("databricks · not installed").unwrap();
+        assert!(
+            !t[pending..].contains("thinking"),
+            "the pending models grow chips before anything installs"
+        );
+        assert!(
+            !rows
+                .iter()
+                .filter(|r| plain(r).contains("dbrx-instruct"))
+                .any(|r| r.spans.iter().any(|s| s.content.contains("/M"))),
+            "the pending row prices what is not installed"
+        );
+        // The pending rows take no pick: the installed twelve keep theirs.
+        assert_eq!(picks(&rows), 12);
+        // Nothing installs, runs or fails here.
+        for word in [
+            "installing",
+            "\u{2713} installed",
+            "\u{2717}",
+            "needs a credential",
+        ] {
+            assert!(!t.contains(word), "missing case draws {word}");
+        }
+    }
+
+    #[test]
+    fn the_missing_row_names_the_provider_in_accent_with_a_dim_mark() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::Modifier;
+        let rows = view(&for_case("install-missing"), 100);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, rows.len() as u16));
+        for (y, r) in rows.iter().enumerate() {
+            crate::paint(&mut buf, 0, y as u16, 100, r);
+        }
+        let lines: Vec<String> = rows.iter().map(plain).collect();
+        let y = lines
+            .iter()
+            .position(|l| l.contains("databricks") && l.contains("not installed"))
+            .unwrap() as u16;
+        let line = &lines[y as usize];
+        // The name reads in the accent colour; the mark reads dim.
+        let name = line.find("databricks").unwrap();
+        let col = line[..name].chars().count();
+        assert_eq!(buf[(col as u16, y)].fg, BLUE, "the name is not accent");
+        assert!(
+            !buf[(col as u16, y)].modifier.contains(Modifier::DIM),
+            "the name went dim"
+        );
+        let mark = line.find("not installed").unwrap();
+        let mcol = line[..mark].chars().count();
+        assert!(
+            buf[(mcol as u16, y)].modifier.contains(Modifier::DIM),
+            "the mark is not dim"
+        );
+        // The pending models read dim throughout, never accent.
+        let y2 = lines
+            .iter()
+            .position(|l| l.contains("dbrx-instruct"))
+            .unwrap() as u16;
+        let start = lines[y2 as usize][..lines[y2 as usize].find("dbrx-instruct").unwrap()]
+            .chars()
+            .count();
+        for i in 0.."dbrx-instruct".len() {
+            let cell = &buf[(start as u16 + i as u16, y2)];
+            assert!(
+                cell.modifier.contains(Modifier::DIM),
+                "pending model cell {i} is not dim"
+            );
+            assert_ne!(cell.fg, BLUE, "pending model cell {i} takes accent");
+        }
     }
 }
