@@ -3957,11 +3957,12 @@ fn the_idle_delay_while_waiting_leaves_the_request_pending_again() {
         let mut looped = looped;
         done.send(looped.turn().unwrap()).unwrap();
     });
-    assert!(
-        clock.await_parked(deadline, support::DEADLINE),
-        "the re-raised request's wait parks until the idle deadline"
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        std::time::Duration::from_secs(60),
+        &Deadline::after(support::DEADLINE),
     );
-    clock.advance(std::time::Duration::from_secs(60));
     inbox.send(Delivery::Cancelled).unwrap();
     let outcome = Deadline::after(support::DEADLINE)
         .recv(&finished)

@@ -1585,15 +1585,12 @@ fn inner_deltas_are_paced_on_the_injected_clock_and_flushed_under_the_inner_acti
     release_first.send(()).unwrap();
     deadline.recv_or_fail(&holding, "the inner stream holds b");
     let interval = std::time::Duration::from_millis(100);
-    assert!(
-        session.clock.await_thread_parked(
-            thread,
-            Some(session.clock.now() + interval),
-            std::time::Duration::from_secs(2)
-        ),
-        "inner delta waits on its clock interval"
+    session.clock.advance_when_parked(
+        Some(session.clock.now() + interval),
+        Some(thread),
+        interval,
+        &fakes::Deadline::after(std::time::Duration::from_secs(2)),
     );
-    session.clock.advance(interval);
     let b = tap.wait_for_delta("b");
     assert_eq!(b.action_id, a.action_id);
     release_last.send(()).unwrap();
