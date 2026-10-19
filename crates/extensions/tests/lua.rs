@@ -377,6 +377,7 @@ fn a_looping_provider_load_stops_at_entry_deadline_and_keeps_commands() {
     let asked = clock.now();
     let provider = start_provider(&ext);
     Deadline::after(WAIT).recv_or_fail(&entered, "provider entered its looping file");
+    assert!(parked_at(&clock, asked + LOAD + GRACE, 1));
     clock.advance_when_parked(
         Some(asked + LOAD + GRACE),
         None,
@@ -548,6 +549,10 @@ fn spinning_callback_stops_at_its_timeout(command: &'static str, body: &str) {
         .recv(&went)
         .expect("waited for the callback to pass its clock check");
     let parked_at = asked + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(parked_at, WAIT),
+        "waited for {command} to park at its deadline"
+    );
     // The interrupt stops the loop at the deadline.
     clock.advance_when_parked(
         Some(parked_at),
@@ -1172,6 +1177,10 @@ fn an_entry_script_past_its_deadline_stops_the_extension_with_its_timeout() {
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the entry script to pass its clock check");
+    assert!(
+        clock.await_parked(abandon, WAIT),
+        "waited for the caller to park until the load grace"
+    );
     // The hook's deadline is the 2 second load bound, before the grace.
     clock.advance_when_parked(Some(abandon), None, LOAD, &Deadline::after(WAIT));
     let err = Deadline::after(WAIT)
