@@ -164,8 +164,7 @@ impl App {
     }
 
     /// The workspace a configuration view reads: the one in use, or the
-    /// hub-global parent with no local workspace, so the hub sees the same
-    /// workspace string as today's empty-path read. `None` when the
+    /// hub-global parent with no local workspace. `None` when the
     /// hub-global read fails (after its notice) or a local terminal names
     /// none.
     fn view_workspace(&mut self) -> Option<PathBuf> {
