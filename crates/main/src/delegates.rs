@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::UNIX_EPOCH;
 
 use contract::SessionId;
@@ -63,6 +63,10 @@ pub(crate) struct Delegates {
     last_seq: jobs::LastSeq,
     /// Renders the quota section of `delegate_models` on every call.
     quota: Option<ModelQuotaRead>,
+    /// The last list `retain` was given: a start whose extension it lacks
+    /// began after a removal reload, so it ends stopped. `None` until
+    /// the first `retain`.
+    loaded: Mutex<Option<Vec<String>>>,
 }
 
 impl Delegates {
@@ -105,6 +109,7 @@ impl Delegates {
             steer,
             last_seq,
             quota: None,
+            loaded: Mutex::new(None),
         }
     }
 
@@ -136,7 +141,56 @@ impl Delegates {
             watch: Arc::clone(&self.watch),
         }
     }
+}
 
+impl contract::extension::HostDelegate for Delegates {
+    /// The session's delegate start for `host.delegate`: the same
+    /// `start_extension` the model's `delegate_spawn` runs, so both paths
+    /// share one registry, one depth and one start gate. A start whose
+    /// extension the last retained list lacks began after a removal
+    /// reload, so it ends stopped, while the caller still gets its id.
+    /// `retain` stores its list before it stops anything, and `cancel`
+    /// counts the stops that ended a job.
+    ///
+    /// `loaded` is held alone: `retain` releases it before
+    /// `retain_extensions`, and `start` reads it after `start_extension`
+    /// returns, so no code takes the registry's start gate while holding
+    /// it (`docs/architecture.md`, "Lock order").
+    fn start(
+        &self,
+        extension: &str,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+        bind: &mut dyn FnMut(&contract::JobId),
+    ) -> Result<contract::JobId, contract::shapes::Failure> {
+        let id = self
+            .tool()
+            .start_extension(extension, arguments, bind)
+            .map_err(|error| contract::shapes::Failure::from(&error))?;
+        let listed = self
+            .loaded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_none_or(|loaded| loaded.iter().any(|name| name == extension));
+        if !listed {
+            contract::jobs::Jobs::stop(self.jobs.as_ref(), &id);
+        }
+        Ok(id)
+    }
+
+    fn retain(&self, loaded: &[String]) -> usize {
+        *self.loaded.lock().unwrap_or_else(PoisonError::into_inner) = Some(loaded.to_vec());
+        self.jobs.retain_extensions(loaded)
+    }
+
+    fn cancel(&self, jobs: &[contract::JobId]) -> usize {
+        jobs.iter()
+            .filter(|id| contract::jobs::Jobs::stop(self.jobs.as_ref(), id))
+            .count()
+    }
+}
+
+impl Delegates {
     /// The `delegate_message` tool this session declares: steers a running
     /// delegate at its next step boundary, or resumes a finished one. It
     /// shares the registry, launch, watch and depth `tool()` hands

@@ -55,11 +55,38 @@ impl contract::tool::Tool for Named {
     }
 }
 
+/// Records the loaded sets `installed` hands it: `retain` is the only
+/// call a reload reaches on the delegate service.
+struct RecordingDelegate {
+    retains: Mutex<Vec<Vec<String>>>,
+}
+
+impl contract::extension::HostDelegate for RecordingDelegate {
+    fn start(
+        &self,
+        _: &str,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &mut dyn FnMut(&contract::JobId),
+    ) -> Result<contract::JobId, contract::shapes::Failure> {
+        panic!("unexpected delegate start")
+    }
+
+    fn retain(&self, loaded: &[String]) -> usize {
+        self.retains.lock().unwrap().push(loaded.to_vec());
+        0
+    }
+
+    fn cancel(&self, _: &[contract::JobId]) -> usize {
+        panic!("unexpected delegate cancel")
+    }
+}
+
 struct Fixture {
     rig: Rig,
     state: Arc<State>,
     replacements: Arc<Mutex<Vec<doors::Replacement>>>,
     declared: Arc<Mutex<std::collections::BTreeMap<String, contract::events::ToolInfo>>>,
+    delegate: Arc<RecordingDelegate>,
 }
 
 impl Fixture {
@@ -117,6 +144,9 @@ impl Fixture {
             )
             .unwrap(),
         );
+        let delegate = Arc::new(RecordingDelegate {
+            retains: Mutex::new(Vec::new()),
+        });
         let replacements = Arc::new(Mutex::new(Vec::new()));
         let seen = replacements.clone();
         let declared = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
@@ -148,6 +178,7 @@ impl Fixture {
             replace: Arc::new(move |replacement| seen.lock().unwrap().push(replacement)),
             drive: Arc::new(NoDrive),
             model: Arc::new(NoDrive),
+            delegate: Arc::clone(&delegate) as Arc<dyn contract::extension::HostDelegate>,
             attended: Arc::new(|| true),
             answerable: true,
             log,
@@ -160,6 +191,7 @@ impl Fixture {
             state,
             replacements,
             declared,
+            delegate,
         }
     }
 
@@ -849,4 +881,18 @@ fn unwritten_keeps_only_the_startup_notices_the_session_did_not_write() {
         &current,
     );
     assert_eq!(kept, vec![first, second]);
+}
+
+/// `installed` hands the reloaded set to the delegate service: the
+/// recording service's `retain` gets the new set's loaded names.
+#[test]
+fn installed_retains_the_reloaded_set_on_the_delegate_service() {
+    let fixture = Fixture::new();
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    assert_eq!(
+        fixture.delegate.retains.lock().unwrap().clone(),
+        vec![vec!["demo".to_owned(), "judge".to_owned()]],
+        "retain runs once with the reloaded set's names"
+    );
 }

@@ -16,6 +16,7 @@
     reason = "test helpers; a failure is the test's; a live test prints its outcome"
 )]
 
+mod extension_harness;
 mod support;
 
 use std::fs;
@@ -26,6 +27,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use extension_harness::{send, until_session, until_session_close};
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{Deadline, KillGroup, SessionGuard, function_call};
@@ -3759,4 +3761,112 @@ fn a_role_naming_a_missing_label_fails_the_spawn_with_credential_missing() {
     );
     assert!(lines.iter().all(|line| line["kind"] != "delegate_started"));
     assert!(child.requests().is_empty());
+}
+
+/// The probe extension: its command calls `host.delegate` with an unknown
+/// key under `pcall` and writes the raised code to its data directory.
+const PROBE: &str = "fiber.command(\"probe\", { timeout = 8000, run = function()\n\
+  local ok, err = pcall(host.delegate, { description = \"scan\", bogus = true }, { timeout = 5000, run = function() end })\n\
+  local code = ok and \"started\" or err.code\n\
+  host.fs.write(host.data_dir(\"machine\") .. \"/code\", code)\n\
+  host.status(code)\n\
+end })\n";
+
+/// The code the probe wrote, once its command has run: the one directory
+/// under `data/` is the probe's, whatever the slug rule spells it.
+fn probe_code(setup: &support::Setup) -> Option<String> {
+    let data = setup.home().join("data");
+    let slug = fs::read_dir(&data)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .find(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))?
+        .file_name();
+    fs::read_to_string(data.join(slug).join("code")).ok()
+}
+
+/// `host.delegate` reaches the session's service in a new session and
+/// again in a resumed one: an unknown key reads `invalid_arguments`, not
+/// `closing`, and no child starts.
+#[test]
+fn an_extension_command_reaches_host_delegate_in_a_new_and_a_resumed_session() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let server = ProviderServer::start([support::hello(), support::hello()]).unwrap();
+    setup.provider(&server);
+    setup.lua("probe", PROBE);
+    let id = doors::mint("s_");
+    // `--prompt` runs a turn, so the session counts as prompted and its
+    // directory survives the close for the resume; the probe still runs
+    // through the driver, beside the turn. A resume takes no prompt: only
+    // a delegate resumes with one.
+    for resume in [false, true] {
+        let mut args = vec![];
+        if resume {
+            args.push("--resume");
+        } else {
+            args.extend(["--prompt", "say hi"]);
+        }
+        let mut running = setup.start_session(&id, &args);
+        // A prompted session prints its first line before its socket is
+        // bound, so the connect below would miss it: wait for the socket
+        // and the load together, keeping every line for the drain `wait`
+        // collects at the end.
+        let mut loaded = false;
+        for _ in 0..400 {
+            if setup.socket(&id).exists() && loaded {
+                break;
+            }
+            if let Ok(line) =
+                fakes::Deadline::after(Duration::from_millis(100)).recv(&running.lines)
+            {
+                let value: Value = serde_json::from_str(&line).unwrap();
+                loaded = loaded || value["kind"] == "extensions_loaded";
+                running.first.push(line);
+            }
+        }
+        assert!(loaded, "the session loads its extensions");
+        let client = running.connect(&setup.socket(&id));
+        send(
+            &client,
+            r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+        );
+        send(
+            &client,
+            r#"{"id":"c_probe","command":"command","args":{"name":"probe"}}"#,
+        );
+        // The status arrives after the write in the command's run, so the
+        // file it names reads the raised code with no poll.
+        let _seen = until_session(&client, "the probe status", |line| {
+            line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/probe"
+        });
+        let code = probe_code(&setup);
+        assert_eq!(code.as_deref(), Some("invalid_arguments"));
+        send(&client, r#"{"id":"c_close","command":"close"}"#);
+        let _tail = until_session_close(&client);
+        drop(client);
+        let (status, out, stderr) = running.wait();
+        if code.is_none() {
+            let kinds: Vec<_> = out
+                .iter()
+                .map(|line| line["kind"].as_str().unwrap_or("?"))
+                .collect();
+            eprintln!("KINDS: {kinds:?}\nSTDERR: {stderr}");
+        }
+        assert!(status.success(), "stderr: {stderr}");
+        assert!(
+            out.iter()
+                .all(|line| line["kind"] != "delegate_started" && line["kind"] != "job_started"),
+            "no child starts"
+        );
+        let data = setup.home().join("data");
+        for entry in fs::read_dir(&data).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                fs::remove_file(entry.path().join("code")).unwrap();
+            }
+        }
+    }
+    // The new session's prompt turn, and nothing else: the resume runs no
+    // turn, and no delegate child ran one of its own against the server.
+    assert_eq!(server.requests().len(), 1);
 }
