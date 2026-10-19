@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Range, RangeInclusive};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use contract::events::{TurnCompleted, TurnOutcome, UsageRecorded};
 use contract::{Envelope, GenerationId, Seq};
@@ -974,6 +974,12 @@ impl Pages {
         self.recount();
     }
 
+    /// The attached screen drains these after each render for the one
+    /// fallback notice per extension and slot.
+    pub(crate) fn take_failures(&mut self) -> Vec<(String, crate::ext::Failure)> {
+        self.ext.cache.take_failures()
+    }
+
     /// Whether the screen reader drops every style from the returned
     /// spans. No production caller yet: the screen-reader ticket wires
     /// it, and the PR body says so.
@@ -1594,7 +1600,7 @@ impl Pages {
         let seam = if self.part(page).is_none() {
             crate::ext::Ext {
                 handle: self.ext.handle,
-                cache: Rc::new(crate::ext::cache::Cache::default()),
+                cache: Arc::new(crate::ext::cache::Cache::default()),
                 flat: self.ext.flat,
             }
             .bind(page)

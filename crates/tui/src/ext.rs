@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -28,8 +29,9 @@ pub(crate) mod spans;
 pub(crate) struct Bound {
     /// The installed renderer's slot on this thread, if any.
     pub(crate) handle: Handle,
-    /// The page's cache.
-    pub(crate) cache: Rc<Cache>,
+    /// The page's cache, shared with the paging window so entries drop
+    /// with their page.
+    pub(crate) cache: Arc<Cache>,
     /// The page these rows draw on.
     pub(crate) page: usize,
     /// The screen reader drops every style from the returned spans.
@@ -45,7 +47,7 @@ pub(crate) struct Ext {
     /// The installed renderer's slot on this thread, if any.
     pub(crate) handle: Handle,
     /// The pages' caches, one entry set per page.
-    pub(crate) cache: Rc<Cache>,
+    pub(crate) cache: Arc<Cache>,
     /// The screen reader drops every style from the returned spans.
     pub(crate) flat: bool,
 }
@@ -55,7 +57,7 @@ impl Ext {
     pub(crate) fn bind(&self, page: usize) -> Bound {
         Bound {
             handle: self.handle,
-            cache: Rc::clone(&self.cache),
+            cache: Arc::clone(&self.cache),
             page,
             flat: self.flat,
         }

@@ -4,7 +4,7 @@
 //! `Vec<Row>`; a plain push is a row that starts a line of its own.
 
 use std::ops::{Deref, Range};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use contract::Seq;
 use ratatui::style::Style;
@@ -117,11 +117,11 @@ impl Rows {
         input: &Input<'_>,
         width: u16,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
-    ) -> Option<Rc<Vec<FittedLine>>> {
+    ) -> Option<Arc<Vec<FittedLine>>> {
         let seam = self.seam.as_ref()?;
         let renderer = seam.handle.get()?;
         let page = seam.page;
-        let cache = Rc::clone(&seam.cache);
+        let cache = Arc::clone(&seam.cache);
         cache.lines(page, slot, input, width, || {
             renderer.render(slot, input, width, builtin)
         })

@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use contract::events::{CallStatus, FileChange};
 use ratatui::style::Modifier;
@@ -1604,7 +1605,7 @@ fn seam(fake: &Rc<Fake>, flat: bool) -> Bound {
     handle.set(fake.clone());
     Bound {
         handle,
-        cache: Rc::new(Cache::default()),
+        cache: Arc::new(Cache::default()),
         page: 0,
         flat,
     }

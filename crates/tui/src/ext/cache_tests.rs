@@ -2,7 +2,7 @@
 //! drops and the call counter.
 
 use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use super::Cache;
 use crate::ext::{Failure, Input, LedgerRow, RawSpan, Status};
@@ -293,7 +293,7 @@ fn the_counter_matches_the_renderer_calls() {
     crate::work::take();
     let cache = Cache::default();
     let calls = Cell::new(0usize);
-    let shared = Rc::new(cache);
+    let shared = Arc::new(cache);
     let arguments = serde_json::json!({"command": "ls"});
     let first = input("shell", "first", &arguments);
     let second = input("shell", "second", &arguments);

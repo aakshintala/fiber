@@ -8,9 +8,8 @@
 //! item's input, so a width change calls nothing for a failed input.
 //! Entries live with the paging window and are dropped with their pages.
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::spans::{self, FittedLine};
 use super::{Failure, Input, RawSpan};
@@ -23,24 +22,45 @@ type FailKey = (usize, String, u64);
 
 /// A renderer's cached lines, one entry per page, slot, input and width.
 /// Failures are cached per page, slot and input, and listed once for the
-/// fallback notice.
+/// fallback notice. The cache crosses threads behind `Arc` (the paging
+/// window shares it with the rows bound to each page), so it holds only
+/// `Send` data: keys, spans and failures. No guard crosses a renderer
+/// call, so a renderer that calls back into the cache never deadlocks
+/// here the way a held `RefCell` borrow would panic.
 #[derive(Debug, Default)]
 pub(crate) struct Cache {
+    inner: Mutex<Inner>,
+}
+
+/// What [`Cache`] locks: successful results by page, slot, input hash
+/// and width, failed inputs by page, slot and input hash, and failures
+/// not yet reported, each with its page and slot.
+#[derive(Debug, Default)]
+struct Inner {
     /// Successful results, by page, slot, input hash and width.
-    entries: RefCell<HashMap<EntryKey, Rc<Vec<FittedLine>>>>,
+    entries: HashMap<EntryKey, Arc<Vec<FittedLine>>>,
     /// Failed inputs, by page, slot and input hash.
-    failed: RefCell<HashSet<FailKey>>,
+    failed: HashSet<FailKey>,
     /// Failures not yet reported, each with its page and slot.
-    pending: RefCell<Vec<(usize, String, Failure)>>,
+    pending: Vec<(usize, String, Failure)>,
 }
 
 impl Cache {
+    /// The lock, with a poisoned one taken as is: only a panicking
+    /// thread poisons it, and a panic aborts the process, so no
+    /// poisoned lock is ever observed here.
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
     /// The renderer's lines for `input` at `width`: a hit returns the
     /// stored lines; a miss calls `call` once and validates what it
     /// returns before storing or drawing any of it. An error or a wrong
     /// shape stores the failure and returns none, so the item falls back
-    /// to its built-in row. No borrow crosses the renderer call, so a
-    /// renderer that calls back into the cache never panics here.
+    /// to its built-in row. No lock crosses the renderer call, so a
+    /// renderer that calls back into the cache never deadlocks.
     pub(crate) fn lines(
         &self,
         page: usize,
@@ -48,19 +68,15 @@ impl Cache {
         input: &Input<'_>,
         width: u16,
         call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>,
-    ) -> Option<Rc<Vec<FittedLine>>> {
+    ) -> Option<Arc<Vec<FittedLine>>> {
         let hash = match input {
             Input::LedgerRow(row) => row.key(slot),
         };
-        if self
-            .failed
-            .borrow()
-            .contains(&(page, slot.to_owned(), hash))
-        {
+        if self.lock().failed.contains(&(page, slot.to_owned(), hash)) {
             return None;
         }
         let entry = (page, slot.to_owned(), hash, width);
-        if let Some(hit) = self.entries.borrow().get(&entry).cloned() {
+        if let Some(hit) = self.lock().entries.get(&entry).cloned() {
             return Some(hit);
         }
         crate::work::add(|work| work.renderer_calls += 1);
@@ -71,8 +87,8 @@ impl Cache {
         match rendered {
             Ok(lines) => match spans::fit(&lines, width, flat) {
                 Ok(fitted) => {
-                    let fitted = Rc::new(fitted);
-                    self.entries.borrow_mut().insert(entry, Rc::clone(&fitted));
+                    let fitted = Arc::new(fitted);
+                    self.lock().entries.insert(entry, Arc::clone(&fitted));
                     Some(fitted)
                 }
                 Err(shape) => {
@@ -97,39 +113,37 @@ impl Cache {
 
     /// Records `failure` against the input and lists it for the notice.
     fn fail(&self, page: usize, slot: &str, hash: u64, failure: Failure) {
-        self.failed
-            .borrow_mut()
-            .insert((page, slot.to_owned(), hash));
-        self.pending
-            .borrow_mut()
-            .push((page, slot.to_owned(), failure));
+        let mut inner = self.lock();
+        inner.failed.insert((page, slot.to_owned(), hash));
+        inner.pending.push((page, slot.to_owned(), failure));
     }
 
     /// Drops the page's entries and failures.
     pub(crate) fn drop_page(&self, page: usize) {
-        self.entries.borrow_mut().retain(|key, _| key.0 != page);
-        self.failed.borrow_mut().retain(|key| key.0 != page);
-        self.pending.borrow_mut().retain(|(at, _, _)| *at != page);
+        let mut inner = self.lock();
+        inner.entries.retain(|key, _| key.0 != page);
+        inner.failed.retain(|key| key.0 != page);
+        inner.pending.retain(|(at, _, _)| *at != page);
     }
 
     /// Drops every successful entry at every width and keeps the
     /// failures: a changed page width changes every derived width.
     pub(crate) fn drop_entries(&self) {
-        self.entries.borrow_mut().clear();
+        self.lock().entries.clear();
     }
 
     /// Drops every entry, failure and listed failure.
     pub(crate) fn clear(&self) {
-        self.entries.borrow_mut().clear();
-        self.failed.borrow_mut().clear();
-        self.pending.borrow_mut().clear();
+        let mut inner = self.lock();
+        inner.entries.clear();
+        inner.failed.clear();
+        inner.pending.clear();
     }
 
     /// The failures not yet reported, each with its slot, emptied.
     pub(crate) fn take_failures(&self) -> Vec<(String, Failure)> {
-        self.pending
-            .borrow_mut()
-            .drain(..)
+        std::mem::take(&mut self.lock().pending)
+            .into_iter()
             .map(|(_, slot, failure)| (slot, failure))
             .collect()
     }
