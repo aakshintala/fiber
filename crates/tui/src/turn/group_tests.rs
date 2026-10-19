@@ -2077,6 +2077,66 @@ fn a_wide_gutter_shifts_extension_links_by_its_own_cells() {
     );
 }
 
+/// At a width equal to the gutter the row keeps the fitted line: with
+/// `<`, width 7 at step 100000's 7-cell gutter takes the gutter-plus-line
+/// branch, and the link shifts by seven; `<=` would cut the line away.
+/// Through a draw the gutter leaves the line nothing there, so the row is
+/// the gutter only with no links, while width 8 keeps the link (#2785).
+#[test]
+fn the_gutter_equal_width_keeps_the_fitted_line_and_its_link() {
+    let line = crate::ext::spans::FittedLine {
+        line: ratatui::text::Line::from(vec![ratatui::text::Span::raw("ab")]),
+        links: vec![(0..2, "https://example.com".to_owned())],
+        pad: 0,
+    };
+    let (row, text) = super::gutter_row("100000 ".to_owned(), 7, &line, 7);
+    assert_eq!(row.to_string(), "100000 ab");
+    assert_eq!(text.tail, 0);
+    assert_eq!(text.links, vec![(7..9, "https://example.com".to_owned())]);
+    // The other side of the boundary keeps the line too.
+    let (row, text) = super::gutter_row("100000 ".to_owned(), 7, &line, 8);
+    assert_eq!(row.to_string(), "100000 ab");
+    assert_eq!(text.links, vec![(7..9, "https://example.com".to_owned())]);
+    // Through a draw at width 7 the gutter leaves the line nothing, so
+    // the row is the gutter only with no links; at width 8 the link
+    // stays, shifted by seven.
+    let group = Group {
+        sections: vec![Section {
+            step: 100000,
+            calls: vec![read_call(1, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(vec![vec![
+            RawSpan {
+                text: "hel".to_owned(),
+                link: Some("https://example.com".to_owned()),
+                ..RawSpan::default()
+            },
+            raw("lo"),
+        ]])),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 7, Some(&bound));
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].0.to_string(), "100000 ");
+    assert_eq!(cells(&rows[1].0), 7);
+    assert_eq!(texts[1].tail, 0);
+    assert!(texts[1].links.is_empty());
+    let (rows, texts) = draw(&group, 8, Some(&bound));
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].0.to_string(), "100000 h");
+    assert_eq!(cells(&rows[1].0), 8);
+    assert_eq!(
+        texts[1].links,
+        vec![(7..8, "https://example.com".to_owned())]
+    );
+}
+
 /// An error, a wrong shape, and a refused link each fall back to the
 /// built-in row, and the failure is cached: two draws call the fake
 /// once per row.
