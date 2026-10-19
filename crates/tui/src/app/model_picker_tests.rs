@@ -4138,3 +4138,193 @@ fn a_mark_cell_click_joins_the_toggled_set() {
     assert!(!app.model_picker_open());
     quiet(&hub.watcher);
 }
+
+/// Marks the attached session busy, as a running turn does.
+fn busy_mid_turn(app: &mut App) {
+    app.phase = super::super::Phase::Attached {
+        session: contract::SessionId(SESSION.to_owned()),
+        busy: true,
+    };
+}
+
+/// Folds the attached session's pass with a running turn, as a raise's
+/// pass does mid-turn: the fold's content never matters here, only its
+/// busyness.
+fn folding_mid_turn(app: &mut App) {
+    app.overlay = super::super::Overlay::Folding {
+        session: contract::SessionId(SESSION.to_owned()),
+        fold: Box::new(crate::window::Pages::new(80)),
+        busy: Some(true),
+        held: false,
+        landing: false,
+    };
+}
+
+/// Whether any notice row carries `code`.
+fn has_code(app: &App, code: &str) -> bool {
+    app.notices().into_iter().any(|line| {
+        matches!(line, crate::app::NoticeLine::Notice { code: found, .. } if found == code)
+    })
+}
+
+#[test]
+fn a_send_while_busy_pushes_the_pending_notice() {
+    let (mut app, seam) = choosing_app();
+    busy_mid_turn(&mut app);
+    open(&mut app);
+    let line = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(line["command"], json!("model"));
+    // The notice names the stashed choice, not the chips: the model with
+    // its untouched level rides along.
+    assert_eq!(newest_code(&app), "switch_pending");
+    assert_eq!(
+        app.notice(),
+        Some("acme/m1 with high applies when this turn ends")
+    );
+    // The acceptance writes the choice and adds no notice of its own:
+    // the pending one already said it would apply.
+    let id = line["id"].as_str().expect("an id").to_owned();
+    let notices = app.notices().len();
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(app.notices().len(), notices);
+    assert_eq!(seam.writes().len(), 1);
+}
+
+#[test]
+fn a_send_while_busy_in_a_folded_pass_pushes_the_pending_notice() {
+    let (mut app, _) = choosing_app();
+    folding_mid_turn(&mut app);
+    open(&mut app);
+    let line = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(line["command"], json!("model"));
+    assert_eq!(newest_code(&app), "switch_pending");
+    assert_eq!(
+        app.notice(),
+        Some("acme/m1 with high applies when this turn ends")
+    );
+}
+
+#[test]
+fn an_idle_send_is_silent() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    let line = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(line["command"], json!("model"));
+    assert!(
+        app.notices().is_empty(),
+        "idle sends stay silent: {:?}",
+        app.notices()
+    );
+}
+
+#[test]
+fn an_accept_while_busy_adds_no_notice() {
+    let (mut app, _) = choosing_app();
+    busy_mid_turn(&mut app);
+    open(&mut app);
+    let line = sent(app.on_key(Key::Enter, now()));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    assert_eq!(newest_code(&app), "switch_pending");
+    app.on_line(accepted(SESSION, &id));
+    // Only the pending notice stands: the acceptance is silent.
+    assert_eq!(newest_code(&app), "switch_pending");
+    assert_eq!(
+        app.notice(),
+        Some("acme/m1 with high applies when this turn ends")
+    );
+}
+
+#[test]
+fn an_idle_acceptance_writes_with_no_notice() {
+    let (mut app, seam) = choosing_app();
+    open(&mut app);
+    let line = sent(app.on_key(Key::Enter, now()));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(seam.writes().len(), 1);
+    assert!(
+        app.notices().is_empty(),
+        "idle choices write with no notice: {:?}",
+        app.notices()
+    );
+}
+
+#[test]
+fn a_rejection_after_acceptance_pushes_without_replacing() {
+    let (mut app, _) = choosing_app();
+    busy_mid_turn(&mut app);
+    open(&mut app);
+    let line = sent(app.on_key(Key::Enter, now()));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    // The acceptance drains the stash; the pending notice stands as the
+    // record of the applied choice.
+    app.on_line(accepted(SESSION, &id));
+    // A late rejection for the drained id is an ordinary one: it pushes
+    // beside the standing notice, replacing nothing.
+    app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
+    assert_eq!(newest_code(&app), "credential_missing");
+    assert_eq!(app.notice(), Some("no key."));
+    assert!(has_code(&app, "switch_pending"));
+}
+
+#[test]
+fn a_rejection_replaces_the_pending_notice() {
+    let (mut app, _) = choosing_app();
+    busy_mid_turn(&mut app);
+    open(&mut app);
+    let line = sent(app.on_key(Key::Enter, now()));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    assert_eq!(
+        app.notice(),
+        Some("acme/m1 with high applies when this turn ends")
+    );
+    app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
+    // The rejection takes the pending notice's place: its code and
+    // message, with no `switch_pending` row left.
+    assert_eq!(newest_code(&app), "credential_missing");
+    assert_eq!(app.notice(), Some("no key."));
+    assert!(!has_code(&app, "switch_pending"));
+}
+
+#[test]
+fn a_duplicate_rejection_mid_turn_is_silent_and_drops_the_writes() {
+    let (mut app, seam) = choosing_app();
+    busy_mid_turn(&mut app);
+    open(&mut app);
+    // Session-only, so the wait names the row and no write waits.
+    let line = sent(ctrl_s(&mut app));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    assert_eq!(newest_code(&app), "switch_pending");
+    let notices = app.notices().len();
+    // A resent copy the session already holds closes with no notice of
+    // its own; the first send is still in flight, so its pending notice
+    // stands.
+    app.on_line(refused(SESSION, &id, "duplicate_command", "twice."));
+    assert_eq!(app.notices().len(), notices);
+    assert_eq!(newest_code(&app), "switch_pending");
+    assert!(!app.model_picker.awaiting.contains_key(&id));
+    // A later acceptance carrying the dropped id writes nothing.
+    app.on_line(accepted(SESSION, &id));
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn a_rejection_after_leaving_drops_the_stash_without_a_notice() {
+    let (mut app, _) = choosing_app();
+    busy_mid_turn(&mut app);
+    open(&mut app);
+    // Session-only, so leaving drops its whole wait.
+    let line = sent(ctrl_s(&mut app));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    assert_eq!(newest_code(&app), "switch_pending");
+    app.leave_session(Some(contract::SessionId(SESSION.to_owned())));
+    // The late rejection for the dropped choice is neither written nor
+    // notified: its pending notice goes with it, since the choice can
+    // never apply.
+    app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
+    assert!(
+        app.notices().is_empty(),
+        "a dropped choice stays silent: {:?}",
+        app.notices()
+    );
+}
