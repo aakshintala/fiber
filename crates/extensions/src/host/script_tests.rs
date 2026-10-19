@@ -177,7 +177,10 @@ fn wait_hang_matched_ignores_other_entries_until_its_own_matches() {
     // no wall-clock timing fixes this order.
     script.hang_matched(2, &json!({"program": "other"}), FakeClock::new().now());
     assert!(
-        matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        matches!(
+            Deadline::after(Duration::from_millis(200)).recv(&done_rx),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
         "waiting for entry 1 ignores a match on entry 2"
     );
     script.hang_matched(1, &json!({"program": "sh"}), FakeClock::new().now());
