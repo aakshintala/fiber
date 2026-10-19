@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -23,7 +22,6 @@ use super::declared::{RepoItem, declared_items};
 use super::store::{CopyHold, Decision, Fetch, Store};
 use crate::Error;
 use crate::git::short_name;
-use crate::install::io as io_error;
 
 /// The repository extensions a session loads, the notices choosing them
 /// raised, and the holds that keep their copies for the session's life.
@@ -157,33 +155,19 @@ impl RepositorySet {
     /// home goes, or under it, leaves out this copy's dependencies with one
     /// notice, while the copy itself still loads. A damaged dependency
     /// directory gets one notice with the damage's text.
-    // A non-`NotFound` stat error on the home or the root is unreachable
-    // after a successful pin, so no test kills a mutant of that arm:
-    // every such state (unreadable parents, a link or file in a parent,
-    // a non-directory ancestor) already fails the pin path's own checks
-    // (`finished`/`check_marker` under `pinned/.lock`), and
-    // `try_ensure_copy` errors before the set ever reads the copy. The
-    // reachable cases stay tested: a missing root skips quietly
-    // (`a_missing_dependency_root_skips_quietly`), a file or link there
-    // reports (`a_file_where_the_dependency_root_goes_...`).
-    #[cfg_attr(false, mutants::skip)]
     fn dependencies(&mut self, item: &RepoItem, copy: &Path) {
         let depends = copy.join(".fiber-depends");
         let root = config::extensions_dir(&depends);
         for path in [&depends, &root] {
             match fs::symlink_metadata(path) {
                 Ok(meta) if meta.file_type().is_dir() => {}
-                // A missing home holds no dependencies; anything else in
-                // its place leaves them out with one notice.
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+                // A home or root that is missing or cannot be read holds
+                // no dependencies.
                 Ok(_) => {
                     self.notices.push(link_notice(item, path));
                     return;
                 }
-                Err(error) => {
-                    self.notices.push(copy_notice(item, &io_error(path)(error)));
-                    return;
-                }
+                Err(_) => return,
             }
         }
         let mut paths: Vec<PathBuf> = match fs::read_dir(&root) {
