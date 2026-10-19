@@ -1,0 +1,1981 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Fiber TUI mock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+:root{
+  --bg:#eceeea; --ink:#1b201d; --muted:#5a655f; --line:#c9d0cb; --card:#f6f7f4; --accent:#2c6a58; --on-accent:#f6f7f4;
+  /* the terminal: one dark 16-colour palette, as a terminal would have */
+  --t-bg:#16181c; --t-fg:#d3d6db; --t-sel:#2b3038;
+  --c0:#1d2025; --c1:#e06c6c; --c2:#8fc47a; --c3:#d8b25f; --c4:#6fa3e0; --c5:#c28ae0; --c6:#5fc4c4; --c7:#c8ccd2;
+  --c8:#6b7280; --c9:#ff8f8f; --c10:#a8dd92; --c11:#f0cc7a; --c12:#8fbdf5; --c13:#d8a6f2; --c14:#7fdede; --c15:#f2f4f7;
+  --diff-add:#1d3322; --diff-del:#3a1f22;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --bg:#111513; --ink:#dde3df; --muted:#8b978f; --line:#29312d; --card:#181d1a; --accent:#6cc0a3; --on-accent:#0f1411; color-scheme:dark; }
+}
+:root[data-theme="dark"]{ --bg:#111513; --ink:#dde3df; --muted:#8b978f; --line:#29312d; --card:#181d1a; --accent:#6cc0a3; --on-accent:#0f1411; color-scheme:dark; }
+
+html,body{background:var(--bg);color:var(--ink)}
+body{font:15px/1.5 "IBM Plex Sans",system-ui,sans-serif;padding-inline:16px;padding-block:20px 48px}
+.wrap{max-width:1400px;margin:0 auto;display:grid;gap:16px}
+h1{font-size:22px;margin:0;text-wrap:balance}
+h2{font-size:15px;margin:0 0 6px}
+p{margin:0;max-width:75ch}
+.muted{color:var(--muted)}
+code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.9em}
+
+.controls{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:flex-start}
+.ctl{display:grid;gap:4px}
+.ctl>span{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.seg{display:flex;flex-wrap:wrap;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--card)}
+.seg button{font:inherit;font-size:13px;border:0;background:none;color:var(--ink);padding:5px 10px;cursor:pointer;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.seg button:focus-visible,.term:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+label.chk{display:flex;gap:6px;align-items:center;font-size:13px}
+
+.termbox{overflow-x:auto;border-radius:8px;background:#040404;padding:10px}
+.term{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;color:var(--t-fg);background:var(--t-bg);line-height:1.2;white-space:pre;width:max-content;cursor:default;user-select:none}
+.row{height:1.2em;display:flex}
+.row span{display:inline-block;overflow:hidden;white-space:pre;flex:none;height:100%}
+.hit{cursor:pointer}
+.hit:hover{background:var(--t-sel)}
+.term{--fg:var(--t-fg)}.term span{color:var(--fg)}.d{color:color-mix(in srgb,var(--fg) 55%,var(--t-bg))!important}.i{font-style:italic}.b{font-weight:700}.u{text-decoration:underline}.rv{background:var(--t-fg);--fg:var(--t-bg)}
+.f1{--fg:var(--c1)}.f2{--fg:var(--c2)}.f3{--fg:var(--c3)}.f4{--fg:var(--c4)}.f5{--fg:var(--c5)}.f6{--fg:var(--c6)}.f7{--fg:var(--c7)}
+.f8{--fg:var(--c8)}.f9{--fg:var(--c9)}.f10{--fg:var(--c10)}.f11{--fg:var(--c11)}.f12{--fg:var(--c12)}.f13{--fg:var(--c13)}.f14{--fg:var(--c14)}.f15{--fg:var(--c15)}
+.fs{--fg:var(--t-sel)}.sm{background:#5a4a1a;--fg:#fff}.smc{background:var(--c3);--fg:#000}.bgs{background:var(--t-sel)}.bga{background:var(--diff-add)}.bgd{background:var(--diff-del)}
+.bp{background:var(--bp)}.bc{background:var(--bc)}.bu{background:var(--bu)}.bt{background:var(--bt)}.bi{background:var(--bi)}.bs{background:var(--t-sel)}
+/* half-block edges: the glyph's two halves, outer colour then inner */
+.et,.eb{--fg:transparent}.et{background:linear-gradient(var(--eo) 50%,var(--ei) 50%)}.eb{background:linear-gradient(var(--ei) 50%,var(--eo) 50%)}
+.bw{background:var(--bw)}.br{background:var(--br)}.bk{background:var(--bk)}
+.hd{--fg:var(--hd)}.sx-kw{--fg:var(--sx-kw)}.sx-fn{--fg:var(--sx-fn)}.sx-str{--fg:var(--sx-str)}.sx-num{--fg:var(--sx-num)}.sx-com{--fg:var(--sx-com)}.sx-ty{--fg:var(--sx-ty)}
+.term[data-pal="atelier"]{--t-bg:#040404;--t-fg:#d4d4d4;--t-sel:#3a3a4a;--c1:#ff5d73;--c2:#6eaafe;--c3:#ff9f43;--c4:#6eaafe;--c5:#b39ddb;--c6:#7dd3fc;--c7:#d4d4d4;--c8:#808080;--c9:#ff5d73;--c10:#6eaafe;--c11:#ff9f43;--c12:#6eaafe;--c13:#c9a8ff;--c14:#7dd3fc;--c15:#ffffff;--bp:#0c0c11;--bc:#1a1a22;--bu:#343541;--bt:#171d27;--bi:#1a1a22;--bs:#3a3a4a;--bw:#101017;--br:#101017;--bk:#181821;--hd:#ff9f43;--sx-kw:#6eaafe;--sx-fn:#7dd3fc;--sx-str:#ce9178;--sx-num:#b5cea8;--sx-com:#7a7a8a;--sx-ty:#7dd3fc;--diff-add:#1d2a3d;--diff-del:#3c2828}
+.term[data-pal="rainbow"]{--t-bg:#040404;--t-fg:#feffff;--t-sel:#606060;--c1:#a03050;--c2:#40d080;--c3:#e09040;--c4:#3060b0;--c5:#603090;--c6:#0090c0;--c7:#dbded8;--c8:#685656;--c9:#c06060;--c10:#90d050;--c11:#e0d000;--c12:#00b0c0;--c13:#801070;--c14:#20b0c0;--c15:#ffffff;--bp:#121212;--bc:#1c1c1c;--bu:#303030;--bt:#1c1c1c;--bi:#262626;--bs:#606060;--bw:#121212;--br:#121212;--bk:#1c1c1c;--hd:#e0d000;--sx-kw:#00b0c0;--sx-fn:#20b0c0;--sx-str:#e09040;--sx-num:#90d050;--sx-com:#685656;--sx-ty:#20b0c0;--diff-add:#005f00;--diff-del:#5f0000}
+.term span.st{color:transparent;background-image:linear-gradient(90deg,var(--fg) 50%,transparent 50%)}.term span.st2{color:transparent;background-image:linear-gradient(90deg,transparent 50%,var(--fg) 50%)}
+.toast{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:13px;color:var(--muted);min-height:1.5em}
+
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.note{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:12px 14px;display:grid;gap:6px;align-content:start}
+.note .src{font-size:13px;color:var(--muted)}
+.note ul{margin:0;padding-left:18px}
+.note li{margin:2px 0}
+.stat{font-variant-numeric:tabular-nums}
+.findings{border-left:3px solid var(--accent);padding-left:14px;display:grid;gap:8px}
+@media (prefers-reduced-motion: reduce){ .spin{animation:none} }
+</style>
+
+<div class="wrap">
+  <header style="display:grid;gap:6px">
+    <h1>Fiber TUI mock</h1>
+    <p class="muted">For #15. The terminal below is drawn on a grid of character cells in a 16-colour palette, and every line in it is folded from a fixture session written in <code>docs/events.md</code> shapes. Switch each item's variant, click groups, reasoning, queue rows and panel cards, and use the keys named on screen after clicking the terminal.</p>
+  </header>
+
+  <div class="controls" id="controls"></div>
+  <div class="termbox"><div class="term" id="term" tabindex="0" aria-label="Mock terminal"></div></div>
+  <div class="toast" id="toast" aria-live="polite"></div>
+  <section class="notes" id="notes"></section>
+  <section class="findings" id="findings"></section>
+</div>
+
+<script>
+"use strict";
+// ============================================================ fixture: events in docs/events.md shapes
+const MAIN = "s_9c41e2";
+const EPH = new Set(["assistant_message_delta","reasoning_delta","tool_call_delta","job_delta","notice","retry_scheduled"]);
+let E = [], seqBy = {}, ts = Date.UTC(2026,8,27,14,2,0), idN = 0, curTurn = null, curSid = MAIN;
+const rid = p => p + "_" + (++idN).toString(16).padStart(4,"0");
+function emit(kind, payload, o = {}) {
+  ts += o.dt ?? 700;
+  const sid = o.sid || curSid;
+  const e = { kind, session_id: sid, ts, schema_version: 1 };
+  if (curTurn && !o.noTurn) e.turn_id = curTurn;
+  if (o.aid) e.action_id = o.aid;
+  if (!EPH.has(kind)) e.seq = (seqBy[sid] = (seqBy[sid] || 0) + 1);
+  e.payload = payload;
+  E.push(e); return e;
+}
+let rng = 7;
+const rnd = () => (rng = (rng * 1103515245 + 12345) % 2147483648) / 2147483648;
+const pick = a => a[Math.floor(rnd() * a.length)];
+const lines = (n, head) => [head || "…", ...Array(Math.max(0, n - 1)).fill("…")].join("\n") + "\n";
+
+function turn(text) { curTurn = rid("t"); emit("turn_started", { input: [{ type: "text", text }] }); }
+function endTurn(outcome) { emit("turn_completed", { outcome }); curTurn = null; }
+function think(text, secs) {
+  const a = rid("a");
+  emit("reasoning_started", {}, { aid: a });
+  emit("reasoning_completed", { text, provider_item: { type: "reasoning" } }, { aid: a, dt: secs * 1000 });
+}
+function say(text) {
+  const a = rid("a");
+  emit("assistant_message_started", {}, { aid: a });
+  emit("assistant_message_completed", { text, outcome: "completed" }, { aid: a, dt: 2200 });
+}
+const EFF = { read: ["reads"], edit: ["writes"], write: ["writes"], shell: ["executes"], delegate_spawn: ["executes"], jobs: ["reads"] };
+function call(name, args, r = {}) {
+  const a = rid("a");
+  emit("tool_call_requested", { name, arguments: args, provider_id: "toolu_" + a }, { aid: a });
+  emit("tool_call_started", { effects: EFF[name] || [], reversible: name === "read", paths: args.path ? [args.path] : [] }, { aid: a, dt: 40 });
+  if (r.running) return a;
+  if (pendingStep) { pendingStep.push([a, r]); return a; }
+  complete(a, r);
+  return a;
+}
+// calls requested in one model response: all requested, then all completed
+let pendingStep = null;
+function step(fn) { pendingStep = []; fn(); const p = pendingStep; pendingStep = null; p.forEach(([a, r]) => complete(a, r)); }
+function complete(a, r = {}) {
+  const p = { status: r.status || "completed", content: [{ type: "text", text: r.content ?? "" }] };
+  if (r.error) p.error = r.error;
+  if (r.details) p.details = r.details;
+  if (r.process) p.process = r.process;
+  emit("tool_call_completed", p, { aid: a, dt: r.dur ?? 350 });
+}
+// a diff for edit's `details` (shape assumed; see findings)
+function diff(line, del, add) {
+  const hunks = [];
+  for (let k = 0; k < del.length; k++) hunks.push({ op: "-", n: line + k, text: del[k] });
+  for (let k = 0; k < add.length; k++) hunks.push({ op: "+", n: line + k, text: add[k] });
+  return { diff: { hunks } };
+}
+function editCall(path, line, del, add, extra = {}) {
+  return call("edit", { path, edits: [{ old_text: del.join("\n"), new_text: add.join("\n") }] },
+    Object.assign({ content: `block 1: replaced lines ${line}–${line + del.length - 1}, now ${line}–${line + add.length - 1}`, details: diff(line, del, add) }, extra));
+}
+const readCall = (path, n) => call("read", { path }, { content: lines(n, "1\t// " + path) });
+const grepCall = (pat, where, n) => call("shell", { command: `grep -rn '${pat}' ${where}` }, { content: lines(n, `${where}/x.rs:12: ${pat}`), process: { exit_code: 0, timed_out: false } });
+const findCall = (where) => call("shell", { command: `find ${where} -name '*.rs'` }, { content: lines(9, where + "/lib.rs"), process: { exit_code: 0, timed_out: false } });
+const cargo = (cmd, ok, out) => call("shell", { command: cmd }, ok ?
+  { content: out, process: { exit_code: 0, timed_out: false }, dur: 21000 } :
+  { status: "failed", content: out, error: { code: "nonzero_exit", message: "exit 101" }, process: { exit_code: 101, timed_out: false }, dur: 18000 });
+
+const TESTS = ["crates/log/tests/lock.rs","crates/log/tests/append.rs","crates/log/tests/torn_tail.rs","crates/loop/tests/steer.rs","crates/loop/tests/cancel.rs",
+  "crates/loop/tests/handoff.rs","crates/tools/tests/shell_timeout.rs","crates/tools/tests/shell_background.rs","crates/tools/tests/jobs_wait.rs","crates/tools/tests/monitor.rs",
+  "crates/doors/tests/serve_attach.rs","crates/doors/tests/serve_close.rs","crates/tui/tests/attach.rs","crates/extensions/tests/hooks.rs","crates/extensions/tests/reload.rs",
+  "crates/provider/tests/retry.rs","crates/provider/tests/sse_cancel.rs","crates/config/tests/watch.rs","crates/tools/tests/edit_stale.rs","crates/log/tests/fsync_order.rs",
+  "crates/loop/tests/jobs_notice.rs","crates/doors/tests/ask_exit.rs","crates/tools/tests/shell_signal.rs"];
+const SRC = ["crates/log/src/lock.rs","crates/log/src/writer.rs","crates/log/src/reader.rs","crates/loop/src/inbox.rs","crates/loop/src/step.rs","crates/tools/src/shell/run.rs",
+  "crates/tools/src/shell/group.rs","crates/tools/src/jobs.rs","crates/doors/src/serve.rs","crates/contract/src/event.rs","crates/testutil/src/child.rs","crates/testutil/src/lib.rs"];
+
+// ---- turn 1: find the flake
+turn("The lock test in crates/log is flaky on Linux CI. Find out why before changing anything.");
+think("**Where the lock is taken**\nThe test spawns a second process that tries to open the same session and expects `session_held`. If the child starts before the parent has flushed its lock file, the child can win. That would only show on a loaded runner, which fits \"flaky on Linux CI\".\n\n**What the test waits on**\nIt probably sleeps a fixed time instead of waiting for the lock to exist. I need to read the test and lock.rs, and check how other tests wait for a child.", 14);
+step(() => { readCall("crates/log/tests/lock.rs", 142); readCall("crates/log/src/lock.rs", 214); });
+step(() => { grepCall("thread::sleep", "crates", 31); readCall("crates/testutil/src/child.rs", 88); });
+cargo("cargo test -p log --test lock", true, lines(14, "running 6 tests") + "test result: ok. 6 passed; 0 failed");
+cargo("cargo test -p log --test lock -- --test-threads=1", true, lines(12, "running 6 tests") + "test result: ok. 6 passed");
+readCall("crates/log/src/writer.rs", 390); grepCall("session_held", "crates", 7);
+say("The test races. `second_writer_is_refused` spawns the child after a fixed `thread::sleep(200ms)` and assumes the parent's lock file exists by then. On a loaded runner it sometimes does not, the child takes the lock, and the assertion fails.\n\nThe same pattern, sleeping to wait for a child process, appears in 31 places across the workspace.");
+endTurn("completed");
+
+// ---- turn 2: interrupted, with a failed and a cancelled call in one group
+turn("Prove it: run the lock test 200 times under load.");
+cargo("cargo test -p log --test lock -- --test-threads=16", false, lines(22, "running 6 tests") + "---- second_writer_is_refused stdout ----\nassertion failed: matches!(err, Error::SessionHeld { .. })\ntest result: FAILED. 5 passed; 1 failed");
+readCall("crates/log/tests/lock.rs", 142);
+editCall("crates/log/tests/lock.rs", 57, ["    for _ in 0..1 {"], ["    for _ in 0..200 {"], { status: "failed", error: { code: "no_match", message: "block 1 not found" }, details: undefined });
+readCall("crates/log/tests/lock.rs", 142);
+call("shell", { command: "cargo nextest run -p log --test lock --retries 0 -j 16 --stress-count 200" }, { status: "cancelled", content: lines(40, "Starting 1200 tests across 1 binary"), process: { signal: "SIGTERM", timed_out: false }, dur: 64000 });
+endTurn("interrupted");
+
+// ---- turn 3: the long one
+turn("Fix it properly: wait on the lock file's creation instead of sleeping, then sweep every test in the workspace that sleeps to wait for a child process. Use one helper in crates/testutil.");
+think("**Plan**\nAdd `wait_for_path(path, deadline)` to testutil, built on polling with backoff because inotify and kqueue differ and this is test code. Then visit each of the 31 sleep sites; some are not waits for a child and must stay.\n\n**Order**\nHelper first, then the lock test, then crate by crate with a check after each crate so a mistake stays local.", 22);
+say("I'll add one helper, `testutil::wait_for_path`, fix the lock test with it, then go crate by crate. I'll run each crate's tests after its edits.");
+// the 318-call run
+editCall("crates/testutil/src/child.rs", 71, ["}"], ["", "/// Waits until `path` exists or `deadline` passes.", "pub fn wait_for_path(path: &Path, deadline: Duration) -> io::Result<()> {", "    let start = Instant::now();", "    let mut pause = Duration::from_millis(1);", "    while !path.exists() {", "        if start.elapsed() > deadline { return Err(io::ErrorKind::TimedOut.into()); }", "        thread::sleep(pause);", "        pause = (pause * 2).min(Duration::from_millis(50));", "    }", "    Ok(())", "}"]);
+let runCalls = 1, failedEditAt = 0;
+for (let i = 0; i < TESTS.length && runCalls < 318; i++) {
+  const t = TESTS[i];
+  const reads = 2 + Math.floor(rnd() * 4);
+  step(() => { for (let k = 0; k < reads; k++) { if (rnd() < .45) grepCall(pick(["thread::sleep","sleep(Duration","spawn_child","wait_for","Command::new"]), t.split("/").slice(0,2).join("/"), 2 + Math.floor(rnd()*14)); else readCall(k ? pick(SRC) : t, 60 + Math.floor(rnd() * 300)); runCalls++; } });
+  if (i % 5 === 2) { findCall(t.split("/").slice(0,2).join("/") + "/tests"); runCalls++; }
+  const edits = 2 + Math.floor(rnd() * 4);
+  for (let k = 0; k < edits; k++) {
+    const ln = 20 + Math.floor(rnd() * 180);
+    if (i === 9 && k === 1) { editCall(t, ln, ["    thread::sleep(Duration::from_millis(300));"], ["    wait_for_path(&ready, Duration::from_secs(5))?;"], { status: "failed", error: { code: "no_match", message: "block 1 not found" }, details: undefined }); failedEditAt = runCalls; }
+    else editCall(t, ln, ["    thread::sleep(Duration::from_millis(" + pick(["100","200","250","500"]) + "));"], ["    let ready = dir.path().join(\"ready\");", "    wait_for_path(&ready, Duration::from_secs(5))?;"]);
+    runCalls++;
+    if (rnd() < .5) { readCall(t, 80 + Math.floor(rnd() * 200)); runCalls++; }
+  }
+  const crate = t.split("/")[1];
+  if (i % 3 === 2 || i === TESTS.length - 1) {
+    const bad = i === 14;
+    cargo(`cargo test -p ${crate}`, !bad, bad ? lines(30, "error[E0425]: cannot find function `wait_for_path` in this scope") + "error: could not compile `extensions` (test \"reload\") due to 1 previous error" : lines(18, "running " + (20 + i) + " tests") + "test result: ok. " + (20 + i) + " passed; 0 failed");
+    runCalls++;
+    if (bad) { editCall(t, 3, ["use testutil::spawn_child;"], ["use testutil::{spawn_child, wait_for_path};"]); cargo(`cargo test -p ${crate}`, true, lines(18, "running 34 tests") + "test result: ok. 34 passed; 0 failed"); runCalls += 2; }
+  }
+  if (i === 11) { think("**Remaining sites**\nThe doors tests sleep to let a socket bind, not for a child. Same fix works: wait for the socket path.", 6); }
+}
+while (runCalls < 318) { if (rnd() < .5) readCall(pick(SRC), 40 + Math.floor(rnd()*200)); else grepCall("thread::sleep", pick(["crates/tools","crates/loop","crates/doors"]), Math.floor(rnd()*4)); runCalls++; }
+say("## Done with the sweep\n\n23 test files now wait with `wait_for_path`. 8 sleep sites stay because they are timing tests, not waits. Every crate's tests pass locally.\n\n```rust\n/// Waits until `path` exists or `deadline` passes.\npub fn wait_for_path(path: &Path, deadline: Duration) -> io::Result<()> {\n    let start = Instant::now();\n    let mut pause = Duration::from_millis(1);\n    while !path.exists() {\n        if start.elapsed() > deadline { return Err(io::ErrorKind::TimedOut.into()); }\n        thread::sleep(pause);\n        pause = (pause * 2).min(Duration::from_millis(50));\n    }\n    Ok(())\n}\n```\n\n| crate | files | sites fixed | sites kept |\n|---|---|---|---|\n| log | 4 | 6 | 0 |\n| loop | 4 | 5 | 2 |\n| tools | 6 | 7 | 4 |\n| doors | 3 | 3 | 0 |\n| others | 6 | 2 | 2 |\n\n- Next: independent checks, while I tidy the helper's docs.\n- `third_party/` is untouched.");
+think("**Checks**\nA reviewer on the helper and the lock fix, the full workspace on Linux in the container, a docs update, and an audit of `third_party/` in case vendored tests sleep too. Four delegates plus the workspace test run as a job.", 9);
+const JOBS = [
+  { id: "j_review", tool: "delegate_spawn", desc: "review: wait_for_path and the lock fix", harness: "fiber", model: "reviewer → openai/gpt-6-sol", sid: "s_d1" },
+  { id: "j_linux", tool: "delegate_spawn", desc: "run the workspace tests on Linux", harness: "claude-code", model: "fast → anthropic/claude-sonnet-5", sid: "s_d2" },
+  { id: "j_docs", tool: "delegate_fork", desc: "update docs/testing.md for wait_for_path", harness: "fiber", model: "fork of this session", sid: "s_d3" },
+  { id: "j_vendor", tool: "delegate_spawn", desc: "audit third_party/ for sleep-waits", harness: "cursor-agent", model: "grok-4.6", sid: "s_d4" },
+  { id: "j_nextest", tool: "shell", desc: "cargo nextest run --workspace --stress-count 50", sid: null },
+];
+for (const j of JOBS) {
+  const a = j.sid ? call(j.tool, { description: j.desc, prompt: "…" }, { content: `started ${j.id}; output artifacts/${j.id}.log` })
+                  : call("shell", { command: j.desc, background: true }, { content: `moved to the background as ${j.id}` });
+  emit("job_started", { job_id: j.id, action_id: a, tool_name: j.tool, description: j.desc, output_path: `artifacts/${j.id}.log` });
+  if (j.sid) emit("delegate_started", { job_id: j.id, session_id: j.sid, harness: j.harness, model: j.model, workspace: "~/work/fiber" });
+}
+// what each delegate has done so far (its lines are relayed with its own session_id)
+function delegateWork(sid, n, start) {
+  const save = [curSid, curTurn]; curSid = sid; curTurn = rid("t");
+  emit("session_started", { parent: { session_id: MAIN, delegate_id: sid } }, { noTurn: true });
+  emit("turn_started", { input: [{ type: "text", text: start }] });
+  think("**Reading the change**\nStart from the diff, then the helper's callers.", 5);
+  for (let k = 0; k < n; k++) { if (rnd() < .6) readCall(pick(SRC.concat(TESTS)), 50 + Math.floor(rnd()*200)); else grepCall("wait_for_path", "crates", 23); }
+  [curSid, curTurn] = save;
+}
+delegateWork("s_d1", 14, "Review the wait_for_path helper and the lock-test fix. Report defects only.");
+delegateWork("s_d2", 6, "Run `cargo nextest run --workspace` in the Linux container and report failures.");
+delegateWork("s_d3", 4, "Update docs/testing.md: tests wait for a path, never sleep.");
+delegateWork("s_d4", 21, "Audit third_party/ for tests that sleep to wait for a child.");
+emit("usage_recorded", { model: "anthropic/claude-opus-5-5", tokens: { input: 38100, cache_read: 8120000, cache_write: { "1h": 91000 }, output: 61400 }, cost: 3.12 });
+say("Four delegates and the workspace stress run are going. I'll tidy the helper while they run.");
+// running now: the live tail (a second tool run, still going)
+readCall("crates/testutil/src/child.rs", 102);
+editCall("crates/testutil/src/child.rs", 72, ["/// Waits until `path` exists or `deadline` passes."], ["/// Waits until `path` exists or `deadline` passes.", "///", "/// Polls with backoff from 1 ms to 50 ms. Use it instead of sleeping", "/// when a test waits for a child process to create a file or socket."]);
+const BASE_LEN = E.length;
+// ---- the Question scenes: the model asks with ask_user while the delegates run; the turn waits on the form
+const FORM = [
+  { header: "Timeout", question: "wait_for_path now names the path when it times out. What deadline should the 23 call sites pass?", options: [
+    { label: "5 s (Recommended)", description: "what every site passes now; enough for a loaded CI runner" },
+    { label: "10 s", description: "twice the headroom, but a real hang takes 10 s to fail" },
+    { label: "Per crate", description: "the doors tests bind sockets and may need longer" }] },
+  { header: "Kept sites", question: "8 sleep sites stay because they time something rather than wait for it. Which crates should get a comment at each one saying why?", multiSelect: true, options: [
+    { label: "loop (2)" }, { label: "tools (4)" }, { label: "others (2)" }] },
+  { header: "Vendor", question: "If the third_party/ audit finds sleep-waits in vendored tests, what should happen to them?", options: [
+    { label: "Report only (Recommended)", description: "list them in the final message; vendored code stays untouched" },
+    { label: "Patch in place", description: "the next vendor sync overwrites the patch" }] },
+  { header: "Reviewer", question: "Should anyone besides the reviewer delegate see the helper before it lands?" },
+];
+const QSEQ = seqBy[MAIN];
+const QA = call("ask_user", { questions: FORM }, { running: true });
+emit("interaction_requested", { request_id: "ir_0001", action_id: QA, kind: "form", fields: FORM });
+const QSPLIT = E.length - BASE_LEN;
+emit("interaction_resolved", { request_id: "ir_0001", answer: { fields: [{ selected: ["5 s (Recommended)"] }, { selected: ["loop (2)", "tools (4)"] }, { selected: ["Report only (Recommended)"] }, { skipped: true }], note: "keep the commit to testutil and the tests" }, by: "person" }, { dt: 48000 });
+complete(QA, { content: "Timeout: 5 s (Recommended)\nKept sites: loop (2), tools (4)\nVendor: Report only (Recommended)\nReviewer: skipped\nnote: keep the commit to testutil and the tests", dur: 60 });
+say("Keeping 5 s. I'll add a comment at the six kept sites in loop and tools, and the vendor audit will only report.");
+const QEV = E.splice(BASE_LEN);
+seqBy[MAIN] = QSEQ;
+// ---- the Handoff scenes: the live turn goes on past the nudge to an automatic handoff at 400k
+const NOTE = "## Where things stand\n- `testutil::wait_for_path` is in `crates/testutil/src/child.rs`; 23 test files use it. 8 sleep sites stay because they are timing tests, and the 6 in loop and tools now say why.\n- Running: the reviewer (j_review), the Linux test run (j_linux), the vendor audit (j_vendor) and the stress run (j_nextest). j_docs finished.\n\n## Next\n- When j_review reports, show its findings to the person before fixing anything.\n- Run clippy on testutil before finishing.\n\nThe session log is `sessions/s_9c41e2/events.jsonl`; search it for `wait_for_path` to find every edit.";
+step(() => { readCall("crates/testutil/src/lib.rs", 64); grepCall("sleep(Duration", "crates/loop", 2); grepCall("sleep(Duration", "crates/tools", 4); });
+emit("context_nudged", { tokens: 268400, trigger_at: 400000 });
+for (const t of ["crates/loop/tests/steer.rs", "crates/loop/tests/cancel.rs", "crates/tools/tests/monitor.rs", "crates/tools/tests/shell_timeout.rs"]) { readCall(t, 180); editCall(t, 40, ["    thread::sleep(Duration::from_millis(250));"], ["    // a timing test: the sleep is what is measured, not a wait", "    thread::sleep(Duration::from_millis(250));"]); }
+cargo("cargo test -p loop -p tools", true, lines(18, "running 61 tests") + "test result: ok. 61 passed; 0 failed");
+emit("handoff_started", { trigger: "auto" });
+const HN = rid("a"); emit("assistant_message_started", {}, { aid: HN });
+const HLIVE = E.length - BASE_LEN;
+emit("assistant_message_completed", { text: NOTE, outcome: "completed" }, { aid: HN, dt: 19000 });
+emit("usage_recorded", { model: "anthropic/claude-opus-5-5", tokens: { input: 2100, cache_read: 400013, cache_write: { "1h": 0 }, output: 1900 }, cost: 0.24 });
+emit("handoff_completed", { outcome: "completed", note: [HN], tokens_before: 402113 });
+think("**Picking up**\nThe note says the kept-site comments are in. Next is the reviewer's findings, which go to the person first.", 4);
+step(() => { readCall("crates/testutil/src/child.rs", 102); });
+emit("usage_recorded", { model: "anthropic/claude-opus-5-5", tokens: { input: 900, cache_read: 24500, cache_write: { "1h": 6800 }, output: 400 }, cost: 0.06 });
+say("Picked up from the handoff note. The comments at the kept sites are in; I'm waiting for the reviewer before changing anything else.");
+const HEV = E.splice(BASE_LEN);
+seqBy[MAIN] = QSEQ;
+// ---- the Error scenes: a notice, an MCP server dying, a rate limit that a retry clears, then an overload that ends the turn
+function failCall(attempt, code, message, provider, retryAfter) {
+  const a = rid("a");
+  emit("assistant_message_started", {}, { aid: a });
+  emit("assistant_message_completed", { outcome: "failed", attempt, error: { code, message, provider, ...(retryAfter ? { retry_after: retryAfter } : {}) } }, { aid: a, dt: 1400 });
+}
+emit("notice", { code: "config_key_ignored", message: "~/.fiber/config.json sets tools.enabeld, which is not a configuration key. It was ignored." });
+step(() => { readCall("crates/testutil/src/lib.rs", 64); });
+emit("mcp_server_failed", { server: "linear", reason: "died", restart: true, error: { code: "mcp_server_unavailable", message: "The MCP server linear died. Fiber restarts it on the next call to one of its tools; if it dies again, its tools fail for the rest of this session." } });
+failCall(1, "rate_limited", "Anthropic rate-limited the request (HTTP 429). Fiber retries it.", { name: "anthropic", status: 429, message: "Number of request tokens has exceeded your per-minute rate limit" }, 4);
+emit("retry_scheduled", { cause: "rate_limited", attempt: 2, delay: 4 }, { dt: 100 });
+const ERETRY = E.length - BASE_LEN;
+step(() => { grepCall("thread::sleep", "crates/loop", 2); readCall("crates/loop/tests/steer.rs", 180); });
+editCall("crates/loop/tests/steer.rs", 40, ["    thread::sleep(Duration::from_millis(250));"], ["    // a timing test: the sleep is what is measured, not a wait", "    thread::sleep(Duration::from_millis(250));"]);
+const OVER = { name: "anthropic", status: 529, message: "Overloaded" };
+for (let k = 1; k <= 4; k++) { failCall(k, "provider_unavailable", k < 4 ? "Anthropic is overloaded (HTTP 529). Fiber retries it." : "Anthropic is overloaded (HTTP 529), and 3 retries did not get through. Send the prompt again, or choose another model with /model.", OVER); if (k < 4) emit("retry_scheduled", { cause: "provider_unavailable", attempt: k + 1, delay: 2 ** k }, { dt: 100 }); }
+emit("turn_completed", { outcome: "failed", error: { code: "provider_unavailable", message: "Anthropic is overloaded (HTTP 529), and 3 retries did not get through. Send the prompt again, or choose another model with /model." } });
+const EEV = E.splice(BASE_LEN);
+seqBy[MAIN] = QSEQ;
+// ---- the Crash scene: the process died mid-call; a new process opens the session and closes its orphaned jobs
+call("shell", { command: "cargo test -p testutil" }, { running: true });
+emit("fiber_started", { version: "0.0.1", schema_version: 1, resumed: true }, { noTurn: true, dt: 1440000 });
+for (const j of JOBS) emit("job_completed", { job_id: j.id, status: "failed", error: { code: "orphaned", message: `Fiber stopped while this job ran, so whether it finished is unknown. Its output so far is in artifacts/${j.id}.log.` } }, { noTurn: true, dt: 30 });
+const CEV = E.splice(BASE_LEN);
+seqBy[MAIN] = QSEQ;
+// ---- the Start scenes: this project's sessions, as listing reads them from each log (docs/state.md)
+// state: running (its socket accepts), waiting (fiber_exited names suspended_on), stopped (fiber_started with no fiber_exited), exited
+const SESSIONS = [
+  { id: "s_9c41e2", state: "running", note: "this terminal", prompt: "Fix it properly: wait on the lock file's creation instead of sleeping, then sweep every test in the workspace that sleeps to wait for a child process.", last: "now", turns: 3, branch: "fix/wait-for-path" },
+  { id: "s_7f20aa", state: "waiting", note: "approval: shell cargo publish --dry-run", prompt: "Cut the 0.0.1 release notes and check the publish dry run", last: "2h ago", turns: 5, branch: "release/0.0.1" },
+  { id: "s_61c9d0", state: "running", note: "no client; 2 jobs running", prompt: "Profile the log writer under 64 concurrent appends", last: "12m ago", turns: 2, branch: "perf/log-writer" },
+  { id: "s_3ab702", state: "waiting", note: "question: 2 of 3 answered", prompt: "Design the fixture format for the TUI prototype", last: "yesterday", turns: 4, branch: "main" },
+  { id: "s_4d0a17", state: "exited", note: "continues s_2b8e11 from seq 812", prompt: "Sweep the remaining sleep-waits in crates/doors", last: "yesterday", turns: 1, branch: "fix/wait-for-path" },
+  { id: "s_5e91b4", state: "stopped", note: "stopped without exiting; 1 job orphaned on resume", prompt: "Run the stress suite overnight and summarise flakes", last: "Sep 26", turns: 6, branch: "main" },
+  { id: "s_0c7d55", state: "exited", note: "", prompt: "Write docs/testing.md's section on fixtures", last: "Sep 25", turns: 12, branch: "docs/testing" },
+  { id: "s_88f310", state: "running", note: "runs Fiber 0.0.3, schema 2; this terminal reads schema 1", prompt: "Try the new provider crate against muse", last: "3m ago", turns: 1, branch: "provider/muse", foreign: true },
+];
+const SS_GLYPH = { running: ["●", "f2"], waiting: ["◐", "f3"], stopped: ["✗", "f1"], exited: ["○", "d"] };
+function sessionRow(x, k, w) {
+  const on = state.ssel === k, act = "ss:" + k, [g, gc] = SS_GLYPH[x.state];
+  const verb = x.id === MAIN ? "open" : x.foreign ? "cannot attach" : x.state === "running" ? "attach" : "resume";
+  const right = [S(x.last.padStart(9), "d", act), S("  " + verb.padEnd(13), x.foreign ? "f1 d" : on ? "f4" : "d", act)];
+  const tw = w - 4 - len(right);
+  const row1 = [S(on ? "▸ " : "  ", "f4", act), S(g + " ", gc, act), ...fit([S(x.prompt, on ? "b" : "", act)], tw), ...right];
+  const row2 = [S("    ", "", act), ...fit([S(x.id + " · " + x.turns + (x.turns === 1 ? " turn" : " turns") + " · " + x.branch, "d", act), ...(x.note ? [S(" · ", "d", act), S(x.note, x.state === "waiting" ? "f3" : x.state === "stopped" ? "f1 d" : "d", act)] : [])], w - 4)];
+  return [row1, row2];
+}
+function sessionsView(w) {
+  const out = [[], [S("  Sessions in ~/work/fiber, newest first. Enter attaches to a running one or resumes one that has exited.", "d")], []];
+  const card = r => surf() ? slab(r.map(l => [S(" "), ...fit(l, w - 6), S(" ")]), "bc", w - 2).map(l => { const x = [S("  "), ...l]; x.bg = l.bg; return x; }) : r.map(l => [S("  "), ...l]);
+  const idx = SESSIONS.map((x, k) => [x, k]);
+  const groups = state.slist === "B" ? [["Waiting on you", idx.filter(([x]) => x.state === "waiting")], ["Running", idx.filter(([x]) => x.state === "running")], ["Earlier", idx.filter(([x]) => x.state === "exited" || x.state === "stopped")]] : [[null, idx]];
+  for (const [title, rows] of groups) {
+    if (!rows.length) continue;
+    if (title) out.push([S("  "), S(title, "b"), S("  " + rows.length, "d")]);
+    out.push(...card(rows.flatMap(([x, k], j) => [...(j ? [[]] : []), ...sessionRow(x, k, w - 6)])), []);
+  }
+  out.push([S("  ● running  ◐ waiting on you  ✗ stopped without exiting  ○ exited · ↑↓ or click · enter · esc returns", "d")]);
+  return out;
+}
+function startLines(w) {
+  if (state.start === "A") return [[], [S("fiber 0.0.1", "b"), S(" · new session s_a1f3c0 in ~/work/fiber on main", "d")], [S("claude-opus-5-5 high · auto mode · 3 MCP servers connecting", "d")], [], [S("Type a prompt to start. / for commands, /resume for earlier sessions.", "d")]];
+  const waiting = SESSIONS.map((x, k) => [x, k]).filter(([x]) => x.state === "waiting" && x.id !== MAIN);
+  const recent = SESSIONS.map((x, k) => [x, k]).filter(([x]) => x.state !== "waiting" && x.id !== MAIN).slice(0, 3);
+  const card = r => surf() ? slab(r.map(l => [S(" "), ...fit(l, w - 4), S(" ")]), "bc", w) : r;
+  const out = [[S("fiber 0.0.1", "b"), S(" · new session s_a1f3c0 in ~/work/fiber on main · claude-opus-5-5 high · auto", "d")], []];
+  out.push([S("Waiting on you", "b")], ...card(waiting.flatMap(([x, k], j) => [...(j ? [[]] : []), ...sessionRow(x, k, w - 4)])), []);
+  out.push([S("Recent", "b"), S("  /resume lists all " + SESSIONS.length, "d")], ...card(recent.flatMap(([x, k], j) => [...(j ? [[]] : []), ...sessionRow(x, k, w - 4)])), []);
+  out.push([S("Type a prompt to start the new session, or pick one above.", "d")]);
+  return out;
+}
+// ---- start page variants C, D, E: they take the whole screen (no side panel), and each draws its own input box.
+// The first frame needs no listing: header, wordmark, approval notice and input box come from config and argv; the lists fill in.
+const START_FULL = new Set(["C", "D", "E"]);
+const NEWS = "s_a1f3c0";
+// what the repository brings that needs approval before the first prompt; read with config, not with listing
+const EXTS = [{ name: "review-gate", ver: "0.4.2", kind: "extension", what: "2 tools, 1 hook" }, { name: "linear", ver: "1.8.0", kind: "MCP server", what: "14 tools" }];
+const TIPS = ["!!cmd runs a command and shows the output only to you", "Ctrl+R searches every prompt you sent in this project", "Shift+Tab cycles the permission mode"];
+const G = () => { const l = []; l.gap = true; return l; };   // a blank row the layout may drop to fit
+const pad = n => S(" ".repeat(Math.max(0, n)));
+const off = (l, n) => [pad(n), ...l];                         // no .bg, so the rest of the row stays the terminal's
+function startSets() {
+  const idx = SESSIONS.map((x, k) => [x, k]).filter(([x]) => x.id !== MAIN);
+  return { waiting: idx.filter(([x]) => x.state === "waiting"), recent: idx.filter(([x]) => x.state !== "waiting").slice(0, 3) };
+}
+// top block, blank rows, bottom block, exactly H rows; gap rows go first when it does not fit
+function stack(top, bottom, H, lift = 0) {
+  let t = top.slice();
+  while (t.length + bottom.length > H) { const i = t.findIndex(l => l.gap); if (i < 0) break; t.splice(i, 1); }
+  t = t.slice(0, Math.max(0, H - bottom.length));
+  const free = H - t.length - bottom.length, above = Math.floor(free * lift);
+  return [...Array(above).fill(0).map(() => []), ...t, ...Array(free - above).fill(0).map(() => []), ...bottom];
+}
+const verbOf = x => x.foreign ? "cannot attach" : x.state === "running" ? "attach" : "resume";
+// one row per session: a waiting one leads with what it waits on, the others with their first prompt
+function sessionLine(x, k, w) {
+  const on = state.ssel === k, act = "ss:" + k, [g, gc] = SS_GLYPH[x.state];
+  const right = [S(x.last.padStart(10), "d", act), S("  " + verbOf(x).padEnd(6), on ? "f4" : "d", act)];
+  const room = w - 4 - len(right), withNote = x.note && [...x.prompt].length + 2 + [...x.note].length <= room;
+  const body = x.state === "waiting" ? [S(x.note, "f3", act), S("  " + x.prompt, "d", act)] : [S(x.prompt, on ? "b" : "", act), ...(withNote ? [S("  " + x.note, "d", act)] : [])];
+  return [S(on ? "▸ " : "  ", "f4", act), S(g + " ", gc, act), ...fit(body, w - 4 - len(right)), ...right];
+}
+const listing = w => [[pad(2), ...fit([S("listing this project's sessions…", "d")], w - 2)]];
+// the wordmark: FIBER in a 5-pixel font, two cells a pixel, drawn with half blocks; a gradient between two theme colours
+const WM = { F: ["####", "#...", "###.", "#...", "#..."], I: ["###", ".#.", ".#.", ".#.", "###"], B: ["###.", "#..#", "###.", "#..#", "###."], E: ["####", "#...", "###.", "#...", "####"], R: ["###.", "#..#", "###.", "#.#.", "#..#"] };
+const grad = (i, n) => `color-mix(in oklab,var(--c4) ${Math.round(100 - 100 * i / Math.max(1, n - 1))}%,var(--c13))`;
+// the page draws a block glyph as a background, as it draws surface edges, so line height leaves no gap; a terminal draws the glyph
+const blockSty = (ch, col) => ch === " " ? "" : "color:transparent;background:" + (ch === "█" ? col : `linear-gradient(${ch === "▀" ? col + " 50%,transparent 50%" : "transparent 50%," + col + " 50%"})`);
+function wordmark() {
+  const px = [0, 1, 2, 3, 4].map(r => [..."FIBER"].map(ch => WM[ch][r]).join(".")); px.push(".".repeat(px[0].length));
+  const n = px[0].length * 2;
+  const rows = [0, 1, 2].map(r => [...px[0]].flatMap((_, c) => {
+    const t = px[2 * r][c] === "#", b = px[2 * r + 1][c] === "#", ch = t && b ? "█" : t ? "▀" : b ? "▄" : " ";
+    return [0, 1].map(h => ({ ...S(ch), sty: blockSty(ch, grad(2 * c + h, n)) }));
+  }));
+  // the one animated line: a bright band sweeps the underline once when the page opens, then rests (still under reduced motion)
+  const at = state.glimmer ? (state.tick - (state.startT0 || 0)) * 4 - 8 : -99;
+  rows.push([...Array(n)].map((_, i) => { const hot = i >= at && i < at + 8;
+    return { ...S("▀"), sty: blockSty("▀", `color-mix(in oklab,${grad(i, n)} ${hot ? 55 : 30}%,var(--${hot ? "c15" : "t-bg"}))`) }; }));
+  return rows;
+}
+function extCallout(w, rows2) {
+  const act = "xa", names = EXTS.map(e => e.name + " " + e.ver + " (" + e.kind + ", " + e.what + ")").join(" · ");
+  const r = [[S("▌", "f3"), S(" "), ...fit([S("⚠ ", "f3"), S(EXTS.length + " from this repository need approval", "b f3", act), S("  " + names, "d", act), S("\t"), S(" review › ", "f3 b", act)], w - 2)]];
+  if (rows2) r.push([S("▌", "f3"), S(" "), ...fit([S("Approving before the first prompt costs no cache rebuild. Typing a prompt skips them for this session.", "d")], w - 2)]);
+  return slab(r, "bk", w);
+}
+function startInput(w, rows) { return slab(rows.map(l => [S("▌", "f4"), S(" "), ...fit(l, w - 3), S(" ")]), "bi", w); }
+const promptRow = hint => [S("› ", "f6"), state.draft ? S(state.draft) : S(hint, "d"), S("█", "d")];
+const chips = () => [S(" claude-opus-5-5 ", "f4 bs", "p:model"), S(" "), S(" high ", "f3 bs", "p:model"), S(" "), S(" auto ", "f3 bs", "p:mode")];
+
+// C · Wordmark: a half-block logotype with a gradient, the header beside it, the lists under it in slabs, the input box at the foot
+function startC(w, H) {
+  const { waiting, recent } = startSets(), compact = H < 40, m = compact ? 1 : 3, bw = w - 2 * m;
+  const wm = wordmark(), ww = wm[0].length, beside = bw - ww - 4 >= 56;
+  const head = [[S("fiber ", "b"), S("0.0.1", "d")], [S("new session ", "d"), S(NEWS, "f6")], [S("~/work/fiber", "f4"), S(" on ", "d"), S("main", "f5"), S(" · ", "d"), S("claude-opus-5-5", "f4", "p:model"), S(" high", "f3", "p:model"), S(" · ", "d"), S("auto", "f3", "p:mode")]];
+  const top = [G(), ...(compact ? [] : [G(), G()])];
+  wm.forEach((l, r) => top.push(off([...l, ...(beside && r < 3 ? [pad(4), ...head[r]] : [])], m)));
+  if (!beside) top.push(off([...head[1], S(" · ", "d"), ...head[2]], m));
+  const sect = (title, rows) => [off(title, m), ...(state.listed ? slab(rows, "bc", bw) : slab(listing(bw), "bc", bw)).map(l => off(l, m))];
+  const rowsOf = list => compact ? list.map(([x, k]) => sessionLine(x, k, bw)) : list.flatMap(([x, k], j) => [...(j ? [[]] : []), ...sessionRow(x, k, bw - 2)]).map(l => [pad(1), ...fit(l, bw - 2), pad(1)]);
+  top.push(G(), ...extCallout(bw, !compact).map(l => off(l, m)), G());
+  top.push(...sect([S("Waiting on you", "b"), S(state.listed ? "  " + waiting.length : "", "d")], rowsOf(waiting)), G());
+  top.push(...sect([S("Recent", "b"), S(state.listed ? "  /resume lists all " + SESSIONS.length : "  /resume", "d", "p:session")], rowsOf(recent)));
+  const bottom = [...startInput(bw, [promptRow("Type a prompt to start " + NEWS + ", or pick a session above")]).map(l => off(l, m)),
+    off([S("↑↓ pick · enter attaches or resumes · / commands · ctrl+c quits", "d")], m + 2)];
+  return stack(top, bottom, H);
+}
+
+// D · Hero: a centred composition around a large input box; the lists sit quietly under it at the box's width
+function startD(w, H) {
+  const { waiting, recent } = startSets(), bw = Math.min(w - 4, 96), m = Math.floor((w - bw) / 2);
+  const ctr = l => off(l, Math.floor((w - len(l)) / 2));
+  const name = [..."fiber"].flatMap((ch, i) => [{ ...S(ch, "b"), sty: `--fg:${grad(i, 5)}` }, ...(i < 4 ? [S(" ")] : [])]);
+  const top = [ctr([...name, S("  0.0.1", "d")]), ctr([S("new session ", "d"), S(NEWS, "f6"), S(" in ", "d"), S("~/work/fiber", "f4"), S(" on ", "d"), S("main", "f5")]), G(),
+    ctr([S("⚠ ", "f3"), S(EXTS.length + " from this repository need approval before the first prompt", "f3", "xa"), S("  review ›", "f3 b", "xa")]), G()];
+  top.push(...startInput(bw, [promptRow("What should the new session do?"), [], [...chips(), S("\t"), S("enter starts " + NEWS, "d")]]).map(l => off(l, m)), G(), G());
+  const sect = (title, list) => [off(title, m + 2), ...(state.listed ? list.map(([x, k]) => off(sessionLine(x, k, bw - 2), m + 1)) : listing(bw).map(l => off(l, m)))];
+  top.push(...sect([S("◐ ", "f3"), S("Waiting on you", "b")], waiting), G());
+  top.push(...sect([S("Recent", "b"), S(state.listed ? "  /resume lists all " + SESSIONS.length : "  /resume", "d", "p:session")], recent));
+  return stack(top, [ctr([S("↑↓ pick a session · enter · / commands · ctrl+c quits", "d")])], H, 0.4);
+}
+
+// E · Dashboard: a header strip, the approval notice as a callout, sessions as cards in two columns, a tip over the input box
+function sessionCard(x, k, w, compact) {
+  const [g, gc] = SS_GLYPH[x.state], act = "ss:" + k, on = state.ssel === k;
+  const stripe = S("▌", { waiting: "f3", running: "f2", stopped: "f1", exited: "f8" }[x.state]);
+  const row = segs => [stripe, S(" "), ...fit(segs.map(s => ({ ...s, act: s.act || act })), w - 3), S(" ")];
+  const note = x.note ? [S(x.note, x.state === "waiting" ? "f3" : x.state === "stopped" ? "f1" : "d")] : [S("exited", "d")];
+  const rows = [row([S(g + " ", gc), S(x.prompt, "b"), S("\t"), S("  " + (on ? "enter " : "") + verbOf(x), on ? "f4 b" : "d")]),
+    row(compact ? [...note, S(" · " + x.id, "d"), S("\t"), S(x.last, "d")] : [...note, S("\t"), S(x.last, "d")])];
+  if (!compact) rows.push(row([S(x.id, "f6 d"), S(" · " + x.turns + (x.turns === 1 ? " turn" : " turns") + " · " + x.branch, "d")]));
+  return rows;
+}
+function startE(w, H) {
+  const { waiting, recent } = startSets(), compact = H < 40, two = w >= 110;
+  const hdr = two ? [[S("▌", "f4"), S(" fiber ", "b f4"), S("0.0.1", "d"), S("   new session ", "d"), S(NEWS, "f6"), S("   ~/work/fiber", "f4"), S(" main", "f5"), S("\t"), ...chips(), S(" ")]]
+    : [[S("▌", "f4"), S(" fiber ", "b f4"), S("0.0.1 · ", "d"), S(NEWS, "f6"), S(" · ", "d"), S("~/work/fiber", "f4"), S(" main", "f5"), S("\t"), ...chips(), S(" ")]];
+  const top = [...slab(hdr.map(l => fit(l, w)), "bk", w), G(), ...extCallout(w, !compact), G()];
+  const cw = two ? Math.floor((w - 3) / 2) : w;
+  const cardsOf = list => state.listed ? list.flatMap(([x, k], j) => [...(j ? [G()] : []), ...slab(sessionCard(x, k, cw, compact), state.ssel === k ? "bu" : "bc", cw)]) : slab(listing(cw), "bc", cw);
+  const wt = [S("Waiting on you", "b"), S(state.listed ? "  " + waiting.length : "", "d")], rt = [S("Recent", "b"), S(state.listed ? "  /resume lists all " + SESSIONS.length : "  /resume", "d", "p:session")];
+  if (two) {
+    const L = [wt, ...cardsOf(waiting)], R = [rt, ...cardsOf(recent)];
+    for (let i = 0; i < Math.max(L.length, R.length); i++) { const a = L[i] || [], b = R[i] || []; top.push([...fit(a, cw, a.bg || ""), pad(3), ...fit(b, cw, b.bg || "")]); }
+  } else {
+    // narrow: waiting sessions as cards, recent ones a row each in one slab
+    top.push(wt, ...cardsOf(waiting), G(), rt, ...slab(state.listed ? recent.map(([x, k]) => sessionLine(x, k, w)) : listing(w), "bc", w));
+  }
+  const bottom = [...(H >= 30 ? [[pad(1), S("tip ", "f6"), S(TIPS[0], "d")]] : []), ...startInput(w, [promptRow("Type a prompt to start the new session")])];
+  return stack(top, bottom, H);
+}
+function startScreen(w, H) { return { C: startC, D: startD, E: startE }[state.start](w, H); }
+// ---- the Rewind scenes: the turn has ended, with its jobs still running (rewind is refused while a turn runs)
+const RWEND = (() => { const l = E.slice(0, BASE_LEN).filter(e => e.session_id === MAIN).pop(); return { kind: "turn_completed", session_id: MAIN, turn_id: l.turn_id, ts: l.ts + 5000, seq: l.seq + 1, schema_version: 1, payload: { outcome: "completed" } }; })();
+const RWSUM = "After the point the model added wait_for_path to testutil, replaced the sleep-waits in 23 test files across 6 crates, fixed one import it missed, and started four delegates and a workspace stress run.";
+
+// live script: runs on a timer after load, so streaming shapes can be judged
+const LIVE = [
+  () => { LIVE.r = rid("a"); emit("reasoning_started", {}, { aid: LIVE.r }); },
+  () => emit("reasoning_delta", { text: "**Checking the helper's error**\nA timeout returns `io::ErrorKind::TimedOut` with no path in it. " }, { aid: LIVE.r }),
+  () => emit("reasoning_delta", { text: "A failing test would then say only \"timed out\". Wrap it so the message names the path and how long it waited." }, { aid: LIVE.r }),
+  () => emit("reasoning_delta", { text: "\n\n**Callers**\nAll 23 call sites use `?`, so a better message costs nothing at the call sites." }, { aid: LIVE.r }),
+  () => emit("reasoning_completed", { text: LIVE_REASON, provider_item: { type: "reasoning" } }, { aid: LIVE.r }),
+  () => { LIVE.a1 = call("read", { path: "crates/testutil/src/lib.rs" }, { running: true }); },
+  () => complete(LIVE.a1, { content: lines(64, "1\t//! Test helpers") }),
+  () => { LIVE.a2 = call("shell", { command: "cargo check -p testutil --tests" }, { running: true }); },
+  () => { applySteer(0); },
+  () => complete(LIVE.a2, { content: lines(3, "Checking testutil v0.0.0") + "Finished `dev` profile", process: { exit_code: 0, timed_out: false } }),
+  () => { editCall("crates/testutil/src/child.rs", 77, ["            return Err(io::ErrorKind::TimedOut.into());"], ["            return Err(io::Error::new(io::ErrorKind::TimedOut,", "                format!(\"{} did not appear within {:?}\", path.display(), deadline)));"]); },
+  () => { emit("delegate_finished", { job_id: "j_docs", final_message: "docs/testing.md: replaced the sleep example with wait_for_path; 1 file, +9 −4.", usage: { output: 4100 } }); emit("job_completed", { job_id: "j_docs", status: "completed" }); },
+  () => { LIVE.a3 = call("shell", { command: "cargo test -p testutil" }, { running: true }); },
+];
+const LIVE_REASON = "**Checking the helper's error**\nA timeout returns `io::ErrorKind::TimedOut` with no path in it. A failing test would then say only \"timed out\". Wrap it so the message names the path and how long it waited.\n\n**Callers**\nAll 23 call sites use `?`, so a better message costs nothing at the call sites.";
+
+// ---- steering: known only to the client that sent it (see findings)
+const QUEUE0 = [
+  "don't touch third_party/ yourself, the vendor audit delegate owns it",
+  "also run clippy on testutil before you finish",
+  "when the review comes back, show me its findings before fixing anything",
+];
+let queue = QUEUE0.slice();
+function applySteer(k) {
+  if (!queue[k]) return;
+  emit("steering_applied", { text: queue[k], source: "person" });
+  queue.splice(k, 1);
+  if (state.qsel >= queue.length) state.qsel = queue.length - 1;
+}
+// ---- approvals (the Approval scene): one from main, one from a delegate
+const APPROVALS = [
+  { session: "main", sid: MAIN, tool: "shell", target: "cargo update -p tempfile", effects: "executes, network, writes", reversible: false, why: "network access is outside this project's rules", rule: "cargo update *" },
+  { session: "delegate: run the workspace tests on Linux", sid: "s_d2", tool: "shell", target: "docker run --rm -v $PWD:/w rust:1.94 cargo nextest run --workspace", effects: "executes, network", reversible: false, why: "docker is not in the allow rules", rule: "docker run *" },
+];
+
+// ============================================================ fold: events -> what the TUI holds
+function fold(events, sid) {
+  const blocks = [], calls = new Map(), reasons = new Map(), jobs = new Map(), bySid = {};
+  let run = null;
+  const usage = { input: 0, cache_read: 0, output: 0, cost: 0 };
+  const closeRun = () => { run = null; };
+  let ho = null, afterOf = null, ctxK = null, turnOpen = false, retrying = null, lastFail = null, prevTs = 0;
+  const notices = [];
+  for (const e of events) {
+    const p = e.payload;
+    if (e.kind !== "fiber_started" && e.session_id === sid) prevTs = e.ts;
+    if (e.session_id !== sid) { (bySid[e.session_id] ||= []).push(e); continue; }
+    switch (e.kind) {
+      case "turn_started": turnOpen = true; closeRun(); blocks.push({ t: "user", text: p.input[0].text, ev: [e] }); break;
+      case "reasoning_started": {
+        const r = { t: "reason", id: e.action_id, text: "", start: e.ts, live: true, ev: [e] };
+        reasons.set(e.action_id, r);
+        if (!run) { run = { t: "tools", id: "g" + e.action_id, items: [] }; blocks.push(run); }
+        run.items.push(r);
+        break; }
+      case "reasoning_delta": { const r = reasons.get(e.action_id); r.text += p.text; break; }
+      case "reasoning_completed": { const r = reasons.get(e.action_id); r.text = p.text; r.live = false; r.secs = Math.max(1, Math.round((e.ts - r.start) / 1000)); r.ev.push(e); break; }
+      case "assistant_message_started": retrying = null; break;
+      case "assistant_message_completed": if (p.outcome === "failed") {
+          if (!run) { run = { t: "tools", id: "g" + e.action_id, items: [] }; blocks.push(run); }
+          (run.fails ||= []).push({ ...p, ts: e.ts }); lastFail = p; break; }
+        if (ho) { ho.noteText = p.text; break; } closeRun(); blocks.push({ t: "text", text: p.text, ev: [e] }); break;
+      case "tool_call_requested": {
+        retrying = null;
+        if (!run) { run = { t: "tools", id: "g" + e.action_id, items: [] }; blocks.push(run); }
+        const c = { t: "call", id: e.action_id, name: p.name, args: p.arguments, status: "pending", start: e.ts, run };
+        run.items.push(c); calls.set(e.action_id, c); break; }
+      case "tool_call_started": calls.get(e.action_id).status = "running"; break;
+      case "tool_call_completed": Object.assign(calls.get(e.action_id), { status: p.status, error: p.error, content: p.content, details: p.details, process: p.process, end: e.ts }); break;
+      case "notice": blocks.push({ t: "notice", code: p.code, message: p.message, ev: [e] }); notices.push(p); break;
+      case "mcp_server_failed": blocks.push({ t: "mcp", ...p, ev: [e] }); break;
+      case "retry_scheduled": retrying = { ...p, ts: e.ts }; break;
+      case "fiber_started": {
+        if (!turnOpen) break;
+        // the process before this one died mid-turn: calls it started are of unknown outcome
+        for (const c of calls.values()) if (c.status === "running") c.status = "unknown";
+        closeRun(); const st = [...blocks].reverse().find(b => b.t === "user");
+        blocks.push({ t: "done", summary: `cut short: Fiber stopped at ${clock(prevTs)} · ${[...calls.values()].filter(c => c.start >= st.ev[0].ts).length} tool calls`, ev: [e] });
+        blocks.push({ t: "resumed", ts: e.ts, ev: [e] }); turnOpen = false; break; }
+      case "context_nudged": closeRun(); blocks.push({ t: "nudge", tokens: p.tokens, at: p.trigger_at, ev: [e] }); break;
+      case "handoff_started": closeRun(); ho = { t: "handoff", id: e.seq, trigger: p.trigger, start: e.ts, noteText: "", ev: [e] }; blocks.push(ho); break;
+      case "handoff_completed": {
+        if (!ho) { closeRun(); ho = { t: "handoff", id: e.seq, trigger: "tool", start: e.ts, noteText: "", ev: [] }; blocks.push(ho); }
+        Object.assign(ho, { done: true, outcome: p.outcome, error: p.error, before: p.tokens_before }); ho.ev.push(e);
+        if (p.note_text) ho.noteText = p.note_text;
+        if (p.outcome === "completed") afterOf = ho;
+        ho = null; break; }
+      case "interaction_resolved": { closeRun(); const rq = events.find(x => x.kind === "interaction_requested" && x.payload.request_id === p.request_id); blocks.push({ t: "answer", fields: rq.payload.fields, answer: p.answer, ev: [e] }); break; }
+      case "steering_applied": closeRun(); blocks.push({ t: "steer", text: p.text, ev: [e] }); break;
+      case "turn_completed": {
+        closeRun();
+        turnOpen = false;
+        if (p.outcome === "interrupted") blocks.push({ t: "interrupted", ev: [e] });
+        if (p.outcome === "failed") blocks.push({ t: "error", error: p.error, provider: lastFail && lastFail.error.provider, ev: [e] });
+        const st = [...blocks].reverse().find(b => b.t === "user");
+        const n = [...calls.values()].filter(c => c.start >= st.ev[0].ts).length;
+        blocks.push({ t: "done", summary: `${p.outcome} · ${dur(e.ts - st.ev[0].ts)} · ${n} tool calls`, ev: [e] });
+        break; }
+      case "job_started": jobs.set(p.job_id, { id: p.job_id, desc: p.description, tool: p.tool_name, status: "running", start: e.ts }); break;
+      case "delegate_started": Object.assign(jobs.get(p.job_id), { sid: p.session_id, harness: p.harness, model: p.model }); break;
+      case "delegate_finished": jobs.get(p.job_id).final = p.final_message; break;
+      case "job_completed": { const j = jobs.get(p.job_id); j.status = p.status; j.end = e.ts; j.error = p.error; closeRun();
+        if (p.error && p.error.code === "orphaned") { const last = blocks[blocks.length - 1]; if (last && last.t === "orphans") last.jobs.push(j); else blocks.push({ t: "orphans", jobs: [j], ev: [e] }); break; }
+        blocks.push({ t: "job", job: j, ev: [e] }); break; }
+      case "usage_recorded": if (afterOf) { afterOf.after = p.tokens.input + p.tokens.cache_read + Object.values(p.tokens.cache_write || {}).reduce((a, b) => a + b, 0); ctxK = Math.round(afterOf.after / 1000); afterOf = null; } usage.input += p.tokens.input; usage.cache_read += p.tokens.cache_read; usage.output += p.tokens.output; usage.cost += p.cost || 0; break;
+    }
+  }
+  const files = new Map();
+  for (const c of calls.values()) {
+    if (c.status !== "completed" || !c.details || !c.details.diff) continue;
+    const f = files.get(c.args.path) || { a: 0, r: 0, edits: [] };
+    const pm = pmOf(c); f.a += pm.a; f.r += pm.r; f.edits.push(c.details.diff.hunks);
+    files.set(c.args.path, f);
+  }
+  return { blocks, calls, jobs, bySid, usage, files, ctxK, retrying, notices };
+}
+
+// ============================================================ state
+const state = {
+  tools: "D", reason: "A", queue: "A", copen: new Set(), look: "surfaces", pal: "atelier", pscroll: 0, conv: "ruled", user: "slab",
+  cardCfg: [["session", true], ["files", true], ["delegates", true], ["jobs", true], ["quota", true]], dscroll: 0, jobsOpen: false, toolsOff: new Set(),
+  msel: 0, effort: "high", diffFile: null, search: null, scene: "live", width: "wide", pm: true,
+  open: new Set(), ropen: new Set(), all: false, scroll: 0, view: null, rail: false, qsel: -1, editing: -1, draft: "",
+  appr: 0, apprAside: false, form: "A", ho: "B", retry: "A", notices: "B", glimmer: !matchMedia("(prefers-reduced-motion: reduce)").matches, start: "B", listed: true, startT0: 0, slist: "A", ssel: 0, dismissed: new Set(), oopen: false, hopen: new Set(), rw: null, rwJobs: {}, rwSum: false, rewound: null, idle: false, fq: 0, fsel: 0, fans: [], fnote: "", formAside: false, liveStep: 0, playing: true, tick: 0,
+};
+const COLS = { wide: 160, narrow: 100, w80: 80 }, PANEL = 34, CONV_MIN = 84;
+let ROWS = 52;
+const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+let NOW_TS = 0;
+const now = () => (NOW_TS || E[E.length - 1].ts) + 4000;
+
+// ============================================================ cells
+const S = (t, c = "", act = null, tip = null) => ({ t: String(t), c, act, tip });
+const len = segs => segs.reduce((n, s) => n + [...s.t].length, 0);
+function fit(segs, w, fillCls = "") {
+  // a "\t" segment right-aligns what follows it
+  const ti = segs.findIndex(s => s.t === "\t");
+  if (ti >= 0) {
+    const gap = w - len(segs.slice(0, ti)) - len(segs.slice(ti + 1));
+    segs = [...segs.slice(0, ti), { ...segs[ti], t: " ".repeat(Math.max(1, gap)) }, ...segs.slice(ti + 1)];
+  }
+  const out = []; let n = 0;
+  for (const s of segs) {
+    const ch = [...s.t];
+    if (n + ch.length <= w) { out.push(s); n += ch.length; }
+    else { const k = w - n; if (k > 0) out.push({ ...s, t: ch.slice(0, Math.max(0, k - 1)).join("") + "…" }); n = w; break; }
+  }
+  if (n < w) out.push(S(" ".repeat(w - n), fillCls));
+  return out;
+}
+function wrap(text, w, first, rest, cls = "", act = null) {
+  const out = [];
+  for (const para of text.split("\n")) {
+    let pre = out.length ? rest : first;
+    const words = para.split(/(\s+)/); let line = "";
+    const room = () => w - len(pre);
+    if (!para.trim()) { out.push([...pre]); continue; }
+    for (const wd of words) {
+      if ([...(line + wd)].length > room() && line.trim()) { out.push([...pre, ...md(line.trimEnd(), cls, act)]); pre = rest; line = wd.trimStart(); }
+      else line += wd;
+    }
+    if (line.trim()) out.push([...pre, ...md(line, cls, act)]);
+  }
+  return out;
+}
+// inline markdown: `code` in cyan, **bold** bold
+function md(t, cls, act) {
+  const out = [];
+  t.split(/(`[^`]+`|\*\*[^*]+\*\*)/).forEach(p => {
+    if (!p) return;
+    if (p.startsWith("`")) out.push(S(p.slice(1, -1), cls.includes("d") ? cls + " f6" : "f6", act));
+    else if (p.startsWith("**")) out.push(S(p.slice(2, -2), cls + " b", act));
+    else out.push(S(p, cls, act));
+  });
+  return out;
+}
+const tipOf = b => b.ev ? b.ev.map(e => e.kind + (e.seq ? " seq " + e.seq : "")).join(", ") : null;
+
+// ============================================================ tool-call facts shared by all variants
+function kindOf(c) {
+  if (c.name === "shell") {
+    const w = c.args.command.trim().split(/\s+/)[0];
+    return w === "grep" || w === "rg" ? "search" : w === "find" || w === "ls" ? "list" : "shell";
+  }
+  return { read: "read", edit: "edit", write: "write", delegate_spawn: "delegate", delegate_fork: "delegate", jobs: "jobs", ask_user: "ask" }[c.name] || "other";
+}
+const target = c => c.args.path || c.args.command || c.args.description || (c.args.questions ? c.args.questions.map(q => q.header).join(", ") : "");
+const nlines = c => c.content ? c.content[0].text.replace(/\n$/, "").split("\n").length : 0;
+function pmOf(c) {
+  const h = c.details && c.details.diff && c.details.diff.hunks;
+  if (!h) return null;
+  return { a: h.filter(x => x.op === "+").length, r: h.filter(x => x.op === "-").length };
+}
+function resultText(c) {
+  if (c.status === "running" || c.status === "pending") return { t: "running", c: "f3" };
+  if (c.status === "unknown") return { t: "may have run; not run again", c: "f3" };
+  if (c.status === "cancelled") return { t: "cancelled", c: "f1 d" };
+  if (c.status === "failed") return { t: c.error.code + ": " + c.error.message, c: "f1" };
+  switch (kindOf(c)) {
+    case "read": return { t: nlines(c) + " lines", c: "d" };
+    case "search": return { t: nlines(c) + " matches", c: "d" };
+    case "list": return { t: nlines(c) + " paths", c: "d" };
+    case "edit": { const pm = pmOf(c); return state.pm && pm ? { t: `+${pm.a} −${pm.r}`, c: "", pm } : { t: c.content[0].text, c: "d" }; }
+    case "shell": return c.process ? { t: "exit " + c.process.exit_code + " · " + nlines(c) + " lines", c: "d" } : { t: c.content[0].text, c: "d" };
+    case "delegate": return { t: c.content[0].text, c: "d" };
+    case "ask": return { t: c.content[0].text === "declined" ? "declined" : "answered", c: "d" };
+    default: return { t: "done", c: "d" };
+  }
+}
+const VERB = { read: ["Read", "file", "files"], search: ["Searched", "pattern", "patterns"], list: ["Listed", "directory", "directories"], edit: ["Edited", "file", "files"],
+  write: ["Wrote", "file", "files"], shell: ["Ran", "command", "commands"], delegate: ["Started", "delegate", "delegates"], jobs: ["Checked", "job", "jobs"], ask: ["Asked", "question", "questions"], other: ["Called", "tool", "tools"] };
+function summarize(calls) {
+  const by = {};
+  for (const c of calls) { const k = kindOf(c); (by[k] ||= { n: 0, files: new Set(), a: 0, r: 0 }); by[k].n += k === "ask" ? c.args.questions.length : 1; by[k].files.add(target(c)); const pm = c.status === "completed" && pmOf(c); if (pm) { by[k].a += pm.a; by[k].r += pm.r; } }
+  const parts = [];
+  for (const k of ["read", "search", "list", "edit", "write", "shell", "delegate", "jobs", "ask", "other"]) {
+    if (!by[k]) continue;
+    const [v, one, many] = VERB[k];
+    const n = k === "read" || k === "edit" || k === "write" ? by[k].files.size : by[k].n;
+    const segs = [S(`${v.toLowerCase()} ${n} ${n === 1 ? one : many}`, "d")];
+    if (k === "edit" && state.pm && (by[k].a || by[k].r)) segs.push(S(" "), S("+" + by[k].a, "f2 d"), S(" "), S("−" + by[k].r, "f1 d"));
+    parts.push(segs);
+  }
+  const out = [];
+  parts.forEach((p, k) => { if (k) out.push(S(", ", "d")); out.push(...p); });
+  if (out.length) out[0] = { ...out[0], t: out[0].t[0].toUpperCase() + out[0].t.slice(1) };
+  return out;
+}
+const dur = ms => { const s = Math.round(ms / 1000); return s < 60 ? s + "s" : s < 3600 ? Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s" : Math.floor(s / 3600) + "h " + String(Math.floor(s / 60) % 60).padStart(2, "0") + "m"; };
+const spin = () => SPIN[state.tick % SPIN.length];
+// the working line's glimmer: a band in the spinner's colour, three cells wide, sweeps left to right across the word, then rests
+// one cell's foreground changes per tick, so a terminal redraws one short line about every 120 ms, and only while a turn runs
+function glimmer(t) {
+  if (!state.glimmer) return [S(t)];
+  const ch = [...t], pos = state.tick % (ch.length + 8) - 2;
+  return ch.map((c, i) => { const d = Math.abs(i - pos); return S(c, d === 0 ? "b f3" : d === 1 ? "f3" : "d"); });
+}
+const isOpen = g => state.all || state.open.has(g.id) || (state.scene === "approval" && g.approvalOpen) ||
+  (state.search && state.search.q.length > 2 && g.items.some(c => c.t === "call" && target(c).toLowerCase().includes(state.search.q.toLowerCase())));
+const runCallsOf = g => g.items.filter(x => x.t === "call");
+
+// ============================================================ reasoning variants
+// A: Claude Code — one line "∴ Thought for 14s", click to expand.
+// B: codex — never in the scrollback; the live heading drives the working line. Full text only with ctrl+o (all expanded).
+// C: inline, clipped — the text itself, dim italic; last 3 lines while streaming, first line after.
+function renderReason(r, w, inGroup) {
+  const out = [], pad = inGroup ? "  " : "";
+  const open = state.ropen.has(r.id) || state.all;
+  const body = () => wrap(r.text, w, [S(pad + "  ")], [S(pad + "  ")], "d i");
+  if (state.reason === "A") {
+    const hs = [...r.text.matchAll(/\*\*([^*]+)\*\*/g)], title = hs.length ? hs[r.live ? hs.length - 1 : 0][1] : "";
+    const head = r.live ? [S(pad), S(spin() + " ", "f3"), S("Thinking" + (title ? ": " + title : ""), "d i")] :
+      [S(pad), S(open ? "- " : "+ ", "d"), S("Thought" + (title ? ": " + title : "") + " · " + r.secs + "s", "d i", "r:" + r.id)];
+    out.push(head.map(s => s.act ? s : { ...s, act: "r:" + r.id }));
+    if (open) out.push(...body());
+  } else if (state.reason === "B") {
+    if (open && !r.live) { out.push([S(pad), S("• ", "d"), ...md(r.text.split("\n")[0].replace(/\*\*/g, ""), "d i")]); out.push(...body().slice(1)); }
+    else return [];
+  } else {
+    const all = body();
+    if (r.live) { out.push([S(pad), S(spin() + " ", "f3"), S("thinking", "d i")]); out.push(...all.slice(-3).map(l => [S(pad + "┊", "d"), ...l.slice(1)])); }
+    else if (open) { out.push(...all.map(l => [S(pad + "┊", "d", "r:" + r.id), ...l.slice(1)])); }
+    else {
+      const first = r.text.split("\n").find(x => x.trim()).replace(/\*\*/g, "");
+      out.push([S(pad + "┊ ", "d", "r:" + r.id), S(first, "d i", "r:" + r.id), S(`  +${all.length - 1} lines · ${r.secs}s`, "d", "r:" + r.id)]);
+    }
+  }
+  return out;
+}
+function liveHeading(fz) {
+  // codex: the latest summary heading replaces "Working"
+  let r = null;
+  for (const b of fz.blocks) { if (b.t === "reason") r = b; if (b.t === "tools") for (const x of b.items) if (x.t === "reason") r = x; }
+  if (!r) return "Working";
+  const hs = [...r.text.matchAll(/\*\*([^*]+)\*\*/g)];
+  return hs.length ? hs[hs.length - 1][1] : "Working";
+}
+
+// ============================================================ tool variants
+function callLineA(c, w) {
+  const k = kindOf(c), res = resultText(c);
+  const dot = c.status === "running" ? S(spin(), "f3") : c.status === "completed" ? S("●", "f2") : S("●", "f1");
+  const name = { read: "Read", edit: "Update", write: "Write", shell: "Shell", search: "Search", list: "List", delegate: "Delegate", jobs: "Jobs" }[k] || c.name;
+  const out = [[S(" "), dot, S(" "), S(name, "b"), S("(", "d"), S(target(c)), S(")", "d")]];
+  const r2 = res.pm ? [S("+" + res.pm.a, "f2"), S(" "), S("−" + res.pm.r, "f1")] : [S(res.t, res.c)];
+  out.push([S("   ⎿  ", "d"), ...r2]);
+  if (k === "edit" && c.status === "completed" && c.details) for (const h of c.details.diff.hunks.slice(0, 4)) out.push([S("      "), S(String(h.n).padStart(4) + " " + h.op + " " + h.text, h.op === "+" ? "bga" : "bgd")]);
+  return out;
+}
+function renderToolsA(g, w) {
+  const calls = runCallsOf(g), out = [], act = "g:" + g.id;
+  const running = calls.filter(c => c.status === "running");
+  const bad = calls.filter(c => c.status === "failed" || c.status === "cancelled");
+  const dot = running.length ? S(spin(), "f3", act) : bad.length ? S("●", "f1", act) : S("●", "f2", act);
+  const head = [S(" "), dot, S(" "), ...summarize(calls).map(s => ({ ...s, act }))];
+  if (running.length) head.push(S(" · ", "d", act), S(running.map(target).join(", "), "f3", act));
+  head.push(S(isOpen(g) ? "  ctrl+o to collapse" : "  ctrl+o to expand", "d", act));
+  out.push(...wrapSegs(head, w, [S("   ")]));
+  if (!isOpen(g)) {
+    for (const c of bad) out.push([S("   ⎿  ", "d"), S(c.status === "failed" ? "✗ " : "⊘ ", "f1"), S(kindOf(c) + " ", "b"), S(target(c) + "  ", ""), S(resultText(c).t, resultText(c).c)]);
+    return out;
+  }
+  for (const x of g.items) out.push(...(x.t === "reason" ? renderReason(x, w, true) : callLineA(x, w)));
+  return out;
+}
+// wrap a long segment list at w, continuing with `cont`
+function wrapSegs(segs, w, cont) {
+  if (len(segs) <= w) return [segs];
+  const out = []; let line = [], n = 0;
+  for (const s of segs) for (const word of s.t.split(/(?<=[ ,])/)) {
+    const wl = [...word].length;
+    if (n + wl > w && n > 0) { out.push(line); line = [...cont]; n = len(cont); }
+    line.push({ ...s, t: word }); n += wl;
+  }
+  if (line.length) out.push(line);
+  return out;
+}
+
+// B: codex cells — read-only calls merge into one "Explored" cell; commands and edits are cells of their own.
+function renderToolsB(g, w) {
+  const out = [], items = g.items;
+  let i = 0;
+  while (i < items.length) {
+    const x = items[i];
+    if (x.t === "reason") { out.push(...renderReason(x, w, false)); i++; continue; }
+    const k = kindOf(x);
+    if (k === "read" || k === "search" || k === "list") {
+      const grp = []; while (i < items.length && items[i].t === "call" && ["read", "search", "list"].includes(kindOf(items[i]))) grp.push(items[i++]);
+      const live = grp.some(c => c.status === "running");
+      out.push([S("• ", live ? "d" : "d"), S(live ? "Exploring" : "Explored", "b")]);
+      // consecutive reads collapse into one "Read a, b, c" line
+      let first = true, k2 = 0;
+      while (k2 < grp.length) {
+        const c = grp[k2], kk = kindOf(c); let segs;
+        if (kk === "read") { const names = []; while (k2 < grp.length && kindOf(grp[k2]) === "read") names.push(grp[k2++].args.path.split("/").pop()); segs = [S("Read ", "f6"), S([...new Set(names)].join(", "))]; }
+        else { const m = c.args.command.match(/'([^']+)'\s+(\S+)/); segs = kk === "search" ? [S("Search ", "f6"), S(m ? m[1] : c.args.command), S(" in ", "d"), S(m ? m[2] : "")] : [S("List ", "f6"), S(c.args.command.split(" ")[1])]; k2++; }
+        const pre = first ? S("  └ ", "d") : S("    ");
+        out.push(...wrapSegs([pre, ...segs], w, [S("      ")])); first = false;
+      }
+      continue;
+    }
+    i++;
+    const c = x, ok = c.status === "completed", run = c.status === "running";
+    const bullet = run ? S(spin(), "f3") : ok ? S("•", "f2") : S("•", "f1 b");
+    if (k === "edit") {
+      const pm = pmOf(c);
+      if (c.status === "failed") { out.push([S("✘", "f1 b"), S(" "), S("Failed to apply edit", "b"), S(" " + c.args.path, "")]); out.push([S("  └ ", "d"), S(c.error.code + ": " + c.error.message, "f1")]); continue; }
+      out.push([bullet, S(" "), S("Edited", "b"), S(" " + c.args.path), ...(state.pm && pm ? [S(" ("), S("+" + pm.a, "f2"), S(" "), S("-" + pm.r, "f1"), S(")")] : [S(" (" + c.content[0].text + ")", "d")])]);
+      if (c.details) c.details.diff.hunks.slice(0, 6).forEach((h, j) => out.push([S(j ? "    " : "  └ ", "d"), S(String(h.n).padStart(4) + " " + h.op + h.text, h.op === "+" ? "bga" : "bgd")]));
+      continue;
+    }
+    if (k === "shell") {
+      const verb = run ? "Running" : c.status === "cancelled" ? "Interrupted" : c.status === "failed" ? `Failed (exit ${c.process.exit_code})` : "Ran";
+      out.push(...wrapSegs([bullet, S(" "), S(verb, "b"), S(" "), S(c.args.command.split(" ")[0], "f12"), S(" " + c.args.command.split(" ").slice(1).join(" "))], w, [S("  │ ", "d")]));
+      if (run) continue;
+      const ls = c.content[0].text.split("\n").filter(l => l !== "…");
+      const n = nlines(c);
+      const head = ls.slice(0, 2), tail = ls.slice(-2);
+      out.push([S("  └ ", "d"), S(head[0] || "", c.status === "failed" ? "f1 d" : "d")]);
+      if (head[1] && n > 4) out.push([S("    "), S(head[1], "d")]);
+      if (n > 5) out.push([S("    "), S(`… +${n - 4} lines (ctrl+o to view)`, "d")]);
+      tail.forEach(l => out.push([S("    "), S(l, c.status === "failed" ? "f1 d" : "d")]));
+      continue;
+    }
+    out.push([bullet, S(" "), S(run ? "Calling" : "Called", "b"), S(" " + c.name, "f12"), S("(" + target(c) + ")", "d")]);
+    if (!run) out.push([S("  └ ", "d"), S(resultText(c).t, "d")]);
+  }
+  return out;
+}
+
+// C: ledger with head and tail — one row per call; a long run folds its middle, failures stay visible.
+const HEAD = 3, TAIL = 6;
+function ledgerRow(c, w) {
+  const res = resultText(c), k = kindOf(c);
+  const g = c.status === "running" ? S(spin(), "f3") : c.status === "completed" ? S("✓", "f2") : c.status === "cancelled" ? S("⊘", "f1") : S("✗", "f1");
+  const resSegs = res.pm ? [S("+" + res.pm.a, "f2"), S(" "), S("−" + res.pm.r, "f1")] : [S(res.t, res.c)];
+  const rl = len(resSegs), tw = w - 14 - rl - 2;
+  let t = target(c); if ([...t].length > tw) t = [...t].slice(0, tw - 1).join("") + "…";
+  return [S("│ ", "d"), g, S(" "), S(k.padEnd(8), "f6"), S(t.padEnd(tw)), S("  "), ...resSegs];
+}
+function renderToolsC(g, w) {
+  const calls = runCallsOf(g), out = [], act = "g:" + g.id;
+  const bad = calls.filter(c => c.status === "failed" || c.status === "cancelled");
+  const running = calls.some(c => c.status === "running");
+  const span = (calls[calls.length - 1].end || now()) - calls[0].start;
+  out.push([S("┌ ", "d", act), S(`${calls.length} call${calls.length > 1 ? "s" : ""}`, "b", act), S(" · " + dur(span), "d", act), ...(bad.length ? [S(" · ", "d", act), S(`${bad.length} not completed`, "f1", act)] : []), S(running ? " · running" : "", "f3", act)]);
+  const rows = g.items;
+  const fold = !isOpen(g) && rows.length > HEAD + TAIL + 1;
+  if (!fold) { for (const x of rows) out.push(...(x.t === "reason" ? renderReason(x, w - 2, false).map(l => [S("│ ", "d"), ...l]) : [ledgerRow(x, w)])); }
+  else {
+    for (const x of rows.slice(0, HEAD)) if (x.t === "call") out.push(ledgerRow(x, w));
+    const mid = rows.slice(HEAD, rows.length - TAIL).filter(x => x.t === "call");
+    const by = {}; mid.forEach(c => by[kindOf(c)] = (by[kindOf(c)] || 0) + 1);
+    out.push([S("┆ ", "d", act), S(`⋯ ${mid.length} more: ` + Object.entries(by).map(([k, n]) => `${n} ${k}`).join(", "), "d", act), S("   click or ctrl+o to show", "d", act)]);
+    for (const c of mid.filter(c => c.status === "failed" || c.status === "cancelled")) out.push(ledgerRow(c, w));
+    for (const x of rows.slice(-TAIL)) if (x.t === "call") out.push(ledgerRow(x, w));
+  }
+  out.push([S("└", "d", act)]);
+  return out;
+}
+
+// D: the ruling. One summary line for everything between two replies, thinking included.
+// Click: the ledger, split by step (one model round trip). Click a row: that call.
+function steps(g) {
+  const out = []; let cur = null, end = 0;
+  for (const x of g.items) {
+    const newStep = !cur || x.t === "reason" || (cur.calls.length && x.start > end);
+    if (newStep) { cur = { reason: null, calls: [] }; out.push(cur); end = 0; }
+    if (x.t === "reason") cur.reason = x;
+    else { cur.calls.push(x); end = Math.max(end, x.end || Infinity); }
+  }
+  return out;
+}
+function callDetail(c, w) {
+  const out = [], pad = "        ";
+  if (c.status === "failed") out.push([S(pad), S(c.error.code + ": " + c.error.message, "d")]);
+  const k = kindOf(c);
+  if (k === "edit" && c.details) c.details.diff.hunks.forEach(h => out.push([S(pad), S(String(h.n).padStart(4) + " " + h.op + " " + h.text, h.op === "+" ? "bga" : "bgd")]));
+  else if (k === "read") out.push([S(pad), S("lines 1–" + nlines(c) + " of " + nlines(c), "d")]);
+  else if (c.args.command) {
+    out.push([S(pad), S("$ ", "f5"), S(c.args.command)]);
+    const ls = c.content ? c.content[0].text.replace(/\n$/, "").split("\n") : [];
+    const real = ls.filter(l => l !== "…");
+    real.slice(0, 2).forEach(l => out.push([S(pad), S(l, "d")]));
+    if (ls.length > 4) out.push([S(pad), S(`… +${ls.length - 4} lines`, "d")]);
+    real.slice(2).slice(-2).forEach(l => out.push([S(pad), S(l, "d")]));
+  } else if (c.content) out.push([S(pad), S(c.content[0].text, "d")]);
+  return out;
+}
+function ledgerRowD(c, w, gutter) {
+  const res = resultText(c), k = kindOf(c), act = "c:" + c.id;
+  const g = c.status === "running" ? S(spin(), "f3") : c.status === "completed" ? S("✓", "f2") : c.status === "cancelled" ? S("⊘", "d") : c.status === "unknown" ? S("?", "f3") : S("✗", "d");
+  const resSegs = res.pm ? [S("+" + res.pm.a, "f2"), S(" "), S("−" + res.pm.r, "f1")] : [S(res.t, res.c.replace("f1", "").trim() || "d")];
+  const rl = len(resSegs), tw = w - 16 - rl - 2;
+  let t = target(c); if ([...t].length > tw) t = [...t].slice(0, tw - 1).join("") + "…";
+  const row = [S(gutter, "d"), g, S(" "), S(k.padEnd(8), "f6", act), S(t.padEnd(tw), "", act), S("  "), ...resSegs.map(s => ({ ...s, act }))];
+  return state.copen.has(c.id) ? [row, ...callDetail(c, w)] : [row];
+}
+function renderToolsD(g, w) {
+  const calls = runCallsOf(g), out = [], act = "g:" + g.id;
+  const thoughts = g.items.filter(x => x.t === "reason").length;
+  const running = calls.filter(c => c.status === "running"), liveR = g.items.find(x => x.t === "reason" && x.live);
+  const endTs = liveR || !calls.length || calls.some(c => !c.end && c.status !== "unknown") ? now() : Math.max(...calls.map(c => c.end || c.start));
+  const dot = running.length || liveR ? S(spin(), "d", act) : S("●", "d", act);
+  const sum = summarize(calls).map(s => ({ ...s, act }));
+  if (thoughts) sum.push(S(`, thought ${thoughts === 1 ? "once" : thoughts + " times"}`, "d", act));
+  const nf = (g.fails || []).length;
+  if (nf && state.retry === "A") sum.push(S(`, ${nf} failed model call${nf > 1 ? "s" : ""}`, "d", act));
+  if (!calls.length && !thoughts) sum.push(S(nf + " failed model call" + (nf > 1 ? "s" : ""), "d", act));
+  const head = [S(" "), dot, S(" "), ...sum, S(" · " + dur(endTs - (g.items.length ? g.items[0].start : g.fails[0].ts)), "d", act)];
+  if (running.length) head.push(S(" · ", "d", act), S(running.map(target).join(", "), "d", act));
+  if (liveR) { const hs = [...liveR.text.matchAll(/\*\*([^*]+)\*\*/g)]; head.push(S(" · Thinking" + (hs.length ? ": " + hs[hs.length - 1][1] : ""), "d i", act)); }
+  head.push(S(isOpen(g) ? "  ▾" : "  ▸", "d", act));
+  out.push(...wrapSegs(head, w, [S("   ")]));
+  if (!isOpen(g)) return out;
+  steps(g).forEach((st, n) => {
+    const num = String(n + 1).padStart(5) + " ";
+    if (st.reason) out.push(...renderReason(st.reason, w - 6, false).map((l, k) => [S(k ? "      " : num, "d"), ...l]));
+    st.calls.forEach((c, k) => out.push(...ledgerRowD(c, w, (k || st.reason) ? "      " : num)));
+  });
+  return out;
+}
+
+// ============================================================ conversation
+function renderBlocks(fz, w) {
+  // turns: a user message and everything after it, up to the next one
+  const turns = []; let cur = null;
+  for (const b of fz.blocks) { if (b.t === "user" || !cur) { cur = { blocks: [] }; turns.push(cur); } cur.blocks.push(b); }
+  const nested = surf() && (state.conv === "turn" || state.conv === "ruled");
+  const out = [];
+  for (const t of turns) {
+    const iw = nested ? w - 2 : w, inner = [];
+    let blocks = t.blocks;
+    // ruled: the prompt that starts a turn floats above the turn's card, as a bubble on the right
+    if (state.conv === "ruled" && surf() && blocks[0].t === "user") { out.push([], ...userLines(blocks[0], w, false, "bubble")); blocks = blocks.slice(1); }
+    const flush = () => {
+      if (!inner.length) return;
+      if (nested) { out.push([]); out.push(...slab(inner.map(l => { const r = [S(" "), ...fit(l, iw, l.bg || ""), S(" ")]; r.bg = l.bg; return r; }), "bw", w)); }
+      else out.push(...inner);
+      inner.length = 0;
+    };
+    blocks.forEach(b => {
+      // handoff B: the card ends at the handoff and a new one starts after it, as the model's context does
+      if (b.t === "handoff" && state.ho === "B" && nested) { flush(); out.push([], ...handoffBand(b, w)); return; }
+      if (b.t === "resumed") { flush(); out.push([], ...resumedLines(b, w)); return; }
+      const r = renderBlock(b, iw, nested); if (r.length) { if (inner.length || !nested) inner.push([]); inner.push(...r); }
+    });
+    flush();
+  }
+  return out;
+}
+function renderBlock(b, w, nested) {
+  const tip = tipOf(b);
+  if (b.t === "user" || b.t === "steer") return userLines(b, w, nested, state.conv === "ruled" && surf() ? "rule" : state.user).map(l => { const r = l.map(s => ({ ...s, tip })); r.bg = l.bg; return r; });
+  if (b.t === "text") {
+    const md = mdLines(b.text, surf() && state.conv === "all" ? w - 2 : w, nested ? "bw" : surf() && state.conv === "all" ? "br" : "");
+    return surf() && state.conv === "all" ? slab(md.map(l => { const r = [S(" "), ...fit(l, w - 2, l.bg || ""), S(" ")]; r.bg = l.bg; return r; }), "br", w) : md;
+  }
+  if (b.t === "notice") return state.notices === "A" ? [[S("⚠ ", "f3"), S(b.code, "f3"), S(" · " + b.message, "d")]] : [];
+  if (b.t === "mcp") return wrap(b.error.message, w - 2, [S("⚠ ", "f3")], [S("  ")], "d");
+  if (b.t === "orphans") {
+    const act = "orph", head = wrapSegs([S("◆ ", "f1", act), S(b.jobs.length + " jobs orphaned", "b", act), S(" · Fiber stopped while they ran, so whether they finished is unknown · ", "d", act), S(b.jobs.map(j => j.desc).join(", "), "d", act), S(state.oopen ? "  ▾" : "  ▸", "d", act)], w, [S("  ")]);
+    return state.oopen ? [...head, ...b.jobs.flatMap(j => wrap(j.desc + ": " + j.error.message, w, [S("  ✗ ", "f1 d")], [S("    ")], "d"))] : head;
+  }
+  if (b.t === "error") return [[S("✗ ", "f1"), ...wrap(b.error.message, w - 2, [], [], "")[0]], ...wrap(b.error.message, w - 2, [], [], "").slice(1).map(l => [S("  "), ...l]),
+    ...(b.provider ? [[S(`${b.error.code} · ${b.provider.name} said HTTP ${b.provider.status}: “${b.provider.message}”`, "d")]] : [])];
+  if (b.t === "nudge") return [[S("◔ ", "d"), S(`Context at ${Math.round(b.tokens / 1000)}k, two thirds of the way to the ${Math.round(b.at / 1000)}k handoff. The model was told a handoff keeps the work going.`, "d")]];
+  if (b.t === "handoff") return handoffLines(b, w);
+  if (b.t === "answer") return answerLines(b, w).map(l => { const r = l.map(s => ({ ...s, tip })); r.bg = l.bg; return r; });
+  if (b.t === "reason") return renderReason(b, w, false);
+  if (b.t === "interrupted" && (nested || state.conv === "turn" || state.conv === "ruled")) return [];
+  if (b.t === "interrupted") return [[S("■ ", "f1"), S("Interrupted", "f1 b"), S(" · the turn ended here", "d")]];
+  if (b.t === "done") return nested || state.conv === "turn" || state.conv === "ruled" ? [[S("▣ ", "d"), S(b.summary, "d")]] : [];
+  if (b.t === "job") { const o = [[S("◆ ", "f5"), S(b.job.desc, "b", "d:" + b.job.id), S(" · " + b.job.status + " · " + dur(b.job.end - b.job.start), "d")]]; if (b.job.final) o.push(...wrap(b.job.final, w, [S("  ⎿  ", "d")], [S("     ")], "d")); if (b.job.error) o.push(...wrap(b.job.error.code + ": " + b.job.error.message, w, [], [], "d")); return o; }
+  if (b.t === "tools" && !runCallsOf(b).length && !(b.fails || []).length) {
+    return b.items.flatMap(r => renderReason(r, w, false));
+  }
+  if (b.t === "tools") {
+    const withFails = r => state.retry === "B" && b.fails ? [...r, ...b.fails.map(f => [S("↻ ", "f3 d"), S(f.error.code, "f3 d"), S(" · attempt " + f.attempt + " · " + f.error.message, "d")])] : r;
+    return withFails(renderToolsGroup(b, w, nested));
+  }
+  return [];
+}
+function renderToolsGroup(b, w, nested) {
+  {
+    const fn = { A: renderToolsA, B: renderToolsB, C: renderToolsC, D: renderToolsD }[state.tools];
+    if (!surf()) return fn(b, w);
+    // ruled: tool groups sit back behind the replies, with no band of their own
+    // ruled: nothing in the card is indented; the summary's dot sits at the card's edge
+    if (state.conv === "ruled") return fn(b, w).map((l, k) => !k && l[0] && l[0].t === " " ? l.slice(1) : l);
+    const rows = fn(b, w - 1).map(l => [S(" "), ...l]);
+    return nested ? rows.map(l => tint(l, "bt")) : slab(rows, "bt", w);
+  }
+  return [];
+}
+const clock = ts => new Date(ts).toISOString().slice(11, 16);
+function userLines(b, w, nested, style) {
+  const steer = b.t === "steer", acc = steer ? "f3" : "f4", who = steer ? "steer" : state.view ? "from main" : "you";
+  const ts = b.ev && b.ev[0] ? clock(b.ev[0].ts) : "";
+  if (!surf()) return wrap(b.text, w, [S("› ", "f6 b"), ...(steer ? [S("steer ", "f3")] : [])], [S("  ")], "b");
+  if (style === "rule") {
+    return [[S(who, acc + " b"), S(" · " + ts + " ", "d"), S("─".repeat(Math.max(0, w - who.length - ts.length - 4)), "fs")], ...wrap(b.text, w, [], [], "b")];
+  }
+  if (style === "bubble") {
+    const maxw = Math.floor(w * 0.72), tl = Math.min(maxw - 4, [...b.text].length);
+    const body = wrap(b.text, tl + 2, [S(" ")], [S(" ")], "");
+    const bw = Math.max(...body.map(len)) + 3, pad = w - bw, outer = nested ? "bw" : "";
+    const rows = body.map(l => { const r = [S(" ".repeat(pad)), ...tint([...fit(l, bw - 2), S(" "), S("▐", acc)], "bu")]; r.bg = outer; return r; });
+    const e = ch => { const r = [S(" ".repeat(pad)), ...edge(ch, "bu", outer, bw)]; r.bg = outer; return r; };
+    return [e("▄"), ...rows, e("▀"), [S(" ".repeat(Math.max(0, w - ts.length - 7))), S(who + " " + ts, "d")]];
+  }
+  const st = S("▌", acc);
+  const rows = wrap(b.text, w - 3, [st, S(" ")], [st, S(" ")], "").map(l => [...l, S(" ")]);
+  return nested ? rows.map(l => tint(l, "bu")) : slab(rows, "bu", w);
+}
+
+// a handoff: the trigger, and the context size before and after; the note expands under it
+const HO_TRIG = { auto: "automatic at 400k", person: "you asked with /handoff", overflow: "the request did not fit", tool: "the model handed off" };
+function hoLabel(b) {
+  const k = n => Math.round(n / 1000) + "k";
+  const segs = [S("handoff", "f13 b"), S(" · " + HO_TRIG[b.trigger], "d")];
+  if (!b.done) segs.push(S(" · writing the note " + spin() + " " + dur(now() - b.start), "d"));
+  else if (b.outcome === "completed") segs.push(S(" · ", "d"), S(k(b.before)), S(" → ", "d"), b.after ? S(k(b.after)) : S("…", "d"));
+  else if (b.outcome === "failed") segs.push(S(" · failed, " + b.error.code + " · the context is unchanged", "f1"));
+  else segs.push(S(" · cancelled · the context is unchanged", "d"));
+  segs.push(S(" · " + clock(b.ev[0].ts), "d"));
+  return segs;
+}
+function hoNote(b, w) { return state.hopen.has(b.id) && b.noteText ? mdLines(b.noteText, w, "").map(r => r.map(s => ({ ...s, c: (s.c + " d").trim() }))) : []; }
+function handoffLines(b, w) {
+  const act = "ho:" + b.id, lab = hoLabel(b).map(s => ({ ...s, act }));
+  const tail = b.noteText && b.done ? [S(" "), S(state.hopen.has(b.id) ? "▾ note" : "▸ note", "f13", act)] : [];
+  const rule = Math.max(1, w - 4 - len(lab) - len(tail));
+  return [[S("── ", "f13 d", act), ...lab, S(" " + "─".repeat(rule), "f13 d", act), ...tail], ...hoNote(b, w)];
+}
+function resumedLines(b, w) {
+  const lab = [S("↺ ", "f4"), S("resumed", "f4 b"), S(" · " + clock(b.ts) + " · the process before this one stopped without exiting", "d")];
+  return [[...lab, S(" " + "─".repeat(Math.max(1, w - len(lab) - 1)), "f4 d")]];
+}
+function handoffBand(b, w) {
+  const act = "ho:" + b.id, lab = hoLabel(b).map(s => ({ ...s, act }));
+  const tail = b.noteText && b.done ? [S(state.hopen.has(b.id) ? "▾ note" : "▸ note", "f13", act)] : [];
+  const rows = [[S(" "), ...fit([S("⇣ ", "f13", act), ...lab, S("\t"), ...tail], w - 3), S(" ")], ...hoNote(b, w - 4).map(l => [S("  "), ...fit(l, w - 4), S("  ")])];
+  return slab(rows, "bs", w);
+}
+
+// the person's answers to a form: theirs, so they read as a labelled rule like a steer, not a dim tool row
+function answerLines(b, w) {
+  const ts = clock(b.ev[0].ts), who = "you answered";
+  const rows = b.answer === "declined" ? [[S("declined", "d")]] : b.fields.map((f, k) => {
+    const a = b.answer.fields[k];
+    const val = a.skipped ? S("skipped", "d") : S([...(a.selected || []), ...(a.text ? ["“" + a.text + "”"] : [])].join(", "), "b");
+    return [S(f.header.padEnd(13), "f4"), val];
+  });
+  if (b.answer.note) rows.push([S("note".padEnd(13), "f4"), S("“" + b.answer.note + "”", "b")]);
+  if (!surf()) return [[S("› ", "f6 b"), S("answered", "f4")], ...rows];
+  return [[S(who, "f4 b"), S(" · " + ts + " ", "d"), S("─".repeat(Math.max(0, w - who.length - ts.length - 4)), "fs")], ...rows];
+}
+
+// ============================================================ markdown and code in replies
+function mdLines(text, w, outer) {
+  const out = [], L = text.split("\n");
+  for (let i = 0; i < L.length; i++) {
+    const ln = L[i];
+    if (ln.startsWith("```")) { const lang = ln.slice(3).trim(), code = []; i++; while (i < L.length && !L[i].startsWith("```")) code.push(L[i++]); out.push(...codeBlock(code, lang, w, outer)); continue; }
+    if (ln.startsWith("|")) { const rows = []; while (i < L.length && L[i].startsWith("|")) rows.push(L[i++]); i--; out.push(...mdTable(rows)); continue; }
+    if (/^#{1,3} /.test(ln)) { out.push([S(ln.replace(/^#+ /, ""), "b hd")]); continue; }
+    if (/^[-*] /.test(ln)) { out.push(...wrap(ln.slice(2), w, [S("• ", "f4")], [S("  ")], "")); continue; }
+    if (!ln.trim()) { out.push([]); continue; }
+    out.push(...wrap(ln, w, [], [], ""));
+  }
+  return out;
+}
+function hl(line) {
+  const out = [], re = /(\/\/.*$)|("(?:[^"\\]|\\.)*")|(\b\d[\d_]*\b)|(\b(?:pub|fn|let|mut|while|if|return|use|impl|for|in|match|struct|const|as|Ok|Err|Some|None)\b)|(\b[A-Z][A-Za-z0-9_]*\b)|(\b[a-z_][a-z0-9_]*(?=\())|(\s+|\w+|[^\s\w])/g;
+  let m;
+  while ((m = re.exec(line))) out.push(S(m[0], m[1] ? "sx-com i" : m[2] ? "sx-str" : m[3] ? "sx-num" : m[4] ? "sx-kw" : m[5] ? "sx-ty" : m[6] ? "sx-fn" : ""));
+  return out;
+}
+function codeBlock(code, lang, w, outer) {
+  const cw = w;
+  if (!surf()) {
+    return [[S("  ╭─ ", "d"), S(lang, "d"), S(" " + "─".repeat(Math.max(0, cw - lang.length - 5)) + "╮", "d")],
+      ...code.map((c, n) => [S("  │ ", "d"), ...fit([S(String(n + 1).padStart(3) + "  ", "fs"), ...hl(c)], cw - 4), S(" │", "d")]),
+      [S("  ╰" + "─".repeat(cw - 2) + "╯", "d")]];
+  }
+  const rows = [[S(" "), S(lang, "d"), S("\t"), S("click to copy", "d", "copy"), S(" ")], ...code.map((c, n) => [S(String(n + 1).padStart(4) + "  ", "fs"), ...hl(c)])];
+  return slab(rows.map(r => fit(r, cw)), "bk", cw, outer);
+}
+function mdTable(rows) {
+  const cells = rows.filter(r => !/^\|[\s:|-]+\|$/.test(r)).map(r => r.slice(1, -1).split("|").map(c => c.trim()));
+  const wd = cells[0].map((_, k) => Math.max(...cells.map(r => r[k].length)));
+  const num = cells[0].map((_, k) => cells.slice(1).every(r => /^[\d.,%+−-]+$/.test(r[k])));
+  const cell = (t, k) => num[k] ? t.padStart(wd[k]) : t.padEnd(wd[k]);
+  const out = [[...cells[0].flatMap((c, k) => [S(cell(c, k), "b"), S("   ")])]];
+  out.push([...wd.flatMap(n => [S("─".repeat(n), "fs"), S("   ")])]);
+  for (const r of cells.slice(1)) out.push([...r.flatMap((c, k) => [S(cell(c, k), num[k] ? "" : ""), S("   ")])]);
+  return out;
+}
+function queueTail(w) {
+  // queue variant B: queued steering at the tail of the conversation, where it will land
+  if (state.queue !== "B" || !queue.length || state.view) return [];
+  const out = [[]];
+  queue.forEach((q, k) => {
+    const sel = state.qsel === k;
+    out.push(...wrapSegs([S("› ", "f6 d"), S(q, (sel ? "bgs " : "") + "d i", "q:" + k), S("   queued", "f3 d", "q:" + k), S("  ✕", "f1", "qx:" + k)], w, [S("  ")]));
+  });
+  out.push([S("  joins the turn at the next step · click to edit · ✕ withdraws", "d")]);
+  return out;
+}
+
+// ============================================================ looks
+// "lines": box-drawing borders, as today. "surfaces": tinted backgrounds with half-block edges and no borders.
+// A terminal draws ▄ with the inner colour as foreground on the outer colour; the page draws the same halves with a gradient.
+const surf = () => state.look === "surfaces";
+const BGS = /\b(bga|bgd|bgs|rv|bp|bc|bu|bt|bi|bw|br|bk|bs|et|eb)\b/;
+function tint(line, bg) { const l = line.map(s => BGS.test(s.c) ? s : { ...s, c: (s.c + " " + bg).trim() }); l.bg = line.bg || bg; return l; }
+function edge(ch, bg, outer, w) { const l = [{ ...S(ch.repeat(w), ch === "▄" ? "et" : "eb"), sty: `--eo:var(--${outer || "t-bg"});--ei:var(--${bg})` }]; l.bg = outer; return l; }
+function slab(lines, bg, w, outer = "") { return [edge("▄", bg, outer, w), ...lines.map(l => tint(l, bg)), edge("▀", bg, outer, w)]; }
+
+// ============================================================ panel cards
+function bar(frac, w, cls = "f6") { const f = Math.max(frac > 0 ? 1 : 0, Math.round(frac * w)); return [S("▆".repeat(f), cls), S("▆".repeat(w - f), "fs")]; }
+const CARD_NAMES = { session: "Session", files: "Changed files", delegates: "Delegates", jobs: "Jobs", quota: "Quota (extension)" };
+function cards(fz) {
+  const u = fz.usage, C = {}, K = {}, ck = fz.ctxK ?? 214;
+  const withAct = (segs, act) => segs.map(s => ({ ...s, act: s.act || act }));
+  // one card for the session: where, which model, how full, what it cost, the mode as one word, and the tools
+  C.session = [{ act: "p:session", title: [S("~/work/fiber", "b", "p:cwd"), S("\t"), S("auto", "f3", "p:mode")], lines: [
+    withAct([S("git ", "d"), S("fix/wait-for-path", "f5"), S("*", "f3")], "p:git"),
+    withAct([S("claude-opus-5-5", "f4"), S("\t"), S("high", "f3"), S(" ∴", "d")], "p:model"),
+    withAct([...bar(ck / 400, 17), S("│", "f3"), S("\t"), S(ck + "k")], "p:context"),
+    withAct([S("handoff 400k", "d"), S("\t"), S(Math.round(ck / 10) + "% of 1M", "d")], "p:context"),
+    withAct([S("in ", "d"), S((u.input / 1e3).toFixed(0) + "k"), S(" out ", "d"), S((u.output / 1e3).toFixed(1) + "k"), S("\t"), S("cache ", "d"), S("99%")], "p:usage"),
+    withAct([S("$" + u.cost.toFixed(2)), S(" · 71 tok/s · 3 turns", "d")], "p:usage"),
+    withAct([S("tools ", "d"), S("41"), S("\t"), S("✗ linear down", "f1")], "p:tools"),
+  ] }];
+  K.session = [[S("~/work/fiber", "", "p:cwd"), S(" git ", "d", "p:git"), S("fix/wait-for-path", "f5", "p:git"), S("*", "f3", "p:git")],
+    withAct([S("opus-5-5", "f4"), S(" high", "f3")], "p:model"), withAct([S("auto", "f3")], "p:mode"),
+    withAct([S("ctx ", "d"), ...bar(ck / 400, 8), S(" " + ck + "k")], "p:context"),
+    withAct([S("$" + u.cost.toFixed(2)), S(" cache ", "d"), S("99%")], "p:usage"), withAct([S("tools 41 ", "d"), S("✗ linear", "f1")], "p:tools")];
+  const fl = [...fz.files.entries()].sort((a, b) => (b[1].a + b[1].r) - (a[1].a + a[1].r));
+  const ta = fl.reduce((n, f) => n + f[1].a, 0), tr = fl.reduce((n, f) => n + f[1].r, 0);
+  C.files = [{ act: "p:diff", title: [S("Changed files", "b"), S("\t"), S(String(fl.length), "d")], lines: [
+    ...fl.slice(0, 5).map(([p, f]) => withAct([S(p.replace("crates/", "")), S("\t"), S("+" + f.a, "f2"), S(" "), S(("−" + f.r).padStart(3), "f1")], "f:" + p)),
+    withAct([S(fl.length > 5 ? "… " + (fl.length - 5) + " more" : "", "d"), S("\t"), S("+" + ta, "f2"), S(" "), S("−" + tr, "f1")], "p:diff")] }];
+  K.files = [withAct([S("± ", "d"), S(fl.length + " files "), S("+" + ta, "f2"), S(" "), S("−" + tr, "f1")], "p:diff")];
+  const jobs = [...fz.jobs.values()];
+  const facts = j => {
+    const d = j.sid ? fz.bySid[j.sid] || [] : [];
+    const n = d.filter(e => e.kind === "tool_call_completed").length;
+    const last = [...d].reverse().find(e => e.kind === "tool_call_requested");
+    const run = j.status === "running";
+    return { n, last, run, t: dur((run ? now() : j.end) - j.start), acc: run ? "f3" : j.status === "completed" ? "f2" : "f1" };
+  };
+  // the list view behind the status line's "◆ delegates" summary
+  C.work = jobs.map(j => { const f = facts(j); return { act: "d:" + j.id, accent: f.acc, title: [S(j.desc, "b")], lines: [[S(f.run ? spin() + " " : j.status === "completed" ? "✓ " : "✗ ", f.acc), S((j.sid ? f.n + " calls · " : "") + f.t, "d"), S("\t"), S(j.harness || "shell", "d")]] }; });
+  // delegates: one card, two rows each, at most 6 rows shown; the card scrolls on its own
+  const dels = jobs.filter(j => j.sid), drun = dels.filter(j => j.status === "running").length;
+  C.delegates = [{ cap: 6, act: "work", title: [S("Delegates", "b"), S("\t"), S(drun + " running", drun ? "f3" : "d")], lines: dels.flatMap(j => {
+    const f = facts(j), act = "d:" + j.id, sel = state.view === j.id ? "b f13" : "";
+    const what = f.run && f.last ? f.last.payload.name + " " + (f.last.payload.arguments.path || f.last.payload.arguments.command || "").split("/").pop() : j.status;
+    return [[S(f.run ? spin() : j.status === "completed" ? "✓" : "✗", f.acc, act), S(" "), S(j.desc, sel, act)], [S("  " + f.n + " calls · " + f.t + " · ", "d", act), S(what, "d", act)]];
+  }) }];
+  K.delegates = [withAct([S("◆ ", "f5"), S(drun + " delegates")], "work")];
+  // jobs: one line saying how many run; click to list them
+  const js = jobs.filter(j => !j.sid), jrun = js.filter(j => j.status === "running").length;
+  C.jobs = [{ act: "jobs", title: [S("Jobs", "b"), S("\t"), S(jrun + " running", jrun ? "f3" : "d"), S(state.jobsOpen ? " ▾" : " ▸", "d")], lines: state.jobsOpen ?
+    js.map(j => { const f = facts(j); return [S(f.run ? spin() : j.status === "completed" ? "✓" : "✗", f.acc, "d:" + j.id), S(" "), S(j.desc, "", "d:" + j.id), S("\t"), S(f.t, "d", "d:" + j.id)]; }) : [] }];
+  K.jobs = jrun ? [withAct([S("⚙ ", "f3"), S(jrun + " job")], "jobs")] : [];
+  C.quota = [{ title: [S("Quota", "b"), S("\t"), S("extension", "d")], lines: [
+    [S("claude weekly", "d"), S("\t"), S("65%")], bar(0.65, PANEL - 7, "f2"),
+    [S("cursor monthly", "d"), S("\t"), S("1%", "f1")], bar(0.01, PANEL - 7, "f1")] }];
+  K.quota = [[S("Q ", "d"), S("claude 65%"), S(" · ", "d"), S("cursor 1%", "f1")]];
+  return { C, K };
+}
+function cardChrome(card, w, outer) {
+  const act = card.act;
+  const title = card.title.map(s => ({ ...s, act: s.act || act }));
+  let body = card.lines.map(l => l.map(s => ({ ...s, act: s.act || act })));
+  // a capped card shows a window of its rows, with its own thumb in the last column
+  let thumb = null;
+  if (card.cap && body.length > card.cap) {
+    const max = body.length - card.cap;
+    state.dmax = max; state.dscroll = Math.min(state.dscroll, max);
+    const th = Math.max(1, Math.round(card.cap * card.cap / body.length)), tt = Math.round((card.cap - th) * state.dscroll / max);
+    body = body.slice(state.dscroll, state.dscroll + card.cap).map(l => l.map(s => ({ ...s, c: s.c + " dz" })));
+    thumb = k => k >= tt && k < tt + th ? S("┃", "f8 dz") : S("│", "fs dz");
+  }
+  if (!surf()) {
+    const bc = card.sel ? "f13 b" : card.accent || "d";
+    const tl = Math.min(len(title), w - 6);
+    return [
+      [S("╭─ ", bc, act), ...fit(title, tl), S(" " + "─".repeat(Math.max(0, w - tl - 5)) + "╮", bc, act)],
+      ...body.map((l, k) => [S("│ ", bc, act), ...fit(l, thumb ? w - 5 : w - 4), ...(thumb ? [thumb(k)] : []), S(" │", bc, act)]),
+      [S("╰" + "─".repeat(w - 2) + "╯", bc, act)],
+    ];
+  }
+  const stripe = card.accent ? S("▌", card.accent, act) : S(" ", "", act);
+  const rows = [[stripe, S(" ", "", act), ...fit(title, w - 3), S(" ", "", act)], ...body.map((l, k) => [stripe, S(" ", "", act), ...fit(l, thumb ? w - 4 : w - 3), ...(thumb ? [thumb(k)] : []), S(" ", "", act)])];
+  return slab(rows, card.sel ? "bs" : "bc", w, outer);
+}
+function panelRows(fz) {
+  const { C } = cards(fz), rows = [];
+  for (const [id, on] of state.cardCfg) {
+    if (!on) continue;
+    for (const card of C[id] || []) { rows.push(...cardChrome(card, PANEL - 2, surf() ? "bp" : "")); if (!surf()) rows.push([]); }
+    if (surf()) rows.push(tint([], "bp"));
+  }
+  return rows;
+}
+// narrow: the panel's cards give up their compact forms to a status line under the input box, as pi-rig's footer does
+function statusRows(fz, W) {
+  const { K } = cards(fz), items = [];
+  for (const [id, on] of state.cardCfg) if (on) items.push(...(K[id] || []));
+  const rows = [[]], sep = () => S("  │  ", "d");
+  for (const it of items) {
+    const r = rows[rows.length - 1];
+    if (r.length && len(r) + 5 + len(it) > W - 2) { if (rows.length === 2) break; rows.push([]); }
+    const cur = rows[rows.length - 1];
+    if (cur.length) cur.push(sep());
+    cur.push(...it);
+  }
+  return rows.map(r => surf() ? tint([S(" "), ...r], "bp") : [S(" "), ...r]);
+}
+
+// ============================================================ bottom: queue (A), input, approval
+function queueAbove(w) {
+  if (state.queue !== "A" || !queue.length || state.view || state.idle || state.rewound) return [];
+  const out = [];
+  out.push([S("  • ", "d"), S("Steering, joins the turn at the next step", "d")]);
+  queue.forEach((q, k) => {
+    const sel = state.qsel === k;
+    out.push(fit([S("    ↳ ", "d"), S(q, (sel ? "rv" : "d"), "q:" + k), S(sel ? "  ⌥x drop" : "", "f1", "qx:" + k)], w));
+  });
+  out.push([S("      ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row", "d")]);
+  return out;
+}
+function boxed(title, bodyLines, w, right = "", cls = "d") {
+  const t = title ? "─ " : "";
+  const top = [S("╭" + t, cls), ...title, S(" ", cls)];
+  const rl = len(right ? [right] : []);
+  top.push(S("─".repeat(Math.max(0, w - len(top) - rl - 2)), cls));
+  if (right) top.push(right);
+  top.push(S("─╮", cls));
+  const out = [top];
+  for (const l of bodyLines) out.push([S("│ ", cls), ...fit(l, w - 4), S(" │", cls)]);
+  out.push([S("╰" + "─".repeat(w - 2) + "╯", cls)]);
+  return out;
+}
+function inputBox(fz, w) {
+  let meta;
+  const editing = state.editing >= 0;
+  const dj = state.view && fz.jobs.get(state.view);
+  if (editing) meta = [S("editing queued message " + (state.editing + 1) + " · enter saves · esc cancels", "f3")];
+  else if (dj && dj.sid) meta = [S("steers ", "f3"), S(dj.desc, "b"), S(" · Enter sends steer to its session", "d")];
+  else meta = null;
+  const below = Math.min(state.scroll, state.maxScroll || 0);
+  const right = below > 0 && !state.view ? S("↓ " + below + " lines below · End", "f3", "end") : null;
+  const text = editing ? queue[state.editing] : state.draft;
+  const line = [S("› ", "f6"), S(text), S("█", "d")];
+  if (!surf()) return boxed(meta || [], [line], w, right ? S(" " + right.t + " ", right.c, right.act) : null, editing ? "f3" : "d");
+  const stripe = S("▌", editing ? "f3" : "f4");
+  const rows = [[stripe, S(" "), ...fit([...line, S("\t"), ...(right ? [right, S(" ")] : [])], w - 3)]];
+  if (meta) rows.push([stripe, S(" "), ...fit(meta, w - 3)]);
+  return slab(rows, "bi", w);
+}
+function approvalPanel(w) {
+  const a = APPROVALS[state.appr];
+  const title = [S("Approval " + (state.appr + 1) + " of " + APPROVALS.length, "f11 b", "ap:next"), S(" · " + a.session, "f11")];
+  const body = [
+    [S(a.tool + " ", "f6 b"), S(a.target, "b")],
+    [S(a.effects + " · not reversible · " + a.why, "d")],
+    [],
+    [S("▸ 1 ", "f3"), S("Allow once", "b", "ap:1")],
+    [S("  2 ", "f3"), S("Allow and add rule ", "", "ap:2"), S(a.rule, "f6", "ap:2")],
+    [S("  3 ", "f3"), S("Deny", "", "ap:3"), S("  type to add feedback", "d")],
+  ];
+  if (!surf()) return boxed(title, body, w, S(" esc puts it aside ", "d"), "f11");
+  const stripe = S("▌", "f11");
+  return slab([[stripe, S(" "), ...fit([...title, S("\t"), S("esc puts it aside", "d")], w - 4)], ...body.map(l => [stripe, S(" "), ...fit(l, w - 4)])], "bc", w);
+}
+
+// ask_user's form: a panel at the bottom in place of the input box, like an approval
+function formPanel(w) {
+  const qs = FORM, n = qs.length, iw = w - 4;
+  const title = [S("Question", "f5 b"), S(" from main · " + n + " questions, any can be skipped", "f5")];
+  const right = S("esc: chat about this", "d");
+  const ansOf = k => { const a = state.fans[k]; const v = [...a.sel, ...(a.text ? ["“" + a.text + "”"] : [])]; return v.length ? v.join(", ") : null; };
+  const optRows = (q, k, indent) => {
+    const a = state.fans[k], out = [], on = state.fq === k || state.form === "B";
+    const opts = q.options || [];
+    opts.forEach((o, j) => {
+      const cur = on && state.fsel === j && (state.form === "A" || state.fq === k), chosen = a.sel.includes(o.label), act = "fo:" + k + ":" + j;
+      const box = q.multiSelect ? (chosen ? "[x] " : "[ ] ") : (chosen ? "(•) " : "( ) ");
+      const row = [S(indent), S(cur ? "▸ " : "  ", "f5"), S(String(j + 1) + " ", "d"), S(box, chosen ? "f5" : "d", act), S(o.label, (chosen ? "b " : "") + (cur ? "u" : ""), act)];
+      if (o.description) row.push(S("  " + o.description, "d", act));
+      out.push(...wrapSegs(row, iw, [S(indent + "        ")]));
+    });
+    const tj = opts.length, cur = on && state.fsel === tj && (state.form === "A" || state.fq === k), act = "fo:" + k + ":" + tj;
+    out.push([S(indent), S(cur ? "▸ " : "  ", "f5"), S(String(tj + 1) + " ", "d"), S("✎ ", "d", act), a.text ? S(a.text, "b", act) : S(opts.length ? "Type an answer, alone or with the options" : "Type an answer", "d", act), S(cur ? "█" : "", "d")]);
+    return out;
+  };
+  const noteRow = cur => [S(cur ? "▸ " : "  ", "f5"), S("note".padEnd(13), "f4"), state.fnote ? S(state.fnote, "b", "fnote") : S("Add a note on the whole form", "d", "fnote"), S(cur ? "█" : "", "d")];
+  const actions = [S("  "), S(" Submit ", "rv", "fs:submit"), S("   "), S(" Chat about this ", "bs", "fs:decline"), S("  declines and ends the turn, so you can answer in your own words", "d")];
+  const body = [];
+  if (state.form === "A") {
+    const tabs = [S("← ", "d")];
+
+    qs.forEach((q, k) => { const done = ansOf(k); tabs.push(S(" " + (done ? "✔ " : "☐ ") + q.header + " ", state.fq === k ? "rv" : done ? "f2" : "", "fq:" + k), S(" ")); });
+    tabs.push(S(" ✔ Submit ", state.fq === n ? "rv" : "", "fq:" + n), S(" →", "d"));
+    body.push(tabs, []);
+    if (state.fq < n) {
+      const q = qs[state.fq];
+      body.push(...wrap(q.question, iw, [], [], "b"), ...(q.multiSelect ? [[S("choose any", "d")]] : []), []);
+      body.push(...optRows(q, state.fq, ""));
+      body.push([], [S("←→ question · ↑↓ choose · space or enter selects · type to answer in words", "d")]);
+    } else {
+      body.push([S("Review", "b")], []);
+      qs.forEach((q, k) => body.push([S("  "), S(q.header.padEnd(13), "f4", "fq:" + k), ansOf(k) ? S(ansOf(k), "b", "fq:" + k) : S("skipped", "d", "fq:" + k)]));
+      body.push(noteRow(true), [], actions);
+    }
+  } else {
+    qs.forEach((q, k) => {
+      body.push(...wrapSegs([S(q.header.padEnd(12), state.fq === k ? "f5 b" : "f4 b", "fq:" + k), S(" "), S(q.question + (q.multiSelect ? " (choose any)" : ""), "b", "fq:" + k)], iw, [S(" ".repeat(13))]));
+      body.push(...optRows(q, k, " ".repeat(11)), []);
+    });
+    body.push(noteRow(state.fq === n).slice(1), [], actions, [], [S("tab next question · ↑↓ choose · space selects · enter submits", "d")]);
+  }
+  if (!surf()) return boxed(title, body, w, S(" " + right.t + " ", "d"), "f5");
+  const stripe = S("▌", "f5");
+  return slab([[stripe, S(" "), ...fit([...title, S("\t"), right], iw)], [stripe], ...body.map(l => [stripe, S(" "), ...fit(l, iw)])], "bc", w);
+}
+function formKey(ev) {
+  const n = FORM.length, q = FORM[state.fq], a = q && state.fans[state.fq], nopt = q ? (q.options || []).length : 0;
+  const onText = q && state.fsel === nopt;
+  const choose = () => { const o = q.options[state.fsel]; if (!o) return; if (q.multiSelect) a.sel = a.sel.includes(o.label) ? a.sel.filter(x => x !== o.label) : [...a.sel, o.label]; else a.sel = a.sel[0] === o.label ? [] : [o.label]; };
+  const next = d => { state.fq = (state.fq + d + n + 1) % (n + 1); state.fsel = 0; };
+  if (ev.key === "Escape") { submitForm(true, true); return true; }
+  if (ev.key === "ArrowLeft" && state.form === "A") { next(-1); return true; }
+  if ((ev.key === "ArrowRight" && state.form === "A") || ev.key === "Tab") { next(ev.shiftKey ? -1 : 1); return true; }
+  if (ev.key === "ArrowDown" && q) { if (state.fsel < nopt) state.fsel++; else if (state.form === "B") next(1); return true; }
+  if (ev.key === "ArrowUp" && q) { if (state.fsel > 0) state.fsel--; else if (state.form === "B" && state.fq > 0) { next(-1); state.fsel = (FORM[state.fq].options || []).length; } return true; }
+  if (ev.key === " " && q && !onText) { choose(); return true; }
+  if (ev.key === "Enter") {
+    if (state.fq === n || state.form === "B") { submitForm(false); return true; }
+    if (!onText) choose();
+    if (onText || !q.multiSelect) next(1);
+    return true;
+  }
+  if (ev.key === "Backspace") { if (onText) a.text = a.text.slice(0, -1); else if (state.fq === n) state.fnote = state.fnote.slice(0, -1); return true; }
+  if (ev.key.length === 1 && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
+    if (q && !onText && /[1-9]/.test(ev.key) && +ev.key <= nopt + 1) { state.fsel = +ev.key - 1; if (state.fsel < nopt) choose(); return true; }
+    if (state.fq === n) state.fnote += ev.key; else { state.fsel = nopt; a.text += ev.key; }
+    return true;
+  }
+  return false;
+}
+function submitForm(declined, end = false) {
+  state.qEnd = end;
+  const r = QEV[QSPLIT];
+  r.payload.answer = declined ? "declined" : { fields: state.fans.map(a => a.sel.length || a.text ? { selected: a.sel, ...(a.text ? { text: a.text } : {}) } : { skipped: true }), ...(state.fnote ? { note: state.fnote } : {}) };
+  QEV[QSPLIT + 1].payload.content[0].text = declined ? "declined" : "(the answers above, one line each)";
+  toast((end ? "Chat about this, or Esc: sends reply { request_id, declined }, then cancel, which ends the turn; the input box is yours" : "Sends reply { request_id, answer }: one reply answers the whole form") + " (docs/events.md, “Interactions”; docs/invocation.md).");
+  state.scene = "answered"; controls();
+}
+// Esc on the form: the call completes declined, then cancel ends the turn
+const QENDEV = () => { const c = QEV[QSPLIT + 1]; return { kind: "turn_completed", session_id: MAIN, turn_id: c.turn_id, ts: c.ts + 300, seq: c.seq + 1, schema_version: 1, payload: { outcome: "interrupted" } }; };
+const freshForm = () => { state.qEnd = false; state.fans = FORM.map(() => ({ sel: [], text: "" })); state.fq = 0; state.fsel = 0; state.fnote = ""; state.formAside = false; };
+
+// rewind: the points are step boundaries (docs/events.md, "Rewind"): a turn's start, just after the person's input, and just after each batch of tool results
+function rwPoints(evs, fz) {
+  const pts = []; let turn = 0, n = 0, prev = -1, saw = [];
+  const open = new Set(), OUT = ["tool_call_requested", "reasoning_started", "assistant_message_started", "turn_completed", "turn_started", "handoff_started"];
+  evs.forEach((e, i) => {
+    if (e.session_id !== MAIN || !e.seq) return;
+    if (OUT.includes(e.kind) && !open.size && saw.length) { pts.push({ turn, kind: "step", n: ++n, i: prev, seq: evs[prev].seq, calls: saw.map(a => fz.calls.get(a)).filter(Boolean) }); saw = []; }
+    if (e.kind === "turn_started") { turn++; n = 0; pts.push({ turn, kind: "start", i: prev, seq: prev >= 0 ? evs[prev].seq : 0, text: e.payload.input[0].text, ts: e.ts }, { turn, kind: "input", i, seq: e.seq }); }
+    if (e.kind === "tool_call_requested") open.add(e.action_id);
+    if (e.kind === "tool_call_completed") { open.delete(e.action_id); saw.push(e.action_id); }
+    prev = i;
+  });
+  return pts;
+}
+function rwSince(evs, P) {
+  const after = evs.slice(P.i + 1).filter(e => e.session_id === MAIN);
+  const req = new Map(after.filter(e => e.kind === "tool_call_requested").map(e => [e.action_id, e.payload]));
+  const files = new Set(), shells = [];
+  for (const e of after) if (e.kind === "tool_call_started") {
+    if (e.payload.effects.includes("writes")) e.payload.paths.forEach(p => files.add(p));
+    if (e.payload.effects.includes("executes")) shells.push(req.get(e.action_id));
+  }
+  const ended = new Set(evs.filter(e => e.kind === "job_completed").map(e => e.payload.job_id));
+  const running = (list) => list.filter(e => e.kind === "job_started" && !ended.has(e.payload.job_id)).map(e => e.payload);
+  return { files, shells, jobsAfter: running(after), jobsBefore: running(evs.slice(0, P.i + 1).filter(e => e.session_id === MAIN)) };
+}
+function rewindView(fz, evs, w) {
+  const pts = rwPoints(evs, fz), turns = [...new Set(pts.map(p => p.turn))];
+  const sel = state.rw || (state.rw = { turn: turns[turns.length - 1], k: 0 });
+  const tp = pts.filter(p => p.turn === sel.turn); sel.k = Math.max(0, Math.min(sel.k, tp.length - 1));
+  const P = tp[sel.k]; state.rwN = tp.length; state.rwTurns = turns; state.rwP = P;
+  const out = [[], [S("  Rewind starts a new session from an earlier point. The conversation goes back to it; files stay as they are.", "d")], []];
+  const rows = [];
+  for (const t of turns) {
+    const st = pts.find(p => p.turn === t && p.kind === "start"), cur = t === sel.turn, on = cur && sel.k === 0, act = "rt:" + t;
+    rows.push([S(on ? "▸ " : "  ", "f13"), S("turn " + t + "  " + clock(st.ts) + "  ", "d", act), S("before: ", "d", act), S(st.text, on ? "b" : cur ? "" : "d", act)]);
+    if (!cur) continue;
+    const rest = tp.slice(1), lo = Math.max(0, Math.min(sel.k - 5, rest.length - 9)), hi = Math.min(rest.length, lo + 9);
+    if (lo > 0) rows.push([S("    │ ", "d"), S("⋯ " + lo + " earlier points", "d")]);
+    rest.slice(lo, hi).forEach((p, j) => {
+      const k = lo + j + 1, on = k === sel.k, act = "rp:" + k;
+      const label = p.kind === "input" ? [S("after your message", on ? "b" : "", act)] : [S("after step " + p.n + "  ", on ? "b" : "d", act), ...summarize(p.calls).map(s => ({ ...s, act }))];
+      rows.push([S(on ? "  ▸ " : "    ", "f13"), S("│ ", "d"), ...label]);
+    });
+    if (hi < rest.length) rows.push([S("    │ ", "d"), S("⋯ " + (rest.length - hi) + " later points", "d")]);
+  }
+  const card = r => surf() ? slab(r.map(l => [S(" "), ...fit(l, w - 6), S(" ")]), "bc", w - 2).map(l => { const x = [S("  "), ...l]; x.bg = l.bg; return x; }) : r.map(l => [S("  "), ...l]);
+  out.push([S("  "), S("Point", "b"), S("  ↑↓ or click · the default is the start of the latest turn", "d")], ...card(rows), []);
+  const { files, shells, jobsAfter, jobsBefore } = rwSince(evs, P);
+  const c = [];
+  c.push([S("Files written by Fiber's tools", "b"), S("\t"), S(files.size + (files.size === 1 ? " file" : " files"))]);
+  [...files].slice(0, 4).forEach(p => c.push([S("  " + p, "d")]));
+  if (files.size > 4) c.push([S("  … " + (files.size - 4) + " more", "d")]);
+  c.push([S("Calls that may have changed files", "b"), S("\t"), S(shells.length + (shells.length === 1 ? " call" : " calls"))]);
+  shells.slice(-3).forEach(p => c.push([S("  " + (p.arguments.command ? "$ " + p.arguments.command : p.name + " " + (p.arguments.description || "")), "d")]));
+  c.push([S("None of this is undone. Rewind moves the conversation, never the files.", "f3")]);
+  if (jobsAfter.length) {
+    c.push([], [S("Jobs started after the point, still running", "b"), S("\t"), S("stop is the default", "d")]);
+    jobsAfter.forEach(j => { const ch = state.rwJobs[j.job_id] || "stop"; c.push([S(" stop ", ch === "stop" ? "rv" : "bs", "rj:" + j.job_id + ":stop"), S(" "), S(" adopt ", ch === "adopt" ? "rv" : "bs", "rj:" + j.job_id + ":adopt"), S("  " + j.description)]); });
+  }
+  if (jobsBefore.length) c.push([], [S("Adopted with the session, because its history shows them starting: ", "d"), S(jobsBefore.map(j => j.description).join(", "), "d")]);
+  out.push([S("  "), S("Since this point", "b"), S("  seq " + P.seq, "d")], ...card(c), []);
+  out.push([S("  "), S(state.rwSum ? "[x] " : "[ ] ", "f13", "rs"), S("Summarise what happened after the point", "", "rs"), S("  one call to claude-opus-5-5, made on this session before it closes", "d")], []);
+  if (state.scene === "held") out.push([S("  "), S("✗ session_held", "f1 b"), S("  another process holds s_9c41e2. Only the process holding a session can rewind it, because its jobs run there.", "")]);
+  else out.push([S("  "), S(" Rewind ", "rv", "rgo"), S("  enter · the new session starts from the point; this one closes and stays in the session list", "d")]);
+  return out;
+}
+function rewoundLines(r, w) {
+  const lab = [S("⟲ ", "f13"), S("rewound", "f13 b"), S(" · s_4d0a17 continues s_9c41e2 from seq " + r.seq + " · " + clock(RWEND.ts + 60000), "d")];
+  const out = [[], [...lab, S(" " + "─".repeat(Math.max(1, w - len(lab) - 1)), "f13 d")]];
+  if (r.sum) out.push(...wrap("Summary: " + RWSUM, w, [], [], "d"));
+  out.push(...wrap(`Not restored: ${r.files} files written and ${r.shells} calls that may have changed files since the point.`, w, [], [], "d"));
+  const stop = r.jobs.filter(j => j.ch === "stop"), adopt = r.jobs.filter(j => j.ch === "adopt");
+  if (stop.length) out.push(...wrap("Stopped: " + stop.map(j => j.description).join(", ") + ".", w, [], [], "d"));
+  if (adopt.length) out.push(...wrap("Adopted: " + adopt.map(j => j.description).join(", ") + ".", w, [], [], "d"));
+  return out;
+}
+function doRewind() {
+  const P = state.rwP; if (!P || state.scene === "held") return;
+  const evs = [...E.slice(0, BASE_LEN), RWEND], { files, shells, jobsAfter } = rwSince(evs, P);
+  state.rewound = { i: P.i, seq: P.seq, sum: state.rwSum, files: files.size, shells: shells.length, jobs: jobsAfter.map(j => ({ ...j, ch: state.rwJobs[j.job_id] || "stop" })) };
+  toast("Sends rewind { seq: " + P.seq + ", summarise: " + !!state.rwSum + ", adopt: [" + state.rewound.jobs.filter(j => j.ch === "adopt").map(j => j.job_id).join(", ") + "] } (docs/invocation.md). The new session waits for a prompt.");
+  state.view = null; state.scroll = 0;
+}
+
+// ============================================================ views swapped into the conversation area
+function viewHeader(W, parts) {
+  const row = [S(" "), ...parts, S("\t"), S("esc returns ", "d", "back")];
+  return surf() ? tint(fit(row, W), "bi") : fit(row.map(s => ({ ...s, c: s.c + " rv" })), W, "rv");
+}
+const MODELS = [["anthropic", [["claude-opus-5-5", "current"], ["claude-sonnet-5", "role: fast"], ["claude-haiku-4-5", ""]]], ["openai", [["gpt-6-sol", "role: reviewer"]]]];
+function modelView(fz, w) {
+  const out = [[]], rows = [];
+  let k = 0;
+  for (const [prov, ms] of MODELS) {
+    rows.push([S(prov, "d")]);
+    for (const [m, note] of ms) {
+      const sel = state.msel === k, cur = note === "current";
+      rows.push([S(cur ? "● " : "  ", "f4", "m:" + k), S(m, (cur ? "b " : "") + (sel ? "rv" : ""), "m:" + k), S("\t"), S(note, cur ? "f4" : "d", "m:" + k)]);
+      k++;
+    }
+    rows.push([]);
+  }
+  const chips = (label, vals, cur) => [S(label.padEnd(10), "d"), ...vals.flatMap(v => [S(" " + v + " ", v === cur ? "rv" : "", "ef:" + v), S(" ")])];
+  rows.push(chips("effort", ["low", "medium", "high", "xhigh", "max"], state.effort));
+  rows.push(chips("thinking", ["on", "off"], "on"));
+  const cardRows = rows.map(r => [S(" "), ...fit(r, w - 6), S(" ")]);
+  out.push(...(surf() ? slab(cardRows, "bc", w - 2).map(l => { const r = [S("  "), ...l]; r.bg = l.bg; return r; }) : cardRows));
+  out.push([], [S("  Switching applies at the next turn boundary and rebuilds the prompt cache: about 214,000 tokens re-sent.", "d")]);
+  out.push([S("  ↑↓ or click to choose · Enter switches · roles are set in configuration", "d")]);
+  return out;
+}
+const CTX = [["system prompt", 6.1, "f4"], ["tool definitions", 18.4, "f12"], ["instruction files", 3.2, "f5"], ["skills listing", 1.1, "f13"],
+  ["your messages", 2.0, "f6"], ["replies", 9.8, "f2"], ["reasoning", 14.9, "f8"], ["tool calls", 11.3, "f3"], ["tool results", 147.2, "f11"]];
+function contextView(w) {
+  const total = CTX.reduce((n, c) => n + c[1], 0), HAND = 400, bw = w - 6;
+  const out = [[], [S("  "), S(Math.round(total) + "k tokens", "b"), S(" · 21% of the 1M window · automatic handoff at " + HAND + "k (docs/handoff.md)", "d")], []];
+  const segs = []; let used = 0;
+  for (const [, n, c] of CTX) { const cells = Math.max(1, Math.round(n / HAND * bw)); segs.push(S("█".repeat(cells), c, "p:context")); used += cells; }
+  segs.push(S("▁".repeat(Math.max(0, bw - used)), "fs"));
+  out.push([S("  "), ...segs, S("│", "f3")], [S("  " + " ".repeat(bw - 12)), S("handoff 400k", "f3")], []);
+  for (const [name, n, c] of CTX) out.push([S("  "), S("■ ", c), S(name.padEnd(20)), S((n.toFixed(1) + "k").padStart(8)), S(("  " + (n / total * 100).toFixed(0) + "%").padStart(7), "d")]);
+  out.push([], [S("  "), S("Largest tool results", "b")]);
+  [["read crates/log/src/writer.rs", 9.8], ["shell cargo test -p tools", 8.1], ["read crates/tools/src/shell/run.rs", 7.4], ["shell grep -rn 'thread::sleep' crates", 6.9], ["read crates/doors/src/serve.rs", 6.2]]
+    .forEach(([t, n]) => out.push([S("  "), S(t.padEnd(44), "d"), S((n.toFixed(1) + "k").padStart(8))]));
+  out.push([], [S("  Deferred tools are not counted until loaded. Cached: 99% of the last request's input.", "d")]);
+  return out;
+}
+function diffView(fz, w) {
+  const files = [...fz.files.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const cur = state.diffFile && fz.files.has(state.diffFile) ? state.diffFile : files[0][0];
+  const list = files.map(([p, f]) => [S(p === cur ? "▸ " : "  ", "f4", "f:" + p), S(p.replace("crates/", ""), p === cur ? "b" : "", "f:" + p), S("\t"), S("+" + f.a, "f2"), S(" "), S(("−" + f.r).padStart(3), "f1")]);
+  const out = [[]];
+  const half = Math.min(files.length, 12);
+  const listRows = list.slice(0, half).map(r => [S(" "), ...fit(r, w - 6), S(" ")]);
+  if (files.length > half) listRows.push([S("   … " + (files.length - half) + " more files", "d")]);
+  out.push(...(surf() ? slab(listRows, "bc", w - 2).map(l => { const r = [S("  "), ...l]; r.bg = l.bg; return r; }) : listRows), []);
+  const f = fz.files.get(cur);
+  out.push([S("  "), S(cur, "b"), S("  "), S("+" + f.a, "f2"), S(" "), S("−" + f.r, "f1"), S("  " + f.edits.length + " edit" + (f.edits.length > 1 ? "s" : ""), "d")]);
+  for (const h of f.edits) {
+    out.push([S("  @@ line " + h[0].n + " @@", "f6 d")]);
+    for (const x of h) out.push([S("  "), ...fit([S(String(x.n).padStart(4) + " " + x.op + " " + x.text, x.op === "+" ? "bga" : "bgd")], w - 4, x.op === "+" ? "bga" : "bgd")]);
+  }
+  return out;
+}
+function delegateView(fz, j, CW) {
+  const d = j.sid ? fz.bySid[j.sid] || [] : [];
+  const n = d.filter(e => e.kind === "tool_call_completed").length;
+  const run = j.status === "running";
+  const info = [
+    [S(j.desc, "b"), S("\t"), S(run ? spin() + " running" : "✓ " + j.status, run ? "f3" : "f2")],
+    [S((j.harness || "shell job") + (j.model ? " · " + j.model : ""), "d")],
+    [S(j.sid ? `${n} calls · ${dur((run ? now() : j.end) - j.start)} · session ${j.sid}` : `${dur((run ? now() : j.end) - j.start)} · output artifacts/${j.id}.log`, "d")],
+    [S("stop", "f1", "stop:" + j.id), S("   "), S(j.sid ? "type below to steer it" : "", "d")],
+  ].map(r => [S(run ? "▌" : " ", run ? "f3" : ""), S(" "), ...fit(r, CW - 7), S(" ")]);
+  const out = [[], ...(surf() ? slab(info, "bc", CW - 2).map(l => { const r = [S("  "), ...l]; r.bg = l.bg; return r; }) : info)];
+  if (j.sid) out.push(...renderBlocks(fold(d, j.sid), CW));
+  else out.push([], [S("  $ ", "f5"), S(j.desc)], ...["Starting 5250 tests across 41 binaries", "    PASS [   0.412s] log::lock second_writer_is_refused", "    PASS [   0.388s] log::lock second_writer_is_refused", "    PASS [   1.020s] tools::shell_timeout kills_group", "    PASS [   0.090s] loop::steer amend_before_drain", "    PASS [   2.771s] doors::serve_attach attach_mid_turn", "    ⋯ 1612/5250"].map(t => [S("  " + t, "d")]));
+  return out;
+}
+// tools: what /tools lists (docs/tools.md, "Seeing the tools"), with the switches configuration already has
+const TOOLS = [
+  ["built in", [["read", "full", 0.6], ["write", "full", 0.3], ["edit", "full", 0.7], ["shell", "full", 1.9], ["jobs", "full", 0.6], ["ask_user", "full", 0.5], ["delegate_spawn", "full", 0.6], ["delegate_fork", "full", 0.4], ["delegate_message", "full", 0.2], ["delegate_models", "full", 0.1], ["web_fetch", "full", 0.4], ["web_search", "hosted", 0.1], ["tool_search", "full", 0.3]]],
+  ["mcp: github", [["12 tools", "deferred", 0.9]]],
+  ["mcp: context7", [["resolve-library-id, get-library-docs", "deferred", 0.2]]],
+  ["mcp: linear", [["not logged in", "", 0]]],
+  ["extension: quota", [["get_quotas", "full", 0.2]]],
+];
+function toolsView(w) {
+  const out = [[]];
+  for (const [src, ts] of TOOLS) {
+    const toggle = !src.startsWith("built");
+    const off = state.toolsOff.has(src);
+    const rows = [[S(src, "b"), S("\t"), ...(toggle ? [S(off ? " off " : " on ", off ? "rv" : "f2", "tt:" + src)] : [S("always", "d")])]];
+    for (const [name, st, k] of ts) rows.push([S("  " + name, src === "mcp: linear" ? "f1" : off ? "d" : ""), S("\t"), S(st.padEnd(9), "d"), S(k ? ("~" + k.toFixed(1) + "k").padStart(7) : "".padStart(7), "d")]);
+    const card = rows.map(r => [S(" "), ...fit(r, w - 6), S(" ")]);
+    out.push(...(surf() ? slab(card, "bc", w - 2).map(l => { const r = [S("  "), ...l]; r.bg = l.bg; return r; }) : card), []);
+  }
+  const n = state.toolsOff.size;
+  out.push([S("  Switches write tools.enabled and tools.disabled (docs/configuration.md) and take effect on reload,", "d")]);
+  out.push([S("  which rebuilds the prompt cache: about 214,000 tokens re-sent. Sizes are the tokens each source adds.", "d")]);
+  out.push([], [S("  "), S(n ? " reload now: " + n + " change" + (n > 1 ? "s" : "") + " " : " no changes ", n ? "rv" : "d", n ? "reload" : null)]);
+  return out;
+}
+// search: every match in the rendered text, the current one brighter; a match inside a collapsed group opens it
+function markSearch(conv) {
+  const q = state.search.q.toLowerCase(); let count = 0, curLine = -1;
+  if (!q) { state.search.n = 0; return conv; }
+  const out = conv.map((l, li) => {
+    const r = [];
+    for (const s of l) {
+      const t = s.t, lo = t.toLowerCase(); let i = 0, j;
+      if (!lo.includes(q)) { r.push(s); continue; }
+      while ((j = lo.indexOf(q, i)) >= 0) {
+        if (j > i) r.push({ ...s, t: t.slice(i, j) });
+        const curm = count === state.search.idx;
+        if (curm) curLine = li;
+        r.push({ ...s, t: t.slice(j, j + q.length), c: s.c.replace(BGS, "") + (curm ? " smc" : " sm") });
+        count++; i = j + q.length;
+      }
+      if (i < t.length) r.push({ ...s, t: t.slice(i) });
+    }
+    r.bg = l.bg; return r;
+  });
+  state.search.n = count; state.search.line = curLine;
+  return out;
+}
+function searchBar(w) {
+  const s = state.search;
+  const row = [S("⌕ ", "f3"), S(s.q, "b"), S("█", "d"), S("\t"), S(s.n ? `${Math.min(s.idx + 1, s.n)} of ${s.n}` : s.q ? "no matches" : "type to search the whole session", s.n ? "" : "d"), S("  enter next · shift+enter previous · esc closes", "d")];
+  if (!surf()) return boxed([S("Search", "f3")], [row], w);
+  return slab([[S("▌", "f3"), S(" "), ...fit(row, w - 3)]], "bi", w);
+}
+
+// ============================================================ frame
+function frame() {
+  const q = state.scene === "question" || state.scene === "answered";
+  const rwScene = state.scene === "rewind" || state.scene === "held";
+  if (state.scene === "exit") { paintExit(); return; }
+  const all = state.scene === "start" ? [E[0]] : state.scene === "retrying" ? [...E.slice(0, BASE_LEN), ...EEV.slice(0, ERETRY)] : state.scene === "errors" ? [...E.slice(0, BASE_LEN), ...EEV] :
+    state.scene === "crash" ? [...E.slice(0, BASE_LEN), ...CEV] : state.scene === "handoff" ? [...E.slice(0, BASE_LEN), ...HEV] : state.scene === "handing" ? [...E.slice(0, BASE_LEN), ...HEV.slice(0, HLIVE)] :
+    rwScene ? [...E.slice(0, BASE_LEN), RWEND].slice(0, state.rewound ? state.rewound.i + 1 : Infinity) : q ? [...E.slice(0, BASE_LEN), ...(state.scene === "question" ? QEV.slice(0, QSPLIT) : state.qEnd ? [...QEV.slice(0, QSPLIT + 2), QENDEV()] : QEV)] : E.slice(0, BASE_LEN + state.liveStep);
+  NOW_TS = all[all.length - 1].ts;
+  const fz = fold(all, MAIN);
+  const lastMain = all.filter(e => e.session_id === MAIN && e.seq).pop();
+  state.idle = lastMain.kind === "turn_completed" || state.scene === "crash" || state.scene === "start";
+  const ts0 = [...all].reverse().find(e => e.kind === "turn_started" && e.session_id === MAIN);
+  fz.turnStart = ts0 ? ts0.ts : now();
+  if (state.scene === "start") { fz.blocks = []; fz.jobs = new Map(); fz.files = new Map(); fz.ctxK = 24; fz.usage = { input: 0, cache_read: 0, output: 0, cost: 0 }; }
+  const bare = state.scene === "start" && START_FULL.has(state.start) && !state.view && !state.search;
+  const narrow = state.width !== "wide" || bare;
+  const cols = COLS[state.width];
+  const W = narrow ? cols : cols - PANEL - (surf() ? 0 : 1);
+  const CW = W - 2;
+
+  // approval: the asking call's group expands
+  if (state.scene === "approval" && !state.apprAside) { const last = fz.blocks.filter(b => b.t === "tools").pop(); if (last) last.approvalOpen = true; }
+
+  const rt = fz.retrying;
+  const working = state.view || state.idle || state.rewound ? [] : rt ? [[S("  "), S("↻ ", "f3"), S("Retrying in " + rt.delay + "s", "b"), S(" · " + rt.cause + " · attempt " + rt.attempt + " of 4 · esc to interrupt", "d")]] : [[S("  "), S(spin() + " ", "f3"), ...glimmer(state.reason === "B" ? liveHeading(fz) : "Working"), S(" " + dur(now() - fz.turnStart) + " · esc to interrupt", "d")]];
+  const asking = state.scene === "question" && !state.formAside && !state.view;
+  let bottom = bare ? [] : state.search ? searchBar(W) : state.scene === "approval" && !state.apprAside ? approvalPanel(W) : asking ? formPanel(W) : [...working, ...queueAbove(W), ...inputBox(fz, W)];
+  if (state.scene === "approval" && state.apprAside) bottom.unshift([S("  "), S("⚠ 2 approvals waiting · click to reopen", "f11 b", "ap:reopen")]);
+  if (state.notices === "B" && fz.notices.length && !state.view && !state.search) bottom.unshift(...fz.notices.map((n, k) => [n, k]).filter(([, k]) => !state.dismissed.has(k)).map(([n, k]) => [S("  "), S("⚠ ", "f3"), S(n.code, "f3"), S(" · " + n.message, "d"), S("  ✕", "d", "nx:" + k)]));
+  if (narrow && !bare) bottom.push(...statusRows(fz, W));
+
+  // the conversation, or a view swapped into its place
+  let conv, header = null;
+  if (state.view === "model") { header = viewHeader(W, [S("Model", "b"), S("  /model", "d")]); conv = modelView(fz, CW); }
+  else if (state.view === "context") { header = viewHeader(W, [S("Context", "b"), S("  /context", "d")]); conv = contextView(CW); }
+  else if (state.view === "tools") { header = viewHeader(W, [S("Tools", "b"), S("  /tools", "d")]); conv = toolsView(CW); }
+  else if (state.view === "sessions") { header = viewHeader(W, [S("Sessions", "b"), S("  /resume", "d")]); conv = sessionsView(CW); }
+  else if (state.view === "rewind") { header = viewHeader(W, [S("Rewind", "b"), S("  /rewind", "d")]); conv = rewindView(fz, all, CW); }
+  else if (state.view === "diff") { header = viewHeader(W, [S("Changed files", "b"), S("  click a file", "d")]); conv = diffView(fz, CW); }
+  else if (state.view === "work") {
+    header = viewHeader(W, [S("◆ Delegates and jobs", "b"), S("  click one to open it", "d")]);
+    conv = [[]];
+    for (const card of cards(fz).C.work) conv.push(...cardChrome(card, CW - 2, "").map(l => { const r = [S(" "), ...l]; r.bg = l.bg; return r; }), []);
+  } else if (state.view) {
+    const j = fz.jobs.get(state.view);
+    header = viewHeader(W, [S("main", "d", "back"), S(" › ", "d"), S("◆ " + j.desc, "b")]);
+    conv = delegateView(fz, j, CW);
+  } else if (state.scene === "start") conv = bare ? startScreen(CW, ROWS) : startLines(CW);
+  else conv = [...renderBlocks(fz, CW), ...(state.rewound ? rewoundLines(state.rewound, CW) : []), ...queueTail(CW)];
+  if (state.search) {
+    conv = markSearch(conv);
+    if (state.search.jump && state.search.line >= 0) { const vh = ROWS - bottom.length - (header ? 1 : 0); state.scroll = Math.max(0, conv.length - vh - Math.max(0, state.search.line - Math.floor(vh / 2))); state.search.jump = false; }
+  }
+
+  const viewH = ROWS - bottom.length - (header ? 1 : 0);
+  const total = conv.length;
+  state.maxScroll = Math.max(0, total - viewH);
+  state.scroll = Math.min(state.scroll, state.maxScroll);
+  const startRow = Math.max(0, total - viewH - state.scroll);
+  const vis = conv.slice(startRow, startRow + viewH);
+  while (vis.length < viewH) state.view ? vis.push([]) : vis.unshift([]);
+  const thumbH = Math.max(1, Math.round(viewH * viewH / Math.max(total, viewH)));
+  const thumbTop = total <= viewH ? 0 : Math.round((viewH - thumbH) * startRow / (total - viewH));
+
+  const convRows = [];
+  if (header) convRows.push(header);
+  vis.forEach((l, k) => convRows.push([S(" "), ...fit(l, CW, l.bg || ""), total > viewH && k >= thumbTop && k < thumbTop + thumbH ? S("┃", "f8") : S(surf() ? " " : "│", "d f8")]));
+  bottom.forEach(l => convRows.push(fit(l, W, l.bg || "")));
+
+  const rows = [];
+  let pr = [];
+  if (!narrow) {
+    pr = panelRows(fz);
+    state.pmax = Math.max(0, pr.length - ROWS);
+    state.pscroll = Math.min(state.pscroll, state.pmax);
+  }
+  for (let r = 0; r < ROWS; r++) {
+    const left = fit(convRows[r] || [], W);
+    if (narrow) { rows.push(left); continue; }
+    const l = pr[r + state.pscroll] || [];
+    let right = [S(" "), ...fit(l, PANEL - 2, l.bg || ""), S(" ")];
+    if (surf()) right = tint(right, "bp");
+    right = right.map(s => ({ ...s, c: s.c + " pz" }));
+    rows.push(surf() ? [...left, ...right] : [...left, S("│", "f8"), ...right]);
+  }
+  paint(rows);
+  notes(fz, conv);
+}
+
+// after exit: the terminal is restored and one line is printed (#15, "On exit")
+function paintExit() {
+  const cols = COLS[state.width], rows = [];
+  // the TUI leaves the alternate screen, so the shell's history is back, with the one line under the command that started it
+  const lines = [[S("~/work/fiber ", "f4"), S("main", "f5"), S(" $ ", "d"), S("git switch -c fix/wait-for-path")], [S("Switched to a new branch 'fix/wait-for-path'")],
+    [S("~/work/fiber ", "f4"), S("fix/wait-for-path", "f5"), S(" $ ", "d"), S("fiber")],
+    [S("Session s_9c41e2 · resume it with "), S("fiber --resume s_9c41e2", "f6")], [S("~/work/fiber ", "f4"), S("fix/wait-for-path", "f5"), S(" $ ", "d"), S("█", "d")]];
+  for (let r = 0; r < ROWS; r++) rows.push(fit(lines[r] || [], cols));
+  paint(rows);
+}
+// ============================================================ paint + input
+const term = document.getElementById("term");
+function esc(t) { return t.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+function paint(rows) {
+  term.dataset.pal = state.pal;
+  let h = "";
+  for (const r of rows) {
+    h += '<div class="row">';
+    for (const s of r) {
+      const n = [...s.t].length; if (!n) continue;
+      const cls = (s.c || "") + (s.act ? " hit" : "") + (s.t === "▌" ? " st" : s.t === "▐" ? " st2" : "");
+      h += `<span class="${cls}" style="width:${n}ch;${s.sty || ""}"${s.act ? ` data-act="${esc(s.act)}"` : ""}${s.tip ? ` title="${esc(s.tip)}"` : ""}>${esc(s.t)}</span>`;
+    }
+    h += "</div>";
+  }
+  term.innerHTML = h;
+}
+const TOASTS = { model: "opens the model picker (/model)", context: "opens the context breakdown (/context)", usage: "opens usage (/usage)", cwd: "copies the working directory",
+  git: "runs git --no-optional-locks status through the person's shell and shows it", call: "scrolls to the running call", diff: "opens the file's diff", mcp: "opens the MCP server's status and log in", mode: "opens the permission mode picker (/mode)", session: "opens the session list, to resume or rewind" };
+function toast(t) { document.getElementById("toast").textContent = t; }
+term.addEventListener("click", ev => {
+  const el = ev.target.closest("[data-act]"); if (!el) return;
+  const a = el.dataset.act, [k, v] = [a.split(":")[0], a.slice(a.indexOf(":") + 1)];
+  if (k === "g") { state.open.has(v) ? state.open.delete(v) : state.open.add(v); }
+  else if (k === "c") { state.copen.has(v) ? state.copen.delete(v) : state.copen.add(v); }
+  else if (k === "r") { state.ropen.has(v) ? state.ropen.delete(v) : state.ropen.add(v); }
+  else if (k === "d") { state.view = state.view === v ? null : v; state.scroll = 0; state.rail = false; }
+  else if (k === "back") state.view = null;
+  else if (k === "q") { state.qsel = +v; state.editing = +v; }
+  else if (k === "qx") { dropQueued(+v); }
+  else if (k === "p" && v === "session") { state.view = "sessions"; state.scroll = 0; }
+  else if (k === "p") { if (["model", "context", "diff", "tools"].includes(v)) { state.view = v; state.scroll = 1e9; } else toast("Click: " + (TOASTS[v] || "opens its view") + "."); }
+  else if (k === "f") { state.view = "diff"; state.diffFile = v; state.scroll = 1e9; }
+  else if (k === "m") state.msel = +v;
+  else if (k === "ef") { state.effort = v; toast("Effort " + v + ": sends model with the new effort; applies at the next turn boundary."); }
+  else if (k === "stop") toast("Click: sends job_stop for " + v + ".");
+  else if (k === "copy") toast("Click: copies the code block, unwrapped, through OSC 52.");
+  else if (k === "jobs") state.jobsOpen = !state.jobsOpen;
+  else if (k === "tt") { state.toolsOff.has(v) ? state.toolsOff.delete(v) : state.toolsOff.add(v); }
+  else if (k === "reload") { toast("Sends reload: the tool set is declared again and the next request rebuilds the prompt cache."); state.toolsOff.clear(); }
+  else if (k === "work") { state.view = "work"; state.scroll = 0; }
+  else if (k === "end") state.scroll = 0;
+  else if (k === "nx") { state.dismissed.add(+v); toast("Dismissed in this terminal. Notices are not logged, so a client that attaches later never sees it."); }
+  else if (k === "orph") state.oopen = !state.oopen;
+  else if (k === "ss") { state.ssel = +v; const x = SESSIONS[+v]; toast(x.id === MAIN ? "This is the session this terminal drives." : x.foreign ? "Declines: " + x.id + " runs Fiber 0.0.3 with schema 2, which this terminal cannot read. Close it or let it exit." : x.state === "running" ? "Attaches to " + x.id + " through its socket: folds the log by seq, then streams (docs/invocation.md, “Processes”)." : "Starts fiber serve on " + x.id + " and resumes it from its log" + (x.state === "waiting" ? ", raising the pending request again." : ".")); }
+  else if (k === "xa") toast("Click: swaps in the approval view for review-gate 0.4.2 and linear 1.8.0: source, version, tools with their effects, providers, hooks, the program, and the diff on update; approve, skip for this session, or never. Esc returns to the start page.");
+  else if (k === "ho") { const id = +v; state.hopen.has(id) ? state.hopen.delete(id) : state.hopen.add(id); }
+  else if (k === "rt") state.rw = { turn: +v, k: 0 };
+  else if (k === "rp") state.rw.k = +v;
+  else if (k === "rj") { const [id, ch] = v.split(":"); state.rwJobs[id] = ch; }
+  else if (k === "rs") state.rwSum = !state.rwSum;
+  else if (k === "rgo") doRewind();
+  else if (k === "fq") { state.fq = +v; state.fsel = 0; }
+  else if (k === "fo") { const [qi, j] = v.split(":").map(Number); state.fq = qi; state.fsel = j; const q = FORM[qi], o = (q.options || [])[j], a = state.fans[qi];
+    if (o) { if (q.multiSelect) a.sel = a.sel.includes(o.label) ? a.sel.filter(x => x !== o.label) : [...a.sel, o.label]; else a.sel = a.sel[0] === o.label ? [] : [o.label]; } }
+  else if (k === "fnote") state.fq = FORM.length;
+  else if (k === "fs") { if (v === "reopen") state.formAside = false; else submitForm(v === "decline", v === "decline"); }
+  else if (k === "ap") {
+    if (v === "next") state.appr = (state.appr + 1) % APPROVALS.length;
+    else if (v === "reopen") state.apprAside = false;
+    else toast("Approval choice " + v + " sends reply { request_id, decision } (docs/permissions.md).");
+  }
+  term.focus(); frame();
+});
+function dropQueued(k) { toast("Sent steer_drop for queued message " + (k + 1) + "."); queue.splice(k, 1); state.editing = -1; state.qsel = Math.min(state.qsel, queue.length - 1); }
+term.addEventListener("wheel", ev => { ev.preventDefault();
+  if (ev.target.closest(".dz")) { state.dscroll = Math.max(0, Math.min(state.dmax || 0, state.dscroll + Math.sign(ev.deltaY))); frame(); return; }
+  if (ev.target.closest(".pz")) { state.pscroll = Math.max(0, Math.min(state.pmax || 0, state.pscroll + Math.sign(ev.deltaY) * 3)); frame(); return; }
+  state.scroll = Math.max(0, Math.min(state.maxScroll || 0, state.scroll - Math.sign(ev.deltaY) * 3)); frame(); }, { passive: false });
+term.addEventListener("keydown", ev => {
+  const alt = ev.altKey;
+  let used = true;
+  if (state.search) {
+    const s = state.search;
+    if (ev.key === "Escape") state.search = null;
+    else if (ev.key === "Enter") { s.idx = s.n ? (s.idx + (ev.shiftKey ? s.n - 1 : 1)) % s.n : 0; s.jump = true; }
+    else if (ev.key === "Backspace") { s.q = s.q.slice(0, -1); s.idx = 0; s.jump = true; }
+    else if (ev.key.length === 1 && !ev.metaKey && !ev.ctrlKey) { s.q += ev.key; s.idx = 0; s.jump = true; }
+    ev.preventDefault(); frame(); return;
+  }
+  if (state.scene === "question" && !state.formAside && !state.view && formKey(ev)) { ev.preventDefault(); frame(); return; }
+  if (ev.key === "f" && (ev.ctrlKey || ev.metaKey)) { state.search = { q: "", idx: 0 }; ev.preventDefault(); frame(); return; }
+  if ((state.view === "sessions" || state.scene === "start") && ["ArrowUp", "ArrowDown"].includes(ev.key)) { state.ssel = Math.max(0, Math.min(SESSIONS.length - 1, state.ssel + (ev.key === "ArrowDown" ? 1 : -1))); ev.preventDefault(); frame(); return; }
+  if (state.view === "rewind" && ["ArrowUp", "ArrowDown", "Enter"].includes(ev.key)) {
+    const r = state.rw, T = state.rwTurns, ti = T.indexOf(r.turn);
+    if (ev.key === "Enter") doRewind();
+    else if (ev.key === "ArrowDown") { if (r.k < state.rwN - 1) r.k++; else if (ti < T.length - 1) state.rw = { turn: T[ti + 1], k: 0 }; }
+    else { if (r.k > 0) r.k--; else if (ti > 0) state.rw = { turn: T[ti - 1], k: 1e9 }; }
+    ev.preventDefault(); frame(); return;
+  }
+  if (state.view === "model" && (ev.key === "ArrowDown" || ev.key === "ArrowUp")) { state.msel = (state.msel + (ev.key === "ArrowDown" ? 1 : 3)) % 4; ev.preventDefault(); frame(); return; }
+  if (ev.key === "Escape") {
+    if (state.editing >= 0) state.editing = -1;
+    else if (state.rail) state.rail = false;
+    else if (state.view) state.view = null;
+    else if (state.scene === "approval" && !state.apprAside) state.apprAside = true;
+    else toast("Esc with nothing open: sends cancel, interrupting the turn.");
+  }
+  else if (ev.key === "o" && ev.ctrlKey) { state.all = !state.all; }
+  else if (ev.key === "End") state.scroll = 0;
+  else if (ev.key === "PageUp") state.scroll = Math.min(state.maxScroll, state.scroll + 20);
+  else if (ev.key === "PageDown") state.scroll = Math.max(0, state.scroll - 20);
+  else if (alt && ev.key === "ArrowUp" && queue.length) { state.qsel = state.qsel <= 0 ? queue.length - 1 : state.qsel - 1; state.editing = state.qsel; }
+  else if (alt && ev.key === "ArrowDown" && queue.length) { state.qsel = (state.qsel + 1) % queue.length; state.editing = state.qsel; }
+  else if (alt && (ev.code === "KeyX") && state.qsel >= 0) dropQueued(state.qsel);
+  else if (ev.key === "Enter" && state.editing >= 0) { toast("Sent steer_amend for queued message " + (state.editing + 1) + "."); state.editing = -1; }
+  else if (state.editing >= 0 && ev.key.length === 1 && !ev.metaKey && !ev.ctrlKey) queue[state.editing] += ev.key;
+  else if (state.editing >= 0 && ev.key === "Backspace") queue[state.editing] = queue[state.editing].slice(0, -1);
+  else if (state.editing < 0 && ev.key.length === 1 && !ev.metaKey && !ev.ctrlKey && !alt) state.draft += ev.key;
+  else if (state.editing < 0 && ev.key === "Backspace") state.draft = state.draft.slice(0, -1);
+  else if (state.scene === "start" && state.editing < 0 && ev.key === "Enter" && state.draft.trim()) { toast("Starts " + NEWS + " with this prompt. Extensions still waiting for approval are skipped for this session."); state.draft = ""; }
+  else if (state.editing < 0 && ev.key === "Enter" && state.draft.trim()) { queue.push(state.draft.trim()); toast("Enter during a turn sends steer. It sits in the queue until the next step."); state.draft = ""; }
+  else used = false;
+  if (used) { ev.preventDefault(); frame(); }
+});
+
+// ============================================================ controls
+const CTL = [
+  { key: "tools", label: "Tool calls", opts: [["D", "★ Ruled"], ["A", "A · Grouped summary"], ["B", "B · Cells by kind"], ["C", "C · Ledger, head and tail"]] },
+  { key: "reason", label: "Reasoning", opts: [["A", "A · One line, expand"], ["B", "B · Status line only"], ["C", "C · Inline, clipped"]] },
+  { key: "queue", label: "Steering queue", opts: [["A", "A · Above the input"], ["B", "B · Conversation tail"], ["C", "C · Side panel"]] },
+  { key: "look", label: "Look", opts: [["surfaces", "Surfaces"], ["lines", "Lines"]] },
+  { key: "conv", label: "Conversation surfaces", opts: [["ruled", "★ Ruled"], ["blocks", "Your messages and tool groups"], ["all", "Every block"], ["turn", "One per turn"]] },
+  { key: "user", label: "Your messages", opts: [["slab", "Stripe"], ["bubble", "Bubble, right"], ["rule", "Labelled rule"]] },
+  { key: "pal", label: "Palette", opts: [["atelier", "atelier (truecolour)"], ["rainbow", "12-bit Rainbow (256)"]] },
+  { key: "scene", label: "Scene", opts: [["live", "Live turn"], ["approval", "Approval pending"], ["question", "Question pending"], ["answered", "Question answered"], ["handing", "Handing off"], ["handoff", "After a handoff"], ["rewind", "Rewind"], ["held", "Rewind refused"], ["retrying", "Retrying"], ["errors", "Turn failed"], ["crash", "After a crash"], ["start", "First screen"], ["sessions", "Session list"], ["exit", "After exit"]] },
+  { key: "start", label: "First screen", opts: [["B", "Current"], ["A", "A · Quiet"], ["C", "C · Wordmark"], ["D", "D · Hero input"], ["E", "E · Dashboard"]] },
+  { key: "slist", label: "Session list", opts: [["A", "★ Ruled"], ["B", "B · Grouped by state"]] },
+  { key: "retry", label: "Failed model calls", opts: [["A", "★ Ruled"], ["B", "B · A line each"]] },
+  { key: "notices", label: "Notices", opts: [["B", "★ Ruled"], ["A", "A · In the conversation"]] },
+  { key: "ho", label: "Handoff divider", opts: [["B", "★ Ruled"], ["A", "A · Rule in the card"]] },
+  { key: "form", label: "Question form", opts: [["A", "★ Ruled"], ["B", "B · Whole form"]] },
+  { key: "open", label: "Open a view", opts: [["model", "Model picker"], ["context", "Context"], ["diff", "Changed files"], ["tools", "Tools"], ["search", "Search (Ctrl+F)"], ["j_review", "A delegate"]] },
+  { key: "width", label: "Width", opts: [["wide", "160 columns, panel"], ["narrow", "100 columns, status line"], ["w80", "80 × 24"]] },
+];
+function controls() {
+  const c = document.getElementById("controls");
+  c.innerHTML = CTL.map(g => `<div class="ctl"><span>${g.label}</span><div class="seg" role="group" aria-label="${g.label}">${g.opts.map(([v, l]) =>
+    `<button id="b-${g.key}-${v}" data-k="${g.key}" data-v="${v}" aria-pressed="${state[g.key] === v}">${l}</button>`).join("")}</div></div>`).join("") +
+    `<div class="ctl"><span>Data</span><div style="display:flex;gap:14px;flex-wrap:wrap"><label class="chk"><input type="checkbox" id="pm" ${state.pm ? "checked" : ""}> show +/− counts</label><label class="chk"><input type="checkbox" id="gl" ${state.glimmer ? "checked" : ""}> glimmer on the working line</label><button id="replay" class="seg" style="padding:4px 10px;font:inherit;font-size:13px;color:var(--ink);cursor:pointer">Replay live tail</button></div></div>`;
+  c.querySelectorAll("button[data-k]").forEach(b => b.onclick = () => {
+    if (b.dataset.k === "open") { if (b.dataset.v === "search") { state.view = null; state.search = { q: "wait_for_path", idx: 0, jump: true }; } else { state.search = null; state.view = b.dataset.v; } state.scroll = b.dataset.v.startsWith("j_") ? 0 : 1e9; frame(); term.focus(); return; }
+    state[b.dataset.k] = b.dataset.v;
+    if (b.dataset.k === "scene") { state.apprAside = false; if (b.dataset.v === "question") { freshForm(); QEV[QSPLIT].payload.answer = ANSWER0; } }
+    if (b.dataset.k === "scene") { state.rewound = null; state.rw = null; state.rwJobs = {}; state.rwSum = false; state.scroll = 0; }
+    if (b.dataset.k === "ho" && !["handoff", "handing"].includes(state.scene)) state.scene = "handoff";
+    if ((b.dataset.k === "retry" || b.dataset.k === "notices") && !["retrying", "errors"].includes(state.scene)) state.scene = "errors";
+    if (b.dataset.k === "form") { state.scene = "question"; state.fq = 0; state.fsel = 0; state.formAside = false; }
+    if (b.dataset.k === "start") { state.scene = "start"; state.listed = false; state.startT0 = state.tick; setTimeout(() => { state.listed = true; frame(); }, 600); }
+    if (b.dataset.k === "width") ROWS = state.width === "w80" ? 24 : 52;
+    if (b.dataset.k === "slist") state.scene = "sessions";
+    state.editing = -1; state.view = (state.scene === "rewind" || state.scene === "held") && !state.rewound ? "rewind" : state.scene === "sessions" ? "sessions" : null; controls(); fitFont(); frame();
+  });
+  const cc = document.createElement("div"); cc.className = "ctl";
+  cc.innerHTML = `<span>Panel cards · order and visibility, as configuration would set them</span><div class="seg">${state.cardCfg.map(([id, on], k) =>
+    `<label class="chk" style="padding:4px 10px;border-right:1px solid var(--line)"><input type="checkbox" id="card-${id}" data-card="${k}" ${on ? "checked" : ""}> ${CARD_NAMES[id]}${k ? ` <button data-up="${k}" aria-label="Move ${CARD_NAMES[id]} up" style="font:inherit;border:0;background:none;color:var(--accent);cursor:pointer">↑</button>` : ""}</label>`).join("")}</div>`;
+  c.appendChild(cc);
+  cc.querySelectorAll("input[data-card]").forEach(i => i.onchange = () => { state.cardCfg[+i.dataset.card][1] = i.checked; frame(); });
+  cc.querySelectorAll("button[data-up]").forEach(b => b.onclick = e => { e.preventDefault(); const k = +b.dataset.up; [state.cardCfg[k - 1], state.cardCfg[k]] = [state.cardCfg[k], state.cardCfg[k - 1]]; controls(); frame(); });
+  document.getElementById("pm").onchange = e => { state.pm = e.target.checked; frame(); };
+  document.getElementById("gl").onchange = e => { state.glimmer = e.target.checked; frame(); };
+  document.getElementById("replay").onclick = replay;
+}
+function replay() { E.length = BASE_LEN; queue = QUEUE0.slice(); state.liveStep = 0; state.scroll = 0; state.qsel = -1; state.editing = -1; seqBy[MAIN] = E.filter(e => e.session_id === MAIN && e.seq).length; runLive(); }
+let liveTimer = null;
+function runLive() {
+  clearInterval(liveTimer);
+  let k = 0;
+  liveTimer = setInterval(() => {
+    if (k >= LIVE.length) { clearInterval(liveTimer); return; }
+    LIVE[k++]();
+    state.liveStep = E.length - BASE_LEN;
+    frame();
+  }, 1600);
+}
+setInterval(() => { state.tick++; if (!document.hidden) frame(); }, 120);
+
+// ============================================================ notes under the terminal
+const ANSWER0 = QEV[QSPLIT].payload.answer;
+const NOTES = {
+  start: {
+    A: { name: "Quiet", src: "new; the first frame is the session", how: ["The conversation area holds four dim lines: version, the new session and where, the model and mode, and how to find /resume.", "The panel is already live: the Session card, 24k of context (the system prompt and tools), MCP servers connecting.", "The first frame draws at once; keyboard detection and MCP startup never hold it (#15, Keys)."] },
+    B: { name: "current draft", src: "the owner's ruling on #15, 2026-09-28; to be designed again", how: ["Under the header: the sessions waiting on you, then the three most recent, each clickable.", "Typing a prompt starts the new session; picking a row attaches or resumes instead.", "It costs a listing of the project's logs before the first frame fills in."] },
+    C: { name: "Wordmark", src: "new; C, D and E take the whole screen, with no side panel", how: ["FIBER in half blocks, three rows tall, with a gradient between two theme colours. A 256-colour theme takes the nearest colour for each column. The header sits beside it; below about 120 columns it moves to one line under it.", "Animates one line: a band sweeps the underline once as the page opens, then rests, so nothing redraws after about a second. Under reduced motion (the glimmer box) it stays still.", "Waiting and recent sessions sit in tinted slabs. At 80 × 24 each is one row, and a waiting one leads with what it waits on.", "The first frame draws everything but the two lists, which fill in when listing returns (slowed to 0.6 s here so it shows; pick the variant again to replay)."] },
+    D: { name: "Hero input", src: "new; a launcher's centred prompt", how: ["The input box is the centre of the screen: three rows, with the model, effort and mode as clickable chips inside it and what Enter does on the right.", "Above it, fiber in the theme's gradient and one line of where; the approval notice is one amber line. Below it, the sessions are plain rows at the box's width, waiting first, each leading with what it waits on.", "Nothing animates. At 80 × 24 the same composition fits, and the box spans 76 columns.", "The lists fill in under a box that is already live, so nothing moves the cursor."] },
+    E: { name: "Dashboard", src: "new; sessions as cards", how: ["A header strip on its own tint, then the approval notice as a callout with an amber ▌ stripe and review ›, which swaps in the approval view.", "Sessions are cards in two columns, waiting on the left and recent on the right. Each card's ▌ stripe takes its state's colour (◐ amber, ● blue, ✗ red, ○ grey), with the prompt, the note, age, id, turns and branch. The chosen card takes the lighter tint.", "A tip line sits over the input box. Nothing animates.", "Below 110 columns it is one column: waiting sessions stay cards of two rows, and recent ones are a row each in one slab. At 80 × 24 it fills every row, so the tip line goes."] },
+  },
+  slist: {
+    A: { name: "the ruling, newest first", src: "the owner's ruling on #15, 2026-09-28; /resume, fiber --resume with no id, and the Session card's click", how: ["One list by last activity, each row two lines: the first prompt, then id, turns, branch and a note.", "A glyph says the state: ● running, ◐ waiting on you, ✗ stopped without exiting, ○ exited. The right column says what Enter does: attach, resume, or cannot attach.", "A rewound session says which one it continues."] },
+    B: { name: "Grouped by state", src: "new", how: ["Waiting on you first, then Running, then Earlier.", "Rows as in A."] },
+  },
+  retry: {
+    A: { name: "the ruling, counted on the group line", src: "the owner's ruling on #15, 2026-09-28; a retried call is not the person's business unless it keeps failing", how: ["While Fiber waits to retry, the working line says so: “↻ Retrying in 4s · rate_limited · attempt 2 of 4”.", "Once a retry gets through, nothing stays in the card but a count on the group line: “1 failed model call”. The ledger has the detail.", "When the retries run out, the turn fails: a ✗ line with Fiber's message as it is, then the provider's own words dim under it, then ▣ failed."] },
+    B: { name: "A line each", src: "new; every failed attempt stays visible", how: ["The working line is the same while waiting.", "Each failed attempt leaves a dim ↻ line in the card, with its code, attempt and message.", "A turn that fails ends the same way as A."] },
+  },
+  notices: {
+    A: { name: "In the conversation", src: "notice, docs/events.md “Usage and notices”", how: ["A ⚠ line where the notice arrived, with its code and Fiber's message.", "Notices are not logged, so the line is gone after a reattach or a resume."] },
+    B: { name: "the ruling, above the input", src: "the owner's ruling on #15, 2026-09-28; like the steering queue", how: ["Notices stack above the input box until dismissed with ✕.", "They are this terminal's own memory: a client that attaches later never sees them."] },
+  },
+  ho: {
+    A: { name: "Rule in the card", src: "docs/handoff.md, “What a person and a driver see”", how: ["A handoff happens inside a turn, so its divider is a rule inside the turn's card, where it happened.", "It names the trigger and the context before and after: 402k → 32k. The size after comes from the first request after the handoff, so it reads “…” until that returns.", "“▸ note” expands the note under the rule, dim. While the note is being written the rule says so, with a spinner.", "The Session card's context bar drops to the new size."] },
+    B: { name: "the ruling, a band between cards", src: "the owner's ruling on #15, 2026-09-28", how: ["The turn's card ends at the handoff, a tinted band carries the same label, and a second card continues the turn below it.", "The ▣ line closes the second card, so one turn has two cards.", "“▸ note” expands inside the band.", "The size after comes from the first request after the handoff, so it reads “…” until that returns.", "The Session card's context bar drops to the new size."] },
+  },
+  form: {
+    A: { name: "the ruling, one question at a time", src: "the owner's ruling on #15, 2026-09-28; after Claude Code's AskUserQuestion", how: ["A tab per question header across the top, ☐ until answered and ✔ after, then a Submit tab.", "One question fills the panel: its text, its options with descriptions, and a row to answer in words.", "Enter on a single-choice option chooses it and moves on; a multi-choice question toggles with space.", "The Submit tab reviews every answer, takes the note on the whole form, and offers “Chat about this”.", "“Chat about this” and Esc both send declined and then cancel: the call completes declined, the turn ends, and the person answers in their own words.", "Approvals and questions waiting at once share one “1 of N” queue, in arrival order, each labelled with the session asking."] },
+    B: { name: "Whole form", src: "new; the form interaction drawn as one screen", how: ["Every question at once, header in the gutter, options under it.", "Tab moves between questions; click anything.", "The note, Submit and “Chat about this” sit at the bottom.", "Four questions take about 30 rows, so the conversation above keeps only what is left."] },
+  },
+  tools: {
+    D: { name: "the ruling", src: "the owner's ruling on #15, 2026-09-27", how: ["Everything between two replies, thinking included, is one line: what was done, how many times the model thought, how long it took.", "Click or Ctrl+O: the ledger, split by step. Each step's number sits in the gutter, with its thinking line first.", "Click a row: that call's diff, output or error. Failed calls are ordinary rows.", "Interrupted is its own line after the group; a call stopped by it says cancelled."] },
+    A: { name: "Grouped summary", src: "pi-rig (pi-extensions#40), after Claude Code", how: ["A run of calls between two pieces of text is one line: “Read 41 files, searched 18 patterns, edited 23 files +442 −12”.", "Failed and cancelled calls always show under the line.", "Ctrl+O or a click expands a group into one Tool(target) line per call, result under it.", "Claude Code itself (2.1.283) groups only two or more consecutive reads, searches and listings (“Read 3 files, searched for 2 patterns”); each edit stays its own Update(path) line. pi-rig groups every kind."] },
+    B: { name: "Cells by kind", src: "codex (codex-rs/tui exec_cell, history_cell)", how: ["Consecutive reads, searches and listings merge into one “Explored” cell; each command and each edit is its own cell.", "A command shows two lines of head and tail with “… +N lines”; an edit shows its diff.", "Nothing collapses. codex's only fuller view is the Ctrl+T transcript overlay."] },
+    C: { name: "Ledger, head and tail", src: "new; closest to a build log", how: ["One aligned row per call: status, kind, target, result.", "A run longer than " + (HEAD + TAIL) + " rows keeps its first " + HEAD + " and last " + TAIL + " and folds the middle into one counted line; failures inside the fold stay visible.", "A live run's tail keeps moving, so the current call is always on screen."] },
+  },
+  reason: {
+    A: { name: "One line, expand", src: "opencode (ReasoningPart); Claude Code shows it in the Ctrl+O transcript", how: ["“+ Thought: Plan · 22s”, dim; click or Ctrl+O shows the text. The title is the reasoning's first bold heading, when the model writes one.", "While streaming: a spinner and “Thinking: ” with the latest heading.", "Reasoning inside a tool run sits inside the group."] },
+    B: { name: "Status line only", src: "codex (history_cell/messages.rs, status_indicator_widget.rs)", how: ["Never in the scrollback. The latest bold heading replaces “Working” on the input box's border.", "The text appears only with Ctrl+O, which expands everything.", "Anthropic models give no headings, so the line stays “Working” for them."] },
+    C: { name: "Inline, clipped", src: "new", how: ["The text itself, dim italic behind a ┊ gutter.", "While streaming, the last 3 lines scroll in place; afterwards only the first line and a count remain.", "Click to show all of it."] },
+  },
+  queue: {
+    A: { name: "Above the input", src: "pi-rig (pi-extensions#39), codex and Claude Code", how: ["Queued rows sit directly above the input box, ↳ each.", "⌥↑ and ⌥↓ select a row and load it into the input box; Enter sends steer_amend, ⌥X sends steer_drop.", "codex's hint reads “Messages to be submitted after next tool call”, edit with Shift+← or ⌥↑. Claude Code's reads “Press up to edit queued messages”."] },
+    B: { name: "Conversation tail", src: "opencode (a “ QUEUED ” pill on the message, in the transcript)", how: ["Queued messages sit dim at the end of the conversation, where they will land, marked “queued”.", "Click one to edit it in the input box; ✕ withdraws it.", "When steering_applied arrives the row becomes an ordinary steer message in place."] },
+    C: { name: "Side panel", src: "new; follows the settled always-shown panel", how: ["A “steering queue” section in the panel, one row each, ✕ to withdraw.", "Click a row to edit it in the input box.", "The conversation and input keep all their rows; on the narrow rail the queue is a count."] },
+  },
+};
+function notes(fz, conv) {
+  const key = state.start + state.slist + state.retry + state.notices + state.tools + state.reason + state.queue + state.pm + state.width + state.look + state.conv + state.user + state.scene + state.form + state.ho;
+  if (notes.last === key) return;
+  notes.last = key;
+  // rows the 318-call run costs in each state, measured from this renderer
+  const big = fz.blocks.filter(b => b.t === "tools").sort((a, b) => b.items.length - a.items.length)[0];
+  const W = (state.width === "wide" ? COLS.wide - PANEL - 1 : COLS[state.width] - 2) - 2;
+  const fn = { A: renderToolsA, B: renderToolsB, C: renderToolsC, D: renderToolsD }[state.tools];
+  const stat = () => { if (!big) return ""; const saveAll = state.all; state.all = false; const rc = fn(big, W).length; state.all = true; const ro = fn(big, W).length; state.all = saveAll;
+    return `<div class="stat">The ${big.items.filter(x => x.t === "call").length}-call run costs <b>${rc}</b> rows collapsed and <b>${ro}</b> expanded at this width.</div>`; };
+  const card = (k) => { const n = NOTES[k][state[k]]; return `<div class="note"><h2>${CTL.find(c => c.key === k).label}: ${n.name}</h2><div class="src">From ${n.src}</div><ul>${n.how.map(h => `<li>${h}</li>`).join("")}</ul>${k === "tools" ? stat() : ""}</div>`; };
+  const look = state.look === "surfaces" ?
+    `<div class="note"><h2>Look: surfaces</h2><div class="src">Tinted backgrounds, after your atelier pi theme</div><ul><li>Your messages, each tool group, the input box and every panel card sit on their own tint. There are no border lines.</li><li>Half-block characters (▄ ▀) give each slab a half-row edge above and below. Ghostty draws block and box characters itself, so the edges join without gaps.</li><li>A ▌ stripe marks state: blue for you, orange for a steer or a running job, green for a finished one.</li><li>The 12-bit Rainbow palette uses only 256-colour greys, so it also works where truecolour does not.</li></ul></div>` :
+    `<div class="note"><h2>Look: lines</h2><div class="src">Box-drawing borders</div><ul><li>Rounded borders around the input box and each panel card, with titles in the border.</li><li>Everything sits on the terminal's own background.</li></ul></div>`;
+  const CONV = { ruled: ["the ruling", "One card per turn. The prompt that starts it floats above the card as a bubble on the right. A steer sits inside the card as a labelled rule, where it landed. Tool groups have no band and sit indented and dim, behind the replies. A ▣ line closes the card."],
+    blocks: ["Your messages and tool groups", "Each of your messages and each tool group is its own slab. Replies and thinking sit on the terminal background, so text reads as the main thing."],
+    all: ["Every block", "Replies get a slab too, so the column is an even run of surfaces: yours, tools, reply. Code blocks sit on a darker tint inside the reply."],
+    turn: ["One per turn", "A turn, from your message to its end, is one faint surface. Your message is its tinted header, tool groups are bands inside it, and a ▣ line closes it with the outcome, duration and call count."] };
+  const USER = { slab: "A tinted slab with a blue ▌ stripe on the left, full width, like atelier's user message background.", bubble: "A tinted bubble on the right, at most about 70% of the width, with the time under it, as chat apps do.", rule: "No tint: a “you · 14:02” rule above the text, which is bold." };
+  const convNote = `<div class="note"><h2>Conversation: ${CONV[state.conv][0]}</h2><div class="src">Your messages: ${state.conv === "ruled" ? "bubble for prompts, labelled rule for steers" : state.user === "slab" ? "stripe" : state.user === "bubble" ? "bubble, right" : "labelled rule"}</div><ul><li>${CONV[state.conv][1]}</li><li>${USER[state.user]}</li><li>The reply after the 318-call group shows Markdown: a heading, a highlighted Rust block, a table and a list.</li></ul></div>`;
+  const asks = state.scene === "question" || state.scene === "answered";
+  const answered = `<div class="note"><h2>After the answer</h2><div class="src">docs/tools.md, “The result”; docs/events.md, “Interactions”</div><ul><li>The answers are the person's words, so they leave the dim tool group and sit in the card as a “you answered” rule, like a steer.</li><li>The ask_user row in the ledger reads “answered” or “declined”; the group line counts “asked 4 questions”.</li><li>A declined form is an answer, not a failure: the call completes and the turn goes on.</li></ul></div>`;
+  const nudge = `<div class="note"><h2>The nudge</h2><div class="src">docs/handoff.md, “The nudge”; context_nudged</div><ul><li>At two thirds of the trigger (268k of 400k) Fiber tells the model once that a handoff keeps the work going.</li><li>The model saw it, so the person sees it too: one dim ◔ line where it happened.</li></ul></div>`;
+  const rwNote = `<div class="note"><h2>Rewind</h2><div class="src">docs/events.md, “Rewind”; docs/invocation.md, rewind</div><ul><li>/rewind swaps a view into the conversation area. Each turn is one row; the chosen turn opens into its points: before its prompt, after your message, and after each step.</li><li>For the chosen point: the files Fiber's tools wrote since, the calls that may have changed files, and each job started since that still runs, with stop (the default) or adopt.</li><li>An optional summary, then Rewind. The conversation is cut at the point and a ⟲ line says what was not restored and what happened to the jobs.</li><li>Rewind is refused while a turn runs (busy), so this scene ends the turn first. “Rewind refused” shows session_held.</li></ul></div>`;
+  const crashNote = `<div class="note"><h2>After a crash</h2><div class="src">docs/events.md, “Reading” and “Writing”</div><ul><li>The process died mid-call. The new process drops a torn last line, reads the log, and writes job_completed failed orphaned for each job still open.</li><li>The turn's card closes with ▣ cut short, at the time of the last line written. The call that started but never finished reads “? may have run; not run again” in the ledger.</li><li>A ↺ resumed band follows, then one line for all the orphaned jobs, naming them. Click it for each job's message.</li><li>The MCP line and errors use message as it is: Fiber writes its own sentence and the terminal never rewrites it.</li></ul></div>`;
+  if (["start", "sessions", "exit"].includes(state.scene)) { document.getElementById("notes").innerHTML = (state.scene === "exit" ? `<div class="note"><h2>After exit</h2><div class="src">#15, “On exit”</div><ul><li>The terminal is restored, and one line is printed: the session id and the command to resume it.</li></ul></div>` : card(state.scene === "start" ? "start" : "slist")) + look; return; }
+  const errScene = ["retrying", "errors"].includes(state.scene);
+  if (errScene || state.scene === "crash") { document.getElementById("notes").innerHTML = errScene ? card("retry") + card("notices") + look : crashNote + look + convNote; return; }
+  const hoScene = state.scene === "handoff" || state.scene === "handing", rwScene = state.scene === "rewind" || state.scene === "held";
+  document.getElementById("notes").innerHTML = hoScene ? card("ho") + nudge + look + convNote : rwScene ? rwNote + look + convNote : asks ? card("form") + answered + look + convNote : look + convNote + card("tools") + card("reason") + card("queue");
+}
+document.getElementById("findings").innerHTML = `
+  <h2>Findings for the docs</h2>
+  <p><b>Settled in #152.</b> <code>tool_call_completed</code> carries <code>changes</code>, so the +/− counts come from the stream, and the ephemeral <code>steering_queue</code> event lets every attached client see the queue.</p>
+  <p><b>Cards and the narrow status line are ordinary ratatui.</b> A card is a rectangle from its layout with a background colour, or a bordered block with a title. A list of card names in configuration can set which cards show and in what order, the same list that orders the status line's segments. Extension widgets become cards through the same list. The mock's panel scrolls with the wheel when its cards outgrow the screen.</p>
+  <p><b>A form field has no fixed shape.</b> <code>interaction_requested</code> carries “its prompt, options or fields”, and <code>interaction_resolved</code> “the answer”. Neither says what a field or a form's answer holds. This mock assumes a field is an <code>ask_user</code> question as called (header, question, options with descriptions, multiSelect), and a form's answer is one entry per field (selected labels, typed text, or skipped) plus the note.</p>
+  <p><b>Settled in #153.</b> <code>rewind</code> takes <code>adopt</code>, the jobs started after the point that the new session keeps; the rest stop. A rewind never starts a turn: the new session waits for a prompt.</p>
+  <p><b>The size after a handoff arrives late.</b> <code>handoff_completed</code> carries <code>tokens_before</code> only. The size after comes from the next request's <code>usage_recorded</code>, so the divider reads “402k → …” until it returns. That is enough; no change needed unless the “…” is unwelcome.</p>
+  <p><b>Settled in #154.</b> <code>mcp_server_failed</code> carries <code>error { code, message }</code>, so its advice is Fiber's own sentence like every other failure's.</p>
+  <p><b>A dropped torn line is silent.</b> On open, a torn last line is truncated and nothing records it. The terminal can say “the process before this one stopped without exiting” from <code>fiber_started</code> with no <code>fiber_exited</code>, but not that a line was lost. The line was never durable, so this may be fine.</p>
+  <p><b>Listing needs more than first lines.</b> A session's first line, <code>session_started</code>, has its creation time, workspace and <code>forked_from</code>. The list also wants the first prompt and the branch, which sit after <code>opening_message</code> and <code>preamble_built</code>, and the latter holds the whole system prompt and tool definitions. The state comes from the last line and the socket. The 39 ms measured for 601 sessions read first lines only.</p>
+  <p><b>Settled in #155.</b> A session that exits with no <code>turn_started</code> deletes its own directory. <code>--resume</code> takes a full id or a unique prefix, and a bare <code>fiber --resume</code> opens this list.</p>
+  <p><b>Everything else drew from events.md shapes.</b> Hover a user, steer or job line to see the event kinds and <code>seq</code> behind it. Reasoning time is the gap between <code>reasoning_started</code> and <code>reasoning_completed</code>; the delegate cards fold each delegate's relayed lines by <code>session_id</code>.</p>`;
+
+freshForm(); controls(); frame(); runLive();
+function fitFont() { const avail = term.parentElement.clientWidth - 20; const cols = COLS[state.width]; const px = Math.max(8, Math.min(14, avail / (cols * 0.6))); term.style.fontSize = px + "px"; }
+new ResizeObserver(() => { fitFont(); }).observe(document.querySelector(".termbox"));
+fitFont();
+</script>
+
+</body></html>
