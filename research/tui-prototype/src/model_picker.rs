@@ -365,12 +365,18 @@ pub enum Install {
     Installing,
     /// the install failed; the row stays and shows the error
     Failed { error: &'static str },
+    /// the provider installed; its section joins the list with the summary
+    Done { login: Option<&'static str> },
 }
 
 /// The catalogue on screen: the hub's on a remote terminal, else the
-/// local fixture.
-fn catalog(hub: bool) -> Vec<Provider> {
-    if hub { hub_fixture() } else { fixture() }
+/// local fixture, with the installed provider once its install is done.
+fn catalog(hub: bool, extra: bool) -> Vec<Provider> {
+    let mut all = if hub { hub_fixture() } else { fixture() };
+    if extra {
+        all.push(install_fixture());
+    }
+    all
 }
 
 /// The five models `scoped_models` holds.
@@ -595,6 +601,17 @@ pub(crate) const CASES: &[Case<State>] = &[
             ..base()
         },
     },
+    Case {
+        name: "install-done",
+        help: "the installed provider with its summary and login",
+        check: "a fourth `databricks` section with its two models listed, then the install summary (`✓ installed databricks …` with its providers and base URLs, what it replaces and carries) and a dim `databricks needs a credential: run `fiber login databricks`` line; same panel, bar and legend.",
+        build: || State {
+            install: Some(Install::Done {
+                login: Some("databricks"),
+            }),
+            ..base()
+        },
+    },
 ];
 
 /// `--picker`, for `--help` and `check/model-picker.md`.
@@ -617,7 +634,7 @@ fn base() -> State {
 /// the focused chip's level, else the model's own level.
 pub fn chosen(s: &State) -> (&'static str, &'static str) {
     let mut i = 0;
-    for p in catalog(s.hub) {
+    for p in catalog(s.hub, s.installed()) {
         for m in &p.models {
             if i == s.focus {
                 let level = match s.chip {
@@ -656,8 +673,8 @@ pub fn for_case(case: &str) -> State {
         .unwrap_or_else(|| panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")))
 }
 
-fn count(hub: bool) -> usize {
-    catalog(hub).iter().map(|p| p.models.len()).sum()
+fn count(hub: bool, extra: bool) -> usize {
+    catalog(hub, extra).iter().map(|p| p.models.len()).sum()
 }
 
 /// The text one query token must subsequence-match: provider, id and
@@ -724,7 +741,7 @@ fn id_hits(query: &str, id: &str) -> Vec<usize> {
 /// The flat indices on screen: the scoped set, or everything. The
 /// checklist shows every model whatever the scope says; the query still filters.
 pub fn visible(s: &State) -> Vec<usize> {
-    let all = catalog(s.hub);
+    let all = catalog(s.hub, s.installed());
     let mut flat: Vec<(&str, &Model)> = vec![];
     for p in &all {
         for m in &p.models {
@@ -744,9 +761,9 @@ pub fn visible(s: &State) -> Vec<usize> {
 }
 
 /// The focused model's level count and its current level's index.
-fn model_levels(hub: bool, focus: usize) -> (usize, usize) {
+fn model_levels(hub: bool, extra: bool, focus: usize) -> (usize, usize) {
     let mut i = 0;
-    for p in catalog(hub) {
+    for p in catalog(hub, extra) {
         for m in &p.models {
             if i == focus {
                 let cur = m
@@ -762,6 +779,10 @@ fn model_levels(hub: bool, focus: usize) -> (usize, usize) {
 }
 
 impl State {
+    /// Whether the install finished: its provider joins the catalogue.
+    fn installed(&self) -> bool {
+        matches!(self.install, Some(Install::Done { .. }))
+    }
     /// After the visible rows change the focus stays when still on screen
     /// and otherwise moves to the first visible row; the chip never survives.
     fn keep_focus(&mut self) {
@@ -791,14 +812,14 @@ impl State {
         self.chip = None;
     }
     pub fn chip_left(&mut self) {
-        let (n, cur) = model_levels(self.hub, self.focus);
+        let (n, cur) = model_levels(self.hub, self.installed(), self.focus);
         if n == 0 {
             return;
         }
         self.chip = Some(self.chip.unwrap_or(cur).saturating_sub(1));
     }
     pub fn chip_right(&mut self) {
-        let (n, cur) = model_levels(self.hub, self.focus);
+        let (n, cur) = model_levels(self.hub, self.installed(), self.focus);
         if n == 0 {
             return;
         }
@@ -832,7 +853,7 @@ impl State {
         self.keep_focus();
     }
     pub fn refresh_all(&mut self) {
-        self.refreshing = (0..catalog(self.hub).len()).collect();
+        self.refreshing = (0..catalog(self.hub, self.installed()).len()).collect();
     }
 }
 
@@ -1044,20 +1065,32 @@ fn controls(s: &State, w: usize) -> Row {
             format!(
                 " {} of {} models · {} marked ",
                 visible(s).len(),
-                count(s.hub),
+                count(s.hub, s.installed()),
                 s.marked.len()
             )
         } else {
-            format!(" {} of {} marked ", s.marked.len(), count(s.hub))
+            format!(
+                " {} of {} marked ",
+                s.marked.len(),
+                count(s.hub, s.installed())
+            )
         };
         return row(vec![sp(scope, dim())]);
     }
     let scope = if !s.query.is_empty() {
-        format!(" {} of {} models ", visible(s).len(), count(s.hub))
+        format!(
+            " {} of {} models ",
+            visible(s).len(),
+            count(s.hub, s.installed())
+        )
     } else if s.scoped.is_empty() {
         format!(" {} models ", visible(s).len())
     } else {
-        format!(" scoped · {} of {} ", visible(s).len(), count(s.hub))
+        format!(
+            " scoped · {} of {} ",
+            visible(s).len(),
+            count(s.hub, s.installed())
+        )
     };
     let mut parts: Vec<(ratatui::text::Span<'static>, Option<Act>)> =
         vec![(sp(scope, dim()), None)];
@@ -1102,15 +1135,14 @@ fn footer(s: &State) -> Row {
 }
 
 /// The not-installed provider's rows below the installed sections: the
-/// row with the gutter and the name in accent, then its models dim with
-/// no prices and no thinking chips, since nothing installed has either.
-/// While the install runs the mark gives way to the spinner in attention;
-/// a failed install keeps the row and adds its error in error underneath.
-fn pending_rows(s: &State, p: &Provider, install: Install) -> Vec<Row> {
-    let mark = match install {
-        Install::Missing | Install::Failed { .. } => sp(" · not installed", dim()),
-        Install::Installing => sp(format!(" ⟳ installing {} ", spin(s)), fg(ORANGE)),
-    };
+/// row with the gutter, the name in accent and the mark, then its models
+/// dim with no prices and no thinking chips, since nothing installed has
+/// either; a failed install adds its error in error underneath.
+fn pending_rows(
+    p: &Provider,
+    mark: ratatui::text::Span<'static>,
+    error: Option<&'static str>,
+) -> Vec<Row> {
     let mut out = vec![
         row(vec![]),
         row(vec![sp("  ", Style::new()), sp(p.name, fg(BLUE)), mark]),
@@ -1126,8 +1158,39 @@ fn pending_rows(s: &State, p: &Provider, install: Install) -> Vec<Row> {
         }
         out.push(row(spans));
     }
-    if let Install::Failed { error } = install {
+    if let Some(error) = error {
         out.push(row(vec![sp(format!("    ✗ {error}"), fg(RED))]));
+    }
+    out
+}
+
+/// The installed summary under the list: what the install shows, the
+/// name, source and version, the providers with their base URLs, what it
+/// replaces and what it carries; and for a provider that needs one, the
+/// `fiber login` line. With no credential the summary stands alone.
+fn summary_rows(login: Option<&'static str>) -> Vec<Row> {
+    let mut out = vec![
+        row(vec![
+            sp("    \u{2713} ", fg(BLUE)),
+            sp(
+                "installed databricks 1.4.0 from the first-party registry".to_string(),
+                Style::new(),
+            ),
+        ]),
+        row(vec![sp(
+            "    providers: databricks (https://api.databricks.com) · replaces nothing".to_string(),
+            dim(),
+        )]),
+        row(vec![sp(
+            "    skills: 2 · themes: 1 · binaries: 1".to_string(),
+            dim(),
+        )]),
+    ];
+    if let Some(name) = login {
+        out.push(row(vec![sp(
+            format!("    {name} needs a credential: run `fiber login {name}`"),
+            dim(),
+        )]));
     }
     out
 }
@@ -1135,7 +1198,7 @@ fn pending_rows(s: &State, p: &Provider, install: Install) -> Vec<Row> {
 /// The panel's body at an inner width: controls, dim provider sections with
 /// a blank row between them, and the visible models, the focused one barred.
 fn body(s: &State, inner: usize) -> Vec<Row> {
-    let all = catalog(s.hub);
+    let all = catalog(s.hub, s.installed());
     let mut at: Vec<(usize, usize)> = vec![];
     for (pi, p) in all.iter().enumerate() {
         for mi in 0..p.models.len() {
@@ -1209,7 +1272,24 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
         }
     }
     if let Some(install) = s.install {
-        out.extend(pending_rows(s, &install_fixture(), install));
+        match install {
+            Install::Done { login } => out.extend(summary_rows(login)),
+            Install::Missing => out.extend(pending_rows(
+                &install_fixture(),
+                sp(" · not installed", dim()),
+                None,
+            )),
+            Install::Installing => out.extend(pending_rows(
+                &install_fixture(),
+                sp(format!(" ⟳ installing {} ", spin(s)), fg(ORANGE)),
+                None,
+            )),
+            Install::Failed { error } => out.extend(pending_rows(
+                &install_fixture(),
+                sp(" · not installed", dim()),
+                Some(error),
+            )),
+        }
     }
     out
 }
@@ -2701,6 +2781,97 @@ mod tests {
             "needs a credential",
         ] {
             assert!(!t.contains(word), "failed case draws {word}");
+        }
+    }
+
+    #[test]
+    fn the_done_case_lists_the_provider_with_its_summary_and_login() {
+        let rows = view(&for_case("install-done"), 100);
+        let t = text(&rows);
+        // The provider joins the list as a fourth installed section.
+        assert!(t.contains("databricks"), "missing the installed provider");
+        assert!(
+            t.contains("$2.50 in · $10.00 out /M"),
+            "the installed models show no prices"
+        );
+        assert_eq!(picks(&rows), 14, "the installed models take no pick");
+        assert!(t.contains("14 models"), "the controls miss the new models");
+        // The install summary under the list: name, source and version,
+        // the providers with their base URLs, and what it carries.
+        assert!(
+            t.contains("✓ installed databricks 1.4.0"),
+            "missing the install summary"
+        );
+        assert!(
+            t.contains("providers: databricks (https://api.databricks.com)"),
+            "missing the providers with their base URLs"
+        );
+        assert!(
+            t.contains("skills: 2 · themes: 1 · binaries: 1"),
+            "missing what the install carries"
+        );
+        // The credential line for a provider that needs one.
+        assert!(
+            t.contains("databricks needs a credential: run `fiber login databricks`"),
+            "missing the login line"
+        );
+        // The summary sits under the list, past the installed models.
+        let last = t.find("llama-4-maverick").unwrap();
+        assert!(
+            t[last..].contains("✓ installed databricks"),
+            "the summary is not under the list"
+        );
+        // Nothing pending, running or failed here.
+        for word in ["not installed", "installing", "\u{2717}"] {
+            assert!(!t.contains(word), "done case draws {word}");
+        }
+    }
+
+    #[test]
+    fn without_a_credential_the_summary_stands_alone() {
+        let mut s = base();
+        s.install = Some(Install::Done { login: None });
+        let rows = view(&s, 100);
+        let t = text(&rows);
+        assert!(
+            t.contains("✓ installed databricks 1.4.0"),
+            "missing the install summary"
+        );
+        assert_eq!(picks(&rows), 14, "the installed models take no pick");
+        assert!(
+            !t.contains("needs a credential"),
+            "the login line shows with no credential"
+        );
+    }
+
+    #[test]
+    fn the_done_mark_reads_success_while_the_details_stay_dim() {
+        let rows = view(&for_case("install-done"), 100);
+        let mark = rows
+            .iter()
+            .find(|r| plain(r).contains("✓ installed databricks"))
+            .unwrap();
+        let tick = mark
+            .spans
+            .iter()
+            .find(|sp| sp.content.contains("✓"))
+            .unwrap();
+        assert_eq!(tick.style.fg, Some(BLUE), "the mark is not success");
+        let login = rows
+            .iter()
+            .find(|r| plain(r).contains("needs a credential"))
+            .unwrap();
+        for sp in login
+            .spans
+            .iter()
+            .filter(|sp| !sp.content.trim().is_empty())
+        {
+            assert!(
+                sp.style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::DIM),
+                "the login line is not dim"
+            );
         }
     }
 
