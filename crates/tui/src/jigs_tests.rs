@@ -272,7 +272,7 @@ fn over<'a>(
     clock: std::sync::Arc<dyn contract::clock::Clock>,
 ) -> super::Paging<'a> {
     super::Paging {
-        app: crate::app::App::new(std::path::PathBuf::new()),
+        app: crate::app::App::new(None),
         log: lines
             .iter()
             .map(|(seq, line)| (*seq, line.as_str()))
@@ -335,7 +335,7 @@ fn range_lines_names_an_unreadable_line_in_range() {
 /// An app folded with `lines` but never connected: `history` never goes
 /// out, so any dropped page keeps the search scanning.
 fn silent_app(lines: &[(contract::Seq, String)]) -> crate::app::App {
-    let mut app = crate::app::App::new(std::path::PathBuf::new());
+    let mut app = crate::app::App::new(None);
     app.set_size(60, 12);
     for (_, line) in lines {
         let envelope: contract::Envelope =
@@ -504,7 +504,7 @@ fn a_frame_names_the_range_the_log_does_not_hold() {
             )
         })
         .collect();
-    let mut app = crate::app::App::new(std::path::PathBuf::new());
+    let mut app = crate::app::App::new(None);
     app.set_size(60, 12);
     for (_, line) in &lines {
         let envelope: contract::Envelope =

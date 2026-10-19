@@ -731,7 +731,7 @@ fn routed_loop_wait_lends_one_queue_then_parks_or_reconnects_at_the_bound() {
             std::thread::spawn(move || {
                 let (mut terminal, old_peer, _, _) = opened();
                 drop(old_peer);
-                terminal.app = crate::app::App::new("/w".into());
+                terminal.app = crate::app::App::new(std::path::PathBuf::from("/w"));
                 terminal.app.set_home(crate::Launch::default());
                 let initial = terminal.app.on_line(Line::Hub(hello()));
                 let initial: serde_json::Value = serde_json::from_str(&initial[0]).unwrap();

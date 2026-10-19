@@ -107,16 +107,18 @@ impl Chooser {
 
 impl Home {
     /// No workspace is chosen: none was picked and there is no launch
-    /// directory.
+    /// directory. An empty pick or launch directory counts as none.
     pub(in crate::app) fn no_workspace(&self) -> bool {
-        self.chooser.chosen.is_none() && self.launch_dir().is_none()
+        self.chooser.chosen.as_deref().is_none_or(str::is_empty) && self.launch_dir().is_none()
     }
 
-    /// The launch directory, when there is one.
+    /// The launch directory, when there is one: an empty launch path
+    /// is none.
     fn launch_dir(&self) -> Option<String> {
         self.launch
             .location
             .workspace()
+            .filter(|workspace| !workspace.as_os_str().is_empty())
             .map(|workspace| workspace.display().to_string())
     }
 
@@ -378,7 +380,12 @@ impl App {
             }
             return;
         };
-        let read = remote.chip(&self.workspace());
+        let read = match self.workspace() {
+            Some(workspace) => remote.chip(&workspace),
+            // With no local workspace the chips still read: the hub's
+            // global layer stands in for the workspace.
+            None => remote.chip_global(),
+        };
         self.fold_chip(read);
     }
 
@@ -605,17 +612,27 @@ impl App {
     }
 
     /// Chooses `workspace` for the next `start` and names its project
-    /// for `prompt_history`. The chips belong to the old workspace, so
-    /// with the link up the chips read at once at the new workspace,
-    /// and with it down the next hello reads them.
+    /// for `prompt_history`. An empty choice clears the pick: it is no
+    /// workspace, so Enter reopens the picker. The chips belong to the
+    /// old workspace, so with the link up the chips read at once at the
+    /// new workspace, and with it down the next hello reads them.
     pub(in crate::app) fn choose_workspace(&mut self, workspace: String) {
-        if let Some(home) = self.home.as_mut() {
+        if workspace.is_empty() {
+            if let Some(home) = self.home.as_mut() {
+                home.chooser.chosen = None;
+                home.chooser.worktree = false;
+                home.chooser.picker = None;
+            }
+        } else if let Some(home) = self.home.as_mut() {
             home.choose(workspace);
         }
         if self.link == Link::Up
             && let Some(remote) = self.remote()
         {
-            let read = remote.chip(&self.workspace());
+            let read = match self.workspace() {
+                Some(workspace) => remote.chip(&workspace),
+                None => remote.chip_global(),
+            };
             self.fold_chip(read);
             self.sync_project();
             return;
@@ -672,26 +689,35 @@ impl App {
     }
 
     /// The workspace in use on home: the attached session's row
-    /// workspace, else the picked one, else the launch workspace.
-    pub(in crate::app) fn home_workspace(&self) -> PathBuf {
+    /// workspace, else the picked one, else the launch workspace, else
+    /// none. An empty value at each step is none, so `None` holds exactly
+    /// when no non-empty row, pick, or launch directory names one.
+    pub(in crate::app) fn home_workspace(&self) -> Option<PathBuf> {
         if let Some(home) = &self.home {
             if let Some(session) = self.session()
                 && let Some(row) = home.sessions.row(session)
+                && let Some(workspace) = non_empty(PathBuf::from(&row.workspace))
             {
-                return PathBuf::from(&row.workspace);
+                return Some(workspace);
             }
-            if let Some(chosen) = &home.chooser.chosen {
-                return PathBuf::from(chosen);
+            if let Some(chosen) = home.chooser.chosen()
+                && let Some(workspace) = non_empty(PathBuf::from(chosen))
+            {
+                return Some(workspace);
             }
-            return home
-                .launch
-                .location
-                .workspace()
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or_default();
+            if let Some(launch) = home.launch.location.workspace() {
+                return non_empty(launch.to_path_buf());
+            }
+            return None;
         }
         self.workspace.clone()
     }
+}
+
+/// A workspace path with empty filtered out: an empty launch, row, or
+/// chosen value is no workspace.
+fn non_empty(path: PathBuf) -> Option<PathBuf> {
+    (!path.as_os_str().is_empty()).then_some(path)
 }
 
 /// A `directories` line for `dir` under `id`: no `session_id`, as a
