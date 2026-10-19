@@ -2471,6 +2471,24 @@ fn settle_waits_for_the_late_childs_reap() {
     Deadline::after(DEADLINE)
         .recv(&is_reaping)
         .expect("the spawn reached its reap");
+    // The spawn listed its group before the kill, so the listing holds
+    // the late PGID: the shell itself cannot report it, as the kill lands
+    // before it could run.
+    let groups = listed(&reads);
+    assert_eq!(
+        groups.len(),
+        1,
+        "only the late group is listed: {:?}",
+        groups
+    );
+    let pgid = groups[0];
+    // Armed once the spawn reaches its reap pause: the settle's pass
+    // before the reap's release probes scripted-alive and parks, its first pass
+    // after probes scripted-alive again, and later probes fall back to
+    // the real syscall, which finds the reaped group empty. The scripted
+    // sends never touch the real group, so the kill below still reaps it
+    // for real.
+    reads.script_group(pgid, vec![Ok(()), Ok(())], vec![]);
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     // The leader is killed but not yet reaped: the count is still raised,
     // and the listed group parks the cancelled settle at its poll.
@@ -2481,12 +2499,32 @@ fn settle_waits_for_the_late_childs_reap() {
         "the late child's reap holds the settle",
     );
     free_reap.send(()).expect("the reap's release");
-    assert!(
-        Deadline::after(DEADLINE)
-            .recv(&settled)
-            .expect("the settle"),
-        "settle waits out the reap"
-    );
+    // The scripted probes keep the group listed past the reap, so one
+    // pass after it is never enough: each advance drives one confirmed
+    // poll park, and the answer arrives once the real probe finds the
+    // group empty. Three poll steps bound the wait; a settle still
+    // parked past the bound fails the test with the step count.
+    let mut steps = 0;
+    let answer = loop {
+        match settled.try_recv() {
+            Ok(answer) => break answer,
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("the settle ended without answering")
+            }
+        }
+        assert!(
+            steps < 3,
+            "the settle is still parked after {steps} poll steps"
+        );
+        let poll = clock
+            .now()
+            .checked_add(GROUP_POLL)
+            .expect("the poll is countable");
+        let _stepped = poll_step(&clock, poll, GROUP_POLL, &Deadline::after(DEADLINE));
+        steps += 1;
+    };
+    assert!(answer, "settle waits out the reap");
     let error = Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the late read")
