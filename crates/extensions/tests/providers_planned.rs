@@ -25,6 +25,74 @@ fn source(root: &Path, name: &str, provider: &str, model: &str) -> PathBuf {
 }
 
 #[test]
+fn providers_planned_rejects_staged_addenda_but_installed_addenda_leave_a_notice() {
+    bounded(|| {
+        let root = fakes::TempDir::new("providers-planned-addendum");
+        let home = root.path().join("home");
+        let a = source(root.path(), "a", "pa", "old");
+        let c = source(root.path(), "c", "pc", "new");
+        let data = c.join("providers/pc.json");
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&data).unwrap()).unwrap();
+        value["models"][0]["prompt_addendum"] = json!("addenda/pc.md");
+        fs::write(&data, value.to_string()).unwrap();
+        fs::create_dir_all(c.join("addenda/pc.md")).unwrap();
+        let clock = fakes::clock::FakeClock::new();
+        extensions::plan(
+            &home,
+            &Request::Path(a),
+            "0.1.0",
+            &Origin::github(),
+            &*clock,
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+        let before = extensions::list(&home, &*clock).unwrap().installed;
+        let files = ["extension.json", "providers/pa.json", ".fiber.json"];
+        let bytes: Vec<_> = files
+            .iter()
+            .map(|file| fs::read(home.join("extensions/fiber.test-a").join(file)).unwrap())
+            .collect();
+        let plan = extensions::plan(
+            &home,
+            &Request::Path(c.clone()),
+            "0.1.0",
+            &Origin::github(),
+            &*clock,
+        )
+        .unwrap();
+        let staged = plan.items().next().unwrap().staged().to_path_buf();
+        let error = Providers::load_planned(&home, &plan).unwrap_err();
+        assert_eq!(error.code(), contract::ErrorCode::ConfigInvalid);
+        assert!(error.to_string().contains("addenda/pc.md"));
+        drop(plan);
+        assert!(!staged.exists());
+        assert_eq!(extensions::list(&home, &*clock).unwrap().installed, before);
+        let after: Vec<_> = files
+            .iter()
+            .map(|file| fs::read(home.join("extensions/fiber.test-a").join(file)).unwrap())
+            .collect();
+        assert_eq!(after, bytes);
+        extensions::plan(
+            &home,
+            &Request::Path(c),
+            "0.1.0",
+            &Origin::github(),
+            &*clock,
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+        let (providers, notices) = Providers::load(&home).unwrap();
+        assert_eq!(providers.names().collect::<Vec<_>>(), ["pa"]);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].code, contract::ErrorCode::ExtensionFailed);
+        assert!(notices[0].message.contains("addenda/pc.md"));
+    });
+}
+
+#[test]
 fn providers_planned_reads_installed_and_staged_data_and_drops_staging() {
     bounded(|| {
         let root = fakes::TempDir::new("providers-planned-union");
