@@ -19,7 +19,7 @@ use contract::clock::Clock;
 use super::{CancelOnDrop, Reads, deadline_due};
 use fakes::Deadline;
 use fakes::children::Ready;
-use fakes::clock::{FakeClock, SystemClock};
+use fakes::clock::{FakeClock, Mark, Miss, SystemClock};
 use rustix::io::Errno;
 use support::clock::Parker;
 use support::group::GROUP_POLL;
@@ -69,6 +69,32 @@ fn ready_in(root: &std::path::Path, name: &str) -> Ready {
     let dir = root.join(name);
     std::fs::create_dir_all(&dir).unwrap();
     Ready::new(&dir)
+}
+
+/// One poll step of a driver loop that is the clock's only mover: waits up
+/// to what is left of the drive, capped at one poll pause, for the parked
+/// poll instant, then advances past it. No fresh park means the settle
+/// answered instead of re-parking, so the caller re-checks its answer
+/// channel and the drive; a park at another instant fails the test. A zero
+/// pause never reaches the clock: the caller re-checks instead.
+#[track_caller]
+fn poll_step(
+    clock: &FakeClock,
+    parked_at: Instant,
+    advance: Duration,
+    drive: &Deadline,
+) -> Option<Mark> {
+    let pause = drive.left().min(PARK_PAUSE);
+    if pause.is_zero() {
+        return None;
+    }
+    match clock.try_advance_when_parked(Some(parked_at), None, advance, pause) {
+        Ok(mark) => Some(mark),
+        Err(Miss::NoPark) => None,
+        Err(miss @ Miss::Mismatch { .. }) => {
+            panic!("{miss} at {:?}; parked: {:?}", clock.now(), clock.parked())
+        }
+    }
 }
 
 #[test]
@@ -326,11 +352,12 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    assert!(
-        clock.await_parked(deadline, DEADLINE),
-        "the wait parked at its deadline"
+    let mark = clock.advance_when_parked(
+        Some(deadline),
+        None,
+        timeout.checked_sub(Duration::from_millis(1)).unwrap(),
+        &Deadline::after(DEADLINE),
     );
-    let mark = clock.advance_marked(timeout.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(
         clock.await_parked_since(&mark, Some(deadline), DEADLINE),
         "the wait parked again after the advance"
@@ -379,7 +406,12 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
     let (settled, is_settled) = mpsc::channel::<()>();
     let (release_settled, resume_reaper) = mpsc::channel::<()>();
     reads.pause_at_settle_complete(settled, resume_reaper);
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE).recv_or_fail(&is_killed, "the settlement's first kill");
     let (killed_again, is_killed_again) = mpsc::channel::<()>();
     let (release_again, freed_again) = mpsc::channel::<()>();
@@ -394,14 +426,14 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
         .now()
         .checked_add(GROUP_POLL)
         .expect("the poll is countable");
-    clock.advance_when_parked(Some(poll), None, GROUP_POLL, &drive);
+    clock.advance_when_parked(Some(poll), None, GROUP_POLL, &Deadline::after(DEADLINE));
     drive.recv_or_fail(&is_killed_again, "the settlement's second kill");
     release_again.send(()).unwrap();
     let repoll = clock
         .now()
         .checked_add(GROUP_POLL)
         .expect("the poll is countable");
-    clock.advance_when_parked(Some(repoll), None, GROUP_POLL, &drive);
+    clock.advance_when_parked(Some(repoll), None, GROUP_POLL, &Deadline::after(DEADLINE));
     drive.recv_or_fail(&is_settled, "the timeout settlement");
 
     assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
@@ -442,11 +474,12 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    assert!(
-        clock.await_parked(deadline, DEADLINE),
-        "the wait parked at its deadline"
+    let mark = clock.advance_when_parked(
+        Some(deadline),
+        None,
+        timeout.checked_sub(Duration::from_millis(1)).unwrap(),
+        &Deadline::after(DEADLINE),
     );
-    let mark = clock.advance_marked(timeout.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(
         clock.await_parked_since(&mark, Some(deadline), DEADLINE),
         "the wait parked again after the advance"
@@ -466,11 +499,12 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
         "the wait answered before its timeout"
     );
     release.send(()).unwrap();
-    assert!(
-        clock.await_parked(deadline, DEADLINE),
-        "the wait parked at its deadline again"
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(Duration::from_millis(1));
     // The timeout re-kills on the poll cadence and parks between passes:
     // drive each confirmed poll park, as the re-kill test does. The advance
     // above wakes only one pass, whose probe can still see a
@@ -497,9 +531,7 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
             .now()
             .checked_add(GROUP_POLL)
             .expect("the poll is countable");
-        if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
-            clock.advance(GROUP_POLL);
-        }
+        let _stepped = poll_step(&clock, poll, GROUP_POLL, &drive);
     }
     let error = match answer {
         Some(got) => got.expect_err("a command holding stdout past its timeout"),
@@ -565,22 +597,14 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
         vec![Ok(()), Ok(()), Err(Errno::SRCH)],
         vec![Ok(()), Ok(())],
     );
-    clock.advance(timeout);
+    clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
     // The timeout re-kills on the poll cadence: each advance follows a
     // confirmed park, so the first two parks each earn one more send and
     // the third observation retires the group.
     let poll = deadline + GROUP_POLL;
-    assert!(
-        clock.await_parked(poll, DEADLINE),
-        "the timeout parked at its first poll"
-    );
-    clock.advance(GROUP_POLL);
+    clock.advance_when_parked(Some(poll), None, GROUP_POLL, &Deadline::after(DEADLINE));
     let repoll = poll + GROUP_POLL;
-    assert!(
-        clock.await_parked(repoll, DEADLINE),
-        "the timeout parked at its second poll"
-    );
-    clock.advance(GROUP_POLL);
+    clock.advance_when_parked(Some(repoll), None, GROUP_POLL, &Deadline::after(DEADLINE));
     let error = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the timed-out read")
         .expect_err("a command still running at its timeout");
