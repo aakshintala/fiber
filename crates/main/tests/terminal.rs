@@ -2558,9 +2558,7 @@ fn choosing_a_model_mid_turn_notices_that_it_applies_when_the_turn_ends() {
     run.write(b"say hi\r");
     // The elapsed count proves `turn_started` folded, which opens the
     // turn: the choice below sends while it runs.
-    run.wait_screen("the running turn", |grid| {
-        working_elapsed(&grid.contents)
-    });
+    run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));
     // Ctrl+L opens the picker: the open wait names the picker frame and
     // the count wait names the answered catalogue, so a stall says
     // whether the picker never opened or the catalogue never answered,
@@ -2601,9 +2599,7 @@ fn choosing_a_level_mid_turn_notices_that_it_applies_when_the_turn_ends() {
     run.ready();
     run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
     run.write(b"say hi\r");
-    run.wait_screen("the running turn", |grid| {
-        working_elapsed(&grid.contents)
-    });
+    run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));
     run.write(b"\x0c");
     run.wait_screen_reporting(
         "the open picker",
@@ -2686,9 +2682,7 @@ fn choosing_an_unreadable_model_mid_turn_replaces_the_pending_notice_with_its_re
     run.ready();
     run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
     run.write(b"say hi\r");
-    run.wait_screen("the running turn", |grid| {
-        working_elapsed(&grid.contents)
-    });
+    run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));
     run.write(b"\x0c");
     run.wait_screen_reporting(
         "the open picker",

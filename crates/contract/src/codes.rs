@@ -207,6 +207,10 @@ codes! {
     StreamIncomplete,
     /// A `rewind` that asked for a summary could not get one.
     SummaryFailed,
+    /// A model or level choice sent while a turn runs: it applies when
+    /// the turn ends, and the chips hold the old model and level until
+    /// the session accepts it.
+    SwitchPending,
     /// A deadline passed.
     Timeout,
     /// A `web_fetch` download larger than 10 MiB.

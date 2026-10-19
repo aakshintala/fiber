@@ -4162,9 +4162,9 @@ fn folding_mid_turn(app: &mut App) {
 
 /// Whether any notice row carries `code`.
 fn has_code(app: &App, code: &str) -> bool {
-    app.notices().into_iter().any(|line| {
-        matches!(line, crate::app::NoticeLine::Notice { code: found, .. } if found == code)
-    })
+    app.notices().into_iter().any(
+        |line| matches!(line, crate::app::NoticeLine::Notice { code: found, .. } if found == code),
+    )
 }
 
 #[test]
@@ -4259,12 +4259,11 @@ fn a_rejection_after_acceptance_pushes_without_replacing() {
     // The acceptance drains the stash; the pending notice stands as the
     // record of the applied choice.
     app.on_line(accepted(SESSION, &id));
-    // A late rejection for the drained id is an ordinary one: it pushes
-    // beside the standing notice, replacing nothing.
+    // A late rejection for the drained id changes nothing: the pending
+    // row is gone, and with it the generic path's push.
     app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
-    assert_eq!(newest_code(&app), "credential_missing");
-    assert_eq!(app.notice(), Some("no key."));
-    assert!(has_code(&app, "switch_pending"));
+    assert_eq!(newest_code(&app), "switch_pending");
+    assert!(!has_code(&app, "credential_missing"));
 }
 
 #[test]

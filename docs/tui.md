@@ -571,7 +571,10 @@ a click on it returns too. The views are:
   thinking level the model supports, each model's input and output prices,
   and what a switch to it costs to rebuild the prompt cache. Choosing a model
   saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. On a remote terminal it lists the hub's catalogue, the models the hub's machine can reach (`docs/invocation.md`, "What the hub speaks", `models`), and a session started from it runs on the hub. Ctrl+S
-  marks the choice as this session only, and then nothing is saved. When
+  marks the choice as this session only, and then nothing is saved. A choice
+  sent while a turn runs says it applies when the turn ends: the chips hold
+  the old model and level until the session accepts it, and the choice
+  applies at the turn's end. When
   `scoped_models` is set, the picker shows only those models, with a "show
   all" toggle on Tab. Typing filters the list on every letter: each
   space-separated word of the query must match, in order but not
@@ -1631,7 +1634,7 @@ later release still applies.
 | `/new` | Goes home with the cursor in the input box, to pick the workspace, worktree, model and thinking level for a new session. The session left keeps running. |
 | `/resume` | Goes home, focused on the first exited row. |
 | `/model` | Opens the model picker. |
-| `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
+| `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. Sent while a turn runs, the choice applies when the turn ends. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
 | `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. Each row carries its mark between the gutter and the id: `[x]` marked, `[ ]` not, bold on the focused row and dim when unmarked. The count row reads ` {m} of {n} marked ` unfiltered and ` {v} of {n} models · {m} marked ` filtered, with no show-all toggle and no refresh button. The row below each model is its thinking row, dim with nothing to choose. Ctrl+S saves and closes. The footer is "↑↓ move · Enter toggle · Ctrl+S save · Esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/context` | Opens the context breakdown. |
