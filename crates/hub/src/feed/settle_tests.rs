@@ -146,13 +146,23 @@ fn a_silent_session_holds_the_listing_for_one_rescan_at_most() {
     let (feed, clock, _session, until) = parked_on_silent(&temp);
     let rx = listing(&feed);
     await_listing_parked(&clock, until);
-    clock.advance(RUN_SCAN.checked_sub(Duration::from_millis(1)).unwrap());
+    clock.advance_when_parked_threads(
+        Some(until),
+        2,
+        RUN_SCAN.checked_sub(Duration::from_millis(1)).unwrap(),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         clock.await_parked_count(until, 2, DEADLINE),
         "both still parked before the bound"
     );
     assert!(rx.try_recv().is_err(), "not answered before the bound");
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked_threads(
+        Some(until),
+        2,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(
         Deadline::after(DEADLINE).recv(&rx).unwrap(),
         Vec::<String>::new()
@@ -267,7 +277,12 @@ fn a_deadline_passing_before_the_first_scan_does_not_release_the_listing() {
         clock.await_parked_unbounded(DEADLINE),
         "the listing waits for the first scan"
     );
-    let mark = clock.advance_marked(RUN_SCAN + Duration::from_millis(1));
+    let mark = clock.advance_when_parked(
+        None,
+        None,
+        RUN_SCAN + Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
         "still waiting for the first scan past the bound"
@@ -287,7 +302,19 @@ fn a_session_found_after_the_first_scan_is_not_awaited() {
     let (feed, clock) = new_feed(&temp.dir);
     start(&feed, &clock);
     let session = FakeSession::bind(&temp.dir, &id(1));
-    clock.advance(RUN_SCAN);
+    let due = next_scan(&clock);
+    let scanner = lock(&feed.scanner)
+        .as_ref()
+        .expect("the feed is started")
+        .thread()
+        .id();
+    // debt: duplicates feed_tests advance_to_scan's scanner lookup and advance (P3-2), upgrade when a third caller of the scanner advance appears.
+    clock.advance_when_parked(
+        Some(due),
+        Some(scanner),
+        RUN_SCAN,
+        &Deadline::after(DEADLINE),
+    );
     assert!(session.await_subscribed(1, DEADLINE));
     assert!(clock.await_parked(next_scan(&clock), DEADLINE));
     let rx = listing(&feed);
