@@ -46,7 +46,17 @@ fn open_session_dir(dir: &Path) -> Result<(OwnedFd, (u64, u64)), Error> {
     if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
         return Err(Error::NotFound(dir.to_owned()));
     }
-    Ok((fd, (stat.st_dev, stat.st_ino)))
+    // `st_dev` is `i32` on macOS and `u64` on Linux; `try_from` gives one
+    // type on both targets, and a value that cannot be a device id is
+    // `NotFound` like any other failed open. `st_ino` is `u64` on both
+    // (`libc::ino_t` is `u64` on macOS, `u64` in rustix's Linux `Stat`),
+    // so it needs no conversion.
+    #[allow(
+        clippy::useless_conversion,
+        reason = "st_dev is u64 on Linux, i32 on macOS"
+    )]
+    let dev = u64::try_from(stat.st_dev).map_err(|_| Error::NotFound(dir.to_owned()))?;
+    Ok((fd, (dev, stat.st_ino)))
 }
 
 /// Whether `dir` still names the opened directory: its link metadata
