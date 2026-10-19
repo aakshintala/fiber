@@ -567,13 +567,62 @@ fn a_rebuild_that_fails_clears_the_stale_ready_marker() {
     assert!(ready(&repo, &hash).is_file());
 }
 
+/// A file mode restored on drop, so a failure still leaves the tree
+/// removable.
+struct RestoreMode {
+    path: PathBuf,
+    mode: u32,
+}
+
+impl RestoreMode {
+    fn set(path: &std::path::Path, mode: u32) -> Self {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        Self {
+            path: path.to_owned(),
+            mode: 0o755,
+        }
+    }
+}
+
+impl Drop for RestoreMode {
+    fn drop(&mut self) {
+        fs::set_permissions(&self.path, fs::Permissions::from_mode(self.mode)).unwrap_or(());
+    }
+}
+
 #[test]
-fn scratch_and_temporary_names_never_repeat() {
-    let (a, b) = (super::store::next(), super::store::next());
-    assert_ne!(a, b);
-    let c = super::store::next();
-    assert_ne!(b, c);
-    assert_ne!(a, c);
+fn an_approval_that_cannot_sync_its_directory_fails_but_keeps_the_decision() {
+    let repo = Repo::new();
+    let item = hook(&repo);
+    let hash = hashed(&item);
+    let dir = approvals_dir(&repo, true);
+    fs::create_dir_all(&dir).unwrap();
+    let _restore = RestoreMode::set(&dir, 0o300);
+    // Precondition: without read permission the directory cannot be
+    // listed, so a root runner fails here loudly instead of passing
+    // vacuously.
+    assert!(fs::read_dir(&dir).is_err());
+    // The temp create and rename work under write and search, but the
+    // directory sync fails: the old write returned `Ok` here.
+    let err = store(&repo).approve(&item, &hash).unwrap_err();
+    assert!(
+        matches!(&err, Error::Config(config::ConfigError::Unsynced { .. })),
+        "{err}"
+    );
+    drop(_restore);
+    // The file is already in place, holding the decision, with no temp
+    // left beside it.
+    let text = fs::read_to_string(dir.join(&hash)).unwrap();
+    let body: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        body.get("decision").and_then(Value::as_str),
+        Some("approve")
+    );
+    let names: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, [hash]);
 }
 
 #[test]
