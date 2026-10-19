@@ -9,7 +9,10 @@
 //! as a local one: a `hub-ws-out` thread sends pair lines as text frames
 //! while the connection thread reads frames into the pair.
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufReader, Write};
+// The port tests read socket lines through this module's scope.
+#[cfg(test)]
+use std::io::BufRead;
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -479,7 +482,7 @@ fn read_lines(web: &Arc<Web>, read: BufReader<TcpStream>, mut bridge: UnixStream
     loop {
         match frames.next(&mut read) {
             Incoming::Text(message) => {
-                if bridge.write_all(&one_line(&message)).is_err() {
+                if support::framing::write_line(&mut bridge, &one_line(&message)).is_err() {
                     break;
                 }
             }
@@ -504,23 +507,17 @@ fn read_lines(web: &Arc<Web>, read: BufReader<TcpStream>, mut bridge: UnixStream
     web.shut();
 }
 
-/// One pair line for a text message: unchanged with its newline when it
+/// One pair line for a text message, without its newline: unchanged when it
 /// holds none, else the message parsed as JSON and written compact, so it
 /// is one line. Invalid JSON becomes the fixed invalid line `{`, answered
 /// `malformed` with no id, as an invalid single line is.
 fn one_line(message: &str) -> Vec<u8> {
     if !message.as_bytes().contains(&b'\n') {
-        let mut line = message.as_bytes().to_vec();
-        line.push(b'\n');
-        return line;
+        return message.as_bytes().to_vec();
     }
     match serde_json::from_str::<Value>(message) {
-        Ok(value) => {
-            let mut line = serde_json::to_vec(&value).unwrap_or_default();
-            line.push(b'\n');
-            line
-        }
-        Err(_) => b"{\n".to_vec(),
+        Ok(value) => serde_json::to_vec(&value).unwrap_or_default(),
+        Err(_) => b"{".to_vec(),
     }
 }
 
@@ -529,15 +526,10 @@ fn one_line(message: &str) -> Vec<u8> {
 /// sent, then shuts the pair and the TCP stream down.
 fn pump_lines(web: &Arc<Web>, bridge: UnixStream) {
     let mut read = BufReader::new(bridge);
-    let mut buf = Vec::new();
     loop {
-        buf.clear();
-        match read.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                if buf.last() == Some(&b'\n') {
-                    buf.pop();
-                }
+        match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => break,
+            Ok(Some(buf)) => {
                 if web.text(String::from_utf8_lossy(&buf).as_bytes()).is_err() {
                     break;
                 }

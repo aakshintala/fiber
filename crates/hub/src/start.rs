@@ -7,7 +7,7 @@
 //! a connection of its own before answering, and sends the prompt on that
 //! connection after answering (`crate::first`).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
@@ -273,13 +273,11 @@ fn acknowledge(stream: &UnixStream, command_id: &str) -> Ack {
         return Ack::Lost;
     };
     let mut read = BufReader::new(clone);
-    let mut buf = Vec::new();
     loop {
-        buf.clear();
-        match read.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => return Ack::Lost,
-            Ok(_) => {}
-        }
+        let buf = match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => return Ack::Lost,
+            Ok(Some(buf)) => buf,
+        };
         let ack: Value = match serde_json::from_slice(&buf) {
             Ok(ack) => ack,
             Err(_) => continue,
@@ -359,12 +357,11 @@ fn invalid(message: &str) -> Outcome {
 }
 
 fn write_line(stream: &UnixStream, line: &Value) -> std::io::Result<()> {
-    let mut stream = stream;
-    let mut bytes = serde_json::to_vec(line)
+    // The hub's own line carries no line feed; the writer adds it.
+    let bytes = serde_json::to_vec(line)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    bytes.push(b'\n');
-    stream.write_all(&bytes)?;
-    stream.flush()
+    let mut out: &UnixStream = stream;
+    support::framing::write_line(&mut out, &bytes)
 }
 
 pub(crate) use support::mint;
