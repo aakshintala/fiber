@@ -459,6 +459,26 @@ fn refreshing_shows_until_the_answer() {
 }
 
 #[test]
+fn startup_read_keeps_a_meanwhile_openers_mark() {
+    use crate::catalogue::Refresh;
+    let mut app = home();
+    // The startup ask counts as owed, so its answer never drops a
+    // meanwhile opened picker's mark.
+    app.note_catalogue_read();
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert_eq!(app.take_reads(), Some(Refresh::Stale));
+    assert_eq!(app.model_picker.refreshing, Some(Refresh::Stale));
+    // The startup read answers first, while the open read still runs:
+    // one owed read stays, so the mark stays.
+    app.on_models(Err("gone".to_owned()));
+    assert_eq!(app.model_picker.refreshing, Some(Refresh::Stale));
+    // Its own answer clears the mark.
+    app.on_models(Err("gone".to_owned()));
+    assert_eq!(app.model_picker.refreshing, None);
+    assert_eq!(app.take_reads(), None);
+}
+
+#[test]
 fn the_picker_is_a_picker_context() {
     let mut app = App::new(PathBuf::from("/w"));
     let user: serde_json::Map<String, serde_json::Value> =

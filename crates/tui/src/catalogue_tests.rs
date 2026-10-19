@@ -165,8 +165,11 @@ fn spawn_failure_fails_the_waiting_and_queued_reads() {
     reader.queued = Some(Refresh::Stale);
     let (tx, rx) = mpsc::channel();
     reader.ask_with(Refresh::Cached, &tx, failing_spawn);
-    // The failure frees the reader: nothing runs and nothing waits.
-    assert!(!reader.running);
+    // The failure keeps the reader busy until the loop consumes its
+    // errors: nothing runs, but a later ask waits instead of starting
+    // over the unconsumed errors. Nothing stays queued: each owed read
+    // fails alike, and each error's `done` frees the reader.
+    assert!(reader.running);
     assert_eq!(reader.queued, None);
     // One failure per owed read, the waiting one and the queued one,
     // carrying the same message.
@@ -182,6 +185,12 @@ fn spawn_failure_fails_the_waiting_and_queued_reads() {
         }
     }
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    // Each consumed error runs `done`, as the loop does: the first
+    // frees the reader, the second finds it already free.
+    reader.done(&tx);
+    assert!(!reader.running);
+    reader.done(&tx);
+    assert!(!reader.running);
     // A later ask spawns again: the reader runs once more.
     reader.ask_with(Refresh::Cached, &tx, |builder, body| builder.spawn(body));
     assert!(reader.running);
@@ -194,7 +203,8 @@ fn spawn_failure_fails_the_waiting_and_queued_reads() {
     let mut reader = Reader::new(Some(read));
     let (tx, rx) = mpsc::channel();
     reader.ask_with(Refresh::Cached, &tx, failing_spawn);
-    assert!(!reader.running);
+    // Busy until the error is consumed, as above.
+    assert!(reader.running);
     match Deadline::after(DEADLINE).recv(&rx) {
         Ok(Input::Models(Err(message))) => assert_eq!(
             message,
@@ -203,5 +213,61 @@ fn spawn_failure_fails_the_waiting_and_queued_reads() {
         Ok(_) => panic!("the waiting read: the failure, not an answer"),
         Err(error) => panic!("waited {DEADLINE:?} for the waiting read: {error}"),
     }
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    // Consuming the error frees the reader, so a later ask spawns again.
+    reader.done(&tx);
+    assert!(!reader.running);
+    reader.ask_with(Refresh::Cached, &tx, |builder, body| builder.spawn(body));
+    assert!(reader.running);
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
+}
+
+#[test]
+fn spawn_failure_keeps_later_asks_waiting_until_its_error_is_consumed() {
+    // #2738's case at the reader: a failed spawn's error waits
+    // unconsumed while two later asks arrive. Both wait instead of
+    // starting over the error (one queued, one merged), so at most two
+    // answers stay owed and the loop's `done` starts the waiter.
+    let read: ReadModels = Arc::new(|_| Ok(Catalogue::default()));
+    let mut reader = Reader::new(Some(read));
+    let (tx, rx) = mpsc::channel();
+    let spawns = Arc::new(Mutex::new(0usize));
+    let counting = || {
+        let spawns = Arc::clone(&spawns);
+        move |_: std::thread::Builder,
+              _: Box<dyn FnOnce() + Send + 'static>|
+              -> io::Result<std::thread::JoinHandle<()>> {
+            *spawns.lock().unwrap() += 1;
+            Err(io::Error::other("no thread"))
+        }
+    };
+    reader.ask_with(Refresh::Stale, &tx, counting());
+    // The failure keeps the reader busy until its error is consumed.
+    assert!(reader.running);
+    reader.ask_with(Refresh::Every, &tx, counting());
+    reader.ask_with(Refresh::Every, &tx, counting());
+    // Only the failed start spawned: the next ask queued, the third
+    // merged into it. Without the fix the second ask spawns again,
+    // owing three answers while the picker counts two.
+    assert_eq!(*spawns.lock().unwrap(), 1);
+    assert_eq!(reader.queued, Some(Refresh::Every));
+    // Exactly one answer waits: the failure's error.
+    let wait = Deadline::after(DEADLINE);
+    match wait.recv(&rx) {
+        Ok(Input::Models(Err(_))) => {}
+        Ok(_) => panic!("the failed spawn: the failure, not an answer"),
+        Err(error) => panic!("waited {DEADLINE:?} for the failure: {error}"),
+    }
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    // The loop consumes the error and runs `done`: the queued read
+    // starts now and answers last.
+    reader.done(&tx);
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
