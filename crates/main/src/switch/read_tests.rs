@@ -659,13 +659,14 @@ fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
         (0..600).map(|_| Ok(())).collect(),
         (0..600).map(|_| Ok(())).collect(),
     );
-    clock.advance(timeout);
+    clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
     assert!(
         clock.await_parked(deadline + GROUP_POLL, DEADLINE),
         "the timeout parked at its first poll"
     );
     // Jump to one nanosecond short of the end: every pass between still
     // found the scripted group alive and sent again.
+    // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
     let mark = clock.advance_marked(
         doors::SHUTDOWN_BOUND
             .checked_sub(Duration::from_nanos(1))
@@ -679,7 +680,12 @@ fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
         matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "timeout answered short of its bound"
     );
-    clock.advance(Duration::from_nanos(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_nanos(1),
+        &Deadline::after(DEADLINE),
+    );
     let error = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the timed-out read")
         .expect_err("a command still running at its timeout");
@@ -739,12 +745,13 @@ fn timeout_with_a_live_leader_answers_at_the_bound_without_the_reap() {
         (0..600).map(|_| Ok(())).collect(),
         (0..600).map(|_| Ok(())).collect(),
     );
-    clock.advance(timeout);
+    clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
     assert!(
         clock.await_parked(deadline + GROUP_POLL, DEADLINE),
         "the timeout parked at its first poll"
     );
     // Jump to one nanosecond short of the end: still parked, no answer.
+    // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
     let mark = clock.advance_marked(
         doors::SHUTDOWN_BOUND
             .checked_sub(Duration::from_nanos(1))
@@ -758,7 +765,12 @@ fn timeout_with_a_live_leader_answers_at_the_bound_without_the_reap() {
         matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "timeout answered short of its bound"
     );
-    clock.advance(Duration::from_nanos(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_nanos(1),
+        &Deadline::after(DEADLINE),
+    );
     let error = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the timed-out read")
         .expect_err("a live leader still running at its timeout");
@@ -817,7 +829,7 @@ fn cancel_during_settlement_answers_interrupted() {
         (0..10).map(|_| Ok(())).collect(),
         (0..10).map(|_| Ok(())).collect(),
     );
-    clock.advance(timeout);
+    clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
     // The settlement re-kills on the poll cadence: parked at its first
     // poll, the wait can only leave through the cancel below.
     assert!(
@@ -950,6 +962,7 @@ fn a_key_finished_after_its_timeout_is_refused() {
         let _held = reads.lock();
         std::fs::write(&go, "").unwrap();
         generation_reaches(&reads.wake, seen + 2, "the two wakes");
+        // No code under test waits on the clock here; the wait is held on the state lock between its checks (ruling 6179406086).
         clock.advance(timeout + Duration::from_secs(1));
     }
     let error = Deadline::after(DEADLINE)
