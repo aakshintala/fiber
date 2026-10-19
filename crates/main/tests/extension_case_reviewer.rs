@@ -1,5 +1,5 @@
-//! Binary-level test that the worked `executes` case in `docs/extensions.md`,
-//! "Testing a tool that executes", passes under `fiber extension test`: the
+//! Binary-level tests that the worked `executes` cases in `docs/extensions.md`,
+//! "Testing a tool that executes", pass under `fiber extension test`: the
 //! doc cannot drift from what the runner does.
 
 #![allow(
@@ -58,6 +58,10 @@ fn documented_blocks() -> Vec<(String, String)> {
     assert!(
         section.contains("tests/launch-allowed.json"),
         "the section must name its case file"
+    );
+    assert!(
+        section.contains("tests/launch-denied.json"),
+        "the section must name its denied case file"
     );
     assert_eq!(
         blocks
@@ -170,4 +174,36 @@ fn the_documented_allow_case_needs_its_reviewer_config() {
         "unexpected summary: {stdout}"
     );
     assert!(denied.stderr.is_empty());
+}
+
+#[test]
+fn the_documented_denied_case_passes_under_fiber_extension_test() {
+    let blocks = documented_blocks();
+    let denied: Value = serde_json::from_str(&blocks[2].1).unwrap();
+    // The denial the ticket names: nobody attached and no reviewer set up.
+    assert_eq!(denied.get("attended"), Some(&json!(false)));
+    assert!(
+        denied.get("config").is_none(),
+        "the denied case sets no reviewer"
+    );
+    let setup = support::Setup::new();
+    let package = package(
+        &setup,
+        &blocks[0].1,
+        &[("launch-denied", blocks[2].1.as_str())],
+    );
+    let temp_root = temp_root();
+    let package_arg = package.to_str().unwrap();
+    let output = run(
+        &setup,
+        &package,
+        temp_root.path(),
+        &["extension", "test", package_arg],
+    );
+    assert_eq!(output.status.code(), Some(0), "stderr: {:?}", output.stderr);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "ok launch-denied\n1 passed, 0 failed\n"
+    );
+    assert!(output.stderr.is_empty());
 }
