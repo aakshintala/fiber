@@ -1250,3 +1250,104 @@ fn the_local_picker_opens_on_its_recents_alone() {
     assert_eq!(typed_text(&app), None);
     assert_eq!(recents(&app), ["/w"]);
 }
+
+#[test]
+fn empty_values_carry_no_workspace() {
+    // An empty construction path is none, like the remote-home launch.
+    assert_eq!(App::new(None).workspace(), None);
+    assert_eq!(App::new(Some(PathBuf::from(""))).workspace(), None);
+    assert_eq!(
+        App::new(Some(PathBuf::from("/w"))).workspace(),
+        Some(PathBuf::from("/w"))
+    );
+    // A default launch names an empty local directory: also none, with
+    // no workspace key in the start arguments.
+    let mut app = App::new(None);
+    app.set_home(Launch::default());
+    assert_eq!(app.workspace(), None);
+    assert_eq!(app.home_workspace(), None);
+    assert!(
+        !app.start_args()
+            .as_object()
+            .unwrap_or_else(|| panic!("start args are an object"))
+            .contains_key("workspace")
+    );
+    // An unreadable status row carries an empty workspace: it yields
+    // none, so it never becomes a recent or the workspace in use.
+    let mut app = remote();
+    let Line::Session(mut envelope) = live("s_aaaaaaaaaaaaaaaa", "newer", "/remote/new") else {
+        unreachable!("a live row is a session line");
+    };
+    envelope.schema_version = contract::SCHEMA_VERSION + 1;
+    app.on_line(Line::Session(envelope));
+    assert_eq!(app.home_workspace(), None);
+    assert!(recents(&app).is_empty());
+    // An empty choice clears the pick: no workspace is chosen.
+    app.choose_workspace("/remote/w".to_owned());
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/remote/w")));
+    app.choose_workspace(String::new());
+    assert_eq!(app.home_workspace(), None);
+}
+
+#[test]
+fn an_empty_choice_clears_the_pick_and_enter_reopens_the_picker() {
+    let mut app = remote();
+    app.choose_workspace("/remote/w".to_owned());
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/remote/w")));
+    app.choose_workspace(String::new());
+    assert_eq!(app.home_workspace(), None);
+    // Enter on the prompt with no workspace reopens the picker
+    // (`docs/tui.md`, "The workspace picker") instead of starting.
+    key(&mut app, Key::Enter);
+    assert!(picker_open(&app));
+}
+
+/// With no local workspace nothing reads the working directory: the
+/// same remote-home app built with none reports none and draws the
+/// same home frame from two different directories.
+#[test]
+fn no_workspace_never_reads_the_working_directory() {
+    let first = fakes::TempDir::new("fiber-no-workspace-first");
+    let second = fakes::TempDir::new("fiber-no-workspace-second");
+    assert_ne!(first.path(), second.path());
+    let previous = std::env::current_dir().unwrap_or_else(|err| panic!("cwd: {err}"));
+    let mut frames = Vec::new();
+    for dir in [&first, &second] {
+        std::env::set_current_dir(dir.path()).unwrap_or_else(|err| panic!("chdir: {err}"));
+        let mut app = App::new(None);
+        app.set_home(Launch {
+            location: crate::LaunchLocation::Remote {
+                hub: "box".to_owned(),
+            },
+            version: "0.0.1".to_owned(),
+            logo_glyph: "⌇".to_owned(),
+            ..Default::default()
+        });
+        app.set_size(80, 24);
+        // A workspace built from the working directory would surface
+        // here: the carried field, home, and start args all stay none.
+        // The field assert is white-box on purpose: the readers below
+        // prefer home once it is set, so only it catches a
+        // construction that smuggles the directory in.
+        assert_eq!(app.workspace, None);
+        assert_eq!(app.workspace(), None);
+        assert_eq!(app.home_workspace(), None);
+        assert!(
+            !app.start_args()
+                .as_object()
+                .unwrap_or_else(|| panic!("start args are an object"))
+                .contains_key("workspace")
+        );
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        frames.push(crate::view::text(&buf));
+    }
+    std::env::set_current_dir(&previous).unwrap_or_else(|err| panic!("restore cwd: {err}"));
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0], frames[1], "the home frame moves with the cwd");
+    assert!(
+        frames[0].contains("[no workspace]"),
+        "the frame is the no-workspace home"
+    );
+}
