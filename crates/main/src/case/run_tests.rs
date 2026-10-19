@@ -302,6 +302,156 @@ fn without_the_last_advance_the_event_wait_keeps_its_bound() {
 }
 
 #[test]
+fn a_failed_initial_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
+    let (_root, log) = session_log(&[]);
+    let case = case_run_with_host(
+        vec![json!({"kind": "fiber_exited"})],
+        Host::default(),
+        vec![ClockAdvance {
+            hang: Some(2),
+            after: None,
+            advance_ms: 50,
+        }],
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+    );
+    let stuck_at = case.session_clock().now() + Duration::from_millis(50);
+    case.host_script()
+        .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
+    let (release, waiter) = park_waiter(&case, stuck_at);
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+    let _ignored = release.send(());
+    waiter.join().expect("join the parked waiter");
+
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("host.exec[1] hung")),
+        "{failures:?}"
+    );
+    assert!(
+        !failures
+            .iter()
+            .any(|failure| failure.contains("did not write fiber_exited after close")),
+        "the released hang drives the exit wait, which consumes the close event: {failures:?}"
+    );
+}
+
+#[test]
+fn a_failed_mid_loop_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
+    let (_root, log) = session_log(&[turn_completed()]);
+    let case = case_run_with_host(
+        vec![
+            json!({"kind": "turn_completed"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Host::default(),
+        vec![ClockAdvance {
+            hang: Some(2),
+            after: Some(Selector {
+                kind: "turn_completed".to_owned(),
+                nth: 1,
+            }),
+            advance_ms: 50,
+        }],
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+    );
+    let stuck_at = case.session_clock().now() + Duration::from_millis(50);
+    case.host_script()
+        .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
+    let (release, waiter) = park_waiter(&case, stuck_at);
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+    let _ignored = release.send(());
+    waiter.join().expect("join the parked waiter");
+
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("host.exec[1] hung")),
+        "{failures:?}"
+    );
+    assert!(
+        !failures
+            .iter()
+            .any(|failure| failure.contains("did not write fiber_exited after close")),
+        "the released hang drives the exit wait, which consumes the close event: {failures:?}"
+    );
+}
+
+#[test]
+fn a_stuck_hang_past_all_advances_skips_the_event_wait() {
+    let (_root, log) = session_log(&[]);
+    let case = case_run(
+        Vec::new(),
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_log".to_owned(),
+            nth: 1,
+        }),
+    );
+    let stuck_at = case.session_clock().now() + Duration::from_millis(50);
+    case.host_script()
+        .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
+    let (release, waiter) = park_waiter(&case, stuck_at);
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: false,
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+    let _ignored = release.send(());
+    waiter.join().expect("join the parked waiter");
+
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("host.exec[1] hung")),
+        "{failures:?}"
+    );
+    assert_eq!(
+        failures
+            .iter()
+            .filter(|failure| failure.contains("wait for until event"))
+            .count(),
+        1,
+        "only the exit wait expires; the main wait ends on the stuck hang: {failures:?}"
+    );
+}
+
+#[test]
 fn close_names_each_stuck_hang_and_releases_in_deadline_order() {
     let (_root, log) = session_log(&[]);
     let case = case_run(vec![], Vec::new(), None);

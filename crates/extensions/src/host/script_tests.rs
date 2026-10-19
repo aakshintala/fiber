@@ -161,6 +161,33 @@ fn wait_hang_matched_returns_once_the_entry_matches() {
 }
 
 #[test]
+fn wait_hang_matched_ignores_other_entries_until_its_own_matches() {
+    let script = HostScript::new(vec![], vec![], Vec::new());
+    let waiter = Arc::clone(&script);
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = waiter.wait_hang_matched(1, Duration::from_secs(30));
+        let _ignored = done_tx.send(outcome);
+    });
+    script
+        .wait_hang_waiting(1, Duration::from_secs(5))
+        .expect("the waiter reaches the hang-match wait");
+    // A match on another entry must not release the waiter: only entry 1
+    // ends its wait. The waiter announces itself through hang_waiters, so
+    // no wall-clock timing fixes this order.
+    script.hang_matched(2, &json!({"program": "other"}), FakeClock::new().now());
+    assert!(
+        matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "waiting for entry 1 ignores a match on entry 2"
+    );
+    script.hang_matched(1, &json!({"program": "sh"}), FakeClock::new().now());
+    let outcome = Deadline::after(Duration::from_secs(5))
+        .recv(&done_rx)
+        .expect("the waiter returns once entry 1 matches");
+    assert!(outcome.is_ok(), "{outcome:?}");
+}
+
+#[test]
 fn wait_hang_matched_fails_naming_the_entry_when_nothing_matches() {
     let script = HostScript::new(vec![], vec![], Vec::new());
     assert!(

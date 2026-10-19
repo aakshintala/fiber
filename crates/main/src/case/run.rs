@@ -179,7 +179,10 @@ impl CaseRun {
                 break;
             }
             if reached_until {
-                released |= self.close(&driver, &cancel, &mut failures);
+                // The exit wait below runs on reached_until alone, so
+                // whether close released a hang is unobservable here: the
+                // return is dropped instead of folded into released.
+                self.close(&driver, &cancel, &mut failures);
             }
         }
 
@@ -251,12 +254,14 @@ impl CaseRun {
         // The whole wait in poll slices, counted, so a hang that matches
         // mid-wait ends it within one slice. The count bounds the wait in
         // real time: the process clock may be a frozen case clock in tests,
-        // while the watcher below always waits in real time.
-        let mut waits = remaining
+        // while the watcher below always waits in real time. An iterator
+        // bounds the wait even when a mutant breaks the count: a hand-stepped
+        // counter can spin past the 120 s mutant timeout instead of failing.
+        let polls = remaining
             .as_millis()
             .div_ceil(GROUP_POLL.as_millis())
             .max(1);
-        loop {
+        for _ in 0..polls {
             // Past the last advance a matched hang with a later deadline can
             // never be released: only the runner's advances move the case
             // clock. End the wait so close can name and release it.
@@ -273,25 +278,19 @@ impl CaseRun {
                     failures.push(format!("reading the session log: {error}"));
                     return None;
                 }
-                None => {
-                    waits = waits.saturating_sub(1);
-                    if waits == 0 {
-                        let until = self
-                            .until
-                            .as_ref()
-                            .map(|selector| {
-                                format!("{} occurrence {}", selector.kind, selector.nth)
-                            })
-                            .unwrap_or_else(|| "turn_completed or turn_failed".to_owned());
-                        failures.push(format!(
-                            "{}: wait for until event {until} expired after {:?}",
-                            self.name, self.waits.until
-                        ));
-                        return None;
-                    }
-                }
+                None => {}
             }
         }
+        let until = self
+            .until
+            .as_ref()
+            .map(|selector| format!("{} occurrence {}", selector.kind, selector.nth))
+            .unwrap_or_else(|| "turn_completed or turn_failed".to_owned());
+        failures.push(format!(
+            "{}: wait for until event {until} expired after {:?}",
+            self.name, self.waits.until
+        ));
+        None
     }
 
     fn apply_advances(
@@ -357,12 +356,15 @@ impl CaseRun {
                 "unmet host call: host.exec[{entry}] hung: request {request} still parked after the last clock advance"
             ));
             released = true;
-            let now = self.clock.now();
-            if deadline > now {
-                let wait = deadline.saturating_duration_since(now);
-                if let Err(reason) = self.clock.advance_when_parked(wait, self.waits.advance) {
-                    failures.push(format!("host.exec[{entry}]: {reason}"));
-                }
+            // pending_hangs only holds deadlines later than now, so the
+            // wait below is never zero on this path; saturating keeps it
+            // total if the clock ever moves between the two reads.
+            let wait = deadline.saturating_duration_since(self.clock.now());
+            if wait.is_zero() {
+                continue;
+            }
+            if let Err(reason) = self.clock.advance_when_parked(wait, self.waits.advance) {
+                failures.push(format!("host.exec[{entry}]: {reason}"));
             }
         }
         let (answer, received) = mpsc::channel();
