@@ -1736,15 +1736,7 @@ fn opening_a_row_by_key_calls_on_attach() {
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
-    let mut accepted = live_status("s_aaaaaaaaaaaaaaaa", "streaming");
-    if let Line::Session(envelope) = &mut accepted {
-        envelope.kind = "command_accepted".to_owned();
-        envelope.payload = serde_json::json!({"command_id": subscribe["id"]})
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
-    }
-    feed(&mut lp, vec![Input::Hub(accepted)]);
+    feed(&mut lp, vec![session_accepted(&subscribe["id"])]);
     let (_, commands) = command(reader, "the commands command after subscribe acceptance");
     assert_eq!(commands["command"], "commands");
     assert_eq!(commands["session_id"], "s_aaaaaaaaaaaaaaaa");

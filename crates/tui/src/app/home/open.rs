@@ -95,7 +95,7 @@ impl Subscriptions {
     /// session to read when the move happened.
     pub(super) fn tail_due(&mut self, attached: Option<&SessionId>) -> Option<SessionId> {
         let (session, held) = match self.opening.as_ref() {
-            Some(Opening::Due { session, held, .. }) => (session.clone(), *held),
+            Some(Opening::Due { session, held }) => (session.clone(), *held),
             _ => return None,
         };
         if Some(&session) != attached {
@@ -396,18 +396,14 @@ impl App {
                 .and_then(|home| home.subs.opening.as_ref())
                 .is_some_and(|opening| matches!(opening, Opening::Summary { .. }));
             if due {
-                let moved = match self.home.as_mut().map(|home| home.subs.opening.take()) {
-                    Some(Some(Opening::Summary { session, held, .. })) => {
-                        let line = self.ask_commands(&session);
-                        if let Some(home) = self.home.as_mut() {
-                            home.subs.opening = Some(Opening::Due { session, held });
-                        }
-                        return Some(vec![line]);
+                if let Some(Opening::Summary { session, held, .. }) =
+                    self.home.as_mut().and_then(|home| home.subs.opening.take())
+                {
+                    let line = self.ask_commands(&session);
+                    if let Some(home) = self.home.as_mut() {
+                        home.subs.opening = Some(Opening::Due { session, held });
                     }
-                    moved => moved,
-                };
-                if let Some(home) = self.home.as_mut() {
-                    home.subs.opening = moved.flatten();
+                    return Some(vec![line]);
                 }
                 return Some(Vec::new());
             }

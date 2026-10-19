@@ -359,6 +359,19 @@ fn open_first(app: &mut App) -> Vec<Value> {
     }
 }
 
+/// Leaves the parent and accepts the summary lowering before a reopen.
+fn leave_and_ack_lowering(app: &mut App) {
+    let Effect::Send(lowering) = app.leave() else {
+        panic!("leaving lowers the parent");
+    };
+    let lowering = commands(lowering);
+    assert_eq!(lowering.len(), 1);
+    let ack = lowering[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("lowering id"));
+    assert!(app.on_line(session_accepted(SESSION, ack)).is_empty());
+}
+
 /// Reopens `SESSION` from home: opens and acknowledges it, without
 /// linking again.
 fn reopen(app: &mut App) {
@@ -570,15 +583,7 @@ fn a_held_delegate_is_not_subscribed_again_after_going_home_and_back() {
     let first = parent_status(&mut app);
     let id = subscribe_id(&first);
     app.on_line(session_accepted(DELEGATE, &id));
-    let Effect::Send(lowering) = app.leave() else {
-        panic!("leaving lowers the parent");
-    };
-    let lowering = commands(lowering);
-    assert_eq!(lowering.len(), 1);
-    let ack = lowering[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("lowering id"));
-    assert!(app.on_line(session_accepted(SESSION, ack)).is_empty());
+    leave_and_ack_lowering(&mut app);
     reopen(&mut app);
     start_delegate(&mut app, "j_1", DELEGATE);
     let out = parent_status(&mut app);
@@ -594,15 +599,7 @@ fn a_refused_delegate_is_tried_again_after_reopening_the_parent() {
     let first = parent_status(&mut app);
     let id = subscribe_id(&first);
     app.on_line(session_refused(DELEGATE, &id));
-    let Effect::Send(lowering) = app.leave() else {
-        panic!("leaving lowers the parent");
-    };
-    let lowering = commands(lowering);
-    assert_eq!(lowering.len(), 1);
-    let ack = lowering[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("lowering id"));
-    assert!(app.on_line(session_accepted(SESSION, ack)).is_empty());
+    leave_and_ack_lowering(&mut app);
     reopen(&mut app);
     start_delegate(&mut app, "j_1", DELEGATE);
     let out = parent_status(&mut app);
@@ -710,15 +707,7 @@ fn a_delegates_status_is_kept_across_going_home_and_back() {
         SESSION,
         json!({"state": "streaming"}),
     ));
-    let Effect::Send(lowering) = app.leave() else {
-        panic!("leaving lowers the parent");
-    };
-    let lowering = commands(lowering);
-    assert_eq!(lowering.len(), 1);
-    let ack = lowering[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("lowering id"));
-    assert!(app.on_line(session_accepted(SESSION, ack)).is_empty());
+    leave_and_ack_lowering(&mut app);
     reopen(&mut app);
     start_delegate(&mut app, "j_1", DELEGATE);
     // A `job_completed` for a job that is no delegate's removes nothing.
@@ -802,15 +791,7 @@ fn a_replayed_job_completed_drops_its_stored_row() {
         SESSION,
         json!({"state": "streaming"}),
     ));
-    let Effect::Send(lowering) = app.leave() else {
-        panic!("leaving lowers the parent");
-    };
-    let lowering = commands(lowering);
-    assert_eq!(lowering.len(), 1);
-    let ack = lowering[0]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("lowering id"));
-    assert!(app.on_line(session_accepted(SESSION, ack)).is_empty());
+    leave_and_ack_lowering(&mut app);
     reopen(&mut app);
     start_delegate(&mut app, "j_1", DELEGATE);
     complete(&mut app, "j_1");
