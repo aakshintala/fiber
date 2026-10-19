@@ -25,6 +25,7 @@ const WAIT: Duration = Duration::from_secs(5);
 /// The extension's grace after a callback's own deadline.
 const GRACE: Duration = Duration::from_secs(1);
 
+// debt: 4 copies of this helper across the extensions test binaries, move into common/mod.rs once group 9C1 merges
 /// The thread parked at `at`: exactly one thread waits there.
 #[track_caller]
 fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
