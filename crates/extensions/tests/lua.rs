@@ -158,14 +158,37 @@ fn a_queued_provider_load_expires_at_two_seconds_and_retries() {
     Deadline::after(WAIT).recv_or_fail(&held, "held command");
     let asked = clock.now();
     let provider = start_provider(&ext);
-    assert!(parked_at(&clock, asked + LOAD, 1));
-    let mark = clock.advance_marked(LOAD.checked_sub(Duration::from_millis(1)).unwrap());
-    assert!(clock.await_parked_since(&mark, Some(asked + LOAD), WAIT));
+    let park = asked + LOAD;
+    let parked = clock
+        .mark_parked(park, WAIT)
+        .expect("the provider caller parks at its load deadline");
+    let parked = parked.threads();
+    assert_eq!(
+        parked.len(),
+        1,
+        "only the provider caller parks at its load deadline"
+    );
+    let provider_caller = parked
+        .into_iter()
+        .next()
+        .expect("the provider caller thread");
+    let mark = clock.advance_when_parked(
+        Some(park),
+        Some(provider_caller),
+        LOAD.checked_sub(Duration::from_millis(1)).unwrap(),
+        &Deadline::after(WAIT),
+    );
+    assert!(clock.await_parked_since(&mark, Some(park), WAIT));
     assert!(matches!(
         provider.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(park),
+        Some(provider_caller),
+        Duration::from_millis(1),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv_or_fail(&provider, "expired queued load")
         .unwrap_err();
@@ -206,15 +229,35 @@ fn expiring_one_queued_provider_load_keeps_the_other_load_queued() {
     Deadline::after(WAIT).recv_or_fail(&held, "held command");
     let asked = clock.now();
     let first = start_provider(&ext);
-    assert!(parked_at(&clock, asked + LOAD, 1));
+    let park = asked + LOAD;
+    let parked = clock
+        .mark_parked(park, WAIT)
+        .expect("the first caller parks at its load deadline");
+    let parked = parked.threads();
+    assert_eq!(
+        parked.len(),
+        1,
+        "only the first caller parks at its load deadline"
+    );
+    let first_caller = parked.into_iter().next().expect("the first caller thread");
     let offset = Duration::from_millis(1);
-    let mark = clock.advance_marked(offset);
-    assert!(clock.await_parked_since(&mark, Some(asked + LOAD), WAIT));
+    let mark = clock.advance_when_parked(
+        Some(park),
+        Some(first_caller),
+        offset,
+        &Deadline::after(WAIT),
+    );
+    assert!(clock.await_parked_since(&mark, Some(park), WAIT));
     let (tx, second) = mpsc::channel();
     let caller = Arc::clone(&ext);
     std::thread::spawn(move || tx.send(caller.provider_functions("q")));
     assert!(parked_at(&clock, asked + offset + LOAD, 1));
-    clock.advance(LOAD.checked_sub(offset).unwrap());
+    clock.advance_when_parked(
+        Some(park),
+        Some(first_caller),
+        LOAD.checked_sub(offset).unwrap(),
+        &Deadline::after(WAIT),
+    );
     let error = Deadline::after(WAIT)
         .recv_or_fail(&first, "first queued load expiry")
         .unwrap_err();
@@ -287,18 +330,26 @@ fn a_stuck_provider_load_abandons_its_mixed_extension_after_grace() {
     let asked = clock.now();
     let provider = start_provider(&ext);
     Deadline::after(WAIT).recv_or_fail(&held, "provider blocked in C read");
-    assert!(parked_at(&clock, asked + LOAD + GRACE, 1));
-    let mark = clock.advance_marked(
+    let park = asked + LOAD + GRACE;
+    let mark = clock.advance_when_parked(
+        Some(park),
+        None,
         (LOAD + GRACE)
             .checked_sub(Duration::from_millis(1))
             .unwrap(),
+        &Deadline::after(WAIT),
     );
-    assert!(clock.await_parked_since(&mark, Some(asked + LOAD + GRACE), WAIT));
+    assert!(clock.await_parked_since(&mark, Some(park), WAIT));
     assert!(matches!(
         provider.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(park),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv_or_fail(&provider, "abandoned provider")
         .unwrap_err();
@@ -326,8 +377,12 @@ fn a_looping_provider_load_stops_at_entry_deadline_and_keeps_commands() {
     let asked = clock.now();
     let provider = start_provider(&ext);
     Deadline::after(WAIT).recv_or_fail(&entered, "provider entered its looping file");
-    assert!(parked_at(&clock, asked + LOAD + GRACE, 1));
-    clock.advance(LOAD);
+    clock.advance_when_parked(
+        Some(asked + LOAD + GRACE),
+        None,
+        LOAD,
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv_or_fail(&provider, "looping provider stopped")
         .unwrap_err();
@@ -493,12 +548,13 @@ fn spinning_callback_stops_at_its_timeout(command: &'static str, body: &str) {
         .recv(&went)
         .expect("waited for the callback to pass its clock check");
     let parked_at = asked + Duration::from_millis(50);
-    assert!(
-        clock.await_parked(parked_at, WAIT),
-        "waited for {command} to park at its deadline"
-    );
     // The interrupt stops the loop at the deadline.
-    clock.advance(Duration::from_millis(50));
+    clock.advance_when_parked(
+        Some(parked_at),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv(&result)
         .expect("waited for the spinning callback")
@@ -577,6 +633,9 @@ fn unbounded_allocation_is_an_error_in_that_vm_and_the_vm_stays_usable() {
     }
 }
 
+/// The late wake is the behaviour under test: the caller wakes past the
+/// asked + 50 ms park, at deadline + grace, after the callback ran past its
+/// own deadline.
 #[test]
 fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
     // The go module is the callback's first statement. `spin_gc` then loops
@@ -616,6 +675,7 @@ fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
             clock.await_parked(parked_at, WAIT),
             "waited for {command} to park at its deadline"
         );
+        // Late wake past the asked + 50 ms park, reached at 50 ms + GRACE.
         clock.advance(Duration::from_millis(50) + GRACE);
         let err = Deadline::after(WAIT)
             .recv(&result)
@@ -803,11 +863,19 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     );
     let asked = clock.now();
     let quick = start(&ext, "quick");
-    assert!(
-        clock.await_parked(asked + Duration::from_millis(300), WAIT),
-        "waited for quick to park at its timeout"
+    let park = asked + Duration::from_millis(300);
+    let parked = clock
+        .mark_parked(park, WAIT)
+        .expect("quick parks at its timeout");
+    let parked = parked.threads();
+    assert_eq!(parked.len(), 1, "only quick parks at its timeout");
+    let quick_caller = parked.into_iter().next().expect("the quick caller thread");
+    clock.advance_when_parked(
+        Some(park),
+        Some(quick_caller),
+        Duration::from_millis(300),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(300));
     let err = Deadline::after(WAIT)
         .recv(&quick)
         .expect("waited for quick")
@@ -862,11 +930,12 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     let second = start(&ext, "work");
     // Both wait on the entry script's grace, which is later than the
     // command's own timeout. Advancing that timeout does not abandon the VM.
-    assert!(
-        parked_at(&clock, asked + LOAD + GRACE, 2),
-        "waited for both calls to park on registration"
+    clock.advance_when_parked_threads(
+        Some(asked + LOAD + GRACE),
+        2,
+        Duration::from_millis(1000),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(1000));
     release.send(()).unwrap();
     for waiter in [first, second] {
         let err = Deadline::after(WAIT)
@@ -905,11 +974,12 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
         .recv(&opened)
         .expect("waited for the entry script to block past its clock checks");
     let quick = start(&ext, "quick");
-    assert!(
-        parked_at(&clock, asked + LOAD + GRACE, 2),
-        "waited for hold and quick to park on registration"
+    clock.advance_when_parked_threads(
+        Some(asked + LOAD + GRACE),
+        2,
+        Duration::from_millis(400),
+        &Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(400));
     release.send(()).unwrap();
     let err = Deadline::after(WAIT)
         .recv(&quick)
@@ -959,13 +1029,20 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
         "waited for p.sign to reach the server"
     );
     let grace = asked + Duration::from_millis(30000) + GRACE;
-    assert!(
-        clock.await_parked(grace, WAIT),
-        "waited for p.sign to park at its own grace"
-    );
+    let parked = clock
+        .mark_parked(grace, WAIT)
+        .expect("p.sign parks at its own grace");
+    let parked = parked.threads();
+    assert_eq!(parked.len(), 1, "only p.sign parks at its own grace");
+    let p_sign = parked.into_iter().next().expect("the p.sign caller thread");
     // The provider function's 50 ms would already have failed a parked call.
     // Advancing wakes the caller; it parks again at the same grace.
-    let mark = clock.advance_marked(Duration::from_millis(50));
+    let mark = clock.advance_when_parked(
+        Some(grace),
+        Some(p_sign),
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     assert!(
         clock.await_parked_since(&mark, Some(grace), WAIT),
         "p.sign left its own deadline"
@@ -1027,11 +1104,7 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the entry script to pass its clock check");
-    assert!(
-        parked_at(&clock, abandon, 2),
-        "waited for both callers to park until the load grace"
-    );
-    clock.advance(LOAD + GRACE);
+    clock.advance_when_parked_threads(Some(abandon), 2, LOAD + GRACE, &Deadline::after(WAIT));
     for waiter in waiters {
         let err = Deadline::after(WAIT)
             .recv(&waiter)
@@ -1099,12 +1172,8 @@ fn an_entry_script_past_its_deadline_stops_the_extension_with_its_timeout() {
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the entry script to pass its clock check");
-    assert!(
-        clock.await_parked(abandon, WAIT),
-        "waited for the caller to park until the load grace"
-    );
     // The hook's deadline is the 2 second load bound, before the grace.
-    clock.advance(LOAD);
+    clock.advance_when_parked(Some(abandon), None, LOAD, &Deadline::after(WAIT));
     let err = Deadline::after(WAIT)
         .recv(&first)
         .expect("waited for the entry script")
