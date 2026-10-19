@@ -200,12 +200,12 @@ fn a_hang_advance_holds_until_its_entry_matches() {
         let ok = applier.apply_advances(None, &mut next, &mut failures);
         let _ignored = done_tx.send((ok, next, failures));
     });
-    // The hold: nothing matches yet, so the applier cannot have finished.
+    case.host_script()
+        .wait_hang_waiting(1, Duration::from_secs(5))
+        .expect("the applier reaches the hold for entry 1");
     assert!(
-        Deadline::after(Duration::from_millis(5))
-            .recv(&done_rx)
-            .is_err(),
-        "the advance fired before entry 1 matched as a hang"
+        matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the applier remains blocked before entry 1 matches as a hang"
     );
     let deadline = case.session_clock().now() + Duration::from_millis(50);
     let (release, waiter) = park_waiter(&case, deadline);

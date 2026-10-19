@@ -159,16 +159,27 @@ fn wait_hang_matched_returns_once_the_entry_matches() {
         let outcome = waiter.wait_hang_matched(1, Duration::from_secs(5));
         let _ignored = done_tx.send(outcome);
     });
+    script
+        .wait_hang_waiting(1, Duration::from_secs(5))
+        .expect("the waiter reaches the hang-match wait");
     script.hang_matched(1, &json!({"program": "sh"}), FakeClock::new().now());
     let outcome = Deadline::after(Duration::from_secs(5))
         .recv(&done_rx)
         .expect("the waiter returns once entry 1 matches");
     assert!(outcome.is_ok(), "{outcome:?}");
+    assert!(
+        script.wait_hang_waiting(1, Duration::ZERO).is_err(),
+        "a completed waiter is removed"
+    );
 }
 
 #[test]
 fn wait_hang_matched_fails_naming_the_entry_when_nothing_matches() {
     let script = HostScript::new(vec![], vec![], Vec::new());
+    assert!(
+        script.wait_hang_waiting(2, Duration::ZERO).is_err(),
+        "no waiter is waiting for entry 2"
+    );
     let error = script
         .wait_hang_matched(2, Duration::from_millis(20))
         .expect_err("no hang matches entry 2");

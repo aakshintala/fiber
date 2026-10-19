@@ -72,6 +72,7 @@ struct State {
     exec_next: usize,
     misses: Vec<String>,
     hangs: Vec<HangMatch>,
+    hang_waiters: Vec<usize>,
 }
 
 /// One matched scripted hang: the 1-based exec entry, its redacted request
@@ -102,6 +103,7 @@ impl HostScript {
                 exec_next: 0,
                 misses: Vec::new(),
                 hangs: Vec::new(),
+                hang_waiters: Vec::new(),
             }),
             changed: Condvar::new(),
         })
@@ -221,17 +223,43 @@ impl HostScript {
     /// Waits, bounded by `within` on the process clock, until exec entry
     /// `entry` has matched as a hang.
     pub fn wait_hang_matched(&self, entry: usize, within: Duration) -> Result<(), String> {
-        let state = lock(&self.state);
-        let (state, _) = self
+        let mut state = lock(&self.state);
+        state.hang_waiters.push(entry);
+        self.changed.notify_all();
+        let (mut state, _) = self
             .changed
             .wait_timeout_while(state, within, |state| {
                 !state.hangs.iter().any(|hang| hang.entry == entry)
             })
             .unwrap_or_else(PoisonError::into_inner);
+        if let Some(waiter) = state
+            .hang_waiters
+            .iter()
+            .position(|waiting| *waiting == entry)
+        {
+            state.hang_waiters.remove(waiter);
+        }
         if state.hangs.iter().any(|hang| hang.entry == entry) {
             Ok(())
         } else {
             Err(format!("host.exec[{entry}] did not hang within {within:?}"))
+        }
+    }
+
+    /// Waits, bounded by `within` on the process clock, until the runner is
+    /// waiting for exec entry `entry` to match as a hang.
+    pub fn wait_hang_waiting(&self, entry: usize, within: Duration) -> Result<(), String> {
+        let state = lock(&self.state);
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, within, |state| !state.hang_waiters.contains(&entry))
+            .unwrap_or_else(PoisonError::into_inner);
+        if state.hang_waiters.contains(&entry) {
+            Ok(())
+        } else {
+            Err(format!(
+                "host.exec[{entry}] did not wait for a hang match within {within:?}"
+            ))
         }
     }
 
