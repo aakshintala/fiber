@@ -23,9 +23,9 @@ use support::run_to_exit;
 const DOC: &str = include_str!("../../../docs/extensions.md");
 
 /// The subsection's fenced blocks in order, each as `(tag, body)`: the
-/// tool as `lua`, then the allowed case as `json`. A doc edit that adds,
-/// drops or reorders a fence changes this list, which the tests pin. The
-/// section must name its case file.
+/// tool as `lua`, then the allowed case as `json`, then the denied case as
+/// `json`. A doc edit that adds, drops or reorders a fence changes this
+/// list, which the tests pin. The section must name its case file.
 fn documented_blocks() -> Vec<(String, String)> {
     let heading = "### Testing a tool that executes";
     let start = DOC
@@ -64,7 +64,7 @@ fn documented_blocks() -> Vec<(String, String)> {
             .iter()
             .map(|(tag, _)| tag.as_str())
             .collect::<Vec<_>>(),
-        ["lua", "json"]
+        ["lua", "json", "json"]
     );
     blocks
 }

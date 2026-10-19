@@ -690,7 +690,10 @@ advances only when the operation is parked on that clock deadline. After the
 last entry, a hang still parked fails the case, naming the request, and the
 runner advances to its deadline to end the session. `until`
 selects the event after which the runner closes the session; by default it
-closes after the first `turn_completed` or `turn_failed`.
+closes after the first `turn_completed` or `turn_failed`. `attended`
+defaults to true; `attended: false` runs the session with nobody attached,
+as it does for a call case: a call that would escalate to a person is
+denied instead ("Testing a tool that executes").
 
 ### Provider call cases
 
@@ -855,6 +858,42 @@ the allowed stream:
     {"kind": "step_started"},
     {"kind": "assistant_message_started"},
     {"kind": "text_completed", "payload": {"text": "Launched."}},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "turn_completed"},
+    {"kind": "fiber_exited"}
+  ]
+}
+```
+
+`tests/launch-denied.json` sets no reviewer and `attended: false`, so the
+same call is denied: no reviewer can be set up and nobody can answer. The
+denial is recorded as `permission_resolved` with `decided_by: no_reviewer` and
+`decision: deny`, no `permission_requested` is written, and
+`tool_call_completed` has `status: denied`:
+
+```json
+{
+  "script": {"steps": [{"tool_calls": [{"name": "launch", "arguments": {}}]}, {"text": "Denied."}]},
+  "prompt": "launch it",
+  "attended": false,
+  "expect": [
+    {"kind": "session_started"},
+    {"kind": "fiber_started"},
+    {"kind": "extensions_loaded"},
+    {"kind": "preamble_built"},
+    {"kind": "opening_message"},
+    {"kind": "turn_started"},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "tool_call_requested"},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "permission_resolved", "payload": {"decision": "deny", "decided_by": "no_reviewer"}},
+    {"kind": "tool_call_completed", "payload": {"status": "denied"}},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "text_completed", "payload": {"text": "Denied."}},
     {"kind": "usage_recorded"},
     {"kind": "assistant_message_completed"},
     {"kind": "turn_completed"},

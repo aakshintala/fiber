@@ -135,6 +135,7 @@ fn case_run_with_host(
         host,
         advances,
         until,
+        true,
         fakes::clock::FakeClock::new(),
         TEST_WAITS,
     )
@@ -1001,6 +1002,7 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
             kind: "assistant_message_delta".to_owned(),
             nth: 1,
         }),
+        true,
         clock,
         TEST_WAITS,
     );

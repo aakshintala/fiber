@@ -42,6 +42,7 @@ pub(crate) struct CaseRun {
     clock: Arc<CaseClock>,
     advances: Vec<ClockAdvance>,
     until: Option<Selector>,
+    attended: bool,
     process_clock: Arc<dyn Clock>,
     waits: WaitBounds,
     verdict: Mutex<Option<Vec<String>>>,
@@ -55,6 +56,7 @@ impl CaseRun {
         host: Host,
         advances: Vec<ClockAdvance>,
         until: Option<Selector>,
+        attended: bool,
         process_clock: Arc<dyn Clock>,
     ) -> Arc<Self> {
         Self::with_waits(
@@ -63,6 +65,7 @@ impl CaseRun {
             host,
             advances,
             until,
+            attended,
             process_clock,
             RUNNER_WAITS,
         )
@@ -74,6 +77,7 @@ impl CaseRun {
         host: Host,
         advances: Vec<ClockAdvance>,
         until: Option<Selector>,
+        attended: bool,
         process_clock: Arc<dyn Clock>,
         waits: WaitBounds,
     ) -> Arc<Self> {
@@ -84,10 +88,16 @@ impl CaseRun {
             clock: CaseClock::new(),
             advances,
             until,
+            attended,
             process_clock,
             waits,
             verdict: Mutex::new(None),
         })
+    }
+
+    /// Whether a person is attached to the case's session.
+    pub(crate) fn attended(&self) -> bool {
+        self.attended
     }
 
     /// The clock this case's session and extension hooks share.
@@ -472,6 +482,7 @@ pub(crate) fn extension_case(
         case.host,
         case.clock,
         case.until,
+        case.attended,
         Arc::clone(&process_clock),
     );
     let signals = match crate::shutdown::install(process_clock) {

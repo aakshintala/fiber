@@ -144,14 +144,26 @@ fn ordered_outcomes_and_clock_entries_stay_with_their_call() {
 }
 
 #[test]
-fn session_case_accepts_a_boolean_attended() {
-    // A session case takes `attended`, as a call case does: both booleans
-    // parse. The default and the refusal of non-booleans ride with the
-    // field in the green commit.
-    for value in [json!(true), json!(false)] {
+fn session_case_attended_defaults_to_true_and_parses_booleans() {
+    // No key reads attended, so the cases written before this field stay
+    // with a person attached.
+    let Case::Session(parsed) = parse(&session_case()).expect("session case parses") else {
+        panic!("session case parsed as a call case");
+    };
+    assert!(parsed.attended);
+    for (value, expected) in [(json!(true), true), (json!(false), false)] {
         let mut case = session_case();
         case["attended"] = value;
-        parse(&case).expect("boolean attended parses in a session case");
+        let Case::Session(parsed) = parse(&case).expect("boolean attended parses") else {
+            panic!("session case parsed as a call case");
+        };
+        assert_eq!(parsed.attended, expected);
+    }
+    for value in [json!(null), json!(0), json!(1), json!("false")] {
+        let mut malformed = session_case();
+        malformed["attended"] = value;
+        let error = case_error(&malformed);
+        assert!(error.contains("attended"), "{error}");
     }
 }
 

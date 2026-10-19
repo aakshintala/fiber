@@ -492,7 +492,11 @@ pub(crate) fn run_new(
     ));
     extensions.model_to(host_model.clone());
     extensions.delegate_to(Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>);
-    let answerable = !one_turn;
+    // A session case with nobody attached denies where it would ask a
+    // person, as a headless run does: only the person fallback is removed,
+    // so `attended: false` with a reviewer still allows through it.
+    let case_attended = case_run.as_ref().is_none_or(|case| case.attended());
+    let answerable = !one_turn && case_attended;
     extensions.answerable(answerable);
     extensions.browse_with(
         Arc::new(extensions::SystemBrowser::default()),
@@ -671,8 +675,10 @@ pub(crate) fn run_new(
                 warm,
                 // Only one-turn `fiber ask` runs with no client: the
                 // session command serves clients that may answer
-                // (`docs/permissions.md`, "Headless").
-                !run_one_turn,
+                // (`docs/permissions.md`, "Headless"). An unattended
+                // session case denies where it would ask a person, as a
+                // headless run does.
+                !run_one_turn && case_attended,
                 reviewer,
                 limits,
                 retry,
