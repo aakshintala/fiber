@@ -763,6 +763,44 @@ impl Run {
         }
     }
 
+    /// Waits under one named deadline like [`Run::wait_screen`], and on
+    /// expiry re-panics with the stage name plus the current grid and
+    /// the caller's extra context: the caught panic already names the
+    /// wait and shows the grid its last check saw, so the report rides
+    /// on the timeout panic instead of replacing it. `extra` runs only
+    /// on failure, and takes no `&mut Run`, so the caller passes reads
+    /// that borrow nothing the wait holds (a session-log excerpt over
+    /// `Setup`, never the run's own grid). It never loosens the wait:
+    /// the predicate, the deadline and the fast-fail path are
+    /// `wait_screen`'s own.
+    #[track_caller]
+    pub(crate) fn wait_screen_reporting(
+        &mut self,
+        what: &str,
+        mut done: impl FnMut(&Grid) -> bool,
+        extra: impl FnOnce() -> String,
+    ) -> Grid {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.wait_screen(what, &mut done)
+        }));
+        match result {
+            Ok(grid) => grid,
+            Err(payload) => {
+                let base = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| {
+                        payload
+                            .downcast_ref::<&str>()
+                            .map(|held| (*held).to_owned())
+                    })
+                    .unwrap_or_else(|| what.to_owned());
+                let grid = self.screen().rows.join("\n");
+                panic!("{base}; grid:\n{grid}; {}", extra());
+            }
+        }
+    }
+
     /// Waits under the run's one deadline until the output at or after
     /// `from` holds `needle` as exact bytes, and returns where the match
     /// ends. The search starts at the caller's offset, never at an
