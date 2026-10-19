@@ -21,6 +21,7 @@ use extensions::{Browser, Index, Store};
 use serde_json::json;
 
 use super::{mcp_login, mcp_logout, run_login, run_logout};
+use crate::CliError;
 use crate::mcp::Streams;
 use crate::project_of;
 
@@ -168,7 +169,7 @@ impl Setup {
 }
 
 struct Run {
-    result: Result<(), Failure>,
+    result: Result<(), CliError>,
     err: String,
 }
 
@@ -236,19 +237,9 @@ fn an_unknown_name_is_a_usage_failure_naming_it() {
     let browser = FakeBrowser::new();
     let (ran, _) = login(&setup, "zzz", &remote, &browser, &|| {});
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("zzz"), "{}", failure.message);
-    // An unknown name is not a stdio server: a mutant that always reports
-    // declared names the command instead.
     assert!(
-        failure.message.contains("no server named"),
-        "{}",
-        failure.message
-    );
-    assert!(
-        !failure.message.contains("declares a command"),
-        "{}",
-        failure.message
+        matches!(failure, CliError::McpServerUnknown { ref server } if server == "zzz"),
+        "{failure:?}"
     );
     assert!(remote.calls.lock().unwrap().is_empty());
 }
@@ -265,11 +256,16 @@ fn a_stdio_server_is_a_usage_failure() {
     let browser = FakeBrowser::new();
     let (ran, _) = login(&setup, "x", &remote, &browser, &|| {});
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("command"), "{}", failure.message);
+    assert!(
+        matches!(failure, CliError::McpServerStdio { ref server } if server == "x"),
+        "{failure:?}"
+    );
     assert!(remote.calls.lock().unwrap().is_empty());
     let logout = logout(&setup, "x", &remote);
-    assert_eq!(logout.result.unwrap_err().code, ErrorCode::Usage);
+    assert!(matches!(
+        logout.result.unwrap_err(),
+        CliError::McpServerStdio { .. }
+    ));
 }
 
 #[test]
@@ -282,7 +278,7 @@ fn a_login_passes_the_effective_url_and_reports_the_file() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(remote.calls.lock().unwrap().as_slice(), [URL]);
     assert_eq!(
@@ -300,11 +296,9 @@ fn a_repository_server_nobody_approved_is_refused() {
     let browser = FakeBrowser::new();
     let (ran, _) = login(&setup, "docs", &remote, &browser, &|| {});
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::McpServerUnapproved);
     assert!(
-        failure.message.contains("fiber approve"),
-        "{}",
-        failure.message
+        matches!(failure, CliError::McpUnapproved { ref server } if server == "docs"),
+        "{failure:?}"
     );
     assert!(remote.calls.lock().unwrap().is_empty());
     assert!(browser.opened.lock().unwrap().is_empty());
@@ -321,7 +315,7 @@ fn an_approved_repository_server_logs_in_with_the_snapshot_url() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(remote.calls.lock().unwrap().as_slice(), [URL]);
 }
@@ -336,7 +330,10 @@ fn a_declaration_changed_after_approval_is_refused() {
     let browser = FakeBrowser::new();
     let (ran, _) = login(&setup, "docs", &remote, &browser, &|| {});
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::McpServerUnapproved);
+    assert!(
+        matches!(failure, CliError::McpUnapproved { .. }),
+        "{failure:?}"
+    );
     assert!(remote.calls.lock().unwrap().is_empty());
 }
 
@@ -356,7 +353,10 @@ fn an_approval_for_b_does_not_carry_to_a() {
     };
     let (ran, _) = login(&setup, "docs", &remote, &browser, &between);
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::McpServerUnapproved);
+    assert!(
+        matches!(failure, CliError::McpUnapproved { .. }),
+        "{failure:?}"
+    );
     assert!(remote.calls.lock().unwrap().is_empty());
     assert!(!setup.home().join("credentials").exists());
 }
@@ -377,7 +377,7 @@ fn a_hook_that_swaps_in_a_sends_the_login_to_b_alone() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         remote.calls.lock().unwrap().as_slice(),
@@ -398,7 +398,10 @@ fn a_hook_that_swaps_in_b_leaves_an_unapproved_a_refused() {
         setup.approve("docs");
     };
     let (ran, _) = login(&setup, "docs", &remote, &browser, &between);
-    assert_eq!(ran.result.unwrap_err().code, ErrorCode::McpServerUnapproved);
+    assert!(matches!(
+        ran.result.unwrap_err(),
+        CliError::McpUnapproved { .. }
+    ));
     assert!(remote.calls.lock().unwrap().is_empty());
 }
 
@@ -413,19 +416,17 @@ fn a_config_invalid_login_names_the_server_with_no_code() {
     let browser = FakeBrowser::new();
     let (ran, _) = login(&setup, "docs", &remote, &browser, &|| {});
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::ConfigInvalid);
-    assert!(failure.message.contains("docs"), "{}", failure.message);
     assert!(
-        failure
-            .message
-            .contains("its authorization server does not offer PKCE with S256"),
-        "{}",
-        failure.message
-    );
-    assert!(
-        !failure.message.contains("config_invalid"),
-        "{}",
-        failure.message
+        matches!(
+            failure,
+            CliError::McpLoginRefused {
+                ref server,
+                ref message
+            } if server == "docs"
+                && message.contains("its authorization server does not offer PKCE with S256")
+                && !message.contains("config_invalid")
+        ),
+        "{failure:?}"
     );
 }
 
@@ -437,8 +438,10 @@ fn a_url_with_userinfo_is_refused_before_the_login() {
     let browser = FakeBrowser::new();
     let (ran, _) = login(&setup, "docs", &remote, &browser, &|| {});
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::ConfigInvalid);
-    assert!(failure.message.contains("docs"), "{}", failure.message);
+    assert!(
+        matches!(failure, CliError::UrlHasUserinfo { ref server } if server == "docs"),
+        "{failure:?}"
+    );
     assert!(remote.calls.lock().unwrap().is_empty());
 }
 
@@ -452,7 +455,7 @@ fn a_logout_deletes_the_file_and_leaves_the_lock() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(ran.err, "");
     assert!(!setup.home().join("credentials/mcp").join(KEY).exists());
@@ -468,7 +471,7 @@ fn a_logout_deletes_the_file_and_leaves_the_lock() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert!(ran.err.contains("no token was stored"), "{}", ran.err);
     assert!(ran.err.contains("docs"), "{}", ran.err);
@@ -480,16 +483,9 @@ fn a_logout_of_an_unknown_name_names_it() {
     let remote = FakeRemote::ok();
     let ran = logout(&setup, "zzz", &remote);
     let failure = ran.result.unwrap_err();
-    assert!(failure.message.contains("zzz"), "{}", failure.message);
     assert!(
-        failure.message.contains("no server named"),
-        "{}",
-        failure.message
-    );
-    assert!(
-        !failure.message.contains("declares a command"),
-        "{}",
-        failure.message
+        matches!(failure, CliError::McpServerUnknown { ref server } if server == "zzz"),
+        "{failure:?}"
     );
 }
 
@@ -504,7 +500,7 @@ fn two_names_over_one_url_share_one_file() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert!(!setup.home().join("credentials/mcp").join(KEY).exists());
 }
@@ -519,7 +515,7 @@ fn a_url_in_another_case_reaches_the_same_key() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert!(!setup.home().join("credentials/mcp").join(KEY).exists());
     // The seam saw the URL as written; the key is what joins them.

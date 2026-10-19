@@ -48,6 +48,10 @@ pub(crate) fn reader(
 /// The error keeps its code, so the hub answers `config_invalid` for an
 /// invalid configuration and the code the failure names otherwise; only
 /// the local adapter above flattens it to text.
+#[allow(
+    clippy::result_large_err,
+    reason = "the read's error names its data by value; the error path is cold"
+)]
 pub(crate) fn catalogue(
     home: PathBuf,
     workspace: PathBuf,
@@ -75,6 +79,10 @@ pub(crate) fn catalogue(
 /// in the background for `Stale` and `Every`. `load` starts the Lua
 /// providers; a `Cached` read never calls it. `Err` names why nothing
 /// could be read; a failed refresh is a notice, and the cached list stays.
+#[allow(
+    clippy::result_large_err,
+    reason = "the read's error names its data by value; the error path is cold"
+)]
 pub(crate) fn read(
     home: &Path,
     workspace: &Path,

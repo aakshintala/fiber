@@ -24,8 +24,8 @@ use std::time::Duration;
 use config::{
     Config, CredentialFile, ProjectKey, Secret, Sources, read_credential, store_credential,
 };
-use contract::ErrorCode;
 use contract::shapes::Failure;
+use contract::{self, ErrorCode};
 use extensions::Providers;
 use serde_json::{Value, json};
 
@@ -36,7 +36,7 @@ use super::{
     credential_key, login, login_store, login_targets, login_with_notices, logout, reviewer_stage,
     run_login, run_logout, write_prompt,
 };
-use crate::finish;
+use crate::{CliError, Refusal, finish};
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
@@ -179,7 +179,7 @@ impl Setup {
         terminal: bool,
         typed: &str,
         keys: &mut Fake,
-    ) -> (Result<(), Failure>, String) {
+    ) -> (Result<(), CliError>, String) {
         self.login_as(provider, None, terminal, typed, keys)
     }
 
@@ -191,7 +191,7 @@ impl Setup {
         terminal: bool,
         typed: &str,
         keys: &mut Fake,
-    ) -> (Result<(), Failure>, String) {
+    ) -> (Result<(), CliError>, String) {
         let mut err = Vec::new();
         let providers = self.providers();
         let result = login(
@@ -211,7 +211,7 @@ impl Setup {
         (result, String::from_utf8(err).unwrap())
     }
 
-    fn logout(&self, provider: Option<&str>) -> (Result<(), Failure>, String) {
+    fn logout(&self, provider: Option<&str>) -> (Result<(), CliError>, String) {
         self.logout_target(provider, LogoutTarget::Only)
     }
 
@@ -219,7 +219,7 @@ impl Setup {
         &self,
         provider: Option<&str>,
         target: LogoutTarget<'_>,
-    ) -> (Result<(), Failure>, String) {
+    ) -> (Result<(), CliError>, String) {
         let mut err = Vec::new();
         let result = logout(
             provider,
@@ -237,7 +237,7 @@ fn mode(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
-fn failed(result: Result<(), Failure>) -> Failure {
+fn failed(result: Result<(), CliError>) -> CliError {
     result.unwrap_err()
 }
 
@@ -337,8 +337,16 @@ fn a_key_is_trimmed_and_an_empty_one_stores_nothing() {
     for empty in ["", "  \n", "\t"] {
         let (result, err) = setup.login(Some("acme"), false, "", &mut Fake::new(empty));
         let e = failed(result);
-        assert_eq!(e.code, ErrorCode::Usage, "{empty:?}");
-        assert!(e.message.starts_with("No key was given"), "{}", e.message);
+        assert!(
+            matches!(
+                e,
+                CliError::StoreRefused {
+                    refusal: Refusal::NoKeyGiven,
+                    hint: true,
+                }
+            ),
+            "{empty:?}: {e:?}"
+        );
         assert_eq!(err, "");
     }
     assert!(!setup.home().join("credentials/acme/default").exists());
@@ -362,11 +370,20 @@ fn providers_that_share_a_credential_store_under_the_one_directory() {
     let (result, _) = setup.login(Some("opencode-go"), false, "", &mut Fake::new("other"));
     let e = failed(result);
     assert!(
-        e.message.contains(
+        matches!(
+            e,
+            CliError::StoreRefused {
+                refusal: Refusal::AlreadyStored { .. },
+                hint: true,
+            }
+        ),
+        "{e:?}"
+    );
+    assert!(
+        e.to_string().contains(
             "credentials/opencode/default is already stored; log in under another label with --as <label>, or run `fiber logout opencode-go --as default` first"
         ),
-        "{}",
-        e.message
+        "{e}"
     );
 }
 
@@ -378,9 +395,22 @@ fn a_label_already_stored_is_refused_and_the_file_is_untouched() {
     let mut keys = Fake::new(KEY);
     let (result, err) = setup.login(Some("acme"), false, "", &mut keys);
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::Usage);
+    assert!(
+        matches!(
+            e,
+            CliError::StoreRefused {
+                refusal: Refusal::AlreadyStored {
+                    name: _,
+                    stored: _,
+                    label: _,
+                },
+                hint: true,
+            }
+        ),
+        "{e:?}"
+    );
     assert_eq!(
-        e.message,
+        e.to_string(),
         "credentials/acme/default is already stored; log in under another label with --as <label>, or run `fiber logout acme --as default` first. Run `fiber --help` for usage."
     );
     assert_eq!(err, "");
@@ -451,8 +481,8 @@ fn a_config_write_that_fails_leaves_no_stored_key_so_a_retry_works() {
     fs::write(setup.home().join("config.json"), "{\"model\": ,").unwrap();
     let (result, err) = setup.login(Some("acme"), false, "", &mut Fake::new(KEY));
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::ConfigInvalid);
-    assert!(!e.message.contains(KEY));
+    assert!(matches!(e, CliError::Config(_)), "{e:?}");
+    assert!(!e.to_string().contains(KEY));
     assert_eq!(err, "");
     assert_eq!(setup.stored("acme", "default"), None);
     fs::write(setup.home().join("config.json"), "{}").unwrap();
@@ -475,8 +505,10 @@ fn a_login_while_another_holds_the_lock_fails_and_stores_nothing() {
     let mut keys = Fake::new(KEY);
     let (result, _) = setup.login(Some("acme"), false, "", &mut keys);
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::IoFailed);
-    assert_eq!(e.message, "another login for acme is running");
+    assert!(
+        matches!(e, CliError::LoginRunning { ref name } if name == "acme"),
+        "{e:?}"
+    );
     assert_eq!(keys.asked, 0);
     drop(held);
     assert_eq!(setup.stored("acme", "default"), None);
@@ -491,22 +523,29 @@ fn an_unknown_provider_is_a_usage_error_naming_the_installed_ones() {
     let setup = Setup::new();
     let (result, _) = setup.login(Some("nope"), false, "", &mut Fake::new(KEY));
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::Usage);
     assert!(
-        e.message.contains("no provider is installed"),
-        "{}",
-        e.message
+        matches!(
+            e,
+            CliError::StoreRefused {
+                refusal: Refusal::UnknownName { .. },
+                hint: true,
+            }
+        ),
+        "{e:?}"
     );
     setup.install("zed", None, None);
     setup.install("alpha", None, None);
     let (result, _) = setup.login(Some("nope"), false, "", &mut Fake::new(KEY));
     let e = failed(result);
     assert_eq!(
-        e.message,
+        e.to_string(),
         "`nope` is neither an installed provider nor a declared secret; the installed providers are alpha, zed, and no installed extension declares a secret. Run `fiber --help` for usage."
     );
     let (result, _) = setup.logout(Some("nope"));
-    assert_eq!(failed(result).code, ErrorCode::Usage);
+    assert!(matches!(
+        failed(result),
+        CliError::ProviderNotInstalled { .. }
+    ));
     assert!(!setup.home().join("credentials").exists());
 }
 
@@ -515,7 +554,9 @@ fn a_provider_name_that_climbs_out_of_credentials_is_refused() {
     let setup = Setup::new();
     setup.install("acme", Some("../escape"), None);
     let (result, _) = setup.login(Some("acme"), false, "", &mut Fake::new(KEY));
-    assert_eq!(failed(result).code, ErrorCode::InvalidArguments);
+    let e = failed(result);
+    assert!(matches!(e, CliError::CredentialFile(_)), "{e:?}");
+    assert_eq!(e.code(), ErrorCode::InvalidArguments);
     assert!(!setup.home().join("escape").exists());
 }
 
@@ -584,11 +625,13 @@ fn the_menu_refuses_a_bad_answer_and_stores_nothing() {
         let mut keys = Fake::new(KEY);
         let (result, _) = setup.login(None, true, typed, &mut keys);
         let e = failed(result);
-        assert_eq!(e.code, ErrorCode::Usage, "{typed:?}");
         if typed.trim().is_empty() {
-            assert!(e.message.contains("Nothing was chosen"), "{typed:?}");
+            assert!(matches!(e, CliError::NothingChosen), "{typed:?}: {e:?}");
         } else {
-            assert!(e.message.contains("is neither a listed"), "{typed:?}");
+            assert!(
+                matches!(e, CliError::ChoiceUnknown { .. }),
+                "{typed:?}: {e:?}"
+            );
         }
         assert_eq!(keys.asked, 0, "{typed:?}");
         assert!(!setup.home().join("credentials/alpha").exists());
@@ -602,8 +645,7 @@ fn without_a_terminal_no_provider_is_a_usage_error_that_reads_nothing() {
     let mut keys = Fake::new(KEY);
     let (result, err) = setup.login(None, false, "1\n", &mut keys);
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::Usage);
-    assert!(e.message.contains("no terminal"), "{}", e.message);
+    assert!(matches!(e, CliError::LoginNeedsName), "{e:?}");
     assert_eq!(err, "");
     assert_eq!(keys.asked, 0);
 }
@@ -613,11 +655,7 @@ fn a_terminal_with_no_provider_installed_says_so() {
     let setup = Setup::new();
     let (result, _) = setup.login(None, true, "1\n", &mut Fake::new(KEY));
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::Usage);
-    assert_eq!(
-        e.message,
-        "No provider is installed, and no installed extension declares a secret. Run `fiber --help` for usage."
-    );
+    assert!(matches!(e, CliError::NothingToLogInTo), "{e:?}");
 }
 
 #[test]
@@ -635,7 +673,7 @@ fn the_prompt_is_for_a_terminal_only_and_a_failed_read_stores_nothing() {
     };
     let (result, err) = setup.login(Some("acme"), true, "", &mut broken);
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::IoFailed);
+    assert!(matches!(e, CliError::Terminal(_)), "{e:?}");
     assert_eq!(err, "Key for acme: ");
     assert_eq!(setup.stored("acme", "default"), None);
     assert!(!setup.home().join("config.json").exists());
@@ -651,8 +689,10 @@ fn logout_deletes_the_one_stored_key_and_names_it() {
     assert_eq!(err, "fiber: removed credentials/acme/work\n");
     assert!(!setup.home().join("credentials/acme/work").exists());
     let e = failed(setup.logout(Some("acme")).0);
-    assert_eq!(e.code, ErrorCode::CredentialMissing);
-    assert_eq!(e.message, "no stored credential for acme");
+    assert!(
+        matches!(e, CliError::NoStoredCredential { ref name } if name == "acme"),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -704,9 +744,9 @@ fn several_stored_labels_are_a_usage_error_listing_them_and_delete_nothing() {
     }
     let (result, err) = setup.logout(Some("acme"));
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::Usage);
+    assert!(matches!(e, CliError::LogoutSeveral { .. }), "{e:?}");
     assert_eq!(
-        e.message,
+        e.to_string(),
         "`acme` has several stored credentials: default, work; name one with --as <label>, or use --all. Run `fiber --help` for usage."
     );
     assert_eq!(err, "");
@@ -718,8 +758,7 @@ fn several_stored_labels_are_a_usage_error_listing_them_and_delete_nothing() {
 fn logout_without_a_provider_is_a_usage_error() {
     let setup = Setup::new();
     let e = failed(setup.logout(None).0);
-    assert_eq!(e.code, ErrorCode::Usage);
-    assert_eq!(e.message, crate::LOGOUT_SHAPE);
+    assert!(matches!(e, CliError::LogoutNeedsProvider), "{e:?}");
 }
 
 #[test]
@@ -742,8 +781,8 @@ fn a_key_from_the_environment_a_file_or_a_command_is_named_and_not_removed() {
         setup.install("acme", None, Some(source));
         let (result, err) = setup.logout(Some("acme"));
         let e = failed(result);
-        assert_eq!(e.code, ErrorCode::CredentialMissing);
-        assert_eq!(e.message, named);
+        assert!(matches!(e, CliError::KeyFromElsewhere { .. }), "{e:?}");
+        assert_eq!(e.to_string(), named);
         assert_eq!(err, "");
         assert!(!setup.home().join("credentials").exists());
     }
@@ -764,10 +803,7 @@ fn a_configured_source_comes_before_the_providers_own_in_label_order() {
     )
     .unwrap();
     let e = failed(setup.logout(Some("acme")).0);
-    assert_eq!(
-        e.message,
-        "acme's key comes from the file /tmp/home.key; fiber logout cannot remove it"
-    );
+    assert!(matches!(e, CliError::KeyFromElsewhere { .. }), "{e:?}");
 }
 
 #[test]
@@ -784,8 +820,10 @@ fn no_stored_key_and_no_source_is_a_failure_that_names_neither() {
     let setup = Setup::new();
     setup.install("acme", None, None);
     let e = failed(setup.logout(Some("acme")).0);
-    assert_eq!(e.code, ErrorCode::CredentialMissing);
-    assert_eq!(e.message, "no stored credential for acme");
+    assert!(
+        matches!(e, CliError::NoStoredCredential { ref name } if name == "acme"),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -909,9 +947,18 @@ fn login_store_refuses_an_already_stored_label_without_the_cli_hint() {
     setup.install("acme", None, None);
     store_credential(&setup.home(), "acme", "default", &Secret::new("old".into())).unwrap();
     let error = login_store(&setup.home(), "acme", None, Secret::new(KEY.into())).unwrap_err();
-    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(
+        matches!(
+            error,
+            CliError::StoreRefused {
+                refusal: Refusal::AlreadyStored { .. },
+                hint: false,
+            }
+        ),
+        "{error:?}"
+    );
     assert_eq!(
-        error.message,
+        error.to_string(),
         "credentials/acme/default is already stored; log in under another label with --as <label>, or run `fiber logout acme --as default` first."
     );
     assert_eq!(setup.stored("acme", "default").as_deref(), Some("old"));
@@ -923,8 +970,16 @@ fn login_store_refuses_an_empty_key_and_stores_nothing() {
     let setup = Setup::new();
     setup.install("acme", None, None);
     let error = login_store(&setup.home(), "acme", None, Secret::new(String::new())).unwrap_err();
-    assert_eq!(error.code, ErrorCode::Usage);
-    assert_eq!(error.message, "No key was given; nothing was stored.");
+    assert!(
+        matches!(
+            error,
+            CliError::StoreRefused {
+                refusal: Refusal::NoKeyGiven,
+                hint: false,
+            }
+        ),
+        "{error:?}"
+    );
     assert!(!setup.home().join("credentials/acme/default").exists());
     assert!(!setup.home().join("config.json").exists());
 }
@@ -966,9 +1021,18 @@ fn login_store_replaces_a_declared_secret_and_says_so() {
 fn login_store_of_an_unknown_name_is_a_usage_refusal() {
     let setup = Setup::new();
     let error = login_store(&setup.home(), "nope", None, Secret::new(KEY.into())).unwrap_err();
-    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(
+        matches!(
+            error,
+            CliError::StoreRefused {
+                refusal: Refusal::UnknownName { .. },
+                hint: false,
+            }
+        ),
+        "{error:?}"
+    );
     assert_eq!(
-        error.message,
+        error.to_string(),
         "`nope` is neither an installed provider nor a declared secret; no provider is installed, and no installed extension declares a secret."
     );
     assert!(!setup.home().join("credentials").exists());
@@ -984,8 +1048,10 @@ fn login_store_while_another_holds_the_lock_stores_nothing() {
         .unwrap()
         .unwrap();
     let error = login_store(&setup.home(), "acme", None, Secret::new(KEY.into())).unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(error.message, "another login for acme is running");
+    assert!(
+        matches!(error, CliError::LoginRunning { ref name } if name == "acme"),
+        "{error:?}"
+    );
     drop(held);
     assert_eq!(setup.stored("acme", "default"), None);
 }
@@ -1136,8 +1202,16 @@ fn a_failed_store_never_asks_for_a_reviewer() {
         &mut Fake::new(KEY),
     );
     let failure = failed(result);
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("--as"), "{}", failure.message);
+    assert!(
+        matches!(
+            failure,
+            CliError::StoreRefused {
+                refusal: Refusal::AlreadyStored { .. },
+                hint: true,
+            }
+        ),
+        "{failure:?}"
+    );
     assert!(!err.contains("Reviewer"), "{err}");
 }
 
@@ -1385,11 +1459,15 @@ fn a_claimed_save_survives_cancellation_before_the_write() {
             );
         } else {
             let failure = result.unwrap_err();
-            assert_eq!(failure.code, ErrorCode::ConfigInvalid);
             assert!(
-                failure.message.contains("providers.alpha.reviewer_model"),
-                "{}",
-                failure.message
+                matches!(failure, CliError::ReviewerNotSaved { .. }),
+                "{failure:?}"
+            );
+            assert!(
+                failure
+                    .to_string()
+                    .contains("providers.alpha.reviewer_model"),
+                "{failure}"
             );
             assert!(!err.contains("fiber: reviewer"), "{err}");
             assert!(!err.contains("no reviewer was set"), "{err}");

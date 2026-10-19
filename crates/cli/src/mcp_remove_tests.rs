@@ -14,7 +14,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use config::{Layer, Secret, insert_entry, store_secret};
-use contract::ErrorCode;
 use contract::events::OfferedKind;
 use extensions::{Decision, Index, Store};
 use serde_json::json;
@@ -95,7 +94,7 @@ impl Setup {
 }
 
 struct Run {
-    result: Result<(), contract::shapes::Failure>,
+    result: Result<(), crate::CliError>,
     out: String,
     err: String,
 }
@@ -168,7 +167,7 @@ fn remove_deletes_only_the_chosen_layer() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
@@ -195,14 +194,18 @@ fn remove_of_an_absent_name_names_the_layers_holding_it() {
     setup.declare(Layer::Repository, "docs");
     let ran = go(&setup, Layer::Global, "docs");
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("`docs`"), "{}", failure.message);
-    assert!(failure.message.contains("global"), "{}", failure.message);
-    assert!(failure.message.contains("project"), "{}", failure.message);
     assert!(
-        failure.message.contains("repository"),
-        "{}",
-        failure.message
+        matches!(
+            failure,
+            crate::CliError::McpNotDeclared {
+                ref name,
+                layer,
+                ref declared_in
+            } if name == "docs"
+                && layer == Layer::Global
+                && declared_in.as_slice() == [Layer::Project, Layer::Repository]
+        ),
+        "{failure:?}"
     );
     assert!(!setup.file(Layer::Global).exists(), "a file was created");
 }
@@ -213,12 +216,16 @@ fn remove_of_a_name_no_layer_declares_names_none() {
     setup.declare(Layer::Global, "other");
     let ran = go(&setup, Layer::Global, "missing");
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("`missing`"), "{}", failure.message);
     assert!(
-        failure.message.contains("no layer declares"),
-        "{}",
-        failure.message
+        matches!(
+            failure,
+            crate::CliError::McpNotDeclared {
+                ref name,
+                layer,
+                ref declared_in
+            } if name == "missing" && layer == Layer::Global && declared_in.is_empty()
+        ),
+        "{failure:?}"
     );
 }
 
@@ -239,7 +246,7 @@ fn remove_from_the_repository_leaves_the_approval_and_the_secret() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(decision_at(&setup, &hash), Some(Decision::Approve));
     assert_eq!(

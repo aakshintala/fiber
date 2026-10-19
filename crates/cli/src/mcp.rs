@@ -13,7 +13,6 @@ use config::{
     Config, ConfigError, CredentialFile, Layer, ProjectKey, Secret, Sources, delete_secret,
     insert_entry, read_secret, remove_entry, store_secret,
 };
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::OfferedKind;
 use contract::mcp_remote::McpRemote;
@@ -22,8 +21,9 @@ use extensions::{Decision, Index, Store};
 use serde_json::{Map, Value};
 
 use crate::approve::say;
+use crate::error::layer_word;
 use crate::login::{KeyReader, NoEcho, Plain};
-use crate::{failed, project_of, usage, with_dirs, write_line};
+use crate::{CliError, project_of, with_dirs, write_line};
 
 /// A server's declaration as the layer's file holds it. Its `Debug`
 /// prints names only, never values: a url prints redacted (never its
@@ -83,53 +83,45 @@ pub(crate) struct Streams<'a> {
 }
 
 pub(crate) fn config_failure(e: ConfigError) -> Failure {
-    failed(e.code(), e)
+    Failure::from(CliError::from(e))
 }
-
-/// The layer in words, as usage failures name it.
-fn layer_word(layer: Layer) -> &'static str {
-    match layer {
-        Layer::Global => "global",
-        Layer::Project => "project",
-        Layer::Repository => "repository",
-    }
-}
+// debt: cli-C deletes `config_failure` with the last use in `hub_list.rs`.
 
 /// The name is a config path segment, a tool-name part and part of a
 /// credential file name: non-empty, with no `"`, `/`, NUL, whitespace or
 /// control character.
-fn check_name(name: &str) -> Result<(), Failure> {
+fn check_name(name: &str) -> Result<(), CliError> {
     let bad = name.is_empty()
         || name.bytes().any(|byte| {
             byte == b'"' || byte == b'/' || byte.is_ascii_whitespace() || byte.is_ascii_control()
         });
     if bad {
-        return Err(usage(format!(
-            "`{name}` is not a server name: it is non-empty and holds no `\"`, `/`, whitespace or control character. Run `fiber --help` for usage."
-        )));
+        return Err(CliError::McpName {
+            name: name.to_owned(),
+        });
     }
     Ok(())
 }
 
 /// An `env` variable name: `[A-Za-z_][A-Za-z0-9_]*`.
-fn check_env_key(key: &str) -> Result<(), Failure> {
+fn check_env_key(key: &str) -> Result<(), CliError> {
     if !config::valid_env_key(key) {
-        return Err(usage(format!(
-            "`{key}` is not a variable name: it matches `[A-Za-z_][A-Za-z0-9_]*`. Run `fiber --help` for usage."
-        )));
+        return Err(CliError::McpEnvKey {
+            key: key.to_owned(),
+        });
     }
     Ok(())
 }
 
 /// Splits each `-e KEY=value`; a value without `=` is a usage error. An
 /// empty value is allowed.
-fn split_env(env: &[String]) -> Result<Vec<(String, String)>, Failure> {
+fn split_env(env: &[String]) -> Result<Vec<(String, String)>, CliError> {
     let mut pairs = Vec::new();
     for raw in env {
         let Some((key, value)) = raw.split_once('=') else {
-            return Err(usage(format!(
-                "`{raw}` is not `KEY=value`. Run `fiber --help` for usage."
-            )));
+            return Err(CliError::McpEnvPair {
+                raw: raw.to_owned(),
+            });
         };
         check_env_key(key)?;
         pairs.push((key.to_owned(), value.to_owned()));
@@ -241,16 +233,12 @@ fn record_approval(
     name: &str,
     expected: &Value,
     clock: &Arc<dyn Clock>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let repo_file = workspace.join(".fiber/config.json");
-    let approve_hint = |why: &str| {
-        failed(
-            ErrorCode::IoFailed,
-            format!(
-                "could not record the approval of `{name}` in {}: {why}. Run `fiber approve` to finish it.",
-                repo_file.display()
-            ),
-        )
+    let approve_hint = |why: &str| CliError::ApprovalNotRecorded {
+        name: name.to_owned(),
+        file: repo_file.clone(),
+        why: why.to_owned(),
     };
     // The same `config.json.lock` writers hold, so the snapshot below sees
     // one whole file: the declaration is read once, and never re-read for
@@ -269,31 +257,24 @@ fn record_approval(
         match declared.mcp_servers.get(name) {
             Some(current) if current == expected => current.clone(),
             _ => {
-                return Err(failed(
-                    ErrorCode::ConfigInvalid,
-                    format!(
-                        "`{name}` changed after it was written; the approval was not recorded. Run `fiber approve` to approve the current declaration."
-                    ),
-                ));
+                return Err(CliError::ApprovalChanged {
+                    name: name.to_owned(),
+                });
             }
         }
     };
     let item = extensions::mcp_server_item(workspace, name, &current)
         .map_err(|e| approve_hint(&e.to_string()))?;
     let mut index = Index::load(home);
-    let hash = extensions::hash(&mut index, &item).map_err(|e| failed(e.code(), e))?;
+    let hash = extensions::hash(&mut index, &item)?;
     // The index only saves a re-hash; failing to write it costs nothing else.
     index.save().unwrap_or(());
     Store::new(home, project, Arc::clone(clock))
         .approve(&item, &hash)
-        .map_err(|e| {
-            failed(
-                e.code(),
-                format!(
-                    "could not record the approval of `{name}` in {}: {e}. Run `fiber approve` to finish it.",
-                    repo_file.display()
-                ),
-            )
+        .map_err(|source| CliError::ApprovalNotStored {
+            name: name.to_owned(),
+            file: repo_file.clone(),
+            source,
         })
 }
 
@@ -320,7 +301,7 @@ pub(crate) fn run_add(
     reads: SecretInput<'_>,
     streams: Streams<'_>,
     clock: &Arc<dyn Clock>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let SecretInput {
         keys,
         input,
@@ -332,26 +313,18 @@ pub(crate) fn run_add(
     // usage error, as are `-e` and `--secret` with a url.
     match (url, command.is_empty()) {
         (Some(_), false) => {
-            return Err(usage(
-                "`fiber mcp add` takes either a url or `-- <command>`, not both. Run `fiber --help` for usage.",
-            ));
+            return Err(CliError::McpUrlAndCommand);
         }
         (None, true) => {
-            return Err(usage(
-                "`fiber mcp add` takes a url or `-- <command>`. Run `fiber --help` for usage.",
-            ));
+            return Err(CliError::McpTransportMissing);
         }
         _ => {}
     }
     if url.is_some() && (!env.is_empty() || !secrets.is_empty()) {
-        return Err(usage(
-            "`-e` and `--secret` apply only to `-- <command>`, not to a url. Run `fiber --help` for usage.",
-        ));
+        return Err(CliError::McpUrlWithEnv);
     }
     if url.is_none() && command.first().is_some_and(String::is_empty) {
-        return Err(usage(
-            "`fiber mcp add` takes a program after `--`. Run `fiber --help` for usage.",
-        ));
+        return Err(CliError::McpProgramMissing);
     }
     let pairs = split_env(env)?;
     for key in secrets {
@@ -364,9 +337,9 @@ pub(crate) fn run_add(
         let mut seen = std::collections::HashSet::new();
         for key in pairs.iter().map(|(key, _)| key).chain(secrets.iter()) {
             if !seen.insert(key) {
-                return Err(usage(format!(
-                    "`{key}` is given more than once; each variable is declared once. Run `fiber --help` for usage.",
-                )));
+                return Err(CliError::McpKeyRepeated {
+                    key: key.to_owned(),
+                });
             }
         }
     }
@@ -375,10 +348,9 @@ pub(crate) fn run_add(
     if let Some(url) = url
         && remote.has_userinfo(url)
     {
-        return Err(failed(
-            ErrorCode::ConfigInvalid,
-            format!("`{name}`'s url carries a user name or password; remove it."),
-        ));
+        return Err(CliError::UrlHasUserinfo {
+            server: name.to_owned(),
+        });
     }
     // Every secret value is read before anything is stored, so an empty
     // one writes nothing.
@@ -391,11 +363,11 @@ pub(crate) fn run_add(
         };
         let value = keys
             .read_key_exact(&prompt, input, err)
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard input: {e}")))?;
+            .map_err(CliError::StandardInput)?;
         if value.expose().is_empty() {
-            return Err(usage(format!(
-                "No value was given for `--secret {key}`; nothing was stored. Run `fiber --help` for usage."
-            )));
+            return Err(CliError::McpSecretEmpty {
+                key: key.to_owned(),
+            });
         }
         values.push(value);
     }
@@ -403,12 +375,11 @@ pub(crate) fn run_add(
     // The whole transaction runs under a per-name lock taken before the
     // layer file's lock, so a concurrent add of the same name cannot
     // restore or delete the winner's credential.
-    let guard = CredentialFile::new(home, "mcp-add", &lock_label(name)).map_err(config_failure)?;
-    let Some(_held) = guard.try_lock().map_err(config_failure)? else {
-        return Err(failed(
-            ErrorCode::IoFailed,
-            format!("another `fiber mcp add` of `{name}` is running"),
-        ));
+    let guard = CredentialFile::new(home, "mcp-add", &lock_label(name))?;
+    let Some(_held) = guard.try_lock()? else {
+        return Err(CliError::McpAddRunning {
+            name: name.to_owned(),
+        });
     };
     // Secrets are stored before the declaration is written, remembering
     // what was there; any failure before the rename puts each one back.
@@ -419,7 +390,7 @@ pub(crate) fn run_add(
         let credential = format!("mcp.{name}.{key}");
         let previous = read_secret(home, &credential).map_err(|e| {
             rollback(home, &stored, err);
-            config_failure(e)
+            CliError::from(e)
         })?;
         let stored_result = store_secret(home, &credential, value);
         if track_after_store(&stored_result) {
@@ -427,7 +398,7 @@ pub(crate) fn run_add(
         }
         if let Err(e) = stored_result {
             rollback(home, &stored, err);
-            return Err(config_failure(e));
+            return Err(CliError::from(e));
         }
     }
     let value = declaration_value(url, command, &pairs, name, secrets);
@@ -436,20 +407,17 @@ pub(crate) fn run_add(
         Ok(true) => {}
         Ok(false) => {
             rollback(home, &stored, err);
-            return Err(usage(format!(
-                "`{name}` is already declared in the {} layer. Run `fiber mcp remove {name}` to remove it first. Run `fiber --help` for usage.",
-                layer_word(layer)
-            )));
+            return Err(CliError::McpAlreadyDeclared {
+                name: name.to_owned(),
+                layer,
+            });
         }
         Err(e) => {
             settle_secrets(home, &stored, &e, err);
             if matches!(e, ConfigError::Unsynced { .. }) {
-                return Err(failed(
-                    e.code(),
-                    format!("{e} The secrets the declaration refers to were kept."),
-                ));
+                return Err(CliError::SecretsKept(e));
             }
-            return Err(config_failure(e));
+            return Err(CliError::from(e));
         }
     }
     for (credential, previous) in &stored {
@@ -498,14 +466,13 @@ fn declaring_layers(
     workspace: &Path,
     project: &ProjectKey,
     name: &str,
-) -> Result<Vec<Layer>, Failure> {
+) -> Result<Vec<Layer>, CliError> {
     let config = Config::load(Sources {
         home: home.to_path_buf(),
         workspace: workspace.to_path_buf(),
         project: project.clone(),
         overrides: Vec::new(),
-    })
-    .map_err(config_failure)?;
+    })?;
     let mut layers = Vec::new();
     for layer in [Layer::Global, Layer::Project, Layer::Repository] {
         let declares = config
@@ -527,28 +494,17 @@ pub(crate) fn run_remove(
     layer: Layer,
     name: &str,
     _streams: Streams<'_>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let (_, project) = project_of(home, workspace)?;
-    if remove_entry(home, workspace, &project, layer, "mcp.servers", name)
-        .map_err(config_failure)?
-    {
+    if remove_entry(home, workspace, &project, layer, "mcp.servers", name)? {
         return Ok(());
     }
-    let layers = declaring_layers(home, workspace, &project, name)?;
-    let hint = if layers.is_empty() {
-        "; no layer declares it".to_owned()
-    } else {
-        let names = layers
-            .iter()
-            .map(|layer| layer_word(*layer))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("; it is declared in the {names} layer(s)")
-    };
-    Err(usage(format!(
-        "`{name}` is not declared in the {} layer{hint}. Run `fiber --help` for usage.",
-        layer_word(layer)
-    )))
+    let declared_in = declaring_layers(home, workspace, &project, name)?;
+    Err(CliError::McpNotDeclared {
+        name: name.to_owned(),
+        layer,
+        declared_in,
+    })
 }
 
 /// `fiber mcp remove [--project | --repo] <name>` in the current directory.
@@ -601,9 +557,8 @@ fn is_approved(
     project: &ProjectKey,
     name: &str,
     clock: &Arc<dyn Clock>,
-) -> Result<bool, Failure> {
-    let items =
-        extensions::declared_items(workspace, clock.as_ref()).map_err(|e| failed(e.code(), e))?;
+) -> Result<bool, CliError> {
+    let items = extensions::declared_items(workspace, clock.as_ref())?;
     let Some(item) = items
         .iter()
         .find(|item| item.kind == OfferedKind::McpServer && item.name == name)
@@ -611,7 +566,7 @@ fn is_approved(
         return Ok(false);
     };
     let mut index = Index::load(home);
-    let hash = extensions::hash(&mut index, item).map_err(|e| failed(e.code(), e))?;
+    let hash = extensions::hash(&mut index, item)?;
     // The index only saves a re-hash; failing to write it costs nothing else.
     index.save().unwrap_or(());
     Ok(Store::new(home, project, Arc::clone(clock))
@@ -628,7 +583,7 @@ pub(crate) fn run_list(
     workspace: &Path,
     streams: Streams<'_>,
     clock: &Arc<dyn Clock>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let Streams { out, err: _ } = streams;
     let (_, project) = project_of(home, workspace)?;
     let config = Config::load(Sources {
@@ -636,8 +591,7 @@ pub(crate) fn run_list(
         workspace: workspace.to_path_buf(),
         project: project.clone(),
         overrides: Vec::new(),
-    })
-    .map_err(config_failure)?;
+    })?;
     let mut rows: Vec<(String, Layer)> = Vec::new();
     for layer in [Layer::Global, Layer::Project, Layer::Repository] {
         if let Some(Value::Object(servers)) = config.in_layer("mcp.servers", layer) {

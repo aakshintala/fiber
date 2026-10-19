@@ -30,6 +30,7 @@ use super::{
     McpDeclaration, SecretInput, Streams, lock_label, mcp_add, record_approval, run_add,
     settle_secrets, track_after_store,
 };
+use crate::CliError;
 use crate::login::KeyReader;
 use crate::project_of;
 
@@ -153,7 +154,7 @@ impl Setup {
 }
 
 struct Run {
-    result: Result<(), Failure>,
+    result: Result<(), CliError>,
     out: String,
     err: String,
 }
@@ -269,7 +270,7 @@ fn a_remote_add_writes_the_url_in_the_chosen_layer() {
         assert!(
             ran.result.is_ok(),
             "{:?}",
-            ran.result.err().map(|e| e.message)
+            ran.result.err().map(|e| e.to_string())
         );
         assert_eq!(
             setup.read(layer),
@@ -299,7 +300,7 @@ fn a_stdio_add_writes_command_args_and_env_with_secret_references() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         setup.read(Layer::Global),
@@ -341,7 +342,7 @@ fn secrets_are_read_in_flag_order_and_empty_parts_stay_unwritten() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         read_secret(&setup.home(), "mcp.x.B")
@@ -383,7 +384,7 @@ fn a_value_with_spaces_round_trips_through_one_stdin_line() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         read_secret(&setup.home(), "mcp.x.TOKEN")
@@ -408,7 +409,10 @@ fn an_empty_secret_value_is_a_usage_failure_and_writes_nothing() {
         "\n",
     );
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
+    assert!(
+        matches!(failure, CliError::McpSecretEmpty { ref key } if key == "TOKEN"),
+        "{failure:?}"
+    );
     assert!(!setup.file(Layer::Global).exists());
     assert!(
         !setup.home().join("credentials").exists(),
@@ -433,7 +437,7 @@ fn an_existing_secret_is_replaced_and_named() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         read_secret(&setup.home(), "mcp.x.TOKEN")
@@ -465,8 +469,10 @@ fn a_url_with_userinfo_is_config_invalid_and_writes_nothing() {
         "",
     );
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::ConfigInvalid);
-    assert!(failure.message.contains("docs"), "{}", failure.message);
+    assert!(
+        matches!(failure, CliError::UrlHasUserinfo { ref server } if server == "docs"),
+        "{failure:?}"
+    );
     assert!(!setup.file(Layer::Global).exists());
     assert!(!setup.home().join("credentials").exists());
 }
@@ -489,7 +495,7 @@ fn userinfo_is_asked_of_the_seam_alone() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         setup.read(Layer::Global),
@@ -503,7 +509,10 @@ fn a_bad_name_is_a_usage_failure_and_writes_nothing() {
         let setup = Setup::new();
         let ran = ok(&setup, Layer::Global, name, Some(URL), &[], &[], &[], "");
         let failure = ran.result.unwrap_err();
-        assert_eq!(failure.code, ErrorCode::Usage, "name {name:?}");
+        assert!(
+            matches!(failure, CliError::McpName { .. }),
+            "name {name:?}: {failure:?}"
+        );
         assert!(!setup.file(Layer::Global).exists(), "name {name:?}");
         assert!(!setup.home().join("credentials").exists(), "name {name:?}");
     }
@@ -513,7 +522,7 @@ fn a_bad_name_is_a_usage_failure_and_writes_nothing() {
         assert!(
             ran.result.is_ok(),
             "name {name:?}: {:?}",
-            ran.result.err().map(|e| e.message)
+            ran.result.err().map(|e| e.to_string())
         );
     }
 }
@@ -541,10 +550,12 @@ fn a_bad_variable_is_a_usage_failure_and_writes_nothing() {
             "v\n",
         );
         let failure = ran.result.unwrap_err();
-        assert_eq!(
-            failure.code,
-            ErrorCode::Usage,
-            "env {env:?} secrets {secrets:?}"
+        assert!(
+            matches!(
+                failure,
+                CliError::McpEnvPair { .. } | CliError::McpEnvKey { .. }
+            ),
+            "env {env:?} secrets {secrets:?}: {failure:?}"
         );
         assert!(!setup.file(Layer::Global).exists());
         assert!(!setup.home().join("credentials").exists());
@@ -555,7 +566,7 @@ fn a_bad_variable_is_a_usage_failure_and_writes_nothing() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         setup.read(Layer::Global),
@@ -577,8 +588,11 @@ fn a_key_that_is_both_plain_and_secret_is_a_usage_failure() {
         "v\n",
     );
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("K"), "{}", failure.message);
+    assert!(
+        matches!(failure, CliError::McpKeyRepeated { .. }),
+        "{failure:?}"
+    );
+    assert!(failure.to_string().contains("K"), "{failure}");
     assert!(!setup.file(Layer::Global).exists());
     assert!(!setup.home().join("credentials").exists());
 }
@@ -613,17 +627,16 @@ fn a_repeated_key_across_e_and_secret_is_refused_before_anything_is_written() {
             lines,
         );
         let failure = ran.result.unwrap_err();
-        assert_eq!(
-            failure.code,
-            ErrorCode::Usage,
-            "env {env:?} secrets {secrets:?}"
+        assert!(
+            matches!(failure, CliError::McpKeyRepeated { .. }),
+            "env {env:?} secrets {secrets:?}: {failure:?}"
         );
         let key = if secrets.contains(&"TOKEN") {
             "TOKEN"
         } else {
             "K"
         };
-        assert!(failure.message.contains(key), "{}", failure.message);
+        assert!(failure.to_string().contains(key), "{failure}");
         assert!(!setup.file(Layer::Global).exists(), "env {env:?}");
         // The original bytes are untouched: nothing was stored.
         assert_eq!(
@@ -649,7 +662,15 @@ fn the_shape_is_exactly_one_transport_and_no_flags_with_a_url() {
     for (url, command) in [(Some(URL), &["npx"] as &[&str]), (None, &[])] {
         let setup = Setup::new();
         let ran = ok(&setup, Layer::Global, "x", url, &[], &[], command, "");
-        assert_eq!(ran.result.unwrap_err().code, ErrorCode::Usage);
+        let failure = ran.result.unwrap_err();
+        if url.is_some() {
+            assert!(matches!(failure, CliError::McpUrlAndCommand), "{failure:?}");
+        } else {
+            assert!(
+                matches!(failure, CliError::McpTransportMissing),
+                "{failure:?}"
+            );
+        }
         assert!(!setup.file(Layer::Global).exists());
     }
     // `-e` and `--secret` with a url.
@@ -665,14 +686,18 @@ fn the_shape_is_exactly_one_transport_and_no_flags_with_a_url() {
             &[],
             "v\n",
         );
-        assert_eq!(ran.result.unwrap_err().code, ErrorCode::Usage);
+        let failure = ran.result.unwrap_err();
+        assert!(matches!(failure, CliError::McpUrlWithEnv), "{failure:?}");
         assert!(!setup.file(Layer::Global).exists());
         assert!(!setup.home().join("credentials").exists());
     }
     // An empty program after `--`.
     let setup = Setup::new();
     let ran = ok(&setup, Layer::Global, "x", None, &[], &[], &[""], "");
-    assert_eq!(ran.result.unwrap_err().code, ErrorCode::Usage);
+    assert!(matches!(
+        ran.result.unwrap_err(),
+        CliError::McpProgramMissing
+    ));
     assert!(!setup.file(Layer::Global).exists());
 }
 
@@ -693,20 +718,26 @@ fn a_duplicate_name_in_the_layer_is_refused_and_keeps_the_bytes() {
         "",
     );
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
     assert!(
-        failure.message.contains("fiber mcp remove"),
-        "{}",
-        failure.message
+        matches!(
+            failure,
+            CliError::McpAlreadyDeclared { ref name, layer }
+            if name == "docs" && layer == Layer::Global
+        ),
+        "{failure:?}"
     );
-    assert!(failure.message.contains("global"), "{}", failure.message);
+    assert!(
+        failure.to_string().contains("fiber mcp remove"),
+        "{failure}"
+    );
+    assert!(failure.to_string().contains("global"), "{failure}");
     assert_eq!(fs::read(setup.file(Layer::Global)).unwrap(), before);
     // The same name in another layer is accepted.
     let ran = ok(&setup, Layer::Project, "docs", Some(URL), &[], &[], &[], "");
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
 }
 
@@ -736,7 +767,10 @@ fn a_duplicate_name_restores_the_previous_secret() {
         &["npx"],
         "loser\n",
     );
-    assert_eq!(ran.result.unwrap_err().code, ErrorCode::Usage);
+    assert!(matches!(
+        ran.result.unwrap_err(),
+        CliError::McpAlreadyDeclared { .. }
+    ));
     assert_eq!(
         read_secret(&setup.home(), "mcp.x.TOKEN")
             .unwrap()
@@ -763,13 +797,9 @@ fn an_add_while_one_of_the_name_runs_fails_busy_and_writes_nothing() {
         "v\n",
     );
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::IoFailed);
     assert!(
-        failure
-            .message
-            .contains("another `fiber mcp add` of `docs` is running"),
-        "{}",
-        failure.message
+        matches!(failure, CliError::McpAddRunning { ref name } if name == "docs"),
+        "{failure:?}"
     );
     assert!(!setup.file(Layer::Global).exists());
     assert!(
@@ -795,7 +825,9 @@ fn a_declaration_write_that_fails_puts_each_secret_back() {
         &["npx"],
         "new-old\nnew-new\n",
     );
-    assert_eq!(ran.result.unwrap_err().code, ErrorCode::ConfigInvalid);
+    let failure = ran.result.unwrap_err();
+    assert!(matches!(failure, CliError::Config(_)), "{failure:?}");
+    assert_eq!(failure.code(), ErrorCode::ConfigInvalid);
     assert_eq!(
         read_secret(&setup.home(), "mcp.x.OLD")
             .unwrap()
@@ -875,7 +907,7 @@ fn a_repo_add_records_the_approval_and_a_global_one_records_none() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(decision_of(&setup, "docs"), Some(Decision::Approve));
     let ran = ok(
@@ -891,7 +923,7 @@ fn a_repo_add_records_the_approval_and_a_global_one_records_none() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(decision_of(&setup, "other"), Some(Decision::Approve));
     assert_eq!(decision_of(&setup, "docs"), Some(Decision::Approve));
@@ -901,7 +933,7 @@ fn a_repo_add_records_the_approval_and_a_global_one_records_none() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert!(
         !setup.home().join("approvals").exists(),
@@ -925,7 +957,7 @@ fn secret_values_never_reach_the_outputs_or_a_second_layer() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert!(!ran.out.contains("s3cr3t-v4lu3"), "stdout: {}", ran.out);
     assert!(!ran.err.contains("s3cr3t-v4lu3"), "stderr: {}", ran.err);
@@ -1069,7 +1101,7 @@ fn a_repo_approval_refuses_a_declaration_changed_after_the_write() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     // A concurrent replacement lands after the lock is released.
     let (_, project) = project_of(&setup.home(), &setup.workspace()).unwrap();
@@ -1102,8 +1134,10 @@ fn a_repo_approval_refuses_a_declaration_changed_after_the_write() {
         &clock,
     )
     .unwrap_err();
-    assert_eq!(failure.code, ErrorCode::ConfigInvalid);
-    assert!(failure.message.contains("docs"), "{}", failure.message);
+    assert!(
+        matches!(failure, CliError::ApprovalChanged { ref name } if name == "docs"),
+        "{failure:?}"
+    );
     // Nothing was approved: the replacement stays unapproved.
     assert_eq!(decision_of(&setup, "docs"), None);
     // Approving the current declaration records it.
@@ -1142,7 +1176,7 @@ fn a_repo_approval_hashes_the_checked_snapshot_never_a_replacement() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     let (_, project) = project_of(&setup.home(), &setup.workspace()).unwrap();
     let submitted = json!({"url": URL});

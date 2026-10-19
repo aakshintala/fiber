@@ -21,8 +21,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use config::{Secret, store_credential};
-use contract::ErrorCode;
 use contract::clock::Wake;
+
+use crate::CliError;
 use extensions::{Browser, Providers};
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
@@ -640,7 +641,7 @@ fn a_malformed_configuration_is_an_error_not_a_guess() {
     fs::write(setup.home().join("config.json"), "{no json").unwrap();
     let providers = setup.providers();
     let failure = reviewer_models(&setup.home(), &providers, "acme", setup.clock()).unwrap_err();
-    assert_eq!(failure.code, ErrorCode::ConfigInvalid);
+    assert!(matches!(failure, CliError::Config(_)), "{failure:?}");
     assert_eq!(
         fs::read(setup.home().join("credentials/acme/default")).unwrap(),
         credential_before,
@@ -654,8 +655,10 @@ fn an_unknown_provider_is_a_usage_error() {
     setup.install_data("acme", &["m1"]);
     let providers = setup.providers();
     let failure = reviewer_models(&setup.home(), &providers, "nope", setup.clock()).unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("`nope`"), "{}", failure.message);
+    assert!(
+        matches!(failure, CliError::ProviderNotInstalled { .. }),
+        "{failure:?}"
+    );
 }
 
 /// Asks `input` of `choices` on a pipe, returning the pick and the terminal text.
@@ -818,11 +821,9 @@ fn a_name_the_path_syntax_cannot_hold_is_refused_before_any_write() {
     let before = fs::read(setup.home().join("config.json")).unwrap();
     let credential_before = fs::read(setup.home().join("credentials/acme/default")).unwrap();
     let failure = set_reviewer(&setup.home(), "a.\"b", "m1").unwrap_err();
-    assert_eq!(failure.code, ErrorCode::ConfigInvalid);
     assert!(
-        failure.message.contains("providers."),
-        "the failure names the key: {}",
-        failure.message
+        matches!(failure, CliError::ReviewerNameUnrepresentable { .. }),
+        "{failure:?}"
     );
     assert_eq!(fs::read(setup.home().join("config.json")).unwrap(), before);
     assert_eq!(
@@ -841,7 +842,13 @@ fn a_broken_existing_document_fails_naming_the_key_and_keeps_the_credential() {
         fs::write(setup.home().join("config.json"), existing).unwrap();
         let failure = set_reviewer(&setup.home(), "acme", "m1").unwrap_err();
         assert!(
-            failure.message.contains("providers.acme.reviewer_model"),
+            matches!(failure, CliError::ReviewerNotSaved { .. }),
+            "{failure:?}"
+        );
+        assert!(
+            failure
+                .to_string()
+                .contains("providers.acme.reviewer_model"),
             "{failure:?}"
         );
         assert_eq!(
@@ -866,11 +873,9 @@ fn a_provider_name_that_parses_to_the_wrong_segments_is_refused_before_any_write
     .unwrap();
     let before = fs::read(setup.home().join("config.json")).unwrap();
     let failure = set_reviewer(&setup.home(), "a\".\"b", "m1").unwrap_err();
-    assert_eq!(failure.code, ErrorCode::ConfigInvalid);
     assert!(
-        failure.message.contains("providers."),
-        "the failure names the key: {}",
-        failure.message
+        matches!(failure, CliError::ReviewerNameUnrepresentable { .. }),
+        "{failure:?}"
     );
     assert_eq!(
         fs::read(setup.home().join("config.json")).unwrap(),
