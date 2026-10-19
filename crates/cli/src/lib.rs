@@ -23,13 +23,25 @@ mod error;
 
 pub use error::{CliError, Refusal};
 
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod approve;
 #[allow(
     clippy::result_large_err,
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod config;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod doctor;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod extension;
 mod extension_test;
 mod hub_list;
@@ -65,6 +77,10 @@ mod model_lists;
 )]
 mod models;
 mod prune;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod release;
 mod sessions;
 mod sessions_list;

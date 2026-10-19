@@ -818,6 +818,100 @@ fn mcp_server_stdio_names_the_server() {
 }
 
 #[test]
+fn nobody_to_ask_keeps_the_calling_command_sentence() {
+    check(
+        &CliError::NobodyToAsk {
+            message: "`fiber approve` has no terminal to ask on and no input. Pass `--yes` to approve without asking.".to_owned(),
+        },
+        ErrorCode::Usage,
+        "`fiber approve` has no terminal to ask on and no input. Pass `--yes` to approve without asking.",
+    );
+}
+
+#[test]
+fn approve_failed_takes_its_source_code() {
+    let source = extensions::Error::GitMissing;
+    let message = format!("could not approve extension fiber.test/bad: {source}");
+    check(
+        &CliError::ApproveFailed {
+            kind: "extension",
+            name: "fiber.test/bad".to_owned(),
+            source,
+        },
+        ErrorCode::Usage,
+        &message,
+    );
+}
+
+#[test]
+fn release_version_mismatch_names_both_versions() {
+    check(
+        &CliError::ReleaseVersionMismatch {
+            fiber_version: "0.1.0".to_owned(),
+            version: "0.2.0".to_owned(),
+        },
+        ErrorCode::Usage,
+        "This is Fiber 0.1.0; it cannot install the docs and extensions of 0.2.0.",
+    );
+}
+
+#[test]
+fn release_no_commit_is_extension_incompatible() {
+    check(
+        &CliError::ReleaseNoCommit,
+        ErrorCode::ExtensionIncompatible,
+        "This build records no commit, so it cannot install a release's extensions.",
+    );
+}
+
+#[test]
+fn extension_directory_prints_the_bare_error() {
+    check(
+        &CliError::ExtensionDirectory(io_error()),
+        ErrorCode::IoFailed,
+        "boom",
+    );
+}
+
+#[test]
+fn fiber_executable_prints_the_bare_error() {
+    check(
+        &CliError::FiberExecutable("no fiber binary".to_owned()),
+        ErrorCode::IoFailed,
+        "no fiber binary",
+    );
+}
+
+#[test]
+fn doctor_report_keeps_its_sentence() {
+    check(
+        &CliError::DoctorReport(io_error()),
+        ErrorCode::IoFailed,
+        "doctor could not write its report: boom",
+    );
+}
+
+#[test]
+fn doctor_directory_keeps_its_sentence() {
+    check(
+        &CliError::DoctorDirectory(io_error()),
+        ErrorCode::IoFailed,
+        "doctor could not read the current directory: boom",
+    );
+}
+
+#[test]
+fn no_first_party_package_names_the_provider() {
+    check(
+        &CliError::NoFirstPartyPackage {
+            provider: "scripted".to_owned(),
+        },
+        ErrorCode::InvalidArguments,
+        "No first-party package serves the provider `scripted`.",
+    );
+}
+
+#[test]
 fn finish_maps_a_cli_error_to_its_exit_code() {
     assert_eq!(finish(Err(CliError::LogoutNeedsProvider)), 2);
     assert_eq!(

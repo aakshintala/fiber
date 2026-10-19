@@ -6,9 +6,9 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::SystemTime;
 
-use contract::ErrorCode;
 use contract::shapes::Failure;
-use doors::failure;
+
+use crate::CliError;
 
 mod files;
 mod startup;
@@ -50,7 +50,7 @@ struct Inputs<'a> {
 /// Prints the report on `out`, notices on `err`, and says whether a
 /// session can start. A closed `out` is the only failure once home and
 /// workspace resolve.
-fn run(inputs: &Inputs<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<bool, Failure> {
+fn run(inputs: &Inputs<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<bool, CliError> {
     let checked = startup(
         inputs.home,
         inputs.workspace,
@@ -62,14 +62,7 @@ fn run(inputs: &Inputs<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<
         // A notice lost to a closed stderr changes nothing.
         drop(writeln!(err, "fiber: {}", clean(&notice.message)));
     }
-    let mut report = |line: &str| {
-        writeln!(out, "{line}").map_err(|source| {
-            failure(
-                ErrorCode::IoFailed,
-                format!("doctor could not write its report: {source}"),
-            )
-        })
-    };
+    let mut report = |line: &str| writeln!(out, "{line}").map_err(CliError::DoctorReport);
     report(&format!("fiber {}", inputs.version))?;
     for line in &checked.lines {
         report(line)?;
@@ -85,8 +78,8 @@ fn run(inputs: &Inputs<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<
 /// The hub lines: running or not, and whose environment it runs with.
 fn hub(
     inputs: &Inputs<'_>,
-    report: &mut impl FnMut(&str) -> Result<(), Failure>,
-) -> Result<(), Failure> {
+    report: &mut impl FnMut(&str) -> Result<(), CliError>,
+) -> Result<(), CliError> {
     match (inputs.hub)(inputs.home, inputs.clock) {
         Hub::NotRunning => report("hub: not running"),
         Hub::Unknown(reason) => report(&format!("hub: unknown ({})", clean(&reason))),
@@ -120,7 +113,7 @@ fn hub(
 }
 
 /// The logs, crash and docs lines: what the last runs left behind.
-fn logs(inputs: &Inputs<'_>, report: &mut impl FnMut(&str) -> Result<(), Failure>) {
+fn logs(inputs: &Inputs<'_>, report: &mut impl FnMut(&str) -> Result<(), CliError>) {
     let home = inputs.home;
     drop(report(&format!(
         "logs: {}",
@@ -187,15 +180,12 @@ pub fn doctor(
 ) -> i32 {
     let home = match config::fiber_home_path_from_env() {
         Ok(home) => home,
-        Err(error) => return crate::fail(failure(error.code(), error.to_string())),
+        Err(error) => return crate::fail(CliError::Config(error).into()),
     };
     let workspace = match std::env::current_dir() {
         Ok(workspace) => workspace,
         Err(source) => {
-            return crate::fail(failure(
-                ErrorCode::IoFailed,
-                format!("doctor could not read the current directory: {source}"),
-            ));
+            return crate::fail(CliError::DoctorDirectory(source).into());
         }
     };
     let now = clock.wall();
@@ -215,7 +205,7 @@ pub fn doctor(
     ) {
         Ok(true) => 0,
         Ok(false) => 1,
-        Err(error) => crate::fail(error),
+        Err(error) => crate::fail(error.into()),
     }
 }
 

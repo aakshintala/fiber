@@ -6,13 +6,10 @@
 use std::io::{self, Write};
 use std::path::Path;
 
-use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::shapes::Failure;
-use doors::failure;
 use extensions::Release;
 
-use crate::{failed, finish, usage};
+use crate::{CliError, finish};
 
 /// Where releases are published.
 pub(crate) const RELEASES: &str = "https://github.com/aakshintala/fiber/releases";
@@ -30,7 +27,7 @@ pub fn release_install(
     clock: &dyn Clock,
 ) -> i32 {
     let ran = config::fiber_home_path_from_env()
-        .map_err(|e| failed(e.code(), e))
+        .map_err(CliError::from)
         .and_then(|home| {
             run(
                 &home,
@@ -55,25 +52,22 @@ fn run(
     commit: Option<&str>,
     clock: &dyn Clock,
     err: &mut dyn Write,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     if version != fiber_version {
-        return Err(usage(format!(
-            "This is Fiber {fiber_version}; it cannot install the docs and extensions of {version}."
-        )));
+        return Err(CliError::ReleaseVersionMismatch {
+            fiber_version: fiber_version.to_owned(),
+            version: version.to_owned(),
+        });
     }
     let Some(commit) = commit.filter(|commit| !commit.is_empty()) else {
-        return Err(failure(
-            ErrorCode::ExtensionIncompatible,
-            "This build records no commit, so it cannot install a release's extensions.",
-        ));
+        return Err(CliError::ReleaseNoCommit);
     };
     let release = Release {
         base: base_url.unwrap_or(RELEASES).to_owned(),
         version: version.to_owned(),
         commit: commit.to_owned(),
     };
-    let names =
-        extensions::install_release(home, &release, clock).map_err(|e| failed(e.code(), e))?;
+    let names = extensions::install_release(home, &release, clock)?;
     // A closed stderr leaves nobody to tell.
     for name in &names {
         writeln!(err, "fiber: installed {}", config::short_name(name)).unwrap_or(());

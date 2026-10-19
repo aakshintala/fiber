@@ -5,10 +5,11 @@ use std::fs;
 use std::path::Path;
 
 use contract::ErrorCode;
+use contract::shapes::Failure;
 use fakes::ustar::{archive, gzip, header, sha256};
 use serde_json::json;
 
-use super::{release_install, run};
+use super::{CliError, release_install, run};
 
 /// A release of `anthropic` and `memory`, served at
 /// `/download/v0.0.0/`. `extensions_sum` replaces the extensions archive's
@@ -60,7 +61,7 @@ fn step(
     server: &fakes::ProviderServer,
     version: &str,
     commit: Option<&str>,
-) -> (Result<(), contract::shapes::Failure>, String) {
+) -> (Result<(), CliError>, String) {
     let mut err = Vec::new();
     let result = run(
         home,
@@ -81,11 +82,16 @@ fn another_version_is_refused_before_any_request() {
     let server = serve(None);
     let (result, _) = step(&home, &server, "0.0.1", Some("abc1234"));
     let failure = result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert_eq!(
-        failure.message,
-        "This is Fiber 0.0.0; it cannot install the docs and extensions of 0.0.1."
-    );
+    let CliError::ReleaseVersionMismatch {
+        fiber_version,
+        version,
+    } = &failure
+    else {
+        panic!("expected ReleaseVersionMismatch, got {failure:?}");
+    };
+    assert_eq!(fiber_version, "0.0.0");
+    assert_eq!(version, "0.0.1");
+    assert_eq!(failure.code(), ErrorCode::Usage);
     assert!(server.requests().is_empty());
     assert!(!home.exists());
 }
@@ -98,11 +104,12 @@ fn a_build_with_no_commit_is_refused_before_any_request() {
         let server = serve(None);
         let (result, _) = step(&home, &server, "0.0.0", commit);
         let failure = result.unwrap_err();
-        assert_eq!(doors::exit_code(&failure), 1, "{commit:?}");
-        assert_eq!(
-            failure.message,
-            "This build records no commit, so it cannot install a release's extensions."
+        assert_eq!(doors::exit_code(&Failure::from(&failure)), 1, "{commit:?}");
+        assert!(
+            matches!(failure, CliError::ReleaseNoCommit),
+            "expected ReleaseNoCommit, got {failure:?}"
         );
+        assert_eq!(failure.code(), ErrorCode::ExtensionIncompatible);
         assert!(server.requests().is_empty(), "{commit:?}");
         assert!(!home.exists());
     }
@@ -132,11 +139,16 @@ fn a_checksum_mismatch_is_io_failed_and_creates_no_home() {
     let server = serve(Some(&sha256(b"other")));
     let (result, err) = step(&home, &server, "0.0.0", Some("abc1234"));
     let failure = result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
     assert!(
-        failure.message.contains("does not match its .sha256 file"),
-        "{}",
-        failure.message
+        matches!(failure, CliError::Extensions(_)),
+        "expected Extensions, got {failure:?}"
+    );
+    assert!(
+        failure
+            .to_string()
+            .contains("does not match its .sha256 file"),
+        "{failure}"
     );
     assert!(err.is_empty());
     assert!(!home.exists());

@@ -10,10 +10,9 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use contract::clock::Clock;
-use contract::shapes::Failure;
 use extensions::{Origin, Provenance, Request, approved_extension, approved_extensions};
 
-use crate::{failed, finish, finish_code, write_line};
+use crate::{CliError, finish, finish_code, write_line};
 
 mod approve;
 
@@ -45,13 +44,11 @@ pub fn install_first_party(
     fiber_version: &str,
     origin: &Origin,
     clock: &dyn Clock,
-) -> Result<FirstPartyInstall, Failure> {
-    let package = extensions::serving_package(provider).ok_or_else(|| {
-        doors::failure(
-            contract::ErrorCode::InvalidArguments,
-            format!("No first-party package serves the provider `{provider}`."),
-        )
-    })?;
+) -> Result<FirstPartyInstall, CliError> {
+    let package =
+        extensions::serving_package(provider).ok_or_else(|| CliError::NoFirstPartyPackage {
+            provider: provider.to_owned(),
+        })?;
     let plan = plan_request(
         home,
         Request::Install(package.to_owned()),
@@ -69,8 +66,7 @@ pub fn install_first_party(
                 .map(str::to_owned),
         )
         .collect();
-    let (providers, _) = extensions::Providers::load_planned(home, &plan)
-        .map_err(|error| failed(error.code(), error))?;
+    let (providers, _) = extensions::Providers::load_planned(home, &plan)?;
     let names: std::collections::BTreeSet<_> = plan
         .items()
         .flat_map(|item| item.providers.iter().map(|data| data.name.as_str()))
@@ -97,7 +93,7 @@ pub fn install_first_party(
             login.push(need);
         }
     }
-    let installed = plan.commit().map_err(|error| failed(error.code(), error))?;
+    let installed = plan.commit()?;
     Ok(FirstPartyInstall {
         installed,
         summary,
@@ -130,11 +126,10 @@ pub fn extension_install(
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
+        .map_err(CliError::from)
         .and_then(|home| {
             let scope = if project {
-                let workspace = std::env::current_dir()
-                    .map_err(|e| failed(contract::ErrorCode::IoFailed, e))?;
+                let workspace = std::env::current_dir().map_err(CliError::ExtensionDirectory)?;
                 let (_, project) = crate::project_of(&home, &workspace)?;
                 Some(ScopedInstall { workspace, project })
             } else {
@@ -171,7 +166,7 @@ pub fn extension_update(name: Option<&str>, fiber_version: &str, clock: &dyn Clo
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
+        .map_err(CliError::from)
         .and_then(|home| {
             let io = Io {
                 terminal,
@@ -202,10 +197,9 @@ pub fn extension_remove(name: &str, clock: &dyn Clock) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
+        .map_err(CliError::from)
         .and_then(|home| {
-            let workspace =
-                std::env::current_dir().map_err(|e| failed(contract::ErrorCode::IoFailed, e))?;
+            let workspace = std::env::current_dir().map_err(CliError::ExtensionDirectory)?;
             remove_in(
                 &home,
                 &workspace,
@@ -228,7 +222,7 @@ pub fn extension_reinstall(name: &str, fiber_version: &str, clock: &dyn Clock) -
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
+        .map_err(CliError::from)
         .and_then(|home| {
             install(
                 &home,
@@ -253,10 +247,9 @@ pub fn extension_reinstall(name: &str, fiber_version: &str, clock: &dyn Clock) -
 /// the declared path and the approved content hash.
 pub fn extension_list(clock: &dyn Clock) -> i32 {
     let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
+        .map_err(CliError::from)
         .and_then(|home| {
-            let workspace =
-                std::env::current_dir().map_err(|e| failed(contract::ErrorCode::IoFailed, e))?;
+            let workspace = std::env::current_dir().map_err(CliError::ExtensionDirectory)?;
             list_in(
                 &home,
                 &workspace,
@@ -276,7 +269,7 @@ fn install(
     origin: &Origin,
     clock: &dyn Clock,
     io: Io<'_>,
-) -> Result<i32, Failure> {
+) -> Result<i32, CliError> {
     let Io {
         terminal,
         input,
@@ -297,13 +290,13 @@ fn update_all(
     origin: &Origin,
     clock: &dyn Clock,
     io: Io<'_>,
-) -> Result<i32, Failure> {
+) -> Result<i32, CliError> {
     let Io {
         terminal,
         input,
         err,
     } = io;
-    let listing = extensions::list(home, clock).map_err(|e| failed(e.code(), e))?;
+    let listing = extensions::list(home, clock)?;
     // Each damaged directory is named once here; the per-extension
     // installs below stay silent about them.
     for hit in &listing.damaged {
@@ -325,20 +318,20 @@ fn update_all(
     Ok(0)
 }
 
-fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32, Failure> {
+fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32, CliError> {
     let Io {
         terminal,
         input,
         err,
     } = io;
-    let removal = extensions::removal(home, typed, clock).map_err(|e| failed(e.code(), e))?;
+    let removal = extensions::removal(home, typed, clock)?;
     let approved = approve::remove_approved(&removal.names, &removal.data, terminal, input, err)?;
     if !approved {
         writeln!(err, "fiber: nothing was removed.").unwrap_or(());
         return Ok(1);
     }
     let names = removal.names.clone();
-    removal.commit().map_err(|e| failed(e.code(), e))?;
+    removal.commit()?;
     for name in names {
         writeln!(err, "fiber: removed {name}").unwrap_or(());
     }
@@ -361,11 +354,13 @@ fn declares_extensions(workspace: &Path) -> bool {
 fn repository_project(
     home: &Path,
     workspace: &Path,
-) -> Result<Option<config::ProjectKey>, Failure> {
+) -> Result<Option<config::ProjectKey>, CliError> {
     if !declares_extensions(workspace) {
         return Ok(None);
     }
-    crate::project_of(home, workspace).map(|(_, project)| Some(project))
+    crate::project_of(home, workspace)
+        .map_err(CliError::from)
+        .map(|(_, project)| Some(project))
 }
 
 /// `fiber extension list` in `workspace`: the personal lines, then one
@@ -379,7 +374,7 @@ fn list_in(
     clock: &dyn Clock,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let Some(project) = repository_project(home, workspace)? else {
         return list(home, clock, out);
     };
@@ -421,7 +416,7 @@ fn remove_in(
     typed: &str,
     clock: &dyn Clock,
     io: Io<'_>,
-) -> Result<i32, Failure> {
+) -> Result<i32, CliError> {
     let Io {
         terminal,
         input,
@@ -454,7 +449,7 @@ fn remove_in(
         writeln!(err, "fiber: nothing was removed.").unwrap_or(());
         return Ok(1);
     }
-    extensions::Store::never_in(home, &project, &item, &digest).map_err(|e| failed(e.code(), e))?;
+    extensions::Store::never_in(home, &project, &item, &digest)?;
     writeln!(
         err,
         "fiber: removed {} from this project; it is not offered again until its content changes",
@@ -464,8 +459,8 @@ fn remove_in(
     Ok(0)
 }
 
-fn list(home: &Path, clock: &dyn Clock, out: &mut dyn Write) -> Result<(), Failure> {
-    let listing = extensions::list(home, clock).map_err(|e| failed(e.code(), e))?;
+fn list(home: &Path, clock: &dyn Clock, out: &mut dyn Write) -> Result<(), CliError> {
+    let listing = extensions::list(home, clock)?;
     for hit in &listing.damaged {
         write_line(out, &format!("{hit}")).unwrap_or(());
     }
@@ -481,9 +476,9 @@ fn list(home: &Path, clock: &dyn Clock, out: &mut dyn Write) -> Result<(), Failu
 }
 
 fn report_install(
-    result: Result<Option<Vec<String>>, Failure>,
+    result: Result<Option<Vec<String>>, CliError>,
     err: &mut dyn Write,
-) -> Result<i32, Failure> {
+) -> Result<i32, CliError> {
     match result {
         Ok(Some(names)) => {
             for name in names {
@@ -505,8 +500,8 @@ fn plan_request<'c>(
     fiber_version: &str,
     origin: &Origin,
     clock: &'c dyn Clock,
-) -> Result<extensions::Plan<'c>, Failure> {
-    extensions::plan(home, &request, fiber_version, origin, clock).map_err(|e| failed(e.code(), e))
+) -> Result<extensions::Plan<'c>, CliError> {
+    extensions::plan(home, &request, fiber_version, origin, clock).map_err(CliError::from)
 }
 
 fn summaries(plan: &extensions::Plan<'_>) -> Vec<approve::InstallSummary> {
@@ -548,7 +543,7 @@ fn commit_plan(
     terminal: bool,
     input: &mut dyn BufRead,
     err: &mut dyn Write,
-) -> Result<Option<Vec<String>>, Failure> {
+) -> Result<Option<Vec<String>>, CliError> {
     let summaries = summaries(&plan);
     if !approve::install_approved(&summaries, terminal, input, err)? {
         return Ok(None);
@@ -562,8 +557,7 @@ fn commit_plan(
                 config::Layer::Project,
                 &format!("extensions.\"{}\".enabled", config::short_name(name)),
                 serde_json::Value::Bool(true),
-            )
-            .map_err(|e| failed(e.code(), e))?;
+            )?;
         }
         for name in plan.fresh_names() {
             config::set(
@@ -573,11 +567,10 @@ fn commit_plan(
                 config::Layer::Global,
                 &format!("extensions.\"{}\".enabled", config::short_name(name)),
                 serde_json::Value::Bool(false),
-            )
-            .map_err(|e| failed(e.code(), e))?;
+            )?;
         }
     }
-    plan.commit().map(Some).map_err(|e| failed(e.code(), e))
+    plan.commit().map(Some).map_err(CliError::from)
 }
 
 #[cfg(test)]

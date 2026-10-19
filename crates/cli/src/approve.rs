@@ -6,12 +6,10 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::shapes::Failure;
 use extensions::{Fetch, Index, Origin, Store};
 
-use crate::{failed, project_of, usage, with_dirs, write_line};
+use crate::{CliError, project_of, with_dirs, write_line};
 
 /// What the prompt asks.
 const PROMPT: &str = "approve all? [y/N]";
@@ -62,15 +60,13 @@ fn run(
     streams: Streams<'_>,
     clock: Arc<dyn Clock>,
     fetch: Fetch,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let Streams { input, out, err } = streams;
     let (_, project) = project_of(home, workspace)?;
     let store = Store::new(home, &project, Arc::clone(&clock)).fetching(fetch);
     let mut index = Index::load(home);
-    let items =
-        extensions::declared_items(workspace, clock.as_ref()).map_err(|e| failed(e.code(), e))?;
-    let pending =
-        extensions::pending(&store, &mut index, items).map_err(|e| failed(e.code(), e))?;
+    let items = extensions::declared_items(workspace, clock.as_ref())?;
+    let pending = extensions::pending(&store, &mut index, items)?;
     // The index only saves a re-hash; failing to write it costs nothing else.
     index.save().unwrap_or(());
     if pending.is_empty() {
@@ -100,16 +96,13 @@ fn run(
         return Ok(());
     }
     for p in &pending {
-        store.approve(&p.item, &p.offered.hash).map_err(|e| {
-            failed(
-                e.code(),
-                format!(
-                    "could not approve {} {}: {e}",
-                    extensions::kind_name(p.item.kind),
-                    p.item.name
-                ),
-            )
-        })?;
+        store
+            .approve(&p.item, &p.offered.hash)
+            .map_err(|source| CliError::ApproveFailed {
+                kind: extensions::kind_name(p.item.kind),
+                name: p.item.name.clone(),
+                source,
+            })?;
         say(
             err,
             &format!(
@@ -131,19 +124,21 @@ pub(crate) fn confirmed(
     terminal: bool,
     input: &mut dyn BufRead,
     err: &mut dyn Write,
-) -> Result<bool, Failure> {
+) -> Result<bool, CliError> {
     say(err, &format!("{prompt} "));
     err.flush().unwrap_or(());
     let mut line = String::new();
     let read = input
         .read_line(&mut line)
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("standard input: {e}")))?;
+        .map_err(CliError::StandardInput)?;
     // A person's Enter ends the prompt's line; a pipe's answer does not.
     if !terminal {
         say(err, "\n");
     }
     if read == 0 && !terminal {
-        return Err(usage(nobody));
+        return Err(CliError::NobodyToAsk {
+            message: nobody.to_owned(),
+        });
     }
     Ok(says_yes(&line))
 }

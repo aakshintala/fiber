@@ -21,7 +21,10 @@ pub(super) fn provider(
         &seam.origin,
         clock.as_ref(),
     )
-    .map_err(super::from_failure)?;
+    .map_err(|error| ConfigureError {
+        code: error.code(),
+        message: error.to_string(),
+    })?;
     Ok(ProviderInstall {
         installed: installed.installed,
         summary: installed.summary,
