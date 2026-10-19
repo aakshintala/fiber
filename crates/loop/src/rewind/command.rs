@@ -130,8 +130,6 @@ impl Loop {
         self.write_last_settled()?;
         // No session message enters after this: one admitted before it and
         // still behind the `rewind` is dropped with the drain below.
-        // Refuse later extension-owned starts before the sweep's first
-        // `running()` read, so a start the sweep cannot list never spawns.
         self.close_admission();
         self.close_extension_starts();
         self.stop_jobs_for_rewind()?;

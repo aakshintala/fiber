@@ -291,7 +291,7 @@ fn bad_specs_raise_before_any_start_and_store_no_handle() {
     for (spec, message) in [
         (
             "{ \"a\", \"b\" }",
-            "string/host.delegate: `spec` json: a list is not an object",
+            "string/host.delegate: `spec` must be a table of named arguments",
         ),
         (
             "{ description = \"s\", prompt = \"p\", model = function() end }",
@@ -328,6 +328,18 @@ fn bad_specs_raise_before_any_start_and_store_no_handle() {
         "string/host.delegate: `spec` json: a table nests deeper than 125"
     );
     assert!(fake.calls().is_empty(), "no spec refusal reaches start");
+}
+
+#[test]
+fn an_empty_table_snapshot_reaches_start_as_an_empty_object() {
+    let (fake, _arrived) = Fake::answering(Ok(JobId("j_empty".into())));
+    let (_dir, ext, _clock) = rigged(&command_init(&probe("{}", GOOD_OPTS)), Some(&fake), true);
+    assert_eq!(go(&ext).unwrap(), "ok/j_empty");
+    assert_eq!(
+        fake.calls(),
+        vec![("ext".to_owned(), Map::new())],
+        "the empty table snapshots as {{}} and yields"
+    );
 }
 
 #[test]
@@ -417,11 +429,19 @@ fn a_timer_cannot_change_what_the_held_start_sends() {
         .expect("the held start arrives");
     assert_eq!(extension, "ext");
     let due = clock.origin() + Duration::from_millis(100);
-    assert!(
-        clock.await_parked(due, WAIT),
-        "the timer waits for its due time"
+    let due = clock.origin() + Duration::from_millis(100);
+    let timer = clock
+        .mark_parked(due, WAIT)
+        .expect("the timer waits for its due time")
+        .threads();
+    assert_eq!(timer.len(), 1, "only the timer parks at its due time");
+    let timer = timer.into_iter().next().expect("the timer thread");
+    clock.advance_when_parked(
+        Some(due),
+        Some(timer),
+        Duration::from_millis(100),
+        &fakes::Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(150));
     release.send(()).expect("the held start is released");
     assert_eq!(
         fakes::Deadline::after(WAIT)
@@ -482,11 +502,12 @@ fn a_hook_and_a_timer_can_each_call_it() {
     assert_eq!(extension, "ext");
     assert_eq!(arguments.get("description"), Some(&Value::from("hooked")));
     let due = clock.origin() + Duration::from_millis(100);
-    assert!(
-        clock.await_parked(due, WAIT),
-        "the timer waits for its due time"
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(100),
+        &fakes::Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_secs(5));
     let (_, arguments) = fakes::Deadline::after(WAIT)
         .recv(&arrived)
         .expect("the timer's start arrives");
@@ -539,11 +560,19 @@ fn a_second_timer_fires_while_one_start_is_held() {
         .expect("the first start arrives");
     assert_eq!(first.get("description"), Some(&Value::from("first")));
     let due = clock.origin() + Duration::from_millis(100);
-    assert!(
-        clock.await_parked(due, WAIT),
-        "the timer waits for its due time"
+    let due = clock.origin() + Duration::from_millis(100);
+    let timer = clock
+        .mark_parked(due, WAIT)
+        .expect("the timer waits for its due time")
+        .threads();
+    assert_eq!(timer.len(), 1, "only the timer parks at its due time");
+    let timer = timer.into_iter().next().expect("the timer thread");
+    clock.advance_when_parked(
+        Some(due),
+        Some(timer),
+        Duration::from_millis(100),
+        &fakes::Deadline::after(WAIT),
     );
-    clock.advance(Duration::from_millis(150));
     let (_, second) = fakes::Deadline::after(WAIT)
         .recv(&arrived)
         .expect("the timer's start arrives");

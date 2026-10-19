@@ -78,9 +78,10 @@ pub(crate) fn install(
     ))
 }
 
-/// The spec as the service sees it: its JSON object text. A table that is
-/// not an object, or one `to_json` refuses, fails here, before the yield,
-/// so `pcall` catches it and no handle is stored.
+/// The spec as the service sees it: its JSON object text. An empty table
+/// becomes `{}`, which the service refuses as missing `description` and
+/// `prompt`. A non-empty list, or one `to_json` refuses, fails here,
+/// before the yield, so `pcall` catches it and no handle is stored.
 fn snapshot(spec: &Table) -> mlua::Result<String> {
     let json = |why: &str| mlua::Error::RuntimeError(format!("host.delegate: `spec` json: {why}"));
     let value = super::to_json(&LuaValue::Table(spec.clone())).map_err(|e| {
@@ -93,9 +94,13 @@ fn snapshot(spec: &Table) -> mlua::Result<String> {
     })?;
     match value {
         Value::Object(map) => serde_json::to_string(&map).map_err(|e| json(&e.to_string())),
-        // A table converts to an array or an object, so anything else here
-        // is a list, an empty table included.
-        Value::Array(_) => Err(json("a list is not an object")),
+        // An empty table reads as `[]`; the service refuses its `{}` as
+        // missing `description` and `prompt` (`invalid_arguments`).
+        Value::Array(list) if list.is_empty() => Ok("{}".to_owned()),
+        // A non-empty list names no arguments.
+        Value::Array(_) => Err(mlua::Error::RuntimeError(
+            "host.delegate: `spec` must be a table of named arguments".to_owned(),
+        )),
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
             Err(json("a table converts to an array or an object"))
         }

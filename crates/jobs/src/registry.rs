@@ -314,13 +314,6 @@ impl Registry {
         lock(&self.inner).inbox.is_some()
     }
 
-    /// Whether the loop closed extension-owned delegate starts on an end
-    /// path. Reads the flag under `inner`; the admit closure calls it
-    /// while it already holds `start_gate`.
-    pub(crate) fn extension_starts_closed(&self) -> bool {
-        lock(&self.inner).extension_starts_closed
-    }
-
     /// Sends the stop of every running job whose `JobStarted.extension` is
     /// `Some(name)` with `name` not in `loaded`, once per run, and returns
     /// how many were sent one. Takes `start_gate` before `inner`, the

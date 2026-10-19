@@ -17,9 +17,6 @@ impl Loop {
     /// extension-owned jobs; a shutdown stops every job. The first error wins.
     pub(crate) fn settled(&mut self, result: Result<(), Error>) -> Result<(), Error> {
         if self.shutting_down() {
-            // Refuse later extension-owned starts before the sweep's
-            // first `running()` read, so a start the sweep cannot list
-            // never spawns.
             self.close_extension_starts();
             let settled = self.settle();
             return result.and(settled);
@@ -27,9 +24,6 @@ impl Loop {
         if self.rewound {
             return result;
         }
-        // Refuse later extension-owned starts before the sweep's first
-        // `running()` read: a start that passes the check is recorded
-        // first and the sweep stops it.
         self.close_extension_starts();
         let mut running = self.running();
         if running.is_empty() {

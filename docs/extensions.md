@@ -360,8 +360,12 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   after the `after_tool` hooks, as an inner call's output is.
   `spec` carries the delegate tool's keys (`description`, `prompt`,
   `model`, and the optional `isolation`, `workspace` and `timeout_ms`),
-  as a JSON object: a list, or a value `to_json` refuses, raises the
-  string `host.delegate: `spec` json: <reason>` before the call yields.
+  as a JSON object: an empty table becomes `{}`, which the service
+  refuses as missing `description` and `prompt` (`invalid_arguments`);
+  a non-empty list raises the string
+  `host.delegate: `spec` must be a table of named arguments` before the
+  call yields; a value `to_json` refuses raises the string
+  `host.delegate: `spec` json: <reason>` before the call yields.
   The second argument is checked like every other registration: it must be
   a table, `timeout` a whole number of milliseconds above 0, and `run` a
   function, else the call raises `host.delegate: `spec` must be a table`,
