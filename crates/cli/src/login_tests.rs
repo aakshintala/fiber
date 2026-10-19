@@ -891,6 +891,38 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
 }
 
 #[test]
+fn login_of_an_unknown_provider_names_the_home_installed_providers() {
+    // Pins `home_and_providers`: the message must name the providers the
+    // child's FIBER_HOME installs. An empty home and empty providers keep
+    // the exit code but say none is installed.
+    if std::env::var_os(CHILD).is_some() {
+        std::process::exit(run_login(
+            Some("no-such-provider-for-the-test"),
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+        ));
+    }
+    let setup = Setup::new();
+    setup.install("acme", None, None);
+    let name = module_path!().split_once("::").unwrap().1;
+    let output = fakes::rerun_prepared(
+        &format!("{name}::login_of_an_unknown_provider_names_the_home_installed_providers"),
+        &[(CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            command.env("FIBER_HOME", setup.home());
+        },
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", output.status);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let line = "`no-such-provider-for-the-test` is neither an installed provider nor a \
+                declared secret; the installed providers are acme, and no installed \
+                extension declares a secret.";
+    assert_eq!(stderr.matches(line).count(), 1, "{stderr:?}");
+}
+
+#[test]
 fn login_targets_list_providers_then_secrets() {
     let setup = Setup::new();
     setup.install("beta", None, None);
