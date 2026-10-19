@@ -50,7 +50,8 @@ pub use approve::approve;
 pub use config::{config_get, config_set, config_set_text};
 pub use doctor::{doctor, with_fix};
 pub use extension::{
-    extension_install, extension_list, extension_reinstall, extension_remove, extension_update,
+    FirstPartyInstall, LoginNeed, extension_install, extension_list, extension_reinstall,
+    extension_remove, extension_update, install_first_party,
 };
 pub use extension_test::extension_test;
 pub use hub_list::{hub_add, hub_remove};

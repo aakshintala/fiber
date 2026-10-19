@@ -17,6 +17,94 @@ use crate::{failed, finish, finish_code, write_line};
 
 mod approve;
 
+/// The extensions installed and the outcome text for the model picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstPartyInstall {
+    /// Each extension put in place.
+    pub installed: Vec<String>,
+    /// The install summary, one line per element.
+    pub summary: Vec<String>,
+    /// Providers whose selected credential is missing or unreadable.
+    pub login: Vec<LoginNeed>,
+}
+
+/// A provider needing a key, or whose key could not be checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginNeed {
+    /// The provider to pass to `fiber login`.
+    pub provider: String,
+    /// A credential-read failure; absent when the key is missing.
+    pub error: Option<String>,
+}
+
+/// Installs the first-party package serving a provider, without asking.
+pub fn install_first_party(
+    home: &Path,
+    config: &config::Config,
+    provider: &str,
+    fiber_version: &str,
+    origin: &Origin,
+    clock: &dyn Clock,
+) -> Result<FirstPartyInstall, Failure> {
+    let package = extensions::serving_package(provider).ok_or_else(|| {
+        doors::failure(
+            contract::ErrorCode::InvalidArguments,
+            format!("No first-party package serves the provider `{provider}`."),
+        )
+    })?;
+    let plan = plan_request(
+        home,
+        Request::Install(package.to_owned()),
+        fiber_version,
+        origin,
+        clock,
+    )?;
+    let summary = plan
+        .damaged()
+        .iter()
+        .map(extensions::Damaged::skipped)
+        .chain(
+            approve::summary_text(&summaries(&plan))
+                .lines()
+                .map(str::to_owned),
+        )
+        .collect();
+    let (providers, _) = extensions::Providers::load_planned(home, &plan)
+        .map_err(|error| failed(error.code(), error))?;
+    let names: std::collections::BTreeSet<_> = plan
+        .items()
+        .flat_map(|item| item.providers.iter().map(|data| data.name.as_str()))
+        .collect();
+    let credentials = config.credentials();
+    let mut login = Vec::new();
+    for name in names {
+        let Some(data) = providers.get(name) else {
+            continue;
+        };
+        let label = credentials.credential_label(data);
+        let need = match credentials.key_presence(data, &label, &|var| std::env::var(var).ok()) {
+            Ok(config::Presence::Present | config::Presence::Unchecked) => None,
+            Ok(config::Presence::Absent | config::Presence::Empty) => Some(LoginNeed {
+                provider: name.to_owned(),
+                error: None,
+            }),
+            Err(error) => Some(LoginNeed {
+                provider: name.to_owned(),
+                error: Some(error.to_string()),
+            }),
+        };
+        if let Some(need) = need {
+            login.push(need);
+        }
+    }
+    let installed = plan.commit().map_err(|error| failed(error.code(), error))?;
+    Ok(FirstPartyInstall {
+        installed,
+        summary,
+        login,
+    })
+}
+
 struct ScopedInstall {
     workspace: PathBuf,
     project: config::ProjectKey,
@@ -421,16 +509,8 @@ fn plan_request<'c>(
     extensions::plan(home, &request, fiber_version, origin, clock).map_err(|e| failed(e.code(), e))
 }
 
-fn commit_plan(
-    home: &Path,
-    scope: Option<&ScopedInstall>,
-    plan: extensions::Plan<'_>,
-    terminal: bool,
-    input: &mut dyn BufRead,
-    err: &mut dyn Write,
-) -> Result<Option<Vec<String>>, Failure> {
-    let summaries: Vec<approve::InstallSummary> = plan
-        .items()
+fn summaries(plan: &extensions::Plan<'_>) -> Vec<approve::InstallSummary> {
+    plan.items()
         .map(|item| approve::InstallSummary {
             name: item.name.clone(),
             source: item.source(),
@@ -458,7 +538,18 @@ fn commit_plan(
             carries: item.carries(),
             staged: item.staged().to_path_buf(),
         })
-        .collect();
+        .collect()
+}
+
+fn commit_plan(
+    home: &Path,
+    scope: Option<&ScopedInstall>,
+    plan: extensions::Plan<'_>,
+    terminal: bool,
+    input: &mut dyn BufRead,
+    err: &mut dyn Write,
+) -> Result<Option<Vec<String>>, Failure> {
+    let summaries = summaries(&plan);
     if !approve::install_approved(&summaries, terminal, input, err)? {
         return Ok(None);
     }

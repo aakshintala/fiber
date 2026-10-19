@@ -487,6 +487,353 @@ const NAME_B: &str = "github.com/acme/fiber-bbb";
 const SLUG_A: &str = "github.com-acme-fiber-aaa";
 const SLUG_B: &str = "github.com-acme-fiber-bbb";
 
+const FIRST_PARTY: &str = "github.com/aakshintala/fiber/providers/openai";
+
+fn first_party_repo() -> fakes::TempDir {
+    let repo = fakes::git::repo("fiber-first-party-install");
+    let dir = repo.path().join("providers/openai");
+    write_file(&dir.join("extension.json"), &serde_json::json!({"name":FIRST_PARTY,"version":"0.1.0","fiber":"0.1.0","api":1,"providers":{"openai":["https://example.com"]}}).to_string());
+    write_file(&dir.join("providers/openai.json"), &serde_json::json!({"name":"openai","models":[{"id":"m","protocol":"openai-responses","base_url":"https://example.com","context_window":1000}]}).to_string());
+    fakes::git::git(repo.path(), &["add", "."]);
+    fakes::git::git(repo.path(), &["commit", "--quiet", "-m", "provider"]);
+    fakes::git::git(repo.path(), &["tag", "v0.1.0"]);
+    repo
+}
+
+fn first_party_config(setup: &Setup) -> config::Config {
+    config::Config::load(config::Sources {
+        home: setup.home(),
+        workspace: setup.root.path().to_path_buf(),
+        project: config::ProjectKey::new("test").unwrap(),
+        overrides: Vec::new(),
+    })
+    .unwrap()
+}
+
+fn fixture_origin(repo: &Path) -> Origin {
+    let repo = repo.to_path_buf();
+    Origin::new("git", move |name| {
+        assert_eq!(name, "github.com/aakshintala/fiber");
+        format!("file://{}", repo.display())
+    })
+}
+
+fn assert_no_staging(home: &Path) {
+    for entry in fs::read_dir(home.join("extensions")).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        assert!(!name.ends_with(".new"), "staged directory left: {name}");
+    }
+}
+
+#[test]
+fn first_party_install_returns_the_install_summary_and_missing_login_without_asking() {
+    fakes::within("first-party install", Duration::from_secs(20), || {
+        let setup = Setup::new();
+        let repo = first_party_repo();
+        let origin = fixture_origin(repo.path());
+        let config = first_party_config(&setup);
+        let clock = fakes::clock::FakeClock::new();
+        let plan = extensions::plan(
+            &setup.home(),
+            &Request::Install("openai".into()),
+            FIBER_VERSION,
+            &origin,
+            &*clock,
+        )
+        .unwrap();
+        let expected: Vec<_> = super::approve::summary_text(&super::summaries(&plan))
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        drop(plan);
+        let answer = super::install_first_party(
+            &setup.home(),
+            &config,
+            "openai",
+            FIBER_VERSION,
+            &origin,
+            &*clock,
+        )
+        .unwrap();
+        assert_eq!(answer.installed, [FIRST_PARTY]);
+        assert_eq!(answer.summary, expected);
+        assert_eq!(
+            answer.summary[0],
+            format!("Install {FIRST_PARTY} from {FIRST_PARTY}")
+        );
+        assert!(
+            answer
+                .summary
+                .contains(&"Provider openai: https://example.com".to_owned())
+        );
+        assert_eq!(
+            answer.login,
+            [super::LoginNeed {
+                provider: "openai".into(),
+                error: None
+            }]
+        );
+        let installed = extensions::list(&setup.home(), &*clock).unwrap().installed;
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].name, FIRST_PARTY);
+    });
+}
+
+#[test]
+fn first_party_install_rejects_scripted_before_fetching() {
+    let setup = Setup::new();
+    let origin = Origin::new("git", |_| panic!("unknown provider fetched"));
+    let error = super::install_first_party(
+        &setup.home(),
+        &first_party_config(&setup),
+        "scripted",
+        FIBER_VERSION,
+        &origin,
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.message,
+        "No first-party package serves the provider `scripted`."
+    );
+    assert!(!setup.home().join("extensions").exists());
+}
+
+#[test]
+fn first_party_install_keeps_fetch_failures_and_cleans_staging() {
+    fakes::within("first-party fetch failure", Duration::from_secs(20), || {
+        let setup = Setup::new();
+        let origin = fixture_origin(&setup.root.path().join("absent"));
+        let clock = fakes::clock::FakeClock::new();
+        let error = super::install_first_party(
+            &setup.home(),
+            &first_party_config(&setup),
+            "openai",
+            FIBER_VERSION,
+            &origin,
+            &*clock,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::FetchFailed);
+        assert!(
+            extensions::list(&setup.home(), &*clock)
+                .unwrap()
+                .installed
+                .is_empty()
+        );
+        assert_no_staging(&setup.home());
+    });
+}
+
+#[test]
+fn first_party_install_reinstalls_an_installed_provider() {
+    fakes::within("first-party reinstall", Duration::from_secs(20), || {
+        let setup = Setup::new();
+        let repo = first_party_repo();
+        let origin = fixture_origin(repo.path());
+        let config = first_party_config(&setup);
+        let clock = fakes::clock::FakeClock::new();
+        for _ in 0..2 {
+            let answer = super::install_first_party(
+                &setup.home(),
+                &config,
+                "openai",
+                FIBER_VERSION,
+                &origin,
+                &*clock,
+            )
+            .unwrap();
+            assert_eq!(answer.installed, [FIRST_PARTY]);
+        }
+        assert_eq!(
+            extensions::list(&setup.home(), &*clock)
+                .unwrap()
+                .installed
+                .len(),
+            1
+        );
+    });
+}
+
+#[test]
+fn first_party_install_rejects_an_unreadable_existing_provider_before_commit() {
+    fakes::within("first-party existing data", Duration::from_secs(20), || {
+        let setup = Setup::new();
+        let source = setup.source(
+            "a",
+            &manifest("a"),
+            &[provider("pa", &["https://example.com"])],
+        );
+        let clock = fakes::clock::FakeClock::new();
+        extensions::plan(
+            &setup.home(),
+            &Request::Path(source),
+            FIBER_VERSION,
+            &Origin::github(),
+            &*clock,
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+        write_file(
+            &setup.home().join("extensions/a/providers/pa.json"),
+            "not JSON",
+        );
+        let repo = first_party_repo();
+        let error = super::install_first_party(
+            &setup.home(),
+            &first_party_config(&setup),
+            "openai",
+            FIBER_VERSION,
+            &fixture_origin(repo.path()),
+            &*clock,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::ConfigInvalid);
+        let installed = extensions::list(&setup.home(), &*clock).unwrap().installed;
+        assert_eq!(
+            installed
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["a"]
+        );
+        assert_no_staging(&setup.home());
+    });
+}
+
+#[test]
+fn first_party_install_rejects_an_unreadable_cache_before_commit() {
+    fakes::within("first-party staged cache", Duration::from_secs(20), || {
+        let setup = Setup::new();
+        let repo = first_party_repo();
+        let cache = setup.home().join("cache/models/openai.json");
+        fs::create_dir_all(&cache).unwrap();
+        let clock = fakes::clock::FakeClock::new();
+        let error = super::install_first_party(
+            &setup.home(),
+            &first_party_config(&setup),
+            "openai",
+            FIBER_VERSION,
+            &fixture_origin(repo.path()),
+            &*clock,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::IoFailed);
+        assert!(error.message.contains(&cache.display().to_string()));
+        assert!(
+            extensions::list(&setup.home(), &*clock)
+                .unwrap()
+                .installed
+                .is_empty()
+        );
+        assert_no_staging(&setup.home());
+    });
+}
+
+#[test]
+fn first_party_install_checks_present_empty_and_unreadable_keys_without_exposing_them() {
+    fakes::within("first-party login check", Duration::from_secs(20), || {
+        let setup = Setup::new();
+        let repo = first_party_repo();
+        let origin = fixture_origin(repo.path());
+        let config = first_party_config(&setup);
+        let clock = fakes::clock::FakeClock::new();
+        let key = setup.home().join("credentials/openai/default");
+        write_file(&key, "secret-key");
+        let answer = super::install_first_party(
+            &setup.home(),
+            &config,
+            "openai",
+            FIBER_VERSION,
+            &origin,
+            &*clock,
+        )
+        .unwrap();
+        assert!(answer.login.is_empty());
+        write_file(&key, "");
+        let answer = super::install_first_party(
+            &setup.home(),
+            &config,
+            "openai",
+            FIBER_VERSION,
+            &origin,
+            &*clock,
+        )
+        .unwrap();
+        assert_eq!(
+            answer.login,
+            [super::LoginNeed {
+                provider: "openai".into(),
+                error: None
+            }]
+        );
+        fs::remove_file(&key).unwrap();
+        fs::create_dir(&key).unwrap();
+        let answer = super::install_first_party(
+            &setup.home(),
+            &config,
+            "openai",
+            FIBER_VERSION,
+            &origin,
+            &*clock,
+        )
+        .unwrap();
+        assert_eq!(answer.login.len(), 1);
+        assert_eq!(answer.login[0].provider, "openai");
+        let error = answer.login[0].error.as_ref().unwrap();
+        assert!(error.contains(&key.display().to_string()));
+        assert!(!error.contains("secret-key"));
+    });
+}
+
+#[test]
+fn first_party_install_rejects_a_staged_dependency_with_an_unreadable_addendum() {
+    fakes::within(
+        "first-party staged addendum",
+        Duration::from_secs(20),
+        || {
+            let setup = Setup::new();
+            let repo = first_party_repo();
+            let c = "github.com/aakshintala/fiber/c";
+            let dir = repo.path().join("c");
+            write_file(&dir.join("extension.json"), &serde_json::json!({"name":c,"version":"0.2.0","fiber":"0.1.0","api":1,"providers":{"pc":["https://example.com"]}}).to_string());
+            write_file(&dir.join("providers/pc.json"), &serde_json::json!({"name":"pc","models":[{"id":"m","protocol":"openai-responses","base_url":"https://example.com","context_window":1000,"prompt_addendum":"addenda/pc.md"}]}).to_string());
+            fs::create_dir_all(dir.join("addenda/pc.md")).unwrap();
+            // Git keeps files, not empty directories; a child preserves the bad path.
+            write_file(&dir.join("addenda/pc.md/child"), "not an addendum");
+            let manifest_path = repo.path().join("providers/openai/extension.json");
+            let mut value: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+            value["depends"] = serde_json::json!({c:"0.2.0"});
+            write_file(&manifest_path, &value.to_string());
+            fakes::git::git(repo.path(), &["add", "."]);
+            fakes::git::git(repo.path(), &["commit", "--quiet", "-m", "dependency"]);
+            fakes::git::git(repo.path(), &["tag", "v0.2.0"]);
+            let clock = fakes::clock::FakeClock::new();
+            let error = super::install_first_party(
+                &setup.home(),
+                &first_party_config(&setup),
+                "openai",
+                FIBER_VERSION,
+                &fixture_origin(repo.path()),
+                &*clock,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::ConfigInvalid);
+            assert!(error.message.contains("addenda/pc.md"));
+            assert!(
+                extensions::list(&setup.home(), &*clock)
+                    .unwrap()
+                    .installed
+                    .is_empty()
+            );
+            assert_no_staging(&setup.home());
+        },
+    );
+}
+
 /// A Fiber home and extension sources in a temporary directory, removed
 /// on drop. No test touches the real home or the test process's
 /// environment.
