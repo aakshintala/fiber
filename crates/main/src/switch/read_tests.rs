@@ -1412,15 +1412,14 @@ fn drive_settle_to_completion(
     // instead (its group died unheld) the loop ends, so the still-listed
     // assert below names the failure, not these lines.
     let mut answered = false;
-    let mut mark =
-        poll_step(clock, poll, GROUP_POLL, drive).expect("the settle parked at its poll");
-    for _ in 1..50 {
+    let mut mark: Option<Mark> = None;
+    for _ in 0..50 {
         let parked_at = clock
             .now()
             .checked_add(GROUP_POLL)
             .expect("the poll is countable");
         match poll_step(clock, parked_at, GROUP_POLL, drive) {
-            Some(stepped) => mark = stepped,
+            Some(stepped) => mark = Some(stepped),
             None => {
                 answered = finished.try_recv().is_ok();
                 assert!(answered, "the settle parked at its poll");
@@ -1428,6 +1427,7 @@ fn drive_settle_to_completion(
             }
         }
     }
+    let mark = mark.expect("the blind probe stepped at least once");
     let reparked = clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE));
     if !reparked && !answered {
         answered = finished.try_recv().is_ok();
