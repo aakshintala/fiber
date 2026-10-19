@@ -384,6 +384,10 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
     let poll_listed = || loop {
         let stdout = fiber_in(&setup, &setup.workspace(), &["sessions", "--json"]);
         if listed_ids(&stdout).contains(&live) {
+            assert!(
+                !setup.deadline.left().is_zero(),
+                "waited until the deadline for the hub to list the live session"
+            );
             break stdout;
         }
         assert!(
