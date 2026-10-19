@@ -312,14 +312,22 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     ext.set_driver(Arc::new(drive.clone()) as Arc<dyn Drive>);
     let caller = Arc::clone(&ext);
     let (done_tx, done_rx) = mpsc::channel();
-    std::thread::spawn(move || done_tx.send(caller.command("slow", "")));
+    let caller_handle = std::thread::spawn(move || done_tx.send(caller.command("slow", "")));
+    let caller_id = caller_handle.thread().id();
     // The drive reached the door, so the callback is parked on it.
     Deadline::after(WAIT)
         .recv(&called)
         .expect("the drive reached the door");
-    // At its timeout the parked call fails by its deadline.
+    // The caller waits at the deadline plus the grace once the callback parks;
+    // the scheduler parks its wake at the deadline itself.
+    let deadline = clock.origin() + Duration::from_millis(200);
+    let grace = clock.origin() + Duration::from_millis(1200);
+    assert!(
+        clock.await_thread_parked(caller_id, Some(grace), WAIT),
+        "the caller parks at the slow command deadline plus the grace"
+    );
     let parked = clock
-        .mark_parked(clock.origin() + Duration::from_millis(200), WAIT)
+        .mark_parked(deadline, WAIT)
         .expect("the scheduler parks at the slow command deadline");
     let parked = parked.threads();
     assert_eq!(
@@ -329,7 +337,7 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     );
     let vm = parked.into_iter().next().expect("the scheduler thread");
     clock.advance_when_parked(
-        Some(clock.origin() + Duration::from_millis(200)),
+        Some(deadline),
         Some(vm),
         Duration::from_millis(200),
         &Deadline::after(WAIT),

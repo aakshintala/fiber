@@ -291,12 +291,21 @@ fn a_timed_out_ask_is_declined_by_fiber_and_late_answers_hand_back() {
     ext.set_answerable(true);
     let held = Arc::clone(&ext);
     let (done_tx, done_rx) = mpsc::channel();
-    std::thread::spawn(move || {
+    let caller_handle = std::thread::spawn(move || {
         let _sent = done_tx.send(held.command("go", ""));
     });
+    let caller_id = caller_handle.thread().id();
     let requested = interaction(&rx, &Deadline::after(WAIT));
+    // The caller waits at the deadline plus the grace once the callback parks;
+    // the scheduler parks its wake at the deadline itself.
+    let deadline = clock.origin() + Duration::from_millis(200);
+    let grace = clock.origin() + Duration::from_millis(1200);
+    assert!(
+        clock.await_thread_parked(caller_id, Some(grace), WAIT),
+        "the caller parks at the command deadline plus the grace"
+    );
     let parked = clock
-        .mark_parked(clock.origin() + Duration::from_millis(200), WAIT)
+        .mark_parked(deadline, WAIT)
         .expect("the scheduler parks at the command deadline");
     let parked = parked.threads();
     assert_eq!(
@@ -306,7 +315,7 @@ fn a_timed_out_ask_is_declined_by_fiber_and_late_answers_hand_back() {
     );
     let vm = parked.into_iter().next().expect("the scheduler thread");
     clock.advance_when_parked(
-        Some(clock.origin() + Duration::from_millis(200)),
+        Some(deadline),
         Some(vm),
         Duration::from_millis(200),
         &Deadline::after(WAIT),
