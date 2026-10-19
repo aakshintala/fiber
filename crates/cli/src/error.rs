@@ -333,6 +333,53 @@ pub enum CliError {
         /// The server named.
         server: String,
     },
+    /// Nobody can answer the approval prompt: no terminal and no input.
+    #[error("{message}")]
+    NobodyToAsk {
+        /// The calling command's own sentence, naming how to answer without asking.
+        message: String,
+    },
+    /// Approving one declared item failed.
+    #[error("could not approve {kind} {name}: {source}")]
+    ApproveFailed {
+        /// The item's kind, as the offer names it.
+        kind: &'static str,
+        /// The item's name.
+        name: String,
+        /// Why the approval failed.
+        source: extensions::Error,
+    },
+    /// The release to install is not this binary's own version.
+    #[error(
+        "This is Fiber {fiber_version}; it cannot install the docs and extensions of {version}."
+    )]
+    ReleaseVersionMismatch {
+        /// This binary's own version.
+        fiber_version: String,
+        /// The version asked for.
+        version: String,
+    },
+    /// This build records no commit, so it cannot install a release's extensions.
+    #[error("This build records no commit, so it cannot install a release's extensions.")]
+    ReleaseNoCommit,
+    /// The working directory could not be read for an extension command.
+    #[error("{0}")]
+    ExtensionDirectory(#[source] io::Error),
+    /// The fiber binary for an extension test could not be described.
+    #[error("{0}")]
+    FiberExecutable(String),
+    /// The doctor report could not be written.
+    #[error("doctor could not write its report: {0}")]
+    DoctorReport(#[source] io::Error),
+    /// The working directory could not be read for `fiber doctor`.
+    #[error("doctor could not read the current directory: {0}")]
+    DoctorDirectory(#[source] io::Error),
+    /// No first-party package serves the provider.
+    #[error("No first-party package serves the provider `{provider}`.")]
+    NoFirstPartyPackage {
+        /// The provider asked for.
+        provider: String,
+    },
 }
 
 /// Why a store refused before anything was read or written: a usage
@@ -466,6 +513,10 @@ impl CliError {
             | Self::StandardError(_)
             | Self::StandardInput(_)
             | Self::CurrentDirectory(_)
+            | Self::ExtensionDirectory(_)
+            | Self::FiberExecutable(_)
+            | Self::DoctorReport(_)
+            | Self::DoctorDirectory(_)
             | Self::InterruptHandler(_)
             | Self::ModelRow(_)
             | Self::ConfigValue { .. }
@@ -473,6 +524,9 @@ impl CliError {
             | Self::McpAddRunning { .. }
             | Self::ApprovalNotRecorded { .. } => ErrorCode::IoFailed,
             Self::ApprovalNotStored { source, .. } => source.code(),
+            Self::ApproveFailed { source, .. } => source.code(),
+            Self::ReleaseNoCommit => ErrorCode::ExtensionIncompatible,
+            Self::NoFirstPartyPackage { .. } => ErrorCode::InvalidArguments,
             Self::SecretsKept(error) => error.code(),
             Self::ApprovalChanged { .. }
             | Self::UrlHasUserinfo { .. }
@@ -510,7 +564,9 @@ impl CliError {
             | Self::McpAlreadyDeclared { .. }
             | Self::McpNotDeclared { .. }
             | Self::McpServerUnknown { .. }
-            | Self::McpServerStdio { .. } => ErrorCode::Usage,
+            | Self::McpServerStdio { .. }
+            | Self::NobodyToAsk { .. }
+            | Self::ReleaseVersionMismatch { .. } => ErrorCode::Usage,
         }
     }
 }
@@ -571,7 +627,16 @@ impl From<CliError> for Failure {
             | CliError::McpAlreadyDeclared { .. }
             | CliError::McpNotDeclared { .. }
             | CliError::McpServerUnknown { .. }
-            | CliError::McpServerStdio { .. }) => Failure {
+            | CliError::McpServerStdio { .. }
+            | CliError::NobodyToAsk { .. }
+            | CliError::ApproveFailed { .. }
+            | CliError::ReleaseVersionMismatch { .. }
+            | CliError::ReleaseNoCommit
+            | CliError::ExtensionDirectory(_)
+            | CliError::FiberExecutable(_)
+            | CliError::DoctorReport(_)
+            | CliError::DoctorDirectory(_)
+            | CliError::NoFirstPartyPackage { .. }) => Failure {
                 code: other.code(),
                 message: other.to_string(),
                 retry_after_ms: None,
