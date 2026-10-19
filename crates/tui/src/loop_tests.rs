@@ -1146,6 +1146,122 @@ fn two_finished_lines_in_one_batch_write_both_notifications_in_order() {
 /// it: a named receive deadline, never a sleep on the test thread.
 const DRAIN: Duration = Duration::from_secs(5);
 
+/// The resume test's hub thread's last step: the last command name it
+/// read, whether a socket write is in progress, and how many replay
+/// envelopes it has streamed. The hub sets each field and drops the
+/// guard before any blocking call, so the panic path can always read it.
+#[derive(Clone, Debug, Default)]
+struct HubProgress {
+    last_command: String,
+    writing: bool,
+    envelopes_streamed: u64,
+}
+
+/// One helper thread's end state from its done channel: finished, still
+/// working, or gone without answering.
+fn done_state(done: &Result<(), mpsc::TryRecvError>) -> &'static str {
+    match done {
+        Ok(()) => "done",
+        Err(mpsc::TryRecvError::Empty) => "waiting",
+        Err(mpsc::TryRecvError::Disconnected) => "gone",
+    }
+}
+
+/// The stall report for the resume test's drain window expiring: names
+/// whether the run thread is alive (the finished channel is empty) or
+/// gone (disconnected), the hub's last step, both helpers' end states,
+/// and the reader's forwarded line count. Pure, so unit tests pin every
+/// word it can print.
+fn stall_report(
+    finished: &mpsc::TryRecvError,
+    hub: &HubProgress,
+    hub_done: &Result<(), mpsc::TryRecvError>,
+    reader_done: &Result<(), mpsc::TryRecvError>,
+    reader_lines: u64,
+) -> String {
+    let run = match finished {
+        mpsc::TryRecvError::Empty => "run thread alive",
+        mpsc::TryRecvError::Disconnected => "run thread gone",
+    };
+    format!(
+        "{run} (finished channel {finished:?}); hub at {:?} (writing: {}, envelopes streamed: {}), hub {}; reader {} (lines forwarded: {reader_lines})",
+        hub.last_command,
+        hub.writing,
+        hub.envelopes_streamed,
+        done_state(hub_done),
+        done_state(reader_done),
+    )
+}
+
+#[test]
+fn stall_report_names_a_parked_hub_while_the_run_thread_lives() {
+    let hub = HubProgress {
+        last_command: "subscribe".to_owned(),
+        writing: false,
+        envelopes_streamed: 0,
+    };
+    let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
+    let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &waiting, &waiting, 0);
+    assert!(report.contains("run thread alive"), "{report}");
+    assert!(report.contains("Empty"), "{report}");
+    assert!(report.contains("subscribe"), "{report}");
+    assert!(report.contains("writing: false"), "{report}");
+    assert!(report.contains("envelopes streamed: 0"), "{report}");
+    assert!(report.contains("hub waiting"), "{report}");
+    assert!(report.contains("reader waiting"), "{report}");
+    assert!(report.contains("lines forwarded: 0"), "{report}");
+}
+
+#[test]
+fn stall_report_names_a_gone_run_thread() {
+    let hub = HubProgress {
+        last_command: "history".to_owned(),
+        writing: true,
+        envelopes_streamed: 900,
+    };
+    let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
+    let report = stall_report(
+        &mpsc::TryRecvError::Disconnected,
+        &hub,
+        &waiting,
+        &waiting,
+        1348,
+    );
+    assert!(report.contains("run thread gone"), "{report}");
+    assert!(!report.contains("run thread alive"), "{report}");
+    assert!(report.contains("Disconnected"), "{report}");
+    assert!(report.contains("history"), "{report}");
+    assert!(report.contains("writing: true"), "{report}");
+    assert!(report.contains("envelopes streamed: 900"), "{report}");
+    assert!(report.contains("lines forwarded: 1348"), "{report}");
+}
+
+#[test]
+fn stall_report_names_finished_helpers_and_their_counts() {
+    let hub = HubProgress {
+        last_command: "subscribe".to_owned(),
+        writing: false,
+        envelopes_streamed: 1348,
+    };
+    let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &Ok(()), &Ok(()), 1352);
+    assert!(report.contains("run thread alive"), "{report}");
+    assert!(report.contains("hub done"), "{report}");
+    assert!(report.contains("reader done"), "{report}");
+    assert!(report.contains("envelopes streamed: 1348"), "{report}");
+    assert!(report.contains("lines forwarded: 1352"), "{report}");
+}
+
+#[test]
+fn stall_report_names_helpers_gone_without_answering() {
+    let hub = HubProgress::default();
+    let gone: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Disconnected);
+    let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &gone, &gone, 7);
+    assert!(report.contains("hub gone"), "{report}");
+    assert!(report.contains("reader gone"), "{report}");
+    assert!(!report.contains("hub done"), "{report}");
+    assert!(!report.contains("reader done"), "{report}");
+}
+
 /// Drains the run thread chunk by chunk: each fold signal renews the
 /// no-progress window and sends one release, so a slow machine folds
 /// every chunk within the window while the whole log takes what it
