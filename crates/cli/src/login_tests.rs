@@ -809,7 +809,7 @@ fn fail_gives_the_failures_exit_code() {
 
 #[test]
 fn finish_is_zero_on_success_and_the_exit_code_on_failure() {
-    assert_eq!(finish(Ok(())), 0);
+    assert_eq!(finish(Ok::<(), Failure>(())), 0);
     assert_eq!(finish(Err(failure(ErrorCode::Usage, "bad usage"))), 2);
     assert_eq!(finish(Err(failure(ErrorCode::IoFailed, "disk"))), 1);
 }
