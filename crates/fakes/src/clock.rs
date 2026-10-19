@@ -68,6 +68,45 @@ impl Mark {
     }
 }
 
+/// What a soft [`FakeClock::try_advance_when_parked`] wait found instead of
+/// its named park: no fresh park arrived within the pause, or a watched
+/// park sits at another instant. A driver that is the clock's only mover
+/// acts on either; every louder failure still panics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Miss {
+    /// No fresh selected park arrived within the pause.
+    NoPark,
+    /// A watched fresh selected park sits at another instant: `watched` is
+    /// the park that failed the wait, even when it has since left, and
+    /// `parked` holds every parked thread with its instant at the look, in
+    /// park order, possibly empty when the mismatching park already left.
+    Mismatch {
+        /// The park that failed the wait, even when it has since left.
+        watched: (ThreadId, Option<Instant>),
+        /// Every parked thread with its instant at the look, in park order,
+        /// possibly empty when the mismatching park already left.
+        parked: Vec<(ThreadId, Option<Instant>)>,
+    },
+}
+
+impl std::fmt::Display for Miss {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Miss::NoPark => write!(f, "no fresh park arrived within the pause"),
+            Miss::Mismatch { watched, parked } => {
+                write!(f, "watched park {:?} at {:?}", watched.0, watched.1)?;
+                write!(f, "; parked threads: [")?;
+                for (index, (thread, until)) in parked.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{thread:?} at {until:?}")?;
+                }
+                write!(f, "]")
+            }
+        }
+    }
+}
 /// A clock a test drives. `Arc<FakeClock>` coerces to `Arc<dyn Clock>`.
 /// [`FakeClock::new`] reads the process clock once, as an arbitrary origin
 /// it never reads again. [`FakeClock::advance`], [`FakeClock::advance_marked`],
@@ -213,6 +252,7 @@ impl FakeClock {
     /// made after the code under test reports its result is legitimate and
     /// may advance. Tests assert on that result, not on no advance after end.
     #[track_caller]
+    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
     pub fn advance_when_parked(
         &self,
         expected: Option<Instant>,
@@ -224,7 +264,11 @@ impl FakeClock {
             Some(id) => Select::Thread(id),
             None => Select::Count(1),
         };
-        self.advance_when_parked_core(expected, select, advance, deadline, &mut || {})
+        match self.advance_when_parked_core(expected, select, advance, deadline, false, &mut || {})
+        {
+            Ok(mark) => mark,
+            Err(miss) => panic!("{miss}"),
+        }
     }
 
     /// Waits for exactly `count` threads to hold a fresh park at `expected`,
@@ -264,13 +308,17 @@ impl FakeClock {
             drop(state);
             panic!("{report}");
         }
-        self.advance_when_parked_core(
+        match self.advance_when_parked_core(
             expected,
             Select::Count(count),
             advance,
             deadline,
+            false,
             &mut || {},
-        )
+        ) {
+            Ok(mark) => mark,
+            Err(miss) => panic!("{miss}"),
+        }
     }
 
     /// [`FakeClock::advance_when_parked`], running `hook` after the park is
@@ -289,6 +337,7 @@ impl FakeClock {
     /// A hook panic unwinds to the caller with its payload and leaves time
     /// unmoved; no subscribed waker is called.
     #[track_caller]
+    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
     pub fn advance_when_parked_then(
         &self,
         expected: Option<Instant>,
@@ -302,16 +351,22 @@ impl FakeClock {
             None => Select::Count(1),
         };
         let mut hook = Some(hook);
-        self.advance_when_parked_core(expected, select, advance, deadline, &mut || {
+        match self.advance_when_parked_core(expected, select, advance, deadline, false, &mut || {
             if let Some(hook) = hook.take() {
                 hook();
             }
-        })
+        }) {
+            Ok(mark) => mark,
+            Err(miss) => panic!("{miss}"),
+        }
     }
 
     /// The loop behind every `advance_when_parked` wait: `select` says which
     /// parks are watched, and `hook` runs under the lock after the park
-    /// matched and the move validated, immediately before the move.
+    /// matched and the move validated, immediately before the move. With
+    /// `soft` set, the two mild failures become values: no fresh park by the
+    /// deadline returns `Miss::NoPark`, and a watched park at another
+    /// instant returns `Miss::Mismatch`; every louder failure still panics.
     #[track_caller]
     #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
     fn advance_when_parked_core(
@@ -320,8 +375,9 @@ impl FakeClock {
         select: Select,
         advance: Duration,
         deadline: &crate::deadline::Deadline,
+        soft: bool,
         hook: &mut dyn FnMut(),
-    ) -> Mark {
+    ) -> Result<Mark, Miss> {
         {
             let state = lock(&self.state);
             if let Err(kind) = checked_move(&state, self.origin, expected, advance) {
@@ -353,6 +409,19 @@ impl FakeClock {
             // A watched mismatch fails before any match is considered: a
             // convenient later park never hides the first wrong one.
             if let Some(found) = watched_mismatch(&state, expected, select) {
+                if soft && let Observation::Park(id, until) = found {
+                    let parked = state
+                        .parked
+                        .iter()
+                        .map(|parked| (parked.thread, parked.until))
+                        .collect();
+                    leave_wait(&mut state);
+                    drop(state);
+                    return Err(Miss::Mismatch {
+                        watched: (id, until),
+                        parked,
+                    });
+                }
                 let (kind, park) = match found {
                     Observation::Moved => ("time moved during the wait by another driver", None),
                     Observation::Park(id, until) => {
@@ -394,7 +463,7 @@ impl FakeClock {
                         for waker in wakers {
                             waker.wake();
                         }
-                        return mark;
+                        return Ok(mark);
                     }
                     Err(kind) => {
                         let report = report(&state, expected, select, advance, kind, None);
@@ -406,6 +475,11 @@ impl FakeClock {
             }
             let wait_for = deadline.left();
             if wait_for.is_zero() {
+                if soft {
+                    leave_wait(&mut state);
+                    drop(state);
+                    return Err(Miss::NoPark);
+                }
                 let kind = select_message(select, SelectOutcome::Expired);
                 let report = report(&state, expected, select, advance, &kind, None);
                 leave_wait(&mut state);
