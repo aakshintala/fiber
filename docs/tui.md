@@ -1795,7 +1795,7 @@ report wrote 20,000 frames and 2,590,000 bytes, painted with the theme's
 colours; a fast sweep over a conversation whose lines are targets wrote 1,458
 frames and 568,722 bytes in 20,000 reports.
 
-Measured in Fiber on Linux x86_64 (7.3.0-9-generic, a 24-core 13th Gen
+Measured in Fiber on Linux x86_64 (7.3.0-9-generic, a 16-core, 24-thread 13th Gen
 Intel Core i7-13700T, load average 1.25 to 3.05 across the runs) with the
 same jig, command, size and runs: a still pointer, and a pointer moving
 along one target, wrote 1 frame and 135 bytes in 20,000 reports; a change
