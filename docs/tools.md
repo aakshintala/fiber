@@ -1531,7 +1531,8 @@ its tools are deferred, change only when the preamble is built.
   name), fixed when the preamble is built.
 - A search is an ordinary tool call. A resume or fork re-sends its result
   byte for byte.
-- A cancelled search loads nothing; its result is the line "The search was cancelled; no tool was loaded."
+- A cancelled search loads nothing; its result is the line "The search was
+  cancelled; no tool was loaded."
 - A loaded tool stays loaded until a handoff, which restarts the conversation
   after the preamble (`docs/handoff.md`); after that the model searches again.
 - A call to a deferred tool that was never loaded runs like any other call,
