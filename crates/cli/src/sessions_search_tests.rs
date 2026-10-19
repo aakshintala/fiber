@@ -95,6 +95,7 @@ fn session(sessions: &Path, id: &str, workspace: &Path, events: &[Event]) -> Pat
     let log = log::Log::create(sessions, SessionId(id.to_owned()), clock_dyn).unwrap();
     log.append(&started(workspace), None, None).unwrap();
     for event in events {
+        // No code under test waits on the clock here; it stamps the wall time the log appends (ruling 6179406086).
         clock.advance(Duration::from_secs(1));
         log.append(event, None, None).unwrap();
     }
@@ -577,6 +578,7 @@ fn control_characters_in_paths_stay_on_their_lines() {
         let clock_dyn: Arc<dyn contract::clock::Clock> = clock.clone();
         let log =
             log::Log::open(&sessions, SessionId("s_\nctl\u{1b}".to_owned()), clock_dyn).unwrap();
+        // No code under test waits on the clock here; it stamps the wall time the log appends (ruling 6179406086).
         clock.advance(Duration::from_secs(2));
         log.append(&completed, None, None).unwrap();
     }
