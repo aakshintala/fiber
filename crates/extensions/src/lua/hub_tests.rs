@@ -112,16 +112,22 @@ fn wait_for_execs_waits_for_a_timer_run_to_queue_its_line() {
         .expect("timer exec ended");
     extension.hub.stop_for_shutdown();
     let waiter = Arc::clone(&extension);
+    let (started_tx, started) = mpsc::channel();
     let (done, returned) = mpsc::channel();
     std::thread::spawn(move || {
+        started_tx.send(std::thread::current().id()).unwrap();
         waiter.hub.wait_for_execs();
         let _sent = done.send(());
     });
+    let waiter_id = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&started)
+        .expect("the waiter started");
     assert!(
-        matches!(
-            Deadline::after(Duration::from_millis(200)).recv(&returned),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ),
+        clock.await_thread_parked(waiter_id, None, fakes::MUST_SUCCEED_WITHIN),
+        "the barrier parks while the run is held"
+    );
+    assert!(
+        returned.try_recv().is_err(),
         "the barrier waits for the held run"
     );
     release.send(()).unwrap();

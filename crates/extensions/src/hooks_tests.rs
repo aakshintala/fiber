@@ -1376,7 +1376,16 @@ end }})"#,
         )),
         &[],
     );
-    let session = home.load(&[]);
+    let clock = FakeClock::new();
+    let session = {
+        let config = home.config(&[]);
+        let home_dir = home.home();
+        let locks: Arc<dyn contract::files::PathLock> = Arc::new(FakeLock::new());
+        Arc::new(bounded({
+            let clock = Arc::clone(&clock);
+            move || SessionExtensions::load(&home_dir, &config, clock, locks, None)
+        }))
+    };
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     let (tx, rx) = mpsc::channel();
     session.deliver_to(tx);
@@ -1398,16 +1407,22 @@ end }})"#,
         .recv(&arrival)
         .expect("the exec ended before its delivery");
     let waiter = Arc::clone(&session);
+    let (started_tx, started) = mpsc::channel();
     let (done, returned) = mpsc::channel();
     thread::spawn(move || {
+        started_tx.send(thread::current().id()).unwrap();
         waiter.wait_for_runs();
         let _sent = done.send(());
     });
+    let waiter_id = Deadline::after(WAIT)
+        .recv(&started)
+        .expect("the waiter started");
     assert!(
-        matches!(
-            Deadline::after(Duration::from_millis(200)).recv(&returned),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ),
+        clock.await_thread_parked(waiter_id, None, WAIT),
+        "the session barrier parks while its exec is held"
+    );
+    assert!(
+        returned.try_recv().is_err(),
         "the session barrier waits for its Lua VM"
     );
     release.send(()).unwrap();
