@@ -120,15 +120,395 @@ fn case_run(
     advances: Vec<ClockAdvance>,
     until: Option<Selector>,
 ) -> Arc<CaseRun> {
+    case_run_with_host(expected, Host::default(), advances, until)
+}
+
+fn case_run_with_host(
+    expected: Vec<Value>,
+    host: Host,
+    advances: Vec<ClockAdvance>,
+    until: Option<Selector>,
+) -> Arc<CaseRun> {
     CaseRun::with_waits(
         "run-loop".to_owned(),
         expected,
-        Host::default(),
+        host,
         advances,
         until,
         fakes::clock::FakeClock::new(),
         TEST_WAITS,
     )
+}
+
+fn hang_exec_entry(program: &str) -> extensions::ExecEntry {
+    extensions::ExecEntry {
+        request: json!({"program": program}),
+        reply: Ok(extensions::ExecReply::Hang),
+    }
+}
+
+/// Parks a waiter on the case clock at `until`: the closure runs once the
+/// park registers, so the waiter is parked before this returns. The waiter
+/// stays parked until the test releases it.
+fn park_waiter(
+    case: &Arc<CaseRun>,
+    until: Instant,
+) -> (mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let waiter_clock = case.session_clock();
+    let handle = std::thread::spawn(move || {
+        waiter_clock.wait_until(Some(until), &mut |_| {
+            let _ignored = parked_tx.send(());
+            let _ignored = Deadline::after(Duration::from_secs(5)).recv(&release_rx);
+        });
+    });
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_rx)
+        .expect("the waiter parks before the test moves on");
+    (release_tx, handle)
+}
+
+#[test]
+fn a_hang_advance_holds_until_its_entry_matches() {
+    let host = Host {
+        exec: vec![hang_exec_entry("hang-once")],
+        ..Host::default()
+    };
+    let case = case_run_with_host(
+        vec![json!({"kind": "turn_completed"})],
+        host,
+        vec![ClockAdvance {
+            hang: Some(1),
+            after: None,
+            advance_ms: 50,
+        }],
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+    );
+    let (done_tx, done_rx) = mpsc::channel();
+    let applier = Arc::clone(&case);
+    std::thread::spawn(move || {
+        let mut next = 0;
+        let mut failures = Vec::new();
+        let ok = applier.apply_advances(None, &mut next, &mut failures);
+        let _ignored = done_tx.send((ok, next, failures));
+    });
+    case.host_script()
+        .wait_hang_waiting(1, Duration::from_secs(5))
+        .expect("the applier reaches the hold for entry 1");
+    assert!(
+        matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the applier remains blocked before entry 1 matches as a hang"
+    );
+    let deadline = case.session_clock().now() + Duration::from_millis(50);
+    let (release, waiter) = park_waiter(&case, deadline);
+    case.host_script()
+        .hang_matched(1, &json!({"program": "hang-once"}), deadline);
+    let (ok, next, failures) = Deadline::after(Duration::from_secs(5))
+        .recv(&done_rx)
+        .expect("the advance applies once entry 1 matches");
+    assert!(ok && next == 1 && failures.is_empty(), "{failures:?}");
+    let (offset, _) = case.clock.parked_offsets();
+    assert_eq!(offset, Duration::from_millis(50));
+    let _ignored = release.send(());
+    waiter.join().expect("join the parked waiter");
+}
+
+#[test]
+fn a_hang_advance_fails_naming_the_entry_when_nothing_matches() {
+    let case = case_run_with_host(
+        vec![json!({"kind": "turn_completed"})],
+        Host::default(),
+        vec![ClockAdvance {
+            hang: Some(2),
+            after: None,
+            advance_ms: 50,
+        }],
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+    );
+    let mut next = 0;
+    let mut failures = Vec::new();
+    assert!(!case.apply_advances(None, &mut next, &mut failures));
+    assert_eq!(next, 0);
+    assert_eq!(failures.len(), 1);
+    assert!(failures[0].contains("clock advance[1]"), "{}", failures[0]);
+    assert!(failures[0].contains("host.exec[2]"), "{}", failures[0]);
+    assert!(
+        failures[0].contains("did not hang within"),
+        "{}",
+        failures[0]
+    );
+}
+
+#[test]
+fn a_matched_hang_past_the_last_advance_ends_the_event_wait() {
+    let (_root, log) = session_log(&[]);
+    let case = case_run(
+        vec![json!({"kind": "extension_log"})],
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_log".to_owned(),
+            nth: 1,
+        }),
+    );
+    let stuck_at = case.session_clock().now() + Duration::from_millis(50);
+    case.host_script()
+        .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
+    let mut watcher = log.watch_all();
+    let deadline = case.process_clock.now() + LOOP_WAIT;
+    let mut failures = Vec::new();
+    assert!(
+        case.next_event(&mut watcher, deadline, &mut failures, true)
+            .is_none()
+    );
+    assert!(
+        failures.is_empty(),
+        "a stuck hang ends the wait with no new failure: {failures:?}"
+    );
+}
+
+#[test]
+fn without_the_last_advance_the_event_wait_keeps_its_bound() {
+    let (_root, log) = session_log(&[]);
+    let case = case_run(
+        vec![json!({"kind": "extension_log"})],
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_log".to_owned(),
+            nth: 1,
+        }),
+    );
+    let stuck_at = case.session_clock().now() + Duration::from_millis(50);
+    case.host_script()
+        .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
+    let mut watcher = log.watch_all();
+    let deadline = case.process_clock.now() + LOOP_WAIT;
+    let mut failures = Vec::new();
+    assert!(
+        case.next_event(&mut watcher, deadline, &mut failures, false)
+            .is_none()
+    );
+    assert_eq!(failures.len(), 1);
+    assert!(
+        failures[0].contains("wait for until event extension_log occurrence 1"),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn a_failed_initial_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
+    let (_root, log) = session_log(&[]);
+    let case = case_run_with_host(
+        vec![json!({"kind": "fiber_exited"})],
+        Host::default(),
+        vec![ClockAdvance {
+            hang: Some(2),
+            after: None,
+            advance_ms: 50,
+        }],
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+    );
+    let stuck_at = case.session_clock().now() + Duration::from_millis(50);
+    case.host_script()
+        .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
+    let (release, waiter) = park_waiter(&case, stuck_at);
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+    let _ignored = release.send(());
+    waiter.join().expect("join the parked waiter");
+
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("host.exec[1] hung")),
+        "{failures:?}"
+    );
+    assert!(
+        !failures
+            .iter()
+            .any(|failure| failure.contains("missing durable event")),
+        "after a failed initial advance the released hang drives the exit wait, which consumes the close event: {failures:?}"
+    );
+}
+
+#[test]
+fn a_failed_mid_loop_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
+    let (_root, log) = session_log(&[turn_completed()]);
+    let case = case_run_with_host(
+        vec![
+            json!({"kind": "turn_completed"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Host::default(),
+        vec![ClockAdvance {
+            hang: Some(2),
+            after: Some(Selector {
+                kind: "turn_completed".to_owned(),
+                nth: 1,
+            }),
+            advance_ms: 50,
+        }],
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+    );
+    let stuck_at = case.session_clock().now() + Duration::from_millis(50);
+    case.host_script()
+        .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
+    let (release, waiter) = park_waiter(&case, stuck_at);
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+    let _ignored = release.send(());
+    waiter.join().expect("join the parked waiter");
+
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("host.exec[1] hung")),
+        "{failures:?}"
+    );
+    assert!(
+        !failures
+            .iter()
+            .any(|failure| failure.contains("missing durable event")),
+        "after a failed mid-loop advance the released hang drives the exit wait, which consumes the close event: {failures:?}"
+    );
+}
+
+#[test]
+fn a_stuck_hang_past_all_advances_skips_the_event_wait() {
+    let (_root, log) = session_log(&[]);
+    let case = case_run(
+        Vec::new(),
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_log".to_owned(),
+            nth: 1,
+        }),
+    );
+    let stuck_at = case.session_clock().now() + Duration::from_millis(50);
+    case.host_script()
+        .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
+    let (release, waiter) = park_waiter(&case, stuck_at);
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: false,
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+    let _ignored = release.send(());
+    waiter.join().expect("join the parked waiter");
+
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("host.exec[1] hung")),
+        "{failures:?}"
+    );
+    assert_eq!(
+        failures
+            .iter()
+            .filter(|failure| failure.contains("wait for until event"))
+            .count(),
+        1,
+        "only the exit wait expires; the main wait ends on the stuck hang: {failures:?}"
+    );
+}
+
+#[test]
+fn close_names_each_stuck_hang_and_releases_in_deadline_order() {
+    let (_root, log) = session_log(&[]);
+    let case = case_run(vec![], Vec::new(), None);
+    let now = case.session_clock().now();
+    // Entry 2 ends first: the release must still run in deadline order.
+    let early = now + Duration::from_millis(50);
+    let late = now + Duration::from_millis(100);
+    case.host_script().hang_matched(
+        1,
+        &json!({"program": "hang-late", "env": {"FIBER_X": "s3cret-value"}}),
+        late,
+    );
+    case.host_script()
+        .hang_matched(2, &json!({"program": "hang-early"}), early);
+    let (release_early, waiter_early) = park_waiter(&case, early);
+    let (release_late, waiter_late) = park_waiter(&case, late);
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: false,
+    });
+    let mut failures = Vec::new();
+    let drive = Arc::clone(&driver) as Arc<dyn contract::extension::Drive>;
+    let released = case.close(
+        &drive,
+        &Arc::new(r#loop::TurnCancel::default()),
+        &mut failures,
+    );
+    assert!(released);
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(
+        failures[0].contains("unmet host call: host.exec[2] hung"),
+        "{failures:?}"
+    );
+    assert!(
+        failures[0].contains("still parked after the last clock advance"),
+        "{failures:?}"
+    );
+    assert!(failures[0].contains("hang-early"), "{failures:?}");
+    assert!(
+        failures[1].contains("unmet host call: host.exec[1] hung"),
+        "{failures:?}"
+    );
+    assert!(failures[1].contains("hang-late"), "{failures:?}");
+    assert!(failures[1].contains("<redacted>"), "{failures:?}");
+    assert!(failures[1].contains("FIBER_X"), "{failures:?}");
+    assert!(
+        !failures.join("\n").contains("s3cret-value"),
+        "{failures:?}"
+    );
+    let (offset, _) = case.clock.parked_offsets();
+    assert_eq!(offset, Duration::from_millis(100));
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+    let _ignored = release_early.send(());
+    let _ignored = release_late.send(());
+    waiter_early.join().expect("join the early waiter");
+    waiter_late.join().expect("join the late waiter");
 }
 
 fn session_log(events: &[Event]) -> (fakes::TempDir, Arc<Log>) {
@@ -285,6 +665,7 @@ fn exiting_before_the_next_advance_names_that_advance() {
     let case = case_run(
         vec![json!({"kind": "fiber_exited"})],
         vec![ClockAdvance {
+            hang: None,
             after: Some(Selector {
                 kind: "turn_completed".to_owned(),
                 nth: 1,
@@ -322,6 +703,7 @@ fn a_missing_advance_fails_on_the_short_advance_wait() {
     let case = case_run(
         vec![json!({"kind": "turn_completed"})],
         vec![ClockAdvance {
+            hang: None,
             after: Some(Selector {
                 kind: "turn_completed".to_owned(),
                 nth: 1,
@@ -366,6 +748,7 @@ fn an_advance_never_reached_is_dumped_after_the_until_event_and_exit() {
             json!({"kind": "fiber_exited"}),
         ],
         vec![ClockAdvance {
+            hang: None,
             after: Some(Selector {
                 kind: "never_written".to_owned(),
                 nth: 1,
@@ -402,6 +785,7 @@ fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
     let case = case_run(
         vec![json!({"kind": "turn_completed"})],
         vec![ClockAdvance {
+            hang: None,
             after: Some(Selector {
                 kind: "extension_log".to_owned(),
                 nth: 1,

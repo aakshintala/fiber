@@ -674,14 +674,21 @@ A case may add `config`, written as the temporary home's global
 configuration. `host.http` and `host.exec` list requests and replies in order.
 An HTTP reply has `status` and `body`, or an `error` with `code` and `message`.
 An exec reply has `stdout` and `stderr` and either `code` or `signal`, an
-integer signal number the extension sees as a name such as `SIGKILL`.
+integer signal number the extension sees as a name such as `SIGKILL`. A reply
+of `{"hang": true}` stands for a process that never exits: the scripted exec
+parks on the case clock until the callback's deadline, as a real `host.exec`
+parks on the injected clock.
 Requests match the fields the
 case gives; a mismatch, an unscripted call or an unused reply fails the case.
 These host replies prevent network requests and program execution.
 
 `clock` is a list of positive `advance_ms` values. An entry may use `after` to
-name the event `kind` and its optional 1-based `nth` occurrence. The runner
-advances only when the operation is parked on that clock deadline. `until`
+name the event `kind` and its optional 1-based `nth` occurrence. An entry may
+use `hang` to name the 1-based exec entry it waits for: the runner holds that
+advance until the entry has matched as a hang. The runner
+advances only when the operation is parked on that clock deadline. After the
+last entry, a hang still parked fails the case, naming the request, and the
+runner advances to its deadline to end the session. `until`
 selects the event after which the runner closes the session; by default it
 closes after the first `turn_completed` or `turn_failed`.
 

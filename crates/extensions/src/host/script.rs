@@ -1,8 +1,11 @@
 //! Scripted `host.http` and `host.exec` calls for extension cases (`docs/testing.md`, "Testing an extension").
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use contract::ErrorCode;
+use contract::clock::Clock;
 use serde_json::{Map, Value};
 
 use super::{HttpRequest, exec::ExecRequest};
@@ -16,8 +19,8 @@ pub struct HttpEntry {
     pub reply: Result<(u16, Vec<u8>), (ErrorCode, String)>,
 }
 
-/// How a scripted `host.exec` run ended: its exit code or the signal
-/// that ended it, shaped like a real run's (`host.rs` sets only the
+/// How a completed scripted `host.exec` run ended: its exit code or the
+/// signal that ended it, shaped like a real run's (`host.rs` sets only the
 /// present one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExecEnd {
@@ -27,15 +30,21 @@ pub enum ExecEnd {
     Signal(i32),
 }
 
-/// The result of a scripted `host.exec` run: how it ended and both streams.
+/// The result of a scripted `host.exec` run.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExecReply {
-    /// How the run ended.
-    pub end: ExecEnd,
-    /// Standard output.
-    pub stdout: String,
-    /// Standard error.
-    pub stderr: String,
+pub enum ExecReply {
+    /// A process that ended, with its termination reason and streams.
+    Completed {
+        /// How the run ended.
+        end: ExecEnd,
+        /// Standard output.
+        stdout: String,
+        /// Standard error.
+        stderr: String,
+    },
+    /// The process never exits: the scripted run parks on the case clock
+    /// until the callback's deadline.
+    Hang,
 }
 
 /// One scripted result for a `host.exec` request.
@@ -52,6 +61,9 @@ pub struct ExecEntry {
 /// consumes nothing (`docs/testing.md`, "Testing an extension").
 pub struct HostScript {
     state: Mutex<State>,
+    /// Wakes parked hang workers and hang-match waiters. Wake-ups are a
+    /// cadence only: every waiter re-reads the case clock after one.
+    changed: Condvar,
 }
 
 struct State {
@@ -62,6 +74,16 @@ struct State {
     http_next: usize,
     exec_next: usize,
     misses: Vec<String>,
+    hangs: Vec<HangMatch>,
+    hang_waiters: Vec<usize>,
+}
+
+/// One matched scripted hang: the 1-based exec entry, its redacted request
+/// and the callback deadline it parks until on the case clock.
+struct HangMatch {
+    entry: usize,
+    request: Value,
+    deadline: Instant,
 }
 
 impl HostScript {
@@ -83,7 +105,10 @@ impl HostScript {
                 http_next: 0,
                 exec_next: 0,
                 misses: Vec::new(),
+                hangs: Vec::new(),
+                hang_waiters: Vec::new(),
             }),
+            changed: Condvar::new(),
         })
     }
 
@@ -164,24 +189,117 @@ impl HostScript {
         entry.reply
     }
 
-    pub(crate) fn exec(&self, request: Value) -> Result<ExecReply, (ErrorCode, String)> {
+    /// Matches one `host.exec` request against the next scripted entry and
+    /// returns its 1-based index with the outcome. A miss consumes nothing.
+    pub(crate) fn exec(&self, request: Value) -> (usize, Result<ExecReply, (ErrorCode, String)>) {
         let mut state = lock(&self.state);
-        let index = state.exec_next;
-        let entry = state.exec.get(index).cloned();
+        let at = state.exec_next;
+        let entry = state.exec.get(at).cloned();
         let Some(entry) = entry else {
-            state
-                .misses
-                .push(miss("exec", index, &redact_env(&request)));
-            return Err(no_reply("exec"));
+            state.misses.push(miss("exec", at, &redact_env(&request)));
+            return (at.saturating_add(1), Err(no_reply("exec")));
         };
         if json_matches(&entry.request, &request).is_err() {
-            state
-                .misses
-                .push(miss("exec", index, &redact_env(&request)));
-            return Err(no_reply("exec"));
+            state.misses.push(miss("exec", at, &redact_env(&request)));
+            return (at.saturating_add(1), Err(no_reply("exec")));
         }
-        state.exec_next = index.saturating_add(1);
-        entry.reply
+        state.exec_next = at.saturating_add(1);
+        (at.saturating_add(1), entry.reply)
+    }
+
+    /// Records a scripted hang match: exec entry `index` (1-based, from
+    /// [`HostScript::exec`]) met `request` and parks until `deadline` on the
+    /// case clock. Called while the hub lock is held, before the worker
+    /// spawns, so the runner's hold cannot miss it. Wakes every waiter in
+    /// [`HostScript::wait_hang_matched`].
+    pub fn hang_matched(&self, index: usize, request: &Value, deadline: Instant) {
+        let mut state = lock(&self.state);
+        state.hangs.push(HangMatch {
+            entry: index,
+            request: redact_env(request),
+            deadline,
+        });
+        self.changed.notify_all();
+    }
+
+    /// Waits, bounded by `within` on the process clock, until exec entry
+    /// `entry` has matched as a hang.
+    pub fn wait_hang_matched(&self, entry: usize, within: Duration) -> Result<(), String> {
+        let mut state = lock(&self.state);
+        state.hang_waiters.push(entry);
+        self.changed.notify_all();
+        let (mut state, _) = self
+            .changed
+            .wait_timeout_while(state, within, |state| {
+                !state.hangs.iter().any(|hang| hang.entry == entry)
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(waiter) = state
+            .hang_waiters
+            .iter()
+            .position(|waiting| *waiting == entry)
+        {
+            state.hang_waiters.remove(waiter);
+        }
+        if state.hangs.iter().any(|hang| hang.entry == entry) {
+            Ok(())
+        } else {
+            Err(format!("host.exec[{entry}] did not hang within {within:?}"))
+        }
+    }
+
+    /// Waits, bounded by `within` on the process clock, until the runner is
+    /// waiting for exec entry `entry` to match as a hang.
+    pub fn wait_hang_waiting(&self, entry: usize, within: Duration) -> Result<(), String> {
+        let state = lock(&self.state);
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, within, |state| !state.hang_waiters.contains(&entry))
+            .unwrap_or_else(PoisonError::into_inner);
+        if state.hang_waiters.contains(&entry) {
+            Ok(())
+        } else {
+            Err(format!(
+                "host.exec[{entry}] did not wait for a hang match within {within:?}"
+            ))
+        }
+    }
+
+    /// Every matched hang still later than `now`: only the runner moves the
+    /// case clock, so no other advance can release these.
+    pub fn pending_hangs(&self, now: Instant) -> Vec<(usize, Value, Instant)> {
+        lock(&self.state)
+            .hangs
+            .iter()
+            .filter(|hang| hang.deadline > now)
+            .map(|hang| (hang.entry, hang.request.clone(), hang.deadline))
+            .collect()
+    }
+
+    /// Parks a scripted hang on the case clock until the callback's
+    /// `deadline`, as a real `host.exec` parks on the injected clock. The
+    /// worker registers as parked at the deadline, so a runner advance to
+    /// it matches; the scheduler answers the callback's timeout, so the
+    /// worker delivers no reply. A stop ends the park early and records
+    /// nothing: the runner owns the stuck report.
+    pub(crate) fn park_hang(&self, clock: &dyn Clock, deadline: Instant, stop: &Receiver<()>) {
+        let mut guard = lock(&self.state);
+        while clock.now() < deadline && !is_disconnected(stop) {
+            // The slice is a wake-up cadence, not a timing judgement: the
+            // loop's decision reads only the case clock after each slice.
+            let parked = support::clock::park(
+                clock,
+                Some(deadline),
+                Some(support::group::GROUP_POLL),
+                &self.changed,
+                guard,
+                |_| false,
+            );
+            guard = match parked {
+                Some(guard) => guard,
+                None => lock(&self.state),
+            };
+        }
     }
 }
 
@@ -292,6 +410,13 @@ fn redact_env(request: &Value) -> Value {
         }
     }
     redacted
+}
+
+/// Whether the stop sender is gone: the run's stop, cancel or dispose
+/// dropped it, so the parked worker ends. A sent value never arrives; the
+/// channel carries only the drop.
+fn is_disconnected(stop: &Receiver<()>) -> bool {
+    matches!(stop.try_recv(), Err(TryRecvError::Disconnected))
 }
 
 fn miss(kind: &str, index: usize, request: &Value) -> String {

@@ -89,6 +89,10 @@ pub(crate) struct ClockAdvance {
     pub(crate) after: Option<Selector>,
     /// The positive number of milliseconds to advance.
     pub(crate) advance_ms: u64,
+    /// The 1-based `host.exec` entry the advance waits to match as a hang.
+    /// The runner holds the advance until that entry matches, so the advance
+    /// lands on the hang's park instead of an earlier wait.
+    pub(crate) hang: Option<usize>,
 }
 
 /// An event kind and its 1-based occurrence.
@@ -130,7 +134,7 @@ impl Case {
             return Err("config: expected an object".to_owned());
         }
         let host = parse_host(map.get("host"))?;
-        let clock = parse_clock(map.get("clock"))?;
+        let clock = parse_clock(map.get("clock"), &host.exec)?;
         let until = map
             .get("until")
             .map(|value| parse_selector(value, "until"))
@@ -167,7 +171,7 @@ impl Case {
                 if returns.is_some() || error.is_some() {
                     return Err("calls entries carry their own returns or error".to_owned());
                 }
-                parse_calls(map.get("calls"))?
+                parse_calls(map.get("calls"), &host.exec)?
             };
             let credentials = credential_map(map.get("credentials"), "credentials")?;
             let expect_credentials =
@@ -179,6 +183,9 @@ impl Case {
             };
             if clock.iter().any(|advance| advance.after.is_some()) {
                 return Err("clock.after: call cases have no events".to_owned());
+            }
+            if clock.iter().any(|advance| advance.hang.is_some()) {
+                return Err("clock.hang: call cases have no events".to_owned());
             }
             Ok(Case::Call(CallCase {
                 name,
@@ -290,7 +297,10 @@ const CASE_FIELDS: &[&str] = &[
     "attended",
 ];
 
-fn parse_calls(value: Option<&Value>) -> Result<Vec<CallStep>, String> {
+fn parse_calls(
+    value: Option<&Value>,
+    exec: &[extensions::ExecEntry],
+) -> Result<Vec<CallStep>, String> {
     let entries = value
         .and_then(Value::as_array)
         .ok_or("calls: expected a non-empty list")?;
@@ -322,9 +332,12 @@ fn parse_calls(value: Option<&Value>) -> Result<Vec<CallStep>, String> {
                 map.get("returns").cloned(),
                 map.get("error").cloned(),
             )?;
-            let clock = parse_clock(map.get("clock"))?;
+            let clock = parse_clock(map.get("clock"), exec)?;
             if clock.iter().any(|advance| advance.after.is_some()) {
                 return Err("calls clock.after: call cases have no events".to_owned());
+            }
+            if clock.iter().any(|advance| advance.hang.is_some()) {
+                return Err("calls clock.hang: call cases have no events".to_owned());
             }
             Ok(CallStep {
                 operation: CallOperation::Invoke { call, outcome },
@@ -544,9 +557,23 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
         .ok_or_else(|| format!("{prefix}.reply: expected an object"))?;
     only(
         reply,
-        &["code", "signal", "stdout", "stderr"],
+        &["code", "signal", "stdout", "stderr", "hang"],
         &format!("{prefix}.reply"),
     )?;
+    if reply.contains_key("hang") {
+        // A hang is a whole reply: a process that never exits parks on the
+        // case clock until the callback's deadline.
+        if !matches!(reply.get("hang"), Some(Value::Bool(true))) {
+            return Err(format!("{prefix}.reply.hang: expected true"));
+        }
+        if reply.len() != 1 {
+            return Err(format!("{prefix}.reply.hang: takes no other key"));
+        }
+        return Ok(extensions::ExecEntry {
+            request: Value::Object(request.clone()),
+            reply: Ok(extensions::ExecReply::Hang),
+        });
+    }
     let end = match (reply.contains_key("code"), reply.contains_key("signal")) {
         (true, false) => {
             let code = signed(reply, "code", &format!("{prefix}.reply"))?;
@@ -570,7 +597,7 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
     let stderr = string(reply, "stderr", &format!("{prefix}.reply"))?;
     Ok(extensions::ExecEntry {
         request: Value::Object(request.clone()),
-        reply: Ok(extensions::ExecReply {
+        reply: Ok(extensions::ExecReply::Completed {
             end,
             stdout,
             stderr,
@@ -578,7 +605,10 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
     })
 }
 
-fn parse_clock(value: Option<&Value>) -> Result<Vec<ClockAdvance>, String> {
+fn parse_clock(
+    value: Option<&Value>,
+    exec: &[extensions::ExecEntry],
+) -> Result<Vec<ClockAdvance>, String> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
@@ -592,7 +622,7 @@ fn parse_clock(value: Option<&Value>) -> Result<Vec<ClockAdvance>, String> {
             let map = value
                 .as_object()
                 .ok_or_else(|| format!("{prefix}: expected an object"))?;
-            only(map, &["advance_ms", "after"], &prefix)?;
+            only(map, &["advance_ms", "after", "hang"], &prefix)?;
             let advance_ms = unsigned(map, "advance_ms", &prefix)?;
             if advance_ms == 0 {
                 return Err(format!("{prefix}.advance_ms: must be positive"));
@@ -601,9 +631,41 @@ fn parse_clock(value: Option<&Value>) -> Result<Vec<ClockAdvance>, String> {
                 .get("after")
                 .map(|value| parse_selector(value, &format!("{prefix}.after")))
                 .transpose()?;
-            Ok(ClockAdvance { after, advance_ms })
+            let hang = map
+                .get("hang")
+                .map(|value| parse_hang(value, &prefix, exec))
+                .transpose()?;
+            Ok(ClockAdvance {
+                after,
+                advance_ms,
+                hang,
+            })
         })
         .collect()
+}
+
+/// Parses a clock entry's `hang` key: the 1-based index of the `host.exec`
+/// entry the advance waits to match as a hang.
+fn parse_hang(
+    value: &Value,
+    prefix: &str,
+    exec: &[extensions::ExecEntry],
+) -> Result<usize, String> {
+    let hang = value
+        .as_u64()
+        .filter(|hang| *hang > 0)
+        .and_then(|hang| usize::try_from(hang).ok())
+        .ok_or_else(|| format!("{prefix}.hang: must be a positive whole number"))?;
+    let hangs = exec
+        .get(hang.saturating_sub(1))
+        .and_then(|entry| entry.reply.as_ref().ok())
+        .is_some_and(|reply| matches!(reply, extensions::ExecReply::Hang));
+    if !hangs {
+        return Err(format!(
+            "{prefix}.hang: must name a host.exec entry whose reply is hang"
+        ));
+    }
+    Ok(hang)
 }
 
 fn parse_selector(value: &Value, field: &str) -> Result<Selector, String> {
