@@ -19,7 +19,7 @@ use contract::clock::Clock;
 use super::{CancelOnDrop, Reads, deadline_due};
 use fakes::Deadline;
 use fakes::children::Ready;
-use fakes::clock::{FakeClock, SystemClock};
+use fakes::clock::{FakeClock, Mark, Miss, SystemClock};
 use rustix::io::Errno;
 use support::clock::Parker;
 use support::group::GROUP_POLL;
@@ -69,6 +69,32 @@ fn ready_in(root: &std::path::Path, name: &str) -> Ready {
     let dir = root.join(name);
     std::fs::create_dir_all(&dir).unwrap();
     Ready::new(&dir)
+}
+
+/// One poll step of a driver loop that is the clock's only mover: waits up
+/// to what is left of the drive, capped at one poll pause, for the parked
+/// poll instant, then advances past it. No fresh park means the settle
+/// answered instead of re-parking, so the caller re-checks its answer
+/// channel and the drive; a park at another instant fails the test. A zero
+/// pause never reaches the clock: the caller re-checks instead.
+#[track_caller]
+fn poll_step(
+    clock: &FakeClock,
+    parked_at: Instant,
+    advance: Duration,
+    drive: &Deadline,
+) -> Option<Mark> {
+    let pause = drive.left().min(PARK_PAUSE);
+    if pause.is_zero() {
+        return None;
+    }
+    match clock.try_advance_when_parked(Some(parked_at), None, advance, pause) {
+        Ok(mark) => Some(mark),
+        Err(Miss::NoPark) => None,
+        Err(miss @ Miss::Mismatch { .. }) => {
+            panic!("{miss} at {:?}; parked: {:?}", clock.now(), clock.parked())
+        }
+    }
 }
 
 #[test]
@@ -326,11 +352,12 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    assert!(
-        clock.await_parked(deadline, DEADLINE),
-        "the wait parked at its deadline"
+    let mark = clock.advance_when_parked(
+        Some(deadline),
+        None,
+        timeout.checked_sub(Duration::from_millis(1)).unwrap(),
+        &Deadline::after(DEADLINE),
     );
-    let mark = clock.advance_marked(timeout.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(
         clock.await_parked_since(&mark, Some(deadline), DEADLINE),
         "the wait parked again after the advance"
@@ -379,7 +406,12 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
     let (settled, is_settled) = mpsc::channel::<()>();
     let (release_settled, resume_reaper) = mpsc::channel::<()>();
     reads.pause_at_settle_complete(settled, resume_reaper);
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE).recv_or_fail(&is_killed, "the settlement's first kill");
     let (killed_again, is_killed_again) = mpsc::channel::<()>();
     let (release_again, freed_again) = mpsc::channel::<()>();
@@ -394,14 +426,14 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
         .now()
         .checked_add(GROUP_POLL)
         .expect("the poll is countable");
-    clock.advance_when_parked(Some(poll), None, GROUP_POLL, &drive);
+    clock.advance_when_parked(Some(poll), None, GROUP_POLL, &Deadline::after(DEADLINE));
     drive.recv_or_fail(&is_killed_again, "the settlement's second kill");
     release_again.send(()).unwrap();
     let repoll = clock
         .now()
         .checked_add(GROUP_POLL)
         .expect("the poll is countable");
-    clock.advance_when_parked(Some(repoll), None, GROUP_POLL, &drive);
+    clock.advance_when_parked(Some(repoll), None, GROUP_POLL, &Deadline::after(DEADLINE));
     drive.recv_or_fail(&is_settled, "the timeout settlement");
 
     assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
@@ -442,11 +474,12 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    assert!(
-        clock.await_parked(deadline, DEADLINE),
-        "the wait parked at its deadline"
+    let mark = clock.advance_when_parked(
+        Some(deadline),
+        None,
+        timeout.checked_sub(Duration::from_millis(1)).unwrap(),
+        &Deadline::after(DEADLINE),
     );
-    let mark = clock.advance_marked(timeout.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(
         clock.await_parked_since(&mark, Some(deadline), DEADLINE),
         "the wait parked again after the advance"
@@ -466,11 +499,12 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
         "the wait answered before its timeout"
     );
     release.send(()).unwrap();
-    assert!(
-        clock.await_parked(deadline, DEADLINE),
-        "the wait parked at its deadline again"
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(Duration::from_millis(1));
     // The timeout re-kills on the poll cadence and parks between passes:
     // drive each confirmed poll park, as the re-kill test does. The advance
     // above wakes only one pass, whose probe can still see a
@@ -497,9 +531,7 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
             .now()
             .checked_add(GROUP_POLL)
             .expect("the poll is countable");
-        if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
-            clock.advance(GROUP_POLL);
-        }
+        let _stepped = poll_step(&clock, poll, GROUP_POLL, &drive);
     }
     let error = match answer {
         Some(got) => got.expect_err("a command holding stdout past its timeout"),
@@ -565,22 +597,14 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
         vec![Ok(()), Ok(()), Err(Errno::SRCH)],
         vec![Ok(()), Ok(())],
     );
-    clock.advance(timeout);
+    clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
     // The timeout re-kills on the poll cadence: each advance follows a
     // confirmed park, so the first two parks each earn one more send and
     // the third observation retires the group.
     let poll = deadline + GROUP_POLL;
-    assert!(
-        clock.await_parked(poll, DEADLINE),
-        "the timeout parked at its first poll"
-    );
-    clock.advance(GROUP_POLL);
+    clock.advance_when_parked(Some(poll), None, GROUP_POLL, &Deadline::after(DEADLINE));
     let repoll = poll + GROUP_POLL;
-    assert!(
-        clock.await_parked(repoll, DEADLINE),
-        "the timeout parked at its second poll"
-    );
-    clock.advance(GROUP_POLL);
+    clock.advance_when_parked(Some(repoll), None, GROUP_POLL, &Deadline::after(DEADLINE));
     let error = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the timed-out read")
         .expect_err("a command still running at its timeout");
@@ -635,13 +659,14 @@ fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
         (0..600).map(|_| Ok(())).collect(),
         (0..600).map(|_| Ok(())).collect(),
     );
-    clock.advance(timeout);
+    clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
     assert!(
         clock.await_parked(deadline + GROUP_POLL, DEADLINE),
         "the timeout parked at its first poll"
     );
     // Jump to one nanosecond short of the end: every pass between still
     // found the scripted group alive and sent again.
+    // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
     let mark = clock.advance_marked(
         doors::SHUTDOWN_BOUND
             .checked_sub(Duration::from_nanos(1))
@@ -655,7 +680,12 @@ fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
         matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "timeout answered short of its bound"
     );
-    clock.advance(Duration::from_nanos(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_nanos(1),
+        &Deadline::after(DEADLINE),
+    );
     let error = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the timed-out read")
         .expect_err("a command still running at its timeout");
@@ -715,12 +745,13 @@ fn timeout_with_a_live_leader_answers_at_the_bound_without_the_reap() {
         (0..600).map(|_| Ok(())).collect(),
         (0..600).map(|_| Ok(())).collect(),
     );
-    clock.advance(timeout);
+    clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
     assert!(
         clock.await_parked(deadline + GROUP_POLL, DEADLINE),
         "the timeout parked at its first poll"
     );
     // Jump to one nanosecond short of the end: still parked, no answer.
+    // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
     let mark = clock.advance_marked(
         doors::SHUTDOWN_BOUND
             .checked_sub(Duration::from_nanos(1))
@@ -734,7 +765,12 @@ fn timeout_with_a_live_leader_answers_at_the_bound_without_the_reap() {
         matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "timeout answered short of its bound"
     );
-    clock.advance(Duration::from_nanos(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_nanos(1),
+        &Deadline::after(DEADLINE),
+    );
     let error = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the timed-out read")
         .expect_err("a live leader still running at its timeout");
@@ -793,7 +829,7 @@ fn cancel_during_settlement_answers_interrupted() {
         (0..10).map(|_| Ok(())).collect(),
         (0..10).map(|_| Ok(())).collect(),
     );
-    clock.advance(timeout);
+    clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
     // The settlement re-kills on the poll cadence: parked at its first
     // poll, the wait can only leave through the cancel below.
     assert!(
@@ -926,6 +962,7 @@ fn a_key_finished_after_its_timeout_is_refused() {
         let _held = reads.lock();
         std::fs::write(&go, "").unwrap();
         generation_reaches(&reads.wake, seen + 2, "the two wakes");
+        // No code under test waits on the clock here; the wait is held on the state lock between its checks (ruling 6179406086).
         clock.advance(timeout + Duration::from_secs(1));
     }
     let error = Deadline::after(DEADLINE)
@@ -1336,9 +1373,9 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
 /// Drives a settle to completion on the fake clock and returns its
 /// answer, through a controlled interleaving that shows both halves
 /// while the reap stays held. The blind-probe phase keeps every hold
-/// and runs ten advance-to-confirmed-re-park cycles exactly like the old
-/// drive, proving it spends budget with zero progress: the clock moves
-/// exactly ten advances while the held leader stays unreaped, so the
+/// and runs fifty poll steps, proving it spends budget with zero
+/// progress: the clock moves fifty poll advances while the held leader
+/// stays unreaped, so the
 /// settle still lists the real group. The listing is read from the
 /// settle itself: a killed-but-unreaped leader probes `EPERM` on some
 /// platforms, which keeps the group pending in the settle (only `SRCH`
@@ -1370,23 +1407,27 @@ fn drive_settle_to_completion(
         clock.await_parked(poll, drive.left()),
         "the settle parked at its poll"
     );
-    // Blind-probe phase, holds maintained: ten advances. Each confirmed
-    // re-park is the held path; once the settle answers early instead
-    // (its group died unheld) later cycles keep the cadence, so the
-    // still-listed assert below names the failure, not these lines.
+    // Blind-probe phase, holds maintained: fifty poll steps. Each
+    // confirmed park is the held path; once the settle answers early
+    // instead (its group died unheld) the loop ends, so the still-listed
+    // assert below names the failure, not these lines.
     let mut answered = false;
-    let mut mark = clock.advance_marked(Duration::from_millis(50));
-    for _ in 1..10 {
-        let reparked = clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE));
-        if !reparked && !answered {
-            answered = finished.try_recv().is_ok();
+    let mut mark: Option<Mark> = None;
+    for _ in 0..50 {
+        let parked_at = clock
+            .now()
+            .checked_add(GROUP_POLL)
+            .expect("the poll is countable");
+        match poll_step(clock, parked_at, GROUP_POLL, drive) {
+            Some(stepped) => mark = Some(stepped),
+            None => {
+                answered = finished.try_recv().is_ok();
+                assert!(answered, "the settle answered when it did not re-park");
+                break;
+            }
         }
-        assert!(
-            reparked || answered,
-            "the settle parked again after the probe advance"
-        );
-        mark = clock.advance_marked(Duration::from_millis(50));
     }
+    let mark = mark.expect("the blind probe stepped at least once");
     let reparked = clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE));
     if !reparked && !answered {
         answered = finished.try_recv().is_ok();
@@ -1398,7 +1439,7 @@ fn drive_settle_to_completion(
     assert_eq!(
         clock.now(),
         start + Duration::from_millis(500),
-        "the blind probe spent exactly ten advances"
+        "the blind probe spent fifty poll steps"
     );
     assert!(
         listed(reads).contains(&real),
@@ -1454,10 +1495,8 @@ fn drive_settle_to_completion(
             break;
         }
         let parked_at = clock.now() + GROUP_POLL;
-        match clock.mark_parked(parked_at, drive.left().min(PARK_PAUSE)) {
-            Some(_) => {
-                clock.advance_marked(Duration::ZERO);
-            }
+        match poll_step(clock, parked_at, Duration::ZERO, drive) {
+            Some(_) => {}
             None => {
                 // Never parked again: the pass answered instead.
                 answer = finished.try_recv().ok();
@@ -1495,7 +1534,7 @@ fn drive_settle_to_completion(
                     if !listed(reads).contains(&real)
                         && clock.await_any_parked_since(&since, drive.left().min(PARK_PAUSE))
                     {
-                        clock.advance_marked(Duration::from_millis(50));
+                        let _stepped = poll_step(clock, parked_at, GROUP_POLL, drive);
                     }
                 }
             }
@@ -1650,6 +1689,7 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
         "the settle parked at its poll"
     );
     let cycles = (doors::SHUTDOWN_BOUND.as_millis() / 50) as usize;
+    // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
     let mut mark = clock.advance_marked(Duration::from_millis(50));
     let mut answer = None;
     for _ in 1..cycles {
@@ -1660,10 +1700,15 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
         // A missing re-park means the settle answered instead of
         // parking again; the drive takes it below. While the reap stays
         // held that never happens before the bound.
-        if !clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
+        if !clock.await_parked_since(
+            &mark,
+            Some(clock.now() + GROUP_POLL),
+            drive.left().min(PARK_PAUSE),
+        ) {
             answer = Some(drive.recv(&settled).expect("the settle"));
             break;
         }
+        // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
         mark = clock.advance_marked(Duration::from_millis(50));
     }
     // The final advance's pass answers at the bound instead of re-parking.
@@ -1737,11 +1782,7 @@ fn settle_sends_again_until_srch_then_never_again() {
     // the settle then parks at its first poll, an exact deadline on the
     // unmoved clock.
     let poll = clock.origin() + GROUP_POLL;
-    assert!(
-        clock.await_parked(poll, DEADLINE),
-        "the settle parked at its poll"
-    );
-    clock.advance(GROUP_POLL);
+    clock.advance_when_parked(Some(poll), None, GROUP_POLL, &Deadline::after(DEADLINE));
     assert!(
         Deadline::after(DEADLINE)
             .recv(&finished)
@@ -1929,6 +1970,7 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
         clock.await_parked(poll, DEADLINE),
         "the settle parked at its poll"
     );
+    // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
     let mut mark = clock.advance_marked(Duration::from_millis(50));
     loop {
         if let Ok(answer) = finished.try_recv() {
@@ -1946,7 +1988,7 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
             break;
         }
         assert!(
-            clock.await_any_parked_since(&mark, DEADLINE),
+            clock.await_parked_since(&mark, Some(clock.now() + GROUP_POLL), DEADLINE),
             "the settle parked again"
         );
         if let Ok(answer) = finished.try_recv() {
@@ -1956,6 +1998,7 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
             );
             break;
         }
+        // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
         mark = clock.advance_marked(Duration::from_millis(50));
     }
     let sends = reads.scripted_sends();
@@ -2083,10 +2126,13 @@ fn repeat_shutdowns_reuse_the_first_end() {
         "the first call stored the end"
     );
     // A repeat one nanosecond before the end must not move it.
-    let mark = clock.advance_marked(
+    let mark = clock.advance_when_parked(
+        Some(end),
+        None,
         bound
             .checked_sub(Duration::from_nanos(1))
             .expect("the bound holds a nanosecond"),
+        &Deadline::after(DEADLINE),
     );
     assert!(
         clock.await_parked_since(&mark, Some(end), DEADLINE),
@@ -2099,7 +2145,12 @@ fn repeat_shutdowns_reuse_the_first_end() {
         "the repeat stored no fresh end"
     );
     // Past the first end both answer `false`: the repeat earned nothing.
-    clock.advance(Duration::from_nanos(2));
+    clock.advance_when_parked_threads(
+        Some(end),
+        2,
+        Duration::from_nanos(1),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         !Deadline::after(DEADLINE)
             .recv(&first)
@@ -2185,6 +2236,7 @@ fn an_empty_shutdown_answers_true_past_its_end() {
             .expect("the first shutdown"),
         "an empty shutdown settles at once"
     );
+    // No code under test waits on the clock here; the first shutdown has answered without parking (ruling 6179406086).
     clock.advance(doors::SHUTDOWN_BOUND + Duration::from_secs(1));
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
@@ -2352,8 +2404,20 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
             .now()
             .checked_add(GROUP_POLL)
             .expect("the poll is countable");
-        if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
-            clock.advance(GROUP_POLL);
+        let pause = drive.left().min(PARK_PAUSE);
+        if pause.is_zero() {
+            continue;
+        }
+        match clock.try_advance_when_parked(Some(poll), None, GROUP_POLL, pause) {
+            Ok(_) => {}
+            Err(Miss::NoPark) => {}
+            Err(Miss::Mismatch {
+                watched: (_, Some(at)),
+                ..
+            }) if at == clock.origin() + doors::SHUTDOWN_BOUND => {
+                answer = drive.recv(&settled).ok();
+            }
+            Err(miss) => panic!("{miss}"),
         }
     }
     let answer = match answer {
@@ -2493,14 +2557,13 @@ fn settle_gives_up_at_the_bound() {
         .recv(&is_entered)
         .expect("the spawn reached its pause");
     let settled = settle_on_thread(&reads, &clock, bound);
-    assert!(
-        clock.await_parked(end, DEADLINE),
-        "the settle parked at its bound"
-    );
-    let mark = clock.advance_marked(
+    let mark = clock.advance_when_parked(
+        Some(end),
+        None,
         bound
             .checked_sub(Duration::from_nanos(1))
             .expect("the bound holds a nanosecond"),
+        &Deadline::after(DEADLINE),
     );
     assert!(
         clock.await_parked_since(&mark, Some(end), DEADLINE),
@@ -2510,7 +2573,12 @@ fn settle_gives_up_at_the_bound() {
     // answer: the park repeats the check above, and the empty channel
     // proves it has not answered yet.
     still_settling(&clock, end, &settled, "the settle short of its bound");
-    clock.advance(Duration::from_nanos(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_nanos(1),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         !Deadline::after(DEADLINE)
             .recv(&settled)
@@ -2556,16 +2624,12 @@ fn settle_wakes_on_a_clock_advance_with_no_earlier_subscription() {
         .recv(&is_entered)
         .expect("the spawn reached its pause");
     let settled = settle_on_thread(&reads, &clock, bound);
-    assert!(
-        clock.await_parked(end, DEADLINE),
-        "the settle parked at its bound"
-    );
-    clock.advance(bound + Duration::from_secs(1));
+    clock.advance_when_parked(Some(end), None, bound, &Deadline::after(DEADLINE));
     assert!(
         !Deadline::after(DEADLINE)
             .recv(&settled)
             .expect("the settle"),
-        "the advance woke the settle past its bound"
+        "the advance woke the settle at its bound {end:?}"
     );
     reads.cancel();
     release.send(()).expect("the spawn's release");
@@ -2630,11 +2694,7 @@ fn settle_pins_zero_true_and_held_false_at_once() {
     let bound = doors::SHUTDOWN_BOUND;
     let end = clock.origin() + bound;
     let held_settle = settle_on_thread(&reads, &clock, bound);
-    assert!(
-        clock.await_parked(end, DEADLINE),
-        "the settle parked at its bound"
-    );
-    clock.advance(bound + Duration::from_secs(1));
+    clock.advance_when_parked(Some(end), None, bound, &Deadline::after(DEADLINE));
     assert!(
         !Deadline::after(Duration::from_secs(3)).recv_or_fail(&held_settle, "the held settle"),
         "settle is false at its bound while a spawn is held"
