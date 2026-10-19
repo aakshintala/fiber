@@ -1818,6 +1818,100 @@ fn close_sets_closing_once_and_it_stays() {
 }
 
 #[test]
+fn closing_returns_once_the_observer_has_ended() {
+    let root = fakes::TempDir::new("status-closing-ended");
+    let log = Arc::new(
+        log::Log::create(
+            root.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    let status = super::start(
+        &log,
+        Fold::new(
+            "-w".to_owned(),
+            "/w".to_owned(),
+            "fake/m".to_owned(),
+            None,
+            Box::new(Vec::new),
+            Box::new(|| None),
+            Box::new(|| 0),
+        ),
+    )
+    .expect("an observer");
+    let tap = status.tap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        status.signal();
+        status.join();
+        done_tx.send(()).unwrap();
+    });
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the observer ended");
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        tap.closing();
+        tx.send(()).unwrap();
+    });
+    Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("closing returns after the observer ended");
+}
+
+#[test]
+fn closing_returns_when_the_observer_ends_before_it_answers() {
+    let root = fakes::TempDir::new("status-closing-dropped");
+    let log = Arc::new(
+        log::Log::create(
+            root.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    let (held, observer_held) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let held_read = Mutex::new(Some((held, released)));
+    let status = super::start(
+        &log,
+        Fold::new(
+            "-w".to_owned(),
+            "/w".to_owned(),
+            "fake/m".to_owned(),
+            None,
+            Box::new(move || {
+                if let Some((held, released)) = held_read.lock().unwrap().take() {
+                    held.send(()).unwrap();
+                    // The test's own wait fails first and drops the sender, which releases this hold.
+                    let _ = released.recv();
+                }
+                Vec::new()
+            }),
+            Box::new(|| None),
+            Box::new(|| 0),
+        ),
+    )
+    .expect("an observer");
+    let tap = status.tap();
+    Deadline::after(DEADLINE)
+        .recv(&observer_held)
+        .expect("the observer is held");
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        tap.closing();
+        done_tx.send(()).unwrap();
+    });
+    drop(log);
+    release.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("closing returns after the observer ends");
+}
+
+#[test]
 fn finished_turns_forget_their_tool_names() {
     let mut w = world();
     w.start();

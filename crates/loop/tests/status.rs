@@ -13,11 +13,16 @@
 mod support;
 
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use contract::Envelope;
-use contract::inbox::Delivery;
+use contract::JobId;
+use contract::events::{JobCompleted, Outcome};
+use contract::inbox::{Ack, Claim, Delivery, JobNotice};
+use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::provider::Provider;
 use contract::tool::Tool;
 use fakes::Deadline;
@@ -187,6 +192,173 @@ fn two_calls_report_their_classified_subject_and_session_start() {
 }
 
 #[test]
+fn a_session_that_accepts_close_says_so_in_its_status() {
+    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    let watcher = session.log.watch();
+    session.inbox.send(delivery("go")).unwrap();
+    let finished = run(session.looped.take().unwrap());
+    let (_watcher, seen) = statuses_until(watcher, idle_named("go"));
+    assert!(
+        seen.iter()
+            .all(|line| !line.payload.contains_key("closing")),
+        "no status carries closing before the close"
+    );
+    let log = Arc::clone(&session.log);
+    let (ack_tx, ack_rx) = mpsc::channel();
+    session
+        .inbox
+        .send(Delivery::Close(Ack(Box::new(move |answer| {
+            let latest = log.latest("session_status").map(|line| line.payload);
+            ack_tx.send((answer.is_ok(), latest)).unwrap();
+        }))))
+        .unwrap();
+    let (ok, latest) = Deadline::after(DEADLINE)
+        .recv(&ack_rx)
+        .expect("the close is acknowledged after the status is published");
+    assert!(ok, "the close is accepted");
+    let payload = latest.expect("a session_status is published");
+    assert_eq!(payload["closing"].as_bool(), Some(true));
+    assert_eq!(payload["state"].as_str(), Some("idle"));
+    assert_eq!(payload["name"].as_str(), Some("go"));
+    Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("close ended the loop")
+        .unwrap();
+}
+
+/// Jobs a test holds from the status observer: `running` lists one job
+/// while `on`, and the first call on the observer's thread after `arm`
+/// signals it is held and waits for the release, so the status fold
+/// pauses mid-line.
+struct HeldJobs {
+    on: AtomicBool,
+    armed: AtomicBool,
+    held: Mutex<Option<mpsc::Sender<()>>>,
+    released: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+impl Jobs for HeldJobs {
+    fn open(&self, _opening: Opening) -> Result<Opened, OpenError> {
+        Err(OpenError {
+            path: std::path::PathBuf::from("jobs"),
+            source: std::io::Error::other("no jobs here"),
+        })
+    }
+
+    fn stop(&self, _job_id: &JobId) -> bool {
+        false
+    }
+
+    fn stop_delegates(&self) -> usize {
+        0
+    }
+
+    fn background(&self) -> usize {
+        0
+    }
+
+    fn foreground(&self, _call: Foreground) {}
+
+    fn running(&self) -> Vec<JobId> {
+        if !self.on.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
+        if self.armed.load(Ordering::SeqCst)
+            && std::thread::current().name() == Some("status")
+            && let Some(held) = self.held.lock().unwrap().take()
+        {
+            let released = self.released.lock().unwrap().take().unwrap();
+            held.send(()).unwrap();
+            // The test's own wait fails first and drops the sender, which
+            // releases this hold.
+            let _ = released.recv();
+        }
+        vec![JobId("j_1".into())]
+    }
+
+    fn deliver_to(&self, _inbox: mpsc::Sender<Delivery>) {}
+}
+
+#[test]
+fn a_close_is_acknowledged_once_a_new_subscriber_reads_closing() {
+    let mut session = Session::with_tools(
+        vec![Scripted::text("First."), Scripted::text("Second.")],
+        None,
+        Vec::new(),
+    );
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let jobs = Arc::new(HeldJobs {
+        on: AtomicBool::new(true),
+        armed: AtomicBool::new(false),
+        held: Mutex::new(Some(held_tx)),
+        released: Mutex::new(Some(release_rx)),
+    });
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(looped.jobs(Arc::clone(&jobs) as Arc<dyn Jobs>));
+    let watcher = session.log.watch();
+    let finished = run(session.looped.take().unwrap());
+    let (watcher, seen) = statuses_until(watcher, |_| true);
+    assert!(!seen[0].payload.contains_key("closing"));
+    jobs.armed.store(true, Ordering::SeqCst);
+    session.inbox.send(delivery("go")).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&held_rx)
+        .expect("the observer is held folding turn_started");
+    // The turn still completes: durable lines reach the watcher whatever
+    // the observer is doing.
+    let (_watcher, _) = support::read_until(watcher, "the prompt's turn_completed", |line| {
+        line.kind == "turn_completed"
+    });
+    let log = Arc::clone(&session.log);
+    let (ack_tx, ack_rx) = mpsc::channel();
+    session
+        .inbox
+        .send(Delivery::Close(Ack(Box::new(move |answer| {
+            let latest = log.latest("session_status").map(|line| line.payload);
+            ack_tx.send((answer.is_ok(), latest)).unwrap();
+        }))))
+        .unwrap();
+    release_tx.send(()).unwrap();
+    let (ok, latest) = Deadline::after(DEADLINE)
+        .recv(&ack_rx)
+        .expect("the close is acknowledged after the observer publishes closing");
+    assert!(ok, "the close is accepted");
+    let payload = latest.expect("a session_status is published");
+    assert_eq!(payload["closing"].as_bool(), Some(true));
+    assert_eq!(payload["name"].as_str(), Some("go"));
+    // A subscriber that attaches mid-close reads closing in the first
+    // status it is sent, as `crates/doors/src/client.rs` does for `summary`.
+    let _second = session.log.watch();
+    let latest = session
+        .log
+        .latest("session_status")
+        .expect("a session_status");
+    assert_eq!(latest.payload["closing"].as_bool(), Some(true));
+    jobs.on.store(false, Ordering::SeqCst);
+    session
+        .inbox
+        .send(Delivery::Job(JobNotice {
+            completed: JobCompleted {
+                job_id: JobId("j_1".into()),
+                status: Outcome::Completed,
+                error: None,
+                process: None,
+                output_tail: None,
+                notice: None,
+                changed_by: None,
+            },
+            claim: Claim(Box::new(|| Some(Vec::new()))),
+            delegate: None,
+        }))
+        .unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the loop ended")
+        .unwrap();
+}
+
+#[test]
 fn no_status_follows_the_line_written_after_run_returns() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
     let watcher = session.log.watch();
@@ -204,9 +376,29 @@ fn no_status_follows_the_line_written_after_run_returns() {
     let (mut watcher, lines) = support::read_until(watcher, "a fiber_exited line", |line| {
         line.kind == "fiber_exited"
     });
+    let statuses: Vec<&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "session_status")
+        .collect();
     assert!(
-        lines.iter().all(|line| line.kind != "session_status"),
-        "no status after the loop ended"
+        !statuses.is_empty(),
+        "the accepted close writes one last status"
+    );
+    assert_eq!(
+        statuses.last().unwrap().payload["closing"].as_bool(),
+        Some(true),
+        "the last status carries the accepted close"
+    );
+    assert!(
+        lines
+            .iter()
+            .rposition(|line| line.kind == "fiber_exited")
+            .unwrap()
+            > lines
+                .iter()
+                .rposition(|line| line.kind == "session_status")
+                .unwrap(),
+        "no status after fiber_exited"
     );
     assert!(
         watcher.try_recv().unwrap().is_none(),

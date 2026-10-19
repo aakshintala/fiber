@@ -817,11 +817,16 @@ impl Loop {
     }
 
     /// Accepts `close`. No later turn starts, and no later approval can be
-    /// answered (`docs/permissions.md`, "Headless").
+    /// answered (`docs/permissions.md`, "Headless"). The acknowledgement
+    /// waits until the `session_status` carrying `closing` is what a new
+    /// subscriber reads, or the status observer has ended.
     pub(crate) fn take_close(&mut self, ack: Ack) {
-        accept(ack);
         self.closing = true;
         self.answerable = false;
+        if let Some(tap) = &self.status_tap {
+            tap.closing();
+        }
+        accept(ack);
     }
 
     /// Takes a sent driver shell: written as `shell_command` at this drain,

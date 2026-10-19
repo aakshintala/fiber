@@ -849,14 +849,18 @@ fn the_failure_names_each_required_item_and_how_to_approve() {
         ran.expect_err("a required item fails the run").to_string(),
         "The repository requires the MCP server `db`, which nobody approved, and nobody could be asked. Run `fiber approve` in the repository to approve it."
     );
-    // The complete, ordered live kinds of the failed run.
-    assert_eq!(
-        lines
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>()
-            .join(" "),
-        "session_status"
+    // The complete, ordered live kinds of the failed run, setting the
+    // `session_status` line aside: whether the helper's `close_if_running`
+    // lands before the failed run ends is timing.
+    let live: Vec<&str> = lines
+        .iter()
+        .map(|line| line.kind.as_str())
+        .filter(|kind| *kind != "session_status")
+        .collect();
+    assert_eq!(live.join(" "), "");
+    assert!(
+        lines.iter().any(|line| line.kind == "session_status"),
+        "at least one session_status was written"
     );
     assert_eq!(durable_kinds(&session).join(" "), "session_started");
     let code = Fake::new(vec![
@@ -869,13 +873,17 @@ fn the_failure_names_each_required_item_and_how_to_approve() {
         ran.expect_err("a required item fails the run").to_string(),
         "The repository requires the MCP server `db` and the hook `fmt`, which nobody approved, and nobody could be asked. Run `fiber approve` in the repository to approve them."
     );
-    assert_eq!(
-        lines
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>()
-            .join(" "),
-        "session_status"
+    // The complete, ordered live kinds of the failed run, setting the
+    // `session_status` line aside, as above.
+    let live: Vec<&str> = lines
+        .iter()
+        .map(|line| line.kind.as_str())
+        .filter(|kind| *kind != "session_status")
+        .collect();
+    assert_eq!(live.join(" "), "");
+    assert!(
+        lines.iter().any(|line| line.kind == "session_status"),
+        "at least one session_status was written"
     );
     assert_eq!(durable_kinds(&session).join(" "), "session_started");
 }
