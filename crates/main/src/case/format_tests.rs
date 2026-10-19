@@ -133,7 +133,6 @@ fn ordered_outcomes_and_clock_entries_stay_with_their_call() {
         ("credentials", json!({})),
         ("expect_credentials", json!({})),
         ("exact_credentials", json!(true)),
-        ("attended", json!(false)),
     ] {
         let mut case = session_case();
         case[field] = value;
@@ -141,6 +140,18 @@ fn ordered_outcomes_and_clock_entries_stay_with_their_call() {
             case_error(&case).contains("only valid in a call case"),
             "{case}"
         );
+    }
+}
+
+#[test]
+fn session_case_accepts_a_boolean_attended() {
+    // A session case takes `attended`, as a call case does: both booleans
+    // parse. The default and the refusal of non-booleans ride with the
+    // field in the green commit.
+    for value in [json!(true), json!(false)] {
+        let mut case = session_case();
+        case["attended"] = value;
+        parse(&case).expect("boolean attended parses in a session case");
     }
 }
 
