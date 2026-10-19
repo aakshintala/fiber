@@ -13,7 +13,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{Setup, go_module, install_lua};
 use config::{Config, ProjectKey, Sources};
@@ -31,6 +31,25 @@ use serde_json::{Map, Value, json};
 
 /// How long a test waits for a signal or an answer before failing.
 const WAIT: Duration = Duration::from_secs(5);
+
+// debt: 4 copies of this helper across the extensions test binaries, move into common/mod.rs once group 9C1 merges
+/// The thread parked at `at`: exactly one thread waits there.
+#[track_caller]
+fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
+    let mark = clock
+        .mark_parked(at, WAIT)
+        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
+    let threads = mark.threads();
+    assert_eq!(
+        threads.len(),
+        1,
+        "only one thread parks at {at:?}: {threads:?}"
+    );
+    match threads.into_iter().next() {
+        Some(id) => id,
+        None => panic!("one parked thread"),
+    }
+}
 
 /// An extension named `fiber.test/<short>` with the entry script `init`.
 fn extension(dir: &Path, short: &str, init: &str, clock: Arc<FakeClock>) -> Arc<LuaExtension> {
@@ -349,6 +368,7 @@ fiber.tool("slow", {
     let went = go_module(dir.path(), "fx");
     let tools = by_name(&ext);
     let slow = Arc::clone(&tools["slow"]);
+    let asked = clock.now();
     let (tx, rx) = mpsc::channel();
     let call = std::thread::spawn(move || {
         let result = slow.effects(&Map::new());
@@ -358,7 +378,16 @@ fiber.tool("slow", {
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the effects function to start");
-    clock.advance(Duration::from_millis(100));
+    assert!(
+        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
+        "waited for the effects call to park at its grace"
+    );
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(100) + GRACE),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         {
             Deadline::after(WAIT).recv(&rx).expect("waited for the effects call");
@@ -478,11 +507,21 @@ fiber.tool("spin", {
     );
     let went = go_module(dir.path(), "spin");
     let tools = by_name(&ext);
+    let asked = clock.now();
     let first = run(&tools["spin"], json!({}));
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for spin to start");
-    clock.advance(Duration::from_millis(100));
+    assert!(
+        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
+        "waited for spin to park at its grace"
+    );
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(100) + GRACE),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         failed(&ran(&first, &Deadline::after(WAIT))),
         (
@@ -538,7 +577,13 @@ fiber.tool("wait", {{
         clock.await_parked(deadline.checked_add(GRACE).unwrap(), WAIT),
         "waited for the caller to see the call parked"
     );
-    clock.advance(Duration::from_millis(100));
+    let scheduler = thread_parked_at(&clock, deadline);
+    clock.advance_when_parked(
+        Some(deadline),
+        Some(scheduler),
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         failed(&ran(&first, &Deadline::after(WAIT))),
         (
@@ -1064,6 +1109,7 @@ fiber.tool("count", {
     );
     let went = go_module(dir.path(), "spin");
     let tools = by_name(&ext);
+    let asked = clock.now();
     let spinning = run(&tools["spin"], json!({}));
     Deadline::after(WAIT)
         .recv(&went)
@@ -1073,7 +1119,16 @@ fiber.tool("count", {
     let queued = run_cancellable(&tools["count"], &cancel);
     cancel.cancel();
     assert_eq!(ran(&queued, &Deadline::after(WAIT)), cancelled());
-    clock.advance(Duration::from_millis(100));
+    assert!(
+        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
+        "waited for spin to park at its grace"
+    );
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(100) + GRACE),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         failed(&ran(&spinning, &Deadline::after(WAIT))).0,
         ErrorCode::Timeout
@@ -1252,6 +1307,7 @@ fiber.tool("exec", {{
     let first = run_cancellable(&tools["exec"], &cancel);
     let group = ready.wait(WAIT)[0];
     let watchdog = fakes::Watchdog::group(group);
+    let cancelled_at = clock.now();
     cancel.cancel();
     // The trap's line: SIGTERM arrived and the group runs on.
     ready.wait(WAIT);
@@ -1261,10 +1317,16 @@ fiber.tool("exec", {{
             .is_err(),
         "the call returned while its group still ran"
     );
-    // Past the SIGKILL 800 ms after the SIGTERM, and past the call's 500 ms
-    // deadline and its grace: a cancelled call waits for its run, not its
-    // deadline.
-    clock.advance(Duration::from_millis(500) + GRACE);
+    // The SIGKILL lands 800 ms after the SIGTERM: the exec parks at its
+    // kill bound, and a cancelled call waits for its run, not its deadline.
+    let kill_at = cancelled_at + support::group::GRACE;
+    let exec_thread = thread_parked_at(&clock, kill_at);
+    clock.advance_when_parked(
+        Some(kill_at),
+        Some(exec_thread),
+        support::group::GRACE,
+        &Deadline::after(WAIT),
+    );
     assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
     assert!(
         !fakes::kill_group(group, "0").unwrap(),
@@ -1319,7 +1381,12 @@ fiber.tool("other", {
         clock.await_parked(abandon_at, WAIT),
         "waited for the caller to park at the grace"
     );
-    clock.advance(Duration::from_millis(50) + GRACE);
+    clock.advance_when_parked(
+        Some(abandon_at),
+        None,
+        Duration::from_millis(50) + GRACE,
+        &Deadline::after(WAIT),
+    );
     assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
     let later = ran(&run(&tools["other"], json!({})), &Deadline::after(WAIT));
     assert_eq!(
@@ -1387,7 +1454,13 @@ fiber.tool("find", {{
         clock.await_parked(abandon_at, WAIT),
         "waited for the stuck call's caller to park at the grace"
     );
-    clock.advance(Duration::from_millis(50) + GRACE);
+    let stuck_caller = thread_parked_at(&clock, abandon_at);
+    clock.advance_when_parked(
+        Some(abandon_at),
+        Some(stuck_caller),
+        Duration::from_millis(50) + GRACE,
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         failed(&ran(&stuck, &Deadline::after(WAIT))).0,
         ErrorCode::ToolError
@@ -1437,28 +1510,46 @@ fiber.tool("find", {{
     let group = ready.wait(WAIT)[0];
     let watchdog = fakes::Watchdog::group(group);
     let asked = clock.now();
+    let abandon_at = asked + Duration::from_millis(50) + GRACE;
     let stuck = run(&tools["find"], json!({}));
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the stuck callback to pass its clock check");
     // The stop's SIGKILL bound anchors at the cancel, so the cancel lands
     // 300 ms into the stuck call's 50 ms timeout plus grace: the abandon
-    // below does not cross the 800 ms bound early.
-    clock.advance(Duration::from_millis(300));
+    // below does not cross the 800 ms bound early. The stuck caller is
+    // named: the exec run parks on its child, not the clock.
+    let stuck_caller = thread_parked_at(&clock, abandon_at);
+    clock.advance_when_parked(
+        Some(abandon_at),
+        Some(stuck_caller),
+        Duration::from_millis(300),
+        &Deadline::after(WAIT),
+    );
     // The thread is stuck in a C call, so it never drops the parked call.
+    let cancelled_at = clock.now();
     cancel.cancel();
+    // The stop notices the dropped run on its next poll and parks the exec
+    // at the kill bound; this read proves that pass ran at 300 ms, so the
+    // 750 ms advance below cannot cross the bound early.
+    let exec_thread = thread_parked_at(&clock, cancelled_at + support::group::GRACE);
     assert!(
         Deadline::after(Duration::from_millis(200))
             .recv(&first)
             .is_err(),
         "the parked call returned before the abandon"
     );
-    let abandon_at = asked + Duration::from_millis(50) + GRACE;
+    let kill_at = cancelled_at + support::group::GRACE;
     assert!(
         clock.await_parked(abandon_at, WAIT),
         "waited for the stuck call's caller to park at the grace"
     );
-    clock.advance(Duration::from_millis(750));
+    clock.advance_when_parked(
+        Some(abandon_at),
+        Some(stuck_caller),
+        Duration::from_millis(750),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         failed(&ran(&stuck, &Deadline::after(WAIT))).0,
         ErrorCode::ToolError
@@ -1477,9 +1568,14 @@ fiber.tool("find", {{
             .is_err(),
         "the call returned while its group still ran"
     );
-    // Past the SIGKILL 800 ms after the SIGTERM: the group is killed and
+    // The SIGKILL 800 ms after the SIGTERM: the group is killed and
     // drained before the call returns.
-    clock.advance(Duration::from_millis(800));
+    clock.advance_when_parked(
+        Some(kill_at),
+        Some(exec_thread),
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
     assert!(
         !fakes::kill_group(group, "0").unwrap(),

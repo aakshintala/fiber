@@ -14,7 +14,7 @@ mod common;
 
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use common::{Setup, pair, script_provider, write};
 use config::{Secret, store_secret};
@@ -29,6 +29,25 @@ use serde_json::json;
 
 /// How long a test waits for one call, or for a background refresh.
 const WAIT: Duration = Duration::from_secs(5);
+
+// debt: 4 copies of this helper across the extensions test binaries, move into common/mod.rs once group 9C1 merges
+/// The thread parked at `at`: exactly one thread waits there.
+#[track_caller]
+fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
+    let mark = clock
+        .mark_parked(at, WAIT)
+        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
+    let threads = mark.threads();
+    assert_eq!(
+        threads.len(),
+        1,
+        "only one thread parks at {at:?}: {threads:?}"
+    );
+    match threads.into_iter().next() {
+        Some(id) => id,
+        None => panic!("one parked thread"),
+    }
+}
 
 fn provider_file(lua: &str) -> (fakes::TempDir, Arc<LuaExtension>) {
     let dir = fakes::TempDir::new("lazy-provider");
@@ -376,7 +395,8 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
         "t1"
     );
     assert_eq!(server.requests().len(), 1);
-    // Into the refresh window, still short of expiry.
+    // Into the refresh window, still short of expiry. No code under test
+    // waits on the clock here; the token call returned (ruling 6179406086).
     clock.advance(
         Duration::from_secs(3600)
             .checked_sub(REFRESH_BEFORE)
@@ -762,7 +782,13 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
         ),
         "waited for get to park at its grace"
     );
-    clock.advance(Duration::from_millis(30000));
+    let scheduler = thread_parked_at(&clock, asked + Duration::from_millis(30000));
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(30000)),
+        Some(scheduler),
+        Duration::from_millis(30000),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv(&rx)
         .expect("waited for get")

@@ -278,7 +278,8 @@ fn a_background_refresh_of_one_pair_leaves_another_pair_alone() {
     let timed = provider(&extension, "timed");
     assert_eq!(token(&timed, "timed", "soon"), "s1");
     assert_eq!(token(&timed, "timed", "late"), "late/1");
-    // Into the refresh window, still short of expiry.
+    // Into the refresh window, still short of expiry. No code under test
+    // waits on the clock here; both token calls returned (ruling 6179406086).
     clock.advance(
         Duration::from_secs(3600)
             .checked_sub(REFRESH_BEFORE)

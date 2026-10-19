@@ -164,6 +164,9 @@ pub(crate) fn drive<T: Send>(
                 panic!("the stalled run returns")
             }
         }
+        // A stall driver: the callers own the bounds, so no single park is
+        // knowable here; each jump goes a day past any install or git bound
+        // and only the run's answer is asserted (ruling 6263191610).
         let mark = clock.advance_marked(FAR);
         if let Some(done) = wait_parked_since(clock, &mark, &done) {
             return done;
