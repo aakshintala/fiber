@@ -971,6 +971,52 @@ fn ledger_rows_never_pass_their_width() {
     // Past five digits the gutter grows, and the row is still cut to
     // the width.
     assert!(rows[3].to_string().starts_with("100000 "));
+    // At step 100000 and width 6 the renderer's row is cut to the
+    // width too, and its links shift by the gutter actually drawn:
+    // every row is at most 6 cells, and every link lands on the cells
+    // drawn.
+    let group = Group {
+        open: true,
+        sections: vec![
+            Section {
+                step: 100_000,
+                calls: vec![read_call(4, "a.rs")],
+                ..Section::default()
+            },
+            Section {
+                step: 1_000_000,
+                calls: vec![read_call(5, "b.rs")],
+                ..Section::default()
+            },
+        ],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(vec![vec![
+            raw("ab"),
+            RawSpan {
+                text: "hel".to_owned(),
+                link: Some("https://example.com".to_owned()),
+                ..RawSpan::default()
+            },
+            raw("lo"),
+        ]])),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 6, Some(&bound));
+    assert_eq!(rows.len(), texts.len());
+    for ((row, _), text) in rows.iter().zip(texts.iter()) {
+        let taken = cells(row);
+        assert!(taken <= 6, "{row:?} is {taken} cells at width 6");
+        for (range, _) in &text.links {
+            assert!(
+                usize::from(range.end) <= taken,
+                "{range:?} lands past the {taken} cells drawn"
+            );
+        }
+    }
 }
 
 /// Thinking rows are dim and italic, cut to the width: "○ Thinking" while
