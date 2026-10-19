@@ -259,6 +259,8 @@ fn no_queries_without_a_card_session_or_live_link() {
     first(&mut app);
 }
 
+// debt: two `sent` copies, move this helper to `app::items::testkit` when that path
+// is in the writing fence.
 /// The command lines an effect sends, parsed.
 fn sent(effect: crate::app::Effect) -> Vec<Value> {
     match effect {

@@ -311,6 +311,8 @@ impl Store {
         self.with_threshold(quota)
     }
 
+    // debt: 810 lines, extract loader/fetch logic into `quota/{fetch,loader}.rs` at a real
+    // module boundary when those paths are in the writing fence.
     /// The fetch path: one fetch per label whose key read succeeded,
     /// whatever the cache's age, answering once every fetch it started
     /// has ended (`docs/invocation.md`, "What each command does",
