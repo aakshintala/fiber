@@ -345,8 +345,8 @@ fn a_failed_initial_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
     assert!(
         !failures
             .iter()
-            .any(|failure| failure.contains("did not write fiber_exited after close")),
-        "the released hang drives the exit wait, which consumes the close event: {failures:?}"
+            .any(|failure| failure.contains("missing durable event")),
+        "after a failed initial advance the released hang drives the exit wait, which consumes the close event: {failures:?}"
     );
 }
 
@@ -400,8 +400,8 @@ fn a_failed_mid_loop_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
     assert!(
         !failures
             .iter()
-            .any(|failure| failure.contains("did not write fiber_exited after close")),
-        "the released hang drives the exit wait, which consumes the close event: {failures:?}"
+            .any(|failure| failure.contains("missing durable event")),
+        "after a failed mid-loop advance the released hang drives the exit wait, which consumes the close event: {failures:?}"
     );
 }
 
