@@ -1422,7 +1422,7 @@ fn drive_settle_to_completion(
             Some(stepped) => mark = Some(stepped),
             None => {
                 answered = finished.try_recv().is_ok();
-                assert!(answered, "the settle parked at its poll");
+                assert!(answered, "the settle answered when it did not re-park");
                 break;
             }
         }
@@ -1436,13 +1436,11 @@ fn drive_settle_to_completion(
         reparked || answered,
         "the settle parked again after the last probe advance"
     );
-    if !answered {
-        assert_eq!(
-            clock.now(),
-            start + Duration::from_millis(500),
-            "the blind probe spent fifty poll steps"
-        );
-    }
+    assert_eq!(
+        clock.now(),
+        start + Duration::from_millis(500),
+        "the blind probe spent fifty poll steps"
+    );
     assert!(
         listed(reads).contains(&real),
         "the held group is still listed after the blind probe: {:?}",
@@ -2417,7 +2415,7 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
                 watched: (_, Some(at)),
                 ..
             }) if at == clock.origin() + doors::SHUTDOWN_BOUND => {
-                answer = Deadline::after(pause).recv(&settled).ok();
+                answer = drive.recv(&settled).ok();
             }
             Err(miss) => panic!("{miss}"),
         }
