@@ -2542,3 +2542,28 @@ fn delegate_starts_from_commands_hooks_timers_and_tools_reach_start() {
         assert_eq!(delegate_reply(&reply_rx, &what).unwrap().0, "j_1");
     }
 }
+
+/// `Unsent::from` keeps its deliveries until the `Unsent` drops: the
+/// ack inside the delivery stays alive in the `Unsent` and drops with
+/// it, so a `Default::default()` in its place fails the first assert.
+#[test]
+fn unsent_from_vec_keeps_its_deliveries_until_drop() {
+    use super::super::hub::Unsent;
+    use contract::inbox::{Ack, Delivery};
+
+    let held = std::sync::Arc::new(());
+    let weak = std::sync::Arc::downgrade(&held);
+    let kept = std::sync::Arc::clone(&held);
+    drop(held);
+    let delivery = Delivery::Close(Ack(Box::new(move |_| drop(kept))));
+    let unsent = Unsent::from(vec![delivery]);
+    assert!(
+        weak.upgrade().is_some(),
+        "the conversion keeps its deliveries"
+    );
+    drop(unsent);
+    assert!(
+        weak.upgrade().is_none(),
+        "dropping the Unsent drops its deliveries"
+    );
+}
