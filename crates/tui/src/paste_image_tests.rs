@@ -11,7 +11,7 @@ use std::time::Duration;
 use contract::clock::Clock;
 use fakes::Deadline;
 use fakes::children;
-use fakes::clock::FakeClock;
+use fakes::clock::{FakeClock, Mark};
 use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
 
 use super::{
@@ -588,7 +588,9 @@ fn apple_script_past_its_frame_cap_is_too_large() {
     reaped(watchdog, pgid, "the over frame-cap read");
 }
 
-/// Waits for the worker to park at `end`, then [`advance_to_parked`].
+/// Waits for the worker to park at `end`, then advances the clock to
+/// just before the limit and proves the worker parked again there.
+#[track_caller]
 fn waiting(
     rx: &mpsc::Receiver<Result<Vec<u8>, Failed>>,
     clock: &Arc<FakeClock>,
@@ -599,22 +601,29 @@ fn waiting(
         clock.await_parked(end, DEADLINE),
         "{what}: the read never parked at its deadline"
     );
-    advance_to_parked(rx, clock, end, what);
+    let mark = clock.advance_when_parked(
+        Some(end),
+        None,
+        LIMIT.checked_sub(Duration::from_millis(1)).unwrap(),
+        &Deadline::after(DEADLINE),
+    );
+    parked_again(rx, clock, end, &mark, what);
 }
 
-/// Advances the clock to just before the limit and proves the worker
-/// parked again there; the answer channel is still empty. The child can
-/// wake the worker between its first park and the advance; the mark
-/// holds its latest park, so the wait below sees its next park.
-fn advance_to_parked(
+/// Proves the worker parked again at `end` after the move `mark`
+/// recorded; the answer channel is still empty. The child can wake the
+/// worker between its first park and the advance; the mark holds its
+/// latest park, so the wait below sees its next park.
+#[track_caller]
+fn parked_again(
     rx: &mpsc::Receiver<Result<Vec<u8>, Failed>>,
     clock: &Arc<FakeClock>,
     end: std::time::Instant,
+    mark: &Mark,
     what: &str,
 ) {
-    let mark = clock.advance_marked(LIMIT.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(
-        clock.await_parked_since(&mark, Some(end), DEADLINE),
+        clock.await_parked_since(mark, Some(end), DEADLINE),
         "{what}: the read never parked again before its deadline"
     );
     assert!(
@@ -694,7 +703,7 @@ impl Clock for HoldingClock {
 
 /// Runs `script` (which blocks on the `go` FIFO before its event) under a
 /// read whose worker is held between parks when the event wakes it, and
-/// checks that `advance_to_parked` still sees the worker park again.
+/// checks that `parked_again` still sees the worker park again.
 #[track_caller]
 fn event_wakes_the_worker_before_the_advance(
     test: &ChildTest,
@@ -731,8 +740,15 @@ fn event_wakes_the_worker_before_the_advance(
         Ok(()) => {}
         Err(_) => panic!("{what}: the worker never left its park"),
     }
-    advance_to_parked(&rx, &fake, end, what);
-    fake.advance(Duration::from_millis(1));
+    // No code under test waits on the clock here; the worker is held between parks and this move releases it (ruling 6179406086).
+    let mark = fake.advance_marked(LIMIT.checked_sub(Duration::from_millis(1)).unwrap());
+    parked_again(&rx, &fake, end, &mark, what);
+    fake.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(
         answered(&rx, what, &Deadline::after(DEADLINE)),
         Err(Failed::TimedOut)
@@ -780,7 +796,12 @@ fn the_limit_kills_a_hung_command() {
     // R2: a millisecond before the limit the read has not answered; a
     // millisecond later it has timed out.
     waiting(&rx, &clock, end, "the hung command");
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(
         answered(&rx, "the hung command", &Deadline::after(DEADLINE)),
         Err(Failed::TimedOut)
@@ -889,7 +910,12 @@ fn a_command_that_closes_stdout_and_keeps_running_hits_the_limit() {
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
     assert!(kill_pid(pgid, "0").unwrap());
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(
         answered(&rx, "the closed-stdout command", &Deadline::after(DEADLINE)),
         Err(Failed::TimedOut)
@@ -920,7 +946,12 @@ fn a_descendant_that_escapes_the_group_cannot_hold_the_read() {
         .unwrap_or_else(|| panic!("no escaped pid"));
     let marker = Watchdog::matching(&test.dir.path().display().to_string());
     waiting(&rx, &clock, end, "the escaped descendant");
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(
         answered(&rx, "the escaped descendant", &Deadline::after(DEADLINE)),
         Err(Failed::TimedOut)
@@ -949,7 +980,12 @@ fn an_exited_shell_whose_child_holds_stdout_waits_for_the_limit() {
     let (watchdog, pgid) = watch(&test);
     let _ = test.ready.wait(DEADLINE);
     waiting(&rx, &clock, end, "the exited shell");
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(
         answered(&rx, "the exited shell", &Deadline::after(DEADLINE)),
         Err(Failed::TimedOut)
@@ -1318,7 +1354,12 @@ fn stdout_of_exactly_the_cap_with_a_live_child_is_not_too_large() {
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 16);
     let (watchdog, pgid) = watch(&test);
     waiting(&rx, &clock, end, "the exact-cap live child");
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(
         answered(&rx, "the exact-cap live child", &Deadline::after(DEADLINE)),
         Err(Failed::TimedOut)
@@ -1349,7 +1390,12 @@ fn the_timeout_kill_misses_a_member_joined_after_it() {
         end,
         "the exact-cap live child with its late join",
     );
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     // The worker sent the group's kill and waits: join a sleep to the
     // group after the kill, so the kill misses it. The leader is still
     // unreaped while the worker is held, so the group still takes members.
