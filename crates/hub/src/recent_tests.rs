@@ -350,16 +350,6 @@ fn seeds_come_from_the_newest_hundred_rows_only() {
     assert!(seeds(&temp.dir).is_empty());
 }
 
-#[test]
-fn find_names_the_project_holding_the_session() {
-    let temp = Temp::new();
-    temp.row(1, "other", Left::Exited, None);
-    let (project, dir) = find(&temp.dir, &id(1)).unwrap();
-    assert_eq!(project, "other");
-    assert_eq!(dir, session_dir(&temp.dir, "other", &id(1)));
-    assert_eq!(find(&temp.dir, &id(2)), None);
-}
-
 /// An exited row's last `session_status`, as `close` reads it.
 fn exited_status(name: &str) -> contract::events::SessionStatus {
     serde_json::from_value(status(name, "/w", "idle", None)).unwrap()

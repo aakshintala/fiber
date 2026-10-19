@@ -24,7 +24,7 @@ use serde_json::{Map, Value};
 use crate::connection::{Hub, Refused};
 use crate::feed::invalid;
 use crate::relay::valid_session_id;
-use crate::resume::{find_log, not_found};
+use crate::resume::not_found;
 
 /// `delete`: removes `session`, and with `cascade` every session that
 /// continues it, dependents first. With `cascade`, `expect` holds the set
@@ -160,7 +160,7 @@ fn confirm(set_ids: &BTreeSet<&SessionId>, expect: &BTreeSet<&SessionId>) -> Res
 
 /// `session`'s directory: a real directory, never a link, holding its log.
 fn session_dir(hub: &Hub, session: &SessionId) -> Option<PathBuf> {
-    let dir = find_log(&hub.home, session)?.parent()?.to_path_buf();
+    let (_, dir) = crate::recent::lookup_logged(&hub.home, session)?;
     fs::symlink_metadata(&dir)
         .is_ok_and(|meta| meta.is_dir())
         .then_some(dir)

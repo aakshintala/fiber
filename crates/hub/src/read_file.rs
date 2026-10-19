@@ -15,7 +15,6 @@ use serde_json::{Map, Value};
 use crate::connection::Refused;
 use crate::feed::invalid;
 use crate::relay::valid_session_id;
-use crate::resume::find_log;
 
 /// The largest file `read_file` answers: 10 MiB.
 const LIMIT: u64 = 10 * 1024 * 1024;
@@ -65,8 +64,7 @@ fn parse(args: &Map<String, Value>) -> Option<(SessionId, &str)> {
 /// home, which runs after `log` reports a missing or unreadable
 /// `artifacts/` so those keep today's codes.
 fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refused> {
-    let dir = find_log(home, session).and_then(|log| log.parent().map(Path::to_path_buf));
-    let Some(dir) = dir else {
+    let Some((_, dir)) = crate::recent::lookup_logged(home, session) else {
         return Err(crate::resume::not_found(session));
     };
     let home_real = fs::canonicalize(home).map_err(|error| unreadable(path, &error))?;

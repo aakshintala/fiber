@@ -33,16 +33,18 @@ pub fn draw(events: &str, width: u16, height: u16) -> Result<String, String> {
 /// aside, so it waits on the badge, a click target. Then draws them at
 /// `width` by `height` through the loop's screen, and moves the pointer to
 /// each of `pointer` in turn, drawing after each as the loop does for a
-/// motion report. Returns the bytes each report wrote. The `hover` jig
+/// motion report. Returns the badge row, the row whose drawn text holds
+/// [`App::badge`], with the bytes each report wrote. The `hover` jig
 /// times it (`docs/tui.md`, "Mouse and hover").
 pub fn hover_frames(
     events: &str,
     width: u16,
     height: u16,
     pointer: &[(u16, u16)],
-) -> Result<Vec<usize>, String> {
+) -> Result<(u16, Vec<usize>), String> {
     let mut app = fold(events, width, height)?;
     app.put_aside();
+    let row = badge_row(&app, width, height)?;
     let written = Counter::default();
     let mut screen = Screen::new(screen::backend(written.clone()), width, height)
         .map_err(|error| error.to_string())?;
@@ -57,7 +59,22 @@ pub fn hover_frames(
             .map_err(|error| error.to_string())?;
         bytes.push(written.0.get().saturating_sub(before));
     }
-    Ok(bytes)
+    Ok((row, bytes))
+}
+
+/// The first row whose drawn text holds the badge, drawn as [`draw`]
+/// draws it. An error when no badge is shown or the badge is on no row.
+fn badge_row(app: &App, width: u16, height: u16) -> Result<u16, String> {
+    let badge = app.badge().ok_or_else(|| "no badge is shown".to_owned())?;
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    view::render(app, area, &mut buf, None);
+    view::text(&buf)
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains(badge.as_str()))
+        .and_then(|(at, _)| u16::try_from(at).ok())
+        .ok_or_else(|| "the badge is on no row".to_owned())
 }
 
 /// Counts the bytes written through it.

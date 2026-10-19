@@ -1146,6 +1146,71 @@ fn two_finished_lines_in_one_batch_write_both_notifications_in_order() {
 /// it: a named receive deadline, never a sleep on the test thread.
 const DRAIN: Duration = Duration::from_secs(5);
 
+/// Drains the run thread chunk by chunk: each fold signal renews the
+/// no-progress window and sends one release, so a slow machine folds
+/// every chunk within the window while the whole log takes what it
+/// takes. The window bounds one chunk, never the whole replay.
+fn drain_by_chunk<T>(
+    window: Duration,
+    reached: &mpsc::Receiver<()>,
+    release: &mpsc::Sender<()>,
+    finished: &mpsc::Receiver<T>,
+) -> Result<T, String> {
+    loop {
+        // One fresh window per signal through the shared deadline
+        // type: each fold renews the no-progress bound.
+        match Deadline::after(window).recv(reached) {
+            Ok(()) => {
+                release.send(()).unwrap_or(());
+            }
+            Err(_) => match finished.try_recv() {
+                Ok(done) => return Ok(done),
+                Err(_) => return Err(format!("no fold for {window:?}")),
+            },
+        }
+    }
+}
+
+#[test]
+fn a_held_fold_fails_the_no_progress_window() {
+    let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
+    lp.app.attach(contract::SessionId(SESSION.to_owned()));
+    let (tx, rx) = mpsc::channel();
+    let (reached_tx, reached) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("held-fold-run".to_owned())
+        .spawn(move || {
+            super::pause::install(reached_tx, release);
+            let code = lp.run(&rx);
+            done.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    tx.send(Input::Hub(Line::Session(line(
+        "turn_started",
+        Some(0),
+        None,
+        json!({"input": []}),
+    ))))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    drop(tx);
+    // The loop holds before its first fold: one hang guard for the hold.
+    Deadline::after(DRAIN).recv_or_fail(&reached, "the loop to hold before the fold");
+    // No release is sent, so the pump fails its window instead of
+    // waiting out the whole drain.
+    let window = Duration::from_millis(200);
+    let err = match drain_by_chunk(window, &reached, &release_tx, &finished) {
+        Ok(_) => panic!("the pump drained a held fold"),
+        Err(err) => err,
+    };
+    assert!(err.contains("no fold"), "{err}");
+    // Dropping the release sender lets the held fold through, so the
+    // loop thread finishes; one hang guard for its return.
+    drop(release_tx);
+    Deadline::after(DRAIN).recv_or_fail(&finished, "the loop to quit after the release");
+}
+
 /// Lower-case words, the same for the seed.
 fn filler(len: usize, seed: u64) -> String {
     const WORDS: [&str; 8] = [
@@ -1402,9 +1467,17 @@ fn resume_open_replays_the_log_to_the_tail() {
         .unwrap_or_else(|err| panic!("send: {err}"));
     drop(tx);
     let (done, finished) = mpsc::channel();
+    // The fold seam renewing the drain window chunk by chunk: one
+    // `reached` per hub chunk, one `release` per signal, so the window
+    // bounds one chunk, never the whole log. Dropping the sender lets
+    // every later fold through, and a panicking test releases the loop
+    // the same way.
+    let (fold_reached_tx, fold_reached) = mpsc::channel();
+    let (fold_release_tx, fold_release) = mpsc::channel();
     std::thread::Builder::new()
         .name("resume-run".to_owned())
         .spawn(move || {
+            super::pause::install(fold_reached_tx, fold_release);
             let code = lp.run(&rx);
             done.send((code, lp)).unwrap_or(());
         })
@@ -1425,15 +1498,17 @@ fn resume_open_replays_the_log_to_the_tail() {
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
     drop(release_tx);
-    // Drain completion off thread-park and answer events: the hub's
-    // writes, the reader's EOF, then the run thread's return. One
-    // deadline per wait, `DRAIN` kept as each wait's hang guard.
-    let hub_wait = Deadline::after(DRAIN);
-    hub_wait.recv_or_fail(&hub_done, "the hub to finish streaming the log");
-    let reader_wait = Deadline::after(DRAIN);
-    reader_wait.recv_or_fail(&reader_done, "the reader to reach EOF");
-    let drain_wait = Deadline::after(DRAIN);
-    let (code, lp) = drain_wait.recv_or_fail(&finished, "the loop to drain");
+    // The drain pumps the fold chunk by chunk: each signal renews the
+    // no-progress window, so a slow machine folds every chunk within
+    // `DRAIN` while the whole log takes what it takes. Panicking drops
+    // the release sender, which releases the held loop thread too.
+    let (code, lp) = drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished)
+        .unwrap_or_else(|err| panic!("the loop folded no chunk for {DRAIN:?}: {err}"));
+    drop(fold_release_tx);
+    // The hub's writes and the reader's EOF are ready once the loop has
+    // returned: hang guards, not drain bounds.
+    Deadline::after(DRAIN).recv_or_fail(&hub_done, "the hub to finish streaming the log");
+    Deadline::after(DRAIN).recv_or_fail(&reader_done, "the reader to reach EOF");
     assert_eq!(code, 0);
     // The one history command is the tail's first window: the replay
     // lands the whole session, so no page fetch follows.

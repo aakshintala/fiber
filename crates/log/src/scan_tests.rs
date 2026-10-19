@@ -661,3 +661,101 @@ fn first_line_of_a_session_started_gives_the_view() {
         Some((SessionId("s_p".to_owned()), Seq(3)))
     );
 }
+
+#[test]
+fn started_first_reads_the_workspace_repository_and_delegate() {
+    let home = fakes::TempDir::new("log-started-first");
+    let dir = home.path().join("s");
+    fs::create_dir_all(&dir).unwrap();
+    // Missing, empty and newline-less logs are incomplete.
+    assert!(matches!(
+        started_first(&dir),
+        Err(FirstLineError::Incomplete)
+    ));
+    fs::write(dir.join("events.jsonl"), b"").unwrap();
+    assert!(matches!(
+        started_first(&dir),
+        Err(FirstLineError::Incomplete)
+    ));
+    fs::write(dir.join("events.jsonl"), b"{\"kind\":\"session_started\"").unwrap();
+    assert!(matches!(
+        started_first(&dir),
+        Err(FirstLineError::Incomplete)
+    ));
+    // A line torn inside a multi-byte character is incomplete until its
+    // newline: completeness is decided on bytes before any decoding.
+    let mut torn = br#"{"kind":"session_started","payload":{"workspace":"/w"#.to_vec();
+    torn.extend_from_slice(&[0xC3]);
+    fs::write(dir.join("events.jsonl"), &torn).unwrap();
+    assert!(matches!(
+        started_first(&dir),
+        Err(FirstLineError::Incomplete)
+    ));
+    // Corrupt: not UTF-8, not JSON, the wrong kind, no workspace.
+    let mut bad_utf8 = torn.clone();
+    bad_utf8.push(b'\n');
+    fs::write(dir.join("events.jsonl"), &bad_utf8).unwrap();
+    assert!(matches!(started_first(&dir), Err(FirstLineError::Corrupt)));
+    for first in [
+        "not json\n".to_owned(),
+        json!({"kind": "fiber_started", "payload": {"workspace": "/w"}}).to_string() + "\n",
+        json!({"kind": "session_started", "payload": {}}).to_string() + "\n",
+        json!({"kind": "session_started", "payload": {"workspace": 7}}).to_string() + "\n",
+    ] {
+        fs::write(dir.join("events.jsonl"), first.as_bytes()).unwrap();
+        assert!(
+            matches!(started_first(&dir), Err(FirstLineError::Corrupt)),
+            "{first}"
+        );
+    }
+    // Minimal envelopes with no `ts` or `session_id` are still `Ok`.
+    fs::write(
+        dir.join("events.jsonl"),
+        format!(
+            "{}\n",
+            json!({"kind": "session_started", "payload": {"workspace": "/w"}})
+        ),
+    )
+    .unwrap();
+    let view = started_first(&dir).unwrap();
+    assert_eq!(view.workspace.as_deref(), Some("/w"));
+    assert_eq!(view.repository, None);
+    assert!(!view.delegate);
+    // With a recorded repository and a parent object.
+    fs::write(
+        dir.join("events.jsonl"),
+        json!({"kind": "session_started", "payload": {
+            "workspace": "/w",
+            "worktree": {"repository": "/r"},
+            "parent": {"session_id": "s", "delegate_id": "j"},
+        }})
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let view = started_first(&dir).unwrap();
+    assert_eq!(view.repository.as_deref(), Some("/r"));
+    assert!(view.delegate);
+    // `parent: null` is not a delegate; any other shape is.
+    for (parent, delegate) in [(json!(null), false), (json!(7), true)] {
+        fs::write(
+            dir.join("events.jsonl"),
+            json!({"kind": "session_started", "payload": {"workspace": "/w", "parent": parent}})
+                .to_string()
+                + "\n",
+        )
+        .unwrap();
+        assert_eq!(started_first(&dir).unwrap().delegate, delegate, "{parent}");
+    }
+}
+
+#[test]
+fn started_first_with_an_unopenable_log_is_corrupt() {
+    let home = fakes::TempDir::new("log-started-first-loop");
+    let dir = home.path().join("s");
+    fs::create_dir_all(&dir).unwrap();
+    // A symlink loop makes `File::open` fail with an error other than
+    // `NotFound` (ELOOP), without root or permissions.
+    std::os::unix::fs::symlink("events.jsonl", dir.join("events.jsonl")).unwrap();
+    assert!(matches!(started_first(&dir), Err(FirstLineError::Corrupt)));
+}
