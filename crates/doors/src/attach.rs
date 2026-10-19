@@ -256,12 +256,7 @@ pub(crate) fn subscribed(
             return Err(Unsubscribed::Closed);
         };
         if is_answer(&line, "command_rejected", &sub.0) {
-            let empty = Map::new();
-            let payload = line
-                .get("payload")
-                .and_then(Value::as_object)
-                .unwrap_or(&empty);
-            return Err(Unsubscribed::Rejected(rejection(payload)));
+            return Err(Unsubscribed::Rejected(rejected(&line)));
         }
         if is_answer(&line, "command_accepted", &sub.0) {
             if let Err(failure) = check_version(id, &line) {
@@ -336,7 +331,19 @@ fn emit(out: &mut dyn Write, raw: &[u8]) -> Result<(), Failure> {
 
 /// The subscribe or credential rejection's code and message, read from the
 /// answer's payload map. Envelope readers pass `envelope.payload` directly;
-/// raw-line readers pass the line's `payload` object.
+/// raw-line readers pass the whole line here.
+pub(crate) fn rejected(line: &Value) -> Failure {
+    let empty = Map::new();
+    let payload = line
+        .get("payload")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    rejection(payload)
+}
+
+/// The subscribe or credential rejection's code and message, read from the
+/// answer's payload map. Envelope readers pass `envelope.payload` directly;
+/// raw-line readers use [`rejected`] on the whole line.
 pub(crate) fn rejection(payload: &Map<String, Value>) -> Failure {
     let code = payload
         .get("code")

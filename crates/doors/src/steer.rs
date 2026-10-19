@@ -9,7 +9,7 @@ use contract::commands::{Command, CommandLine, ContentArgs, SentPart, SubscribeL
 use contract::shapes::Failure;
 use contract::{CommandId, SessionId};
 
-use crate::attach::{Unsubscribed, is_answer, next_line, open, rejection, send, subscribed};
+use crate::attach::{Unsubscribed, is_answer, next_line, open, rejected, send, subscribed};
 use crate::mint;
 
 /// A test-only pause point at the acknowledgement wait: armed by the
@@ -175,12 +175,7 @@ pub fn steer(
             return Steered::Gone;
         };
         if is_answer(&line, "command_rejected", command) {
-            let empty = serde_json::Map::new();
-            let payload = line
-                .get("payload")
-                .and_then(serde_json::Value::as_object)
-                .unwrap_or(&empty);
-            return Steered::Rejected(rejection(payload));
+            return Steered::Rejected(rejected(&line));
         }
         if is_answer(&line, "command_accepted", command) {
             return Steered::Accepted;
