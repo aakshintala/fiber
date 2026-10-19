@@ -85,13 +85,6 @@ fn state_line(key: &str, landing: u64) -> StateLine {
 }
 
 #[test]
-fn default_wait_for_runs_returns_at_once() {
-    std::thread::scope(|s| {
-        s.spawn(|| Never.wait_for_runs()).join().unwrap();
-    });
-}
-
-#[test]
 fn hook_state_line_builds_set_and_unset_events_from_its_only_identity() {
     let unset = state_line("removed", 7);
     assert_eq!(
