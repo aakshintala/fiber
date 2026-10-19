@@ -220,7 +220,6 @@ fn create_opens_one_stamped_line_and_a_second_open_writes_nothing() {
             let repo = repo("doors-timing-create");
             let clock = FakeClock::new();
             let id = SessionId("s_0123456789abcdef".into());
-            // No code under test waits on the clock here; it stamps elapsed time (ruling 6179406086).
             let clock_add = Arc::clone(&clock);
             let add = move |command: &mut Command| -> io::Result<Output> {
                 let out = command.output()?;

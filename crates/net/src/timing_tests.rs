@@ -913,9 +913,10 @@ fn a_no_proxy_bypass_times_the_direct_socket() {
     assert_eq!(capture.ends(), 1, "the direct scope drops once");
 }
 
-/// The instant the gated keep parks at: a minute out, past the test's
-/// millisecond advances but inside the same park the helper waits for.
-const PARK: Duration = Duration::from_secs(60);
+/// The offset from `now` at which the gated keep parks: a minute out,
+/// past the test's millisecond advances but inside the same park the
+/// helper waits for.
+const PARK_AFTER: Duration = Duration::from_secs(60);
 
 /// A keep that advances the fake clock at fixed points: the second
 /// address's stop check parks past its clock check until the test
@@ -947,7 +948,7 @@ impl GatedKeep {
     /// the advance can only land inside the scope.
     fn park(&self, ack: &mpsc::Sender<()>, release: &Mutex<mpsc::Receiver<()>>) {
         self.clock
-            .wait_until(Some(self.clock.now() + PARK), &mut |_| {
+            .wait_until(Some(self.clock.now() + PARK_AFTER), &mut |_| {
                 assert_eq!(
                     self.capture.ends(),
                     0,
@@ -1067,7 +1068,7 @@ fn the_scope_covers_the_attempts_and_the_keep() {
     Deadline::after(EACH_WITHIN)
         .recv(&gates.stop_ack_rx)
         .expect("the second stop check parks");
-    let park = clock.now() + PARK;
+    let park = clock.now() + PARK_AFTER;
     clock.advance_when_parked(
         Some(park),
         None,
@@ -1078,7 +1079,7 @@ fn the_scope_covers_the_attempts_and_the_keep() {
     Deadline::after(EACH_WITHIN)
         .recv(&gates.keep_ack_rx)
         .expect("the keep parks");
-    let park = clock.now() + PARK;
+    let park = clock.now() + PARK_AFTER;
     clock.advance_when_parked(
         Some(park),
         None,
@@ -1127,7 +1128,7 @@ fn a_refused_keep_keeps_the_same_scope() {
     Deadline::after(EACH_WITHIN)
         .recv(&gates.stop_ack_rx)
         .expect("the second stop check parks");
-    let park = clock.now() + PARK;
+    let park = clock.now() + PARK_AFTER;
     clock.advance_when_parked(
         Some(park),
         None,
@@ -1138,7 +1139,7 @@ fn a_refused_keep_keeps_the_same_scope() {
     Deadline::after(EACH_WITHIN)
         .recv(&gates.keep_ack_rx)
         .expect("the keep parks");
-    let park = clock.now() + PARK;
+    let park = clock.now() + PARK_AFTER;
     clock.advance_when_parked(
         Some(park),
         None,

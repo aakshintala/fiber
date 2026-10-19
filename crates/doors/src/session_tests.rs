@@ -1303,6 +1303,7 @@ fn a_clock_move_delivers_cancelled_and_nothing_before() {
         Deadline::after(DEADLINE)
             .recv(&entered_rx)
             .expect("the receiver is blocked");
+        // No thread parks on the clock; the move fires a wake.
         clock.advance(Duration::from_millis(1));
     });
     opened
