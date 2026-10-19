@@ -1361,82 +1361,6 @@ fn drain_by_chunk<T>(
     }
 }
 
-/// The resume failure site's second look at the run thread: the drain
-/// saw no fold, so a finish that landed between the drain's check and
-/// now wins instead of a stale stall report. `Err` carries the panic
-/// text the site prints.
-fn take_finish_or_stall<T>(
-    drain_err: String,
-    finished: &mpsc::Receiver<T>,
-    hub: &HubProgress,
-    hub_done: &Result<(), mpsc::TryRecvError>,
-    reader_done: &Result<(), mpsc::TryRecvError>,
-    reader_forwarded: u64,
-) -> Result<T, String> {
-    match finished.try_recv() {
-        Ok(done) => Ok(done),
-        Err(finished_state) => Err(format!(
-            "{drain_err}\n{}",
-            stall_report(
-                &finished_state,
-                hub,
-                hub_done,
-                reader_done,
-                reader_forwarded
-            ),
-        )),
-    }
-}
-
-#[test]
-fn a_finish_between_the_drain_check_and_the_recheck_wins() {
-    let (reached_tx, reached) = mpsc::channel::<()>();
-    let (release_tx, _release) = mpsc::channel::<()>();
-    let (done_tx, finished) = mpsc::channel::<u8>();
-    drop(reached_tx);
-    // No fold signal can arrive: the disconnected `reached` fails the
-    // window at once, and the drain's own check sees no finish. The
-    // pause point is the drain's return: the finish below lands after
-    // its check and before the site's recheck, every run, with no wait
-    // of its own.
-    let err = match drain_by_chunk(Duration::from_secs(5), &reached, &release_tx, &finished) {
-        Ok(_) => panic!("the pump drained without a fold"),
-        Err(err) => err,
-    };
-    done_tx.send(7).unwrap_or_else(|err| panic!("send: {err}"));
-    let hub = HubProgress::default();
-    let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
-    match take_finish_or_stall(err, &finished, &hub, &waiting, &waiting, 0) {
-        Ok(done) => assert_eq!(done, 7),
-        Err(report) => panic!("a finish between the checks still stalled: {report}"),
-    }
-}
-
-#[test]
-fn no_finish_by_the_recheck_reports_the_stall() {
-    let (done_tx, finished) = mpsc::channel::<u8>();
-    drop(done_tx);
-    let hub = HubProgress {
-        last_command: "subscribe".to_owned(),
-        writing: false,
-    };
-    let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
-    let err = match take_finish_or_stall(
-        "no fold for 5s".to_owned(),
-        &finished,
-        &hub,
-        &waiting,
-        &waiting,
-        0,
-    ) {
-        Ok(_) => panic!("a gone run thread drained"),
-        Err(err) => err,
-    };
-    assert!(err.contains("no fold for 5s"), "{err}");
-    assert!(err.contains("run thread gone"), "{err}");
-    assert!(err.contains("subscribe"), "{err}");
-}
-
 #[test]
 fn a_held_fold_fails_the_no_progress_window() {
     let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
@@ -1800,26 +1724,30 @@ fn resume_open_replays_the_log_to_the_tail() {
     // `DRAIN` while the whole log takes what it takes. Panicking drops
     // the release sender, which releases the held loop thread too.
     // The run thread may have finished between the drain's check and
-    // this re-check: take its value instead of reporting a stale stall.
-    // Otherwise the panic names the run thread's state and each helper
-    // thread's last step, so the next sighting shows which stall
-    // candidate happened.
+    // now: the drain error still panics, and the panic names the run
+    // thread's state and each helper thread's last step, so the next
+    // sighting shows which stall candidate happened.
     let (code, lp) = match drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished) {
         Ok(done) => done,
-        Err(err) => match take_finish_or_stall(
-            format!("the loop folded no chunk for {DRAIN:?}: {err}"),
-            &finished,
-            &hub_progress
-                .lock()
-                .map(|held| held.clone())
-                .unwrap_or_default(),
-            &hub_done.try_recv(),
-            &reader_done.try_recv(),
-            reader_forwarded.load(Ordering::Relaxed),
-        ) {
-            Ok(done) => done,
-            Err(report) => panic!("{report}"),
-        },
+        Err(err) => {
+            let prefix = format!("the loop folded no chunk for {DRAIN:?}: {err}");
+            match finished.try_recv() {
+                Ok(_) => panic!("{prefix}\nrun thread finished after the drain gave up"),
+                Err(finished_state) => panic!(
+                    "{prefix}\n{}",
+                    stall_report(
+                        &finished_state,
+                        &hub_progress
+                            .lock()
+                            .map(|held| held.clone())
+                            .unwrap_or_default(),
+                        &hub_done.try_recv(),
+                        &reader_done.try_recv(),
+                        reader_forwarded.load(Ordering::Relaxed),
+                    ),
+                ),
+            }
+        }
     };
     drop(fold_release_tx);
     // The hub's writes and the reader's EOF are ready once the loop has
