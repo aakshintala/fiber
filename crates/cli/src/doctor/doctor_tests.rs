@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use super::{Hub, Inputs, doctor, run};
+use crate::CliError;
 use config::{Secret, store_credential};
+use contract::ErrorCode;
 use contract::clock::Clock;
 use serde_json::{Value, json};
 
@@ -18,6 +20,10 @@ const VERSION: &str = "0.0.0 (abc1234)";
 
 /// Set in the child that runs `doctor` itself.
 const CHILD: &str = "FIBER_DOCTOR_CHILD";
+
+/// Set in the child that deletes its working directory before running
+/// `doctor` itself: it prints the bare directory-read error on stdout.
+const DIR_CHILD: &str = "FIBER_DOCTOR_DIR_CHILD";
 
 /// How long a re-run child may take.
 const CHILD_DEADLINE: Duration = Duration::from_secs(50);
@@ -416,6 +422,59 @@ fn no_request_reaches_the_provider_and_no_command_runs() {
     assert!(!setup.home().join("marker").exists());
 }
 
+/// An `out` that fails every write, recording what it was asked for.
+struct FailingWriter {
+    attempted: Vec<String>,
+}
+
+impl std::io::Write for FailingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.attempted
+            .push(String::from_utf8_lossy(buf).into_owned());
+        Err(std::io::Error::other("boom"))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn an_unwritable_report_is_doctor_report() {
+    let setup = Setup::new();
+    let clock = fakes::clock::FakeClock::new();
+    let mut out = FailingWriter {
+        attempted: Vec::new(),
+    };
+    let mut err = Vec::new();
+    let error = run(
+        &Inputs {
+            home: &setup.home(),
+            workspace: &setup.workspace(),
+            version: VERSION,
+            now: clock.wall(),
+            env: &|_| None,
+            has_userinfo: &|_| false,
+            hub: &|_, _| Hub::NotRunning,
+            clock: &*clock,
+        },
+        &mut out,
+        &mut err,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, CliError::DoctorReport(_)),
+        "expected DoctorReport, got {error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    // The report stops where it starts: the version line is the only
+    // line it tried to write.
+    // The report stops where it starts: the version line is the only
+    // line it tried to write. `writeln!` writes the line before its
+    // line feed, and that first write already fails.
+    assert_eq!(out.attempted, vec![format!("fiber {VERSION}")]);
+}
+
 /// Runs the test `test` of this module in a child with `FIBER_HOME` set
 /// to `home` and `extra` in its environment, and returns how it exited.
 /// The key the fixtures read is always removed first, so the parent's
@@ -437,6 +496,26 @@ fn child(test: &str, home: &Path, extra: &[(&str, &str)]) -> std::process::ExitS
         },
     )
     .status
+}
+
+/// Like [`child`], but returns the whole run so the parent can read
+/// stderr off it. Built on the same environment setup; [`child`] and its
+/// callers are unchanged.
+#[track_caller]
+fn child_output(test: &str, home: &Path, extra: &[(&str, &str)]) -> std::process::Output {
+    let module = module_path!().split_once("::").unwrap().1;
+    fakes::rerun_prepared(
+        &format!("{module}::{test}"),
+        &[(CHILD, "1"), (DIR_CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            command.env("FIBER_HOME", home);
+            command.env_remove("FIBER_TEST_FAKE_KEY");
+            for (key, value) in extra {
+                command.env(key, value);
+            }
+        },
+    )
 }
 
 #[test]
@@ -495,6 +574,41 @@ fn doctor_exits_2_for_a_relative_home() {
         &[],
     );
     assert_eq!(status.code(), Some(2), "{status:?}");
+}
+
+#[test]
+#[allow(clippy::print_stdout, reason = "the parent test reads this line")]
+fn doctor_exits_1_for_a_deleted_directory() {
+    if std::env::var_os(DIR_CHILD).is_some() {
+        let dir = std::env::temp_dir().join(format!("fiber-doctor-cwd-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        // The bare text the parent compares stderr against, read here
+        // in the child: the parent never leaves its own directory.
+        println!("{}", std::env::current_dir().unwrap_err());
+        let clock = fakes::clock::FakeClock::new();
+        std::process::exit(doctor(VERSION, &*clock, &Remote));
+    }
+    let setup = Setup::new();
+    let output = child_output("doctor_exits_1_for_a_deleted_directory", &setup.home(), &[]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let module = module_path!().split_once("::").unwrap().1;
+    let bare = stdout
+        .find("running 1 test\n")
+        .map(|at| &stdout[at + "running 1 test\n".len()..])
+        .and_then(|rest| {
+            rest.strip_prefix(&format!(
+                "test {module}::doctor_exits_1_for_a_deleted_directory ... "
+            ))
+        })
+        .unwrap_or_else(|| panic!("the child wrote no bare error line: {stdout:?}"));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        stderr,
+        format!("fiber: doctor could not read the current directory: {bare}")
+    );
 }
 
 /// The hub lines for a running hub, by environment: the tests inject the

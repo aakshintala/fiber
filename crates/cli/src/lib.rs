@@ -33,6 +33,10 @@ mod approve;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod config;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod doctor;
 #[allow(
     clippy::result_large_err,
