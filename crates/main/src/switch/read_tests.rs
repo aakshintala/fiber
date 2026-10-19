@@ -2128,10 +2128,13 @@ fn repeat_shutdowns_reuse_the_first_end() {
         "the first call stored the end"
     );
     // A repeat one nanosecond before the end must not move it.
-    let mark = clock.advance_marked(
+    let mark = clock.advance_when_parked(
+        Some(end),
+        None,
         bound
             .checked_sub(Duration::from_nanos(1))
             .expect("the bound holds a nanosecond"),
+        &Deadline::after(DEADLINE),
     );
     assert!(
         clock.await_parked_since(&mark, Some(end), DEADLINE),
@@ -2144,7 +2147,12 @@ fn repeat_shutdowns_reuse_the_first_end() {
         "the repeat stored no fresh end"
     );
     // Past the first end both answer `false`: the repeat earned nothing.
-    clock.advance(Duration::from_nanos(2));
+    clock.advance_when_parked_threads(
+        Some(end),
+        2,
+        Duration::from_nanos(1),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         !Deadline::after(DEADLINE)
             .recv(&first)
@@ -2230,6 +2238,7 @@ fn an_empty_shutdown_answers_true_past_its_end() {
             .expect("the first shutdown"),
         "an empty shutdown settles at once"
     );
+    // No code under test waits on the clock here; the first shutdown has answered without parking (ruling 6179406086).
     clock.advance(doors::SHUTDOWN_BOUND + Duration::from_secs(1));
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
@@ -2397,8 +2406,20 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
             .now()
             .checked_add(GROUP_POLL)
             .expect("the poll is countable");
-        if clock.await_parked(poll, drive.left().min(PARK_PAUSE)) {
-            clock.advance(GROUP_POLL);
+        let pause = drive.left().min(PARK_PAUSE);
+        if pause.is_zero() {
+            continue;
+        }
+        match clock.try_advance_when_parked(Some(poll), None, GROUP_POLL, pause) {
+            Ok(_) => {}
+            Err(Miss::NoPark) => {}
+            Err(Miss::Mismatch {
+                watched: (_, Some(at)),
+                ..
+            }) if at == clock.origin() + doors::SHUTDOWN_BOUND => {
+                answer = Deadline::after(pause).recv(&settled).ok();
+            }
+            Err(miss) => panic!("{miss}"),
         }
     }
     let answer = match answer {
@@ -2538,14 +2559,13 @@ fn settle_gives_up_at_the_bound() {
         .recv(&is_entered)
         .expect("the spawn reached its pause");
     let settled = settle_on_thread(&reads, &clock, bound);
-    assert!(
-        clock.await_parked(end, DEADLINE),
-        "the settle parked at its bound"
-    );
-    let mark = clock.advance_marked(
+    let mark = clock.advance_when_parked(
+        Some(end),
+        None,
         bound
             .checked_sub(Duration::from_nanos(1))
             .expect("the bound holds a nanosecond"),
+        &Deadline::after(DEADLINE),
     );
     assert!(
         clock.await_parked_since(&mark, Some(end), DEADLINE),
@@ -2555,7 +2575,12 @@ fn settle_gives_up_at_the_bound() {
     // answer: the park repeats the check above, and the empty channel
     // proves it has not answered yet.
     still_settling(&clock, end, &settled, "the settle short of its bound");
-    clock.advance(Duration::from_nanos(1));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_nanos(1),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         !Deadline::after(DEADLINE)
             .recv(&settled)
@@ -2601,16 +2626,12 @@ fn settle_wakes_on_a_clock_advance_with_no_earlier_subscription() {
         .recv(&is_entered)
         .expect("the spawn reached its pause");
     let settled = settle_on_thread(&reads, &clock, bound);
-    assert!(
-        clock.await_parked(end, DEADLINE),
-        "the settle parked at its bound"
-    );
-    clock.advance(bound + Duration::from_secs(1));
+    clock.advance_when_parked(Some(end), None, bound, &Deadline::after(DEADLINE));
     assert!(
         !Deadline::after(DEADLINE)
             .recv(&settled)
             .expect("the settle"),
-        "the advance woke the settle past its bound"
+        "the advance woke the settle at its bound {end:?}"
     );
     reads.cancel();
     release.send(()).expect("the spawn's release");
@@ -2675,11 +2696,7 @@ fn settle_pins_zero_true_and_held_false_at_once() {
     let bound = doors::SHUTDOWN_BOUND;
     let end = clock.origin() + bound;
     let held_settle = settle_on_thread(&reads, &clock, bound);
-    assert!(
-        clock.await_parked(end, DEADLINE),
-        "the settle parked at its bound"
-    );
-    clock.advance(bound + Duration::from_secs(1));
+    clock.advance_when_parked(Some(end), None, bound, &Deadline::after(DEADLINE));
     assert!(
         !Deadline::after(Duration::from_secs(3)).recv_or_fail(&held_settle, "the held settle"),
         "settle is false at its bound while a spawn is held"
