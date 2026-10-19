@@ -133,6 +133,16 @@ fn plus_bg(grid: &Grid) -> Colour {
         .bg
 }
 
+/// The bg of the "✓" cell on the second project's header row: focus
+/// lifts that one cell, so its bg tells the "N ✓" stop from "+" and
+/// the cards.
+fn done_bg(grid: &Grid) -> Colour {
+    let row = plus_row(grid);
+    let found = grid.rows[row].chars().position(|cell| cell == '✓').unwrap();
+    grid.cell(u16::try_from(found).unwrap(), u16::try_from(row).unwrap())
+        .bg
+}
+
 /// Whether the rail draws: a row starts with its project header.
 fn rail_drawn(grid: &Grid) -> bool {
     grid.rows.iter().any(|row| row.starts_with(RAIL_HEADER))
@@ -234,6 +244,7 @@ fn rail_focus_lifts_moves_switches_and_widens_home() {
     run.write(b"\x1b[D");
     let grid = wait_hint_lifted(&mut run, &raised, &flat);
     let plus_flat = plus_bg(&grid);
+    let done_flat = done_bg(&grid);
 
     // ↓ moves the lift to the next group's "+" stop: the hint stays,
     // neither card lifts, and the "+" cell lifts.
@@ -243,6 +254,17 @@ fn rail_focus_lifts_moves_switches_and_widens_home() {
             && tint(grid, "first live") == raised
             && tint(grid, "second live") == flat
             && plus_bg(grid) != plus_flat
+    });
+
+    // ↓ moves the lift to the group's "0 ✓" stop: the hint stays,
+    // neither card lifts, and the "✓" cell lifts.
+    run.write(b"\x1b[B");
+    run.wait_screen("the lifted zero count", |grid| {
+        grid.contents.contains(HINT_MIDDLE)
+            && tint(grid, "first live") == raised
+            && tint(grid, "second live") == flat
+            && plus_bg(grid) == plus_flat
+            && done_bg(grid) != done_flat
     });
 
     // ↓ moves the lift to the second card.
