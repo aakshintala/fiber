@@ -805,3 +805,120 @@ impl Wake for Hub {
         self.changed.notify_all();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A ready hub with one started call and its admitted exec run: the
+    /// call's id and the run's stop receiver, still connected.
+    fn started_with_exec(hub: &Arc<Hub>) -> (u64, std::sync::mpsc::Receiver<()>) {
+        let mut shared = hub.lock();
+        let now = hub.clock().now();
+        let id = shared.push(Target::Tool("t".to_owned()), serde_json::Value::Null, now);
+        shared.calls.insert(
+            id,
+            Progress::Started {
+                deadline: None,
+                run: Run::Running,
+            },
+        );
+        let rx = shared.register_exec(id);
+        assert!(
+            matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+            "no stop is signalled yet"
+        );
+        (id, rx)
+    }
+
+    /// The stop reached the run, the hub stopped, and the in-flight call
+    /// waits for the run's end before answering `Stopped`.
+    fn assert_shutdown_stopped(hub: &Arc<Hub>, id: u64, rx: &std::sync::mpsc::Receiver<()>) {
+        // The sender dropped with the stop: the receiver disconnects.
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected)
+            ),
+            "the stop reaches the run without the Lua thread"
+        );
+        {
+            let shared = hub.lock();
+            assert!(matches!(shared.phase, Phase::Stopped(_)), "the hub stopped");
+            assert!(
+                shared.cancelled.contains(&id),
+                "the in-flight call is cancelled"
+            );
+            assert!(shared.exec_pending(id), "the run stays to be awaited");
+        }
+        let mut shared = hub.lock();
+        let now = hub.clock().now();
+        let target = Target::Tool("t".to_owned());
+        assert!(
+            matches!(
+                shared.judge("ext", id, &target, now, now),
+                (Next::Sleep(_), _)
+            ),
+            "the cancelled call waits for its run's end"
+        );
+        shared.finish_exec(id);
+        match shared.judge("ext", id, &target, now, now) {
+            (Next::Return(Err(_)), _) => {}
+            _ => panic!("the call answers Stopped once the run ends"),
+        }
+    }
+
+    /// `stop_every_callback` stops an in-flight callback's `host.exec`
+    /// group through the shutdown's real path. An emptied
+    /// `stop_every_callback` would fail every assert here.
+    #[test]
+    fn stop_every_callback_stops_an_in_flight_exec_and_its_call() {
+        let hub = Hub::new(fakes::clock::FakeClock::new());
+        hub.lock().phase = Phase::Ready(Default::default());
+        let (id, rx) = started_with_exec(&hub);
+        stop_every_callback();
+        assert_shutdown_stopped(&hub, id, &rx);
+    }
+
+    /// `stop_for_shutdown` signals an in-flight exec and marks its call,
+    /// so the callback waits for the run's end before answering
+    /// `Stopped`. An emptied `stop_for_shutdown` would fail every assert
+    /// here, as would one that left the phase ready and the run connected.
+    #[test]
+    fn stop_for_shutdown_signals_an_in_flight_exec_and_marks_its_call() {
+        let hub = Hub::new(fakes::clock::FakeClock::new());
+        hub.lock().phase = Phase::Ready(Default::default());
+        let (id, rx) = started_with_exec(&hub);
+        hub.stop_for_shutdown();
+        assert_shutdown_stopped(&hub, id, &rx);
+    }
+
+    /// `stop_for_shutdown` on an already-stopped hub changes nothing: the
+    /// stored reason stays, and a queued call the shutdown never started
+    /// stays uncancelled. Without the `!` the stop would re-run and
+    /// overwrite the reason with `Stopped`, failing here.
+    #[test]
+    fn stop_for_shutdown_leaves_a_stopped_hub_unchanged() {
+        let hub = Hub::new(fakes::clock::FakeClock::new());
+        let id = {
+            let mut shared = hub.lock();
+            let now = hub.clock().now();
+            let id = shared.push(Target::Tool("t".to_owned()), serde_json::Value::Null, now);
+            shared.phase = Phase::Stopped(StopReason::Abandoned {
+                extension: "ext".to_owned(),
+                callback: "hook".to_owned(),
+            });
+            id
+        };
+        hub.stop_for_shutdown();
+        let shared = hub.lock();
+        assert!(
+            matches!(&shared.phase, Phase::Stopped(StopReason::Abandoned { .. })),
+            "the stored reason stays"
+        );
+        assert!(
+            !shared.cancelled.contains(&id),
+            "the queued call stays uncancelled"
+        );
+    }
+}
