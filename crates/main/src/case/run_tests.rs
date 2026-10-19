@@ -285,6 +285,7 @@ fn exiting_before_the_next_advance_names_that_advance() {
     let case = case_run(
         vec![json!({"kind": "fiber_exited"})],
         vec![ClockAdvance {
+            hang: None,
             after: Some(Selector {
                 kind: "turn_completed".to_owned(),
                 nth: 1,
@@ -322,6 +323,7 @@ fn a_missing_advance_fails_on_the_short_advance_wait() {
     let case = case_run(
         vec![json!({"kind": "turn_completed"})],
         vec![ClockAdvance {
+            hang: None,
             after: Some(Selector {
                 kind: "turn_completed".to_owned(),
                 nth: 1,
@@ -366,6 +368,7 @@ fn an_advance_never_reached_is_dumped_after_the_until_event_and_exit() {
             json!({"kind": "fiber_exited"}),
         ],
         vec![ClockAdvance {
+            hang: None,
             after: Some(Selector {
                 kind: "never_written".to_owned(),
                 nth: 1,
@@ -402,6 +405,7 @@ fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
     let case = case_run(
         vec![json!({"kind": "turn_completed"})],
         vec![ClockAdvance {
+            hang: None,
             after: Some(Selector {
                 kind: "extension_log".to_owned(),
                 nth: 1,

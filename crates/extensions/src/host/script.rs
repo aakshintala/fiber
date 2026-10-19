@@ -1,8 +1,11 @@
 //! Scripted `host.http` and `host.exec` calls for extension cases (`docs/testing.md`, "Testing an extension").
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
 
 use contract::ErrorCode;
+use contract::clock::Clock;
 use serde_json::{Map, Value};
 
 use super::{HttpRequest, exec::ExecRequest};
@@ -25,6 +28,9 @@ pub enum ExecEnd {
     Code(i32),
     /// The signal number that ended the process.
     Signal(i32),
+    /// The process never exits: the scripted run parks on the case clock
+    /// until the callback's deadline.
+    Hang,
 }
 
 /// The result of a scripted `host.exec` run: how it ended and both streams.
@@ -52,6 +58,9 @@ pub struct ExecEntry {
 /// consumes nothing (`docs/testing.md`, "Testing an extension").
 pub struct HostScript {
     state: Mutex<State>,
+    /// Wakes parked hang workers and hang-match waiters. Wake-ups are a
+    /// cadence only: every waiter re-reads the case clock after one.
+    changed: Condvar,
 }
 
 struct State {
@@ -84,6 +93,7 @@ impl HostScript {
                 exec_next: 0,
                 misses: Vec::new(),
             }),
+            changed: Condvar::new(),
         })
     }
 
@@ -182,6 +192,32 @@ impl HostScript {
         }
         state.exec_next = index.saturating_add(1);
         entry.reply
+    }
+
+    /// Parks a scripted hang on the case clock until the callback's
+    /// `deadline`, as a real `host.exec` parks on the injected clock. The
+    /// worker registers as parked at the deadline, so a runner advance to
+    /// it matches; the scheduler answers the callback's timeout, so the
+    /// worker delivers no reply. A stop ends the park early and records
+    /// nothing: the runner owns the stuck report.
+    pub(crate) fn park_hang(&self, clock: &dyn Clock, deadline: Instant, stop: &Receiver<()>) {
+        let mut guard = lock(&self.state);
+        while clock.now() < deadline && !is_disconnected(stop) {
+            // The slice is a wake-up cadence, not a timing judgement: the
+            // loop's decision reads only the case clock after each slice.
+            let parked = support::clock::park(
+                clock,
+                Some(deadline),
+                Some(support::group::GROUP_POLL),
+                &self.changed,
+                guard,
+                |_| false,
+            );
+            guard = match parked {
+                Some(guard) => guard,
+                None => lock(&self.state),
+            };
+        }
     }
 }
 
@@ -292,6 +328,13 @@ fn redact_env(request: &Value) -> Value {
         }
     }
     redacted
+}
+
+/// Whether the stop sender is gone: the run's stop, cancel or dispose
+/// dropped it, so the parked worker ends. A sent value never arrives; the
+/// channel carries only the drop.
+fn is_disconnected(stop: &Receiver<()>) -> bool {
+    matches!(stop.try_recv(), Err(TryRecvError::Disconnected))
 }
 
 fn miss(kind: &str, index: usize, request: &Value) -> String {

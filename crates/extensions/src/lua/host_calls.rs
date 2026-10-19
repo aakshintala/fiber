@@ -315,18 +315,58 @@ pub(super) fn admit<'a>(
                 cwd: request.cwd.clone(),
             });
             if let Some(script) = hub.host_script() {
-                drop(shared);
+                // The hang arm below keeps the admission lock held into its
+                // spawn, so no stop lands between the match and the
+                // registration; every other arm drops it before delivering.
                 match script.exec(request.case_value()) {
+                    Ok(ExecReply {
+                        end: ExecEnd::Hang, ..
+                    }) => match deadline {
+                        Some(until) => {
+                            // A process that never exits: the worker parks on
+                            // the case clock until the callback's deadline,
+                            // as a real host.exec parks on the injected
+                            // clock. The scheduler answers the callback's
+                            // timeout, so the worker delivers no reply and
+                            // writes no exec line.
+                            let cancel_rx = shared.register_exec(id);
+                            let clock = hub.clock_handle();
+                            let worker = Arc::clone(&hub_exec);
+                            Admitted::Spawning {
+                                shared,
+                                spawn: Spawn {
+                                    builder: thread::Builder::new().name(format!("exec {name}")),
+                                    work: Box::new(move || {
+                                        script.park_hang(clock.as_ref(), until, &cancel_rx);
+                                        worker.lock().finish_exec(id);
+                                        worker.notify();
+                                    }),
+                                    exec: true,
+                                },
+                            }
+                        }
+                        None => {
+                            drop(shared);
+                            Admitted::Replied(Reply::Exec(Err((
+                                contract::ErrorCode::IoFailed,
+                                "host.exec: a scripted hang needs a callback deadline".to_owned(),
+                            ))))
+                        }
+                    },
                     Ok(ExecReply {
                         end,
                         stdout,
                         stderr,
                     }) => {
+                        drop(shared);
                         let (exit_code, signal) = match end {
                             ExecEnd::Code(code) => (Some(code), None),
                             ExecEnd::Signal(number) => {
                                 (None, Some(support::group::signal_name(number)))
                             }
+                            // The hang arm above owns this end: a hang never
+                            // answers at once, so no immediate reply carries it.
+                            ExecEnd::Hang => (None, None),
                         };
                         let ran = exec::Ran {
                             exit_code,
@@ -338,7 +378,10 @@ pub(super) fn admit<'a>(
                         send_exec(&hub_exec, meta.as_ref(), &ran);
                         Admitted::Replied(Reply::Exec(Ok(ran)))
                     }
-                    Err(failed) => Admitted::Replied(Reply::Exec(Err(failed))),
+                    Err(failed) => {
+                        drop(shared);
+                        Admitted::Replied(Reply::Exec(Err(failed)))
+                    }
                 }
             } else {
                 // The stop sender stays in the hub, so the stop reaches the
