@@ -1897,7 +1897,9 @@ fn closing_returns_when_the_observer_ends_before_it_answers() {
         ),
     )
     .expect("an observer");
-    let tap = status.tap();
+    let mut tap = status.tap();
+    let (queued_tx, queued_rx) = std::sync::mpsc::channel::<()>();
+    tap.announce_queued(queued_tx);
     Deadline::after(DEADLINE)
         .recv(&observer_held)
         .expect("the observer is held");
@@ -1906,6 +1908,11 @@ fn closing_returns_when_the_observer_ends_before_it_answers() {
         tap.closing();
         done_tx.send(()).unwrap();
     });
+    // The request is queued before the observer ends, so the close takes
+    // the dropped-reply path, not the already-ended one.
+    Deadline::after(DEADLINE)
+        .recv(&queued_rx)
+        .expect("the close request is queued before the observer ends");
     drop(log);
     release.send(()).unwrap();
     Deadline::after(DEADLINE)

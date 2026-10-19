@@ -321,6 +321,13 @@ fn a_close_is_acknowledged_once_a_new_subscriber_reads_closing() {
             ack_tx.send((answer.is_ok(), latest)).unwrap();
         }))))
         .unwrap();
+    // The observer is still held, so the `session_status` carrying
+    // `closing` cannot be published yet: the close waits for it instead of
+    // answering at once. A no-wait ack would already have fired.
+    assert!(
+        ack_rx.try_recv().is_err(),
+        "the close waits for the held observer before it is acknowledged"
+    );
     release_tx.send(()).unwrap();
     let (ok, latest) = Deadline::after(DEADLINE)
         .recv(&ack_rx)

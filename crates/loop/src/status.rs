@@ -612,6 +612,11 @@ fn call_step(name: &str, subject: Option<&str>) -> String {
 pub(crate) struct Tap {
     injector: Injector,
     closing: mpsc::Sender<Published>,
+    /// Test-only: fired once `closing` has queued its request, so a test
+    /// can order the observer's end after the queue. Never read in
+    /// production builds.
+    #[cfg(test)]
+    queued: Option<mpsc::Sender<()>>,
 }
 
 impl Tap {
@@ -630,6 +635,12 @@ impl Tap {
         self.injector.push_kept(line);
     }
 
+    /// Test-only: `tx` fires once `closing` has queued its request.
+    #[cfg(test)]
+    pub(crate) fn announce_queued(&mut self, tx: mpsc::Sender<()>) {
+        self.queued = Some(tx);
+    }
+
     /// Marks the accepted `close`: queues the control line, then waits
     /// until the `session_status` carrying `closing` is written, or the
     /// observer has ended. A dropped request sender means the observer is
@@ -639,6 +650,14 @@ impl Tap {
         let (reply, published) = mpsc::channel();
         if self.closing.send(reply).is_err() {
             return;
+        }
+        #[cfg(test)]
+        if let Some(queued) = &self.queued {
+            // The test's own wait fails first and drops the receiver,
+            // which releases this send.
+            match queued.send(()) {
+                Ok(()) | Err(_) => {}
+            }
         }
         self.injector.push_kept(control(CLOSING));
         match published.recv() {
@@ -660,6 +679,8 @@ impl Status {
         Tap {
             injector: self.injector.clone(),
             closing: self.closing.clone(),
+            #[cfg(test)]
+            queued: None,
         }
     }
 
