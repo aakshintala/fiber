@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use contract::clock::Clock as _;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
@@ -268,12 +269,22 @@ fn a_spinning_run_past_its_timeout_returns_a_timeout() {
         clock.clone(),
     ));
     let spinning = Arc::clone(&ext);
+    let asked = clock.now();
     let spun =
         on_thread(move || spinning.search_run("spin", json!({}), &fakes::CancelToken::new()));
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the backend to spin");
-    clock.advance(Duration::from_millis(100));
+    assert!(
+        clock.await_parked(asked + Duration::from_millis(100) + crate::lua::GRACE, WAIT),
+        "the caller parked at the grace"
+    );
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(100) + crate::lua::GRACE),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     let Err(Error::Timeout { callback, .. }) =
         Deadline::after(WAIT).recv(&spun).expect("the run returned")
     else {

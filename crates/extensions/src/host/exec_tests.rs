@@ -100,6 +100,22 @@ fn dir(name: &str) -> (fakes::TempDir, PathBuf) {
     (dir, path)
 }
 
+/// Steps the clock to `deadline` through each poll park: each pass names
+/// the next park (`deadline` or one `GROUP_POLL` ahead), so the run never
+/// moves past a park it holds.
+#[track_caller]
+fn step_to_deadline(clock: &FakeClock, deadline: Instant) {
+    while clock.now() < deadline {
+        let park = deadline.min(clock.now() + GROUP_POLL);
+        clock.advance_when_parked(
+            Some(park),
+            None,
+            park - clock.now(),
+            &Deadline::after(DEADLINE),
+        );
+    }
+}
+
 #[test]
 fn echo_returns_exit_3_and_both_streams() {
     let (_dir, cwd) = dir("fiber-exec-echo");
@@ -280,19 +296,16 @@ fn a_deadline_stop_reports_timed_out() {
     let (_cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), Some(deadline));
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    assert!(
-        clock.await_parked(clock.now() + GROUP_POLL, DEADLINE),
-        "waited {DEADLINE:?} for the run to park while running"
-    );
-    // Past the callback's deadline the run stops, although nothing
+    // At the callback's deadline the run stops, although nothing
     // dropped its cancel.
-    clock.advance(Duration::from_millis(1000));
+    step_to_deadline(&clock, deadline);
     let kill_at = clock.now() + Duration::from_millis(800);
-    assert!(
-        clock.await_parked(kill_at, DEADLINE),
-        "waited {DEADLINE:?} for the run to park for the 800 ms grace"
+    clock.advance_when_parked(
+        Some(kill_at),
+        None,
+        Duration::from_millis(800),
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(Duration::from_millis(800));
     let ran = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the timed-out run")
@@ -328,7 +341,12 @@ fn cancel_sends_term_then_kill_after_800_ms() {
         "waited {DEADLINE:?} for the run to park for the 800 ms grace"
     );
     assert!(group_lives(pgid), "SIGTERM leaves the ignoring group alive");
-    clock.advance(Duration::from_millis(800));
+    clock.advance_when_parked(
+        Some(kill_at),
+        None,
+        Duration::from_millis(800),
+        &Deadline::after(DEADLINE),
+    );
     let ran = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the cancelled run")
@@ -363,7 +381,12 @@ fn output_held_open_after_the_kill_stops_after_2_s() {
         clock.await_parked(drain_until, DEADLINE),
         "waited {DEADLINE:?} for the run to park for the 2 s drain"
     );
-    clock.advance(Duration::from_secs(2));
+    clock.advance_when_parked(
+        Some(drain_until),
+        None,
+        Duration::from_secs(2),
+        &Deadline::after(DEADLINE),
+    );
     let ran = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the drained run")
@@ -549,7 +572,12 @@ fn a_member_outliving_the_leader_is_stopped_with_its_group() {
         group_lives(pgid),
         "the member ignores SIGTERM, so the group lives through the grace"
     );
-    clock.advance(Duration::from_millis(800));
+    clock.advance_when_parked(
+        Some(kill_at),
+        None,
+        Duration::from_millis(800),
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the stopped run")
@@ -587,7 +615,12 @@ fn one_stream_still_open_keeps_the_drain_to_its_bound() {
         clock.await_parked(drain_until, DEADLINE),
         "waited {DEADLINE:?} for the run to park for the 2 s drain"
     );
-    clock.advance(Duration::from_secs(2));
+    clock.advance_when_parked(
+        Some(drain_until),
+        None,
+        Duration::from_secs(2),
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the drained run")
@@ -661,7 +694,12 @@ fn a_startup_abort_kills_only_after_the_800_ms_grace() {
         "SIGTERM leaves the ignoring group alive through the grace"
     );
     assert!(group::live().contains(pgid), "a live group stays listed");
-    clock.advance(Duration::from_millis(800));
+    clock.advance_when_parked(
+        Some(kill_at),
+        None,
+        Duration::from_millis(800),
+        &Deadline::after(DEADLINE),
+    );
     let err = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the aborted run");
@@ -803,16 +841,17 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
     // The spinner shares this test's group, so the guard matches its argv
     // by pid alone, never the group: a panic anywhere below still kills it.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
-    assert!(
-        clock.await_parked(clock.now() + GROUP_POLL, DEADLINE),
-        "waited {DEADLINE:?} for the pid-mode run to park while running"
-    );
-    // Past the deadline the run stops, although nothing dropped its cancel.
-    clock.advance(Duration::from_millis(1000));
+    // At the deadline the run stops, although nothing dropped its cancel.
+    step_to_deadline(&clock, deadline);
     let kill_at = clock.now() + Duration::from_millis(800);
     let early = crate::stall::await_grace_or_answer(&clock, &done, kill_at);
     if early.is_none() {
-        clock.advance(Duration::from_millis(800));
+        clock.advance_when_parked(
+            Some(kill_at),
+            None,
+            Duration::from_millis(800),
+            &Deadline::after(DEADLINE),
+        );
     }
     let outcome = match early {
         Some(outcome) => Ok(outcome),
@@ -1017,7 +1056,7 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
         .recv(&stdout_read_rx)
         .expect("waited for stdout to be read before the drain bound");
     let unanswered_before_advance = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
-    clock.advance(DRAIN);
+    clock.advance_when_parked(Some(drain_until), None, DRAIN, &Deadline::after(DEADLINE));
     let outcome = Deadline::after(DEADLINE).recv(&done);
     // The holder keeps the pipe whether the wait ended or not: kill it by
     // its pid file before asserting, so no `sleep` outlives the test.
@@ -1103,7 +1142,12 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         let before_drain = drain_until
             .checked_sub(step)
             .expect("the before-drain boundary stays after the start");
-        let mark = clock.advance_marked(before_drain - clock.now());
+        let mark = clock.advance_when_parked(
+            Some(drain_until),
+            None,
+            before_drain - clock.now(),
+            &Deadline::after(DEADLINE),
+        );
         assert!(
             clock.await_parked_since(&mark, Some(drain_until), DRAIN_BOUNDARY_DEADLINE),
             "waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to keep draining ({case})"
@@ -1113,7 +1157,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         // At the drain bound the child status wins for deadlines just before,
         // exactly at, and just after it. Do not jump past the bound before
         // observing the result.
-        clock.advance(step);
+        clock.advance_when_parked(Some(drain_until), None, step, &Deadline::after(DEADLINE));
         let outcome = Deadline::after(DRAIN_BOUNDARY_DEADLINE).recv(&done);
         // The holder keeps the pipe whether the wait ended or not: kill it
         // by its pid file before asserting, so no `sleep` outlives the test.
@@ -1172,12 +1216,8 @@ fn a_pid_mode_term_stop_reports_sigterm() {
     let pid = ready.wait(DEADLINE)[0];
     // The spinner shares this test's group: match its argv by pid alone.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
-    assert!(
-        clock.await_parked(clock.now() + GROUP_POLL, DEADLINE),
-        "waited {DEADLINE:?} for the pid-mode run to park while running"
-    );
-    // Past the deadline the run stops, although nothing dropped its cancel.
-    clock.advance(Duration::from_millis(1000));
+    // At the deadline the run stops, although nothing dropped its cancel.
+    step_to_deadline(&clock, deadline);
     let outcome = Deadline::after(DEADLINE).recv(&done);
     if outcome.is_err() {
         drop(fakes::kill_pid(pid, "KILL"));

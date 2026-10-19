@@ -12,6 +12,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::clock::Clock as _;
 use contract::search::{Domains, SearchBackend};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -21,6 +22,9 @@ use crate::lua::LuaExtension;
 
 /// Wall-clock bound on every wait for the extension.
 const WAIT: Duration = Duration::from_secs(5);
+
+/// How long past a deadline the caller waits before it abandons the VM.
+const GRACE: Duration = Duration::from_secs(1);
 
 /// An extension named `fiber.test/t` whose entry script is `init`, in a
 /// fresh temporary directory kept beside it.
@@ -313,6 +317,7 @@ fn a_timeout_maps_to_timeout() {
         clock.clone(),
     ));
     let searching = Arc::clone(&ext);
+    let asked = clock.now();
     let ran = on_thread(move || {
         LuaSearch::new(searching, "s".to_owned()).search(
             "rust",
@@ -323,7 +328,16 @@ fn a_timeout_maps_to_timeout() {
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the backend to start");
-    clock.advance(Duration::from_millis(50));
+    assert!(
+        clock.await_parked(asked + Duration::from_millis(50) + GRACE, WAIT),
+        "the caller parked at the grace"
+    );
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(50) + GRACE),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     let Err(failed) = Deadline::after(WAIT)
         .recv(&ran)
         .expect("the search returned")

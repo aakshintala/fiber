@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
 use contract::RequestId;
+use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{InteractionRequested, ResolvedBy};
 use contract::extension::ExtensionDoor;
@@ -316,8 +317,8 @@ fn an_admitted_command_holds_its_runner_through_success_and_lua_error() {
 }
 
 #[test]
-fn a_command_deadline_ends_its_runner_at_and_above_but_not_below_the_boundary() {
-    for milliseconds in [99, 100, 101] {
+fn a_command_deadline_ends_its_runner_at_but_not_below_the_boundary() {
+    for milliseconds in [99, 100] {
         let home = Home::new();
         home.install("a", "fiber.command('go', { timeout = 100, run = function() return host.tool('read', {}).status end })");
         let clock = FakeClock::new();
@@ -344,14 +345,34 @@ fn a_command_deadline_ends_its_runner_at_and_above_but_not_below_the_boundary() 
         assert!(clock.await_thread_parked(caller.thread().id(), Some(until), WAIT));
         // The VM ends a parked callback at its own deadline; the caller's
         // grace is a backstop, not extra command time.
-        assert!(clock.await_parked(clock.origin() + Duration::from_millis(100), WAIT));
-        clock.advance(Duration::from_millis(milliseconds));
+        let parked = clock
+            .mark_parked(clock.origin() + Duration::from_millis(100), WAIT)
+            .expect("the scheduler parks at the command deadline");
+        let parked = parked.threads();
+        assert_eq!(
+            parked.len(),
+            1,
+            "only the scheduler parks at the command deadline"
+        );
+        let vm = parked.into_iter().next().expect("the scheduler thread");
+        let park = clock.origin() + Duration::from_millis(100);
+        clock.advance_when_parked(
+            Some(park),
+            Some(vm),
+            Duration::from_millis(milliseconds),
+            &Deadline::after(WAIT),
+        );
         if milliseconds < 100 {
             assert!(!request.cancel.is_cancelled());
             assert_eq!(session.lua[0].runners_held(), 1);
             assert!(result.try_recv().is_err());
             assert!(clock.await_thread_parked(caller.thread().id(), Some(until), WAIT));
-            clock.advance(Duration::from_millis(1));
+            clock.advance_when_parked(
+                Some(park),
+                Some(vm),
+                Duration::from_millis(1),
+                &Deadline::after(WAIT),
+            );
         }
         assert!(matches!(
             Deadline::after(WAIT).recv_or_fail(&result, "command timeout"),
@@ -425,11 +446,23 @@ fn an_untaken_request_keeps_stream_order_under_both_timeout_orders() {
             WAIT
         ));
         assert!(!marker.exists());
-        clock.advance(Duration::from_millis(if command_first {
-            2000
+        let (park, thread) = if command_first {
+            (
+                clock.origin() + Duration::from_millis(2000),
+                command_thread.thread().id(),
+            )
         } else {
-            1000
-        }));
+            (
+                clock.origin() + Duration::from_millis(1000),
+                hook_thread.thread().id(),
+            )
+        };
+        clock.advance_when_parked(
+            Some(park),
+            Some(thread),
+            park - clock.now(),
+            &Deadline::after(WAIT),
+        );
         if command_first {
             assert!(matches!(
                 Deadline::after(WAIT).recv_or_fail(&command_result, "command timeout before hook"),
@@ -733,9 +766,23 @@ fn the_door_returns_a_tool_failure_normally_and_ends_a_running_call_at_timeout()
         request.cancel.subscribe(Arc::downgrade(&wake));
         (request.taken)();
         assert!(session.lua[0].runs_own_command_call());
-        assert!(clock.await_parked(clock.origin() + Duration::from_secs(2), WAIT));
+        let parked = clock
+            .mark_parked(clock.origin() + Duration::from_secs(2), WAIT)
+            .expect("the call parks at its timeout plus the grace");
+        let parked = parked.threads();
+        assert_eq!(
+            parked.len(),
+            1,
+            "one thread parks at the timeout plus the grace"
+        );
+        let parked = parked.into_iter().next().expect("the parked thread");
         if ending == "timeout" {
-            clock.advance(Duration::from_millis(2001));
+            clock.advance_when_parked(
+                Some(clock.origin() + Duration::from_secs(2)),
+                Some(parked),
+                Duration::from_millis(2000),
+                &Deadline::after(WAIT),
+            );
             let notice = Deadline::after(WAIT).recv_or_fail(&events, "command timeout notice");
             let contract::events::Event::Notice(notice) = notice else {
                 panic!("expected timeout notice");

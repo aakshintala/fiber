@@ -146,7 +146,12 @@ fn a_run_that_spins_past_its_timeout_is_a_timeout() {
         clock.await_parked(asked + Duration::from_millis(50) + GRACE, WAIT),
         "waited for the caller to park at the grace"
     );
-    clock.advance(Duration::from_millis(50));
+    clock.advance_when_parked(
+        Some(asked + Duration::from_millis(50) + GRACE),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv(&result)
         .expect("waited for the spinning callback")

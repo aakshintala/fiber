@@ -713,12 +713,13 @@ fn a_stalled_install_step_approves_nothing_and_leaves_no_copy() {
         clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
         "waited {WITHIN:?} for the step to park while running"
     );
-    // Past the install-step deadline the run stops.
-    clock.advance(INSTALL_STEP_DEADLINE + Duration::from_secs(1));
+    // At the install-step deadline the run stops.
+    // Crosses only poll pauses to the install-step deadline; the run is proven parked at its poll (ruling 6260728504).
+    clock.advance(INSTALL_STEP_DEADLINE);
     let kill_at = clock.now() + GRACE;
     let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
     if answered.is_none() {
-        clock.advance(GRACE);
+        clock.advance_when_parked(Some(kill_at), None, GRACE, &Deadline::after(WITHIN));
     }
     let answer = match answered {
         Some(answer) => answer,

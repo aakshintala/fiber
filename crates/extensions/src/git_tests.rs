@@ -200,13 +200,14 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     // a starter on the way up reports a timeout the stall never caused.
     let early = await_stuck(&done_rx, &watching);
     assert!(early.is_none(), "the stall answers only at its deadline");
-    // Past the git deadline the run stops: it parks for the grace, or
+    // At the git deadline the run stops: it parks for the grace, or
     // answers at once when the stall dies on SIGTERM with no grace park.
-    clock.advance(GIT_DEADLINE + Duration::from_secs(1));
+    // Crosses only poll pauses to the git deadline; the run is proven parked at its poll (ruling 6260728504).
+    clock.advance(GIT_DEADLINE);
     let kill_at = clock.now() + GRACE;
     let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
     if answered.is_none() {
-        clock.advance(GRACE);
+        clock.advance_when_parked(Some(kill_at), None, GRACE, &Deadline::after(WITHIN));
     }
     let answer = match answered {
         Some(answer) => answer,

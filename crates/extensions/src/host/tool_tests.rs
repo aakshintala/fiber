@@ -790,7 +790,12 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
         clock.await_parked(due, WAIT),
         "the timer waits for its due time"
     );
-    clock.advance(Duration::from_secs(5));
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     Deadline::after(WAIT)
         .recv(&timer_done_rx)
         .expect("the timer callback completed");
@@ -930,8 +935,13 @@ fn a_timed_out_call_drops_its_runner_and_its_late_answer() {
         caller_thread.thread().id(),
         clock.origin() + Duration::from_millis(200) + Duration::from_secs(1),
     );
-    // Past its timeout and the grace: the parked call fails by its deadline.
-    clock.advance(Duration::from_secs(5));
+    // At its timeout and the grace: the parked call fails by its deadline.
+    clock.advance_when_parked(
+        Some(clock.origin() + Duration::from_millis(1200)),
+        Some(caller_thread.thread().id()),
+        Duration::from_millis(1200),
+        &Deadline::after(WAIT),
+    );
     assert!(
         matches!(
             Deadline::after(WAIT)

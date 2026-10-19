@@ -10,6 +10,7 @@
 
 use std::sync::mpsc;
 
+use contract::clock::Clock as _;
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::Bound;
 use fakes::Deadline;
@@ -606,6 +607,7 @@ fn a_spinning_tool_holds_the_extensions_hook_until_its_timeout() {
         clock.clone(),
     ));
     let spinning = Arc::clone(&ext);
+    let asked = clock.now();
     let spun = on_thread(move || spinning.tool_run("spin", json!({}), &fakes::CancelToken::new()));
     Deadline::after(WAIT)
         .recv(&went)
@@ -625,7 +627,19 @@ fn a_spinning_tool_holds_the_extensions_hook_until_its_timeout() {
             .is_err(),
         "the hook started while the tool held the thread"
     );
-    clock.advance(Duration::from_millis(100));
+    let park = asked + Duration::from_millis(100) + crate::lua::GRACE;
+    let parked = clock
+        .mark_parked(park, WAIT)
+        .expect("the tool caller parks at the grace");
+    let parked = parked.threads();
+    assert_eq!(parked.len(), 1, "only the tool caller parks at the grace");
+    let tool_caller = parked.into_iter().next().expect("the tool caller thread");
+    clock.advance_when_parked(
+        Some(park),
+        Some(tool_caller),
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     let Err(Error::Timeout { callback, .. }) = Deadline::after(WAIT)
         .recv(&spun)
         .expect("the tool returned")

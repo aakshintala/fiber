@@ -688,15 +688,16 @@ fn stalled_ls_files_child() {
         // a starter on the way up reports a timeout the stall never caused.
         let early = await_stuck(&done_rx, &watching);
         assert!(early.is_none(), "the stall answers only at its deadline");
-        // Past the git deadline the run stops.
-        clock.advance(GIT_DEADLINE + Duration::from_secs(1));
+        // At the git deadline the run stops.
+        // Crosses only poll pauses to the git deadline; the run is proven parked at its poll (ruling 6260728504).
+        clock.advance(GIT_DEADLINE);
         // The run parks for the grace, or answers at once when the stall dies
         // on SIGTERM with no grace park; an answer meanwhile ends this at
         // once, as above.
         let kill_at = clock.now() + GRACE;
         let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
         if answered.is_none() {
-            clock.advance(GRACE);
+            clock.advance_when_parked(Some(kill_at), None, GRACE, &Deadline::after(CHILD_BUDGET));
         }
         let answer = match answered {
             Some(answer) => answer,
