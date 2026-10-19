@@ -15,6 +15,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -270,6 +271,59 @@ fn a_running_session_is_attached_to_without_a_resume() {
     assert!(resumed(&hub).is_ok());
     assert!(starter.resumed().is_empty());
     assert!(!temp.hub_log().contains("session_resumed"));
+}
+
+#[test]
+fn a_non_trusted_attempt_with_a_live_socket_looks_up_once() {
+    let temp = Temp::new();
+    temp.recorded();
+    let run = temp.dir.join("run");
+    fs::create_dir_all(&run).unwrap();
+    let _running = UnixListener::bind(run.join(SID)).unwrap();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed_exited(&hub).is_ok());
+    assert!(starter.resumed().is_empty());
+    assert_eq!(
+        crate::recent::LOGGED_LOOKUPS.load(Ordering::SeqCst),
+        1,
+        "the connect-succeeded branch shares one lookup between its predicates"
+    );
+}
+
+#[test]
+fn a_refused_connect_then_resume_looks_up_once() {
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed(&hub).is_ok());
+    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    assert_eq!(
+        crate::recent::LOGGED_LOOKUPS.load(Ordering::SeqCst),
+        1,
+        "the connect-failed branch looks up once per attempt"
+    );
+}
+
+#[test]
+fn a_directory_without_a_log_does_not_mask_a_later_log() {
+    let temp = Temp::new();
+    // `-a` holds the session directory with no log; `-p` holds the log.
+    // The lookup must skip the earlier directory for the later log.
+    fs::create_dir_all(
+        temp.dir
+            .join("projects")
+            .join("-a")
+            .join("sessions")
+            .join(SID),
+    )
+    .unwrap();
+    let workspace = temp.recorded();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    assert!(resumed(&hub).is_ok());
+    assert_eq!(starter.resumed(), [(sid(), workspace)]);
 }
 
 #[test]
@@ -2341,4 +2395,21 @@ fn a_removed_workspace_resumes_in_its_recorded_repository_through_serve() {
     assert_eq!(client.acknowledged("the subscribe"), "c_1");
     assert_eq!(starter.resumed(), [(sid(), repository)]);
     assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+#[test]
+fn a_refused_labelled_subscribe_asks_once() {
+    // The guard for the terminal's refused open: the hub tries the
+    // asked label once, so `asked()` stays `[Some("nope")]`.
+    let temp = Temp::new();
+    temp.recorded();
+    let exited = failure(ErrorCode::CredentialMissing, "no credential label `nope`");
+    let starter = FakeStarter::exit_with(&temp.dir, exited);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe_with("c_1", "full", Some("nope"));
+    let rejected = client.next("the rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(rejected["payload"]["command_id"], "c_1");
+    assert_eq!(starter.asked(), [Some("nope".to_owned())]);
 }

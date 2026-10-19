@@ -1090,40 +1090,61 @@ fn join_returns_only_after_the_joined_thread_ends() {
 }
 
 #[test]
-fn the_last_kind_reads_only_a_whole_last_line() {
+fn a_stale_socket_costs_no_directory_scan() {
+    use std::os::unix::net::UnixListener;
+
     let temp = Temp::new();
-    let log = temp.dir.join("events.jsonl");
-    assert_eq!(last_kind(&log), None);
-    fs::write(&log, "").unwrap();
-    assert_eq!(last_kind(&log), None);
-    fs::write(&log, "{\"kind\":\"a\"}\n{\"kind\":\"fiber_exited\"}\n").unwrap();
-    assert_eq!(last_kind(&log).as_deref(), Some("fiber_exited"));
-    fs::write(&log, "{\"kind\":\"fiber_exited\"}").unwrap();
-    assert_eq!(last_kind(&log).as_deref(), Some("fiber_exited"));
-    // A torn tail does not parse.
-    fs::write(&log, "{\"kind\":\"fiber_exited\"}\n{\"kind\":\"tu").unwrap();
-    assert_eq!(last_kind(&log), None);
-    // A long log: only its tail is read.
-    let filler = format!("{{\"kind\":\"x\",\"p\":\"{}\"}}\n", "y".repeat(100_000));
-    fs::write(&log, format!("{filler}{{\"kind\":\"rewound\"}}\n")).unwrap();
-    assert_eq!(last_kind(&log).as_deref(), Some("rewound"));
-    // A last line longer than the tail is neither exit line.
-    fs::write(&log, format!("{{\"kind\":\"fiber_exited\"}}\n{filler}")).unwrap();
-    assert_eq!(last_kind(&log), None);
-    // Even when the tail of that line happens to parse on its own.
-    let inner = |pad: usize| {
-        format!(
-            "{{\"kind\":\"fiber_exited\",\"p\":\"{}\"}}",
-            "y".repeat(pad)
-        )
-    };
-    let pad = usize::try_from(TAIL).unwrap() - 1 - inner(0).len();
-    fs::write(&log, format!("not json {}\n", inner(pad))).unwrap();
-    assert_eq!(last_kind(&log), None);
-    // A last line well inside the tail reads whole.
-    let long = format!("{{\"kind\":\"z\",\"p\":\"{}\"}}\n", "y".repeat(2_000));
-    fs::write(&log, format!("{filler}{long}")).unwrap();
-    assert_eq!(last_kind(&log).as_deref(), Some("z"));
+    let (feed, _) = new_feed(&temp.dir);
+    // Bound then dropped: the file stays in `run/`, nothing listens.
+    UnixListener::bind(temp.dir.join("run").join(id(1))).unwrap();
+    for _ in 0..3 {
+        feed.scan();
+    }
+    assert_eq!(
+        crate::recent::LOOKUPS.load(Ordering::SeqCst),
+        0,
+        "the lookup runs only after the connect succeeds"
+    );
+    stop_within(&feed);
+}
+
+#[test]
+fn a_followed_session_looks_up_its_directory_once() {
+    let temp = Temp::new();
+    let (feed, _) = new_feed(&temp.dir);
+    let id = temp.session(1, "p", "turn_completed");
+    let (session, _) = running(&temp, &id, "idle");
+    feed.follow(id);
+    assert!(session.await_subscribed(1, DEADLINE));
+    assert_eq!(
+        crate::recent::LOOKUPS.load(Ordering::SeqCst),
+        1,
+        "one lookup per followed session"
+    );
+    stop_within(&feed);
+}
+
+#[test]
+fn a_session_without_a_log_still_gets_its_crashed_row() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp.dir);
+    let id = id(1);
+    // The directory exists but holds no log: the session crashed
+    // before writing a line.
+    fs::create_dir_all(recent::session_dir(&temp.dir, "p", &id)).unwrap();
+    let session = FakeSession::bind(&temp.dir, &id);
+    let line = status_line(&id, &status("n", "/w", "idle", None));
+    session.say(&line);
+    let mut sub = Sub::new(&feed);
+    start(&feed, &clock);
+    assert_eq!(sub.raw("the session's status"), line);
+    session.close();
+    sub.left(&id, "crashed");
+    let rows = temp.rows();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["how"], "crashed");
+    assert_eq!(rows[0]["project"], "p");
+    stop_within(&feed);
 }
 
 #[test]

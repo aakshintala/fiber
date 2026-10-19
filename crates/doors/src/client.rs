@@ -9,7 +9,7 @@ mod writer;
 pub(crate) use writer::write_loop;
 pub(crate) use writer::{Prelude, STOP, control_line, spawn_writer, write_line};
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
@@ -153,15 +153,10 @@ pub(crate) fn serve_connection(
         gone: false,
     };
     let mut read = BufReader::new(stream);
-    let mut buf = Vec::new();
     loop {
-        buf.clear();
-        match read.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                while buf.last().is_some_and(|byte| is_line_ending(*byte)) {
-                    buf.pop();
-                }
+        match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => break,
+            Ok(Some(buf)) => {
                 on_line(&buf, &mut conn);
                 if conn.gone {
                     break;
@@ -176,11 +171,6 @@ pub(crate) fn serve_connection(
         outbox.cancel_settles();
         outbox.stop(&conn.gate.session_id);
     }
-}
-
-/// A carriage return and a line feed both end a command line.
-fn is_line_ending(byte: u8) -> bool {
-    byte == b'\n' || byte == b'\r'
 }
 
 /// Ends a client connection's reader: stops its stoppable read, then shuts

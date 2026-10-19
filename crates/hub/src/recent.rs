@@ -9,6 +9,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 
 use contract::ErrorCode;
 use contract::SessionId;
@@ -221,17 +223,35 @@ pub(crate) fn session_dir(home: &Path, project: &str, id: &str) -> PathBuf {
         .join(id)
 }
 
-/// Finds session `id`'s directory under any project: its project key and
-/// the directory. `None` when no project holds it.
-pub(crate) fn find(home: &Path, id: &str) -> Option<(String, PathBuf)> {
-    fs::read_dir(home.join("projects"))
-        .ok()?
-        .filter_map(Result::ok)
-        .find_map(|entry| {
-            let project = entry.file_name().to_string_lossy().into_owned();
-            let dir = session_dir(home, &project, id);
-            dir.is_dir().then_some((project, dir))
-        })
+/// How many directory lookups `feed` made: every `follow` connects
+/// first, so a stale socket leaves this at 0. Test-only: nextest runs
+/// each test in its own process, so the count is race-free.
+#[cfg(test)]
+pub(crate) static LOOKUPS: AtomicUsize = AtomicUsize::new(0);
+
+/// How many logged-directory lookups resume, rejoin and the granted
+/// callers made. Test-only, as above.
+#[cfg(test)]
+pub(crate) static LOGGED_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
+
+/// Finds session `id`'s directory under any project: its project key
+/// and the directory, over [`log::find_session`]. The feed's lookup:
+/// a session that crashed before writing a line still gets its crashed
+/// row.
+pub(crate) fn lookup(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
+    #[cfg(test)]
+    LOOKUPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    log::find_session(home, id)
+}
+
+/// Finds session `id`'s logged directory under any project: its project
+/// key and the directory, over [`log::find_logged_session`]. The
+/// lookup resume, rejoin and the granted callers share, so a log-less
+/// directory cannot mask a later log.
+pub(crate) fn lookup_logged(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
+    #[cfg(test)]
+    LOGGED_LOOKUPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    log::find_logged_session(home, id)
 }
 
 fn path(home: &Path) -> PathBuf {

@@ -388,15 +388,16 @@ fn ten() -> Vec<String> {
 fn a_click_switches_lowering_the_old_and_opening_the_new() {
     let mut app = opened(&[A, B], A);
     let out = sent(click(&mut app, B));
-    assert_eq!(out.len(), 3, "{out:?}");
+    assert_eq!(out.len(), 2, "commands waits for acceptance: {out:?}");
     assert_eq!(
         out,
         vec![
             subscribe(&out[0]["id"], A, "summary"),
             subscribe(&out[1]["id"], B, "summary"),
-            asks_commands(&out[2]["id"], B),
         ]
     );
+    let commands = commands(app.on_line(accepted(B, out[1]["id"].as_str().unwrap_or_default())));
+    assert_eq!(commands, vec![asks_commands(&commands[0]["id"], B)]);
     assert_eq!(on_screen(&app), Some(B));
 }
 
@@ -414,7 +415,6 @@ fn a_switch_to_a_session_held_at_full_sends_summary_then_full() {
         vec![
             subscribe(&out[0]["id"], A, "summary"),
             subscribe(&out[1]["id"], B, "summary"),
-            asks_commands(&out[2]["id"], B),
         ]
     );
     // The first stage answered, the `full` raise follows.
@@ -460,13 +460,9 @@ fn alt_n_with_no_such_card_does_nothing() {
 fn alt_n_on_home_opens_the_card() {
     let mut app = with(&[A, B]);
     let out = sent(press(&mut app, Key::AltDigit(2)));
-    assert_eq!(
-        out,
-        vec![
-            subscribe(&out[0]["id"], B, "summary"),
-            asks_commands(&out[1]["id"], B),
-        ]
-    );
+    assert_eq!(out, vec![subscribe(&out[0]["id"], B, "summary")]);
+    let commands = commands(app.on_line(accepted(B, out[0]["id"].as_str().unwrap_or_default())));
+    assert_eq!(commands, vec![asks_commands(&commands[0]["id"], B)]);
     assert_eq!(on_screen(&app), Some(B));
 }
 
@@ -598,10 +594,8 @@ fn a_crashed_card_click_resumes_it() {
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a first stage for {B}: {out:?}"))
         .to_owned();
-    assert!(
-        app.on_line(accepted(B, &first)).is_empty(),
-        "the first stage keeps the gate"
-    );
+    let commands = commands(app.on_line(accepted(B, &first)));
+    assert_eq!(commands, vec![asks_commands(&commands[0]["id"], B)]);
     // The first frame releases the raise: the crashed session opens
     // at `full` after it.
     let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
@@ -1416,7 +1410,8 @@ fn alt_r_on_home_does_nothing() {
     for ch in "/home".chars() {
         press(&mut app, Key::Char(ch));
     }
-    press(&mut app, Key::Enter);
+    let lowering = sent(press(&mut app, Key::Enter));
+    ack(&mut app, &lowering);
     assert!(app.home_screen().is_some());
     assert_eq!(press(&mut app, Key::AltR), Effect::None);
     open(&mut app, A);

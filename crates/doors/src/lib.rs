@@ -128,11 +128,8 @@ pub fn exit_before_session(failure: Failure, out: &mut dyn Write, err: &mut dyn 
     let code = exit_code(&failure);
     let message = failure.message.clone();
     // Nothing is left to report a failed write to.
-    if let Ok(mut line) = serde_json::to_vec(&PreSessionExit::new(code, failure)) {
-        line.push(b'\n');
-        out.write_all(&line)
-            .and_then(|()| out.flush())
-            .unwrap_or(());
+    if let Ok(line) = serde_json::to_vec(&PreSessionExit::new(code, failure)) {
+        support::framing::write_line(out, &line).unwrap_or(());
     }
     writeln!(err, "fiber: {message}").unwrap_or(());
     code

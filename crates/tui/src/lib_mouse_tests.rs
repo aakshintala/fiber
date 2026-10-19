@@ -604,7 +604,7 @@ impl Backend for Cells {
 fn hover_frames_counts_the_bytes_each_report_wrote() {
     let events = include_str!("../examples/hover.jsonl");
     // The request is put aside: the badge is on row 8 of 60x12.
-    let bytes = crate::hover_frames(events, 60, 12, &[(3, 8), (4, 8), (3, 0), (3, 0)])
+    let (_, bytes) = crate::hover_frames(events, 60, 12, &[(3, 8), (4, 8), (3, 0), (3, 0)])
         .unwrap_or_else(|error| panic!("hover_frames: {error}"));
     assert_eq!(bytes.len(), 4);
     assert!(bytes[0] > 0);
@@ -1137,7 +1137,7 @@ fn hover_never_tints_a_turn() {
     // The `hover` jig's frames write what they wrote before turns were
     // stops, byte for byte.
     let events = include_str!("../examples/hover.jsonl");
-    let bytes = crate::hover_frames(events, 60, 12, &[(3, 8), (4, 8), (3, 0), (3, 0)])
+    let (_, bytes) = crate::hover_frames(events, 60, 12, &[(3, 8), (4, 8), (3, 0), (3, 0)])
         .unwrap_or_else(|error| panic!("hover_frames: {error}"));
     assert_eq!(bytes.len(), 4);
     assert!(bytes[0] > 0);

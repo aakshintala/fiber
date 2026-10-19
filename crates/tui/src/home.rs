@@ -377,6 +377,16 @@ impl Subs {
             .or_else(|| self.accepted.get(session).copied())
     }
 
+    /// The last in-flight subscribe's id when it asks for `summary`.
+    pub(crate) fn pending_summary(&self, session: &SessionId) -> Option<&str> {
+        self.inflight
+            .iter()
+            .rev()
+            .find(|(_, id, _)| id == session)
+            .filter(|(_, _, level)| *level == Level::Summary)
+            .map(|(id, _, _)| id.as_str())
+    }
+
     /// Answers the in-flight subscribe `id`: on acceptance the level
     /// becomes the accepted one. Some when the id was in flight, with
     /// its session, either way.

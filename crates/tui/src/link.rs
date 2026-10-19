@@ -1,7 +1,7 @@
 //! Hub lines out and in: command lines written one per line, and the
 //! reader that splits hub lines from session envelopes.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{SendError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -67,8 +67,7 @@ pub(crate) fn history_answer(line: &Envelope) -> Result<Vec<Envelope>, String> {
 pub(crate) fn write_line(mut stream: &UnixStream, line: &str) -> std::io::Result<()> {
     static WRITE: Mutex<()> = Mutex::new(());
     let _write = support::lock(&WRITE);
-    stream.write_all(format!("{line}\n").as_bytes())?;
-    stream.flush()
+    support::framing::write_line(&mut stream, line.as_bytes())
 }
 
 /// The parsed hub lines allowed in the channel: K counts
@@ -256,16 +255,19 @@ impl From<Sender<Input>> for Feed {
 /// [`Input::Disconnected`], never capacity-gated.
 pub(crate) fn read_lines(stream: impl std::io::Read, feed: &Feed) {
     let mut read = BufReader::new(stream);
-    let mut buf = String::new();
     loop {
-        buf.clear();
-        match read.read_line(&mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
+        let raw = match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => break,
+            Ok(Some(raw)) => raw,
+        };
+        // A non-UTF-8 line ends the stream, as an `Err` does: the hub
+        // speaks JSON text, and a relayed byte line is never a hub line.
+        let Ok(text) = String::from_utf8(raw) else {
+            break;
+        };
         // A line that parses takes a unit before it parses the next;
         // a malformed line takes none.
-        let Some(line) = parse_line(buf.trim_end_matches(['\r', '\n'])) else {
+        let Some(line) = parse_line(&text) else {
             continue;
         };
         if feed

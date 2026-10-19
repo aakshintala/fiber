@@ -1736,7 +1736,8 @@ fn opening_a_row_by_key_calls_on_attach() {
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
-    let (_, commands) = command(reader, "the commands command");
+    feed(&mut lp, vec![session_accepted(&subscribe["id"])]);
+    let (_, commands) = command(reader, "the commands command after subscribe acceptance");
     assert_eq!(commands["command"], "commands");
     assert_eq!(commands["session_id"], "s_aaaaaaaaaaaaaaaa");
     let seen = || attached.lock().map(|held| held.clone()).unwrap_or_default();
