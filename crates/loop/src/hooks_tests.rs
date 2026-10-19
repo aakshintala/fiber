@@ -2521,3 +2521,277 @@ fn empty_replaced_content_on_a_spill_sends_no_text_part() {
     assert_eq!(completed.payload["content"], json!([]));
     assert_eq!(completed.payload["artifact"], "artifacts/s_spill.txt");
 }
+
+/// `output` carrying the one loaded tool `a`.
+fn loaded(text: &str) -> Output {
+    Output {
+        loaded: Some(vec!["a".into()]),
+        ..self::text(text)
+    }
+}
+
+/// `tool`'s `make` output with `loaded: Some(["a"])` set, for the spill
+/// shapes, which build their output at run time.
+fn with_loaded(mut tool: Fixed) -> Fixed {
+    let make = tool.make.take().expect("a make-built output");
+    tool.make = Some(Arc::new(move || {
+        let mut output = make();
+        output.loaded = Some(vec!["a".into()]);
+        output
+    }));
+    tool
+}
+
+#[test]
+fn a_withheld_search_result_carries_no_loaded() {
+    let hooks = FakeHooks::new(
+        AfterToolOutcome::Withheld {
+            extension: "acme".into(),
+        },
+        &[],
+        Vec::new(),
+    );
+    let ran = run(
+        fixed(loaded("secret")),
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        Arc::new(TurnCancel::default()),
+    );
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "completed");
+    assert!(completed.payload.get("loaded").is_none());
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": super::withheld_line("acme")}])
+    );
+}
+
+#[test]
+fn a_withheld_spilled_search_result_carries_no_loaded() {
+    let home = fakes::TempDir::new("fiber-loaded-withheld-spilled");
+    let hooks = FakeHooks::new(
+        AfterToolOutcome::Withheld {
+            extension: "acme".into(),
+        },
+        &[],
+        Vec::new(),
+    );
+    let tool = with_loaded(spilling(
+        &home,
+        vec![b'a'; 100],
+        "HHHH",
+        "TTTT",
+        92,
+        Bound::DEFAULT,
+    ));
+    let ran = run_spilled(home, tool, Some(Arc::clone(&hooks)));
+    let completed = ran.completed();
+    assert!(completed.payload.get("loaded").is_none());
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": super::withheld_line("acme")}])
+    );
+}
+
+#[test]
+fn a_withheld_unsaved_search_result_carries_no_loaded() {
+    let home = fakes::TempDir::new("fiber-loaded-withheld-unsaved");
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let hooks = FakeHooks::new(
+        AfterToolOutcome::Withheld {
+            extension: "acme".into(),
+        },
+        &[],
+        Vec::new(),
+    );
+    let tool = with_loaded(unsaved("HHHH", "TTTT", 92, message, None, Bound::DEFAULT));
+    let ran = run_spilled(home, tool, Some(Arc::clone(&hooks)));
+    let completed = ran.completed();
+    assert!(completed.payload.get("loaded").is_none());
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": super::withheld_line("acme")}])
+    );
+}
+
+#[test]
+fn a_search_result_lost_to_a_failed_hook_carries_no_loaded() {
+    let failure = contract::hook::HookFailure {
+        extension: "acme".into(),
+        message: "broken".into(),
+    };
+    let hooks = FakeHooks::new(AfterToolOutcome::Failed(failure.clone()), &[], Vec::new());
+    let ran = run(
+        fixed(loaded("secret")),
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        Arc::new(TurnCancel::default()),
+    );
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "failed");
+    assert!(completed.payload.get("loaded").is_none());
+    assert_eq!(
+        completed.payload["content"][0]["text"],
+        serde_json::Value::String(super::failed_line(&failure))
+    );
+}
+
+#[test]
+fn a_search_result_shaped_under_a_shutdown_carries_no_loaded() {
+    let (ran, hooks) = shut_down_during(loaded("partial secret, long enough to be cut"));
+    assert!(hooks.seen().is_empty());
+    let completed = ran.completed();
+    assert_eq!(completed.payload["content"], json!([]));
+    assert!(completed.payload.get("loaded").is_none());
+}
+
+#[test]
+fn a_hook_rewrite_of_a_search_result_keeps_loaded() {
+    let hooks = FakeHooks::new(changed(Some("hooked"), None, None), &["acme"], Vec::new());
+    let ran = run(
+        fixed(loaded("secret")),
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        Arc::new(TurnCancel::default()),
+    );
+    let completed = ran.completed();
+    assert_eq!(completed.payload["loaded"], json!(["a"]));
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "hooked"}])
+    );
+}
+
+#[test]
+fn an_unchanged_search_result_keeps_loaded() {
+    let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    let ran = run(
+        fixed(loaded("secret")),
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        Arc::new(TurnCancel::default()),
+    );
+    let completed = ran.completed();
+    assert_eq!(completed.payload["loaded"], json!(["a"]));
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "secret"}])
+    );
+}
+
+#[test]
+fn an_unchanged_spilled_search_result_keeps_loaded() {
+    let home = fakes::TempDir::new("fiber-loaded-unchanged-spilled");
+    let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    let tool = with_loaded(spilling(
+        &home,
+        vec![b'a'; 100],
+        "HHHH",
+        "TTTT",
+        92,
+        Bound::DEFAULT,
+    ));
+    let ran = run_spilled(home, tool, Some(Arc::clone(&hooks)));
+    let completed = ran.completed();
+    assert_eq!(completed.payload["loaded"], json!(["a"]));
+    let path = ran.session.join("artifacts").join(SPILL_NAME);
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": cut_of(&path)}])
+    );
+}
+
+#[test]
+fn an_unchanged_unsaved_search_result_keeps_loaded() {
+    let home = fakes::TempDir::new("fiber-loaded-unchanged-unsaved");
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    let tool = with_loaded(unsaved(
+        "HHHH",
+        "TTTT",
+        92,
+        message.clone(),
+        None,
+        Bound::DEFAULT,
+    ));
+    let ran = run_spilled(home, tool, Some(Arc::clone(&hooks)));
+    let completed = ran.completed();
+    assert_eq!(completed.payload["loaded"], json!(["a"]));
+    let notice = format!("[92 bytes cut. The full output could not be saved: {message}.]");
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": format!("HHHH\n{notice}\nTTTT")}])
+    );
+}
+
+#[test]
+fn a_denied_search_carries_no_loaded() {
+    let hooks = FakeHooks::new(changed(Some("x"), None, None), &["acme"], Vec::new());
+    let ran = run(
+        Fixed {
+            effects: vec![Effect::Executes],
+            ..fixed(loaded("secret"))
+        },
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        Arc::new(TurnCancel::default()),
+    );
+    assert!(hooks.seen().is_empty());
+    assert_eq!(ran.completed().payload["status"], "denied");
+    assert!(ran.completed().payload.get("loaded").is_none());
+}
+
+#[test]
+fn a_cancelled_search_is_shown_to_the_hook_as_the_cancel_line() {
+    let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    let cancel = Arc::new(TurnCancel::default());
+    let ran = run(
+        Fixed {
+            cancel: Some(Arc::clone(&cancel)),
+            ..fixed(loaded("partial secret"))
+        },
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        cancel,
+    );
+    let seen = hooks.seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].status, CallStatus::Cancelled);
+    assert_eq!(
+        seen[0].content,
+        "The search was cancelled; no tool was loaded."
+    );
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "cancelled");
+    assert!(completed.payload.get("loaded").is_none());
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "The search was cancelled; no tool was loaded."}])
+    );
+}
+
+#[test]
+fn a_cancelled_search_rewritten_before_it_ran_completes_with_the_cancel_line_only() {
+    let mut hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    Arc::get_mut(&mut hooks).unwrap().before = Some(BeforeToolOutcome::Rewritten {
+        arguments: Map::new(),
+        changed_by: vec!["acme".into()],
+    });
+    let cancel = Arc::new(TurnCancel::default());
+    let ran = run(
+        Fixed {
+            cancel: Some(Arc::clone(&cancel)),
+            ..fixed(loaded("partial secret"))
+        },
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        cancel,
+    );
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "cancelled");
+    assert!(completed.payload.get("loaded").is_none());
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "The search was cancelled; no tool was loaded."}])
+    );
+}
