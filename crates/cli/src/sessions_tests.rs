@@ -552,8 +552,27 @@ fn the_hub_closing_before_answering_is_io_failed() {
     setup.started(ROOT, None);
     let mut hub = FakeHub::new(&[]);
     let (out, _, got) = run_delete(&setup, &mut hub, ROOT, false, true, false, &mut Unread);
-    assert_eq!(got.unwrap_err().code, ErrorCode::IoFailed);
+    let failure = got.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert_eq!(
+        failure.message,
+        "the hub closed the connection before answering `delete`"
+    );
     assert_eq!(out, "");
+}
+
+#[test]
+fn a_rejection_without_a_message_through_delete_names_delete() {
+    let setup = Setup::new();
+    setup.started(ROOT, None);
+    let rejected = json!({"kind": "command_rejected", "ts": 1, "schema_version": 1, "payload": {
+        "command_id": "c_delete", "code": "busy",
+    }});
+    let mut hub = FakeHub::new(&[rejected]);
+    let (_, _, got) = run_delete(&setup, &mut hub, ROOT, false, true, false, &mut Unread);
+    let failure = got.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::Busy);
+    assert_eq!(failure.message, "the hub refused `delete`");
 }
 
 #[test]

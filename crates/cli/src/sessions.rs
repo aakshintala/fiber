@@ -181,12 +181,22 @@ pub(crate) fn answer_of(line: &HubLine, id: &str, command: &str) -> Option<Resul
     if line.payload.get("command_id").and_then(Value::as_str) != Some(id) {
         return None;
     }
+    matched(line.clone(), id, || command.to_owned())
+}
+
+/// The answer body over an owned line: moves an accepted `result` out of
+/// the payload instead of cloning it. `command` runs at most once, only
+/// for a rejection with no `message`.
+fn matched(
+    mut line: HubLine,
+    id: &str,
+    command: impl FnOnce() -> String,
+) -> Option<Result<Value, Failure>> {
+    if line.payload.get("command_id").and_then(Value::as_str) != Some(id) {
+        return None;
+    }
     match line.kind.as_str() {
-        "command_accepted" => Some(Ok(line
-            .payload
-            .get("result")
-            .cloned()
-            .unwrap_or(Value::Null))),
+        "command_accepted" => Some(Ok(line.payload.remove("result").unwrap_or(Value::Null))),
         "command_rejected" => {
             let code = line
                 .payload
@@ -194,15 +204,28 @@ pub(crate) fn answer_of(line: &HubLine, id: &str, command: &str) -> Option<Resul
                 .and_then(Value::as_str)
                 .and_then(|code| serde_json::from_value(Value::String(code.to_owned())).ok())
                 .unwrap_or(ErrorCode::IoFailed);
-            let message = line
-                .payload
-                .get("message")
-                .and_then(Value::as_str)
-                .map_or_else(|| format!("the hub refused `{command}`"), str::to_owned);
+            let message = match line.payload.remove("message") {
+                Some(Value::String(message)) => message,
+                _ => format!("the hub refused `{}`", command()),
+            };
             Some(Err(failed(code, message)))
         }
         _ => None,
     }
+}
+
+/// The name for the messages below, read from the serialised line so a
+/// renamed variant cannot leave a stale name here.
+fn name_of(bytes: &[u8]) -> String {
+    serde_json::from_slice::<Value>(bytes)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("command")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 /// Sends hub `command` as `command_id` and reads until its answer,
@@ -224,17 +247,6 @@ pub(crate) fn request(
             format!("a command could not be written as JSON: {e}"),
         )
     })?;
-    // The name for the messages below, read from the serialised line so a
-    // renamed variant cannot leave a stale name here.
-    let name = serde_json::from_slice::<Value>(&bytes)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("command")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "unknown".to_owned());
     let lost = |e: io::Error| failed(ErrorCode::IoFailed, format!("the hub: {e}"));
     support::framing::write_line(read.get_mut(), &bytes).map_err(lost)?;
     loop {
@@ -243,13 +255,16 @@ pub(crate) fn request(
         else {
             return Err(failed(
                 ErrorCode::IoFailed,
-                format!("the hub closed the connection before answering `{name}`"),
+                format!(
+                    "the hub closed the connection before answering `{}`",
+                    name_of(&bytes)
+                ),
             ));
         };
         let Ok(answer) = serde_json::from_slice::<HubLine>(&buf) else {
             continue;
         };
-        if let Some(answered) = answer_of(&answer, command_id, &name) {
+        if let Some(answered) = matched(answer, command_id, || name_of(&bytes)) {
             return answered;
         }
     }
