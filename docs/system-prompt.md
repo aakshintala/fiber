@@ -409,11 +409,13 @@ extra.
 
 ## The texts
 
-Every text Fiber sends the model is a Markdown file in the `loop` or `tools` crate,
-compiled into the binary:
+Every text Fiber sends the model is a Markdown file in the `loop`, `tools` or
+`contract` crate, compiled into the binary:
 
 | File | Holds |
 |---|---|
+| `crates/contract/prompt/no-match.md` | the `tool_search` result when no deferred tool matched |
+| `crates/contract/prompt/loaded.md` | an earlier `tool_search` result, listing the loaded tools as `{names}` |
 | `crates/loop/prompt/system.md` | Fiber's system prompt text |
 | `crates/tools/prompt/guidelines.md` | the built-in tools' guidelines, one `##` section per tool |
 | `crates/loop/prompt/opening.md` | the opening message |

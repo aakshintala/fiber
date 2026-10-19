@@ -213,6 +213,7 @@ impl Loop {
 pub(crate) fn refuse_after_rewound(delivery: Delivery) {
     match delivery {
         Delivery::Prompt(_, ack)
+        | Delivery::ProposeNotes(_, ack)
         | Delivery::Steer(_, ack)
         | Delivery::SteerDrop(_, ack)
         | Delivery::Handoff(_, _, ack)

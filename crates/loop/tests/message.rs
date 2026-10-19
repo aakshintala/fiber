@@ -83,7 +83,8 @@ fn users(request: &contract::provider::ModelRequest) -> Vec<String> {
             Input::Assistant { .. }
             | Input::Reasoning { .. }
             | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect()
 }

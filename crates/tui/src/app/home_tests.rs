@@ -3,7 +3,7 @@
 
 use super::{App, Effect};
 use crate::home::{Launch, Spot};
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::local_time::{new_york, turn_started_at};
 use contract::clock::Clock;
@@ -4545,4 +4545,458 @@ fn the_foot_shows_the_plain_quit_hint_while_armed() {
             .add_modifier
             .contains(ratatui::style::Modifier::DIM)
     );
+}
+
+/// Attaches `session` with its live row fed, then goes `/home`: the
+/// back key is live for it.
+fn home_from(app: &mut App, session: &str) {
+    start_session(app, session);
+    app.on_line(live(
+        session,
+        "current work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    assert!(matches!(enter_text(app, "/home"), Effect::Send(_)));
+    assert!(app.on_home());
+}
+
+#[test]
+fn the_foot_names_the_back_key_after_home_from_a_live_session() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or Esc back to the session · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_names_the_rebound_back_key() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("close_or_interrupt".to_owned(), json!("f5"));
+    app.set_keys(crate::KeysSetup { user });
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or F5 back to the session · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_leaves_the_back_key_out_when_unbound() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("close_or_interrupt".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_keeps_quit_named_when_the_key_map_is_unbound() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("key_map".to_owned(), json!([]));
+    user.insert("close_or_interrupt".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete deletes an exited one · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_launch_home_foot_names_no_back_key() {
+    let app = home();
+    assert!(!foot(&app).contains("back to the session"));
+}
+
+#[test]
+fn opening_a_row_then_closing_names_no_back_key() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert!(foot(&app).contains("→ or Esc back to the session"));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "other work",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    let key = app
+        .home
+        .as_ref()
+        .and_then(|home| {
+            home.sessions
+                .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
+        })
+        .map(|row| row.key)
+        .expect("row B");
+    open(&mut app, key);
+    let Effect::Send(_) = enter_text(&mut app, "/close") else {
+        panic!("/close sends");
+    };
+    assert!(app.on_home());
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn a_card_switch_then_closing_names_no_back_key() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert!(foot(&app).contains("→ or Esc back to the session"));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "other work",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    // A card switch: the session on screen left, then the card's
+    // session opens as one from home does.
+    let _ = app.leave();
+    let key = app
+        .home
+        .as_ref()
+        .and_then(|home| {
+            home.sessions
+                .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
+        })
+        .map(|row| row.key)
+        .expect("row B");
+    app.open_entry(key);
+    let Effect::Send(_) = enter_text(&mut app, "/close") else {
+        panic!("/close sends");
+    };
+    assert!(app.on_home());
+    assert!(!foot(&app).contains("back to the session"));
+}
+
+#[test]
+fn closing_straight_from_a_session_names_no_back_key() {
+    let mut app = home();
+    linked(&mut app);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let Effect::Send(_) = enter_text(&mut app, "/close") else {
+        panic!("/close sends");
+    };
+    assert!(app.on_home());
+    assert!(!foot(&app).contains("back to the session"));
+}
+
+#[test]
+fn home_on_home_keeps_the_back_key() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let _ = enter_text(&mut app, "/home");
+    assert!(app.on_home());
+    assert!(foot(&app).contains("→ or Esc back to the session"));
+}
+
+#[test]
+fn new_on_home_keeps_the_back_key() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let _ = enter_text(&mut app, "/new");
+    assert!(app.on_home());
+    assert!(foot(&app).contains("→ or Esc back to the session"));
+}
+
+#[test]
+fn the_back_hint_bolds_the_key_and_dims_the_rest() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let screen = app.home_screen().expect("home draws");
+    let span = |content: &str| {
+        screen
+            .foot
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == content)
+            .unwrap_or_else(|| panic!("{content} draws"))
+    };
+    for key in ["→", "Esc"] {
+        let style = span(key).style;
+        assert!(
+            style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+            "{key} is bold"
+        );
+        assert!(
+            !style.add_modifier.contains(ratatui::style::Modifier::DIM),
+            "{key} is not dim"
+        );
+    }
+    for label in [" or ", " back to the session"] {
+        let style = span(label).style;
+        assert!(
+            style.add_modifier.contains(ratatui::style::Modifier::DIM),
+            "{label} is dim"
+        );
+        assert!(
+            !style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+            "{label} is not bold"
+        );
+    }
+}
+
+/// A steering queue with one row for `session`.
+fn steering_queue(session: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "steering_queue".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"messages": [{
+            "content": [{"type": "text", "text": "steer me"}],
+            "source": "driver",
+            "command_id": "c_1",
+        }]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+#[test]
+fn slash_new_from_a_session_with_a_focused_steering_row_lands_on_the_entry_bar() {
+    let mut app = home();
+    linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "current work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.on_line(steering_queue("s_aaaaaaaaaaaaaaaa"));
+    app.select_steering(0);
+    assert_eq!(app.draft(), "steer me");
+    // Esc returns to the box, clearing the steering selection, so
+    // `/new` can be typed.
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(app.draft(), "");
+    assert!(matches!(enter_text(&mut app, "/new"), Effect::Send(_)));
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.draft(), "");
+}
+
+/// The row key of `session` on home.
+fn row_key(app: &App, session: &str) -> u64 {
+    app.home
+        .as_ref()
+        .and_then(|home| home.sessions.row(&contract::SessionId(session.to_owned())))
+        .map(|row| row.key)
+        .unwrap_or_else(|| panic!("row {session}"))
+}
+
+#[test]
+fn slash_home_from_a_session_focuses_the_on_screen_sessions_row() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "first work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    home_from(&mut app, "s_bbbbbbbbbbbbbbbb");
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_bbbbbbbbbbbbbbbb"
+        ))))
+    );
+}
+
+#[test]
+fn slash_home_focuses_an_exited_row_hidden_behind_more() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(
+        &mut app,
+        &recent,
+        &[
+            ("s_aaaaaaaaaaaaaaaa", "newest"),
+            ("s_bbbbbbbbbbbbbbbb", "second"),
+            ("s_cccccccccccccccc", "third"),
+            ("s_dddddddddddddddd", "fourth"),
+        ],
+    );
+    // The fourth row hides behind more; opening it attaches its
+    // exited session.
+    let key = more_key(&app, "-w").expect("the fourth row is hidden");
+    open(&mut app, key);
+    let _ = enter_text(&mut app, "/home");
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(key)))
+    );
+}
+
+#[test]
+fn slash_home_with_no_row_for_the_session_leaves_the_box_focused() {
+    let mut app = home();
+    linked(&mut app);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let _ = enter_text(&mut app, "/home");
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn slash_home_on_home_leaves_focus_unchanged() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    drawn(&mut app);
+    // The entry bar focused, with a live came-from row behind it:
+    // `/home` must not refocus that row.
+    app.focus = None;
+    let _ = enter_text(&mut app, "/home");
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn an_exited_came_from_session_hides_the_back_hint() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert!(foot(&app).contains("→ or Esc back to the session"));
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    assert!(!foot(&app).contains("back to the session"));
+}
+
+#[test]
+fn slash_new_then_right_returns_to_the_session_left() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(enter_text(&mut app, "/new"), Effect::None);
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+    let Effect::Send(_) = app.on_edit(Edit::Right) else {
+        panic!("→ goes back");
+    };
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(!app.on_home());
+}
+
+#[test]
+fn slash_new_then_esc_returns_to_the_session_left() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(enter_text(&mut app, "/new"), Effect::None);
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(_) = app.on_key(Key::Esc, now) else {
+        panic!("Esc goes back");
+    };
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(!app.on_home());
+}
+
+#[test]
+fn slash_resume_then_right_returns_to_the_session_left() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "current work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
+    drawn(&mut app);
+    assert!(matches!(enter_text(&mut app, "/resume"), Effect::Send(_)));
+    assert!(app.on_home());
+    drawn(&mut app);
+    let exited = *keys(&app)
+        .get(1)
+        .expect("the exited row follows the live row");
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(exited)))
+    );
+    let Effect::Send(_) = app.on_edit(Edit::Right) else {
+        panic!("→ goes back");
+    };
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(!app.on_home());
+}
+
+#[test]
+fn slash_resume_then_esc_returns_to_the_session_left() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "current work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
+    drawn(&mut app);
+    assert!(matches!(enter_text(&mut app, "/resume"), Effect::Send(_)));
+    assert!(app.on_home());
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(_) = app.on_key(Key::Esc, now) else {
+        panic!("Esc goes back");
+    };
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(!app.on_home());
 }

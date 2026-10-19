@@ -734,7 +734,8 @@ fn the_window_reader_leaves_image_shaped_tool_arguments_alone() {
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .unwrap();
     assert_eq!(replayed.arguments, shaped);

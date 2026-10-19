@@ -58,8 +58,12 @@ fn wait_returns_after_the_delay_on_the_fake_clock() {
     let (clock, retry) = permit();
     let rx = waiting(&clock, &retry);
     retry.give(HALF);
-    parked(&clock, clock.origin() + HALF);
-    clock.advance(HALF);
+    clock.advance_when_parked(
+        Some(clock.origin() + HALF),
+        None,
+        HALF,
+        &Deadline::after(DEADLINE),
+    );
     assert!(result(&rx, &Deadline::after(DEADLINE)));
     assert_eq!(retry.held(), None);
 }
@@ -70,8 +74,12 @@ fn an_advance_short_of_the_delay_keeps_waiting() {
     let rx = waiting(&clock, &retry);
     retry.give(HALF);
     let until = clock.origin() + HALF;
-    parked(&clock, until);
-    let mark = clock.advance_marked(Duration::from_millis(499));
+    let mark = clock.advance_when_parked(
+        Some(until),
+        None,
+        Duration::from_millis(499),
+        &Deadline::after(DEADLINE),
+    );
     // Parked again at the same deadline: 499 ms is short of it, and the
     // thread has checked the clock since the advance.
     assert!(
@@ -79,7 +87,12 @@ fn an_advance_short_of_the_delay_keeps_waiting() {
         "waited {DEADLINE:?} for the wait to park again"
     );
     assert!(rx.try_recv().is_err());
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(until),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert!(result(&rx, &Deadline::after(DEADLINE)));
 }
 
@@ -88,8 +101,12 @@ fn a_delay_given_before_the_wait_is_used() {
     let (clock, retry) = permit();
     retry.give(HALF);
     let rx = waiting(&clock, &retry);
-    parked(&clock, clock.origin() + HALF);
-    clock.advance(HALF);
+    clock.advance_when_parked(
+        Some(clock.origin() + HALF),
+        None,
+        HALF,
+        &Deadline::after(DEADLINE),
+    );
     assert!(result(&rx, &Deadline::after(DEADLINE)));
 }
 

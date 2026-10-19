@@ -87,6 +87,7 @@ fn a_line_carries_the_envelope_the_log_fills_in() {
     // What append returns is the line, byte for byte.
     let file = fs::read_to_string(tmp.session(&id("s_9")).join("events.jsonl")).unwrap();
     assert_eq!(file, serde_json::to_string(&returned).unwrap() + "\n");
+    // No code under test waits on the clock here; it stamps data (ruling 6179406086).
     clock.advance(Duration::from_millis(5));
     log.append(&empty("step_started"), None, None).unwrap();
     let again = common::lines(&tmp.session(&id("s_9")));

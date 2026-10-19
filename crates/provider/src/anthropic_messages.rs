@@ -333,7 +333,8 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
 
@@ -399,7 +400,7 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
 /// the model's own text.
 fn role_of(input: &Input) -> &'static str {
     match input {
-        Input::User { .. } | Input::ToolResult { .. } => "user",
+        Input::User { .. } | Input::ToolResult { .. } | Input::ToolSearchResult { .. } => "user",
         Input::Assistant { .. } | Input::Reasoning { .. } | Input::ToolCall { .. } => "assistant",
     }
 }
@@ -472,6 +473,19 @@ fn block_of(
             "name": call.name,
             "input": call.arguments,
         })],
+        Input::ToolSearchResult { action_id, loaded } => block_of(
+            &Input::ToolResult {
+                action_id: action_id.clone(),
+                text: contract::provider::loaded_text(loaded),
+                is_error: false,
+                images: Vec::new(),
+                pdfs: Vec::new(),
+            },
+            reference,
+            call_ids,
+            session_dir,
+            text_only,
+        ),
         Input::ToolResult {
             action_id,
             text,

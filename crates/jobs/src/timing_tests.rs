@@ -24,7 +24,7 @@ use contract::events::JobCompleted;
 use contract::inbox::Delivery;
 use contract::jobs::{JobRecord, Jobs as _, Stop};
 use contract::tool::Tool as _;
-use fakes::clock::FakeClock;
+use fakes::clock::{FakeClock, Miss};
 use fakes::{CancelToken, Deadline, Recorder, TempDir, Watchdog};
 use serde_json::{Map, Value, json};
 
@@ -379,35 +379,84 @@ fn assert_none(records: &mpsc::Receiver<Record>, what: &str) {
     assert!(records.try_recv().is_err(), "{what}: no scope closed");
 }
 
-/// How long the reap driver waits for the runner's retry park before it
-/// checks its stop: a bound on each wait, never a timing assertion.
-const POLL: Duration = Duration::from_millis(10);
+/// One wait inside `try_advance_when_parked` for a fresh park: a poll
+/// pause, not a deadline. At most 100 ms, so a driver whose runner left
+/// its park without a clock move sees its end condition within one pause.
+/// Shared by every poll driver in `crates/jobs` tests: each driver moves
+/// time only through `try_step` below.
+pub(crate) const PAUSE: Duration = Duration::from_millis(100);
+
+/// One `try_advance_when_parked` call's outcome: the move landed, no fresh
+/// park arrived within the pause, or a park at another instant was
+/// watched and is carried into the next pass.
+pub(crate) enum Step {
+    Moved,
+    NoPark,
+    Next(Instant),
+}
+
+/// One `try_advance_when_parked` call at the instant the driver read or
+/// carried this pass, moving `advance` and no further. Never checks a
+/// deadline and never moves time itself: the driver's own pass top fails
+/// at its deadline. A watched park with no deadline panics naming it:
+/// the runner never parks without one.
+pub(crate) fn try_step(clock: &FakeClock, until: Instant, advance: Duration) -> Step {
+    match clock.try_advance_when_parked(Some(until), None, advance, PAUSE) {
+        Ok(_) => Step::Moved,
+        Err(Miss::NoPark) => Step::NoPark,
+        Err(Miss::Mismatch {
+            watched: (_, Some(watched)),
+            ..
+        }) => Step::Next(watched),
+        Err(
+            miss @ Miss::Mismatch {
+                watched: (_, None), ..
+            },
+        ) => {
+            panic!("{miss}; now={:?} parked={:?}", clock.now(), clock.parked());
+        }
+    }
+}
 
 /// Takes the run's end, re-running the runner's reap pass while it holds
 /// its retry park at `park`: the drain's end of file can beat the zombie,
 /// and only a clock wake re-runs the reap. The driver advances zero, which
 /// moves no time and changes no deadline; it only wakes the parked pass.
 /// `park` is the drive start plus the watch retry backoff. Modelled on
-/// `reported_before` in `delegate/run_tests.rs`.
+/// `reported_before` in `delegate/run_tests.rs`. The driver names `park`
+/// every pass: a mismatch at any other instant is dropped, so there is no
+/// carried instant to keep. The driver runs in the
+/// scope, so no wait outlives the call: a panic in the driver fails the
+/// test at the scope.
 fn end_after_reap(
     fixture: &Fixture,
     park: Instant,
     deadline: Deadline,
     what: &str,
 ) -> JobCompleted {
-    let stop = Arc::new(AtomicBool::new(false));
-    let driver_stop = Arc::clone(&stop);
+    let stop = AtomicBool::new(false);
     let clock = Arc::clone(&fixture.clock);
-    thread::spawn(move || {
-        while !driver_stop.load(Ordering::SeqCst) {
-            if clock.await_parked(park, POLL) {
-                clock.advance(Duration::ZERO);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            loop {
+                if stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                if deadline.left().is_zero() {
+                    panic!("{what}; now={:?} parked={:?}", clock.now(), clock.parked());
+                }
+                // Only the park this call waits for is named: a mismatch
+                // at any other instant is dropped, and the next pass names
+                // `park` again.
+                match try_step(&clock, park, Duration::ZERO) {
+                    Step::Moved | Step::NoPark | Step::Next(_) => {}
+                }
             }
-        }
-    });
-    let ended = expect_end(&fixture.inbox, deadline, what);
-    stop.store(true, Ordering::SeqCst);
-    ended
+        });
+        let ended = expect_end(&fixture.inbox, deadline, what);
+        stop.store(true, Ordering::SeqCst);
+        ended
+    })
 }
 
 /// The run's end from the inbox.
@@ -432,6 +481,7 @@ fn expect_end(inbox: &mpsc::Receiver<Delivery>, deadline: Deadline, what: &str) 
         | Delivery::Resolved(..)
         | Delivery::InnerCall(_)
         | Delivery::ExtensionLog(_)
+        | Delivery::ProposeNotes(..)
         | Delivery::ExtensionJob(..)
         | Delivery::ExtensionUsage(_)
         | Delivery::Shell(..)

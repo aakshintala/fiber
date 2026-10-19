@@ -294,7 +294,8 @@ fn user_text(input: &Input) -> &str {
         Input::Assistant { .. }
         | Input::Reasoning { .. }
         | Input::ToolCall { .. }
-        | Input::ToolResult { .. } => {
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. } => {
             panic!("a user item: {input:?}")
         }
     }
@@ -600,7 +601,8 @@ fn user_text_or_none(input: &Input) -> Option<&str> {
         Input::Assistant { .. }
         | Input::Reasoning { .. }
         | Input::ToolCall { .. }
-        | Input::ToolResult { .. } => None,
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. } => None,
     }
 }
 

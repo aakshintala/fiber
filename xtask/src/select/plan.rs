@@ -163,8 +163,8 @@ const BASE_ROWS: [(&str, &[&str]); 6] = [
 
 /// Whether `path` is a docs file for the base-row selection: `is_docs_file`
 /// says so, and it is not under `crates/`. Every `.md` under `crates/` is
-/// code, because five are compiled in by `include_str!`
-/// (`crates/loop/prompt/*.md`, `crates/tools/prompt/guidelines.md`).
+/// code: compiled-in Markdown lives in `crates/contract/prompt/`,
+/// `crates/loop/prompt/`, `crates/tools/prompt/` and `crates/tools/tests/pages/`.
 fn is_base_docs_file(path: &str) -> bool {
     super::is_docs_file(path) && !path.starts_with("crates/")
 }

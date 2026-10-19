@@ -126,11 +126,12 @@ fn a_tick_through_the_thread_draws_the_next_frame() {
     let (tx, rx) = mpsc::channel();
     lp.tick.start(shared, tx);
     assert_eq!(step(&mut lp, Input::Resize), None);
-    assert!(
-        clock.await_parked(at, DEADLINE),
-        "waited {DEADLINE:?} for the ticker to park on the clock"
+    clock.advance_when_parked(
+        Some(at),
+        None,
+        Duration::from_millis(120),
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(Duration::from_millis(120));
     assert!(matches!(
         Deadline::after(DEADLINE)
             .recv(&rx)
@@ -153,11 +154,12 @@ fn a_tick_behind_a_key_is_acked_before_the_next() {
     let (tx, rx) = mpsc::channel();
     lp.tick.start(shared, tx);
     assert_eq!(step(&mut lp, Input::Resize), None);
-    assert!(
-        clock.await_parked(at, DEADLINE),
-        "waited {DEADLINE:?} for the ticker to park on the clock"
+    clock.advance_when_parked(
+        Some(at),
+        None,
+        Duration::from_millis(120),
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(Duration::from_millis(120));
     // Tick A arrives and is held: nothing is stepped yet.
     assert!(matches!(
         Deadline::after(DEADLINE)
@@ -169,12 +171,22 @@ fn a_tick_behind_a_key_is_acked_before_the_next() {
     // while tick A is still out. That nothing sends meanwhile lives in
     // `gate_step_table`'s in-flight row; no quiet wait proves it here.
     assert_eq!(step(&mut lp, Input::Bytes(b"x".to_vec())), None);
+    // No code under test waits on the clock here; the ticker is idle on its condvar with tick A unacked (ruling 6179406086).
     clock.advance(Duration::from_millis(240));
     // Stepping tick A acks it. The step re-arms the next boundary, so
-    // advancing to it delivers tick B whichever arm the thread reads:
-    // the stale one past, or the new one reached now.
+    // the frame's re-arm is the only deadline the thread reads: disarm
+    // first, leaving the thread idle on its condvar, so it parks at that
+    // instant every run.
+    lp.tick.arm(None);
     assert_eq!(step(&mut lp, Input::Tick), None);
-    clock.advance(Duration::from_millis(120));
+    let next = lp.tick.armed().expect("the frame re-armed");
+    assert!(next > clock.now());
+    clock.advance_when_parked(
+        Some(next),
+        None,
+        next.duration_since(clock.now()),
+        &Deadline::after(DEADLINE),
+    );
     assert!(matches!(
         Deadline::after(DEADLINE)
             .recv(&rx)
@@ -195,11 +207,12 @@ fn a_tick_while_a_frame_waits_for_history_is_acked() {
     let (tx, rx) = mpsc::channel();
     lp.tick.start(shared, tx.clone());
     assert_eq!(step(&mut lp, Input::Resize), None);
-    assert!(
-        clock.await_parked(at, DEADLINE),
-        "waited {DEADLINE:?} for the ticker to park on the clock"
+    clock.advance_when_parked(
+        Some(at),
+        None,
+        Duration::from_millis(120),
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(Duration::from_millis(120));
     // The tick the thread sent waits in the channel behind the answer.
     tx.send(Input::Hub(session_line(
         "command_accepted",
@@ -310,6 +323,7 @@ fn a_waiting_card_arms_for_ten_seconds_then_stops() {
         lp.tick.armed(),
         origin.checked_add(Duration::from_millis(480))
     );
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(Duration::from_millis(9_990));
     assert_eq!(step(&mut lp, Input::Resize), None);
     assert_eq!(
@@ -317,6 +331,7 @@ fn a_waiting_card_arms_for_ten_seconds_then_stops() {
         origin.checked_add(Duration::from_millis(10_000))
     );
     // At T+10 000 the pulse holds still: nothing arms.
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(Duration::from_millis(10));
     assert_eq!(step(&mut lp, Input::Resize), None);
     assert_eq!(lp.tick.armed(), None);

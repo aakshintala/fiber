@@ -217,7 +217,7 @@ fn typing_filters_prefix_matches_first() {
     assert_eq!(
         shown(&app),
         [
-            "/resume  Opens home at the session list.  command",
+            "/resume  Goes home, focused on the first exited row.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
             "/areview  Runs areview.  skill",
         ]
@@ -1237,7 +1237,7 @@ fn slash_completions_carry_their_window() {
     assert_eq!(
         completions.lines(),
         [
-            "/resume  Opens home at the session list.  command",
+            "/resume  Goes home, focused on the first exited row.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
             "/areview  Runs areview.  skill",
         ]

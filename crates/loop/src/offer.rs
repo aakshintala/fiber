@@ -364,6 +364,7 @@ impl Loop {
                 | Delivery::Rewind(..)
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)
+                | Delivery::ProposeNotes(..)
                 | Delivery::InnerCall(_)) => self.deferred.push_back(held),
                 now @ (Delivery::Reply(..)
                 | Delivery::Name(..)

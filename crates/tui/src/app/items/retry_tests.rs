@@ -282,6 +282,7 @@ fn hub_session_not_found_refusal_retries_the_open_delegate_subscribe() {
     let refused_at = clock.now();
     app.on_line(hub_refused(&id, "session_not_found"));
     assert_eq!(app.items_wake(), Some(refused_at + RETRY));
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(RETRY);
     tick(&mut app, &clock);
     let retry = subscribes(&commands(app.items_due(clock.now())));
@@ -337,14 +338,17 @@ fn a_view_refused_full_is_resent_once_at_the_retry() {
     tick(&mut app, &clock);
     app.on_line(session_refused(DELEGATE_A, &id, "session_not_found"));
     assert!(commands(app.items_due(clock.now())).is_empty());
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(RETRY.checked_sub(Duration::from_millis(1)).unwrap_or(RETRY));
     assert!(commands(app.items_due(clock.now())).is_empty());
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(Duration::from_millis(1));
     let resent = subscribes(&commands(app.items_due(clock.now())));
     assert_eq!(resent.len(), 1);
     assert_eq!(resent[0]["session_id"], DELEGATE_A);
     assert_eq!(resent[0]["args"]["level"], "full");
     // Once resent, no second resend goes out on later steps.
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(RETRY);
     assert!(commands(app.items_due(clock.now())).is_empty());
 }
@@ -368,6 +372,7 @@ fn a_card_refused_summary_is_resent_likewise() {
     // reconciler only.
     let again = commands(app.on_line(live(SESSION, json!({"state": "streaming"}))));
     assert!(subscribes(&again).is_empty());
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(RETRY);
     let resent = subscribes(&commands(app.items_due(clock.now())));
     assert_eq!(resent.len(), 1);
@@ -392,6 +397,7 @@ fn no_resend_after_the_parent_lists_the_job_completed() {
     // The refusal, then the parent's `job_completed`, then the retry
     // moment: the wish is gone with the run.
     complete(&mut app, "j_1");
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(RETRY + Duration::from_secs(1));
     assert!(commands(app.items_due(clock.now())).is_empty());
 }
@@ -412,6 +418,7 @@ fn no_resend_with_the_link_down() {
     tick(&mut app, &clock);
     app.on_line(session_refused(DELEGATE_A, &id, "session_not_found"));
     app.disconnected();
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(RETRY + Duration::from_secs(1));
     assert!(commands(app.items_due(clock.now())).is_empty());
 }
@@ -431,6 +438,7 @@ fn a_refusal_with_another_code_is_never_resent_and_leaves_no_wish() {
         .unwrap_or_else(|| panic!("an id"));
     tick(&mut app, &clock);
     app.on_line(session_refused(DELEGATE_A, &id, "invalid_arguments"));
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(RETRY + Duration::from_secs(1));
     assert!(commands(app.items_due(clock.now())).is_empty());
     assert!(app.items_wake().is_none());
@@ -454,6 +462,7 @@ fn the_wake_is_the_retry_then_nothing_once_in_flight() {
     app.on_line(session_refused(DELEGATE_A, &id, "session_not_found"));
     assert_eq!(app.items_wake(), Some(refused_at + RETRY));
     // The resend in flight asks no wake.
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(RETRY);
     let resent = commands(app.items_due(clock.now()));
     assert_eq!(subscribes(&resent).len(), 1);
@@ -476,6 +485,7 @@ fn a_close_while_full_is_in_flight_waits_for_its_acknowledgement() {
     app.close_item();
     // At several later instants the lowering waits and asks no wake.
     for _ in 0..3 {
+        // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
         clock.advance(Duration::from_secs(1));
         assert!(commands(app.items_due(clock.now())).is_empty());
         assert!(app.items_wake().is_none());
@@ -512,6 +522,7 @@ fn two_refusals_keep_two_wishes() {
             .unwrap_or_else(|| panic!("a session"));
         app.on_line(session_refused(session, id, "session_not_found"));
     }
+    // No code under test waits on the clock here; it moves the frame time the app reads (ruling 6179406086).
     clock.advance(RETRY);
     let resent = subscribes(&commands(app.items_due(clock.now())));
     assert_eq!(resent.len(), 2);

@@ -438,6 +438,16 @@ pub enum CommandResult {
         /// The provider whose credential label switches.
         provider: String,
     },
+    /// For `propose_notes`: evidence and proposed lines for one topic.
+    ProposeNotes {
+        /// Gathered evidence followed by the person's nonempty answer.
+        evidence: Vec<crate::notes::Evidence>,
+        /// Validated lines citing evidence of a single kind.
+        proposed: Vec<crate::notes::Proposed>,
+        /// A call or budget failure, with no proposals.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<Box<crate::shapes::Failure>>,
+    },
 }
 
 /// The labels of the provider a credential command would switch now.
