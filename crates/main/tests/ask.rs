@@ -2094,9 +2094,10 @@ fn openai_responses_cache_write_is_recorded_and_priced_from_the_write() {
         .collect();
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0]["payload"]["tokens"]["input"], 3);
+    // The loop runs an hour-lifetime cache, so the write keys `1h`.
     assert_eq!(
         recorded[0]["payload"]["tokens"]["cache_write"],
-        json!({"5m": 2344})
+        json!({"1h": 2344})
     );
     // gpt-6-luna declares its cache-write price, so the warming block
     // prices from the write: input, read and write at its base tier.

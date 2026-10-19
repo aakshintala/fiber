@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 use std::io::BufRead;
 
 use contract::events::{
-    ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
+    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
+    ToolCallRequested,
 };
 use contract::provider::{
     CallUsage, Delta, Finish, HostedCall, Input, InputSize, ModelCall, ModelRequest, Provider,
@@ -73,7 +74,7 @@ impl Responses {
             format!("{}/responses", endpoint.base_url.trim_end_matches('/')),
             headers,
             body,
-            |stream, _, sink| decode_tracked(stream, sink),
+            |stream, lifetime, sink| decode_tracked(stream, &lifetime, sink),
         )
     }
     /// Builds the observed call for `request`: as the plain request, writing
@@ -344,7 +345,7 @@ fn arguments_text(arguments: &Value) -> String {
 /// returns the reply once its terminal event arrives. A stream that fails
 /// keeps nothing it streamed, finished tool calls included.
 pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply, Error> {
-    decode_tracked(stream, sink).map_err(|(error, _)| error)
+    decode_tracked(stream, &CacheLifetime::FiveMinutes, sink).map_err(|(error, _)| error)
 }
 
 /// As [`decode`], also carrying what the stream had seen when it failed:
@@ -355,14 +356,18 @@ pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply
 )]
 pub(crate) fn decode_tracked(
     stream: impl BufRead,
+    lifetime: &CacheLifetime,
     sink: &mut dyn FnMut(Delta),
 ) -> Result<Reply, (Error, Option<CallUsage>)> {
-    let mut reply = Decoder::default();
+    let mut reply = Decoder {
+        lifetime: Some(*lifetime),
+        ..Decoder::default()
+    };
     let mut end = None;
     let read = sse::read(stream, |data| {
         let event: Value = serde_json::from_str(data)
             .map_err(|e| Error::StreamIncomplete(format!("an event is not JSON ({e})")))?;
-        end = reply.event(&event, sink)?;
+        end = reply.event(&event, lifetime, sink)?;
         Ok(end.is_some())
     });
     if let Err(error) = read {
@@ -389,15 +394,20 @@ struct Decoder {
     id: String,
     /// The response's last usage, from `response.created` on.
     usage: Value,
+    /// The request's cache lifetime, which a reported cache write is counted
+    /// under. Set from `decode`'s lifetime; `None` in unit tests counts
+    /// writes as five minutes.
+    lifetime: Option<CacheLifetime>,
 }
 
 impl Decoder {
     /// What the stream had seen: the generation once a response event named
     /// it, and the usage so far.
     fn partial(&self) -> CallUsage {
+        let lifetime = self.lifetime.unwrap_or(CacheLifetime::FiveMinutes);
         CallUsage {
             generation_id: named(self.id.clone()),
-            tokens: tokens(&self.usage),
+            tokens: tokens(&self.usage, &lifetime),
             web_searches: None,
             input_size: InputSize::default(),
         }
@@ -420,6 +430,7 @@ impl Decoder {
     fn event(
         &mut self,
         event: &Value,
+        lifetime: &CacheLifetime,
         sink: &mut dyn FnMut(Delta),
     ) -> Result<Option<Reply>, Error> {
         let text = |key: &str| str_at(event, key).to_owned();
@@ -454,7 +465,7 @@ impl Decoder {
             }
             "response.completed" | "response.incomplete" | "response.failed" => {
                 self.note(&event["response"]);
-                return self.finish(&event["response"]).map(Some);
+                return self.finish(&event["response"], lifetime).map(Some);
             }
             "error" => {
                 // A usage-limit error is `quota_exceeded`, never retried
@@ -550,7 +561,7 @@ impl Decoder {
     }
 
     /// The reply, from the terminal event's response object.
-    fn finish(&mut self, response: &Value) -> Result<Reply, Error> {
+    fn finish(&mut self, response: &Value, lifetime: &CacheLifetime) -> Result<Reply, Error> {
         let finish = match str_at(response, "status") {
             "completed" => Finish::Completed,
             "incomplete" => match response.pointer("/incomplete_details/reason") {
@@ -614,7 +625,7 @@ impl Decoder {
             actions: std::mem::take(&mut self.actions),
             finish,
             generation_id: named(std::mem::take(&mut self.id)),
-            tokens: tokens(&response["usage"]),
+            tokens: tokens(&response["usage"], lifetime),
             web_searches: None,
             cost: None,
             input_size: InputSize::default(),
@@ -681,15 +692,28 @@ fn web_search_call(item: &Value) -> HostedCall {
     }
 }
 
-/// `usage` as `tokens`: Responses counts cached tokens inside
-/// `input_tokens`, and `tokens.input` excludes them (`docs/events.md`).
-fn tokens(usage: &Value) -> Tokens {
+/// `usage` as `tokens`: Responses counts cache reads inside
+/// `input_tokens`, and `tokens.input` excludes both reads and writes. A
+/// cache write is counted under the request's cache lifetime: `1h` for a
+/// 1-hour request, and five minutes for one without.
+fn tokens(usage: &Value, lifetime: &CacheLifetime) -> Tokens {
     let count = |pointer: &str| usage.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
     let cached = count("/input_tokens_details/cached_tokens");
+    let write = count("/input_tokens_details/cache_write_tokens");
+    let key = match lifetime {
+        CacheLifetime::FiveMinutes => "5m",
+        CacheLifetime::OneHour => "1h",
+    };
     Tokens {
-        input: count("/input_tokens").saturating_sub(cached),
+        input: count("/input_tokens")
+            .saturating_sub(cached)
+            .saturating_sub(write),
         cache_read: cached,
-        cache_write: BTreeMap::new(),
+        cache_write: if write > 0 {
+            BTreeMap::from([(key.to_owned(), write)])
+        } else {
+            BTreeMap::new()
+        },
         output: count("/output_tokens"),
     }
 }

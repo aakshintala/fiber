@@ -23,6 +23,7 @@ mod wire_tools;
 #[path = "support/harness.rs"]
 mod harness;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -341,10 +342,22 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
             let cached = want.usage["input_tokens_details"]["cached_tokens"]
                 .as_u64()
                 .unwrap();
+            let written = want.usage["input_tokens_details"]["cache_write_tokens"]
+                .as_u64()
+                .unwrap();
             assert_eq!(reply.tokens.cache_read, cached, "{label}");
             assert_eq!(
                 reply.tokens.input,
-                want.usage["input_tokens"].as_u64().unwrap() - cached,
+                want.usage["input_tokens"].as_u64().unwrap() - cached - written,
+                "{label}"
+            );
+            assert_eq!(
+                reply.tokens.cache_write,
+                if written > 0 {
+                    BTreeMap::from([("5m".to_owned(), written)])
+                } else {
+                    BTreeMap::new()
+                },
                 "{label}"
             );
             assert_eq!(
