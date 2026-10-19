@@ -46,6 +46,70 @@ fn summary() -> Vec<String> {
     ]
 }
 
+fn call(
+    seam: &Seam,
+    workspace: &std::path::Path,
+) -> Result<Option<serde_json::Value>, contract::shapes::Failure> {
+    use hub::Machine;
+    seam.configure(
+        "install_provider",
+        json!({"workspace":workspace,"provider":"openai"})
+            .as_object()
+            .expect("request object"),
+        fakes::clock::FakeClock::new(),
+    )
+}
+
+#[test]
+fn hub_install_returns_summary_and_omits_absent_login_errors() {
+    fakes::within("hub provider install", Duration::from_secs(20), || {
+        let rig = Rig::new("fiber-configure-install-wire");
+        let repo = repository();
+        let seam = Seam::with_origin(rig.home.clone(), origin(repo.path()));
+        let result = call(&seam, &rig.workspace).unwrap().unwrap();
+        assert_eq!(
+            result,
+            json!({"installed":[NAME],"summary":summary(),"login":[{"provider":"openai"}]})
+        );
+        let key = rig.home.join("credentials/openai/default");
+        fs::create_dir_all(&key).unwrap();
+        let result = call(&seam, &rig.workspace).unwrap().unwrap();
+        assert_eq!(result["installed"], json!([NAME]));
+        assert_eq!(result["login"][0]["provider"], "openai");
+        assert!(
+            result["login"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains(&key.display().to_string())
+        );
+    });
+}
+
+#[test]
+fn hub_install_rejections_preserve_configuration_and_fetch_error_codes() {
+    fakes::within(
+        "hub provider install failure",
+        Duration::from_secs(20),
+        || {
+            let rig = Rig::new("fiber-configure-install-wire-error");
+            let seam = Seam::with_origin(rig.home.clone(), origin(&rig.root.path().join("absent")));
+            let failure = call(&seam, &rig.workspace).unwrap_err();
+            assert_eq!(failure.code, ErrorCode::ExtensionNotFound);
+            assert!(failure.message.contains("not found"));
+            fs::write(rig.home.join("config.json"), "not JSON").unwrap();
+            let seam = Seam::with_origin(
+                rig.home.clone(),
+                Arc::new(extensions::Origin::new("git", |_| {
+                    panic!("invalid configuration must not fetch")
+                })),
+            );
+            let failure = call(&seam, &rig.workspace).unwrap_err();
+            assert_eq!(failure.code, ErrorCode::ConfigInvalid);
+            assert!(failure.message.contains("config.json"));
+        },
+    );
+}
+
 #[test]
 fn fresh_install_returns_summary_and_login_then_stored_key_removes_login() {
     fakes::within(
