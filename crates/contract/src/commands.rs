@@ -12,6 +12,8 @@ use crate::events::Decision;
 use crate::shapes::True;
 use crate::{CommandId, JobId, RequestId, Seq, SessionId};
 
+pub mod hub;
+
 /// One command line: one JSON object on the driver channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandLine {
