@@ -4,15 +4,11 @@
 //! or the end of the connection. The socket helpers are `attach`'s own
 //! rather than a second client.
 
-use std::io::BufReader;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use contract::commands::{Command, CommandLine, SubscribeArgs, SubscribeLevel};
-use contract::{CommandId, Envelope, SessionId};
+use contract::{Envelope, SessionId};
 
-use crate::attach::{check_version, is_answer, next_line, rejection, send};
-use crate::mint;
+use crate::attach::{Unsubscribed, next_envelope, subscribe_full};
 
 /// What a watch ended on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,48 +48,23 @@ pub fn watch_after(
     after: Option<u64>,
     on_line: &mut dyn FnMut(&Envelope),
 ) -> std::io::Result<Watched> {
-    let socket = home.join("run").join(&id.0);
-    let stream = UnixStream::connect(&socket)?;
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut writer = stream;
-    let sub = mint("c_");
-    send(
-        &mut writer,
-        id,
-        &CommandLine {
-            id: CommandId(sub.clone()),
-            command: Command::Subscribe(SubscribeArgs {
-                level: SubscribeLevel::Full,
-                credential: None,
-            }),
-        },
-    )
-    .map_err(failed)?;
-    // The acknowledgement is written before the writer starts, so it is
-    // the first line this connection reads, ahead of the fold.
-    loop {
-        let Some((_, line)) = next_line(&mut reader) else {
-            return Err(closed(id));
-        };
-        if is_answer(&line, "command_rejected", &sub) {
-            return Err(failed(rejection(&line)));
+    let (mut reader, _) = match subscribe_full(home, id) {
+        Ok(pair) => pair,
+        Err(Unsubscribed::Connect(error) | Unsubscribed::Clone(error)) => return Err(error),
+        Err(Unsubscribed::Write(failure)) => return Err(failed(failure)),
+        Err(Unsubscribed::Closed) => return Err(closed(id)),
+        Err(Unsubscribed::Rejected(failure) | Unsubscribed::Version(failure)) => {
+            return Err(failed(failure));
         }
-        if is_answer(&line, "command_accepted", &sub) {
-            check_version(id, &line).map_err(failed)?;
-            break;
-        }
-    }
+    };
     let mut last_seq = None;
     loop {
-        let Some((_, line)) = next_line(&mut reader) else {
+        let Some((_, envelope)) = next_envelope(&mut reader) else {
             return Ok(Watched::Closed { last_seq });
         };
         // Only this connection's subscribe was answered above, and it
         // sends no more commands, so every later line is the session's
-        // own. One that is not an envelope is skipped.
-        let Ok(envelope) = serde_json::from_value::<Envelope>(line) else {
-            continue;
-        };
+        // own.
         // Past the boundary: an earlier run's lines, its `fiber_exited`
         // included, are neither delivered nor end the watch.
         if after.is_some_and(|bound| envelope.seq.is_some_and(|seq| seq.0 <= bound)) {

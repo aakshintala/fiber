@@ -6,7 +6,7 @@
 //! `close` and never opens the log: the holder keeps the only writer, and a
 //! disconnect only ends the client.
 
-use std::io::{BufReader, Write};
+use std::io::{self, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
@@ -14,8 +14,8 @@ use contract::commands::{
     Command, CommandLine, ContentArgs, CredentialArgs, SentPart, SubscribeArgs, SubscribeLevel,
 };
 use contract::shapes::Failure;
-use contract::{CommandId, ErrorCode, SCHEMA_VERSION, SessionId};
-use serde_json::Value;
+use contract::{CommandId, Envelope, ErrorCode, SCHEMA_VERSION, SessionId};
+use serde_json::{Map, Value};
 
 use crate::{failure, mint};
 
@@ -42,41 +42,25 @@ pub fn attach(
     out: &mut dyn Write,
     refused: Failure,
 ) -> Result<i32, Failure> {
-    let socket = home.join("run").join(&id.0);
-    let stream = UnixStream::connect(&socket).map_err(|_| refused)?;
-    let mut reader = BufReader::new(
-        stream
-            .try_clone()
-            .map_err(|e| failure(ErrorCode::IoFailed, format!("{}: {e}", socket.display())))?,
-    );
-    let mut writer = stream;
-
-    let sub = mint("c_");
-    send(
-        &mut writer,
-        id,
-        &CommandLine {
-            id: CommandId(sub.clone()),
-            command: Command::Subscribe(SubscribeArgs {
-                level: SubscribeLevel::Full,
-                credential: None,
-            }),
-        },
-    )?;
-    // The acknowledgement is written before the writer starts, so it is the
-    // first line this connection reads, ahead of the fold.
-    loop {
-        let Some((_, line)) = next_line(&mut reader) else {
-            return Err(ended(id));
-        };
-        if is_answer(&line, "command_rejected", &sub) {
-            return Err(rejection(&line));
+    // One handshake for every client: connect, mint, write the subscribe,
+    // then read until its answer and check the version, all on the raw
+    // line. A session on another schema version may answer outside this
+    // build's envelope, so the answer is matched before any envelope
+    // parse (`docs/invocation.md`, "Processes").
+    let (mut reader, mut writer) = match subscribe_full(home, id) {
+        Ok(pair) => pair,
+        Err(Unsubscribed::Connect(_)) => return Err(refused),
+        Err(Unsubscribed::Clone(e)) => {
+            return Err(failure(
+                ErrorCode::IoFailed,
+                format!("{}: {e}", home.join("run").join(&id.0).display()),
+            ));
         }
-        if is_answer(&line, "command_accepted", &sub) {
-            check_version(id, &line)?;
-            break;
+        Err(Unsubscribed::Write(f) | Unsubscribed::Rejected(f) | Unsubscribed::Version(f)) => {
+            return Err(f);
         }
-    }
+        Err(Unsubscribed::Closed) => return Err(ended(id)),
+    };
 
     let command = mint("c_");
     if let Some(label) = credential {
@@ -119,21 +103,26 @@ pub fn attach(
     )?;
     let mut printing = false;
     loop {
-        let Some((raw, line)) = next_line(&mut reader) else {
+        let Some((raw, envelope)) = next_envelope(&mut reader) else {
             return Err(ended(id));
         };
-        if is_answer(&line, "command_rejected", &command) {
-            return Err(rejection(&line));
+        if answers(&envelope, "command_rejected", &command) {
+            // The prompt's own rejection, read through the one helper so
+            // its code and message match the handshake's.
+            return Err(rejection(&Value::Object(Map::from_iter([(
+                "payload".to_owned(),
+                Value::Object(envelope.payload.clone()),
+            )]))));
         }
-        if kind(&line) == "command_accepted" || kind(&line) == "command_rejected" {
+        if envelope.kind == "command_accepted" || envelope.kind == "command_rejected" {
             continue;
         }
-        if starts_own_turn(&line, &command) {
+        if starts_turn(&envelope, &command) {
             printing = true;
-        } else if printing && kind(&line) == "turn_completed" {
+        } else if printing && envelope.kind == "turn_completed" {
             emit(out, &raw)?;
-            return Ok(outcome(&line));
-        } else if printing && kind(&line) == "fiber_exited" {
+            return Ok(completed(&envelope));
+        } else if printing && envelope.kind == "fiber_exited" {
             return Err(ended(id));
         }
         if printing {
@@ -183,12 +172,130 @@ pub(crate) fn is_answer(line: &Value, kind: &str, command: &str) -> bool {
         && line.pointer("/payload/command_id").and_then(Value::as_str) == Some(command)
 }
 
-/// Whether `line` is the `turn_started` carrying this prompt's command id in
-/// its input.
-fn starts_own_turn(line: &Value, command: &str) -> bool {
-    self::kind(line) == "turn_started"
-        && line
-            .pointer("/payload/input")
+/// One open subscription: the connection past its subscribe write, still
+/// waiting on the answer.
+pub(crate) struct Opened {
+    pub(crate) reader: BufReader<UnixStream>,
+    pub(crate) writer: UnixStream,
+    pub(crate) sub: CommandId,
+}
+
+/// What a subscribe wait ended on, before its caller maps it onto its own
+/// errors.
+pub(crate) enum Unsubscribed {
+    /// Nothing accepts on the socket.
+    Connect(io::Error),
+    /// The reader side did not clone.
+    Clone(io::Error),
+    /// The subscribe write failed.
+    Write(Failure),
+    /// The connection closed before the answer.
+    Closed,
+    /// The subscribe was rejected, with its code and message.
+    Rejected(Failure),
+    /// The session runs another schema version.
+    Version(Failure),
+}
+
+/// Connects to the session `id` running under `home`, mints the subscribe
+/// id and writes the `level` subscribe. `steer` subscribes `summary` and
+/// pauses between this and [`subscribed`]; `attach` and `watch` subscribe
+/// `full` through [`subscribe_full`].
+pub(crate) fn open(
+    home: &Path,
+    id: &SessionId,
+    level: SubscribeLevel,
+) -> Result<Opened, Unsubscribed> {
+    let socket = home.join("run").join(&id.0);
+    let stream = UnixStream::connect(&socket).map_err(Unsubscribed::Connect)?;
+    let reader = BufReader::new(stream.try_clone().map_err(Unsubscribed::Clone)?);
+    let mut writer = stream;
+    let sub = mint("c_");
+    send(
+        &mut writer,
+        id,
+        &CommandLine {
+            id: CommandId(sub.clone()),
+            command: Command::Subscribe(SubscribeArgs {
+                level,
+                credential: None,
+            }),
+        },
+    )
+    .map_err(Unsubscribed::Write)?;
+    Ok(Opened {
+        reader,
+        writer,
+        sub: CommandId(sub),
+    })
+}
+
+/// Reads until the subscribe's answer and checks the version, on the raw
+/// line: a session on another schema version may answer outside this
+/// build's envelope, so the answer is matched before any envelope parse. A
+/// rejection is answered before the version, as the session checks the
+/// command first.
+pub(crate) fn subscribed(
+    opened: Opened,
+    id: &SessionId,
+) -> Result<(BufReader<UnixStream>, UnixStream), Unsubscribed> {
+    let Opened {
+        mut reader,
+        writer,
+        sub,
+    } = opened;
+    // The acknowledgement is written before the writer starts, so it is the
+    // first line this connection reads, ahead of the fold.
+    loop {
+        let Some((_, line)) = next_line(&mut reader) else {
+            return Err(Unsubscribed::Closed);
+        };
+        if is_answer(&line, "command_rejected", &sub.0) {
+            return Err(Unsubscribed::Rejected(rejection(&line)));
+        }
+        if is_answer(&line, "command_accepted", &sub.0) {
+            if let Err(failure) = check_version(id, &line) {
+                return Err(Unsubscribed::Version(failure));
+            }
+            return Ok((reader, writer));
+        }
+    }
+}
+
+/// [`open`] at `full`, then [`subscribed`]: the whole handshake.
+pub(crate) fn subscribe_full(
+    home: &Path,
+    id: &SessionId,
+) -> Result<(BufReader<UnixStream>, UnixStream), Unsubscribed> {
+    let opened = open(home, id, SubscribeLevel::Full)?;
+    subscribed(opened, id)
+}
+
+/// The next envelope from the session, with its bytes for printing. A JSON
+/// line that is not an envelope is skipped: every line a session writes is
+/// an envelope, so no real line is lost. `None` is a closed connection.
+pub(crate) fn next_envelope(reader: &mut BufReader<UnixStream>) -> Option<(Vec<u8>, Envelope)> {
+    loop {
+        let (raw, line) = next_line(reader)?;
+        if let Ok(envelope) = serde_json::from_value::<Envelope>(line) {
+            return Some((raw, envelope));
+        }
+    }
+}
+
+/// Whether `envelope` answers `command` with `kind`.
+fn answers(envelope: &Envelope, kind: &str, command: &str) -> bool {
+    envelope.kind == kind
+        && envelope.payload.get("command_id").and_then(Value::as_str) == Some(command)
+}
+
+/// Whether `envelope` is the `turn_started` carrying this prompt's command
+/// id in its input.
+fn starts_turn(envelope: &Envelope, command: &str) -> bool {
+    envelope.kind == "turn_started"
+        && envelope
+            .payload
+            .get("input")
             .and_then(Value::as_array)
             .is_some_and(|items| {
                 items
@@ -197,9 +304,9 @@ fn starts_own_turn(line: &Value, command: &str) -> bool {
             })
 }
 
-/// The exit code for `line`'s outcome: 0 for `completed`, 1 for the rest.
-fn outcome(line: &Value) -> i32 {
-    if line.pointer("/payload/outcome").and_then(Value::as_str) == Some("completed") {
+/// The exit code for `envelope`'s outcome: 0 for `completed`, 1 for the rest.
+fn completed(envelope: &Envelope) -> i32 {
+    if envelope.payload.get("outcome").and_then(Value::as_str) == Some("completed") {
         0
     } else {
         1

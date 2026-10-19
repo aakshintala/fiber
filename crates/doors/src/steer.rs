@@ -3,17 +3,13 @@
 //! ordinary client of the delegate's socket (`docs/delegates.md`,
 //! "Streams"; `docs/invocation.md`, "Processes").
 
-use std::io::BufReader;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use contract::commands::{
-    Command, CommandLine, ContentArgs, SentPart, SubscribeArgs, SubscribeLevel,
-};
+use contract::commands::{Command, CommandLine, ContentArgs, SentPart, SubscribeLevel};
 use contract::shapes::Failure;
 use contract::{CommandId, SessionId};
 
-use crate::attach::{check_version, is_answer, next_line, rejection, send};
+use crate::attach::{Unsubscribed, is_answer, next_line, open, rejection, send, subscribed};
 use crate::mint;
 
 /// A test-only pause point at the acknowledgement wait: armed by the
@@ -121,51 +117,21 @@ pub fn steer(
     commit: &mut dyn FnMut() -> bool,
     on_queued: &mut dyn FnMut(),
 ) -> Steered {
-    let socket = home.join("run").join(&id.0);
-    let Ok(stream) = UnixStream::connect(&socket) else {
-        return Steered::Gone;
+    let opened = match open(home, id, SubscribeLevel::Summary) {
+        Ok(opened) => opened,
+        Err(_) => return Steered::Gone,
     };
-    let Ok(clone) = stream.try_clone() else {
-        return Steered::Gone;
-    };
-    let mut reader = BufReader::new(clone);
-    let mut writer = stream;
-    let sub = mint("c_");
-    if send(
-        &mut writer,
-        id,
-        &CommandLine {
-            id: CommandId(sub.clone()),
-            command: Command::Subscribe(SubscribeArgs {
-                level: SubscribeLevel::Summary,
-                credential: None,
-            }),
-        },
-    )
-    .is_err()
-    {
-        return Steered::Gone;
-    }
     // Test-only: the commit-order test holds here until it holds the
     // acknowledgement, so a commit before the answer fails deterministically.
     #[cfg(test)]
     pause_at_ack_wait();
-    // The acknowledgement is written before the writer starts, so it is
-    // the first line this connection reads, ahead of the fold.
-    loop {
-        let Some((_, line)) = next_line(&mut reader) else {
-            return Steered::Gone;
-        };
-        if is_answer(&line, "command_rejected", &sub) {
-            return Steered::Rejected(rejection(&line));
+    let (mut reader, mut writer) = match subscribed(opened, id) {
+        Ok(pair) => pair,
+        Err(Unsubscribed::Rejected(failure) | Unsubscribed::Version(failure)) => {
+            return Steered::Rejected(failure);
         }
-        if is_answer(&line, "command_accepted", &sub) {
-            if let Err(failure) = check_version(id, &line) {
-                return Steered::Rejected(failure);
-            }
-            break;
-        }
-    }
+        Err(_) => return Steered::Gone,
+    };
     // Test-only: the commit-order test asserts inside `commit` that this
     // fired, so a commit before the answer fails deterministically.
     #[cfg(test)]
