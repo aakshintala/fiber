@@ -1373,9 +1373,9 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
 /// Drives a settle to completion on the fake clock and returns its
 /// answer, through a controlled interleaving that shows both halves
 /// while the reap stays held. The blind-probe phase keeps every hold
-/// and runs ten advance-to-confirmed-re-park cycles exactly like the old
-/// drive, proving it spends budget with zero progress: the clock moves
-/// exactly ten advances while the held leader stays unreaped, so the
+/// and runs fifty poll steps, proving it spends budget with zero
+/// progress: the clock moves fifty poll advances while the held leader
+/// stays unreaped, so the
 /// settle still lists the real group. The listing is read from the
 /// settle itself: a killed-but-unreaped leader probes `EPERM` on some
 /// platforms, which keeps the group pending in the settle (only `SRCH`
@@ -1407,22 +1407,26 @@ fn drive_settle_to_completion(
         clock.await_parked(poll, drive.left()),
         "the settle parked at its poll"
     );
-    // Blind-probe phase, holds maintained: ten advances. Each confirmed
-    // re-park is the held path; once the settle answers early instead
-    // (its group died unheld) later cycles keep the cadence, so the
-    // still-listed assert below names the failure, not these lines.
+    // Blind-probe phase, holds maintained: fifty poll steps. Each
+    // confirmed park is the held path; once the settle answers early
+    // instead (its group died unheld) the loop ends, so the still-listed
+    // assert below names the failure, not these lines.
     let mut answered = false;
-    let mut mark = clock.advance_marked(Duration::from_millis(50));
-    for _ in 1..10 {
-        let reparked = clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE));
-        if !reparked && !answered {
-            answered = finished.try_recv().is_ok();
+    let mut mark =
+        poll_step(clock, poll, GROUP_POLL, drive).expect("the settle parked at its poll");
+    for _ in 1..50 {
+        let parked_at = clock
+            .now()
+            .checked_add(GROUP_POLL)
+            .expect("the poll is countable");
+        match poll_step(clock, parked_at, GROUP_POLL, drive) {
+            Some(stepped) => mark = stepped,
+            None => {
+                answered = finished.try_recv().is_ok();
+                assert!(answered, "the settle parked at its poll");
+                break;
+            }
         }
-        assert!(
-            reparked || answered,
-            "the settle parked again after the probe advance"
-        );
-        mark = clock.advance_marked(Duration::from_millis(50));
     }
     let reparked = clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE));
     if !reparked && !answered {
@@ -1432,11 +1436,13 @@ fn drive_settle_to_completion(
         reparked || answered,
         "the settle parked again after the last probe advance"
     );
-    assert_eq!(
-        clock.now(),
-        start + Duration::from_millis(500),
-        "the blind probe spent exactly ten advances"
-    );
+    if !answered {
+        assert_eq!(
+            clock.now(),
+            start + Duration::from_millis(500),
+            "the blind probe spent fifty poll steps"
+        );
+    }
     assert!(
         listed(reads).contains(&real),
         "the held group is still listed after the blind probe: {:?}",
@@ -1491,10 +1497,8 @@ fn drive_settle_to_completion(
             break;
         }
         let parked_at = clock.now() + GROUP_POLL;
-        match clock.mark_parked(parked_at, drive.left().min(PARK_PAUSE)) {
-            Some(_) => {
-                clock.advance_marked(Duration::ZERO);
-            }
+        match poll_step(clock, parked_at, Duration::ZERO, drive) {
+            Some(_) => {}
             None => {
                 // Never parked again: the pass answered instead.
                 answer = finished.try_recv().ok();
@@ -1532,7 +1536,7 @@ fn drive_settle_to_completion(
                     if !listed(reads).contains(&real)
                         && clock.await_any_parked_since(&since, drive.left().min(PARK_PAUSE))
                     {
-                        clock.advance_marked(Duration::from_millis(50));
+                        let _stepped = poll_step(clock, parked_at, GROUP_POLL, drive);
                     }
                 }
             }
@@ -1687,6 +1691,7 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
         "the settle parked at its poll"
     );
     let cycles = (doors::SHUTDOWN_BOUND.as_millis() / 50) as usize;
+    // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
     let mut mark = clock.advance_marked(Duration::from_millis(50));
     let mut answer = None;
     for _ in 1..cycles {
@@ -1697,10 +1702,15 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
         // A missing re-park means the settle answered instead of
         // parking again; the drive takes it below. While the reap stays
         // held that never happens before the bound.
-        if !clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE)) {
+        if !clock.await_parked_since(
+            &mark,
+            Some(clock.now() + GROUP_POLL),
+            drive.left().min(PARK_PAUSE),
+        ) {
             answer = Some(drive.recv(&settled).expect("the settle"));
             break;
         }
+        // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
         mark = clock.advance_marked(Duration::from_millis(50));
     }
     // The final advance's pass answers at the bound instead of re-parking.
@@ -1774,11 +1784,7 @@ fn settle_sends_again_until_srch_then_never_again() {
     // the settle then parks at its first poll, an exact deadline on the
     // unmoved clock.
     let poll = clock.origin() + GROUP_POLL;
-    assert!(
-        clock.await_parked(poll, DEADLINE),
-        "the settle parked at its poll"
-    );
-    clock.advance(GROUP_POLL);
+    clock.advance_when_parked(Some(poll), None, GROUP_POLL, &Deadline::after(DEADLINE));
     assert!(
         Deadline::after(DEADLINE)
             .recv(&finished)
@@ -1966,6 +1972,7 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
         clock.await_parked(poll, DEADLINE),
         "the settle parked at its poll"
     );
+    // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
     let mut mark = clock.advance_marked(Duration::from_millis(50));
     loop {
         if let Ok(answer) = finished.try_recv() {
@@ -1983,7 +1990,7 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
             break;
         }
         assert!(
-            clock.await_any_parked_since(&mark, DEADLINE),
+            clock.await_parked_since(&mark, Some(clock.now() + GROUP_POLL), DEADLINE),
             "the settle parked again"
         );
         if let Ok(answer) = finished.try_recv() {
@@ -1993,6 +2000,7 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
             );
             break;
         }
+        // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
         mark = clock.advance_marked(Duration::from_millis(50));
     }
     let sends = reads.scripted_sends();
