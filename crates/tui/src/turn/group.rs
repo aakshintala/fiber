@@ -751,12 +751,6 @@ const INDENT: &str = "        ";
 /// One rendered ledger line with its six-column gutter: the gutter cut
 /// to the width when the width holds no more, else the gutter before
 /// the fitted line, with every link range moved right by its six cells.
-// Exempt: at width 6 the fitted line is always empty (it is fitted to
-// the width less the six-column gutter, 0), so both arms draw the
-// byte-identical gutter-only row and no test through the seam can tell
-// `<` from `<=`. Widths 5, 6 and 7 stay pinned by
-// `the_gutter_edge_keeps_its_branch_at_six_columns`.
-#[cfg_attr(false, mutants::skip)]
 fn gutter_row(
     mark: String,
     line: &crate::ext::spans::FittedLine,

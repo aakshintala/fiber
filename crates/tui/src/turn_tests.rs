@@ -2421,6 +2421,7 @@ fn call_timing_measures_start_to_completion() {
             changed_by: None,
             hosts_surfaced: Vec::new(),
             provider_item: None,
+            loaded: None,
         }
     }
     fn call<'a>(turn: &'a super::Turn, action: &str) -> &'a super::group::Call {
