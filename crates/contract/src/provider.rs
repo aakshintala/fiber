@@ -19,6 +19,19 @@ use crate::{ActionId, GenerationId, ProviderCallId, ThinkingLevel};
 /// The name of the tool that finds deferred tools.
 pub const TOOL_SEARCH: &str = "tool_search";
 
+/// The `tool_search` result when no deferred tool matched
+/// (`docs/system-prompt.md`, "The texts").
+pub const NO_MATCH: &str = include_str!("../prompt/no-match.md").trim_ascii_end();
+
+/// An earlier `tool_search` result, listing the loaded tools
+/// (`docs/system-prompt.md`, "The texts"). `names` must be non-empty;
+/// the empty form is [`NO_MATCH`].
+pub fn loaded_text(names: &[String]) -> String {
+    include_str!("../prompt/loaded.md")
+        .trim_ascii_end()
+        .replace("{names}", &names.join(", "))
+}
+
 /// One model, reached through its protocol. A provider extension's model
 /// becomes one of these.
 pub trait Provider: Send + Sync {

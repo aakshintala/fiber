@@ -136,6 +136,25 @@ fn tool_search_has_a_stable_name_and_providers_do_not_defer_by_default() {
 }
 
 #[test]
+fn tool_search_text_files_pin_every_byte() {
+    assert_eq!(
+        include_bytes!("../prompt/no-match.md").as_slice(),
+        b"No deferred tool matched the query.\n"
+    );
+    assert_eq!(
+        include_bytes!("../prompt/loaded.md").as_slice(),
+        b"Loaded: {names}.\n"
+    );
+}
+
+#[test]
+fn tool_search_texts_strip_the_newline_and_join_loaded_names() {
+    assert_eq!(NO_MATCH, "No deferred tool matched the query.");
+    assert_eq!(loaded_text(&["a".into(), "b".into()]), "Loaded: a, b.");
+    assert_eq!(loaded_text(&["a".into()]), "Loaded: a.");
+}
+
+#[test]
 fn a_user_s_images_are_absent_when_empty_and_read_back_when_full() {
     let plain = Input::User {
         text: "hi".into(),
