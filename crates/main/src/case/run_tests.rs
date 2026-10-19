@@ -23,7 +23,7 @@ use contract::shapes::{Tokens, Usage};
 use log::Log;
 use serde_json::{Value, json};
 
-use super::super::format::{ClockAdvance, Host, Selector};
+use super::super::format::{ClockAdvance, Host, Selector, SessionCase};
 use super::{CaseRun, WaitBounds, session_verdict, write_config};
 use fakes::Deadline;
 
@@ -115,6 +115,27 @@ fn ephemeral_lines_are_dropped_and_host_misses_fail_the_case() {
     assert!(error.contains("host.http[1]"), "{error}");
 }
 
+fn session_case(
+    name: Option<String>,
+    expected: Vec<Value>,
+    host: Host,
+    advances: Vec<ClockAdvance>,
+    until: Option<Selector>,
+    attended: bool,
+) -> SessionCase {
+    SessionCase {
+        name,
+        script: json!({}),
+        prompt: String::new(),
+        config: None,
+        host,
+        clock: advances,
+        until,
+        expect: expected,
+        attended,
+    }
+}
+
 fn case_run(
     expected: Vec<Value>,
     advances: Vec<ClockAdvance>,
@@ -130,14 +151,52 @@ fn case_run_with_host(
     until: Option<Selector>,
 ) -> Arc<CaseRun> {
     CaseRun::with_waits(
-        "run-loop".to_owned(),
-        expected,
-        host,
-        advances,
-        until,
+        session_case(
+            Some("run-loop".to_owned()),
+            expected,
+            host,
+            advances,
+            until,
+            true,
+        ),
         fakes::clock::FakeClock::new(),
         TEST_WAITS,
     )
+}
+
+/// The runner carries the parsed `attended` value: flipping it to either
+/// constant breaks the session setup's answerable computation, so both
+/// values are pinned here (mutant `CaseRun::attended -> bool`).
+#[test]
+fn case_run_attended_carries_the_parsed_value() {
+    for attended in [true, false] {
+        let case = CaseRun::with_waits(
+            session_case(
+                Some("run-loop".to_owned()),
+                Vec::new(),
+                Host::default(),
+                Vec::new(),
+                None,
+                attended,
+            ),
+            fakes::clock::FakeClock::new(),
+            TEST_WAITS,
+        );
+        assert_eq!(case.attended(), attended);
+    }
+}
+
+/// A session case without a name runs under the default: flipping the
+/// fallback to anything else renames every unnamed case, so the empty
+/// default is pinned here.
+#[test]
+fn case_run_without_a_name_uses_the_default() {
+    let case = CaseRun::with_waits(
+        session_case(None, Vec::new(), Host::default(), Vec::new(), None, true),
+        fakes::clock::FakeClock::new(),
+        TEST_WAITS,
+    );
+    assert_eq!(case.name, String::new());
 }
 
 fn hang_exec_entry(program: &str) -> extensions::ExecEntry {
@@ -993,14 +1052,17 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
         exit_on_close: true,
     });
     let case = CaseRun::with_waits(
-        "run-loop".to_owned(),
-        vec![json!({"kind": "fiber_exited"})],
-        Host::default(),
-        Vec::new(),
-        Some(Selector {
-            kind: "assistant_message_delta".to_owned(),
-            nth: 1,
-        }),
+        session_case(
+            Some("run-loop".to_owned()),
+            vec![json!({"kind": "fiber_exited"})],
+            Host::default(),
+            Vec::new(),
+            Some(Selector {
+                kind: "assistant_message_delta".to_owned(),
+                nth: 1,
+            }),
+            true,
+        ),
         clock,
         TEST_WAITS,
     );

@@ -133,7 +133,6 @@ fn ordered_outcomes_and_clock_entries_stay_with_their_call() {
         ("credentials", json!({})),
         ("expect_credentials", json!({})),
         ("exact_credentials", json!(true)),
-        ("attended", json!(false)),
     ] {
         let mut case = session_case();
         case[field] = value;
@@ -141,6 +140,30 @@ fn ordered_outcomes_and_clock_entries_stay_with_their_call() {
             case_error(&case).contains("only valid in a call case"),
             "{case}"
         );
+    }
+}
+
+#[test]
+fn session_case_attended_defaults_to_true_and_parses_booleans() {
+    // No key reads attended, so the cases written before this field stay
+    // with a person attached.
+    let Case::Session(parsed) = parse(&session_case()).expect("session case parses") else {
+        panic!("session case parsed as a call case");
+    };
+    assert!(parsed.attended);
+    for (value, expected) in [(json!(true), true), (json!(false), false)] {
+        let mut case = session_case();
+        case["attended"] = value;
+        let Case::Session(parsed) = parse(&case).expect("boolean attended parses") else {
+            panic!("session case parsed as a call case");
+        };
+        assert_eq!(parsed.attended, expected);
+    }
+    for value in [json!(null), json!(0), json!(1), json!("false")] {
+        let mut malformed = session_case();
+        malformed["attended"] = value;
+        let error = case_error(&malformed);
+        assert!(error.contains("attended"), "{error}");
     }
 }
 

@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 use support::group::GROUP_POLL;
 
 use super::clock::CaseClock;
-use super::format::{Case, ClockAdvance, Host, Selector, SessionCase};
+use super::format::{Case, ClockAdvance, Selector, SessionCase};
 
 pub(super) const ADVANCE_WAIT: Duration = Duration::from_secs(10);
 pub(super) const UNTIL_WAIT: Duration = Duration::from_secs(30);
@@ -42,6 +42,7 @@ pub(crate) struct CaseRun {
     clock: Arc<CaseClock>,
     advances: Vec<ClockAdvance>,
     until: Option<Selector>,
+    attended: bool,
     process_clock: Arc<dyn Clock>,
     waits: WaitBounds,
     verdict: Mutex<Option<Vec<String>>>,
@@ -49,45 +50,33 @@ pub(crate) struct CaseRun {
 
 impl CaseRun {
     /// Builds the host script and manual clock for a parsed session case.
-    pub(crate) fn new(
-        name: String,
-        expected: Vec<Value>,
-        host: Host,
-        advances: Vec<ClockAdvance>,
-        until: Option<Selector>,
-        process_clock: Arc<dyn Clock>,
-    ) -> Arc<Self> {
-        Self::with_waits(
-            name,
-            expected,
-            host,
-            advances,
-            until,
-            process_clock,
-            RUNNER_WAITS,
-        )
+    pub(crate) fn new(case: SessionCase, process_clock: Arc<dyn Clock>) -> Arc<Self> {
+        Self::with_waits(case, process_clock, RUNNER_WAITS)
     }
 
     fn with_waits(
-        name: String,
-        expected: Vec<Value>,
-        host: Host,
-        advances: Vec<ClockAdvance>,
-        until: Option<Selector>,
+        case: SessionCase,
         process_clock: Arc<dyn Clock>,
         waits: WaitBounds,
     ) -> Arc<Self> {
+        let name = case.name.clone().unwrap_or_default();
         Arc::new(Self {
             name,
-            expected,
-            host: extensions::HostScript::new(host.http, host.exec, host.oauth),
+            expected: case.expect,
+            host: extensions::HostScript::new(case.host.http, case.host.exec, case.host.oauth),
             clock: CaseClock::new(),
-            advances,
-            until,
+            advances: case.clock,
+            until: case.until,
+            attended: case.attended,
             process_clock,
             waits,
             verdict: Mutex::new(None),
         })
+    }
+
+    /// Whether a person is attached to the case's session.
+    pub(crate) fn attended(&self) -> bool {
+        self.attended
     }
 
     /// The clock this case's session and extension hooks share.
@@ -457,7 +446,11 @@ pub(crate) fn extension_case(
             let name = call.name.clone().unwrap_or(fallback_name);
             return super::call::run_case(call, name, process_clock);
         }
-        Case::Session(session) => (session.name.clone().unwrap_or(fallback_name), session),
+        Case::Session(mut session) => {
+            let name = session.name.clone().unwrap_or(fallback_name);
+            session.name = Some(name.clone());
+            (name, session)
+        }
     };
     let workspace = match std::env::current_dir() {
         Ok(workspace) => workspace,
@@ -466,14 +459,8 @@ pub(crate) fn extension_case(
     if let Err(error) = write_inputs(&case, &workspace) {
         return report(&name, &[error]);
     }
-    let case_run = CaseRun::new(
-        name.clone(),
-        case.expect,
-        case.host,
-        case.clock,
-        case.until,
-        Arc::clone(&process_clock),
-    );
+    let prompt = case.prompt.clone();
+    let case_run = CaseRun::new(case, Arc::clone(&process_clock));
     let signals = match crate::shutdown::install(process_clock) {
         Ok(signals) => signals,
         Err(error) => return report(&name, &[format!("case signals: {error}")]),
@@ -481,7 +468,7 @@ pub(crate) fn extension_case(
     let result = crate::session_command::new_session(
         contract::SessionId(doors::mint("s_")),
         crate::per_run(Some("scripted/script.json".to_owned()), Vec::new()),
-        Some(case.prompt),
+        Some(prompt),
         false,
         false,
         case_run.session_clock(),

@@ -32,6 +32,8 @@ pub(crate) struct SessionCase {
     pub(crate) until: Option<Selector>,
     /// Durable event lines expected from the session.
     pub(crate) expect: Vec<Value>,
+    /// Whether a person is attached to the case.
+    pub(crate) attended: bool,
 }
 
 /// A provider call case: the call and its one expected outcome.
@@ -198,17 +200,12 @@ impl Case {
                 clock,
             }))
         } else {
-            if [
-                "credentials",
-                "expect_credentials",
-                "exact_credentials",
-                "attended",
-            ]
-            .iter()
-            .any(|key| map.contains_key(*key))
+            if ["credentials", "expect_credentials", "exact_credentials"]
+                .iter()
+                .any(|key| map.contains_key(*key))
             {
                 return Err(
-                    "credentials, expect_credentials, exact_credentials and attended are only valid in a call case"
+                    "credentials, expect_credentials and exact_credentials are only valid in a call case"
                         .to_owned(),
                 );
             }
@@ -226,6 +223,11 @@ impl Case {
             provider::scripted::Script::parse(path, &script_bytes)
                 .map_err(|error| format!("script: {error}"))?;
             let prompt = prompt.ok_or_else(|| "prompt: required for a session case".to_owned())?;
+            let attended = match map.get("attended") {
+                None => true,
+                Some(Value::Bool(value)) => *value,
+                Some(_) => return Err("attended: expected a boolean".to_owned()),
+            };
             Ok(Case::Session(SessionCase {
                 name,
                 script: script_value.clone(),
@@ -235,6 +237,7 @@ impl Case {
                 clock,
                 until,
                 expect,
+                attended,
             }))
         }
     }
