@@ -359,10 +359,7 @@ pub(crate) fn decode_tracked(
     lifetime: &CacheLifetime,
     sink: &mut dyn FnMut(Delta),
 ) -> Result<Reply, (Error, Option<CallUsage>)> {
-    let mut reply = Decoder {
-        lifetime: Some(*lifetime),
-        ..Decoder::default()
-    };
+    let mut reply = Decoder::default();
     let mut end = None;
     let read = sse::read(stream, |data| {
         let event: Value = serde_json::from_str(data)
@@ -371,13 +368,13 @@ pub(crate) fn decode_tracked(
         Ok(end.is_some())
     });
     if let Err(error) = read {
-        return Err((error, Some(reply.partial())));
+        return Err((error, Some(reply.partial(lifetime))));
     }
     match end {
         Some(reply) => Ok(reply),
         None => Err((
             Error::StreamIncomplete("it ended before its terminal event".into()),
-            Some(reply.partial()),
+            Some(reply.partial(lifetime)),
         )),
     }
 }
@@ -394,20 +391,16 @@ struct Decoder {
     id: String,
     /// The response's last usage, from `response.created` on.
     usage: Value,
-    /// The request's cache lifetime, which a reported cache write is counted
-    /// under. Set from `decode`'s lifetime; `None` in unit tests counts
-    /// writes as five minutes.
-    lifetime: Option<CacheLifetime>,
 }
 
 impl Decoder {
     /// What the stream had seen: the generation once a response event named
-    /// it, and the usage so far.
-    fn partial(&self) -> CallUsage {
-        let lifetime = self.lifetime.unwrap_or(CacheLifetime::FiveMinutes);
+    /// it, and the usage so far, with a reported cache write counted under
+    /// the request's cache lifetime.
+    fn partial(&self, lifetime: &CacheLifetime) -> CallUsage {
         CallUsage {
             generation_id: named(self.id.clone()),
-            tokens: tokens(&self.usage, &lifetime),
+            tokens: tokens(&self.usage, lifetime),
             web_searches: None,
             input_size: InputSize::default(),
         }

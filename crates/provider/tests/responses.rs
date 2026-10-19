@@ -468,7 +468,7 @@ fn a_cache_write_is_counted_under_the_request_lifetime() {
     ];
     let server = ProviderServer::start([
         fakes::wire::stream_with_usage(&events, warming.clone()),
-        fakes::wire::stream_with_usage(&events, warming.clone()),
+        fakes::wire::stream_with_usage(&events, warming),
     ])
     .unwrap();
     let protocol = Responses::new(endpoint(&server));
@@ -484,14 +484,14 @@ fn a_cache_write_is_counted_under_the_request_lifetime() {
     assert_eq!(hour.tokens.cache_read, 0);
     assert_eq!(
         hour.tokens.cache_write,
-        std::collections::BTreeMap::from([("1h".to_owned(), 2344)])
+        BTreeMap::from([("1h".to_owned(), 2344)])
     );
     assert_eq!(hour.tokens.output, 28);
     let short = short.unwrap();
     assert_eq!(short.tokens.input, 3);
     assert_eq!(
         short.tokens.cache_write,
-        std::collections::BTreeMap::from([("5m".to_owned(), 2344)])
+        BTreeMap::from([("5m".to_owned(), 2344)])
     );
 }
 

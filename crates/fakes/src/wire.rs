@@ -5,28 +5,12 @@ use serde_json::{Value, json};
 use crate::Response;
 
 /// An `openai-responses` stream of `events`, then a completed reply.
-#[allow(
-    clippy::indexing_slicing,
-    clippy::unwrap_used,
-    reason = "a test helper; a failure is the test's"
-)]
 pub fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
+    stream_with_usage(
+        events,
+        json!({"input_tokens": 10,
+        "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}),
+    )
 }
 
 /// An `openai-responses` stream of `events`, then a completed reply

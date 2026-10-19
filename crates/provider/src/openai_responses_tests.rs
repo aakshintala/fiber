@@ -7,7 +7,7 @@ use contract::provider::ModelRequest;
 use contract::shapes::Tokens;
 use serde_json::{Value, json};
 
-use super::{Responses, decode};
+use super::{Responses, decode, decode_tracked};
 use crate::Endpoint;
 
 fn request() -> ModelRequest {
@@ -89,11 +89,9 @@ fn usage(input: u64, write: Option<u64>, cached: u64, output: u64) -> Value {
 /// to: the public decode drops the request's lifetime, so a write lands
 /// under five minutes.
 fn decoded(usage: &Value) -> Tokens {
-    let bytes = format!(
-        "event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{usage}}}}}\n\n"
-    );
+    let body = fakes::wire::stream_with_usage(&[], usage.clone()).body;
     let mut deltas = Vec::new();
-    decode(bytes.as_bytes(), &mut |delta| deltas.push(delta))
+    decode(body.as_slice(), &mut |delta| deltas.push(delta))
         .unwrap()
         .tokens
 }
@@ -152,6 +150,32 @@ fn a_missing_write_counts_its_input_in_full() {
             {"cache_write_tokens": "2344", "cached_tokens": 0},
             "output_tokens": 21});
     assert_eq!(decoded(&written_as_text).cache_write, BTreeMap::new());
+}
+
+#[test]
+fn a_failed_call_counts_its_write_under_the_request_lifetime() {
+    let usage = usage(2347, Some(2344), 0, 28);
+    let event = json!({"type": "response.failed", "response": {"id": "resp_1",
+        "status": "failed",
+        "error": {"code": "server_error", "message": "boom"}, "usage": usage}});
+    let bytes = format!(
+        "event: {}\ndata: {event}\n\n",
+        event["type"].as_str().unwrap()
+    );
+    let mut deltas = Vec::new();
+    let (_, partial) = decode_tracked(bytes.as_bytes(), &CacheLifetime::OneHour, &mut |delta| {
+        deltas.push(delta)
+    })
+    .unwrap_err();
+    assert_eq!(
+        partial.unwrap().tokens,
+        Tokens {
+            input: 3,
+            cache_read: 0,
+            cache_write: BTreeMap::from([("1h".to_owned(), 2344)]),
+            output: 28,
+        }
+    );
 }
 
 #[test]
