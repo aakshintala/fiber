@@ -11,6 +11,7 @@
 
 mod artifact;
 pub mod crash;
+mod delete;
 mod dependents;
 pub mod diag;
 mod export;
@@ -36,6 +37,7 @@ use std::path::{Path, PathBuf};
 use contract::{ErrorCode, SessionId};
 
 pub use artifact::{Refusal, check_artifact_path, open_artifact};
+pub use delete::{delete_session, is_plain_dir};
 pub use dependents::{Children, dependents};
 pub use export::export;
 pub use history::{Segment, history, history_to, last_line, last_seq};
@@ -68,6 +70,22 @@ const ARTIFACTS: &str = "artifacts";
 /// resolved.
 pub fn project_key(project: &Path) -> String {
     project.to_string_lossy().replace('/', "-")
+}
+
+/// The session directory of `id` in `project`: `home/projects/<key>/sessions/<id>`,
+/// a plain join. Rows in `recent.jsonl` are written by Fiber, so no shape
+/// check happens here.
+pub fn session_dir(home: &Path, project: &str, id: &SessionId) -> PathBuf {
+    home.join("projects")
+        .join(project)
+        .join("sessions")
+        .join(&id.0)
+}
+
+/// Whether the session directory is still there, following links as
+/// [`Path::is_dir`] does.
+pub fn dir_exists(dir: &Path) -> bool {
+    dir.is_dir()
 }
 
 /// Where a project's session directories live in Fiber home

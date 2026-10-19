@@ -10,6 +10,7 @@
 )]
 
 use std::fs;
+use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -51,7 +52,7 @@ impl Temp {
     }
 
     fn dir_of(&self, project: &str, n: u64) -> PathBuf {
-        recent::session_dir(&self.dir, project, &id(n))
+        log::session_dir(&self.dir, project, &SessionId(id(n)))
     }
 
     /// Session `n` in `project`, continuing session `from` when given: its
