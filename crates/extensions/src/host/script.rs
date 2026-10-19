@@ -2,7 +2,7 @@
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -71,6 +71,15 @@ struct State {
     http_next: usize,
     exec_next: usize,
     misses: Vec<String>,
+    hangs: Vec<HangMatch>,
+}
+
+/// One matched scripted hang: the 1-based exec entry, its redacted request
+/// and the callback deadline it parks until on the case clock.
+struct HangMatch {
+    entry: usize,
+    request: Value,
+    deadline: Instant,
 }
 
 impl HostScript {
@@ -92,6 +101,7 @@ impl HostScript {
                 http_next: 0,
                 exec_next: 0,
                 misses: Vec::new(),
+                hangs: Vec::new(),
             }),
             changed: Condvar::new(),
         })
@@ -174,24 +184,65 @@ impl HostScript {
         entry.reply
     }
 
-    pub(crate) fn exec(&self, request: Value) -> Result<ExecReply, (ErrorCode, String)> {
+    /// Matches one `host.exec` request against the next scripted entry and
+    /// returns its 1-based index with the outcome. A miss consumes nothing.
+    pub(crate) fn exec(&self, request: Value) -> (usize, Result<ExecReply, (ErrorCode, String)>) {
         let mut state = lock(&self.state);
-        let index = state.exec_next;
-        let entry = state.exec.get(index).cloned();
+        let at = state.exec_next;
+        let entry = state.exec.get(at).cloned();
         let Some(entry) = entry else {
-            state
-                .misses
-                .push(miss("exec", index, &redact_env(&request)));
-            return Err(no_reply("exec"));
+            state.misses.push(miss("exec", at, &redact_env(&request)));
+            return (at.saturating_add(1), Err(no_reply("exec")));
         };
         if json_matches(&entry.request, &request).is_err() {
-            state
-                .misses
-                .push(miss("exec", index, &redact_env(&request)));
-            return Err(no_reply("exec"));
+            state.misses.push(miss("exec", at, &redact_env(&request)));
+            return (at.saturating_add(1), Err(no_reply("exec")));
         }
-        state.exec_next = index.saturating_add(1);
-        entry.reply
+        state.exec_next = at.saturating_add(1);
+        (at.saturating_add(1), entry.reply)
+    }
+
+    /// Records a scripted hang match: exec entry `index` (1-based, from
+    /// [`HostScript::exec`]) met `request` and parks until `deadline` on the
+    /// case clock. Called while the hub lock is held, before the worker
+    /// spawns, so the runner's hold cannot miss it. Wakes every waiter in
+    /// [`HostScript::wait_hang_matched`].
+    pub(crate) fn hang_matched(&self, index: usize, request: &Value, deadline: Instant) {
+        let mut state = lock(&self.state);
+        state.hangs.push(HangMatch {
+            entry: index,
+            request: redact_env(request),
+            deadline,
+        });
+        self.changed.notify_all();
+    }
+
+    /// Waits, bounded by `within` on the process clock, until exec entry
+    /// `entry` has matched as a hang.
+    pub fn wait_hang_matched(&self, entry: usize, within: Duration) -> Result<(), String> {
+        let state = lock(&self.state);
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, within, |state| {
+                !state.hangs.iter().any(|hang| hang.entry == entry)
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        if state.hangs.iter().any(|hang| hang.entry == entry) {
+            Ok(())
+        } else {
+            Err(format!("host.exec[{entry}] did not hang within {within:?}"))
+        }
+    }
+
+    /// Every matched hang still later than `now`: only the runner moves the
+    /// case clock, so no other advance can release these.
+    pub fn pending_hangs(&self, now: Instant) -> Vec<(usize, Value, Instant)> {
+        lock(&self.state)
+            .hangs
+            .iter()
+            .filter(|hang| hang.deadline > now)
+            .map(|hang| (hang.entry, hang.request.clone(), hang.deadline))
+            .collect()
     }
 
     /// Parks a scripted hang on the case clock until the callback's

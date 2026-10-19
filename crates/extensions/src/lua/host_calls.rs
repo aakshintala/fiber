@@ -318,7 +318,9 @@ pub(super) fn admit<'a>(
                 // The hang arm below keeps the admission lock held into its
                 // spawn, so no stop lands between the match and the
                 // registration; every other arm drops it before delivering.
-                match script.exec(request.case_value()) {
+                let case_value = request.case_value();
+                let (index, outcome) = script.exec(case_value.clone());
+                match outcome {
                     Ok(ExecReply {
                         end: ExecEnd::Hang, ..
                     }) => match deadline {
@@ -329,6 +331,7 @@ pub(super) fn admit<'a>(
                             // clock. The scheduler answers the callback's
                             // timeout, so the worker delivers no reply and
                             // writes no exec line.
+                            script.hang_matched(index, &case_value, until);
                             let cancel_rx = shared.register_exec(id);
                             let clock = hub.clock_handle();
                             let worker = Arc::clone(&hub_exec);
