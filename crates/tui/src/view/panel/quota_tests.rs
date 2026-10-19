@@ -44,9 +44,10 @@ fn window_share_is_left_and_floors_at_zero() {
     for (used, figure) in [(35.0, "65%"), (99.0, "1%"), (100.0, "0%"), (101.0, "0%")] {
         let rows = rows(&app(window(used), 80.0), 30);
         assert_eq!(text(&rows)[1], format!("codex weekly{:>18}", figure));
-        // The title opens nothing; every row opens the quota view.
-        assert!(rows[0].spot.is_none());
-        assert!(rows[1..].iter().all(|r| r.spot == Some(Spot::Quota)));
+        // The title and the data row open the quota view; the bar opens nothing.
+        assert_eq!(rows[0].spot, Some(Spot::Quota));
+        assert_eq!(rows[1].spot, Some(Spot::Quota));
+        assert!(rows[2].spot.is_none());
     }
 }
 
@@ -193,14 +194,12 @@ fn title_and_long_names_fit_the_card_and_its_rows_open_the_view() {
         80.0,
     );
     let rows = super::super::rows(&app, 28);
-    // The edges and title open nothing; every row between opens the view.
+    // The edges open nothing; the title and data rows open the view,
+    // and the bar between them opens nothing.
     assert!(rows[0].spot.is_none());
-    assert!(rows[1].spot.is_none());
-    assert!(
-        rows[2..rows.len() - 1]
-            .iter()
-            .all(|r| r.spot == Some(Spot::Quota))
-    );
+    assert_eq!(rows[1].spot, Some(Spot::Quota));
+    assert_eq!(rows[2].spot, Some(Spot::Quota));
+    assert!(rows[3].spot.is_none());
     assert!(rows.last().unwrap().spot.is_none());
     assert_eq!(rows[1].line.spans[0].content, "Quota");
     assert!(
@@ -229,7 +228,7 @@ fn quota_card_snapshots_at_floor_and_sixty_columns() {
         let mut buffer = Buffer::empty(area);
         let mut targets = Vec::new();
         super::super::draw(&app, area, &mut buffer, &mut targets);
-        // Every row opens the quota view; the snapshot pins the text.
+        // The title and data rows open the quota view; the snapshot pins the text.
         assert!(!targets.is_empty());
         assert!(
             targets

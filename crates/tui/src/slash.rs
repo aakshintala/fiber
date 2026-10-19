@@ -38,7 +38,11 @@ const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
     ("tools", "Opens the tools view.", None),
     ("context", "Opens the context breakdown.", None),
     ("usage", "Opens the usage view.", None),
-    ("quota", "Opens the quota view.", None),
+    (
+        "quota",
+        "Opens the quota view and fetches every label's quota.",
+        None,
+    ),
     ("panel", "Shows or hides the panel.", None),
     ("rail", "Shows or hides the rail.", None),
     ("rules", "Opens the standing rules.", None),

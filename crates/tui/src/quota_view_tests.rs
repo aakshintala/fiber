@@ -75,12 +75,16 @@ fn empty_names_what_is_missing() {
 }
 
 #[test]
-fn fetching_marks_the_first_row_over_the_cached_answer() {
+fn fetching_marks_the_header_over_the_cached_answer() {
     let frame = show(&rows()[..1], true);
+    assert_eq!(frame.title, "Quota");
+    assert_eq!(frame.command, "/quota · fetching");
     let lines = text(&frame);
-    assert_eq!(lines[0], "fetching");
-    assert_eq!(frame.rows[0][0].2, Ink::Muted);
-    assert!(lines[1].contains("codex · default"), "{lines:?}");
+    assert!(lines[0].contains("codex · default"), "{lines:?}");
+    assert!(
+        !lines.iter().any(|line| line.contains("fetching")),
+        "{lines:?}"
+    );
 }
 
 #[test]
@@ -182,6 +186,57 @@ fn credit_reads_its_figure_and_bar() {
     let lines = text(&frame);
     assert_eq!(lines[1], "credit  42%");
     assert!(lines[2].contains('▆'), "{lines:?}");
+}
+
+#[test]
+fn a_zero_credit_limit_reads_no_share_and_no_bar() {
+    let rows = quota(json!([
+        {"provider": "codex", "credential": "default",
+            "credit": {"remaining": 4.2, "limit": 0.0}},
+    ]));
+    let frame = show(&rows, false);
+    assert_eq!(text(&frame), ["codex · default", "credit  4.20"]);
+    assert_eq!(frame.rows[1][1].2, Ink::Plain);
+}
+
+#[test]
+fn credit_low_reads_error_at_the_notice_line() {
+    // Half used against a notice line of half: exactly little left.
+    let rows = quota(json!([
+        {"provider": "codex", "credential": "default",
+            "credit": {"remaining": 5.0, "limit": 10.0}},
+    ]));
+    let frame = frame(&rows, 50.0, false, List::default(), 160, NOW_MS);
+    assert_eq!(text(&frame)[1], "credit  50%");
+    assert_eq!(frame.rows[1][1].2, Ink::Role(Role::Error));
+    assert_eq!(frame.rows[2][0].2, Ink::Role(Role::Error));
+}
+
+#[test]
+fn credit_with_most_left_reads_plain() {
+    // Five percent used against a notice line of eighty: not little left.
+    let rows = quota(json!([
+        {"provider": "codex", "credential": "default",
+            "credit": {"remaining": 9.5, "limit": 10.0}},
+    ]));
+    let frame = show(&rows, false);
+    assert_eq!(text(&frame)[1], "credit  95%");
+    assert_eq!(frame.rows[1][1].2, Ink::Plain);
+    assert_eq!(frame.rows[2][0].2, Ink::Role(Role::Accent));
+}
+
+#[test]
+fn credit_half_used_reads_error_above_a_low_line() {
+    // Half used against a notice line of forty: little left, where a
+    // quotient in place of the difference would read plenty.
+    let rows = quota(json!([
+        {"provider": "codex", "credential": "default",
+            "credit": {"remaining": 5.0, "limit": 10.0}},
+    ]));
+    let frame = frame(&rows, 40.0, false, List::default(), 160, NOW_MS);
+    assert_eq!(text(&frame)[1], "credit  50%");
+    assert_eq!(frame.rows[1][1].2, Ink::Role(Role::Error));
+    assert_eq!(frame.rows[2][0].2, Ink::Role(Role::Error));
 }
 
 #[test]

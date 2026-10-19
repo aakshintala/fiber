@@ -19,7 +19,10 @@ enum Ask {
     Due,
     #[default]
     Idle,
+    /// The panel's own fetch-less query.
     Asked(CommandId),
+    /// The quota view's `fetch: true` query.
+    Fetching(CommandId),
     Refused,
 }
 
@@ -42,16 +45,16 @@ impl Query {
     }
 
     pub(super) fn refuse(&mut self, id: &str) {
-        if matches!(&self.ask, Ask::Asked(asked) if asked.0 == id) {
+        if matches!(&self.ask, Ask::Asked(asked) | Ask::Fetching(asked) if asked.0 == id) {
             self.ask = Ask::Refused;
             self.rows.clear();
         }
     }
 
-    /// Whether a fetch is in flight: the quota view shows `fetching`
+    /// Whether a query is in flight: the quota view shows `fetching`
     /// over the cached answer until its answer lands.
     pub(crate) fn fetching(&self) -> bool {
-        matches!(self.ask, Ask::Asked(_))
+        matches!(self.ask, Ask::Asked(_) | Ask::Fetching(_))
     }
 }
 
@@ -76,7 +79,7 @@ impl App {
         match envelope.kind.as_str() {
             "command_accepted" => {
                 if let Some(accepted) = super::super::read!(envelope, CommandAccepted)
-                    && matches!(&self.panel_state.quota.ask, Ask::Asked(id) if *id == accepted.command_id)
+                    && matches!(&self.panel_state.quota.ask, Ask::Asked(id) | Ask::Fetching(id) if *id == accepted.command_id)
                 {
                     self.panel_state.quota.ask = Ask::Idle;
                     self.panel_state.quota.answered = self.motion().now_instant();
@@ -114,7 +117,7 @@ impl App {
             return None;
         }
         let query = &self.panel_state.quota;
-        if matches!(query.ask, Ask::Asked(_) | Ask::Refused) {
+        if matches!(query.ask, Ask::Asked(_) | Ask::Fetching(_) | Ask::Refused) {
             return None;
         }
         let session = self.session()?.clone();
@@ -138,9 +141,11 @@ impl App {
     }
 
     /// Sends one `quota` with `fetch: true`, unless a fetch is already in
-    /// flight: its answer redraws the view. An explicit open retries
-    /// after a refusal. Never put in the conversation's pending
-    /// commands: the answer folds into the panel card's rows by its id.
+    /// flight: its answer redraws the view. A panel fetch-less query in
+    /// flight is replaced by the fetch, so opening the view always
+    /// fetches. An explicit open retries after a refusal. Never put in
+    /// the conversation's pending commands: the answer folds into the
+    /// panel card's rows by its id.
     fn quota_fetch(&mut self) -> Option<String> {
         if self.link != Link::Up {
             return None;
@@ -149,14 +154,14 @@ impl App {
             return None;
         }
         let query = &mut self.panel_state.quota;
-        if matches!(query.ask, Ask::Asked(_)) {
+        if matches!(query.ask, Ask::Fetching(_)) {
             return None;
         }
         let session = self.session()?.clone();
         let id = CommandId(mint());
         let line =
             session_command(&id.0, "quota", &session, Some(json!({"fetch": true}))).to_string();
-        self.panel_state.quota.ask = Ask::Asked(id);
+        self.panel_state.quota.ask = Ask::Fetching(id);
         Some(line)
     }
 }

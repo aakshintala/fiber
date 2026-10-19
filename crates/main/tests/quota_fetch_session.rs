@@ -15,7 +15,7 @@
 mod support;
 
 use std::fs;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
@@ -339,6 +339,10 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
         }),
         Condvar::new(),
     ));
+    // The server signals each fetch it holds: the test releases only
+    // after that signal, so the gated count proves the request was held
+    // before release.
+    let (held, held_rx) = mpsc::channel();
     let server = ProviderServer::start_responding({
         let quota_gate = Arc::clone(&quota_gate);
         move |request| match request.path.as_str() {
@@ -349,6 +353,7 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
                 if guard.armed {
                     // The view's fetch: hold it until the release.
                     guard.gated += 1;
+                    let _sent = held.send(());
                     let _guard = cvar.wait_while(guard, |gate| !gate.open).unwrap();
                 }
                 Response::status(200, "42")
@@ -383,7 +388,11 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
     run.wait_screen("the view's fetching mark", |grid| {
         grid.contents.contains("fetching")
     });
-    // The mark is up, so the view's fetch is in flight: release it.
+    // The mark is up, but the fetch may not have reached the server yet:
+    // wait for the server to hold it before releasing.
+    setup
+        .deadline
+        .recv_or_fail(&held_rx, "the fake server holding the view's fetch");
     {
         let (lock, cvar) = &*quota_gate;
         lock.lock().unwrap().open = true;

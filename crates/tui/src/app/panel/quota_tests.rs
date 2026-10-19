@@ -297,6 +297,37 @@ fn opening_the_view_sends_fetch_true_and_shares_the_flight() {
 }
 
 #[test]
+fn opening_the_view_replaces_a_panel_query_in_flight_with_a_fetch() {
+    let mut app = attached();
+    let panel = first(&mut app);
+    assert!(app.panel_state.quota.fetching());
+    // The panel's fetch-less query is still outstanding: opening the view
+    // replaces it with a fetch instead of showing `fetching` with none.
+    let lines = sent(app.quota_view());
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "quota");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0]["args"], json!({"fetch": true}));
+    assert_ne!(lines[0]["id"], panel);
+    assert!(app.session_view_open());
+    // The abandoned panel answer folds nothing: the flight stays up for
+    // the fetch's answer.
+    answer(&mut app, &panel);
+    assert!(app.panel_state.quota.fetching());
+    // A second opening shares the in-flight fetch: no new line.
+    assert!(sent(app.quota_view()).is_empty());
+}
+
+#[test]
+fn opening_the_view_without_a_live_link_sends_nothing() {
+    let mut app = attached();
+    app.link = Link::Down;
+    assert!(sent(app.quota_view()).is_empty());
+    assert!(app.session_view_open());
+    assert!(!app.panel_state.quota.fetching());
+}
+
+#[test]
 fn opening_the_view_retries_after_a_refusal() {
     let mut app = attached();
     let lines = sent(app.quota_view());

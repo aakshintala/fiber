@@ -366,9 +366,15 @@ impl LuaProvider {
             cache.flight = Some(Flight { id, started: now });
             id
         };
+        self.start_flight(pair, key.cloned(), id);
+    }
+
+    /// Spawns the fetch thread for flight `id`: calls `quota()`, then
+    /// stores the result when its flight still owns the slot. Both
+    /// triggers share this one spawn.
+    fn start_flight(self: &Arc<Self>, pair: &CredentialPair, key: Option<Secret>, id: u64) {
         let this = Arc::clone(self);
         let pair = pair.clone();
-        let key = key.cloned();
         thread::spawn(move || {
             let fetched = this
                 .fetch_quota(&pair, key.as_ref())
@@ -406,16 +412,7 @@ impl LuaProvider {
             }
         };
         if spawned {
-            let this = Arc::clone(self);
-            let pair = pair.clone();
-            let key = key.cloned();
-            thread::spawn(move || {
-                let fetched = this
-                    .fetch_quota(&pair, key.as_ref())
-                    .map(|(quota, _)| quota)
-                    .map_err(|_| ());
-                this.finish_quota(&pair, id, fetched);
-            });
+            self.start_flight(pair, key.cloned(), id);
         }
         QuotaFlight {
             id,

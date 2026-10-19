@@ -196,13 +196,17 @@ impl Switching {
 }
 
 impl Store {
+    /// Starts the loader once, named for the quota waits: the one spawn
+    /// behind the cached, model and fetch readers.
+    fn spawn_loader(store: Arc<Self>) -> std::io::Result<()> {
+        std::thread::Builder::new()
+            .name("fiber-quota-load".into())
+            .spawn(move || store.load())
+            .map(|_| ())
+    }
+
     fn answer(self: &Arc<Self>) -> (Vec<QuotaInfo>, f64) {
-        self.answer_with_spawn(|store| {
-            std::thread::Builder::new()
-                .name("fiber-quota-load".into())
-                .spawn(move || store.load())
-                .map(|_| ())
-        })
+        self.answer_with_spawn(Self::spawn_loader)
     }
 
     /// The model-facing snapshot: every held, silent and failed label from
@@ -211,12 +215,7 @@ impl Store {
     /// is read before the entry, so a value landing between the two reads
     /// shows the value. Neither lock is held across a `quota_now` call.
     fn entries(self: &Arc<Self>) -> QuotaView {
-        let (checked, labels, failed, silent) = self.snapshot_starting(|store| {
-            std::thread::Builder::new()
-                .name("fiber-quota-load".into())
-                .spawn(move || store.load())
-                .map(|_| ())
-        });
+        let (checked, labels, failed, silent) = self.snapshot_starting(Self::spawn_loader);
         if !checked {
             return QuotaView::Loading;
         }
@@ -320,13 +319,7 @@ impl Store {
     /// lock is held across a fetch or a wait: labels are cloned under the
     /// lock like the cached path clones them.
     fn answer_fetch(self: &Arc<Self>) -> (Vec<QuotaInfo>, f64) {
-        let spawn = |store: Arc<Self>| {
-            std::thread::Builder::new()
-                .name("fiber-quota-load".into())
-                .spawn(move || store.load())
-                .map(|_| ())
-        };
-        let (checked, labels, failed, _) = self.snapshot_starting(spawn);
+        let (checked, labels, failed, _) = self.snapshot_starting(Self::spawn_loader);
         let (labels, mut quota) = match checked {
             true => (labels, failed),
             // A cold cache: wait for the loader's label list instead of
@@ -650,6 +643,11 @@ struct Loaded<'a>(&'a Store);
 /// the fetch path's loader wait ends with the loader, never past it.
 struct NotifyLoaded<'a>(&'a Store);
 impl Drop for NotifyLoaded<'_> {
+    // Exempted: without the notify the 50ms poll still ends the loader
+    // wait, so no consumer-visible behaviour changes; pinning the prompt
+    // wake would need a real-clock timing assertion, which docs/testing.md
+    // ("Waits and timeouts") bans, and the wait's own budget bounds it.
+    #[cfg_attr(false, mutants::skip)]
     fn drop(&mut self) {
         self.0.loaded.notify_all();
     }

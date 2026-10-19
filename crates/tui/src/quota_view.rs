@@ -6,9 +6,11 @@
 //! and its bar, then its reset time dim on the row after it. An
 //! unreachable entry shows its last value and `unreachable` in `error`,
 //! or `unreachable` alone when it has no last value. While the fetch is
-//! in flight the first row shows `fetching` dim over the cached answer.
+//! in flight the header's command reads `/quota · fetching`, over the
+//! cached answer.
 
-use contract::events::{QuotaCredit, QuotaInfo, QuotaWindow};
+use crate::view::panel::quota::{credit_figure, window_figure};
+use contract::events::{QuotaInfo, QuotaWindow};
 
 use crate::swapped::{Frame, Ink, List};
 use crate::theme::Role;
@@ -33,35 +35,6 @@ fn resets_in(mins: u64) -> String {
     } else {
         format!("{mins}m")
     }
-}
-
-/// A window's figure, its remaining share and whether little is left, as
-/// the panel card draws them; `None` for a window reporting neither usage
-/// nor reset.
-fn window_figure(window: &QuotaWindow, notice_at: f64) -> Option<(String, f64, bool)> {
-    if window.reset.is_some() {
-        Some(("reset".to_owned(), 100.0, false))
-    } else if let Some(used) = window.percent_used {
-        let share = (100.0 - used).clamp(0.0, 100.0);
-        Some((format!("{share:.0}%"), share, used >= notice_at))
-    } else {
-        None
-    }
-}
-
-/// A credit's figure, its remaining share and whether little is left, as
-/// the panel card draws them.
-fn credit_figure(credit: &QuotaCredit, notice_at: f64) -> (String, Option<f64>, bool) {
-    let share = credit
-        .limit
-        .filter(|limit| *limit > 0.0)
-        .map(|limit| (credit.remaining / limit * 100.0).clamp(0.0, 100.0));
-    let figure = share.map_or_else(
-        || format!("{:.2}", credit.remaining),
-        |share| format!("{share:.0}%"),
-    );
-    let low = share.is_some_and(|share| 100.0 - share >= notice_at);
-    (figure, share, low)
 }
 
 /// The figure ink: `error` where little is left, plain otherwise.
@@ -182,9 +155,9 @@ fn entry_rows(rows: &mut Vec<Row>, info: &QuotaInfo, notice_at: f64, width: usiz
     }
 }
 
-/// The quota rows for the swapped view: `fetching` dim first while the
-/// fetch is in flight, over the cached answer; one dim line in place of
-/// the rows with no entries.
+/// The quota rows for the swapped view: while the fetch is in flight the
+/// header's command carries the `fetching` mark; one dim line stands in
+/// place of the rows with no entries.
 pub(crate) fn frame(
     rows: &[QuotaInfo],
     notice_at: f64,
@@ -194,9 +167,6 @@ pub(crate) fn frame(
     now_ms: u64,
 ) -> Frame {
     let mut out = Vec::new();
-    if fetching {
-        out.push(vec![cell("fetching".to_owned(), Ink::Muted)]);
-    }
     if rows.is_empty() {
         out.push(vec![cell(
             "No provider reports quota".to_owned(),
@@ -212,7 +182,11 @@ pub(crate) fn frame(
     }
     Frame {
         title: "Quota".to_owned(),
-        command: "/quota",
+        command: if fetching {
+            "/quota · fetching"
+        } else {
+            "/quota"
+        },
         rows: out,
         list,
         below: Vec::new(),

@@ -1258,6 +1258,42 @@ fn clicking_a_row_tail_only_selects_the_row() {
 }
 
 #[test]
+fn a_non_row_click_in_a_usage_quota_or_context_view_selects_nothing() {
+    for view in [SessionView::Usage, SessionView::Quota, SessionView::Context] {
+        let mut app = attached(80, 24);
+        app.link = crate::app::Link::Up;
+        app.on_line(usage_line(SESSION, "g1", "model/m", None));
+        app.on_line(context_preamble());
+        app.on_line(context_status(50, 100));
+        if view == SessionView::Quota {
+            let lines = sent(slash_quota(&mut app));
+            let id = lines[0]["id"].as_str().unwrap().to_owned();
+            app.on_line(session_line(
+                SESSION,
+                "command_accepted",
+                None,
+                json!({"command_id": id,
+                    "result": {"quota": [
+                        {"provider": "codex", "credential": "default",
+                            "windows": [{"name": "weekly", "percent_used": 38.0}]},
+                    ], "notice_at": 80.0}}),
+            ));
+        }
+        assert_eq!(app.open_session_view(view), Effect::None);
+        app.on_click(TargetId::View(ViewSpot::Row(1)));
+        let selected = app.session_view_screen(80).unwrap().list.selected();
+        assert_eq!(selected, 1);
+        // A click that names no row selects nothing: only a row click moves.
+        assert_eq!(
+            app.on_click(TargetId::View(ViewSpot::Item(7))),
+            Effect::None
+        );
+        assert!(app.session_view_open());
+        assert_eq!(app.session_view_screen(80).unwrap().list.selected(), 1);
+    }
+}
+
+#[test]
 fn esc_and_the_cross_close_the_lists() {
     for view in [SessionView::Delegates, SessionView::Jobs] {
         let mut app = attached(80, 24);

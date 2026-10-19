@@ -1179,6 +1179,12 @@ fn a_failed_fetch_with_a_last_value_answers_unreachable_with_it() {
 fn fetch_true_waits_for_a_held_loader_then_answers() {
     let fixture = fixture(false, false, &[]);
     let store = fixture.switching.quota_store();
+    // A test-owned fake loader clock: its parks name the instants the
+    // waits below synchronize on.
+    let loader_clock = fakes::clock::FakeClock::new();
+    let mut now = fixture.switching.reloadable();
+    now.loader.clock = loader_clock.clone();
+    fixture.switching.reloaded(now);
     let (entered, at_register) = mpsc::channel();
     let (release, released) = mpsc::channel();
     store.pause_at_register(entered, released);
@@ -1186,10 +1192,23 @@ fn fetch_true_waits_for_a_held_loader_then_answers() {
     let reader = store.clone();
     std::thread::spawn(move || found.send(reader.answer_fetch()));
     receive(&at_register, "the loader before the quota check");
-    // The loader is held before resolving any label: the fetch path holds
-    // with it instead of answering the empty snapshot as complete.
+    // The loader is held before resolving any label: the fetch path parks
+    // on the loader wait instead of answering the empty snapshot as
+    // complete. The parked thread proves the reader reached its wait;
+    // the bounded receive below proves no answer without a sleep.
+    let end = loader_clock
+        .now()
+        .checked_add(LOADER_BUDGET)
+        .expect("the loader budget fits the clock");
     assert!(
-        got.try_recv().is_err(),
+        loader_clock.await_parked(end, MUST_SUCCEED_WITHIN),
+        "the fetch path parked on the loader wait"
+    );
+    assert!(
+        matches!(
+            Deadline::after(LOADER_POLL * 4).recv(&got),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
         "the fetch path answered before the loader finished"
     );
     release.send(()).unwrap();
@@ -1216,6 +1235,12 @@ fn fetch_true_waits_for_a_held_loader_then_answers() {
 fn fetch_true_answers_unreachable_when_the_loader_budget_expires() {
     let fixture = fixture(false, false, &[]);
     let store = fixture.switching.quota_store();
+    // A test-owned fake loader clock: its parks name the instants the
+    // waits below synchronize on.
+    let loader_clock = fakes::clock::FakeClock::new();
+    let mut now = fixture.switching.reloadable();
+    now.loader.clock = loader_clock.clone();
+    fixture.switching.reloaded(now);
     let (entered, at_register) = mpsc::channel();
     let (release, released) = mpsc::channel();
     store.pause_at_register(entered, released);
@@ -1223,19 +1248,32 @@ fn fetch_true_answers_unreachable_when_the_loader_budget_expires() {
     let reader = store.clone();
     std::thread::spawn(move || found.send(reader.answer_fetch()));
     receive(&at_register, "the loader before the quota check");
+    // Past the budget on the loader clock, which the waiter reads: no
+    // label resolved, so every startup label answers `unreachable`. The
+    // parked thread proves the reader reached its wait, and the advance
+    // names that park, never a sleep; reaching the deadline is enough,
+    // since the waiter's own check is `now >= end`.
+    let end = loader_clock
+        .now()
+        .checked_add(LOADER_BUDGET)
+        .expect("the loader budget fits the clock");
     assert!(
-        got.try_recv().is_err(),
+        loader_clock.await_parked(end, MUST_SUCCEED_WITHIN),
+        "the fetch path parked on the loader wait"
+    );
+    assert!(
+        matches!(
+            Deadline::after(LOADER_POLL * 4).recv(&got),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
         "the fetch path answered before the budget expired"
     );
-    // Past the budget on the loader clock, which the waiter reads: no
-    // label resolved, so every startup label answers `unreachable`.
-    // Advancing only after the loader's wait signal, never a sleep.
-    fixture
-        .switching
-        .reloadable()
-        .loader
-        .clock
-        .sleep(LOADER_BUDGET + Duration::from_secs(1));
+    loader_clock.advance_when_parked(
+        Some(end),
+        None,
+        LOADER_BUDGET,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
     assert_eq!(
         receive(&got, "the expired budget's answer"),
         (
