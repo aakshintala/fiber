@@ -973,7 +973,7 @@ mod command_calls;
 mod declared;
 mod errors;
 mod host_calls;
-mod hub;
+pub(crate) mod hub;
 mod router;
 mod schedule;
 mod search;
