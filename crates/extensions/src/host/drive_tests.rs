@@ -317,8 +317,23 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     Deadline::after(WAIT)
         .recv(&called)
         .expect("the drive reached the door");
-    // Past its timeout and the grace: the parked call fails by its deadline.
-    clock.advance(Duration::from_secs(5));
+    // At its timeout the parked call fails by its deadline.
+    let parked = clock
+        .mark_parked(clock.origin() + Duration::from_millis(200), WAIT)
+        .expect("the scheduler parks at the slow command deadline");
+    let parked = parked.threads();
+    assert_eq!(
+        parked.len(),
+        1,
+        "only the scheduler parks at the slow command deadline"
+    );
+    let vm = parked.into_iter().next().expect("the scheduler thread");
+    clock.advance_when_parked(
+        Some(clock.origin() + Duration::from_millis(200)),
+        Some(vm),
+        Duration::from_millis(200),
+        &Deadline::after(WAIT),
+    );
     assert!(
         matches!(
             Deadline::after(WAIT)

@@ -295,7 +295,22 @@ fn a_timed_out_ask_is_declined_by_fiber_and_late_answers_hand_back() {
         let _sent = done_tx.send(held.command("go", ""));
     });
     let requested = interaction(&rx, &Deadline::after(WAIT));
-    clock.advance(Duration::from_millis(1000));
+    let parked = clock
+        .mark_parked(clock.origin() + Duration::from_millis(200), WAIT)
+        .expect("the scheduler parks at the command deadline");
+    let parked = parked.threads();
+    assert_eq!(
+        parked.len(),
+        1,
+        "only the scheduler parks at the command deadline"
+    );
+    let vm = parked.into_iter().next().expect("the scheduler thread");
+    clock.advance_when_parked(
+        Some(clock.origin() + Duration::from_millis(200)),
+        Some(vm),
+        Duration::from_millis(200),
+        &Deadline::after(WAIT),
+    );
     let Delivery::Resolved(resolved, _) = Deadline::after(WAIT)
         .recv(&rx)
         .expect("the decline arrives")
@@ -346,9 +361,19 @@ fn a_timer_that_asks_and_expires_is_declined_the_same_way() {
         .unwrap(),
         "set"
     );
-    clock.advance(Duration::from_millis(60));
+    clock.advance_when_parked(
+        Some(clock.origin() + Duration::from_millis(50)),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     let requested = interaction(&rx, &Deadline::after(WAIT));
-    clock.advance(Duration::from_millis(200));
+    clock.advance_when_parked(
+        Some(clock.origin() + Duration::from_millis(150)),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT),
+    );
     let Delivery::Resolved(resolved, _) = Deadline::after(WAIT)
         .recv(&rx)
         .expect("the decline arrives")
