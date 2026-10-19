@@ -21,6 +21,7 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(5);
 const RUN_WITHIN: Duration = Duration::from_secs(10);
 
 use super::run;
+use crate::CliError;
 
 /// A git repository declaring one hook, with Fiber home beside it.
 struct Setup {
@@ -70,7 +71,7 @@ impl Setup {
 }
 
 struct Run {
-    result: Result<(), contract::shapes::Failure>,
+    result: Result<(), CliError>,
     out: String,
     err: String,
 }
@@ -215,8 +216,11 @@ fn no_terminal_and_no_input_refuses_naming_yes_and_records_nothing() {
     let setup = Setup::new();
     let ran = go(&setup, false, false, "");
     let failure = ran.result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("--yes"), "{}", failure.message);
+    assert_eq!(failure.code(), ErrorCode::Usage);
+    let CliError::NobodyToAsk { message } = &failure else {
+        panic!("expected NobodyToAsk, got {failure:?}");
+    };
+    assert!(message.contains("--yes"), "{message}");
     assert_eq!(setup.approvals(), 0);
     assert!(!setup.home().join("pinned").exists());
 }
@@ -262,12 +266,12 @@ fn a_failure_names_the_item_and_leaves_the_earlier_ones_recorded() {
     .unwrap();
     let ran = go(&setup, true, false, "");
     let failure = ran.result.unwrap_err();
-    assert!(
-        failure.message.contains("extension fiber.test/bad"),
-        "{}",
-        failure.message
-    );
-    assert_eq!(failure.code, ErrorCode::NonzeroExit);
+    let CliError::ApproveFailed { kind, name, .. } = &failure else {
+        panic!("expected ApproveFailed, got {failure:?}");
+    };
+    assert_eq!(*kind, "extension");
+    assert_eq!(name, "fiber.test/bad");
+    assert_eq!(failure.code(), ErrorCode::NonzeroExit);
     // The extension before it is recorded; the hook after it is not.
     assert_eq!(setup.approvals(), 1);
     assert!(
@@ -505,12 +509,12 @@ fn a_dependency_failure_keeps_earlier_approvals_and_skips_the_rest() {
         ran.err
     );
     assert!(!ran.err.contains("approved hook"), "{}", ran.err);
-    assert!(
-        failure.message.contains("extension fiber.test/bad"),
-        "{}",
-        failure.message
-    );
-    assert_eq!(failure.code, ErrorCode::ExtensionNotFound);
+    let CliError::ApproveFailed { kind, name, .. } = &failure else {
+        panic!("expected ApproveFailed, got {failure:?}");
+    };
+    assert_eq!(*kind, "extension");
+    assert_eq!(name, "fiber.test/bad");
+    assert_eq!(failure.code(), ErrorCode::ExtensionNotFound);
     assert_eq!(setup.approvals(), 1);
     // Without the failing extension the hook approves.
     fs::write(
@@ -538,12 +542,16 @@ fn the_passed_fiber_version_decides_dependency_compatibility() {
     // the passed 0.2.0 installs it, so the check runs on the argument.
     let refused = go_version(&setup, true, false, "", "0.1.0", deps.origin());
     let failure = refused.result.unwrap_err();
+    let CliError::ApproveFailed { kind, name, .. } = &failure else {
+        panic!("expected ApproveFailed, got {failure:?}");
+    };
+    assert_eq!(*kind, "extension");
+    assert_eq!(name, "fiber.test/root");
     assert!(
-        failure.message.contains("needs Fiber 0.2.0"),
-        "{}",
-        failure.message
+        failure.to_string().contains("needs Fiber 0.2.0"),
+        "{failure}"
     );
-    assert_eq!(failure.code, ErrorCode::ExtensionIncompatible);
+    assert_eq!(failure.code(), ErrorCode::ExtensionIncompatible);
     assert_eq!(setup.approvals(), 0);
     let ran = go_version(&setup, true, false, "", "0.2.0", deps.origin());
     assert!(ran.result.is_ok(), "{:?}", ran.result);

@@ -23,6 +23,10 @@ mod error;
 
 pub use error::{CliError, Refusal};
 
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod approve;
 #[allow(
     clippy::result_large_err,
