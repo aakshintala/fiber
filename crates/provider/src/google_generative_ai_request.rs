@@ -211,9 +211,9 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             endpoint.text_only,
             crate::images::PdfForm::Native,
         );
-        // A result from another model reference goes as plain text. An
-        // orphan keeps the native form ("Google Generative AI wire facts"
-        // in `docs/model-routing.md`).
+        // A result whose call another model reference made goes as
+        // plain text (`docs/model-routing.md`, "Google Generative
+        // AI wire facts"). An orphan keeps today's native rendering.
         if let Some((made, made_model)) = found
             && *made_model != reference
         {
@@ -239,8 +239,11 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             }
             return;
         }
-        // FunctionResponse.response carries `error` for a failed call,
-        // otherwise `output` (googleapis content.proto).
+        // A failed call sends the documented `error` key in place
+        // of `output` (googleapis
+        // `google/ai/generativelanguage/v1beta/content.proto`,
+        // `FunctionResponse.response`: "if the function call failed
+        // to execute, the response can have an \"error\" key").
         let result = if is_error {
             json!({"error": prepared.text})
         } else {
@@ -248,7 +251,9 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         };
         let mut response =
             json!({"name": call.map_or("", |c| c.name.as_str()), "response": result});
-        // Media rides beside the response the model read.
+        // An image rides in `parts`, beside the `response` the
+        // model read, as does a PDF (`docs/model-routing.md`,
+        // "Google Generative AI wire facts").
         if !prepared.images.is_empty() || !prepared.documents.is_empty() {
             let mut parts: Vec<Value> = prepared.images.iter().map(|image| {
                 json!({"inlineData": {"mimeType": image.mime_type, "data": image.data}})

@@ -94,8 +94,7 @@ fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
         } else {
             assert_eq!(
                 body["contents"][0]["parts"][2]["text"],
-                "The tool tool_search returned:
-Loaded: a, b."
+                "The tool tool_search returned:\nLoaded: a, b."
             );
         }
     }

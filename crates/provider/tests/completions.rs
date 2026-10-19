@@ -47,44 +47,42 @@ fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
     let server = ProviderServer::start(vec![completed_reply(), completed_reply()]).unwrap();
     let ep = endpoint(&server);
     let model = ep.reference();
-    {
-        let mut req = request();
-        req.conversation.push(Input::ToolCall {
-            action_id: ActionId("a_1".into()),
-            model: model.clone(),
-            call: ToolCallRequested {
-                name: "tool_search".into(),
-                arguments: json!({"query":"q"}),
-                provider_id: None,
-                repair: None,
-                ran_by: None,
-                provider_item: None,
-            },
-        });
-        req.conversation.push(Input::ToolSearchResult {
-            action_id: ActionId("a_1".into()),
-            loaded: vec!["a".into(), "b".into()],
-        });
+    let mut req = request();
+    req.conversation.push(Input::ToolCall {
+        action_id: ActionId("a_1".into()),
+        model: model.clone(),
+        call: ToolCallRequested {
+            name: "tool_search".into(),
+            arguments: json!({"query":"q"}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        },
+    });
+    req.conversation.push(Input::ToolSearchResult {
+        action_id: ActionId("a_1".into()),
+        loaded: vec!["a".into(), "b".into()],
+    });
 
-        let protocol = Completions::new(ep.clone());
-        run(protocol.call(&req)).0.unwrap();
-        req.conversation[2] = Input::ToolResult {
-            action_id: ActionId("a_1".into()),
-            text: "Loaded: a, b.".into(),
-            is_error: false,
-            images: vec![],
-            pdfs: vec![],
-        };
-        run(protocol.call(&req)).0.unwrap();
-        let requests = server.requests();
-        let pair = &requests[requests.len() - 2..];
-        assert_eq!(pair[0].body, pair[1].body, "{model}");
-        let body: Value = serde_json::from_slice(&pair[0].body).unwrap();
-        assert_eq!(
-            body["messages"][3],
-            json!({"role":"tool", "tool_call_id":"a_1", "content":"Loaded: a, b."})
-        );
-    }
+    let protocol = Completions::new(ep.clone());
+    run(protocol.call(&req)).0.unwrap();
+    req.conversation[2] = Input::ToolResult {
+        action_id: ActionId("a_1".into()),
+        text: "Loaded: a, b.".into(),
+        is_error: false,
+        images: vec![],
+        pdfs: vec![],
+    };
+    run(protocol.call(&req)).0.unwrap();
+    let requests = server.requests();
+    let pair = &requests[requests.len() - 2..];
+    assert_eq!(pair[0].body, pair[1].body);
+    let body: Value = serde_json::from_slice(&pair[0].body).unwrap();
+    assert_eq!(
+        body["messages"][3],
+        json!({"role":"tool", "tool_call_id":"a_1", "content":"Loaded: a, b."})
+    );
 }
 
 fn research(path: &str) -> PathBuf {
