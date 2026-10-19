@@ -278,18 +278,24 @@ fn the_bound_kills_and_exits_at_4_9_seconds_with_no_writer() {
     let until = clock.now() + KILL_AT;
     signals.handle(SIGTERM);
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
+    let mark = clock.advance_when_parked(
+        Some(until),
+        None,
+        KILL_AT.checked_sub(Duration::from_millis(1)).unwrap(),
+        &Deadline::after(DEADLINE),
     );
-    let mark = clock.advance_marked(KILL_AT.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(
         clock.await_parked_since(&mark, Some(until), DEADLINE),
         "short of the bound it waits again"
     );
     assert!(calls.try_recv().is_err(), "nothing killed before the bound");
     assert!(did.try_recv().is_err(), "no exit before the bound");
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(until),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(143));
@@ -306,11 +312,12 @@ fn the_bound_kills_at_4_9_seconds_then_writes_its_line_then_exits() {
     signals.handle(SIGTERM);
     assert_eq!(calls.try_recv().unwrap(), (Did::Signal(-1), String::new()));
     let kill_at = start + KILL_AT;
-    assert!(
-        clock.await_parked(kill_at, DEADLINE),
-        "the bound waits at the kill point"
+    let mark = clock.advance_when_parked(
+        Some(kill_at),
+        None,
+        KILL_AT.checked_sub(Duration::from_millis(1)).unwrap(),
+        &Deadline::after(DEADLINE),
     );
-    let mark = clock.advance_marked(KILL_AT.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(
         clock.await_parked_since(&mark, Some(kill_at), DEADLINE),
         "short of the kill point it waits again"
@@ -319,7 +326,12 @@ fn the_bound_kills_at_4_9_seconds_then_writes_its_line_then_exits() {
         calls.try_recv().is_err(),
         "nothing killed before the kill point"
     );
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(kill_at),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     let ended = Deadline::after(DEADLINE);
     assert_eq!(
         ended.recv(&calls).unwrap(),
@@ -358,28 +370,31 @@ fn a_stalled_bound_line_still_exits_at_5_seconds() {
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(143));
     let kill_at = start_at + KILL_AT;
     let exit_by = start_at + SHUTDOWN_BOUND;
-    assert!(
-        clock.await_parked(kill_at, DEADLINE),
-        "the bound waits at the kill point"
+    clock.advance_when_parked(Some(kill_at), None, KILL_AT, &Deadline::after(DEADLINE));
+    clock.advance_when_parked(
+        Some(kill_at + Duration::from_millis(60)),
+        None,
+        Duration::from_millis(60),
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(KILL_AT);
-    assert!(
-        clock.await_parked(kill_at + Duration::from_millis(60), DEADLINE),
-        "the slow kill waits out its 60 ms from the kill point"
-    );
-    clock.advance(Duration::from_millis(60));
     assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
-    assert!(
-        clock.await_parked(exit_by, DEADLINE),
-        "the end waits for the line until 5 s"
+    let mark = clock.advance_when_parked(
+        Some(exit_by),
+        None,
+        Duration::from_millis(39),
+        &Deadline::after(DEADLINE),
     );
-    let mark = clock.advance_marked(Duration::from_millis(39));
     assert!(
         clock.await_parked_since(&mark, Some(exit_by), DEADLINE),
         "short of 5 s it waits again"
     );
     assert!(did.try_recv().is_err(), "no exit before 5 s");
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(exit_by),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(
         Deadline::after(DEADLINE).recv(&did).unwrap(),
         Did::Exit(143)
@@ -426,11 +441,7 @@ fn a_started_shutdown_has_the_same_bound() {
     let until = clock.now() + KILL_AT;
     signals.handle(SIGHUP);
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(129));
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(129));
@@ -479,11 +490,7 @@ fn a_lifeline_eof_after_start_takes_the_sighup_path() {
         Did::Signal(129),
         "EOF after start shuts down with the hangup code"
     );
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(129));
@@ -520,11 +527,7 @@ fn a_blocked_lifeline_triggers_nothing_until_released() {
         Did::Signal(129),
         "EOF after the block shuts down with the hangup code"
     );
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(129));
@@ -664,11 +667,7 @@ fn close_now_once_started_shuts_down_with_code_0_and_the_bound_exits_0() {
     let until = clock.now() + KILL_AT;
     signals.close_now();
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(0));
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(0));
@@ -690,11 +689,7 @@ fn a_second_close_now_does_nothing_and_a_later_term_kills_the_groups() {
     assert!(calls.try_recv().is_err(), "a later SIGHUP does nothing");
     signals.handle(SIGTERM);
     assert_eq!(calls.try_recv().unwrap(), Did::Second);
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(0));
@@ -714,11 +709,7 @@ fn close_now_after_a_signal_keeps_the_signal_and_its_code() {
     signals.close_now();
     assert!(calls.try_recv().is_err(), "close_now keeps the signal");
     let until = clock.now() + KILL_AT;
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(143));
@@ -753,11 +744,7 @@ fn after_attach_the_bound_line_names_the_session_and_the_early_line_the_pid() {
     signals.handle(SIGTERM);
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
     let until = clock.now() + KILL_AT;
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), 143);
     let text =
         std::fs::read_to_string(home.join("logs").join("ask-s_0123456789abcdef.log")).unwrap();
@@ -794,11 +781,7 @@ fn after_attach_the_bound_line_names_the_session_and_the_early_line_the_pid() {
     signals.close_now();
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(0));
     let until = clock.now() + KILL_AT;
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), 0);
     let text = std::fs::read_to_string(
         home.join("logs")
@@ -943,11 +926,7 @@ fn a_signal_between_start_and_commit_is_recorded_and_nothing_is_written() {
     assert_eq!(commit, Err(143));
     assert!(!wrote, "nothing is written once a signal was recorded");
     assert_eq!(signals.recorded(), Some(143));
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(143));
@@ -974,11 +953,7 @@ fn a_close_now_between_start_and_commit_is_recorded_with_code_0() {
     assert_eq!(commit, Err(0));
     assert!(!wrote, "nothing is written once a close was recorded");
     assert_eq!(signals.recorded(), Some(0));
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(0));
@@ -1016,11 +991,7 @@ fn a_signal_during_commit_is_handled_once_the_write_returns() {
         "the deferred signal shuts down exactly once"
     );
     assert_eq!(signals.recorded(), None);
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound counts from the in-write signal"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(143));
@@ -1052,11 +1023,7 @@ fn a_close_now_during_commit_shuts_down_with_code_0_after_the_write() {
         "the deferred close shuts down exactly once"
     );
     assert_eq!(signals.recorded(), None);
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound counts from the in-write close"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(0));
@@ -1083,11 +1050,7 @@ fn close_now_after_a_signal_while_armed_does_nothing() {
         calls.try_recv().is_err(),
         "the recorded close runs no second on_record"
     );
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound waits on the clock"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(143));
@@ -1126,11 +1089,7 @@ fn close_now_after_a_signal_while_committing_does_nothing() {
         calls.try_recv().is_err(),
         "the deferred signal shuts down exactly once"
     );
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the bound counts from the in-write signal"
-    );
-    clock.advance(KILL_AT);
+    clock.advance_when_parked(Some(until), None, KILL_AT, &Deadline::after(DEADLINE));
     let ended = Deadline::after(DEADLINE);
     assert_eq!(ended.recv(&calls).unwrap(), Did::Bound);
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(143));
