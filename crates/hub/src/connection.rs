@@ -12,12 +12,14 @@
 //! opens with `hub_hello`, before any acknowledgement.
 
 use std::collections::HashMap;
-use std::io::{BufReader, Write};
+use std::io::BufReader;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -1030,13 +1032,9 @@ pub(crate) fn send(
     kind: &str,
     payload: Map<String, Value>,
 ) {
-    let mut bytes = line(hub, kind, payload);
-    bytes.push(b'\n');
+    let bytes = line(hub, kind, payload);
     let mut writer = lock(writer);
-    writer
-        .write_all(&bytes)
-        .and_then(|()| writer.flush())
-        .unwrap_or(());
+    support::framing::write_line(&mut *writer, &bytes).unwrap_or(());
 }
 
 /// Serialises one hub line, without its trailing newline: the port sends
