@@ -10,7 +10,6 @@
 //! later remove or stop still frees a writer whose overflow shutdown has
 //! not run yet.
 
-use std::io::Write;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 #[cfg(test)]
@@ -52,7 +51,14 @@ pub(crate) fn spawn_writer(
         .spawn(move || {
             for line in rx {
                 let mut out = support::lock(&writer);
-                if out.write_all(&line).and_then(|()| out.flush()).is_err() {
+                // Queued lines carry their line feed; the writer takes the line.
+                // An empty queue item sends nothing: the snapshot of an empty
+                // feed holds no line, and a zero-byte write sends none.
+                let stripped: &[u8] = line.strip_suffix(b"\n").unwrap_or(&line);
+                if stripped.is_empty() {
+                    continue;
+                }
+                if support::framing::write_line(&mut *out, stripped).is_err() {
                     return;
                 }
             }

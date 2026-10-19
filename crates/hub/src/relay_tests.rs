@@ -9,6 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::io::BufRead;
 use std::os::unix::net::UnixStream;
 
 use serde_json::{Value, json};
