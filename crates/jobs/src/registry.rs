@@ -2,9 +2,7 @@
 //! (`docs/tools.md`, "Background jobs").
 
 use std::collections::VecDeque;
-use std::collections::hash_map::RandomState;
 use std::fs::File;
-use std::hash::BuildHasher;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -576,7 +574,7 @@ fn timed_out(clock: &dyn Clock, until: Option<Instant>) -> bool {
 /// `j_` and 16 lowercase hex digits, drawn once. 64 bits, the same scheme
 /// as the loop's ids.
 fn mint_id() -> String {
-    format!("j_{:016x}", RandomState::new().hash_one(()))
+    support::mint("j_")
 }
 
 /// Mints the id before spawning, so the launch and the record name the
