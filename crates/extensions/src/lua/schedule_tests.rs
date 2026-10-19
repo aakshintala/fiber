@@ -2567,3 +2567,86 @@ fn unsent_from_vec_keeps_its_deliveries_until_drop() {
         "dropping the Unsent drops its deliveries"
     );
 }
+
+/// A delegate starter for the `||` gate: never started in these tests.
+struct LiveDelegate;
+
+impl contract::extension::HostDelegate for LiveDelegate {
+    fn start(
+        &self,
+        _extension: &str,
+        _arguments: &serde_json::Map<String, serde_json::Value>,
+        _bind: &mut dyn FnMut(&contract::JobId),
+    ) -> Result<contract::JobId, contract::shapes::Failure> {
+        unreachable!("no start runs in these tests");
+    }
+
+    fn retain(&self, _loaded: &[String]) -> usize {
+        0
+    }
+
+    fn cancel(&self, _jobs: &[contract::JobId]) -> usize {
+        0
+    }
+}
+
+/// The delegate starter answers only while live: a drop alone and a seal
+/// alone each silence it, even for a service present under that single
+/// flag. With the `||` flipped to `&&`, either alone would wrongly still
+/// answer. The drop clears the service, so it is reinstalled directly
+/// (`set_delegate` refuses after a drop) to isolate the gate; the seal
+/// leaves `set_delegate` open, so a late service takes the public path.
+#[test]
+fn delegate_answers_only_while_live() {
+    let service: Arc<dyn contract::extension::HostDelegate> = Arc::new(LiveDelegate);
+    let live = Hub::new(fakes::clock::FakeClock::new());
+    live.set_delegate(Arc::clone(&service));
+    assert!(live.delegate().is_some(), "live answers");
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    hub.set_delegate(Arc::clone(&service));
+    hub.dispose("ext");
+    hub.lock().router.delegate = Some(Arc::clone(&service));
+    assert!(
+        hub.delegate().is_none(),
+        "nothing starts after the drop alone"
+    );
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    hub.seal();
+    hub.set_delegate(Arc::clone(&service));
+    assert!(
+        hub.delegate().is_none(),
+        "nothing starts after the seal alone"
+    );
+    assert!(
+        Hub::new(fakes::clock::FakeClock::new())
+            .delegate()
+            .is_none(),
+        "nothing starts before delegate_to"
+    );
+}
+
+/// `bind_delegate` records its id, so a later abandon cancels it: with the
+/// body replaced by `()` the binding stays missing and the abandon cancels
+/// nothing.
+#[test]
+fn bind_delegate_records_its_id_for_a_later_abandon() {
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    let (fake, _arrived_rx, _answer_tx) = watch_delegates(&hub);
+    hub.lock().delegates.clear();
+    let id = contract::JobId("j_bind".to_owned());
+    hub.bind_delegate(id.clone(), 7);
+    assert_eq!(
+        hub.lock().delegates.get(&id),
+        Some(&7),
+        "bind records its id"
+    );
+    let unsent = {
+        let mut shared = hub.lock();
+        shared.abandon(StopReason::Abandoned {
+            extension: "ext".to_owned(),
+            callback: "hook".to_owned(),
+        })
+    };
+    drop(unsent);
+    assert_cancelled_free(&fake, &["j_bind"]);
+}
