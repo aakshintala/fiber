@@ -809,9 +809,14 @@ fn a_resumed_job_opens_from_its_row_again() {
     let lowered = commands(app.items_due(clock.now()));
     ack_all(&mut app, &lowered);
     complete(&mut app, "j_1");
-    // Completed: the row opens nothing.
-    assert_eq!(app.open_serial(serial), Effect::None);
-    // The same job id runs again: the row is clickable and opens.
+    // Completed: the row replays the finished run.
+    let finished = open_serial_of(&mut app, serial);
+    assert_eq!(subscribes(&finished).len(), 1);
+    ack_all(&mut app, &finished);
+    assert!(app.item_open());
+    app.close_item();
+    // The same job id runs again: the row is clickable and opens, and
+    // the replay's held `full` lowers and raises again.
     start_delegate(&mut app, "j_1", DELEGATE_A);
     let resumed = match app.open_serial(serial) {
         Effect::Send(lines) => commands(lines),
@@ -827,8 +832,16 @@ fn a_resumed_job_opens_from_its_row_again() {
         | Effect::OpenFile(_)
         | Effect::ReadImage(_) => panic!("resuming opens"),
     };
-    assert_eq!(subscribes(&resumed).len(), 1);
-    assert_eq!(resumed[0]["args"]["level"], "full");
+    let resumed_subscribes = subscribes(&resumed);
+    let levels: Vec<&str> = resumed_subscribes
+        .iter()
+        .map(|line| {
+            line["args"]["level"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a level"))
+        })
+        .collect();
+    assert_eq!(levels, ["summary", "full"]);
     let view = app.item_view().unwrap_or_else(|| panic!("a view"));
     assert!(view.running);
 }
@@ -957,6 +970,59 @@ fn a_resume_while_open_rewants_full_without_a_second_subscribe() {
     // held level already answers the new run.
     ack_all(&mut app, &out);
     assert!(commands(app.items_due(clock.now())).is_empty());
+}
+
+#[test]
+fn closing_a_finished_view_before_its_ack_sends_nothing_further() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    complete(&mut app, "j_1");
+    let out = open(&mut app, "j_1");
+    let id = subscribes(&out)
+        .into_iter()
+        .next()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("an id"));
+    // Closing with the replay subscribe in flight sends nothing: a
+    // finished view leaves no `summary` wish behind.
+    assert_eq!(app.close_item(), None);
+    assert!(!app.item_open());
+    assert!(commands(app.items_due(clock.now())).is_empty());
+    // The late answer settles without touching the closed view.
+    app.on_line(session_accepted(DELEGATE_A, &id));
+    assert!(!app.item_open());
+    assert!(commands(app.items_due(clock.now())).is_empty());
+}
+
+#[test]
+fn opening_a_finished_delegate_with_the_link_down_holds_its_wish() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    complete(&mut app, "j_1");
+    app.disconnected();
+    // The open swaps in and holds its wish; nothing goes out.
+    assert!(open(&mut app, "j_1").is_empty());
+    assert!(app.item_open());
+    assert!(
+        app.items
+            .wants
+            .contains_key(&SessionId(DELEGATE_A.to_owned())),
+        "the down link holds the wish"
+    );
+    // The reconciler drops the wish on a down link, as today.
+    assert!(commands(app.items_due(clock.now())).is_empty());
+    assert!(
+        !app.items
+            .wants
+            .contains_key(&SessionId(DELEGATE_A.to_owned())),
+        "the down link drops the wish"
+    );
 }
 
 #[test]
