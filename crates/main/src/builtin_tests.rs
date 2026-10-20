@@ -789,12 +789,7 @@ fn every_builtin_fits_the_strict_shape_unless_its_section_says_strict_false() {
         walked.push(definition.name);
     }
     walked.sort();
-    // `contract::tool::BUILT_IN_TOOLS` is frozen, so the fork the session
-    // registers beside spawn is listed here.
-    let mut listed = contract::tool::BUILT_IN_TOOLS.to_vec();
-    listed.push("delegate_fork");
-    listed.sort();
-    assert_eq!(walked, listed);
+    assert_eq!(walked, contract::tool::BUILT_IN_TOOLS);
 }
 
 /// The names an extension must list in `replaces` are exactly the names
@@ -808,14 +803,10 @@ fn built_in_tools_is_every_name_builtin_registers() {
         names.sort();
         names
     };
-    // `contract::tool::BUILT_IN_TOOLS` is frozen, so the fork the session
-    // registers beside spawn is listed here.
-    let mut listed: Vec<String> = contract::tool::BUILT_IN_TOOLS
+    let listed: Vec<String> = contract::tool::BUILT_IN_TOOLS
         .iter()
         .map(|name| (*name).to_owned())
         .collect();
-    listed.push("delegate_fork".to_owned());
-    listed.sort();
     assert_eq!(names(Some("web_search_20250305")), listed);
     let mut without = names(None);
     without.push("web_search".to_owned());

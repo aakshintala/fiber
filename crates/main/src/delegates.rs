@@ -705,15 +705,15 @@ fn read_fork_point(
     // `tool_call_requested` or from the log's latest message.
     let calling = match action {
         Some(action) => {
-            let call = lines
+            let call_seq = lines
                 .iter()
-                .find(|line| {
-                    line.kind == "tool_call_requested"
-                        && line.action_id.as_ref() == Some(action)
-                        && line.seq.is_some()
+                .filter(|line| {
+                    line.kind == "tool_call_requested" && line.action_id.as_ref() == Some(action)
                 })
+                .filter_map(|line| line.seq)
+                .max()
+                .map(|seq| seq.0)
                 .ok_or_else(|| unreadable("no `tool_call_requested` for the call".to_owned()))?;
-            let call_seq = call.seq.map(|seq| seq.0).unwrap_or(u64::MAX);
             lines
                 .iter()
                 .filter(|line| {
@@ -731,7 +731,10 @@ fn read_fork_point(
             .max_by_key(|line| line.seq.map(|seq| seq.0))
             .ok_or_else(|| unreadable("no `assistant_message_started`".to_owned()))?,
     };
-    let point = calling.seq.map(|seq| seq.0).unwrap_or(0).saturating_sub(1);
+    let point = calling
+        .seq
+        .map(|seq| seq.0.saturating_sub(1))
+        .ok_or_else(|| unreadable("no `assistant_message_started` before the call".to_owned()))?;
     // The calling message's own usage, written with the message's action
     // before the message completes, so it is on disk when the call runs.
     let model = lines

@@ -4229,7 +4229,7 @@ fn a_fork_child_of_a_worktree_parent_holds_the_shared_lock() {
     );
 }
 
-/// Answers a three-level tree on one provider server: `spawn` answers
+/// Answers a session tree on one provider server: `spawn` answers
 /// the root's first request, `reviewer` every reviewer request,
 /// `delegate_first` the depth-1 delegate's first request (named by the
 /// spawn prompt that started it), `forked` the depth-2 fork's first
@@ -4264,53 +4264,6 @@ fn tree_answering(
             return delegate_first.clone();
         }
         spawn.clone()
-    }
-}
-
-/// Whether a provider request body carries the `delegate_fork` tool. The
-/// fork keeps the tool declared, so its requests carry it too; the
-/// reviewer sends an empty tools array.
-fn carries_fork(body: &Value) -> bool {
-    body["tools"]
-        .as_array()
-        .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "delegate_fork"))
-}
-
-/// Answers one session's and its fork's requests on one provider server:
-/// `first` answers the parent's first request, `reviewer` every reviewer
-/// request (it sends an empty tools array), `forked` the fork's first
-/// request, and `rest` every request carrying a fork receipt. The fork's
-/// requests carry the `delegate_fork` tool like the parent's, so the
-/// fork-task text (`fork_task`, "you are a fork of session") marks
-/// them; the receipt text marks a request after a call.
-fn fork_answering(
-    first: Response,
-    reviewer: Response,
-    forked: Response,
-    rest: Response,
-) -> impl Fn(&Request) -> Response + Send + Sync + 'static {
-    // The fork's first request is its only one without a call behind
-    // it: a refused `delegate_fork` completes as failed with no receipt
-    // text, so only the first fork request takes `forked`.
-    let forked_taken = Arc::new(AtomicBool::new(false));
-    move |request: &Request| {
-        let text = String::from_utf8_lossy(&request.body);
-        // The reviewer sends an empty tools array, like the depth test's
-        // router: only a session request carries tools.
-        if !text.contains("\"tools\":[") || text.contains("\"tools\":[]") {
-            return reviewer.clone();
-        }
-        if text.contains("Started delegate") {
-            return rest.clone();
-        }
-        if text.contains("you are a fork of session") && !forked_taken.swap(true, Ordering::SeqCst)
-        {
-            return forked.clone();
-        }
-        if text.contains("you are a fork of session") {
-            return rest.clone();
-        }
-        first.clone()
     }
 }
 
@@ -4375,13 +4328,66 @@ fn fork_call_request(server: &ProviderServer, prompt: &str) -> Value {
         .iter()
         .map(|request| serde_json::from_slice::<Value>(&request.body).unwrap())
         .find(|body| {
-            carries_fork(body)
+            // The fork keeps the tool declared, so its requests carry
+            // it too; the reviewer sends an empty tools array.
+            let declares_fork = body["tools"]
+                .as_array()
+                .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "delegate_fork"));
+            declares_fork
                 && body.to_string().contains(prompt)
                 && !body.to_string().contains("Started delegate")
                 && !body.to_string().contains("you are a fork of session")
         })
         .expect("the parent asked for the fork")
 }
+
+/// The fork continues its parent's request: its first request matches the
+/// parent's last request up to the new content, keyed on the chain's root
+/// with the parent's thinking level. It hands the two inputs back for the
+/// fork-task checks below.
+fn assert_continues<'a>(
+    parent_body: &'a Value,
+    fork_body: &'a Value,
+    key: &str,
+) -> (&'a Vec<Value>, &'a Vec<Value>) {
+    let parent_input = parent_body["input"].as_array().unwrap();
+    let fork_input = fork_body["input"].as_array().unwrap();
+    assert!(
+        fork_input.len() > parent_input.len(),
+        "the fork's request adds its first-turn items and fork-task"
+    );
+    for (position, item) in parent_input.iter().enumerate() {
+        assert_eq!(
+            serde_json::to_string(&fork_input[position]).unwrap(),
+            serde_json::to_string(item).unwrap(),
+            "the inherited prefix is byte-identical at item {position}"
+        );
+    }
+    let mut prefix_only = fork_body.clone();
+    prefix_only["input"] = Value::Array(parent_input.clone());
+    assert_eq!(prefix_only, *parent_body);
+    assert_eq!(fork_body["prompt_cache_key"], json!(key));
+    assert_eq!(fork_body["reasoning"], json!({"effort": "low"}));
+    (parent_input, fork_input)
+}
+
+/// The fork's durable kinds, in order, pinned from a real run: one reply
+/// completing, then the turn ends. The fork sends the logged preamble
+/// verbatim, so its log holds no `preamble_built` and no
+/// `opening_message`, unlike a spawned delegate's.
+const FORK_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
 
 /// A parent's `delegate_fork` call starts a fork of its calling turn: the
 /// fork's `session_started` carries `forked_from` with the parent and the
@@ -4394,9 +4400,11 @@ fn fork_call_request(server: &ProviderServer, prompt: &str) -> Value {
 fn a_delegate_fork_starts_a_fork_of_the_calling_turn() {
     let setup = support::Setup::new();
     let _guard = arm(&setup);
-    let server = ProviderServer::start_responding(fork_answering(
+    let server = ProviderServer::start_responding(tree_answering(
         support::stream(&[fork_call("say hello")]),
         text_reply("allow"),
+        // No `run the fork` prompt at depth 0, so this never answers.
+        support::hello(),
         support::hello(),
         support::hello(),
     ))
@@ -4447,28 +4455,14 @@ fn a_delegate_fork_starts_a_fork_of_the_calling_turn() {
             "no {kind} in the fork's log"
         );
     }
+    // The fork's log holds one completed turn and nothing else, in
+    // order: a missing, duplicated or reordered event fails here.
+    assert_eq!(durable_kinds(&fork_lines), FORK_DURABLE);
     // The fork's first request matches the parent's last request up to
     // the new content: preamble, model, thinking level and cache key.
     let parent_body = fork_call_request(&server, "scan the tree");
     let fork_body = fork_first(&server);
-    let parent_input = parent_body["input"].as_array().unwrap();
-    let fork_input = fork_body["input"].as_array().unwrap();
-    assert!(
-        fork_input.len() > parent_input.len(),
-        "the fork's request adds its first-turn items and fork-task"
-    );
-    for (position, item) in parent_input.iter().enumerate() {
-        assert_eq!(
-            serde_json::to_string(&fork_input[position]).unwrap(),
-            serde_json::to_string(item).unwrap(),
-            "the inherited prefix is byte-identical at item {position}"
-        );
-    }
-    let mut prefix_only = fork_body.clone();
-    prefix_only["input"] = Value::Array(parent_input.clone());
-    assert_eq!(prefix_only, parent_body);
-    assert_eq!(fork_body["prompt_cache_key"], json!(parent_id));
-    assert_eq!(fork_body["reasoning"], json!({"effort": "low"}));
+    let (parent_input, fork_input) = assert_continues(&parent_body, &fork_body, parent_id);
     // The new content ends with the call's `fork-task` as the first user
     // message, carrying the call's prompt.
     let new_content = &fork_input[parent_input.len()..];
@@ -4539,21 +4533,7 @@ fn a_depth_one_delegates_fork_starts_depth_two_on_the_root_key() {
     // (`docs/prompt-cache.md`, "Cache markers and keys").
     let parent_body = fork_call_request(&server, "run the fork");
     let fork_body = fork_first(&server);
-    let parent_input = parent_body["input"].as_array().unwrap();
-    let fork_input = fork_body["input"].as_array().unwrap();
-    assert!(fork_input.len() > parent_input.len());
-    for (position, item) in parent_input.iter().enumerate() {
-        assert_eq!(
-            serde_json::to_string(&fork_input[position]).unwrap(),
-            serde_json::to_string(item).unwrap(),
-            "the inherited prefix is byte-identical at item {position}"
-        );
-    }
-    let mut prefix_only = fork_body.clone();
-    prefix_only["input"] = Value::Array(parent_input.clone());
-    assert_eq!(prefix_only, parent_body);
-    assert_eq!(fork_body["prompt_cache_key"], json!(id));
-    assert_eq!(fork_body["reasoning"], json!({"effort": "low"}));
+    let (_, fork_input) = assert_continues(&parent_body, &fork_body, id);
     // The `fork-task` names the delegate depth the fork runs at.
     let task = fork_input.last().unwrap();
     let text = task["content"].as_str().unwrap().to_owned();
