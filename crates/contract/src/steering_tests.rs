@@ -236,10 +236,13 @@ fn a_drop_released_while_the_push_is_held_still_lands_empty_last() {
         // Structural, no scheduling: the append fired inside the push's
         // section, so the lock must still be held — the test thread
         // observes the mutex directly instead of asking the drop thread
-        // to prove blockedness. Under the old emit-after-unlock shape
+        // to prove blockedness. `tests` is a child module of `steering`
+        // (`#[path]`), so it reads the private `inner` field with no
+        // production-visible seam; `try_lock` never blocks and bypasses
+        // the armed one-shot gate. Under the old emit-after-unlock shape
         // the append fires after the release and this fails.
         assert!(
-            queued.is_locked_for_test(),
+            queued.inner.try_lock().is_err(),
             "the push holds the queue lock across its emit"
         );
         // The drop reaches the acquisition path only after the push is

@@ -113,16 +113,6 @@ impl Queue {
         *lock(&self.entry_gate) = Some(gate);
     }
 
-    /// Whether the queue lock is held right now, bypassing the test gate:
-    /// the race test calls this after the push's append fired to prove
-    /// the push still holds the lock across its emit. Never blocks.
-    /// `try_lock` skips `acquire` on purpose so the armed one-shot gate
-    /// stays in place for the drop thread.
-    #[cfg(any(test, feature = "test-gates"))]
-    pub fn is_locked_for_test(&self) -> bool {
-        self.inner.try_lock().is_err()
-    }
-
     /// The queue lock, pausing at the test's gate first when armed. The
     /// gate's own lock is released before blocking, so it takes no lock
     /// into the wait.
