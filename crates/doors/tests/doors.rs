@@ -232,6 +232,144 @@ fn project_ignores_a_hostile_git_environment() {
     );
 }
 
+/// The real `git` on the parent's `PATH`: the stub below execs it after
+/// logging the invocation discovery made.
+fn real_git_on_path() -> PathBuf {
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        let candidate = dir.join("git");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    panic!("git is not on PATH");
+}
+
+#[test]
+fn discovery_runs_git_with_the_scrubbed_environment() {
+    if std::env::var("FIBER_DOORS_SCRUB_CHILD").is_ok() {
+        fakes::within("the child's scrub checks", CHILD_BUDGET, || {
+            let repo = PathBuf::from(std::env::var("FIBER_DOORS_SCRUB_REPO").unwrap());
+            let resolved = resolve_project(&repo);
+            let common = fs::canonicalize(repo.join(".git")).unwrap();
+            assert_eq!(resolved.path, common);
+            assert!(resolved.in_repository);
+        });
+        return;
+    }
+    fakes::within(
+        "discovery_runs_git_with_the_scrubbed_environment",
+        RERUN_OUTER,
+        || {
+            let temp = Temp::new();
+            let repo = temp.0.join("repo");
+            fs::create_dir_all(&repo).unwrap();
+            assert!(
+                Command::new("git")
+                    .arg("init")
+                    .arg("-q")
+                    .arg(&repo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let decoy = temp.0.join("decoy");
+            fs::create_dir_all(&decoy).unwrap();
+            assert!(
+                Command::new("git")
+                    .arg("init")
+                    .arg("-q")
+                    .arg(&decoy)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            // An executable `git` that logs every discovery invocation's
+            // argv and watched environment, then runs the real git: the
+            // log pins the scrub set discovery invoked it with.
+            let bin = temp.0.join("stub-bin");
+            fs::create_dir_all(&bin).unwrap();
+            fs::write(
+                bin.join("git"),
+                r#"#!/bin/sh
+{
+printf 'argv:'
+for arg in "$@"; do printf ' %s' "$arg"; done
+printf '\n'
+for name in GIT_OPTIONAL_LOCKS GIT_TERMINAL_PROMPT GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE; do
+ eval "present=\${$name+x}"
+ if [ -n "$present" ]; then eval "printf '%s=%s\n' \"$name\" \"\$$name\""; fi
+done
+} >> "$FIBER_DOORS_SCRUB_LOG"
+exec "$FIBER_DOORS_SCRUB_REAL_GIT" "$@"
+"#,
+            )
+            .unwrap();
+            let stub = bin.join("git");
+            fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+            let real = real_git_on_path();
+            let log = temp.0.join("git.log");
+            let path = format!(
+                "{}:{}",
+                bin.to_str().unwrap(),
+                std::env::var("PATH").unwrap_or_default()
+            );
+            let repo_str = repo.to_str().unwrap().to_owned();
+            let log_str = log.to_str().unwrap().to_owned();
+            let real_str = real.to_str().unwrap().to_owned();
+            let decoy_git_str = decoy.join(".git").to_str().unwrap().to_owned();
+            let decoy_str = decoy.to_str().unwrap().to_owned();
+            let out = fakes::rerun_prepared(
+                "discovery_runs_git_with_the_scrubbed_environment",
+                &[
+                    ("FIBER_DOORS_SCRUB_CHILD", "1"),
+                    ("FIBER_DOORS_SCRUB_REPO", repo_str.as_str()),
+                    ("FIBER_DOORS_SCRUB_LOG", log_str.as_str()),
+                    ("FIBER_DOORS_SCRUB_REAL_GIT", real_str.as_str()),
+                    ("PATH", path.as_str()),
+                    ("GIT_DIR", decoy_git_str.as_str()),
+                    ("GIT_WORK_TREE", decoy_str.as_str()),
+                    ("GIT_OPTIONAL_LOCKS", "9"),
+                    ("GIT_TERMINAL_PROMPT", "ask"),
+                ],
+                RERUN_WITHIN,
+                |_| {},
+            );
+            assert!(
+                out.status.success(),
+                "discovery must judge the workspace repository:\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+            let logged = fs::read_to_string(&log).unwrap();
+            let lines: Vec<&str> = logged.lines().collect();
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("-c core.fsmonitor=false")),
+                "discovery runs git with fsmonitor off:\n{logged}"
+            );
+            assert!(
+                lines.iter().any(|line| *line == "GIT_OPTIONAL_LOCKS=0"),
+                "discovery pins the lock guard:\n{logged}"
+            );
+            assert!(
+                lines.iter().any(|line| *line == "GIT_TERMINAL_PROMPT=0"),
+                "discovery pins the prompt guard:\n{logged}"
+            );
+            for name in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_COMMON_DIR",
+                "GIT_INDEX_FILE",
+            ] {
+                assert!(
+                    !lines.iter().any(|line| line.starts_with(name)),
+                    "discovery removes {name}:\n{logged}"
+                );
+            }
+        },
+    );
+}
+
 #[test]
 fn the_project_is_gits_shared_directory_or_the_launch_directory() {
     let temp = Temp::new();
