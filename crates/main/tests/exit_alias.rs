@@ -17,10 +17,11 @@ use support::hello;
 use support::pty::Grid;
 
 /// Installs the fake provider and spawns the terminal at 160 by 32.
-/// 160 columns keep the conversation's 84-column minimum beside the
-/// rail and the panel (layout::split sheds the rail at 120), so the
-/// rail's WORKING card is drawn while attached and the working half can
-/// gate on it. The hub exits a second after its last client leaves, so
+/// The layout panel is always wanted (Chrome default), so the rail
+/// sheds at 120 in every attached frame and the WORKING card the
+/// working half gates on never renders there; 160 columns fit rail
+/// (24) + panel (34) + the 84-column conversation minimum, so the rail
+/// draws. The hub exits a second after its last client leaves, so
 /// `wait` never outlasts the test's deadline.
 fn terminal(setup: &support::Setup, server: &ProviderServer) -> support::pty::Run {
     setup.provider(server);
