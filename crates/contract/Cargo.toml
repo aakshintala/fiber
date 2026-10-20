@@ -11,5 +11,9 @@ support = { path = "../support" }
 serde_json.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+# The race test's bounded receives (`docs/testing.md`, "Waits and timeouts").
+fakes = { path = "../fakes" }
+
 [lints]
 workspace = true
