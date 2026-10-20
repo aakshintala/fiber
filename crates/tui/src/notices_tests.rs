@@ -925,6 +925,34 @@ fn an_open_single_notice_past_the_cap_is_born() {
 }
 
 #[test]
+fn an_open_single_notice_on_a_held_notice_gains_no_birth() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    notices.push("io_failed", "shown".to_owned());
+    notices.hold();
+    notices.push("io_failed", "held".to_owned());
+    // The open single notice names the held row: the sweep must not
+    // birth what it does not show, however the guard reads.
+    notices.open(1);
+    notices.sweep(t0);
+    notices.close();
+    // Past the fade the born row expires, while the held row — never
+    // born — stands waiting for the release with a fresh life.
+    notices.sweep(at(t0, 10_000));
+    notices.release();
+    assert_eq!(texts(&notices.lines()), ["held"]);
+    // Still unborn, it contributes no wake; the first sweep showing
+    // it births it, ten seconds to its own fade.
+    assert_eq!(notices.notices_wake(), None);
+    notices.sweep(at(t0, 10_000));
+    assert_eq!(notices.notices_wake(), Some(at(t0, 20_000)));
+    notices.sweep(at(t0, 19_999));
+    assert_eq!(texts(&notices.lines()), ["held"]);
+    notices.sweep(at(t0, 20_000));
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
 fn an_open_single_notice_pauses_only_its_row() {
     let t0 = fakes::clock::FakeClock::new().now();
     let mut notices = stack("io_failed", &["one", "two"]);

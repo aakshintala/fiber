@@ -220,9 +220,7 @@ impl Notices {
         let mut ids: Vec<usize> = self.shown().take(SHOWN).map(|notice| notice.id).collect();
         match self.overlay {
             Some(Overlay::All) => ids.extend(self.shown().skip(SHOWN).map(|notice| notice.id)),
-            Some(Overlay::One(id))
-                if self.shown().any(|notice| notice.id == id) && !ids.contains(&id) =>
-            {
+            Some(Overlay::One(id)) if self.shown().any(|notice| notice.id == id) => {
                 ids.push(id);
             }
             Some(Overlay::One(_)) | None => {}
