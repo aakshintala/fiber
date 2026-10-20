@@ -1408,6 +1408,158 @@ fn drain_by_chunk<T>(
     }
 }
 
+/// Pumps folds until the hub parks at `history`: each fold signal
+/// renews the no-progress window and sends one release, so a slow
+/// machine folds every chunk within the window; the hub's park ends the
+/// pump, so the window never covers the held `history` answer. The
+/// park's ping wakes the pump, and a park that lands as the window
+/// expires still ends it through the recheck.
+fn pump_until_parked(
+    window: Duration,
+    reached: &mpsc::Receiver<()>,
+    release: &mpsc::Sender<()>,
+    parked: &mpsc::Receiver<()>,
+) -> Result<(), String> {
+    loop {
+        if parked.try_recv().is_ok() {
+            return Ok(());
+        }
+        // One fresh window per signal through the shared deadline
+        // type: each fold renews the no-progress bound.
+        match Deadline::after(window).recv(reached) {
+            Ok(()) => {
+                release.send(()).unwrap_or(());
+            }
+            Err(_) => {
+                if parked.try_recv().is_ok() {
+                    return Ok(());
+                }
+                return Err(format!("no fold nor park for {window:?}"));
+            }
+        }
+    }
+}
+
+/// Unpacks a waited run thread return: the value, or a panic naming the
+/// run thread's state and each helper thread's last step, so the next
+/// sighting shows which stall candidate happened.
+#[track_caller]
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+fn unpack_wait<T>(
+    waited: Result<T, String>,
+    prefix: String,
+    finished: &mpsc::Receiver<(i32, Loop<TestBackend>)>,
+    hub_progress: &Mutex<HubProgress>,
+    hub_done: &mpsc::Receiver<()>,
+    reader_done: &mpsc::Receiver<()>,
+) -> T {
+    match waited {
+        Ok(done) => done,
+        Err(err) => {
+            let prefix = format!("{prefix}: {err}");
+            match finished.try_recv() {
+                Ok(_) => panic!("{prefix}\nrun thread finished after the drain gave up"),
+                Err(finished_state) => panic!(
+                    "{prefix}\n{}",
+                    stall_report(
+                        &finished_state,
+                        &hub_progress
+                            .lock()
+                            .map(|held| held.clone())
+                            .unwrap_or_default(),
+                        &hub_done.try_recv(),
+                        &reader_done.try_recv(),
+                    ),
+                ),
+            }
+        }
+    }
+}
+
+#[test]
+fn the_park_ends_the_pump_without_a_fold() {
+    let (_reached_tx, reached) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let (parked_tx, parked) = mpsc::channel();
+    parked_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("park: {err}"));
+    drop(parked_tx);
+    pump_until_parked(DRAIN, &reached, &release_tx, &parked).unwrap_or_else(|err| panic!("{err}"));
+    assert!(release.try_recv().is_err(), "no fold was released");
+}
+
+#[test]
+fn a_fold_before_the_park_is_released_then_the_pump_ends() {
+    let (reached_tx, reached) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let (parked_tx, parked) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("pump-park".to_owned())
+        .spawn(move || {
+            let pumped = pump_until_parked(DRAIN, &reached, &release_tx, &parked);
+            done_tx.send(pumped).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // A fold, as the loop waits in its answer: the pump releases it.
+    reached_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("fold: {err}"));
+    Deadline::after(DRAIN).recv_or_fail(&release, "the pump to release the fold");
+    // The park with its ping, as the hub sends them: the pump ends.
+    parked_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("park: {err}"));
+    reached_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("ping: {err}"));
+    Deadline::after(DRAIN)
+        .recv_or_fail(&done, "the pump to end at the park")
+        .unwrap_or_else(|err| panic!("{err}"));
+}
+
+#[test]
+fn a_park_without_a_ping_ends_the_pump_at_the_window() {
+    let (reached_tx, reached) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let (parked_tx, parked) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("pump-park-late".to_owned())
+        .spawn(move || {
+            let pumped =
+                pump_until_parked(Duration::from_millis(300), &reached, &release_tx, &parked);
+            done_tx.send(pumped).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // A fold, as the loop waits in its answer: the pump releases it.
+    reached_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("fold: {err}"));
+    Deadline::after(DRAIN).recv_or_fail(&release, "the pump to release the fold");
+    // The park with no ping: no wakeup follows, so the window expires
+    // and the recheck ends the pump.
+    parked_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("park: {err}"));
+    Deadline::after(DRAIN)
+        .recv_or_fail(&done, "the pump to end at the park")
+        .unwrap_or_else(|err| panic!("{err}"));
+}
+
+#[test]
+fn no_fold_and_no_park_fails_the_pump_window() {
+    let (_reached_tx, reached) = mpsc::channel();
+    let (release_tx, _release) = mpsc::channel();
+    let (_parked_tx, parked) = mpsc::channel();
+    let err = match pump_until_parked(Duration::from_millis(50), &reached, &release_tx, &parked) {
+        Ok(()) => panic!("the pump ended with no fold and no park"),
+        Err(err) => err,
+    };
+    assert!(err.contains("no fold nor park"), "{err}");
+}
+
 #[test]
 fn a_held_fold_fails_the_no_progress_window() {
     let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
@@ -1624,6 +1776,20 @@ fn resume_open_replays_the_log_to_the_tail() {
     // release it, and dropping the sender on panic releases it too.
     let (subscribed_tx, subscribed) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
+    // The fold seam the pump and the drain share: one `reached` per hub
+    // chunk, one `release` per signal. The hub holds a clone to ping the
+    // pump awake when it parks at history.
+    let (fold_reached_tx, fold_reached) = mpsc::channel();
+    let (fold_release_tx, fold_release) = mpsc::channel();
+    let fold_ping_tx = fold_reached_tx.clone();
+    // The pause point holding the history answer: the hub signals it
+    // read history, then waits on a channel whose sender the test owns,
+    // so the hold needs no deadline of its own. The pump releases folds
+    // until the park, then the test releases the answer, so the drain
+    // that follows bounds replay chunks only, never the held answer.
+    // Dropping the sender on panic releases the hub the same way.
+    let (history_parked_tx, history_parked) = mpsc::channel();
+    let (history_release_tx, history_release) = mpsc::channel();
     // The hub signals when it finishes its writes, so the test waits on
     // the hub's answer instead of the drain window alone.
     let (hub_done_tx, hub_done) = mpsc::channel();
@@ -1695,6 +1861,15 @@ fn resume_open_replays_the_log_to_the_tail() {
                         write(session_ack(&id, json!({"commands": []})));
                     }
                     Some("history") => {
+                        // Parked with the question read: the loop asked
+                        // and waits in its answer, so no fold follows
+                        // until the test releases the answer. The ping
+                        // wakes the fold pump, which sees the park and
+                        // stops; the answer goes out only after the
+                        // test's release.
+                        history_parked_tx.send(()).unwrap_or(());
+                        fold_ping_tx.send(()).unwrap_or(());
+                        history_release.recv().unwrap_or(());
                         let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
                         let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
                         write(session_ack(
@@ -1723,8 +1898,6 @@ fn resume_open_replays_the_log_to_the_tail() {
     // bounds one chunk, never the whole log. Dropping the sender lets
     // every later fold through, and a panicking test releases the loop
     // the same way.
-    let (fold_reached_tx, fold_reached) = mpsc::channel();
-    let (fold_release_tx, fold_release) = mpsc::channel();
     std::thread::Builder::new()
         .name("resume-run".to_owned())
         .spawn(move || {
@@ -1749,6 +1922,24 @@ fn resume_open_replays_the_log_to_the_tail() {
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
     drop(release_tx);
+    // The hub parked at history with the loop waiting in its answer:
+    // pump folds until the park, so the no-progress window never covers
+    // the held answer. The park's ping wakes the pump; the recheck after
+    // a timeout still sees a park that lands as the window expires.
+    // Panicking drops the history release sender, which releases the
+    // held hub thread too.
+    unpack_wait(
+        pump_until_parked(DRAIN, &fold_reached, &fold_release_tx, &history_parked),
+        format!("the loop neither folded nor parked at history for {DRAIN:?}"),
+        &finished,
+        &hub_progress,
+        &hub_done,
+        &reader_done,
+    );
+    history_release_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    drop(history_release_tx);
     // The drain pumps the fold chunk by chunk: each signal renews the
     // no-progress window, so a slow machine folds every chunk within
     // `DRAIN` while the whole log takes what it takes. Panicking drops
@@ -1757,27 +1948,14 @@ fn resume_open_replays_the_log_to_the_tail() {
     // now: the drain error still panics, and the panic names the run
     // thread's state and each helper thread's last step, so the next
     // sighting shows which stall candidate happened.
-    let (code, lp) = match drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished) {
-        Ok(done) => done,
-        Err(err) => {
-            let prefix = format!("the loop folded no chunk for {DRAIN:?}: {err}");
-            match finished.try_recv() {
-                Ok(_) => panic!("{prefix}\nrun thread finished after the drain gave up"),
-                Err(finished_state) => panic!(
-                    "{prefix}\n{}",
-                    stall_report(
-                        &finished_state,
-                        &hub_progress
-                            .lock()
-                            .map(|held| held.clone())
-                            .unwrap_or_default(),
-                        &hub_done.try_recv(),
-                        &reader_done.try_recv(),
-                    ),
-                ),
-            }
-        }
-    };
+    let (code, lp) = unpack_wait(
+        drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished),
+        format!("the loop folded no chunk for {DRAIN:?}"),
+        &finished,
+        &hub_progress,
+        &hub_done,
+        &reader_done,
+    );
     drop(fold_release_tx);
     // The hub's writes and the reader's EOF are ready once the loop has
     // returned: hang guards, not drain bounds.
