@@ -1,0 +1,56 @@
+{
+  "case": "classify/global.zai.glm-5.3",
+  "model": "global.zai.glm-5.3",
+  "region": "ap-south-1",
+  "url_path": "/model/global.zai.glm-5.3/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "Call get_weather for Paris."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 48
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ],
+    "toolConfig": {
+      "tools": [
+        {
+          "toolSpec": {
+            "name": "get_weather",
+            "description": "Weather for a city.",
+            "inputSchema": {
+              "json": {
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "status": 403,
+  "headers": {
+    "content-type": "application/json",
+    "x-amzn-errortype": "AccessDeniedException:http://internal.amazon.com/coral/com.amazon.bedrock/"
+  },
+  "body": "{\"message\":\"zai.glm-5.3 is not available for this account. You can explore other available models on Amazon Bedrock. For additional access options, contact AWS Sales at https://aws.amazon.com/contact-us/sales-support/\"}"
+}

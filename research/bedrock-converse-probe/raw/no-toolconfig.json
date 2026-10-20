@@ -1,0 +1,61 @@
+{
+  "case": "no-toolconfig",
+  "model": "mistral.ministral-3-8b-instruct",
+  "region": "ap-south-1",
+  "url_path": "/model/mistral.ministral-3-8b-instruct/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "What is the weather in Paris?"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "toolUse": {
+              "toolUseId": "tooluse_probe0001",
+              "name": "get_weather",
+              "input": {
+                "city": "Paris"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "toolResult": {
+              "toolUseId": "tooluse_probe0001",
+              "content": [
+                {
+                  "text": "Sunny, 22 C."
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 64
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ]
+  },
+  "status": 400,
+  "headers": {
+    "content-type": "application/json",
+    "x-amzn-errortype": "ValidationException:http://internal.amazon.com/coral/com.amazon.bedrock/"
+  },
+  "body": "{\"message\":\"The toolConfig field must be defined when using toolUse and toolResult content blocks.\"}"
+}
