@@ -959,10 +959,7 @@ fn version_prints_the_version_alone_without_a_recorded_commit() {
     match option_env!("FIBER_COMMIT").filter(|commit| !commit.is_empty()) {
         Some(commit) => assert_eq!(
             version.stdout,
-            format!(
-                "fiber {VERSION} ({})\n",
-                commit.get(..7).unwrap_or(commit)
-            ),
+            format!("fiber {VERSION} ({})\n", commit.get(..7).unwrap_or(commit)),
             "--version names the recorded commit's first 7 characters"
         ),
         None => assert_eq!(
