@@ -23,7 +23,7 @@ const DOC: &str = concat!(
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |\n",
-    "| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | 1 ms | 1 ms | 72 ms | 0 % | 0 % |\n",
     "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| `paging` jig, open pass and first frame | 616 ms | Linux x86_64 | picked | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |\n",
     "| `paging` jig, slowest frame that loaded pages | 3 ms | Linux x86_64 | picked | 8 ms | 5 ms | 10 ms | 16 % | 4 % |\n",
@@ -66,6 +66,7 @@ fn head() -> Value {
             "session_start_ms": [6.1, 5.9, 6.0, 6.3, 6.0],
             "terminal_first_frame_ms": [18.2, 17.9, 18.0, 18.4, 18.1],
             "sessions_list_ms": [12.1, 12.4, 11.9, 12.0, 12.2],
+            "session_list_ms": [1, 1, 1, 1, 1],
             "terminal_attach_ms": attach_metric(),
             "terminal_attach_rss_kib": [51200, 51210, 51190, 51205, 51195],
             "terminal_attach_retained_kib": [48000, 48010, 47990, 48005, 47995],
@@ -150,6 +151,7 @@ fn base() -> Value {
             "session_start_ms": [0.6, 0.6, 0.6, 0.6, 0.6],
             "terminal_first_frame_ms": [1.8, 1.8, 1.8, 1.8, 1.8],
             "sessions_list_ms": [11.5, 11.5, 11.5, 11.5, 11.5],
+            "session_list_ms": [1, 1, 1, 1, 1],
             "terminal_attach_ms": attach_base_metric(),
             "paging_open_ms": [290.0, 290.0, 290.0, 290.0, 290.0],
             "paging_load_ms": [1.1, 1.1, 1.1, 1.1, 1.1],
@@ -263,7 +265,7 @@ fn rows_not_measured_appear_with_their_ticket() {
     let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
     let not_measured = comment.split("### Not measured").nth(1).unwrap();
     assert!(
-        not_measured.contains("`session_list`, waiting") && not_measured.contains("#581"),
+        !not_measured.contains("`session_list`, waiting") && !not_measured.contains("#581"),
         "{not_measured}"
     );
     for budget in [
@@ -510,6 +512,7 @@ fn a_missing_metric_fails() {
         "session_threads",
         "terminal_first_frame_ms",
         "sessions_list_ms",
+        "session_list_ms",
         "terminal_attach_ms",
     ] {
         let mut results = head();
@@ -715,7 +718,7 @@ fn every_gated_row_but_one_is_measured() {
         assert!(row(&comment, budget).ends_with("| pass |"), "{comment}");
     }
     assert!(
-        not_measured.contains("`session_list`, waiting") && not_measured.contains("#581"),
+        !not_measured.contains("`session_list`, waiting") && !not_measured.contains("#581"),
         "{comment}"
     );
     for budget in [
@@ -1706,6 +1709,7 @@ fn a_file_without_metric_runs_expects_runs_for_every_metric() {
         "session_start_ms",
         "terminal_first_frame_ms",
         "sessions_list_ms",
+        "session_list_ms",
         "terminal_attach_rss_kib",
         "terminal_attach_retained_kib",
         "busy_turn_retained_kib",
@@ -2734,9 +2738,9 @@ fn both_paging_ratio_rows_are_measured_and_scale_one_stays() {
         let line = row(&out.comment, budget);
         assert!(line.ends_with("| pass |"), "{line}");
     }
-    // The unrelated tickets stay, and all six scale-1 paging metrics
-    // still judge their rows.
-    assert!(not_measured.contains("#581"), "{not_measured}");
+    // The #581 ticket moved into MEASURED with the session_list row,
+    // and all six scale-1 paging metrics still judge their rows.
+    assert!(!not_measured.contains("#581"), "{not_measured}");
     assert!(!not_measured.contains("#2210"), "{not_measured}");
     for budget in [
         "`paging` jig, its session at scale 1 and 160 by 48",
@@ -2789,7 +2793,7 @@ const UNCLASSIFIED_MODEL: &str = "INTEL(R) XEON(R) PLATINUM 8573C";
 
 /// Every scalar timing row, by comment lookup prefix and metric id, with
 /// its ruled class ceilings (ms) and fast/slow tolerances (%).
-const SCALAR_ROWS: [(&str, &str, f64, f64, f64, f64, f64); 10] = [
+const SCALAR_ROWS: [(&str, &str, f64, f64, f64, f64, f64); 11] = [
     (
         "Session start, the internal session command",
         "session_start_ms",
@@ -2816,6 +2820,15 @@ const SCALAR_ROWS: [(&str, &str, f64, f64, f64, f64, f64); 10] = [
         41.0,
         21.0,
         13.0,
+    ),
+    (
+        "`session_list`, waiting for every running session's status",
+        "session_list_ms",
+        1.0,
+        1.0,
+        72.0,
+        0.0,
+        0.0,
     ),
     (
         "`paging` jig, open pass",
