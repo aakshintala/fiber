@@ -28,3 +28,4 @@ crates/tui/src/loop_tests.rs	lane-2824	plan	2026-10-20T17:34:08Z	Amoghs-MacBook-
 crates/tui/src/app/find/state_tests.rs	box-2764	grant	2026-10-20T18:12:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	2887
 crates/main/src/rewind.rs	368-p5	plan	2026-10-20T18:18:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/loop/src/rewind_tests.rs	368-p5	plan	2026-10-20T18:18:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/main/build.rs	412	plan	2026-10-20T18:18:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
