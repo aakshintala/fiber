@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use serde_json::{Map, Value, json};
 
 use super::super::reconnect::UNANSWERED;
-use super::super::{App, Effect, Link, mint, session_command};
+use super::super::{App, Effect, mint, session_command};
 use super::{refusal, refusal_code};
 use crate::home::{Level, Spot, State, dependents};
 use crate::keys::Key;
@@ -149,7 +149,7 @@ impl App {
     /// link down nothing goes out. A refusal of the close becomes the
     /// row's note and a notice.
     pub(super) fn stop_or_ask(&mut self, key: u64) -> Effect {
-        if !self.on_home() || self.outbox.link != Link::Up {
+        if !self.on_home() || !self.outbox.is_up() {
             return Effect::None;
         }
         let row = self
@@ -287,7 +287,7 @@ impl App {
         let Some((id, expect)) = ask else {
             return Effect::None;
         };
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return Effect::None;
         }
         let command = mint();

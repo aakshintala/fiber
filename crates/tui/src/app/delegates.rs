@@ -94,7 +94,7 @@ impl App {
         if !self.panel_cards().iter().any(|card| card == "delegates") {
             return Vec::new();
         }
-        if self.outbox.link != super::Link::Up {
+        if !self.outbox.is_up() {
             return Vec::new();
         }
         let running: Vec<(SessionId, String)> = self

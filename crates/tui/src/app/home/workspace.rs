@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 
-use super::super::{App, Effect, Link, mint};
+use super::super::{App, Effect, mint};
 use super::typed::{Resolved, Typed};
 use super::{Home, typed};
 use crate::home::PickerScreen;
@@ -333,7 +333,7 @@ impl App {
     /// and scope fold into the launch, and a failed read is a notice
     /// until a new workspace or link owes the next one.
     pub(super) fn picker_asks(&mut self) -> Vec<String> {
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return Vec::new();
         }
         if self.home.is_none() {
@@ -577,7 +577,7 @@ impl App {
                 .as_ref()
                 .is_some_and(|picker| picker.typing())
         });
-        if typed_open && self.outbox.link != Link::Up {
+        if typed_open && !self.outbox.is_up() {
             return Some(Effect::None);
         }
         if !typed_open {
@@ -626,7 +626,7 @@ impl App {
         } else if let Some(home) = self.home.as_mut() {
             home.choose(workspace);
         }
-        if self.outbox.link == Link::Up
+        if self.outbox.is_up()
             && let Some(remote) = self.remote()
         {
             let read = match self.workspace() {

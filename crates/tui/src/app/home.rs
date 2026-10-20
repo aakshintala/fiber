@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use super::{App, Effect, Kind, Link, mint};
+use super::{App, Effect, Kind, mint};
 use crate::home::{
     Chip, Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line,
     delete_line, from_status, line, recent_rows,
@@ -478,7 +478,7 @@ impl App {
     /// first unscoped `recent` page. The session list fills in when the
     /// hub's feed arrives.
     pub(super) fn home_outgoing(&mut self) -> Vec<String> {
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return Vec::new();
         }
         let mut asks = self.picker_asks();
@@ -964,7 +964,7 @@ impl App {
     /// Asks the first unscoped `recent` page again: an accepted delete
     /// fills the gap it left.
     fn ask_recent_first(&mut self) -> Vec<String> {
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return Vec::new();
         }
         let Some(home) = self.home.as_mut() else {

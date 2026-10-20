@@ -18,7 +18,7 @@ use contract::events::{
     SessionState, SessionStatus, ToolCallCompleted, Ui, UsageRecorded,
 };
 
-use super::{App, Effect, Kind, Link, mint};
+use super::{App, Effect, Kind, mint};
 use crate::input::Draft;
 use crate::shell;
 use crate::view::panel::delegates::DELEGATES_SHOWN;
@@ -573,7 +573,7 @@ impl App {
         if !self.panel_cards().iter().any(|card| card == "session") {
             return None;
         }
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return None;
         }
         if self.attached_row().is_some_and(|row| row.left.is_some()) {
