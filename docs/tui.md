@@ -77,6 +77,14 @@ and leaving creates nothing. The first turn waits for any MCP server that
 starts with the session (`docs/mcp.md`, "Starting servers"), and the working
 line says so: "Connecting 2 MCP servers…".
 
+On the first interactive run, with no import receipt yet
+(`docs/configuration.md`, "Importing"), home offers a one-time import of
+another harness's configuration: Claude Code's or Codex's. (Built in P2.)
+The offer runs the same shared import `fiber import` runs, and imported
+items apply on the next `/reload` with the reload's usual cache cost
+(`docs/mcp.md`, "Reload"). The offer fires once: answering it, or running
+`fiber import` first, writes the receipt, and the offer never shows again.
+
 **The workspace chip** names the workspace in use: the one last picked, else
 the directory the terminal was launched in. Clicking it opens the workspace
 picker, the same on every client. It is an overlay centred over home, unless
@@ -1638,10 +1646,10 @@ later release still applies.
 | `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. Sent while a turn runs, the choice applies when the turn ends. The notice appears when the choice is sent; if the session rejects the choice, the rejection's notice replaces it. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
 | `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. Each row carries its mark between the gutter and the id: `[x]` marked, `[ ]` not, bold on the focused row and dim when unmarked. The count row reads ` {m} of {n} marked ` unfiltered and ` {v} of {n} models · {m} marked ` filtered, with no show-all toggle and no refresh button. The row below each model is its thinking row, dim with nothing to choose. Ctrl+S saves and closes. The footer is "↑↓ move · Enter toggle · Ctrl+S save · Esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
+| `/tools` | Opens the tools view. |
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |
 | `/quota` | Opens the quota view and fetches every label's quota. |
-| `/tools` | Opens the tools view. |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
@@ -1652,11 +1660,14 @@ later release still applies.
 | `/handoff [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
-| `/approvals` | Reopens the waiting approvals and questions. |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
+| `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/close` | Stops the session on screen ("Quit"). |
 | `/quit` | Quits ("Quit"). |
+| `/approvals` | Reopens the waiting approvals and questions. |
 | `/?`, `/help` | Opens the key map. |
+
+The `/` list shows built-in commands in this order.
 
 The rest of the list is the session's answer to the `commands` driver command
 (`docs/invocation.md`, "What each command does"): its skills, prompt templates

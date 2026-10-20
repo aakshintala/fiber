@@ -144,6 +144,7 @@ fn provider(protocol: Protocol) -> Result<Option<Arc<dyn Provider>>, String> {
     let here = crate::connect::Here {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
+        cache_diagnostics: false,
     };
     spoken(crate::connect::connect(model, None, None, None, &here))
 }

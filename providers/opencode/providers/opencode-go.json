@@ -46,7 +46,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {
@@ -76,7 +77,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {
@@ -107,7 +109,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {
@@ -137,7 +140,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {
@@ -168,7 +172,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {
@@ -197,7 +202,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {
@@ -226,7 +232,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {
@@ -256,7 +263,8 @@
     {
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
-        "cache_key_header": "x-opencode-session"
+        "cache_key_header": "x-opencode-session",
+        "store": false
       },
       "context_window": 1050000,
       "cost": {
@@ -295,7 +303,8 @@
     {
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
-        "cache_key_header": "x-opencode-session"
+        "cache_key_header": "x-opencode-session",
+        "store": false
       },
       "context_window": 1050000,
       "cost": {
@@ -334,7 +343,8 @@
     {
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
-        "cache_key_header": "x-opencode-session"
+        "cache_key_header": "x-opencode-session",
+        "store": false
       },
       "context_window": 500000,
       "cost": {
@@ -370,7 +380,8 @@
     {
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
-        "cache_key_header": "x-opencode-session"
+        "cache_key_header": "x-opencode-session",
+        "store": false
       },
       "context_window": 500000,
       "cost": {
@@ -407,7 +418,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 256000,
       "cost": {
@@ -437,7 +449,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1024000,
       "cost": {
@@ -467,7 +480,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 262144,
       "cost": {
@@ -497,7 +511,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1048576,
       "cost": {
@@ -524,7 +539,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {
@@ -554,7 +570,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {
@@ -585,7 +602,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {
@@ -616,7 +634,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1048576,
       "cost": {
@@ -644,7 +663,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1048576,
       "cost": {
@@ -673,7 +693,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1048576,
       "cost": {
@@ -770,7 +791,8 @@
     {
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
-        "cache_key_header": "x-opencode-session"
+        "cache_key_header": "x-opencode-session",
+        "store": false
       },
       "context_window": 1048576,
       "cost": {
@@ -798,7 +820,8 @@
     {
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
-        "cache_key_header": "x-opencode-session"
+        "cache_key_header": "x-opencode-session",
+        "store": false
       },
       "context_window": 1048576,
       "cost": {
@@ -927,7 +950,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1048576,
       "cost": {
@@ -958,7 +982,8 @@
       "base_url": "https://opencode.ai/zen/go/v1",
       "compat": {
         "cache_key_header": "x-opencode-session",
-        "max_tokens": true
+        "max_tokens": true,
+        "store": false
       },
       "context_window": 1000000,
       "cost": {

@@ -7,9 +7,10 @@ use clap::error::ContextValue;
 use crate::completion::Shell;
 
 use super::{
-    ApproveArgs, AskArgs, Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation,
-    LoginArgs, LogoutArgs, MENU, McpAddArgs, McpCommands, McpRemoveArgs, SessionArgs, SessionsArgs,
-    SessionsCommands, TokenCommands, TopLevel, command, parse_from, usage_sentence, version_line,
+    ApproveArgs, AskArgs, Commands, ConfigCommands, ExtensionCommands, HubCommands, ImportSource,
+    Invocation, LoginArgs, LogoutArgs, MENU, McpAddArgs, McpCommands, McpRemoveArgs, SessionArgs,
+    SessionsArgs, SessionsCommands, TokenCommands, TopLevel, command, parse_from, usage_sentence,
+    version_line,
 };
 
 #[test]
@@ -1053,6 +1054,24 @@ fn parses_argv_into_its_invocation() {
             ),
         ),
         (
+            &["fiber", "import", "claude-code"],
+            Invocation::Run(
+                Some(Commands::Import {
+                    source: ImportSource::ClaudeCode,
+                }),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "import", "codex"],
+            Invocation::Run(
+                Some(Commands::Import {
+                    source: ImportSource::Codex,
+                }),
+                TopLevel::default(),
+            ),
+        ),
+        (
             &["fiber", "hub", "serve"],
             Invocation::Run(
                 Some(Commands::Hub(HubCommands::Serve { installed: false })),
@@ -2008,6 +2027,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "mcp",
             "approve",
             "config",
+            "import",
             "login",
             "logout",
             "doctor",
@@ -2077,6 +2097,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "mcp",
             "approve",
             "config",
+            "import",
             "login",
             "logout",
             "doctor",
@@ -2512,6 +2533,20 @@ fn config_set_without_a_value_names_it() {
         sentence(&["fiber", "config", "set", "model"]).contains("<value>"),
         "{}",
         sentence(&["fiber", "config", "set", "model"])
+    );
+}
+
+#[test]
+fn import_rejects_anything_but_the_two_sources() {
+    let refused = sentence(&["fiber", "import", "vim"]);
+    assert!(
+        refused.contains("claude-code") && refused.contains("codex"),
+        "{refused}"
+    );
+    let missing = sentence(&["fiber", "import"]);
+    assert!(
+        missing.starts_with("The following required arguments were not provided: <source>"),
+        "{missing}"
     );
 }
 
@@ -3129,7 +3164,7 @@ fn synopses_come_from_command_tables_only() {
 #[test]
 fn doc_synopses_are_the_commands_section() {
     let synopses = doc_synopses();
-    assert_eq!(synopses.len(), 42);
+    assert_eq!(synopses.len(), 43);
     assert_eq!(synopses[0], "fiber [--model <model>] [-c <key>=<value>]...");
     assert_eq!(
         synopses[1],

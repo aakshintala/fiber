@@ -380,6 +380,21 @@ pub enum CliError {
         /// The provider asked for.
         provider: String,
     },
+    /// `--older-than` does not parse as a duration.
+    #[error(
+        "`--older-than` takes a duration such as `30d`: a whole number and `s`, `m`, `h` or `d`."
+    )]
+    OlderThanUnreadable,
+    /// Some deletions failed: how many of how many, with the first failure's code.
+    #[error("{failed} of {total} could not be deleted")]
+    PruneFailed {
+        /// The first failure's code.
+        code: ErrorCode,
+        /// How many deletions failed.
+        failed: usize,
+        /// How many deletions were attempted.
+        total: usize,
+    },
 }
 
 /// Why a store refused before anything was read or written: a usage
@@ -509,6 +524,7 @@ impl CliError {
             Self::CredentialFile(error) => error.code(),
             Self::Extensions(error) => error.code(),
             Self::Forwarded(failure) => failure.code.clone(),
+            Self::PruneFailed { code, .. } => code.clone(),
             Self::Terminal(_)
             | Self::StandardError(_)
             | Self::StandardInput(_)
@@ -566,6 +582,7 @@ impl CliError {
             | Self::McpServerUnknown { .. }
             | Self::McpServerStdio { .. }
             | Self::NobodyToAsk { .. }
+            | Self::OlderThanUnreadable
             | Self::ReleaseVersionMismatch { .. } => ErrorCode::Usage,
         }
     }
@@ -629,6 +646,8 @@ impl From<CliError> for Failure {
             | CliError::McpServerUnknown { .. }
             | CliError::McpServerStdio { .. }
             | CliError::NobodyToAsk { .. }
+            | CliError::OlderThanUnreadable
+            | CliError::PruneFailed { .. }
             | CliError::ApproveFailed { .. }
             | CliError::ReleaseVersionMismatch { .. }
             | CliError::ReleaseNoCommit

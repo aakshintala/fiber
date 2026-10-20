@@ -841,6 +841,7 @@ MCP servers:
 Configuration:
   config get <key>                              Print the effective value and the layer it came from
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
+  import <claude-code | codex>                   Copy another harness's configuration into Fiber home, once
 
 The hub:
   hub add [--default] <name> <address>  Add a hub to this client's list

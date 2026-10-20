@@ -133,6 +133,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `cache.lifetime` | `"1h"` | yes | The prompt-cache lifetime, `"5m"` or `"1h"` (`docs/prompt-cache.md`). |
 | `cache.warm_idle` | false | yes | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
 | `cache.warm_cap` | `2` | yes | How many cache lifetimes after the last turn warming stops, an integer; less than 12 (`docs/prompt-cache.md`, "Warming while idle"). |
+| `cache.diagnostics` | false | yes | Whether a debug `provider_request` line for a model call also carries redacted prefix hashes and the reported cache use (`docs/prompt-cache.md`, "Cache diagnostics"). |
 | `keys."<action>"` | the binding in `docs/tui.md` | no | A key, or a list of keys, for a terminal action; `[]` unbinds it (`docs/tui.md`, "Bindings"). |
 | `retry.attempts` | 3 | yes | Retries of a failed model call (`docs/model-routing.md`, "When a model call fails"). |
 | `retry.initial_delay_ms` | 2000 | yes | The first backoff, doubling each retry. |
@@ -642,6 +643,52 @@ declares") lists:
 - `subscription` is `true` for a model a subscription login serves; its `cost`
   is then the vendor's API prices (`docs/model-routing.md`, "Cost"). Absent
   means false.
+
+## Importing
+
+`fiber import` copies configuration from one other harness into Fiber home,
+once (`docs/invocation.md`, "Commands and flags"). It reads `~/.claude`
+(Claude Code) or `~/.codex` (Codex) and copies what maps into Fiber's own
+configuration; it never reads the other harness again, and it imports no
+past conversations. Every pinned source path is optional: a missing file,
+table or directory means nothing to import from it, never an error.
+`~/.claude.json` is state and caches, not configuration, and the import
+never reads it.
+
+What each source item maps to:
+
+| Source | Fiber destination |
+|---|---|
+| Claude Code `skills/*/SKILL.md` | A personal skill: one directory per skill in `skills/` in Fiber home, discovered at session start like every other personal skill (`docs/system-prompt.md`, "Skills") |
+| Claude Code `commands/*.md` | A prompt template: the same directory shape holding a synthesized header (its name from the file stem, its description from the first non-empty line, model invocation disabled) plus the file's bytes as the body, so the person runs it by name and the model listing leaves it out |
+| Claude Code `CLAUDE.md` | `CLAUDE.md` at the top of Fiber home |
+| Claude Code `settings.json` `mcpServers` | User-scope MCP servers in the global layer, with the field map `docs/mcp.md` ("Configuration") lists |
+| Codex `skills/*/SKILL.md` | A personal skill, as above |
+| Codex `prompts/*.md` | A prompt template, as above |
+| Codex `config.toml` `[mcp_servers]` | User-scope MCP servers in the global layer, read through a narrow subset reader: section headers plus scalar `command`, `args`, `env`, `url` and `required` lines only |
+| Codex `AGENTS.md` | `AGENTS.md` at the top of Fiber home |
+
+A Codex server entry outside that subset — another table, another key, or a
+multi-line or otherwise unparseable value — is refused to the left-behind
+list with its reason, never interpreted. A refused secret value (an API key,
+a token, an auth file, a secret block in a server declaration) is named
+there without its value, and the value reaches neither Fiber's files nor the
+report. Anything else unmapped — agents, hooks, permissions, sessions,
+history, todos, credentials — lands in left-behind with its category and
+reason; nothing is lost silently.
+
+The import never overwrites: a colliding skill, command or server name is
+suffixed and reported, while a colliding instruction target is never
+suffixed, since a suffixed fixed name is never read — the existing file
+stands and the item goes to left-behind with the occupied target as its
+reason. Identical bytes are skipped without error.
+
+One receipt file per source sits at the top of Fiber home,
+`import-claude-code.json` and `import-codex.json`, each holding its source,
+time and counts (`docs/state.md`, "What each part holds"). A completed
+receipt short-circuits the command for that source: with a completed
+receipt the command succeeds without reading the source at all. The receipt
+is written last, and only on full success.
 
 A provider with a `models()` function returns a list in exactly the shape of
 `models`. Fiber caches it at `cache/models/<name>.json`.

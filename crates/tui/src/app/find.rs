@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use super::{App, Effect, Link, Target, mint, session_command};
+use super::{App, Effect, Target, mint, session_command};
 use crate::keys::{Edit, Key};
 use crate::link::history_answer;
 use crate::logical;
@@ -446,7 +446,7 @@ impl App {
         if self.pass_open() {
             return;
         }
-        let (Some(session), true) = (self.session().cloned(), self.link == Link::Up) else {
+        let (Some(session), true) = (self.session().cloned(), self.outbox.is_up()) else {
             return;
         };
         let revision = self.screen.pages().index().revision(page);
@@ -500,6 +500,9 @@ impl App {
             return None;
         }
         let mut fetch = self.find.take_fetch()?;
+        // The fetch's answer settles its kept line, which no fold path
+        // pops a pending entry for.
+        self.outbox.answered(&fetch.id);
         if fetch.generation != self.find.generation() {
             // A query change while it was in flight sends nothing: the
             // fetch stays recorded no more, its lines fold nowhere, and

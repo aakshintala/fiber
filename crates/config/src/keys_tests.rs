@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn cache_diagnostics_defaults_to_off() {
+    // Opt-in: with the setting unset, no prefix hash or cache-use field
+    // is written.
+    assert_eq!(
+        defaults().pointer("/cache/diagnostics"),
+        Some(&serde_json::json!(false)),
+        "the built-in default is off"
+    );
+}
+
+#[test]
+fn a_repository_may_set_cache_diagnostics() {
+    let layer: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(r#"{"cache": {"diagnostics": true}}"#).expect("the test layer parses");
+    let mut notices = Vec::new();
+    let kept = check(
+        layer,
+        &crate::Source::Repository("repo/config.json".into()),
+        &mut notices,
+    )
+    .expect("a repository may set the setting");
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        kept.get("cache").and_then(|cache| cache.get("diagnostics")),
+        Some(&serde_json::json!(true)),
+    );
+}
+
+#[test]
 fn thinking_key_values_match_the_contract_levels() {
     assert_eq!(
         LEVELS,

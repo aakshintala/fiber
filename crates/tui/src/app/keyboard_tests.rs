@@ -8,9 +8,12 @@ use serde_json::{Value, json};
 
 use contract::clock::Clock;
 
+use super::super::commands::commands_testkit::{
+    attached as hub_attached, connected, enter, key, turn_starts, type_any,
+};
 use super::super::{App, Effect};
 use crate::home::{Launch, Spot};
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::keyset::Context;
 use crate::link::Line;
 use crate::stroke::{Code, Mods, Stroke};
@@ -926,6 +929,21 @@ fn ctrl_n_goes_home_with_an_empty_draft_as_slash_new() {
 }
 
 #[test]
+fn an_action_settles_once_from_the_press_entry() {
+    let mut app = homed(80, 24);
+    // A key settles the attached layout first, so the action below has
+    // a stale layout to clear.
+    type_text(&mut app, "x");
+    assert!(app.chrome().layout().is_some());
+    assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
+    assert!(app.session().is_none());
+    assert_eq!(app.draft(), "");
+    // The entry settles the action's `leave`: the layout is home's,
+    // not the attached conversation's.
+    assert_eq!(app.chrome().layout(), None);
+}
+
+#[test]
 fn ctrl_n_from_a_focused_item_lands_on_the_entry_bar() {
     let mut app = groups(1, 80, 24);
     app.set_home(launch());
@@ -1273,4 +1291,86 @@ fn the_key_map_over_the_model_picker_is_the_overlay_context() {
     assert!(app.keymap_top().is_none());
     assert!(app.model_picker_open());
     assert_eq!(app.key_context(), Context::Picker);
+}
+
+#[test]
+fn slash_question_mark_slash_help_and_f1_open_the_key_map() {
+    for open in ["/?", "/help", "F1"] {
+        let mut app = connected();
+        if open == "F1" {
+            assert_eq!(app.on_key(Key::F1, now()), Effect::None);
+        } else {
+            assert_eq!(enter(&mut app, open), Effect::None, "{open}");
+        }
+        assert_eq!(app.keymap_top(), Some(0), "{open}");
+        assert_eq!(app.draft(), "", "{open}");
+        assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+        assert_eq!(app.keymap_top(), None, "{open}");
+    }
+}
+
+#[test]
+fn the_key_map_scrolls_by_binding_and_searches() {
+    let mut app = hub_attached();
+    app.set_size(80, 24);
+    turn_starts(&mut app);
+    app.on_key(Key::F1, now());
+    // The focus moves by binding; the scroll follows whole bindings.
+    assert_eq!(app.keymap_top(), Some(0));
+    app.on_key(Key::Up, now());
+    assert_eq!(app.keymap_top(), Some(0));
+    app.on_key(Key::Down, now());
+    assert_eq!(app.keymap_top(), Some(0));
+    // A page moves by the bindings that fit less one.
+    app.on_key(Key::PageDown, now());
+    let map = app.keymap().expect("open");
+    assert_eq!((map.focus(), map.top()), (2, 1));
+    app.on_key(Key::PageUp, now());
+    let map = app.keymap().expect("open");
+    assert_eq!((map.focus(), map.top()), (1, 1));
+    app.on_key(Key::PageUp, now());
+    assert_eq!(app.keymap_top(), Some(0));
+    // Down past the end holds on the last binding.
+    for _ in 0..80 {
+        app.on_key(Key::Down, now());
+    }
+    let map = app.keymap().expect("open");
+    let total = map.visible(app.keys()).len();
+    assert_eq!(map.focus(), total - 1);
+    let last = app.keymap_top();
+    app.on_key(Key::Down, now());
+    assert_eq!(app.keymap_top(), last);
+    // Typing narrows the rows to the query; the draft keeps nothing.
+    app.on_key(Key::Esc, now());
+    app.on_key(Key::F1, now());
+    app.on_key(Key::Char('x'), now());
+    let map = app.keymap().expect("open");
+    assert_eq!(map.query(), "x");
+    assert!(map.visible(app.keys()).len() < total);
+    assert_eq!(app.draft(), "");
+    app.on_key(Key::Backspace, now());
+    assert_eq!(app.keymap().expect("open").query(), "");
+    // Enter, Tab, End and F1 do nothing behind the map.
+    for key in [Key::Enter, Key::Tab, Key::End, Key::F1] {
+        assert_eq!(app.on_key(key, now()), Effect::None);
+    }
+    assert_eq!(app.draft(), "");
+    assert!(app.keymap_top().is_some());
+    // Ctrl+C still arms the quit past the map.
+    app.on_key(Key::CtrlC, now());
+    assert!(app.hint());
+    assert!(app.keymap_top().is_some());
+}
+
+#[test]
+fn editing_keys_do_nothing_while_the_key_map_is_open() {
+    let mut app = connected();
+    type_any(&mut app, "ab");
+    assert_eq!(app.on_key(Key::F1, now()), Effect::None);
+    assert!(app.keymap_top().is_some());
+    assert_eq!(app.on_edit(Edit::Paste("x".to_owned())), Effect::None);
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    app.on_key(Key::Esc, now());
+    key(&mut app, '!');
+    assert_eq!(app.draft(), "ab!");
 }

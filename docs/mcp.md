@@ -370,6 +370,10 @@ the approval of that exact declaration for the person who ran it. Another
 person who gets the declaration with the repository has no approval on their
 machine, and is asked.
 
+An imported server is not a repository's server: it lands in the global
+layer, so no repository approval attaches to it, and the approval flow above
+is unchanged.
+
 The approval does not cover what the program fetches or reads while it runs.
 A declaration that fetches its program at start, such as `npx -y`, can run
 different code later under the same approval, and a server that loads other
@@ -409,6 +413,15 @@ the repository's `.fiber/config.json` with `--repo` (`docs/invocation.md`,
 "Commands and flags"). `fiber mcp list` lists every declared server, the layer
 that declares it, and for a repository's server whether it is approved. Any
 other field is set with `fiber config set`.
+
+An import from another harness (`docs/configuration.md`, "Importing") lands
+here too: each imported entry becomes a user-scope server in the global
+layer, with the source field map `command` to `command`, `args` to `args`,
+string `env` values to `env`, `url` to `url`, and `required` only when the
+source declares it. A secret value, auth block or token is refused to the
+left-behind list, never stored. An imported server starts unapproved, as any
+server the person declares does; approving what a repository ships is
+unchanged ("A repository's servers").
 
 ## Where servers run
 

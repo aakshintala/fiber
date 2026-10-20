@@ -4,6 +4,7 @@
 //! [`crate::clock::Clock`], it defines the seam and contains no behaviour;
 //! `log::diag::Diag` writes the lines.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
@@ -11,6 +12,25 @@ use std::time::Instant;
 use serde::Serialize;
 
 use crate::provider::{ModelCall, ModelRequest};
+
+/// Redacted digests of one request's cacheable prefix segments, in the
+/// protocol's own encoding (`docs/prompt-cache.md`, "Cache diagnostics").
+/// The digests stand in for the bytes: no prompt, tool or model text
+/// reaches the line. `system` and `tools` are absent when the request
+/// sends no such segment; `messages[i]` covers the cumulative
+/// conversation encoding through message boundary `i`. Digests compare
+/// within one protocol only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PrefixHashes {
+    /// The system prompt segment's digest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// The tool definitions segment's digest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<String>,
+    /// Each cumulative message-prefix segment's digest, in order.
+    pub messages: Vec<String>,
+}
 
 /// Why Fiber made a provider request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -64,6 +84,17 @@ pub struct ProviderRequest {
     pub first_token_ms: Option<u64>,
     /// Milliseconds from the send until the call returned.
     pub total_ms: u64,
+    /// Redacted digests of the request's cacheable prefix segments, when
+    /// the `cache.diagnostics` setting asked for them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix_hashes: Option<PrefixHashes>,
+    /// Input tokens the response read from the cache, when reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<u64>,
+    /// Input tokens the response wrote to the cache, keyed by cache
+    /// lifetime (`"5m"`, `"1h"`), when reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<BTreeMap<String, u64>>,
 }
 
 /// Where debug lines go. `provider_request` writes nothing when

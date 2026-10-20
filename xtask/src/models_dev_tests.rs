@@ -1143,3 +1143,34 @@ fn openai_search_marks_match_the_october_probe() {
             .is_none()
     );
 }
+
+#[test]
+fn opencode_go_marks_store_false_where_the_protocol_accepts_it() {
+    // The generated opencode-go file, compiled in: every openai-responses
+    // and openai-completions model carries compat.store false, since
+    // those protocols read it, while anthropic-messages and
+    // google-generative-ai models carry no store key their protocol
+    // never reads.
+    let file: Value = serde_json::from_str(include_str!(
+        "../../providers/opencode/providers/opencode-go.json"
+    ))
+    .unwrap();
+    let models = file["models"].as_array().unwrap();
+    assert!(!models.is_empty());
+    for model in models {
+        let protocol = model["protocol"].as_str().unwrap();
+        match protocol {
+            "openai-responses" | "openai-completions" => assert_eq!(
+                model["compat"]["store"],
+                Value::Bool(false),
+                "{} on {protocol} carries no store:false",
+                model["id"]
+            ),
+            _ => assert!(
+                model["compat"].get("store").is_none(),
+                "{} on {protocol} carries a store flag its protocol never reads",
+                model["id"]
+            ),
+        }
+    }
+}

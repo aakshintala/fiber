@@ -23,7 +23,7 @@ const DOC: &str = concat!(
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |\n",
-    "| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | 1 ms | 1 ms | 72 ms | 0 % | 0 % |\n",
     "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| `paging` jig, open pass and first frame | 616 ms | Linux x86_64 | picked | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |\n",
     "| `paging` jig, slowest frame that loaded pages | 3 ms | Linux x86_64 | picked | 8 ms | 5 ms | 10 ms | 16 % | 4 % |\n",
@@ -66,6 +66,7 @@ fn head() -> Value {
             "session_start_ms": [6.1, 5.9, 6.0, 6.3, 6.0],
             "terminal_first_frame_ms": [18.2, 17.9, 18.0, 18.4, 18.1],
             "sessions_list_ms": [12.1, 12.4, 11.9, 12.0, 12.2],
+            "session_list_ms": [1, 1, 1, 1, 1],
             "terminal_attach_ms": attach_metric(),
             "terminal_attach_rss_kib": [51200, 51210, 51190, 51205, 51195],
             "terminal_attach_retained_kib": [48000, 48010, 47990, 48005, 47995],
@@ -150,6 +151,7 @@ fn base() -> Value {
             "session_start_ms": [0.6, 0.6, 0.6, 0.6, 0.6],
             "terminal_first_frame_ms": [1.8, 1.8, 1.8, 1.8, 1.8],
             "sessions_list_ms": [11.5, 11.5, 11.5, 11.5, 11.5],
+            "session_list_ms": [1, 1, 1, 1, 1],
             "terminal_attach_ms": attach_base_metric(),
             "paging_open_ms": [290.0, 290.0, 290.0, 290.0, 290.0],
             "paging_load_ms": [1.1, 1.1, 1.1, 1.1, 1.1],
@@ -263,7 +265,7 @@ fn rows_not_measured_appear_with_their_ticket() {
     let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
     let not_measured = comment.split("### Not measured").nth(1).unwrap();
     assert!(
-        not_measured.contains("`session_list`, waiting") && not_measured.contains("#581"),
+        !not_measured.contains("`session_list`, waiting") && !not_measured.contains("#581"),
         "{not_measured}"
     );
     for budget in [
@@ -510,6 +512,7 @@ fn a_missing_metric_fails() {
         "session_threads",
         "terminal_first_frame_ms",
         "sessions_list_ms",
+        "session_list_ms",
         "terminal_attach_ms",
     ] {
         let mut results = head();
@@ -714,10 +717,6 @@ fn every_gated_row_but_one_is_measured() {
         assert!(!not_measured.contains(budget), "{budget}:\n{comment}");
         assert!(row(&comment, budget).ends_with("| pass |"), "{comment}");
     }
-    assert!(
-        not_measured.contains("`session_list`, waiting") && not_measured.contains("#581"),
-        "{comment}"
-    );
     for budget in [
         "Terminal to its first frame, attaching",
         "Listing 1,000 sessions in one project, warm cache",
@@ -1706,6 +1705,7 @@ fn a_file_without_metric_runs_expects_runs_for_every_metric() {
         "session_start_ms",
         "terminal_first_frame_ms",
         "sessions_list_ms",
+        "session_list_ms",
         "terminal_attach_rss_kib",
         "terminal_attach_retained_kib",
         "busy_turn_retained_kib",
@@ -2734,9 +2734,8 @@ fn both_paging_ratio_rows_are_measured_and_scale_one_stays() {
         let line = row(&out.comment, budget);
         assert!(line.ends_with("| pass |"), "{line}");
     }
-    // The unrelated tickets stay, and all six scale-1 paging metrics
-    // still judge their rows.
-    assert!(not_measured.contains("#581"), "{not_measured}");
+    // All six scale-1 paging metrics still judge their rows.
+    assert!(!not_measured.contains("#581"), "{not_measured}");
     assert!(!not_measured.contains("#2210"), "{not_measured}");
     for budget in [
         "`paging` jig, its session at scale 1 and 160 by 48",
@@ -2789,7 +2788,7 @@ const UNCLASSIFIED_MODEL: &str = "INTEL(R) XEON(R) PLATINUM 8573C";
 
 /// Every scalar timing row, by comment lookup prefix and metric id, with
 /// its ruled class ceilings (ms) and fast/slow tolerances (%).
-const SCALAR_ROWS: [(&str, &str, f64, f64, f64, f64, f64); 10] = [
+const SCALAR_ROWS: [(&str, &str, f64, f64, f64, f64, f64); 11] = [
     (
         "Session start, the internal session command",
         "session_start_ms",
@@ -2816,6 +2815,15 @@ const SCALAR_ROWS: [(&str, &str, f64, f64, f64, f64, f64); 10] = [
         41.0,
         21.0,
         13.0,
+    ),
+    (
+        "`session_list`, waiting for every running session's status",
+        "session_list_ms",
+        1.0,
+        1.0,
+        72.0,
+        0.0,
+        0.0,
     ),
     (
         "`paging` jig, open pass",
@@ -4016,12 +4024,13 @@ fn a_head_failure_with_a_missing_base_metric_shows_unavailable() {
 const FAST_ATTACH_DATA: &str = include_str!("../tests/class_data/9v45-attach-10mib.json");
 const PERFORMANCE_DOC: &str = include_str!("../../docs/performance.md");
 
-/// The attaching row's fast ceiling (ms) and fast tolerance (%) in `docs/performance.md`.
-fn doc_fast_attach_gate() -> (f64, f64) {
+/// A gated row's fast ceiling (ms) and fast tolerance (%) in
+/// `docs/performance.md`: the row whose text starts with `prefix`.
+fn doc_gate(prefix: &str) -> (f64, f64) {
     let line = PERFORMANCE_DOC
         .lines()
-        .find(|l| l.starts_with("| Terminal to its first frame, attaching"))
-        .expect("attaching row");
+        .find(|l| l.starts_with(prefix))
+        .unwrap_or_else(|| panic!("no performance row starting with {prefix:?}"));
     let cells: Vec<&str> = line.split('|').map(str::trim).collect();
     let number = |cell: &str| -> f64 {
         cell.split_whitespace()
@@ -4038,9 +4047,14 @@ fn median_of(samples: &[f64]) -> f64 {
     s[s.len() / 2]
 }
 
-#[test]
-fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
-    let files: Vec<Value> = serde_json::from_str(FAST_ATTACH_DATA).unwrap();
+/// The pin both fast-class ceiling tests share: every stored file's samples
+/// pin the row's fast ceiling, and the stored per-file medians pin its fast
+/// tolerance. Each pin sample must be finite and at or above zero before
+/// any ceiling or median math, so an appended -1, NaN or infinite entry
+/// fails here. A per-file median under the 1 ms quantum counts as 1 ms
+/// when `quantum` holds, so a zero median never divides the tolerance.
+fn pinned_gate(data: &str, prefix: &str, label: &str, quantum: bool) {
+    let files: Vec<Value> = serde_json::from_str(data).unwrap();
     assert!(files.len() >= 5, "the class gates only with 5 stored files");
     let samples: Vec<Vec<f64>> = files
         .iter()
@@ -4053,14 +4067,29 @@ fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
                 .collect()
         })
         .collect();
+    for (file, file_samples) in files.iter().zip(&samples) {
+        for s in file_samples {
+            assert!(
+                s.is_finite() && *s >= 0.0,
+                "{label}_pin_samples_are_finite_and_non_negative: {} holds {s}",
+                file["file"]
+            );
+        }
+    }
     let max_sample = samples.iter().flatten().copied().fold(0.0, f64::max);
-    let medians: Vec<f64> = samples.iter().map(|s| median_of(s)).collect();
+    let medians: Vec<f64> = samples
+        .iter()
+        .map(|s| {
+            let m = median_of(s);
+            if quantum && m < 1.0 { 1.0 } else { m }
+        })
+        .collect();
     let max_median = medians.iter().copied().fold(0.0, f64::max);
     let min_median = medians.iter().copied().fold(f64::MAX, f64::min);
-    let (ceiling, tolerance) = doc_fast_attach_gate();
+    let (ceiling, tolerance) = doc_gate(prefix);
     assert!(
         ceiling >= max_sample,
-        "fast attach ceiling {ceiling} ms sits below stored sample {max_sample} ms"
+        "{label} ceiling {ceiling} ms sits below stored sample {max_sample} ms"
     );
     assert_eq!(
         ceiling,
@@ -4068,8 +4097,30 @@ fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
         "ceiling is the max sample rounded up"
     );
     let want = (100.0 * (max_median / min_median - 1.0)).ceil();
-    assert_eq!(
-        tolerance, want,
-        "fast attach tolerance for the stored medians"
+    assert_eq!(tolerance, want, "{label} tolerance for the stored medians");
+}
+
+#[test]
+fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
+    pinned_gate(
+        FAST_ATTACH_DATA,
+        "| Terminal to its first frame, attaching",
+        "fast attach",
+        false,
+    );
+}
+
+// --- #2668 the 9V45 session_list class data pins its own ceiling ---
+
+/// Every stored 9V45 file's session_list samples: plain numbers per file.
+const SESSION_LIST_DATA: &str = include_str!("../tests/class_data/9v45-session-list.json");
+
+#[test]
+fn session_list_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
+    pinned_gate(
+        SESSION_LIST_DATA,
+        "| `session_list`, waiting for every running",
+        "fast session_list",
+        true,
     );
 }

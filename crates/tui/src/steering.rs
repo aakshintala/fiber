@@ -12,7 +12,7 @@
 
 use contract::events::SteeringQueue;
 
-use super::{App, Effect, Kind, Link, mint, session_command};
+use super::{App, Effect, Kind, mint, session_command};
 use crate::format;
 use crate::input::Draft;
 use crate::keys::Key;
@@ -299,9 +299,12 @@ impl App {
     /// `steer` with the edited text; the draft from before the selection
     /// comes back.
     pub(super) fn amend(&mut self) -> Effect {
-        let (Some(session), Link::Up) = (self.session().cloned(), self.link) else {
+        let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
+        if !self.outbox.is_up() {
+            return Effect::None;
+        }
         let Some((row, stash)) = self.steering.amend() else {
             return Effect::None;
         };
@@ -320,7 +323,7 @@ impl App {
             )
             .to_string(),
         );
-        self.pending.insert(id, (Kind::Steer, taken));
+        self.outbox.pending.insert(id, (Kind::Steer, taken));
         Effect::Send(lines)
     }
 
@@ -330,7 +333,7 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
-        if rows.is_empty() || self.link != Link::Up {
+        if rows.is_empty() || !self.outbox.is_up() {
             return Effect::None;
         }
         let lines = rows
@@ -339,7 +342,9 @@ impl App {
                 let id = mint();
                 let args = json!({ "command_id": row });
                 let line = session_command(&id, "steer_drop", &session, Some(args));
-                self.pending.insert(id, (Kind::SteerDrop, Draft::default()));
+                self.outbox
+                    .pending
+                    .insert(id, (Kind::SteerDrop, Draft::default()));
                 line.to_string()
             })
             .collect();

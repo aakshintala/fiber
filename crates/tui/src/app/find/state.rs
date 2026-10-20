@@ -41,7 +41,7 @@ impl Eq for Match {}
 #[derive(Debug)]
 pub(super) struct Fetch {
     /// The command's id: only its answer folds into the scan.
-    id: String,
+    pub(super) id: String,
     /// The page it reads.
     pub(super) page: usize,
     /// The page's segment session: the request names it, and the

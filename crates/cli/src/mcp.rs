@@ -91,11 +91,7 @@ pub(crate) fn config_failure(e: ConfigError) -> Failure {
 /// credential file name: non-empty, with no `"`, `/`, NUL, whitespace or
 /// control character.
 fn check_name(name: &str) -> Result<(), CliError> {
-    let bad = name.is_empty()
-        || name.bytes().any(|byte| {
-            byte == b'"' || byte == b'/' || byte.is_ascii_whitespace() || byte.is_ascii_control()
-        });
-    if bad {
+    if !config::valid_server_name(name) {
         return Err(CliError::McpName {
             name: name.to_owned(),
         });

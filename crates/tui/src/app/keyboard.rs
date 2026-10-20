@@ -4,7 +4,8 @@
 use std::time::Instant;
 
 use super::{App, Effect};
-use crate::keys::{Event, default_event};
+use crate::keymap::{KeyMap, KeyPress};
+use crate::keys::{Edit, Event, Key, default_event};
 use crate::keyset::{Context, KeysSetup, Keyset, Resolved, load};
 use crate::rebind::{KeysScreen, Outcome};
 use crate::stroke::{Code, Mods, Stroke};
@@ -33,6 +34,72 @@ fn ctrl_c() -> Stroke {
 pub(super) struct Keyboard {
     keys: Keyset,
     screen: Option<KeysScreen>,
+    keymap: Option<KeyMap>,
+}
+
+impl Keyboard {
+    /// The key map overlay, while it is open.
+    pub(super) fn keymap(&self) -> Option<&KeyMap> {
+        self.keymap.as_ref()
+    }
+
+    /// The key map overlay's top row, while it is open.
+    pub(super) fn keymap_top(&self) -> Option<usize> {
+        self.keymap.as_ref().map(KeyMap::top)
+    }
+
+    /// Closes the key map before a swapped view takes the conversation.
+    pub(super) fn close_keymap(&mut self) {
+        self.keymap = None;
+    }
+
+    /// Opens the key map overlay at its top.
+    pub(super) fn open_keymap(&mut self) -> Effect {
+        self.keymap = Some(KeyMap::default());
+        Effect::None
+    }
+
+    /// A key while the key map is open: it takes every key but Ctrl+C,
+    /// ⌥R and ⌥1–9, which arm quit and switch sessions past it. `None`
+    /// while it is closed.
+    pub(super) fn keymap_key(
+        &mut self,
+        key: &Key,
+        keyset: &Keyset,
+        width: u16,
+        height: usize,
+    ) -> Option<Effect> {
+        let map = self.keymap.as_mut()?;
+        // The frame docks full width, so the inner columns are the
+        // conversation's less the frame's four blank ones.
+        match map.press(key, keyset, width.saturating_sub(4), height) {
+            KeyPress::Close => self.keymap = None,
+            KeyPress::Through => return None,
+            KeyPress::Handled => {}
+        }
+        Some(Effect::None)
+    }
+
+    /// An edit while the key map is open: Left and Right move between
+    /// its tabs, every other edit does nothing behind it, and a paste
+    /// never reaches the draft. `None` while it is closed.
+    pub(super) fn edit_key(&mut self, edit: &Edit) -> Option<Effect> {
+        let map = self.keymap.as_mut()?;
+        match edit {
+            Edit::Left => map.move_tab(-1),
+            Edit::Right => map.move_tab(1),
+            Edit::ShiftEnter
+            | Edit::CtrlJ
+            | Edit::WordLeft
+            | Edit::WordRight
+            | Edit::DeleteWord
+            | Edit::LineStart
+            | Edit::LineEnd
+            | Edit::Delete
+            | Edit::Paste(_) => {}
+        }
+        Some(Effect::None)
+    }
 }
 
 impl App {
@@ -59,50 +126,61 @@ impl App {
     pub(crate) fn on_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
         self.attention_seen();
         if self.keys_screen_open() && !self.quit_open() {
-            if self.notice_overlay().is_none() {
+            // The notice overlay hides the screen: Esc closes the
+            // overlay, Ctrl+C goes through the bindings, and every other
+            // stroke reaches neither the screen nor the draft. A `None`
+            // falls through to the bindings below.
+            let effect = if self.notice_overlay().is_none() {
                 let height = self.keys_height();
                 let outcome = match self.keyboard.screen.as_mut() {
                     Some(screen) => screen.press(&stroke, &self.keyboard.keys, height),
                     None => Outcome::Nothing,
                 };
-                let effect = match outcome {
-                    Outcome::Nothing => Effect::None,
+                match outcome {
+                    Outcome::Nothing => Some(Effect::None),
                     Outcome::Close => {
                         self.keyboard.screen = None;
-                        Effect::None
+                        Some(Effect::None)
                     }
-                    Outcome::Apply(next) => self.apply_keys(next),
+                    Outcome::Apply(next) => Some(self.apply_keys(next)),
                     // Ctrl+C goes through the bindings below, clearing
                     // then quitting as on any screen.
-                    Outcome::Pass => return self.bindings_press(stroke, now),
-                };
+                    Outcome::Pass => None,
+                }
+            } else if stroke == esc() {
+                self.notices.close();
+                Some(Effect::None)
+            } else if stroke == ctrl_c() {
+                None
+            } else {
+                return Effect::None;
+            };
+            if let Some(effect) = effect {
                 self.edited();
                 self.settle();
                 return effect;
             }
-            // The notice overlay hides the screen: Esc closes the
-            // overlay, Ctrl+C goes through the bindings, and every other
-            // stroke reaches neither the screen nor the draft.
-            if stroke == esc() {
-                self.notices.close();
-                self.edited();
-                self.settle();
-                return Effect::None;
-            }
-            if stroke != ctrl_c() {
-                return Effect::None;
-            }
         }
-        self.bindings_press(stroke, now)
+        // The bindings settle here: `on_key` and `on_edit` settle
+        // themselves, so only an action settles from this Loop entry,
+        // once per input.
+        let (effect, settle) = self.bindings_press(stroke, now);
+        if settle {
+            self.settle();
+        }
+        effect
     }
 
     /// One stroke through the effective bindings in the context on screen.
     /// Home owns plain arrows on a chip or a list stop: they dispatch
     /// as its own keys ahead of the bindings, so a rebound `recall_prompt`
-    /// or `focus_next_prev` leaves them to home.
-    fn bindings_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
+    /// or `focus_next_prev` leaves them to home. Returns the effect with
+    /// whether the Loop entry still settles: `on_key` and `on_edit`
+    /// settle themselves, an action leaves the settle to the entry, and
+    /// a stroke nothing handles settles nothing.
+    fn bindings_press(&mut self, stroke: Stroke, now: Instant) -> (Effect, bool) {
         if let Some(effect) = self.rail_stroke(&stroke, now) {
-            return effect;
+            return (effect, false);
         }
         if self.home_owns_arrows()
             && stroke.mods == Mods::NONE
@@ -112,19 +190,19 @@ impl App {
             )
         {
             match default_event(&stroke) {
-                Some(Event::Key(key)) => return self.on_key(key, now),
-                Some(Event::Edit(edit)) => return self.on_edit(edit),
+                Some(Event::Key(key)) => return (self.on_key(key, now), false),
+                Some(Event::Edit(edit)) => return (self.on_edit(edit), false),
                 Some(Event::Stroke(_) | Event::Mouse(_) | Event::Reply(_) | Event::Focus(_))
                 | None => {
-                    return Effect::None;
+                    return (Effect::None, false);
                 }
             }
         }
         match self.keys().resolve(&stroke, self.key_context()) {
-            Resolved::Key(key) => self.on_key(key, now),
-            Resolved::Edit(edit) => self.on_edit(edit),
-            Resolved::Action(id) => self.on_action(id),
-            Resolved::Nothing => Effect::None,
+            Resolved::Key(key) => (self.on_key(key, now), false),
+            Resolved::Edit(edit) => (self.on_edit(edit), false),
+            Resolved::Action(id) => (self.on_action(id), true),
+            Resolved::Nothing => (Effect::None, false),
         }
     }
 
@@ -156,7 +234,7 @@ impl App {
     }
 
     /// A click on the screen's `spot`: the ✕ closes it, a row selects
-    /// while browsing.
+    /// while browsing. The click entry settles after the dispatch.
     pub(crate) fn keys_screen_click(&mut self, spot: Spot) -> Effect {
         let height = self.keys_height();
         let close = self
@@ -168,7 +246,6 @@ impl App {
             self.keyboard.screen = None;
         }
         self.edited();
-        self.settle();
         Effect::None
     }
 
@@ -268,7 +345,6 @@ impl App {
             self.leave()
         };
         self.edited();
-        self.settle();
         effect
     }
 }

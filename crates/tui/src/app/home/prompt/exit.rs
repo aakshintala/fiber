@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 
-use super::super::super::{App, Effect, Link, Phase, mint, session_command};
+use super::super::super::{App, Effect, Phase, mint, session_command};
 use super::Prompt;
 use crate::home::{Level, QuitChoice};
 use crate::keys::Key;
@@ -115,7 +115,7 @@ impl App {
     /// is written and no `write_failed` runs.
     fn close_all(&mut self) -> Effect {
         let working = self.working();
-        if working.is_empty() || self.link != Link::Up {
+        if working.is_empty() || !self.outbox.is_up() {
             return Effect::Quit;
         }
         let mut lines = Vec::new();

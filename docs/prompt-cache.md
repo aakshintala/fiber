@@ -240,6 +240,67 @@ parameter, missed it on Anthropic and GPT-6 Luna.
 cache, input written to the cache by lifetime, and output. Every provider
 prices these differently, so no cost can be computed without the split.
 
+## Cache diagnostics
+
+An opt-in setting, `cache.diagnostics` (`docs/configuration.md`,
+"Keys"), asks each debug `provider_request` line for a model call to
+say what prefix the request sent and what cache use the response
+reported, so a miss can be told from noise. With the setting off, the
+default, the lines hold what they always held (`docs/state.md`,
+"What each part holds"); with it on, each line for a model call also carries
+`prefix_hashes` and the reported `cache_read` and `cache_write`, on the
+existing debug line in `logs/`. A process reads the setting when it
+starts, so a changed value reaches new processes only.
+
+### Prefix hashes
+
+`prefix_hashes` is a labelled object, never a list: `system` holds the
+system prompt segment's digest, `tools` the tool definitions segment's,
+and `messages` the cumulative message prefixes in order, so a reader
+needs no index convention. Each present string is the lowercase hex
+SHA-256 of the encoded segment as it went on the wire: the bytes the
+provider's cache keys on, not the model request they were built from.
+`system` and `tools` are absent when the request sends none;
+`messages[i]` covers the cumulative conversation encoding through
+message boundary `i`. Digests are comparable within one protocol only:
+each protocol hashes its own encoding, and the same inputs on two
+protocols hash differently by design. The canary compares turn over turn
+within one provider.
+
+### What is hashed
+
+Each protocol hashes each cacheable segment as it encodes it: the system
+prompt, the tool definitions, then each message boundary, as the JSON
+that goes on the wire. The provider's cache keys on the bytes it
+receives, so a request that renders the same inputs differently between
+turns hashes differently: a reordering or a re-serialization shows up
+as shifted digests, which is the defect this exists to catch. The
+encoder does no digest work with the setting off, so the hot path is
+unchanged.
+
+### The reported use
+
+`cache_read` is the input tokens the response read from the cache, and
+`cache_write` the input tokens it wrote, keyed by cache lifetime
+(`"5m"`, `"1h"`), as the response reported them. Both are absent on a
+send or decode failure: an HTTP error keeps its status, a retry keeps
+its attempt number, and a request never sent keeps no line, so a miss
+count can leave those lines out. A line carrying usage always carries a
+2xx status.
+
+### Redaction
+
+The log holds hashes and counts only. It never holds prompt or tool
+text: no system prompt, tool definition, credential, token, header
+value, model text, tool argument or configuration value reaches the
+line (`docs/state.md`, "What each part holds").
+
+### Example
+
+`{"provider":"fake","model":"m","purpose":"model_call","status":200,"attempt":1,"request_bytes":2214,"response_bytes":913,"total_ms":180,"prefix_hashes":{"system":"9f2c…","tools":"41ab…","messages":["c7d0…","e91f…"]},"cache_read":9585,"cache_write":{"1h":57}}`
+(the digests truncated). Two turns' lines hash equal up to the new
+message; a system-prompt change shifts the first hash.
+
 ## What misses the cache on purpose
 
 Each of these costs one rebuild and is logged:
