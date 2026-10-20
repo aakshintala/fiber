@@ -336,6 +336,8 @@ fn the_header_counts_one_exited_session_beside_the_spend() {
     );
 }
 
+// debt: kept as the multi-exit header edge case; the one-count test does not
+// pin the two-count rendering.
 /// Two exits read "2 ✓": the count has no singular form.
 #[test]
 fn the_header_counts_two_exited_sessions() {

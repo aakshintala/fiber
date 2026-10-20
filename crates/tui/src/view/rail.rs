@@ -33,6 +33,9 @@ pub(crate) struct Group<'a> {
     pub(crate) cards: Vec<&'a Row>,
     /// The count of the project's exited sessions.
     pub(crate) exited: usize,
+    // debt: count-only is not a simplification while the ticket acceptance
+    // (open home on the project's first exited row) needs the key; remove
+    // only if the Done stop stops focusing a row.
     /// The key of the project's first exited row, newest first.
     pub(crate) first_exited: Option<u64>,
 }

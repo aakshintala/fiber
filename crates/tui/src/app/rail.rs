@@ -582,6 +582,10 @@ impl App {
         }
     }
 
+    // debt: revisit only if rail_click shows up in a profile or the group
+    // lookup grows a second caller; clicks are rare and the current shape is
+    // pinned by three caught mutants, so a rewrite is churn with no
+    // behavioural gain.
     /// A project header's "N ✓": home, with focus on the project's
     /// first exited row, expanding it when it hides behind more. With
     /// no exited row the entry bar keeps focus: a plain `leave`.

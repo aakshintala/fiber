@@ -1093,6 +1093,10 @@ fn plus_goes_home_with_that_projects_workspace() {
     assert_eq!(app.focused(), None);
 }
 
+// debt: kept until the mutant map stops naming
+// clicking_done_opens_home_on_the_first_exited_row as the unique catcher of
+// three mutants; re-propose deletion only with a replacement test that
+// catches all three.
 /// A header's "N ✓" sits in drawn order right after its "+": Up
 /// from the card reaches the count, then the chip, and Down walks
 /// back.
