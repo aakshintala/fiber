@@ -14,7 +14,7 @@ mod support;
 use std::io::{Cursor, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -35,13 +35,20 @@ use serde_json::{Value, json};
 use support::review::{RequestKind, ReviewArgs, parse_args, replay};
 use support::{Session, calls_reply, delivery, handoff, paris, shell};
 
-/// How long the whole jig exchange may take. `.config/nextest.toml` kills
-/// a slow test after a 30s period times 4 (120s total); with the 5s
-/// watchdog stand-down the deadlines sum to 25s, so 120s is at least twice
-/// them: `docs/testing.md`, "Waits and timeouts", needs nextest's timeout
-/// to be at least twice the test's own deadlines, so a hang reports which
-/// wait expired.
+/// How long the jig exchange may take once the binary has started.
+/// `.config/nextest.toml` kills a slow test after a 30s period times 4
+/// (120s total); with the 30s start bound, the 5s reap and the 5s
+/// watchdog stand-down the longest run sums to 50s, so 120s is at least
+/// twice it: `docs/testing.md`, "Waits and timeouts", needs nextest's
+/// timeout to be at least twice the test's own deadlines, so a hang
+/// reports which wait expired.
 const JIG_DEADLINE: Duration = Duration::from_secs(10);
+
+/// How long the built binary's first start may take. The first exec of a
+/// freshly linked binary can stall for seconds under load; the warm-up
+/// below absorbs that stall here, so the exchange keeps its own
+/// [`JIG_DEADLINE`].
+const START_BOUND: Duration = Duration::from_secs(30);
 
 /// One prompt turn, asserting it completes.
 fn prompt_turn(session: &mut Session, text: &str) {
@@ -290,10 +297,12 @@ fn example_path() -> PathBuf {
 
 /// Runs the built `review` binary on `dir` with `answers` as its stdin
 /// and `args` after the directory. `keep_open` leaves stdin open, so a
-/// second read would block instead of seeing EOF. One [`JIG_DEADLINE`]
-/// covers the whole exchange and the exit; the watchdog reaps the
+/// second read would block instead of seeing EOF. A [`START_BOUND`]
+/// warm-up absorbs the first-exec stall, then one [`JIG_DEADLINE`]
+/// covers the exchange and the exit; the watchdog reaps the
 /// process group on every path, including failure.
 fn run_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> Output {
+    warm_up_binary();
     let mut child = Command::new(example_path())
         .arg(dir)
         .args(args)
@@ -303,8 +312,6 @@ fn run_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> Output 
         .process_group(0)
         .spawn()
         .unwrap();
-    let group = child.id();
-    let watchdog = Watchdog::group(group);
     if !answers.is_empty() {
         child
             .stdin
@@ -316,9 +323,18 @@ fn run_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> Output 
     if !keep_open {
         child.stdin.take();
     }
+    wait_under(child, JIG_DEADLINE)
+}
+
+/// Waits at most `bound` for `child` to exit, reaping it on every path:
+/// on expiry the child's process group is killed first, then the test
+/// fails naming what it waited for.
+fn wait_under(child: Child, bound: Duration) -> Output {
+    let group = child.id();
+    let watchdog = Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match Deadline::after(JIG_DEADLINE).recv(&finished) {
+    let output = match Deadline::after(bound).recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => {
             kill_group(group, "KILL").unwrap_or(false);
@@ -333,6 +349,24 @@ fn run_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> Output 
     };
     watchdog.stand_down(Duration::from_secs(5));
     output
+}
+
+/// Runs the already-built binary once under [`START_BOUND`], so a
+/// first-exec scan stall lands here instead of in the exchange's
+/// [`JIG_DEADLINE`]. The `--bogus` flag fails fast with exit 2 before
+/// the binary touches any session directory; asserting that exit proves
+/// the warm-up ran.
+fn warm_up_binary() {
+    let child = Command::new(example_path())
+        .arg("--bogus")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let output = wait_under(child, START_BOUND);
+    assert_eq!(output.status.code(), Some(2), "the warm-up fails fast");
 }
 
 /// The jig's stdout, one parsed JSON value per line.
@@ -1567,15 +1601,7 @@ fn bad_argv_and_notes_fail_through_the_binary() {
         .process_group(0)
         .spawn()
         .unwrap();
-    let group = none.id();
-    let watchdog = Watchdog::group(group);
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(none.wait_with_output()).unwrap());
-    let output = Deadline::after(JIG_DEADLINE)
-        .recv(&finished)
-        .unwrap()
-        .unwrap();
-    watchdog.stand_down(Duration::from_secs(5));
+    let output = wait_under(none, START_BOUND);
     assert_eq!(output.status.code(), Some(2));
 }
 
