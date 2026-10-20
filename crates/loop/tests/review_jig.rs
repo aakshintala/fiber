@@ -11,11 +11,11 @@
 
 mod support;
 
-use std::io::{BufRead, BufReader, Cursor, Write};
+use std::io::{Cursor, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Once, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -301,8 +301,13 @@ fn example_path() -> PathBuf {
 /// warm-up absorbs the first-exec stall, then one [`JIG_DEADLINE`]
 /// covers the exchange and the exit; the watchdog reaps the
 /// process group on every path, including failure.
+/// The first-exec warm-up has run once in this test process: the ticket
+/// asks for a one-time warm-up exec, and every [`run_jig`] caller shares
+/// it instead of spawning its own.
+static WARMED_UP: Once = Once::new();
+
 fn run_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> Output {
-    warm_up_binary();
+    WARMED_UP.call_once(warm_up_binary);
     let mut child = Command::new(example_path())
         .arg(dir)
         .args(args)
@@ -1826,22 +1831,16 @@ fn a_blocked_call_a_hook_rewrote_replays_with_the_rewritten_arguments() {
     }
 }
 
-/// Quotes `text` for an inline `/bin/sh -c` script: single quotes with
-/// embedded quotes escaped, so temporary paths with spaces or quotes
-/// still reach the wrapper intact.
-fn sh_quote(text: &str) -> String {
-    format!("'{}'", text.replace('\'', "'\\''"))
-}
-
 /// A `review` exchange held before the binary starts: the wrapper has
-/// acked and is blocked reading the hold FIFO, and the exchange's result
-/// arrives on `finished` once the hold is released. Dropping this value
-/// without releasing kills the group through the watchdog.
+/// reported its pid on the ready FIFO and is blocked reading the release
+/// FIFO, and the exchange's result arrives on `finished` once the hold is
+/// released. Dropping this value without releasing kills the group
+/// through the watchdog.
 struct HeldExchange {
-    /// The hold directory, kept alive while the FIFO is held.
+    /// The hold directory, kept alive while the FIFOs are held.
     _home: fakes::TempDir,
-    /// The FIFO's write side, kept open until the exchange finishes so
-    /// the release line never meets a closed writer.
+    /// The release FIFO's write side, kept open until the exchange
+    /// finishes so the release line never meets a closed writer.
     hold: std::fs::File,
     group: u32,
     watchdog: Watchdog,
@@ -1872,36 +1871,34 @@ impl HeldExchange {
     }
 }
 
-/// Spawns the built binary through an inline `/bin/sh -c` wrapper that
-/// writes one ack line to the hold FIFO, blocks reading the hold FIFO,
-/// then execs the binary: no script file is written or executed. The
-/// parent pre-opens the FIFO read-write so neither side's open blocks,
-/// writes `answers` to the wrapper's stdin as [`run_jig`] does, and reads
-/// the ack under [`START_BOUND`] as the signal the child is blocked.
-/// Returns the exchange still held; the test releases it.
+/// Spawns the built binary through an inline `/bin/sh -c` wrapper: the
+/// wrapper reports its pid on a [`fakes::children::Ready`] FIFO, blocks
+/// reading a parent-held release FIFO, then execs the binary with the
+/// remaining positional parameters: no script file is written or executed,
+/// and the shell quotes the parameters itself. The parent pre-opens the
+/// release FIFO read-write so neither side's open blocks, writes `answers`
+/// to the wrapper's stdin as [`run_jig`] does, and reads the pid under
+/// [`START_BOUND`] as the signal the child is blocked. Returns the
+/// exchange still held; the test releases it.
 fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> HeldExchange {
     let home = fakes::TempDir::new("fiber-review-jig-hold");
-    let fifo_path = home.path().join("hold");
-    fakes::fifo(&fifo_path);
+    let ready = fakes::children::Ready::new(home.path());
+    let release_path = home.path().join("release");
+    fakes::fifo(&release_path);
     let hold = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&fifo_path)
+        .open(&release_path)
         .unwrap();
-    let fifo = sh_quote(&fifo_path.to_string_lossy());
-    let mut exec = format!(
-        "exec {} {}",
-        sh_quote(&example_path().to_string_lossy()),
-        sh_quote(&dir.to_string_lossy())
-    );
-    for arg in args {
-        exec.push(' ');
-        exec.push_str(&sh_quote(arg));
-    }
-    let script = format!("printf 'ack\\n' >> {fifo}; IFS= read -r release < {fifo}; {exec}");
     let mut child = Command::new("/bin/sh")
         .arg("-c")
-        .arg(script)
+        .arg(r#"printf '%s\n' "$$" > "$1"; IFS= read -r release < "$2"; shift 2; exec "$@""#)
+        .arg("sh")
+        .arg(ready.path())
+        .arg(&release_path)
+        .arg(example_path())
+        .arg(dir)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1923,39 +1920,7 @@ fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> 
     }
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let acked = {
-        let (ack_done, acked) = mpsc::channel();
-        let ack = hold.try_clone().unwrap();
-        thread::spawn(move || {
-            let mut line = String::new();
-            let read = BufReader::new(ack).read_line(&mut line).map(|_| line);
-            ack_done.send(read).unwrap();
-        });
-        acked
-    };
-    match Deadline::after(START_BOUND).recv(&acked) {
-        Ok(Ok(line)) => assert_eq!(line, "ack\n", "the wrapper acks before it blocks"),
-        Ok(Err(err)) => {
-            kill_group(group, "KILL").unwrap_or(false);
-            drop(
-                Deadline::after(Duration::from_secs(5))
-                    .recv(&finished)
-                    .expect("the wrapper died after KILL"),
-            );
-            watchdog.stand_down(Duration::from_secs(5));
-            panic!("the hold FIFO closed before the wrapper acked: {err}");
-        }
-        Err(_) => {
-            kill_group(group, "KILL").unwrap_or(false);
-            drop(
-                Deadline::after(Duration::from_secs(5))
-                    .recv(&finished)
-                    .expect("the wrapper died after KILL"),
-            );
-            watchdog.stand_down(Duration::from_secs(5));
-            panic!("waited {START_BOUND:?} for the wrapper's ack");
-        }
-    }
+    ready.wait(START_BOUND);
     HeldExchange {
         _home: home,
         hold,
@@ -1967,24 +1932,15 @@ fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> 
 
 /// A start stalled past the exchange deadline still replays once
 /// released: the held start takes none of the exchange's own bound. The
-/// hold is two bounded receives, never a sleep; the 12 s hold outlasts
+/// hold is one bounded receive, never a sleep; the 12 s hold outlasts
 /// [`JIG_DEADLINE`], so a single bound from spawn would kill this
 /// exchange with empty stdout.
 #[test]
 fn stalled_start_keeps_the_exchange_deadline_whole() {
     let fixture = main_fixture();
     let held = spawn_held_jig(&fixture.dir, "1\n", false, &[]);
-    // The exchange has not answered while the start is held: a short
-    // bounded receive times out instead of answering.
-    assert!(
-        matches!(
-            Deadline::after(Duration::from_secs(3)).recv(&held.finished),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ),
-        "the held start answers nothing"
-    );
     // The hold outlasts the exchange deadline with no sleep: a 12 s
-    // bounded receive expires.
+    // bounded receive expires instead of answering.
     assert!(
         matches!(
             Deadline::after(Duration::from_secs(12)).recv(&held.finished),
