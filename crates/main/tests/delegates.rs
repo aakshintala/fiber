@@ -3870,3 +3870,64 @@ fn an_extension_command_reaches_host_delegate_in_a_new_and_a_resumed_session() {
     // turn, and no delegate child ran one of its own against the server.
     assert_eq!(server.requests().len(), 1);
 }
+
+#[test]
+fn a_finished_delegate_replays_its_transcript_to_a_full_subscribe() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        if text.contains("Started delegate") {
+            return support::hello();
+        }
+        support::stream(&[spawn_call("fiber:pb/m")])
+    })
+    .unwrap();
+    let child =
+        ProviderServer::start_responding(|_: &Request| text_reply("the scan is done")).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    // The first wait: the delegate runs to completion and the parent
+    // exits on its own.
+    let running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let done = one(&lines, "job_completed");
+    assert_eq!(done["status"], "completed");
+    let started = one(&lines, "delegate_started");
+    let delegate = started["delegate_session_id"].as_str().unwrap().to_owned();
+    let parent_id = lines[0]["session_id"].as_str().unwrap().to_owned();
+
+    // The second wait: a `full` subscribe to the finished delegate
+    // session replays its transcript from `session_started`.
+    let hub_slot = Arc::new(Mutex::new(None));
+    let (hub, _) = support::connect_hub(&setup, &hub_slot);
+    hub.send(&format!(
+        "{{\"id\":\"c_dsub\",\"session_id\":\"{delegate}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
+    ));
+    let ack = support::recv_answer(&hub, "c_dsub", "the subscribe acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    let fold = support::until(&hub, "the finished delegate's replayed fold", |line| {
+        line.get("session_id").and_then(Value::as_str) == Some(delegate.as_str())
+            && line["kind"] == "fiber_exited"
+    });
+    let started_line = fold
+        .iter()
+        .find(|line| {
+            line["kind"] == "session_started"
+                && line.get("session_id").and_then(Value::as_str) == Some(delegate.as_str())
+        })
+        .unwrap_or_else(|| panic!("no session_started in {fold:?}"));
+    assert_eq!(
+        started_line["payload"]["parent"]["session_id"], parent_id,
+        "{started_line}"
+    );
+    if let Some(proc) = hub_slot.lock().unwrap().take() {
+        proc.kill_and_wait();
+    }
+}
