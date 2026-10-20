@@ -32,11 +32,15 @@ use support::{
 };
 
 /// A driven session: the child, its socket client and the test setup.
+/// The child's stderr streams over a channel: the login writes its
+/// authorization URL there before it waits on the loopback callback, so
+/// waiting for that line waits for the login itself.
 struct Driver {
     child: Child,
     guard: KillGroup,
     watchdog: Watchdog,
     stderr: mpsc::Receiver<String>,
+    overheard: Vec<String>,
     client: Socket,
     setup: support::Setup,
 }
@@ -70,12 +74,11 @@ impl Driver {
         });
         let (tx, stderr) = mpsc::channel();
         thread::spawn(move || {
-            let mut text = String::new();
-            stderr_pipe
-                .take(u64::MAX)
-                .read_to_string(&mut text)
-                .unwrap();
-            tx.send(text).unwrap();
+            for line in BufReader::new(stderr_pipe).lines() {
+                if tx.send(line.unwrap()).is_err() {
+                    break;
+                }
+            }
         });
         first_line(setup.deadline, &lines);
         let client = Socket::connect(setup.deadline, &setup.session_socket(id));
@@ -98,8 +101,24 @@ impl Driver {
             guard,
             watchdog,
             stderr,
+            overheard: Vec::new(),
             client,
             setup,
+        }
+    }
+
+    /// The next child-stderr line matching `done`, each taking what
+    /// remains of the test's deadline: expiry panics naming `what`.
+    /// Earlier lines stay in `overheard` for `finish`'s failure report.
+    #[track_caller]
+    fn stderr_until(&mut self, what: &str, mut done: impl FnMut(&str) -> bool) -> String {
+        loop {
+            let line = self.setup.deadline.recv_or_fail(&self.stderr, what);
+            let hit = done(&line);
+            self.overheard.push(line.clone());
+            if hit {
+                return line;
+            }
         }
     }
 
@@ -133,7 +152,7 @@ impl Driver {
 
     /// Closes the session and asserts it left nothing behind.
     #[track_caller]
-    fn finish(self) -> String {
+    fn finish(mut self) -> String {
         self.client.send(r#"{"id":"close","command":"close"}"#);
         until_close(&self.client);
         let group = self.child.id();
@@ -143,7 +162,17 @@ impl Driver {
             tx.send(child.wait()).unwrap();
         });
         let status = self.setup.deadline.recv(&done).unwrap().unwrap();
-        let stderr = self.setup.deadline.recv(&self.stderr).unwrap();
+        // The stderr sender hangs up after the child's last line: each
+        // receive takes what remains of the test's deadline, and the
+        // hangup ends the drain.
+        loop {
+            match self.setup.deadline.recv(&self.stderr) {
+                Ok(line) => self.overheard.push(line),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(error) => panic!("the child's stderr never closed: {error:?}"),
+            }
+        }
+        let stderr = self.overheard.join("\n");
         assert!(status.success(), "{stderr}");
         assert!(!group_alive(self.setup.deadline, group));
         std::mem::forget(self.guard);
@@ -446,7 +475,7 @@ fn login_against_a_fake_authorization_server_makes_the_server_ready() {
         &setup,
         &json!({"remote": {"url": format!("{}/mcp", remote.url())}}),
     );
-    let driver = Driver::start(setup, &doors::mint("s_"), empty.as_os_str());
+    let mut driver = Driver::start(setup, &doors::mint("s_"), empty.as_os_str());
 
     let rows = driver.servers("c_before");
     let before = Driver::row(&rows, "remote");
@@ -456,41 +485,36 @@ fn login_against_a_fake_authorization_server_makes_the_server_ready() {
     driver.client.send(
         &json!({"id": "c_login", "command": "mcp_login", "args": {"server": "remote"}}).to_string(),
     );
-    // The login waits on the loopback callback; its row carries the URL
-    // to open by hand until the callback arrives.
-    let mut auth_url = String::new();
-    for round in 0..60 {
-        let rows = driver.servers(&format!("c_wait_{round}"));
-        if let Some(url) = Driver::row(&rows, "remote")
+    // The login writes its authorization URL on the child's stderr
+    // before it waits on the loopback callback: the line proves the
+    // wait and carries the callback's address, so one `mcp_servers`
+    // query after it sees the row's `auth_url`.
+    let auth_url = driver.stderr_until("the login to present its authorization URL", |line| {
+        line.contains("/authorize?")
+    });
+    let rows = driver.servers("c_wait");
+    assert_eq!(
+        Driver::row(&rows, "remote")
             .get("auth_url")
-            .and_then(Value::as_str)
-        {
-            auth_url = url.to_owned();
-            break;
-        }
-    }
-    assert!(!auth_url.is_empty(), "no auth_url while the login waits");
+            .and_then(Value::as_str),
+        Some(auth_url.as_str()),
+        "{rows:?}"
+    );
     // One login in flight per server: a second one is refused.
     let busy = driver.command("c_login_again", "mcp_login", json!({"server": "remote"}));
     assert_eq!(busy["kind"], "command_rejected", "{busy:?}");
     assert_eq!(busy["payload"]["code"], "busy", "{busy:?}");
     drive_callback(&auth_url);
+    // The login thread delivers the reconnect and answers only after
+    // its acknowledgement: its answer proves the server restarted, so
+    // one `mcp_servers` query after it sees the ready row.
     let logged_in = support::recv_answer(&driver.client, "c_login", "the login acknowledgement");
     assert_eq!(logged_in["kind"], "command_accepted", "{logged_in:?}");
-
-    // The stored token starts the server: its row is ready.
-    let mut ready = false;
-    for round in 0..60 {
-        let rows = driver.servers(&format!("c_ready_{round}"));
-        let row = Driver::row(&rows, "remote");
-        if row["state"] == "ready" {
-            assert!(row.get("auth_url").is_none(), "{rows:?}");
-            assert_eq!(row["tools"], 1, "{rows:?}");
-            ready = true;
-            break;
-        }
-    }
-    assert!(ready, "the server never became ready after the login");
+    let rows = driver.servers("c_ready");
+    let row = Driver::row(&rows, "remote");
+    assert_eq!(row["state"], "ready", "{rows:?}");
+    assert!(row.get("auth_url").is_none(), "{rows:?}");
+    assert_eq!(row["tools"], 1, "{rows:?}");
     driver.finish();
 }
 

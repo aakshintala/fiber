@@ -572,8 +572,10 @@ fn is_approved(
 
 /// One configured MCP server: what `fiber mcp list` prints and what the
 /// hub's `mcp_servers` answer builds its rows from (`docs/mcp.md`,
-/// "Servers, their state and the per-server commands"). Nothing else
-/// about a declaration travels: a declaration can hold tokens.
+/// "Servers, their state and the per-server commands"): its name, the
+/// layer that declares it, and for a repository's server whether it is
+/// approved. Nothing else about a declaration travels: a declaration can
+/// hold tokens.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DeclaredServer {
     /// The server's name.
@@ -583,8 +585,6 @@ pub struct DeclaredServer {
     /// Whether a repository's server is approved; always true for the
     /// global and project layers, which need no approval.
     pub approved: bool,
-    /// The effective `url`; `None` for a stdio server.
-    pub url: Option<String>,
 }
 
 /// Every declared MCP server, sorted by name then layer (global, project,
@@ -620,8 +620,8 @@ pub fn declared_servers(
             .cmp(&right.0)
             .then(layer_order(left.1).cmp(&layer_order(right.1)))
     });
-    // Approval and the URL resolve in listing order, as `run_list`
-    // always resolved them, so a failing row reports the same error.
+    // Approval resolves in listing order, as `run_list` always resolved
+    // it, so a failing row reports the same error.
     let mut declared = Vec::with_capacity(rows.len());
     for (name, layer) in rows {
         let approved = if layer == Layer::Repository {
@@ -629,17 +629,10 @@ pub fn declared_servers(
         } else {
             true
         };
-        let url = config
-            .get(
-                &format!("mcp.servers.{}.url", config::quoted_segment(&name)),
-                None,
-            )
-            .and_then(|(value, _)| value.as_str().map(str::to_owned));
         declared.push(DeclaredServer {
             name,
             layer,
             approved,
-            url,
         });
     }
     Ok(declared)

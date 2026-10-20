@@ -10,7 +10,7 @@ use std::sync::Arc;
 use contract::events::UsageRecorded;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 use contract::{Envelope, SessionId};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{App, Effect};
 use crate::ThemeSetting;
@@ -272,6 +272,20 @@ impl App {
         Effect::None
     }
 
+    /// Sends `command` with `args` to the session on screen: the sent
+    /// line and its id, for the caller to record and send. Nothing when
+    /// no session is attached.
+    fn send_config_command(
+        &mut self,
+        command: &str,
+        args: Option<Value>,
+    ) -> Option<(String, String)> {
+        let (session, _) = self.command_session()?;
+        let id = super::mint();
+        let line = super::session_command(&id, command, &session, args).to_string();
+        Some((id, line))
+    }
+
     /// Opens a view on the session on screen that waits for its command's
     /// answer: sends `command` and opens what `build` makes of its id.
     /// With no session attached the notice is pushed and nothing opens.
@@ -281,11 +295,9 @@ impl App {
         command: &str,
         build: fn(String, &Ctx<'_>) -> Open,
     ) -> Effect {
-        let Some((session, _)) = self.command_session() else {
+        let Some((id, line)) = self.send_config_command(command, None) else {
             return Effect::None;
         };
-        let id = super::mint();
-        let line = super::session_command(&id, command, &session, None).to_string();
         let Some(workspace) = self.view_workspace() else {
             return Effect::None;
         };
@@ -545,15 +557,12 @@ impl App {
     /// remembers its id as the server's wait: the answer clears the wait
     /// and queries the rows again. Nothing when no session is attached.
     fn send_mcp_driver(&mut self, command: &str, server: &str, login: bool) -> Effect {
-        let Some((session, _)) = self.command_session() else {
+        let Some((id, line)) = self.send_config_command(command, Some(json!({"server": server})))
+        else {
             return Effect::None;
         };
-        let id = super::mint();
-        let line = super::session_command(&id, command, &session, Some(json!({"server": server})))
-            .to_string();
         if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {
             mcp.sent(server, id, login);
-            mcp.sending(server, login);
         }
         Effect::Send(vec![line])
     }
@@ -561,11 +570,9 @@ impl App {
     /// Re-sends `mcp_servers` for the open MCP view: its answer fills
     /// what `expect` names. Nothing when no session is attached.
     fn remcp_query(&mut self) -> Vec<String> {
-        let Some((session, _)) = self.command_session() else {
+        let Some((id, line)) = self.send_config_command("mcp_servers", None) else {
             return Vec::new();
         };
-        let id = super::mint();
-        let line = super::session_command(&id, "mcp_servers", &session, None).to_string();
         if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {
             mcp.expect(id);
         }

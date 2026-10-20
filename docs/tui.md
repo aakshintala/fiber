@@ -716,7 +716,7 @@ a click on it returns too. The views are:
   and waits for the loopback callback, and the row shows the wait with the
   login URL cut to fit, then success or the failure reason. Enter on a ready
   or connecting row does nothing. A repository's server nobody approved
-  shows as such, and Enter says to run `fiber approve` in the repository;
+  shows `not approved`, and Enter says to run `fiber approve` in the repository;
   the view never approves it. Rows sort by server name. The last row is
   "Per-tool on/off switches stay in `/tools`.", dim. On a remote terminal
   the browser opens on the hub's machine, so the row's URL is the one to

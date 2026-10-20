@@ -252,6 +252,29 @@ fn enter_on_unapproved_gives_the_approve_advice_and_sends_nothing() {
 }
 
 #[test]
+fn unapproved_rows_show_as_such() {
+    let (_fake, mcp) = opened(&[row(
+        "repo",
+        McpServerLayer::Repository,
+        McpServerState::Connecting,
+        "",
+        None,
+        false,
+        None,
+    )]);
+    // The skipped server never started, but its row names the reason:
+    // not its connecting state.
+    assert_eq!(
+        texts(&mcp)[..1],
+        [format!(
+            "  {} · repository · not approved",
+            fit_name("repo")
+        )]
+    );
+    assert_eq!(inks(&mcp)[0], Ink::Role(Role::Attention));
+}
+
+#[test]
 fn the_wait_shows_with_the_url_cut_to_fit() {
     let url = format!("https://login.example/{}", "a".repeat(200));
     let (fake, mut mcp) = opened(&[row(

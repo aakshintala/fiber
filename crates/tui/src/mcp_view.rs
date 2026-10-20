@@ -48,16 +48,8 @@ struct Wait {
     login: bool,
 }
 
-/// One row of the view.
-#[derive(Debug)]
-enum Entry {
-    /// A server's row.
-    Server(McpServerRow),
-    /// The last row, naming where the per-tool switches stay.
-    Note,
-}
-
-/// The `/mcp` view's state.
+/// The `/mcp` view's state: the answer's rows, sorted by name, then
+/// the note naming where the per-tool switches stay.
 #[derive(Debug)]
 pub(crate) struct Mcp {
     /// The `mcp_servers` command's id until its answer arrives.
@@ -66,11 +58,9 @@ pub(crate) struct Mcp {
     servers: Vec<McpServerRow>,
     /// The driver commands in flight, by server.
     waiting: HashMap<String, Wait>,
-    /// The login URL as the rows show it, cut to the answering view's
-    /// width, by server.
-    urls: HashMap<String, String>,
-    /// Server rows and the last note.
-    rows: Vec<Entry>,
+    /// The answering view's width: the login URL is cut to fit it, as
+    /// the frame has no width to cut by.
+    columns: usize,
     list: List,
     /// What the last action said, shown below the rows.
     said: Vec<String>,
@@ -79,17 +69,14 @@ pub(crate) struct Mcp {
 impl Mcp {
     /// The view opening with the `mcp_servers` command `id` sent.
     pub(crate) fn open(id: String) -> Self {
-        let mut mcp = Self {
+        Self {
             awaiting: Some(id),
             servers: Vec::new(),
             waiting: HashMap::new(),
-            urls: HashMap::new(),
-            rows: Vec::new(),
+            columns: 0,
             list: List::default(),
             said: Vec::new(),
-        };
-        mcp.rebuild(0);
-        mcp
+        }
     }
 
     /// Whether a fresh query would say anything new: none while the last
@@ -108,6 +95,11 @@ impl Mcp {
         self.awaiting.as_deref() == Some(id)
     }
 
+    /// Server rows and the last note: the list's length.
+    fn len(&self) -> usize {
+        self.servers.len() + 1
+    }
+
     /// Handles one key.
     pub(crate) fn key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
         if *key == Key::Esc {
@@ -117,7 +109,7 @@ impl Mcp {
             return self.enter();
         }
         let shown = self.shown(ctx);
-        if self.list.key(key, self.rows.len(), shown) {
+        if self.list.key(key, self.len(), shown) {
             self.said.clear();
         }
         Act::Stay
@@ -129,7 +121,7 @@ impl Mcp {
             Spot::Close => Act::Close,
             Spot::Row(at) => {
                 let shown = self.shown(ctx);
-                self.list.select(at, self.rows.len(), shown);
+                self.list.select(at, self.len(), shown);
                 Act::Stay
             }
             Spot::Revoke(_) | Spot::Cell(_, _) | Spot::Item(_) | Spot::Switch { .. } => Act::Stay,
@@ -140,7 +132,8 @@ impl Mcp {
     /// that needs it, the approve advice on an unapproved one, and
     /// nothing on a ready or connecting row.
     fn enter(&mut self) -> Act {
-        let Some(Entry::Server(row)) = self.rows.get(self.list.selected()) else {
+        let Some(row) = self.servers.get(self.list.selected()) else {
+            // The last note: Enter does nothing on it.
             return Act::Stay;
         };
         if !row.approved {
@@ -171,20 +164,10 @@ impl Mcp {
         // hub no longer waits on is over, one way or the other.
         self.waiting
             .retain(|server, _| servers.iter().any(|row| row.name == *server));
-        // The login URL is cut once, to fit the view it arrived for: the
-        // frame has no width to cut by.
-        let mut urls = HashMap::new();
-        for row in &self.servers {
-            if let Some(url) = row.auth_url.as_deref() {
-                urls.insert(
-                    row.name.clone(),
-                    cut_login_url(&row.name, row.layer, url, ctx.width),
-                );
-            }
-        }
-        self.urls = urls;
+        self.columns = ctx.width;
         self.awaiting = None;
-        self.rebuild(ctx.height);
+        let shown = rows_height(&self.frame(None), ctx.height);
+        self.list.select(self.list.selected(), self.len(), shown);
     }
 
     /// The sent command's rejection: only for its id.
@@ -199,15 +182,11 @@ impl Mcp {
         self.said = vec![message.to_owned()];
     }
 
-    /// Remembers the driver command `id` sent for `server`: a login when
-    /// `login`, else a reconnect.
+    /// Remembers the driver command `id` sent for `server` and says
+    /// what it is doing: a login waits on the browser, a reconnect
+    /// restarts the one slot. A login when `login`, else a reconnect.
     pub(crate) fn sent(&mut self, server: &str, id: String, login: bool) {
         self.waiting.insert(server.to_owned(), Wait { id, login });
-    }
-
-    /// Says what the driver command sent for `server` is doing: a login
-    /// waits on the browser, a reconnect restarts the one slot.
-    pub(crate) fn sending(&mut self, server: &str, login: bool) {
         self.said = vec![if login {
             format!("Logging in {server}…")
         } else {
@@ -229,27 +208,15 @@ impl Mcp {
         true
     }
 
-    /// Rebuilds the rows from the answer: server rows sorted by name,
-    /// then the note naming where the per-tool switches stay.
-    fn rebuild(&mut self, height: usize) {
-        let mut rows: Vec<Entry> = self.servers.iter().cloned().map(Entry::Server).collect();
-        rows.push(Entry::Note);
-        self.rows = rows;
-        let shown = rows_height(&self.frame(None), height);
-        self.list
-            .select(self.list.selected(), self.rows.len(), shown);
-    }
-
-    /// The frame to draw.
+    /// The frame to draw: server rows sorted by name, then the note
+    /// naming where the per-tool switches stay.
     pub(crate) fn frame(&self, _usage: Option<u64>) -> Frame {
-        let rows = self
-            .rows
+        let mut rows: Vec<Vec<(String, Option<Spot>, Ink)>> = self
+            .servers
             .iter()
-            .map(|entry| match entry {
-                Entry::Server(row) => self.server_cells(row),
-                Entry::Note => vec![(format!("  {NOTE}"), None, Ink::Muted)],
-            })
+            .map(|row| self.server_cells(row))
             .collect();
+        rows.push(vec![(format!("  {NOTE}"), None, Ink::Muted)]);
         let below = if self.awaiting.is_some() {
             let mut below = vec!["Reading the servers…".to_owned()];
             below.extend(self.said.clone());
@@ -269,9 +236,25 @@ impl Mcp {
     }
 
     /// One server's cells: its name, layer and state, with the login wait
-    /// and its URL while one is in flight.
+    /// and its URL while one is in flight. A repository's server nobody
+    /// approved never starts: its row says so, and Enter gives the
+    /// `fiber approve` advice.
     fn server_cells(&self, row: &McpServerRow) -> Vec<(String, Option<Spot>, Ink)> {
+        if !row.approved {
+            return vec![(
+                format!(
+                    "  {} · {} · not approved",
+                    fit_name(&row.name),
+                    layer_word(row.layer)
+                ),
+                None,
+                Ink::Role(Role::Attention),
+            )];
+        }
         let waiting_login = self.waiting.get(&row.name).is_some_and(|wait| wait.login);
+        // The login URL as the rows show it, cut to the answering
+        // view's width: the frame has no width to cut by.
+        let mut login_url = None;
         let (state, ink) = match row.state {
             McpServerState::Connecting => ("connecting".to_owned(), Ink::Muted),
             McpServerState::Ready => {
@@ -295,32 +278,22 @@ impl Mcp {
                 let mut state = "needs-login".to_owned();
                 if waiting_login || row.auth_url.is_some() {
                     state.push_str(" · waiting for login");
-                    if let Some(url) = self.urls.get(&row.name) {
-                        state.push_str(" · ");
-                        state.push_str(url);
-                    }
+                    login_url = row.auth_url.as_deref();
                 }
                 (state, Ink::Role(Role::Attention))
             }
         };
-        let name = fit_name(&row.name);
-        vec![(
-            format!("  {name} · {} · {state}", layer_word(row.layer)),
-            None,
-            ink,
-        )]
+        let mut text = format!(
+            "  {} · {} · {state}",
+            fit_name(&row.name),
+            layer_word(row.layer)
+        );
+        if let Some(url) = login_url {
+            text.push_str(" · ");
+            text.push_str(&cut(url, self.columns.saturating_sub(width(&text))));
+        }
+        vec![(text, None, ink)]
     }
-}
-
-/// `url` cut to fit a row of `width` columns: the name, the layer, the
-/// needs-login state and the wait's own separators stay whole.
-fn cut_login_url(name: &str, layer: McpServerLayer, url: &str, columns: usize) -> String {
-    let prefix = format!(
-        "  {} · {} · needs-login · waiting for login · ",
-        fit_name(name),
-        layer_word(layer)
-    );
-    cut(url, columns.saturating_sub(width(&prefix)))
 }
 
 /// `name` in the name column: padded, or cut with `…`.

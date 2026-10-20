@@ -1936,8 +1936,7 @@ fn an_unreadable_secret_names_the_file_without_its_value() {
 #[test]
 fn running_names_only_the_servers_up_now() {
     let setup = Setup::with_tools(&json!([{"name": "echo"}]));
-    let mut up = setup.spec("up");
-    up.startup_timeout = std::time::Duration::from_secs(30);
+    let up = setup.spec("up");
     let mut down = setup.spec("down");
     down.transport = crate::Transport::Stdio(crate::StdioSpec {
         command: "/no/such/command".to_owned(),
@@ -1964,8 +1963,7 @@ fn running_names_only_the_servers_up_now() {
 #[test]
 fn restart_serves_the_slot_again_and_reports_what_changed() {
     let setup = Setup::with_tools(&json!([{"name": "echo"}]));
-    let mut up = setup.spec("up");
-    up.startup_timeout = std::time::Duration::from_secs(30);
+    let up = setup.spec("up");
     let mut down = setup.spec("down");
     down.transport = crate::Transport::Stdio(crate::StdioSpec {
         command: "/no/such/command".to_owned(),
