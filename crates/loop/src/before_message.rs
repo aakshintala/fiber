@@ -171,9 +171,14 @@ impl Loop {
             None => {
                 // Refused, failed or shut down: admitted answered the
                 // probe. The entry leaves with no notice when the loop
-                // is closing: the session exit is the signal.
-                let _ = self.steering.take(id, &emit);
-                if let Ok(Err(rejection)) = probe_rx.try_recv()
+                // is closing: the session exit is the signal. A hook
+                // outcome for an id no longer present is discarded with
+                // no second emit (drop-wins): only a removal that
+                // actually took the entry publishes the notice, so a
+                // reader-side drop that won the race is never followed
+                // by a stale rejection.
+                if self.steering.take(id, &emit).is_some()
+                    && let Ok(Err(rejection)) = probe_rx.try_recv()
                     && rejection.code != ErrorCode::Closing
                 {
                     self.write(

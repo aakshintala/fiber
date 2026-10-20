@@ -1303,14 +1303,28 @@ use contract::inbox::Message as SteerMessage;
 use contract::shapes::{ContentPart as SteerContent, Origin as SteerOrigin, Sender as SteerSender};
 use contract::steering::Queue as SteerQueue;
 
+/// A one-shot pause inside the hook: the hook fires `entered` and blocks
+/// on `release`, so the test drops the entry mid-pass. The release sender
+/// drops when the test ends, which releases a still-blocked hook instead
+/// of hanging it.
+struct HookGate {
+    entered: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 struct FakeSteerHooks {
     seen: SteerSeen<Vec<String>>,
     answers: SteerSeen<SteerAnswers<SteerBeforeMessageAnswer>>,
+    gate: SteerSeen<Option<HookGate>>,
 }
 
 impl FakeSteerHooks {
     fn answer(&self, answer: SteerBeforeMessageAnswer) {
         self.answers.lock().unwrap().push_back(answer);
+    }
+
+    fn arm(&self, gate: HookGate) {
+        *self.gate.lock().unwrap() = Some(gate);
     }
 
     fn count(&self) -> usize {
@@ -1353,6 +1367,16 @@ fn steer_refused(by: &str, reason: &str) -> SteerBeforeMessageAnswer {
     }
 }
 
+fn steer_failed(by: &str, message: &str) -> SteerBeforeMessageAnswer {
+    SteerBeforeMessageAnswer {
+        outcome: SteerBeforeMessageOutcome::Failed(contract::hook::HookFailure {
+            extension: by.to_owned(),
+            message: message.to_owned(),
+        }),
+        notices: Vec::new(),
+    }
+}
+
 impl SteerHooks for FakeSteerHooks {
     fn after_tool(&self, _call: &SteerAfterToolCall<'_>) -> SteerAfterToolAnswer {
         SteerAfterToolAnswer {
@@ -1377,6 +1401,10 @@ impl SteerHooks for FakeSteerHooks {
     }
 
     fn before_message(&self, message: &SteerBeforeMessage<'_>) -> SteerBeforeMessageAnswer {
+        if let Some(gate) = self.gate.lock().unwrap().take() {
+            let _sent = gate.entered.send(());
+            let _released = gate.release.recv();
+        }
         self.seen
             .lock()
             .unwrap()
@@ -1557,6 +1585,7 @@ fn a_refused_reader_admitted_steer_removes_the_row_writes_the_notice_and_applies
     let hooks = Arc::new(FakeSteerHooks {
         seen: SteerSeen::new(Vec::new()),
         answers: SteerSeen::new(SteerAnswers::new()),
+        gate: SteerSeen::new(None),
     });
     hooks.answer(steer_refused("fiber.test/hooks", "nope"));
     let (mut looped, log, mut watched, home) = started_with_steering(Arc::clone(&queue));
@@ -1612,6 +1641,7 @@ fn a_replaced_reader_admitted_steer_updates_the_row_and_applies_the_replacement(
     let hooks = Arc::new(FakeSteerHooks {
         seen: SteerSeen::new(Vec::new()),
         answers: SteerSeen::new(SteerAnswers::new()),
+        gate: SteerSeen::new(None),
     });
     hooks.answer(steer_replaced("hooked", "fiber.test/hooks"));
     let (mut looped, log, mut watched, home) = started_with_steering(Arc::clone(&queue));
@@ -1645,6 +1675,7 @@ fn a_steer_dropped_before_its_delivery_never_hooks_and_never_applies() {
     let hooks = Arc::new(FakeSteerHooks {
         seen: SteerSeen::new(Vec::new()),
         answers: SteerSeen::new(SteerAnswers::new()),
+        gate: SteerSeen::new(None),
     });
     let (mut looped, log, mut watched, home) = started_with_steering(Arc::clone(&queue));
     looped = looped.hooks(hooks.clone());
@@ -1673,6 +1704,7 @@ fn a_steer_dropped_after_staging_skips_the_apply() {
     let hooks = Arc::new(FakeSteerHooks {
         seen: SteerSeen::new(Vec::new()),
         answers: SteerSeen::new(SteerAnswers::new()),
+        gate: SteerSeen::new(None),
     });
     let (mut looped, log, mut watched, home) = started_with_steering(Arc::clone(&queue));
     looped = looped.hooks(hooks.clone());
@@ -1811,4 +1843,71 @@ fn a_drop_before_the_claim_never_starts_the_next_turn() {
             "a drop that lost to the claim leaves the claimed steer"
         );
     }
+}
+
+/// A refusal or blocking failure racing a reader-side drop: the hook
+/// pauses mid-pass, the reader drops the entry, and the hook's outcome
+/// then arrives for an id no longer present. Drop-wins: no holder queues
+/// and no notice is published.
+fn raced_hook_outcome(answer: SteerBeforeMessageAnswer) {
+    let queue = Arc::new(SteerQueue::new());
+    let hooks = Arc::new(FakeSteerHooks {
+        seen: SteerSeen::new(Vec::new()),
+        answers: SteerSeen::new(SteerAnswers::new()),
+        gate: SteerSeen::new(None),
+    });
+    hooks.answer(answer);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (free_tx, free_rx) = mpsc::channel();
+    hooks.arm(HookGate {
+        entered: entered_tx,
+        release: free_rx,
+    });
+    let (mut looped, log, mut watched, _home) = started_with_steering(Arc::clone(&queue));
+    looped = looped.hooks(hooks.clone());
+    let turn = TurnId("t_test".into());
+    steer_pushed(&queue, &log, "c_1", "raced");
+    std::thread::scope(|scope| {
+        let waiter = scope.spawn(|| {
+            looped.admit_running(
+                Delivery::Steer(steer_message("raced", "c_1"), steer_ignore()),
+                &turn,
+            )
+        });
+        Deadline::after(DEADLINE)
+            .recv(&entered_rx)
+            .expect("the hook runs mid-pass");
+        // The reader drops while the hook is paused and is acknowledged.
+        assert!(
+            queue.remove(&SteerId("c_1".into()), &*log),
+            "the racing drop wins"
+        );
+        let _sent = free_tx.send(());
+        let outcome = waiter.join().expect("the drain thread ends");
+        outcome.expect("the drain ends cleanly");
+    });
+    assert_eq!(hooks.count(), 1, "the hook ran once");
+    assert!(looped.queued.is_empty(), "nothing queues");
+    // The removal already emitted the empty queue; the losing outcome
+    // emits nothing more.
+    assert_eq!(
+        steer_rows(&mut watched, 2),
+        [vec!["raced".to_owned()], Vec::<String>::new()]
+    );
+    // Any notice would already sit in the watcher: its write is
+    // synchronous with the drain above, so one immediate receive decides.
+    assert!(
+        matches!(watched.try_recv(), Ok(None)),
+        "a stale hook outcome publishes no notice"
+    );
+}
+
+#[test]
+fn a_refusal_racing_a_reader_drop_publishes_no_notice() {
+    raced_hook_outcome(steer_refused("fiber.test/hooks", "nope"));
+}
+
+#[test]
+fn a_hook_failure_racing_a_reader_drop_publishes_no_notice() {
+    raced_hook_outcome(steer_failed("fiber.test/hooks", "boom"));
 }
