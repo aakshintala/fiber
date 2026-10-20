@@ -2111,7 +2111,13 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   ancestor and `to_seq` set to its `seq`, pages that session the same way,
   and repeats for each further ancestor. Pages, row counts, search and the
   opening pass treat the chain as one history. The terminal never reads a
-  log from disk.
+  log from disk. `land` carries the preview's closed ancestor pages across
+  the swap the way it carries open items; a dropped ancestor page loads
+  again with `history` under its `session_id`, and the fold still replays
+  the own log only. Ancestor rows are counted by the same `history`
+  streaming before the scroll bar appears, never from the subscription:
+  "until the screen is full" governs the display phase, and the count
+  phase keeps streaming past filled to the chain root.
 - **Pages are cut inside turns,** at `step_started`, about 64 lines each, and
   never inside a tool group, so each page renders on its own.
 - **The window** is the pages on screen plus one screen of rows above and
