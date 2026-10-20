@@ -123,13 +123,21 @@ such as in the global file:
 ```
 
 and switches it mid-session with `/credential <configuration>`. Under
-`default` it takes the active configuration's token, and when that has no
-account logged in, Application Default Credentials': `gcloud auth
-application-default print-access-token`. Each command's `--format` prints
-the token and its expiry and no other field. The token is refreshed before
-its expiry, as any token is ("Keys, tokens and OAuth"). With neither, the
-call fails with `credential_failed`, and the message says to run `gcloud auth
-login` or `gcloud auth application-default login`, or name a configuration.
+`default` it takes the active configuration's token. Only when gcloud has no
+account selected at all, saying "You do not currently have an active account
+selected", does it take Application Default Credentials' token instead:
+`gcloud auth application-default print-access-token`. Any other failure, such
+as a login that needs reauthentication or a selected account with no
+credentials, fails with `credential_failed` and says to run `gcloud auth
+login`, so a session never switches to the account Application Default
+Credentials hold. Each command's `--format` prints the token and its expiry
+and no other field. The token is refreshed before its expiry, as any token is
+("Keys, tokens and OAuth"). With no account selected and no Application
+Default Credentials, the call fails with `credential_failed`, and the message
+says to run `gcloud auth login` or `gcloud auth application-default login`,
+or name a configuration. The failure keeps gcloud's own reason, with an
+address shown as `[account]` and any run of 20 or more token-like characters
+as `[redacted]`.
 `fiber login vertex` is not supported: it stores a key, and a provider with
 `credential()` reads none. The Google Cloud project is the package's
 `project` setting, which its base URL names, read from
