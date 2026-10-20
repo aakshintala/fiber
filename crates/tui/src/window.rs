@@ -1145,7 +1145,7 @@ impl Pages {
     }
 
     /// Carries the preview's closed ancestor-segment runs into the fold
-    /// front beside `carry_opens`: the index pages, their seeds and their
+    /// front beside `carry_opens`: the index runs, their seeds and their
     /// resident cards move, and every position-keyed set shifts by the
     /// carried count. A dropped ancestor page loads again under its own
     /// session; the fold's own runs keep their keys and keep folding

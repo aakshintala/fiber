@@ -824,3 +824,114 @@ fn prefixes_saturate_rather_than_subtract() {
     assert_eq!(index.locate(8), None);
     assert_eq!(index.start(99), 8);
 }
+
+/// The ancestor's session: a second segment numbering from zero, like a
+/// real chain.
+fn ancestor() -> SessionId {
+    SessionId("s_bbbbbbbbbbbbbbbb".to_owned())
+}
+
+/// One page-cutting chunk of `session` lines from `seq`: fillers, then a
+/// `turn_started` that cuts the next page.
+fn chunk(index: &mut Index, session: &SessionId, seq: &mut u64) {
+    for _ in 0..PAGE_LINES {
+        index.push(session, Seq(*seq), "usage_recorded", None, true);
+        *seq += 1;
+    }
+    index.push(session, Seq(*seq), "turn_started", None, true);
+    *seq += 1;
+}
+
+/// Every line on every page resolves to its own page under its session:
+/// the lookup searches only the named session's runs.
+fn check_runs(index: &Index) {
+    for (at, page) in index.pages().iter().enumerate() {
+        if page.lines == 0 {
+            continue;
+        }
+        let mut seq = page.first_seq.0;
+        while seq <= page.last_seq.0 {
+            assert_eq!(
+                index.page_of(&page.session, Seq(seq)),
+                Some(at),
+                "session {} seq {seq}",
+                page.session.0
+            );
+            seq += 1;
+        }
+    }
+}
+
+/// `page_of` searches only the named session's runs: both segments number
+/// from zero, so a bare `seq` match would land on the wrong run. The
+/// ancestor runs twice, so the lookup must walk every matching run, not
+/// just the first.
+#[test]
+fn page_of_searches_only_the_named_sessions_run() {
+    let mut index = Index::default();
+    let mut aseq = 0u64;
+    chunk(&mut index, &ancestor(), &mut aseq);
+    chunk(&mut index, &ancestor(), &mut aseq);
+    let mut oseq = 0u64;
+    chunk(&mut index, &session(), &mut oseq);
+    chunk(&mut index, &session(), &mut oseq);
+    chunk(&mut index, &ancestor(), &mut aseq);
+    check_runs(&index);
+    // The two segments share their seqs, yet resolve apart.
+    let seam = index
+        .pages()
+        .iter()
+        .position(|page| page.session == session())
+        .expect("the own run");
+    assert!(seam > 0, "the ancestor runs first");
+    assert_eq!(index.page_of(&ancestor(), Seq(0)), Some(0));
+    assert_eq!(index.page_of(&session(), Seq(0)), Some(seam));
+    // The ancestor's later run sits past the own run.
+    let later = index
+        .page_of(&ancestor(), Seq(aseq.saturating_sub(1)))
+        .expect("the ancestor's last seq");
+    assert!(later > seam, "the second ancestor run follows the own run");
+    // Unknown sessions and seqs past every page miss.
+    assert_eq!(
+        index.page_of(&SessionId("s_cccccccccccccccc".to_owned()), Seq(0)),
+        None
+    );
+    assert_eq!(index.page_of(&ancestor(), Seq(aseq)), None);
+    assert_eq!(index.page_of(&session(), Seq(oseq)), None);
+}
+
+/// `prepend_from` carries the runs with the pages and shifts the fold's
+/// own runs by the carried count, so both sides still resolve. Carrying
+/// nothing, or carrying from an index that recorded no run, keeps the
+/// index as it was.
+#[test]
+fn prepend_from_shifts_the_runs_it_keeps() {
+    let mut other = Index::default();
+    let mut aseq = 0u64;
+    chunk(&mut other, &ancestor(), &mut aseq);
+    chunk(&mut other, &ancestor(), &mut aseq);
+    let mut index = Index::default();
+    let mut oseq = 0u64;
+    chunk(&mut index, &session(), &mut oseq);
+    chunk(&mut index, &session(), &mut oseq);
+    let own_pages = index.pages().len();
+    let carried = other.pages().len();
+    index.prepend_from(&other, carried);
+    assert_eq!(index.pages().len(), carried + own_pages);
+    check_runs(&index);
+    let seam = index
+        .pages()
+        .iter()
+        .position(|page| page.session == session())
+        .expect("the own run");
+    assert_eq!(seam, carried, "the carried runs land ahead of the fold's");
+    assert_eq!(index.page_of(&ancestor(), Seq(0)), Some(0));
+    assert_eq!(index.page_of(&session(), Seq(0)), Some(carried));
+    // Carrying nothing, or carrying from an index with no run, is a no-op.
+    let len = index.pages().len();
+    index.prepend_from(&other, 0);
+    assert_eq!(index.pages().len(), len);
+    index.prepend_from(&Index::default(), 1);
+    assert_eq!(index.pages().len(), len);
+    check_runs(&index);
+}
