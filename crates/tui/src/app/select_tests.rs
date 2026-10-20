@@ -882,7 +882,7 @@ fn spanning() -> Vec<Line> {
 
 /// Loads every page `app` needs from `lines`, as the loop's `page_in` does.
 fn load_needed(app: &mut App, lines: &[Line]) {
-    while let Some(range) = app.needs().first().cloned() {
+    while let Some((session, range)) = app.needs().first().cloned() {
         let chunk: Vec<contract::Envelope> = lines
             .iter()
             .filter_map(|line| match line {
@@ -892,7 +892,7 @@ fn load_needed(app: &mut App, lines: &[Line]) {
             .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
             .collect();
         assert!(!chunk.is_empty(), "no lines for {range:?}");
-        app.load(chunk);
+        app.load(&session, chunk);
     }
 }
 
@@ -973,8 +973,8 @@ fn a_failed_page_abandons_the_copy_with_a_notice() {
     let prior = app.pages().pinned();
     let (effect, _) = select_dropped(&mut app, &lines);
     assert_eq!(effect, Effect::None);
-    for range in app.needs() {
-        app.load_failed(&range, "boom");
+    for (session, range) in app.needs() {
+        app.load_failed(&session, &range, "boom");
     }
     assert_eq!(app.take_copy(), None);
     assert_eq!(app.notice(), Some(COPY_FAILED));

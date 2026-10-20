@@ -565,7 +565,7 @@ fn a_dropped_page_is_fetched_with_history_and_scanned_on_its_answer() {
     let start = app.pages().index().start(0);
     assert_eq!(app.top(), Some(start));
     let first = log.first().and_then(|line| line.seq).expect("a first seq");
-    assert!(app.needs().iter().any(|range| range.contains(&first)));
+    assert!(app.needs().iter().any(|(_, range)| range.contains(&first)));
 }
 
 #[test]
@@ -1739,7 +1739,7 @@ fn revealing_a_match_on_a_dropped_page_loads_it_in_the_same_step() {
     let start = app.pages().index().start(0);
     assert_eq!(app.top(), Some(start));
     let first = log.first().and_then(|line| line.seq).expect("a first seq");
-    assert!(app.needs().iter().any(|range| range.contains(&first)));
+    assert!(app.needs().iter().any(|(_, range)| range.contains(&first)));
 }
 
 #[test]
@@ -2610,7 +2610,11 @@ fn dropping_and_reloading_at_the_same_width_rescans_nothing() {
         assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     }
     assert_eq!(app.find.current_index(), Some(9));
-    app.load(lines.clone());
+    let session = lines
+        .first()
+        .map(|line| line.session_id.clone())
+        .expect("the log names its session");
+    app.load(&session, lines.clone());
     assert!(
         app.pages().part(1).is_some(),
         "the middle page loads resident"
@@ -2627,7 +2631,7 @@ fn dropping_and_reloading_at_the_same_width_rescans_nothing() {
     // Back onto it before reloading: the window must cover the page for
     // the reload to stick, and the reveal still gives up.
     app.jump(app.pages().index().start(1));
-    app.load(lines);
+    app.load(&session, lines);
     assert!(app.pages().part(1).is_some(), "the page reloads");
     let work = crate::work::take();
     assert_eq!(

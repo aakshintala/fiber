@@ -783,6 +783,10 @@ impl App {
     /// the old width's rows until it loads, so the pages hold the anchor
     /// and each load finds the top again.
     fn land(&mut self, mut fold: Pages, held: bool) {
+        // The preview's closed ancestor runs land in the fold front
+        // beside the carried opens, under their own sessions, before the
+        // swap; the fold still replays the own log only.
+        self.attached_screen().pages().carry_chain(&mut fold);
         self.attached_screen().pages().carry_opens(&mut fold);
         let focus = self.focus.take();
         self.focus = focus.and_then(|id| self.remap_focus(id, &fold));
@@ -1284,17 +1288,19 @@ impl App {
         self.screen.pages().shown(top, height)
     }
 
-    /// The seq ranges of pages the next frame needs and does not hold.
-    pub(crate) fn needs(&self) -> Vec<RangeInclusive<Seq>> {
+    /// The seq ranges of pages the next frame needs and does not hold,
+    /// each with its segment's session.
+    pub(crate) fn needs(&self) -> Vec<(SessionId, RangeInclusive<Seq>)> {
         if self.pass_open() {
             return Vec::new();
         }
         self.screen.needs(self.conversation_height())
     }
 
-    /// Folds a fetched range's durable lines into their pages.
-    pub(crate) fn load(&mut self, lines: Vec<Envelope>) {
-        self.screen.pages_mut().load(&lines);
+    /// Folds a fetched range's durable lines into their pages, the
+    /// window's segment: every line in a page shares its session.
+    pub(crate) fn load(&mut self, session: &SessionId, lines: Vec<Envelope>) {
+        self.screen.pages_mut().load(session, &lines);
         // A held landing's top, found again at the width the load counted.
         // The pass stays live while a stale page is still owed, after it
         // closed: the anchor lets go only once every stale page is counted
@@ -1306,10 +1312,16 @@ impl App {
         self.settle();
     }
 
-    /// Loading `range` failed: its rows stay blank and the notice says why.
+    /// Loading `range` of segment `session` failed: its rows stay blank
+    /// and the notice says why.
     /// A failed page ends a whole-turn copy waiting on dropped pages.
-    pub(crate) fn load_failed(&mut self, range: &RangeInclusive<Seq>, message: &str) {
-        self.screen.pages_mut().fail(*range.start());
+    pub(crate) fn load_failed(
+        &mut self,
+        session: &SessionId,
+        range: &RangeInclusive<Seq>,
+        message: &str,
+    ) {
+        self.screen.pages_mut().fail(session, *range.start());
         if !self.pass_open() {
             self.screen.pages_mut().clear_anchor();
         }

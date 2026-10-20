@@ -91,7 +91,10 @@ fn ids_follow_first_sight_and_survive_a_refold() {
     );
     // A page refold notes the same paths again and keeps every id:
     // `load` notes each line it folds, and seen paths keep their ids.
-    pages.load(&[started(&["artifacts/b.png", "artifacts/a.png"])]);
+    pages.load(
+        &SessionId(SESSION.to_owned()),
+        &[started(&["artifacts/b.png", "artifacts/a.png"])],
+    );
     assert_eq!(
         pages.image(1).map(|part| part.path.clone()),
         Some("artifacts/b.png".to_owned())

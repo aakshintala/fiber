@@ -185,7 +185,10 @@ fn needs_is_empty_when_every_page_is_resident() {
     screen.jump(0);
     let needs = screen.needs(5);
     let first = &screen.pages().index().pages()[0];
-    assert_eq!(needs.first(), Some(&(first.first_seq..=first.last_seq)));
+    assert_eq!(
+        needs.first(),
+        Some(&(first.session.clone(), first.first_seq..=first.last_seq))
+    );
 }
 
 #[test]
@@ -297,4 +300,154 @@ fn a_frozen_screen_does_not_scroll() {
     );
     screen.scroll_rows(true, 2, height);
     assert_ne!(screen.top(), top, "unfrozen scrolls again");
+}
+
+/// A durable line numbered `seq` in segment `session`.
+fn segment(
+    seq: &mut u64,
+    session: &str,
+    kind: &str,
+    action: Option<&str>,
+    payload: Value,
+) -> Envelope {
+    let mut line = envelope(seq, kind, action, payload);
+    line.session_id = SessionId(session.to_owned());
+    line
+}
+
+/// One turn's eight lines under `session`, numbered from `seq`.
+fn segment_turn(seq: &mut u64, session: &str, turn: usize) -> Vec<Envelope> {
+    let message = format!("c_m{turn}");
+    let thought = format!("c_r{turn}");
+    let prompt = format!("prompt {turn}");
+    [
+        segment(
+            seq,
+            session,
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": prompt}]}]}),
+        ),
+        segment(seq, session, "step_started", None, json!({})),
+        segment(
+            seq,
+            session,
+            "assistant_message_started",
+            Some(&message),
+            json!({}),
+        ),
+        segment(seq, session, "reasoning_started", Some(&thought), json!({})),
+        segment(
+            seq,
+            session,
+            "reasoning_completed",
+            Some(&thought),
+            json!({"text": "weigh it"}),
+        ),
+        segment(
+            seq,
+            session,
+            "text_completed",
+            Some(&message),
+            json!({"text": format!("reply {turn}")}),
+        ),
+        segment(
+            seq,
+            session,
+            "assistant_message_completed",
+            Some(&message),
+            json!({"outcome": "completed"}),
+        ),
+        segment(
+            seq,
+            session,
+            "turn_completed",
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// The ancestor's session: the chain's first segment.
+const ANCESTOR: &str = "s_bbbbbbbbbbbbbbbb";
+
+#[test]
+fn the_window_over_the_seam_asks_each_side_under_its_session() {
+    let mut screen = Screen::new();
+    let mut log = Vec::new();
+    let mut aseq = 0u64;
+    for turn in 0..20 {
+        let lines = segment_turn(&mut aseq, ANCESTOR, turn);
+        for line in &lines {
+            screen.pages_mut().apply(line);
+        }
+        log.extend(lines);
+    }
+    let mut dseq = 0u64;
+    for turn in 20..30 {
+        let lines = segment_turn(&mut dseq, "s_aaaaaaaaaaaaaaaa", turn);
+        for line in &lines {
+            screen.pages_mut().apply(line);
+        }
+        log.extend(lines);
+    }
+    // The seam cuts a page: no page holds both segments' lines.
+    let segments = screen.pages().index().segments();
+    assert_eq!(segments.len(), 2, "the ancestor run, then the own run");
+    let seam = segments[1].1;
+    assert!(seam > 1, "the ancestor spans pages");
+    let joint = total(&screen);
+    // Over the seam, the window holds pages from both sides.
+    let start = screen.pages().index().start(seam);
+    screen.jump(start);
+    screen.settle(10);
+    let window = screen.pages().index().window(start, 10);
+    let sessions: Vec<SessionId> = window
+        .map(|at| screen.pages().index().pages()[at].session.clone())
+        .collect();
+    assert!(
+        sessions.iter().any(|session| session.0 == ANCESTOR),
+        "the window holds an ancestor page"
+    );
+    assert!(
+        sessions
+            .iter()
+            .any(|session| session.0 == "s_aaaaaaaaaaaaaaaa"),
+        "the window holds the own run's page"
+    );
+    // Away and back, the seam pages dropped: each is asked under its
+    // own session, and loading settles.
+    screen.jump(0);
+    screen.settle(10);
+    screen.jump(start);
+    screen.settle(10);
+    let mut needs = screen.needs(10);
+    assert!(!needs.is_empty(), "the seam pages dropped");
+    assert!(
+        needs.iter().any(|(session, _)| session.0 == ANCESTOR),
+        "the ancestor side is asked under its session"
+    );
+    assert!(
+        needs
+            .iter()
+            .any(|(session, _)| session.0 == "s_aaaaaaaaaaaaaaaa"),
+        "the own side is asked under its session"
+    );
+    for (session, range) in std::mem::take(&mut needs) {
+        let lines: Vec<Envelope> = log
+            .iter()
+            .filter(|line| {
+                line.session_id == session && line.seq.is_some_and(|seq| range.contains(&seq))
+            })
+            .cloned()
+            .collect();
+        assert!(!lines.is_empty(), "no lines for {session:?} {range:?}");
+        screen.pages_mut().load(&session, &lines);
+    }
+    assert!(screen.needs(10).is_empty());
+    assert_eq!(total(&screen), joint, "the joint count spans the seam");
+    assert_eq!(screen.scroll_bar(10).1, joint);
 }

@@ -1330,15 +1330,19 @@ fn envelopes_of(lines: &[Line]) -> Vec<contract::Envelope> {
 
 /// Loads every page `app` needs from `envelopes`, as the frame loop does.
 fn load_needed(app: &mut App, envelopes: &[contract::Envelope]) {
-    while let Some(range) = app.needs().first().cloned() {
+    while let Some((session, range)) = app.needs().first().cloned() {
         let chunk: Vec<contract::Envelope> = envelopes
             .iter()
             .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
             .cloned()
             .collect();
         assert!(!chunk.is_empty(), "no lines for {range:?}");
-        app.load(chunk);
-        assert_ne!(app.needs().first(), Some(&range), "loading did not settle");
+        app.load(&session, chunk);
+        assert_ne!(
+            app.needs().first(),
+            Some(&(session, range)),
+            "loading did not settle"
+        );
     }
 }
 
@@ -1450,8 +1454,8 @@ fn a_failed_history_load_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
     let (mut app, _, prior) = pending_copy();
     let needs: Vec<_> = app.needs().into_iter().collect();
     assert!(!needs.is_empty(), "nothing asked for the dropped pages");
-    for range in &needs {
-        app.load_failed(range, "boom");
+    for (session, range) in &needs {
+        app.load_failed(session, range, "boom");
     }
     assert_eq!(app.pages().pinned(), prior);
 }

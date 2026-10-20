@@ -1,13 +1,19 @@
 //! Tests for the page index: the cut rule, seq ranges and the window.
 
-use contract::{ActionId, Seq};
+use contract::{ActionId, Seq, SessionId};
 
 use super::{Cut, Index, PAGE_LINES, Page};
+
+/// The session every line here folds under: one segment, so no page
+/// spans a continuation point.
+fn session() -> SessionId {
+    SessionId("s_aaaaaaaaaaaaaaaa".to_owned())
+}
 
 /// Pushes one line, shown on a card or not.
 fn push(index: &mut Index, seq: u64, kind: &str, action: Option<&str>, shown: bool) -> Cut {
     let action = action.map(|id| ActionId(id.to_owned()));
-    index.push(Seq(seq), kind, action.as_ref(), shown)
+    index.push(&session(), Seq(seq), kind, action.as_ref(), shown)
 }
 
 /// Feeds `kinds` with consecutive seqs from `seq`, each with `action` and
@@ -35,6 +41,7 @@ fn filler(index: &mut Index, seq: &mut u64, count: usize) {
 /// A page from `first` to `last` holding `lines`, no rows counted.
 fn page(first: u64, last: u64, lines: usize) -> Page {
     Page {
+        session: session(),
         first_seq: Seq(first),
         last_seq: Seq(last),
         lines,
@@ -431,10 +438,10 @@ fn the_page_holding_a_seq_is_found() {
     filler(&mut index, &mut seq, PAGE_LINES);
     feed(&mut index, &mut seq, &[("turn_started", None)]);
     let boundary = PAGE_LINES as u64;
-    assert_eq!(index.page_of(Seq(0)), Some(0));
-    assert_eq!(index.page_of(Seq(boundary - 1)), Some(0));
-    assert_eq!(index.page_of(Seq(boundary)), Some(1));
-    assert_eq!(index.page_of(Seq(boundary + 1)), None);
+    assert_eq!(index.page_of(&session(), Seq(0)), Some(0));
+    assert_eq!(index.page_of(&session(), Seq(boundary - 1)), Some(0));
+    assert_eq!(index.page_of(&session(), Seq(boundary)), Some(1));
+    assert_eq!(index.page_of(&session(), Seq(boundary + 1)), None);
 }
 
 /// An index of pages with these row counts.
@@ -517,17 +524,17 @@ fn nothing_pends_on_a_fresh_index() {
 fn page_of_holds_only_lines_on_a_page() {
     // The fresh index's open page holds no lines: nothing is on it.
     let empty = Index::default();
-    assert_eq!(empty.page_of(Seq(0)), None);
-    assert_eq!(empty.page_of(Seq(9)), None);
+    assert_eq!(empty.page_of(&session(), Seq(0)), None);
+    assert_eq!(empty.page_of(&session(), Seq(9)), None);
     // Both sides of a cut between two pages holding lines.
     let mut index = Index::default();
     let mut seq = 0;
     filler(&mut index, &mut seq, PAGE_LINES);
     feed(&mut index, &mut seq, &[("turn_started", None)]);
     let edge = PAGE_LINES as u64;
-    assert_eq!(index.page_of(Seq(edge - 1)), Some(0));
-    assert_eq!(index.page_of(Seq(edge)), Some(1));
-    assert_eq!(index.page_of(Seq(edge + 1)), None);
+    assert_eq!(index.page_of(&session(), Seq(edge - 1)), Some(0));
+    assert_eq!(index.page_of(&session(), Seq(edge)), Some(1));
+    assert_eq!(index.page_of(&session(), Seq(edge + 1)), None);
 }
 
 #[test]

@@ -261,7 +261,7 @@ fn joined(pages: &mut Pages, lines: &[Envelope]) -> Vec<Row> {
                 .get(at)
                 .map(|page| page.first_seq..=page.last_seq);
             if let Some(range) = range {
-                pages.load(&history(lines, &range));
+                pages.load(&SessionId(SESSION.to_owned()), &history(lines, &range));
             }
         }
         assert!(pages.part(at).is_some(), "page {at} did not load");
@@ -380,9 +380,13 @@ fn app(width: u16, height: u16) -> App {
 
 /// One frame's loading: every range the app needs, from `lines`.
 fn frame(app: &mut App, lines: &[Envelope]) {
-    while let Some(range) = app.needs().first().cloned() {
-        app.load(history(lines, &range));
-        assert_ne!(app.needs().first(), Some(&range), "loading did not settle");
+    while let Some((session, range)) = app.needs().first().cloned() {
+        app.load(&session, history(lines, &range));
+        assert_ne!(
+            app.needs().first(),
+            Some(&(session, range)),
+            "loading did not settle"
+        );
     }
 }
 
@@ -591,15 +595,15 @@ fn a_failed_load_keeps_every_count_and_says_why() {
     app.jump(0);
     let range = app.needs().first().cloned();
     assert!(range.is_some(), "the top was resident");
-    let Some(range) = range else {
+    let Some((session, range)) = range else {
         return;
     };
-    app.load_failed(&range, "from_seq is past the latest line");
+    app.load_failed(&session, &range, "from_seq is past the latest line");
     assert_eq!(
         app.notice(),
         Some("Could not load history: from_seq is past the latest line")
     );
-    assert!(!app.needs().contains(&range));
+    assert!(!app.needs().contains(&(session, range)));
     frame(&mut app, &lines);
     assert!(app.pages().part(0).is_none());
     assert_eq!(layout(&app), before);
@@ -811,9 +815,13 @@ fn open_job_descriptions_survive_live_page_cuts_and_reload() {
         .find(|line| line.kind == "job_completed")
         .and_then(|line| line.seq)
         .expect("job_completed has a seq");
+    let session = lines
+        .first()
+        .map(|line| line.session_id.clone())
+        .expect("the log names its session");
     assert_ne!(
-        pages.index().page_of(started),
-        pages.index().page_of(completed),
+        pages.index().page_of(&session, started),
+        pages.index().page_of(&session, completed),
         "the job events must straddle a page cut"
     );
 
@@ -971,8 +979,8 @@ fn page_of_kind(pages: &Pages, lines: &[Envelope], kind: &str) -> usize {
     lines
         .iter()
         .find(|line| line.kind == kind)
-        .and_then(|line| line.seq)
-        .and_then(|seq| pages.index().page_of(seq))
+        .and_then(|line| line.seq.map(|seq| (line.session_id.clone(), seq)))
+        .and_then(|(session, seq)| pages.index().page_of(&session, seq))
         .expect("the line is on a page")
 }
 
@@ -1547,7 +1555,7 @@ fn reloading_an_orphan_page_keeps_its_seeded_target_ids() {
     pages.seeds.first_mut().expect("first page seed").next = 40;
 
     drop_all(&mut pages);
-    pages.load(&stream.lines);
+    pages.load(&SessionId(SESSION.to_owned()), &stream.lines);
 
     let part = pages.part(0).expect("reloaded first page");
     let mut rows = Rows::default();
@@ -2011,7 +2019,7 @@ fn fold_text_keeps_no_page_resident() {
     // Kept nowhere: the page is still dropped.
     assert!(pages.part(0).is_none());
     // What it folds is what loading it keeps, drawn all open.
-    pages.load(&history(&lines, &range));
+    pages.load(&SessionId(SESSION.to_owned()), &history(&lines, &range));
     assert_eq!(
         pages.page_text_open(0).map(|(rows, _)| drawn_texts(&rows)),
         Some(drawn_texts(&rows))
@@ -2048,7 +2056,7 @@ fn force_open_on_a_dropped_page_opens_it_when_it_loads() {
     // Nothing resident holds it, so nothing changes yet: the override
     // loads it open.
     assert!(!pages.force_open(&group));
-    pages.load(&history(&lines, &range));
+    pages.load(&SessionId(SESSION.to_owned()), &history(&lines, &range));
     let opened = pages.page_text(0).map(|(rows, _)| drawn_texts(&rows));
     assert!(
         opened.is_some_and(|texts| texts.iter().any(|line| line.contains("read"))),
@@ -2786,7 +2794,7 @@ fn reload(pages: &mut Pages, lines: &[Envelope]) {
                 .get(at)
                 .map(|page| page.first_seq..=page.last_seq);
             if let Some(range) = range {
-                pages.load(&history(lines, &range));
+                pages.load(&SessionId(SESSION.to_owned()), &history(lines, &range));
             }
             assert!(pages.part(at).is_some(), "page {at} did not load");
         }
@@ -3319,7 +3327,7 @@ fn trim_drops_only_pages_outside_the_window_and_keeps_pins() {
                 .get(at)
                 .map(|page| page.first_seq..=page.last_seq);
             if let Some(range) = range {
-                pages.load(&history(&lines, &range));
+                pages.load(&SessionId(SESSION.to_owned()), &history(&lines, &range));
             }
         }
     }
@@ -4034,7 +4042,7 @@ fn dropping_a_page_calls_again_on_reload() {
         .first()
         .map(|page| page.first_seq..=page.last_seq);
     if let Some(range) = range {
-        pages.load(&history(&lines, &range));
+        pages.load(&SessionId(SESSION.to_owned()), &history(&lines, &range));
     }
     assert!(pages.part(0).is_some(), "page 0 loads back");
     search_pages(&pages);
@@ -4342,4 +4350,245 @@ fn bound_shares_the_renderer_and_its_cache_with_the_page() {
         again.iter().any(|line| line.contains("zxqy")),
         "a row still carries the renderer's lines: {again:?}"
     );
+}
+
+/// The ancestor's session: its lines replay under this id.
+const ANCESTOR: &str = "s_bbbbbbbbbbbbbbbb";
+
+/// `lines` rehomed under `session`: the ancestor's log under its own id.
+fn rehome(lines: Vec<Envelope>, session: &str) -> Vec<Envelope> {
+    lines
+        .into_iter()
+        .map(|mut line| {
+            line.session_id = SessionId(session.to_owned());
+            line
+        })
+        .collect()
+}
+
+/// One turn's durable lines under `session`, numbered from `seq`: turn
+/// `turn`, so the two segments' calls and generations stay apart.
+fn segment_turn(session: &str, seq: &mut u64, turn: usize) -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    stream.seq = *seq;
+    stream.turn(turn, 30);
+    *seq = stream.seq;
+    rehome(std::mem::take(&mut stream.lines), session)
+}
+
+/// A two-segment log: the ancestor's turns, then the own run's turns,
+/// each segment numbered from zero.
+fn chain() -> (Vec<Envelope>, Vec<Envelope>) {
+    let mut aseq = 0u64;
+    let mut ancestor = segment_turn(ANCESTOR, &mut aseq, 0);
+    ancestor.extend(segment_turn(ANCESTOR, &mut aseq, 1));
+    let mut dseq = 0u64;
+    let mut log = ancestor.clone();
+    log.extend(segment_turn(SESSION, &mut dseq, 10));
+    log.extend(segment_turn(SESSION, &mut dseq, 11));
+    assert!(ancestor.len() > 64, "the ancestor spans pages");
+    (ancestor, log)
+}
+
+/// Every page's lines joined, loading each dropped page under its own
+/// session from `log`, and checking each page's count against the rows
+/// its lines draw.
+fn chain_joined(pages: &mut Pages, log: &[Envelope]) -> Vec<Row> {
+    let mut out = Vec::new();
+    for at in 0..pages.index().pages().len() {
+        if pages.part(at).is_none() {
+            let page = pages
+                .index()
+                .pages()
+                .get(at)
+                .cloned()
+                .unwrap_or_else(|| panic!("page {at}"));
+            let lines: Vec<Envelope> = log
+                .iter()
+                .filter(|line| {
+                    line.session_id == page.session
+                        && line
+                            .seq
+                            .is_some_and(|seq| (page.first_seq..=page.last_seq).contains(&seq))
+                })
+                .cloned()
+                .collect();
+            assert!(!lines.is_empty(), "no lines for page {at}");
+            pages.load(&page.session, &lines);
+        }
+        assert!(pages.part(at).is_some(), "page {at} did not load");
+        let mut rows = Rows::default();
+        if let Some(part) = pages.part(at) {
+            pages.draw(at, part, &mut rows);
+        }
+        let drawn: usize = rows
+            .iter()
+            .map(|(line, _)| crate::view::rows(line.clone(), pages.width))
+            .sum();
+        let counted = pages.index().pages().get(at).map(|page| page.rows);
+        assert_eq!(counted, Some(drawn), "page {at}");
+        out.extend(rows.into_parts().0);
+    }
+    out
+}
+
+#[test]
+fn chain_pages_load_under_their_own_session_and_count_the_chain() {
+    let (_ancestor, log) = chain();
+    let mut pages = Pages::new(80);
+    for line in &log {
+        pages.apply(line);
+    }
+    // One page never spans the continuation point: every page carries
+    // the session of the lines it folded.
+    let segments = pages.index().segments();
+    assert_eq!(segments.len(), 2, "the ancestor run, then the own run");
+    assert_eq!(segments[0].0, SessionId(ANCESTOR.to_owned()));
+    assert_eq!(segments[1].0, SessionId(SESSION.to_owned()));
+    let seam = segments[1].1;
+    assert!(
+        pages.index().pages()[..seam]
+            .iter()
+            .all(|page| page.session == SessionId(ANCESTOR.to_owned())),
+        "every page before the seam is the ancestor's"
+    );
+    assert!(
+        pages.index().pages()[seam..]
+            .iter()
+            .all(|page| page.session == SessionId(SESSION.to_owned())),
+        "every page from the seam on is the own run's"
+    );
+    let joint = pages.index().total();
+    let reference = whole(&pages, &log);
+    // The live cards draw the chain seamless.
+    let got = chain_joined(&mut pages, &log);
+    assert_eq!(differs(&got, &reference), None);
+    // Dropping every closed page re-asks each under its own session.
+    drop_all(&mut pages);
+    let needs = pages.needs(0, top_total(&pages));
+    assert_eq!(
+        needs.len(),
+        pages.index().pages().len() - 1,
+        "every closed page is needed"
+    );
+    for (session, range) in &needs {
+        let page = pages
+            .index()
+            .pages()
+            .iter()
+            .find(|page| page.session == *session && (page.first_seq..=page.last_seq) == *range)
+            .unwrap_or_else(|| panic!("{session:?} {range:?} names a page"));
+        let lines: Vec<Envelope> = log
+            .iter()
+            .filter(|line| {
+                line.session_id == page.session
+                    && line
+                        .seq
+                        .is_some_and(|seq| (page.first_seq..=page.last_seq).contains(&seq))
+            })
+            .cloned()
+            .collect();
+        assert!(!lines.is_empty(), "no lines for {session:?} {range:?}");
+        pages.load(session, &lines);
+    }
+    assert!(pages.needs(0, top_total(&pages)).is_empty());
+    assert_eq!(
+        pages.index().total(),
+        joint,
+        "the joint count survives the reload"
+    );
+    // Folded back, the chain draws what one fold draws.
+    let got = chain_joined(&mut pages, &log);
+    assert_eq!(differs(&got, &reference), None);
+}
+
+/// The open page's row count, as a window tall enough to need it all.
+fn top_total(pages: &Pages) -> usize {
+    pages.index().total()
+}
+
+#[test]
+fn a_failed_ancestor_page_keeps_every_count() {
+    let (_ancestor, log) = chain();
+    let mut pages = Pages::new(80);
+    for line in &log {
+        pages.apply(line);
+    }
+    let joint = pages.index().total();
+    let seam = pages
+        .index()
+        .segments()
+        .get(1)
+        .map(|(_, at)| *at)
+        .expect("the own run starts past a seam");
+    let failed = pages.index().pages()[seam - 1].clone();
+    assert_eq!(
+        failed.session,
+        SessionId(ANCESTOR.to_owned()),
+        "the page before the seam is the ancestor's"
+    );
+    drop_all(&mut pages);
+    // Failing the ancestor's last page forgets its ask, nothing else.
+    pages.fail(&failed.session, failed.first_seq);
+    let top = pages.index().total();
+    let needs = pages.needs(0, top);
+    assert!(
+        !needs.contains(&(failed.session.clone(), failed.first_seq..=failed.last_seq)),
+        "the failed ask is gone"
+    );
+    assert_eq!(
+        needs.len(),
+        pages.index().pages().len() - 2,
+        "every other closed page is still needed"
+    );
+    // Everything else loads; the failed page draws blank, rows kept.
+    let got = chain_joined_except(&mut pages, &log, seam - 1);
+    assert!(pages.needs(0, top).is_empty());
+    assert_eq!(
+        pages.index().total(),
+        joint,
+        "the joint count survives the failure"
+    );
+    assert!(pages.part(seam - 1).is_none());
+    assert!(
+        got.len() < whole(&pages, &log).len(),
+        "the failed page draws nothing"
+    );
+}
+
+/// Like [`chain_joined`], but page `skip` stays dropped.
+fn chain_joined_except(pages: &mut Pages, log: &[Envelope], skip: usize) -> Vec<Row> {
+    let mut out = Vec::new();
+    for at in 0..pages.index().pages().len() {
+        if at == skip {
+            continue;
+        }
+        if pages.part(at).is_none() {
+            let page = pages
+                .index()
+                .pages()
+                .get(at)
+                .cloned()
+                .unwrap_or_else(|| panic!("page {at}"));
+            let lines: Vec<Envelope> = log
+                .iter()
+                .filter(|line| {
+                    line.session_id == page.session
+                        && line
+                            .seq
+                            .is_some_and(|seq| (page.first_seq..=page.last_seq).contains(&seq))
+                })
+                .cloned()
+                .collect();
+            assert!(!lines.is_empty(), "no lines for page {at}");
+            pages.load(&page.session, &lines);
+        }
+        assert!(pages.part(at).is_some(), "page {at} did not load");
+        let mut rows = Rows::default();
+        if let Some(part) = pages.part(at) {
+            pages.draw(at, part, &mut rows);
+        }
+        out.extend(rows.into_parts().0);
+    }
+    out
 }

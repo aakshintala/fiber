@@ -585,7 +585,7 @@ fn a_held_landing_after_a_deferred_resize_keeps_the_top_seq() {
         app.attached_screen()
             .pages()
             .index()
-            .page_of(contract::Seq(66)),
+            .page_of(&id(SESSION), contract::Seq(66)),
         Some(page),
         "the top shares its page with the long replies"
     );
@@ -682,7 +682,7 @@ fn a_held_landing_keeps_the_top_seq_when_the_fold_dropped_its_page() {
     fold.trim(total - 1, 1);
     let page = fold
         .index()
-        .page_of(contract::Seq(66))
+        .page_of(&id(SESSION), contract::Seq(66))
         .unwrap_or_else(|| panic!("a page holds turn 11"));
     let range = fold
         .index()
@@ -691,7 +691,7 @@ fn a_held_landing_keeps_the_top_seq_when_the_fold_dropped_its_page() {
         .map(|page| page.first_seq..=page.last_seq)
         .unwrap_or_else(|| panic!("the top's page"));
     assert!(
-        fold.needs(0, total).contains(&range),
+        fold.needs(0, total).contains(&(id(SESSION), range)),
         "the fold dropped the top's page"
     );
     app.land(fold, true);
@@ -699,7 +699,7 @@ fn a_held_landing_keeps_the_top_seq_when_the_fold_dropped_its_page() {
     // The frame's loads, as the loop pages them in.
     let log = envelopes(&lines);
     for _ in 0..8 {
-        let Some(range) = app.needs().into_iter().next() else {
+        let Some((session, range)) = app.needs().into_iter().next() else {
             break;
         };
         let held: Vec<contract::Envelope> = log
@@ -707,7 +707,7 @@ fn a_held_landing_keeps_the_top_seq_when_the_fold_dropped_its_page() {
             .filter(|envelope| envelope.seq.is_some_and(|seq| range.contains(&seq)))
             .cloned()
             .collect();
-        app.load(held);
+        app.load(&session, held);
     }
     assert!(app.needs().is_empty(), "every page loaded");
     let area = Rect::new(0, 0, 60, 24);
@@ -784,12 +784,12 @@ fn landing_top_text(app: &App) -> String {
 #[test]
 fn a_failed_held_landing_does_not_move_the_top_on_a_later_load() {
     let (mut app, log) = held_landing_with_dropped_pages();
-    let range = app
+    let (session, range) = app
         .needs()
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("a dropped page"));
-    app.load_failed(&range, "page failed");
+    app.load_failed(&session, &range, "page failed");
     // Following leaves the failed page for the resident, unrelated tail.
     app.on_key(
         crate::keys::Key::End,
@@ -803,7 +803,7 @@ fn a_failed_held_landing_does_not_move_the_top_on_a_later_load() {
         .filter(|line| line.seq.is_some_and(|seq| seq > *range.end()))
         .collect();
     assert!(!tail.is_empty());
-    app.load(tail);
+    app.load(&session, tail);
     let after = landing_top_text(&app);
     assert_eq!(
         app.attached_screen().top(),
@@ -821,7 +821,7 @@ fn a_scrolled_held_landing_does_not_move_the_top_on_a_later_load() {
     );
     let top = app.attached_screen().top();
     let before = landing_top_text(&app);
-    let range = app
+    let (session, range) = app
         .needs()
         .into_iter()
         .next()
@@ -831,7 +831,7 @@ fn a_scrolled_held_landing_does_not_move_the_top_on_a_later_load() {
         .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
         .collect();
     assert!(!page.is_empty());
-    app.load(page);
+    app.load(&session, page);
     let after = landing_top_text(&app);
     assert_eq!(
         app.attached_screen().top(),
@@ -852,7 +852,7 @@ fn a_wheel_up_after_a_held_landing_does_not_jump_back_on_load() {
     let top = app.attached_screen().top();
     assert!(top.is_some(), "the wheel scrolled up from the landing");
     let before = landing_top_text(&app);
-    let range = app
+    let (session, range) = app
         .needs()
         .into_iter()
         .next()
@@ -862,7 +862,7 @@ fn a_wheel_up_after_a_held_landing_does_not_jump_back_on_load() {
         .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
         .collect();
     assert!(!page.is_empty());
-    app.load(page);
+    app.load(&session, page);
     let after = landing_top_text(&app);
     assert_eq!(
         app.attached_screen().top(),
@@ -881,7 +881,7 @@ fn a_follow_after_a_held_landing_does_not_jump_back_on_load() {
     app.attached_screen_mut().follow();
     assert_eq!(app.attached_screen().top(), None, "the click follows");
     let before = landing_top_text(&app);
-    let range = app
+    let (session, range) = app
         .needs()
         .into_iter()
         .next()
@@ -891,7 +891,7 @@ fn a_follow_after_a_held_landing_does_not_jump_back_on_load() {
         .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
         .collect();
     assert!(!page.is_empty());
-    app.load(page);
+    app.load(&session, page);
     let after = landing_top_text(&app);
     assert_eq!(
         app.attached_screen().top(),
@@ -911,7 +911,7 @@ fn a_search_jump_after_a_held_landing_does_not_jump_back_on_load() {
     app.attached_screen_mut().jump(0);
     assert_eq!(app.attached_screen().top(), Some(0));
     let before = landing_top_text(&app);
-    let range = app
+    let (session, range) = app
         .needs()
         .into_iter()
         .next()
@@ -921,7 +921,7 @@ fn a_search_jump_after_a_held_landing_does_not_jump_back_on_load() {
         .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
         .collect();
     assert!(!page.is_empty());
-    app.load(page);
+    app.load(&session, page);
     let after = landing_top_text(&app);
     assert_eq!(
         app.attached_screen().top(),
@@ -2326,14 +2326,14 @@ fn a_failed_load_clears_the_held_anchor_only_without_a_pass() {
     }
     let range = Seq(0)..=Seq(seq.saturating_sub(1));
     app.screen.pages_mut().hold_anchor(Seq(0), 0);
-    app.load_failed(&range, "boom");
+    app.load_failed(&id(SESSION), &range, "boom");
     assert!(
         app.screen.pages_mut().anchored_row().is_none(),
         "with no pass the landing lets go"
     );
     app.screen.pages_mut().hold_anchor(Seq(0), 0);
     app.passes.push((id(SESSION), Pass::Until(Seq(1_000))));
-    app.load_failed(&range, "boom");
+    app.load_failed(&id(SESSION), &range, "boom");
     assert!(
         app.screen.pages_mut().anchored_row().is_some(),
         "with a pass the landing holds"
@@ -2400,4 +2400,118 @@ fn a_close_for_another_session_keeps_the_running_fold() {
     };
     assert_eq!(session, &id(SESSION));
     assert_eq!(fold.index().total(), held, "the fold keeps its lines");
+}
+
+/// The ancestor's session: the chain's first segment.
+const ANCESTOR: &str = "s_bbbbbbbbbbbbbbbb";
+
+/// `lines` rehomed under `session`: the ancestor's preview under its own
+/// id.
+fn rehome(lines: Vec<Line>, session: &str) -> Vec<Line> {
+    lines
+        .into_iter()
+        .map(|line| match line {
+            Line::Session(mut envelope) => {
+                envelope.session_id = SessionId(session.to_owned());
+                Line::Session(envelope)
+            }
+            Line::Hub(hub) => Line::Hub(hub),
+        })
+        .collect()
+}
+
+#[test]
+fn land_carries_closed_ancestor_pages_across_the_swap() {
+    let mut seq = 0u64;
+    let mut ancestor = Vec::new();
+    for n in 0..12 {
+        ancestor.extend(turn(
+            &mut seq,
+            &format!("a_m{n}"),
+            &format!("ancestor reply {n}"),
+        ));
+    }
+    let ancestor = rehome(ancestor, ANCESTOR);
+    let mut dseq = 0u64;
+    let mut descendant = Vec::new();
+    for n in 0..14 {
+        descendant.extend(turn(
+            &mut dseq,
+            &format!("b_m{n}"),
+            &format!("descendant reply {n}"),
+        ));
+    }
+    let mut app = app();
+    // The ancestor runs page in from history, straight into the
+    // preview's pages; the own run streams live.
+    for line in &ancestor {
+        if let Line::Session(envelope) = line {
+            app.attached_screen_mut().pages_mut().apply(envelope);
+        }
+    }
+    for line in &descendant {
+        app.on_line(line.clone());
+    }
+    let before = app.attached_screen().pages().index().total();
+    let segments = app.attached_screen().pages().index().segments();
+    assert_eq!(segments.len(), 2, "the ancestor run, then the own run");
+    // The fold replays the own log only.
+    let fold = folded(&descendant);
+    app.land(fold, false);
+    let pages = app.attached_screen().pages();
+    assert_eq!(pages.index().total(), before, "the landing keeps every row");
+    let segments = pages.index().segments();
+    assert_eq!(segments.len(), 2, "the chain survives the swap");
+    assert_eq!(segments[0].0, id(ANCESTOR));
+    assert_eq!(segments[1].0, id(SESSION));
+    // Every ancestor seq routes to an ancestor page.
+    for line in &ancestor {
+        let Line::Session(envelope) = line else {
+            continue;
+        };
+        let seq = envelope.seq.expect("a durable seq");
+        let at = pages
+            .index()
+            .page_of(&id(ANCESTOR), seq)
+            .expect("an ancestor page");
+        assert_eq!(pages.index().pages()[at].session, id(ANCESTOR));
+    }
+    // Away from the seam and back: each dropped side reloads under its
+    // own session, and the joint count holds.
+    let seam = pages.index().start(segments[1].1);
+    let combined: Vec<Line> = ancestor.iter().chain(&descendant).cloned().collect();
+    app.jump(0);
+    app.jump(seam);
+    let needs = app.needs();
+    assert!(!needs.is_empty(), "the seam pages dropped");
+    assert!(
+        needs.iter().any(|(session, _)| *session == id(ANCESTOR)),
+        "the ancestor side is asked under its session"
+    );
+    assert!(
+        needs.iter().any(|(session, _)| *session == id(SESSION)),
+        "the own side is asked under its session"
+    );
+    for (session, range) in needs {
+        let lines: Vec<contract::Envelope> = combined
+            .iter()
+            .filter_map(|line| match line {
+                Line::Session(envelope)
+                    if envelope.session_id == session
+                        && envelope.seq.is_some_and(|seq| range.contains(&seq)) =>
+                {
+                    Some(envelope.clone())
+                }
+                Line::Session(_) | Line::Hub(_) => None,
+            })
+            .collect();
+        assert!(!lines.is_empty(), "no lines for {session:?} {range:?}");
+        app.load(&session, lines);
+    }
+    assert!(app.needs().is_empty(), "every side reloaded");
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        before,
+        "the joint count survives the reload"
+    );
 }

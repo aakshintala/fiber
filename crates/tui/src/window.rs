@@ -9,7 +9,7 @@ use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
 use contract::events::{TurnCompleted, TurnOutcome, UsageRecorded};
-use contract::{Envelope, GenerationId, Seq};
+use contract::{Envelope, GenerationId, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::text::Line;
 
@@ -131,7 +131,7 @@ fn call_paths(part: &Part) -> CallPaths {
 }
 
 /// One turn's totals for its ▣ line, kept for the whole session.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct Summary {
     started: u64,
     step: u64,
@@ -264,7 +264,7 @@ pub(crate) struct Pages {
     summaries: Vec<Summary>,
     /// The summary keeping each generation's usage, by its id, so a
     /// `usage_recorded` line finds its turn without walking every turn.
-    generations: HashMap<GenerationId, usize>,
+    generations: BTreeMap<GenerationId, usize>,
     /// The ledger default, the last Ctrl+O.
     fold: Fold,
     /// Shell output, placed after the number of turns in the page where it ran.
@@ -336,7 +336,7 @@ impl Pages {
             open: Part::seeded(seed),
             pending: None,
             summaries: Vec::new(),
-            generations: HashMap::new(),
+            generations: BTreeMap::new(),
             fold: Fold::default(),
             shells: Vec::new(),
             shell_index: HashMap::new(),
@@ -390,7 +390,9 @@ impl Pages {
         let early = matches!(kind, "turn_started" | "step_started");
         let mut cut = Cut::None;
         if early && let Some(seq) = envelope.seq {
-            cut = self.index.push(seq, kind, action, true);
+            cut = self
+                .index
+                .push(&envelope.session_id, seq, kind, action, true);
             match cut {
                 Cut::Here => self.close(),
                 Cut::Candidate => self.pending = Some(self.candidate()),
@@ -410,7 +412,9 @@ impl Pages {
             .unwrap_or(folded);
         let changed = folded.changed();
         if !early && let Some(seq) = envelope.seq {
-            cut = self.index.push(seq, kind, action, changed);
+            cut = self
+                .index
+                .push(&envelope.session_id, seq, kind, action, changed);
         }
         if cut == Cut::AtCandidate {
             self.confirm();
@@ -717,14 +721,16 @@ impl Pages {
     }
 
     /// Folds fetched durable lines into the closed pages that hold them,
-    /// from each page's seed, and counts their rows. The open page is
+    /// each window's lines into its own segment's pages, from each page's
+    /// seed, and counts their rows: every line in a page shares its
+    /// session, and no page spans a continuation point. The open page is
     /// never folded again: it holds the live fold. Session state is the
     /// app's, so nothing here touches it.
-    pub(crate) fn load(&mut self, lines: &[Envelope]) {
+    pub(crate) fn load(&mut self, session: &SessionId, lines: &[Envelope]) {
         let mut folding: Option<(usize, Part)> = None;
         for line in lines {
             self.note_images(line);
-            let Some(at) = line.seq.and_then(|seq| self.index.page_of(seq)) else {
+            let Some(at) = line.seq.and_then(|seq| self.index.page_of(session, seq)) else {
                 continue;
             };
             if at >= self.closed.len() {
@@ -819,19 +825,19 @@ impl Pages {
         Some((rows, texts, turns, call_paths(&part)))
     }
 
-    /// The page holding `seq` could not be loaded: it is not asked for
-    /// again until the width changes.
-    pub(crate) fn fail(&mut self, seq: Seq) {
-        if let Some(at) = self.index.page_of(seq) {
+    /// The page holding segment `session`'s `seq` could not be loaded:
+    /// it is not asked for again until the width changes.
+    pub(crate) fn fail(&mut self, session: &SessionId, seq: Seq) {
+        if let Some(at) = self.index.page_of(session, seq) {
             self.failed.insert(at);
         }
     }
 
-    /// The seq ranges to load, in order: the window's pages not resident,
-    /// then the pages whose row counts are stale, then the pages a
-    /// pending copy asked for. A page may be listed twice; once loaded,
-    /// it is no longer needed.
-    pub(crate) fn needs(&self, top: usize, height: usize) -> Vec<RangeInclusive<Seq>> {
+    /// The seq ranges to load, in order, each with its segment's session:
+    /// the window's pages not resident, then the pages whose row counts
+    /// are stale, then the pages a pending copy asked for. A page may be
+    /// listed twice; once loaded, it is no longer needed.
+    pub(crate) fn needs(&self, top: usize, height: usize) -> Vec<(SessionId, RangeInclusive<Seq>)> {
         let wanted = |at: &usize| {
             !self.failed.contains(at) && self.closed.get(*at).is_some_and(Option::is_none)
         };
@@ -841,7 +847,7 @@ impl Pages {
         pages
             .into_iter()
             .filter_map(|at| self.index.pages().get(at))
-            .map(|page| page.first_seq..=page.last_seq)
+            .map(|page| (page.session.clone(), page.first_seq..=page.last_seq))
             .collect()
     }
 
@@ -1115,6 +1121,160 @@ impl Pages {
                 .map(Target::Image),
             Target::Login => Some(Target::Login),
             Target::Note(_) | Target::Orphans(_) => None,
+        }
+    }
+
+    /// Carries the preview's closed ancestor-segment runs into the fold
+    /// front beside `carry_opens`: the index runs, their seeds and their
+    /// resident cards move, and every position-keyed set shifts by the
+    /// carried count. A dropped ancestor page loads again under its own
+    /// session; the fold's own runs keep their keys and keep folding
+    /// own-log lines after land. No page spans a continuation point. A
+    /// preview with no ancestor runs carries nothing.
+    pub(crate) fn carry_chain(&self, fold: &mut Pages) {
+        let Some(attached) = self
+            .index
+            .segments()
+            .last()
+            .map(|(session, _)| session.clone())
+        else {
+            return;
+        };
+        let len = self
+            .index
+            .pages()
+            .iter()
+            .take(self.closed.len())
+            .take_while(|page| page.session != attached)
+            .count();
+        if len == 0 {
+            return;
+        }
+        // The summaries the carried pages draw: every summary a carried
+        // seed or card names. Summaries are pushed in fold order, so the
+        // carried ones are the prefix ending here.
+        let mut summaries = 0;
+        for at in 0..len {
+            if let Some(seed) = self.seeds.get(at) {
+                summaries = summaries.max(seed.first.saturating_add(1));
+            }
+            if let Some(part) = self.closed.get(at).and_then(Option::as_ref) {
+                summaries = summaries.max(part.first.saturating_add(part.turns.len().max(1)));
+            }
+        }
+        let summaries = summaries.min(self.summaries.len());
+        fold.index.prepend_from(&self.index, len);
+        fold.seeds.splice(..0, self.seeds.iter().take(len).cloned());
+        fold.closed
+            .splice(..0, self.closed.iter().take(len).cloned());
+        fold.table.splice(..0, self.table.iter().take(len).cloned());
+        fold.focus.splice(..0, self.focus.iter().take(len).cloned());
+        fold.row_seqs
+            .splice(..0, self.row_seqs.iter().take(len).cloned());
+        for seed in fold.seeds.iter_mut().skip(len) {
+            seed.first = seed.first.saturating_add(summaries);
+        }
+        for part in fold.closed.iter_mut().skip(len).flatten() {
+            part.first = part.first.saturating_add(summaries);
+        }
+        fold.open.first = fold.open.first.saturating_add(summaries);
+        if let Some(pending) = fold.pending.as_mut() {
+            pending.before.first = pending.before.first.saturating_add(summaries);
+            pending.next.first = pending.next.first.saturating_add(summaries);
+        }
+        fold.summaries
+            .splice(..0, self.summaries.iter().take(summaries).cloned());
+        for summary in fold.summaries.iter_mut().skip(summaries) {
+            summary.closed_on = summary.closed_on.saturating_add(len);
+        }
+        for id in fold.generations.values_mut() {
+            *id = id.saturating_add(summaries);
+        }
+        for (generation, id) in &self.generations {
+            if *id < summaries {
+                fold.generations.entry(generation.clone()).or_insert(*id);
+            }
+        }
+        let mut shells: Vec<(usize, usize, String)> = self
+            .shells
+            .iter()
+            .filter(|(page, _, _)| *page < len)
+            .cloned()
+            .collect();
+        shells.extend(fold.shells.iter().map(|(page, after, text)| {
+            (
+                page.saturating_add(len),
+                after.saturating_add(summaries),
+                text.clone(),
+            )
+        }));
+        fold.shell_index.clear();
+        for (slot, (page, after, _)) in shells.iter().enumerate() {
+            fold.shell_index
+                .entry((*page, *after))
+                .or_default()
+                .push(slot);
+        }
+        fold.shells = shells;
+        // Asides queue behind their turn, so their turn-after moves with
+        // the summaries: the open and pending folds only, since a reload
+        // seeds a closed page's fold without any.
+        for (turn, _) in fold.open.fold.asides.iter_mut() {
+            *turn = turn.saturating_add(summaries);
+        }
+        if let Some(pending) = fold.pending.as_mut() {
+            for (turn, _) in pending.before.fold.asides.iter_mut() {
+                *turn = turn.saturating_add(summaries);
+            }
+            for (turn, _) in pending.next.fold.asides.iter_mut() {
+                *turn = turn.saturating_add(summaries);
+            }
+        }
+        let stale: Vec<usize> = fold.stale.iter().copied().collect();
+        fold.stale.clear();
+        for at in stale {
+            fold.stale.insert(at.saturating_add(len));
+        }
+        for at in &self.stale {
+            if *at < len {
+                fold.stale.insert(*at);
+            }
+        }
+        let failed: Vec<usize> = fold.failed.iter().copied().collect();
+        fold.failed.clear();
+        for at in failed {
+            fold.failed.insert(at.saturating_add(len));
+        }
+        for at in &self.failed {
+            if *at < len {
+                fold.failed.insert(*at);
+            }
+        }
+        let resident: Vec<usize> = fold.resident_set.iter().copied().collect();
+        fold.resident_set.clear();
+        for at in resident {
+            fold.resident_set.insert(at.saturating_add(len));
+        }
+        for at in &self.resident_set {
+            if *at < len && self.closed.get(*at).is_some_and(Option::is_some) {
+                fold.resident_set.insert(*at);
+            }
+        }
+        let pins: Vec<usize> = fold.pins.pages().collect();
+        for at in &pins {
+            fold.pins.unpin(*at);
+        }
+        for at in self.pins.pages().filter(|at| *at < len).collect::<Vec<_>>() {
+            fold.pins.pin(at);
+        }
+        for at in pins {
+            fold.pins.pin(at.saturating_add(len));
+        }
+        for (id, part) in &self.images.parts {
+            fold.images.parts.entry(*id).or_insert_with(|| part.clone());
+        }
+        for (path, id) in &self.images.ids {
+            fold.images.ids.entry(path.clone()).or_insert(*id);
         }
     }
 
@@ -1464,12 +1624,15 @@ impl Pages {
     /// The conversation row `offset` rows into the piece drawn from
     /// `seq`'s line, kept within the piece; else the first row of the
     /// first piece after it on its page, else the page's first row.
-    /// `None` when no page holds `seq`. No test pins `>` against `>=`
+    /// `None` when no page holds `seq`. Row space is already global
+    /// (`docs/tui.md`, "History and paging"), so the row names no
+    /// segment: the first segment holding `seq` in chain order wins.
+    /// No test pins `>` against `>=`
     /// below: the exact arm takes every `seq` a run starts at, so where
     /// the search runs `>=` matches `>` on every input.
     #[cfg_attr(false, mutants::skip)]
     pub(crate) fn seq_row(&self, seq: Seq, offset: usize) -> Option<usize> {
-        let at = self.index.page_of(seq)?;
+        let at = self.index.page_of_any(seq)?;
         let runs = self.row_seqs.get(at).map_or(&[][..], Vec::as_slice);
         let rows = self.index.pages().get(at).map_or(0, |page| page.rows);
         let exact = runs.iter().position(|(_, from)| *from == seq);

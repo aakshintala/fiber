@@ -8,7 +8,7 @@
 
 use std::ops::RangeInclusive;
 
-use contract::Seq;
+use contract::{Seq, SessionId};
 
 use super::Target;
 use crate::view::Scroll;
@@ -257,8 +257,9 @@ impl Screen {
         (self.view_top(height), self.pages.index().total())
     }
 
-    /// The seq ranges of pages the window needs and does not hold.
-    pub(super) fn needs(&self, height: usize) -> Vec<RangeInclusive<Seq>> {
+    /// The seq ranges of pages the window needs and does not hold, each
+    /// with its segment's session.
+    pub(super) fn needs(&self, height: usize) -> Vec<(SessionId, RangeInclusive<Seq>)> {
         self.pages.needs(self.view_top(height), height)
     }
 

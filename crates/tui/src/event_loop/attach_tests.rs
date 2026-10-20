@@ -1974,9 +1974,13 @@ fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
     // A whole page can span several wire answers; the app loads it whole.
     let first: Vec<_> = session()
         .into_iter()
-        .filter(|line| needed[0].contains(&line.seq.unwrap()))
+        .filter(|line| needed[0].1.contains(&line.seq.unwrap()))
         .collect();
-    lp.app.load(first.clone());
+    let piece = first
+        .first()
+        .map(|line| line.session_id.clone())
+        .expect("the log names its session");
+    lp.app.load(&piece, first.clone());
     assert!(lp.app.pages().part(0).is_some());
     select_report(&mut lp.app, MouseKind::Press(Button::Left), 0, 0);
     select_report(&mut lp.app, MouseKind::Drag(Button::Left), 59, 2);
@@ -1989,8 +1993,8 @@ fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
     assert_eq!(lp.app.take_copy(), None);
     assert!(lp.app.needs().is_empty());
     lp.app.on_line(Line::Session(replay(last)));
-    assert!(lp.app.needs().iter().any(|range| range.start().0 == 0));
-    lp.app.load(first);
+    assert!(lp.app.needs().iter().any(|(_, range)| range.start().0 == 0));
+    lp.app.load(&piece, first);
     assert!(
         lp.app
             .take_copy()
