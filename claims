@@ -11,3 +11,8 @@ crates/tui/src/turn/answers_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundho
 crates/main/tests/opencode_go_store_false.rs	2845	grant	2026-10-20T06:18:19Z	HOST:DIR	2873
 crates/config/src/import.rs	2841	plan	2026-10-20T10:28:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2841-import	
 crates/config/src/import_tests.rs	2841	plan	2026-10-20T10:28:47Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2841-import	
+crates/tui/src/app/model_picker_tests.rs	lane-2843	grant	2026-10-20T12:27:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2884
+crates/tui/src/paging_tests.rs	lane-2843	grant	2026-10-20T12:27:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2884
+crates/tui/src/app/home/workspace_tests.rs	lane-2843	grant	2026-10-20T12:27:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2884
+crates/tui/src/app/reconcile_tests.rs	lane-2843	grant	2026-10-20T12:27:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2884
+crates/tui/src/app/reconnect_tests.rs	lane-2843	grant	2026-10-20T12:27:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2884
