@@ -68,6 +68,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "providers/openrouter/providers/openrouter.json",
         "extensions",
     ),
+    ("providers/vertex/providers/vertex.json", "extensions"),
     ("providers/anthropic/providers/anthropic.json", "main"),
     ("providers/codex/providers/codex.json", "main"),
     ("providers/gemini/providers/gemini.json", "main"),
@@ -85,6 +86,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/opencode/providers/opencode-go.json", "config"),
     ("providers/opencode/providers/opencode-zen.json", "config"),
     ("providers/openrouter/providers/openrouter.json", "config"),
+    ("providers/vertex/providers/vertex.json", "config"),
     ("providers/opencode/providers/opencode-go.json", "provider"),
     ("providers/opencode/providers/opencode-go.json", "xtask"),
     (
@@ -2181,6 +2183,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "research/vertex-probe/raw/gemini-sysrole-none.sse",
         "provider",
     ),
+    ("research/vertex-probe/raw/gemini-sysrole-none.sse", "main"),
     (
         "research/vertex-probe/raw/gemini-sysrole-user.sse",
         "provider",
@@ -2191,6 +2194,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ),
     ("research/vertex-probe/raw/gemini-thinking.sse", "provider"),
     ("research/vertex-probe/raw/gemini-tool.sse", "provider"),
+    ("research/vertex-probe/raw/gemini-tool.sse", "main"),
     (
         "research/vertex-probe/raw/gemini-unknown-model.json",
         "provider",
