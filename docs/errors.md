@@ -341,6 +341,7 @@ the lines that carry it.
 | `stream_closed` | notice | the hub could not read the open session's log to serve this terminal, so the conversation stops at the last line it received; reopening the session subscribes again (`docs/tui.md`, "Notices") |
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
 | `summary_failed` | driver command | a `rewind` that asked for a summary could not get one, so no new session was created (`docs/events.md`, "Rewind") |
+| `switch_pending` | notice | a model or level choice sent while a turn runs: it applies when the turn ends, and the chips hold the old model and level until the session accepts it (`docs/tui.md`, "Notices") |
 | `timeout` | extension call, tool call, job, diagnostic log | a deadline passed |
 | `too_large` | extension call, tool call, hub command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB; or Ctrl+G configuration text exceeds 64 KiB |
 | `tool_error` | tool call, extension call | the tool itself failed, or its effects function errored |
