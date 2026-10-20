@@ -377,6 +377,7 @@ impl Loop {
                     tokens: None,
                 }),
             );
+            (rows.state)(name, state);
         }
     }
 

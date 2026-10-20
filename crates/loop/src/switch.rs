@@ -294,6 +294,17 @@ impl Loop {
                 applied();
             }
             self.chosen = prepared.chosen;
+            // A switch rebuilds the preamble against the new provider:
+            // drop the previous build's factory-inserted search with it,
+            // so the rebuild declares no search when the new model does
+            // not defer (`docs/tools.md`, "Tool search").
+            if let Some(previous) = self
+                .preamble
+                .as_ref()
+                .and_then(|preamble| preamble.search.clone())
+            {
+                self.tools.remove(&previous);
+            }
             self.preamble = None;
             self.preamble_reason = contract::events::PreambleReason::Switch;
             self.warming.stop(self.log.clock().now());

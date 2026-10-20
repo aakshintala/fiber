@@ -152,11 +152,21 @@ impl Loop {
                     let definition = search.definition();
                     let name = definition.name.clone();
                     if !rewound.tools.contains_key(&name) {
-                        rewound
-                            .tools
-                            .insert(name.clone(), ("builtin".to_owned(), search, definition));
+                        rewound.tools.insert(
+                            name.clone(),
+                            ("builtin".to_owned(), search, definition.clone()),
+                        );
+                        // The rewound preamble wires the registered search
+                        // with the registry, in name order, so the first
+                        // request declares it as built from the logged D.
                         if let Some(preamble) = rewound.preamble.as_mut() {
                             preamble.search = Some(name);
+                            let at = preamble
+                                .tools
+                                .iter()
+                                .position(|tool| tool.name > definition.name)
+                                .unwrap_or(preamble.tools.len());
+                            preamble.tools.insert(at, definition);
                         }
                     }
                 }
