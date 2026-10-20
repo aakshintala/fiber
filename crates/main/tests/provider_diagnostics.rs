@@ -834,6 +834,102 @@ fn protocol_hello(protocol: &str) -> Response {
 }
 
 #[test]
+fn a_second_turn_keeps_the_first_turns_prefix_hashes() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    let first = ask_debug_diagnostics(&setup, &server, json!({}));
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+    let second = ask_with(&setup, &["ask", "--resume", &id, "again"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "both turns arrived"
+    );
+    let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
+    let requests: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "provider_request")
+        .collect();
+    assert_eq!(requests.len(), 2, "one line per turn");
+    for line in &requests {
+        assert_eq!(line["session_id"], id.as_str(), "joined by session");
+    }
+    let first_hashes = requests[0]["data"]
+        .get("prefix_hashes")
+        .expect("hashes are set on the first turn");
+    let second_hashes = requests[1]["data"]
+        .get("prefix_hashes")
+        .expect("hashes are set on the second turn");
+    assert_eq!(
+        first_hashes["system"], second_hashes["system"],
+        "the unchanged system prompt hashes the same"
+    );
+    assert_eq!(
+        first_hashes["tools"], second_hashes["tools"],
+        "the unchanged tools hash the same"
+    );
+    let first_messages = first_hashes["messages"]
+        .as_array()
+        .expect("messages hash on the first turn");
+    let second_messages = second_hashes["messages"]
+        .as_array()
+        .expect("messages hash on the second turn");
+    assert!(
+        second_messages.len() > first_messages.len(),
+        "the second turn appends messages: {second_messages:?} over {first_messages:?}"
+    );
+    assert_eq!(
+        &second_messages[..first_messages.len()],
+        first_messages.as_slice(),
+        "the second turn keeps the first turn's prefix"
+    );
+    for line in &requests {
+        let wire = serde_json::to_string(line).unwrap();
+        for sentinel in ["hi", "again", "Hello.", "sk-test"] {
+            assert!(
+                !wire.contains(sentinel),
+                "no content in the line: {sentinel}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_changed_system_prompt_shifts_the_system_digest() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    let first = ask_debug_diagnostics(&setup, &server, json!({}));
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let first_line = the_request(&setup, &first);
+    let first_system = first_line["data"]["prefix_hashes"]["system"].clone();
+    assert!(hex64(&first_system), "the system segment hashes");
+    fs::write(setup.home().join("APPEND_SYSTEM.md"), "Be terse.\n").unwrap();
+    let second = ask(&setup);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "both runs arrived"
+    );
+    let second_line = the_request(&setup, &second);
+    let second_system = &second_line["data"]["prefix_hashes"]["system"];
+    assert!(hex64(second_system), "the system segment hashes");
+    assert_ne!(
+        &first_system, second_system,
+        "the changed system prompt shifts the first hash"
+    );
+    for line in [&first_line, &second_line] {
+        let wire = serde_json::to_string(line).unwrap();
+        for sentinel in ["hi", "Hello.", "sk-test", "Be terse."] {
+            assert!(
+                !wire.contains(sentinel),
+                "no content in the line: {sentinel}"
+            );
+        }
+    }
+}
+
+#[test]
 fn each_protocol_writes_one_diagnostics_line() {
     for protocol in [
         "openai-responses",
