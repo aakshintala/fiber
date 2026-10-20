@@ -12,7 +12,11 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::TempDir;
 use fakes::clock::FakeClock;
 
@@ -284,4 +288,172 @@ fn read_source_dir_other_io_error_is_an_error() {
         "{err:?}",
     );
     assert!(left_behind.is_empty());
+}
+
+/// One wall guard for the FIFO writer's report in a growth test.
+const WRITER_HANG: Duration = Duration::from_secs(10);
+
+/// Streams `total` filler bytes into a FIFO at `rel` under the source home,
+/// then reports. The FIFO's metadata size stays 0 while its stream runs
+/// longer: the same skew a file grown between the metadata check and the
+/// read shows. The open rendezvous orders the two ends, so no sleep does;
+/// a reader that stops at its cap closes the pipe, and the writes past it
+/// fail, which the fixed byte count already made moot. The test joins the
+/// worker only after its report arrives, so a worker that never reports is
+/// never joined.
+fn stream_fifo(
+    fixture: &Fixture,
+    rel: &str,
+    total: u64,
+) -> (thread::JoinHandle<()>, mpsc::Receiver<()>) {
+    let fifo = fixture.source().join(rel);
+    std::fs::create_dir_all(fifo.parent().unwrap()).unwrap();
+    fakes::fifo(&fifo);
+    let (done, finished) = mpsc::channel();
+    let worker = thread::Builder::new()
+        .name("import-growth".to_owned())
+        .spawn(move || {
+            let mut out = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&fifo)
+                .expect("the reader opens the FIFO");
+            let chunk = vec![b'y'; 64 * 1024];
+            let mut left = usize::try_from(total).unwrap();
+            use std::io::Write as _;
+            while left > 0 {
+                let next = left.min(chunk.len());
+                if out.write_all(&chunk[..next]).is_err() {
+                    break;
+                }
+                left -= next;
+            }
+            done.send(()).unwrap_or(());
+        })
+        .unwrap();
+    (worker, finished)
+}
+
+/// Reads `rel` through `read_source` with `budget`, then joins the FIFO
+/// writer once its report arrives under the wall guard.
+fn read_grown(
+    fixture: &Fixture,
+    rel: &str,
+    budget: &mut Budget,
+    left_behind: &mut Vec<LeftBehind>,
+    worker: thread::JoinHandle<()>,
+    finished: mpsc::Receiver<()>,
+) -> SourceFile {
+    let got = read_source(&fixture.source().join(rel), rel, budget, left_behind).unwrap();
+    Deadline::after(WRITER_HANG)
+        .recv(&finished)
+        .expect("the FIFO writer did not finish");
+    worker.join().expect("the FIFO writer panicked");
+    got
+}
+
+#[test]
+fn a_file_growing_past_one_mebibyte_mid_read_is_left_behind() {
+    let fixture = Fixture::new();
+    // The FIFO's size 0 passes both metadata checks; the stream runs past
+    // 1 MiB, which the capped read reports under the file cap's reason.
+    let (worker, finished) = stream_fifo(&fixture, "skills/review/SKILL.md", MAX_FILE_BYTES + 512);
+    let mut budget = Budget::default();
+    let mut left_behind = Vec::new();
+    let got = read_grown(
+        &fixture,
+        "skills/review/SKILL.md",
+        &mut budget,
+        &mut left_behind,
+        worker,
+        finished,
+    );
+    assert!(matches!(got, SourceFile::Skipped), "{got:?}");
+    assert_eq!(left_behind.len(), 1);
+    assert_eq!(left_behind[0].item, "skills/review/SKILL.md");
+    assert_eq!(left_behind[0].reason, "larger than 1 MiB, left unread");
+    assert_eq!(budget.used, 0);
+}
+
+#[test]
+fn a_file_growing_past_the_eight_mebibyte_total_mid_read_is_left_behind() {
+    let fixture = Fixture::new();
+    // Ten bytes of budget left and a 1 KiB stream past them: the size 0
+    // passes the metadata check, and the capped read stops eleven bytes in
+    // under the budget's reason.
+    let (worker, finished) = stream_fifo(&fixture, "skills/review/SKILL.md", 1024);
+    let mut budget = Budget {
+        used: MAX_SOURCE_BYTES - 10,
+    };
+    let mut left_behind = Vec::new();
+    let got = read_grown(
+        &fixture,
+        "skills/review/SKILL.md",
+        &mut budget,
+        &mut left_behind,
+        worker,
+        finished,
+    );
+    assert!(matches!(got, SourceFile::Skipped), "{got:?}");
+    assert_eq!(left_behind.len(), 1);
+    assert_eq!(left_behind[0].item, "skills/review/SKILL.md");
+    assert_eq!(
+        left_behind[0].reason,
+        "over the 8 MiB read budget, left unread"
+    );
+    assert_eq!(budget.used, MAX_SOURCE_BYTES - 10);
+}
+
+#[test]
+fn a_file_reading_exactly_to_the_eight_mebibyte_total_is_kept() {
+    let fixture = Fixture::new();
+    // Ten bytes left, ten streamed: the strict cutoff keeps the read, and
+    // the budget closes exactly.
+    let (worker, finished) = stream_fifo(&fixture, "skills/review/SKILL.md", 10);
+    let mut budget = Budget {
+        used: MAX_SOURCE_BYTES - 10,
+    };
+    let mut left_behind = Vec::new();
+    let got = read_grown(
+        &fixture,
+        "skills/review/SKILL.md",
+        &mut budget,
+        &mut left_behind,
+        worker,
+        finished,
+    );
+    match got {
+        SourceFile::Read(bytes) => assert_eq!(bytes.len(), 10),
+        SourceFile::Missing | SourceFile::Skipped => panic!("the boundary read is kept: {got:?}"),
+    }
+    assert!(left_behind.is_empty());
+    assert_eq!(budget.used, MAX_SOURCE_BYTES);
+}
+
+#[test]
+fn a_one_mebibyte_stream_past_a_shorter_budget_reports_the_budget() {
+    let fixture = Fixture::new();
+    // The stream reaches exactly 1 MiB while one byte less of budget is
+    // left: the read proves the file fits its cap, so the budget's reason
+    // wins over the file cap's.
+    let (worker, finished) = stream_fifo(&fixture, "skills/review/SKILL.md", MAX_FILE_BYTES);
+    let mut budget = Budget {
+        used: MAX_SOURCE_BYTES - (MAX_FILE_BYTES - 1),
+    };
+    let mut left_behind = Vec::new();
+    let got = read_grown(
+        &fixture,
+        "skills/review/SKILL.md",
+        &mut budget,
+        &mut left_behind,
+        worker,
+        finished,
+    );
+    assert!(matches!(got, SourceFile::Skipped), "{got:?}");
+    assert_eq!(left_behind.len(), 1);
+    assert_eq!(left_behind[0].item, "skills/review/SKILL.md");
+    assert_eq!(
+        left_behind[0].reason,
+        "over the 8 MiB read budget, left unread"
+    );
+    assert_eq!(budget.used, MAX_SOURCE_BYTES - (MAX_FILE_BYTES - 1));
 }

@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -545,11 +546,13 @@ enum SourceFile {
 
 /// Reads a source file under both caps: missing reads as `Missing`; a file
 /// over 1 MiB, or one past the source's running 8 MiB total, is left unread
-/// and reported in left-behind under `item`, charging nothing. Read
+/// and reported in left-behind under `item`, charging nothing. The metadata
+/// sizes above are advisory only: the file can grow between them and the
+/// read, so the read itself takes at most one byte past the tighter cap,
+/// and an over-cap read joins left-behind under the same reasons. Read
 /// failures keep their `ConfigError` for the caller, which refuses or
-/// aborts as it does today. One open pins the file past both caps: a
-/// source file vanishing mid-import reads as missing only when the open
-/// misses it, and an open handle can no longer race the read.
+/// aborts as it does today. A source file vanishing mid-import reads as
+/// missing only when the open misses it.
 fn read_source(
     file: &Path,
     item: &str,
@@ -587,14 +590,34 @@ fn read_source(
         });
         return Ok(SourceFile::Skipped);
     }
+    // One byte past the tighter cap proves an over-cap read without
+    // keeping it: the metadata size above can predate a concurrent
+    // append, so this allocation stays bounded either way.
+    let remaining = MAX_SOURCE_BYTES.saturating_sub(budget.used);
+    let allowance = MAX_FILE_BYTES.min(remaining);
+    let mut capped = handle.by_ref().take(allowance.saturating_add(1));
     let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut handle, &mut bytes).map_err(|source| ConfigError::Io {
+    std::io::Read::read_to_end(&mut capped, &mut bytes).map_err(|source| ConfigError::Io {
         file: file.to_path_buf(),
         source,
     })?;
-    budget.used = budget
-        .used
-        .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+    let kept = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if kept > allowance {
+        // Past the file cap, the read proves the file itself is over
+        // 1 MiB; anything shorter only proves the 8 MiB total ran out
+        // first, since the cap stopped the read either way.
+        let reason = if kept > MAX_FILE_BYTES {
+            "larger than 1 MiB, left unread"
+        } else {
+            "over the 8 MiB read budget, left unread"
+        };
+        left_behind.push(LeftBehind {
+            item: item.to_owned(),
+            reason: reason.into(),
+        });
+        return Ok(SourceFile::Skipped);
+    }
+    budget.used = budget.used.saturating_add(kept);
     Ok(SourceFile::Read(bytes))
 }
 
