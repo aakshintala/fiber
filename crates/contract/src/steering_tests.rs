@@ -249,19 +249,16 @@ fn a_drop_released_while_the_push_is_held_still_lands_empty_last() {
         Deadline::after(BOUND)
             .recv(&gate_rx)
             .expect("the drop waits at the gate");
-        // The test releases the drop while the push is still held: the
-        // drop can only proceed to the real lock, still held by the push.
+        // Open the drop gate while the push is still held. With the fix
+        // the two sections serialize on the shared mutex, so the drop's
+        // append cannot precede the push's release and this bounded
+        // receive must expire; without the fix the push released the
+        // mutex before blocking, so the drop's lock-free path appends
+        // inside the bound and this assertion fails.
         let _sent = free_tx.send(());
-        // The drop cannot have finished while the push holds the lock:
-        // one immediate receive decides, with no clock read. What proves
-        // it waited on the held lock is the mutex itself: the push is
-        // provably inside its section and the drop provably at the gate,
-        // so the drop's completion after the release below can only mean
-        // it blocked on the held lock, and the empty last event can only
-        // mean it ran second.
         assert!(
-            done_rx.try_recv().is_err(),
-            "the drop stays blocked while the push holds the lock"
+            Deadline::after(BOUND).recv(&entered_rx).is_err(),
+            "the drop's append stays blocked while the push holds the lock"
         );
         // Only then is the push released: it emits `[A]`, the drop takes
         // the lock, removes A and emits `[]` last.
