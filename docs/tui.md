@@ -77,6 +77,14 @@ and leaving creates nothing. The first turn waits for any MCP server that
 starts with the session (`docs/mcp.md`, "Starting servers"), and the working
 line says so: "Connecting 2 MCP servers…".
 
+On the first interactive run, with no import receipt yet
+(`docs/configuration.md`, "Importing"), home offers a one-time import of
+another harness's configuration: Claude Code's or Codex's. (Built in P2.)
+The offer runs the same shared import `fiber import` runs, and imported
+items apply on the next `/reload` with the reload's usual cache cost
+(`docs/mcp.md`, "Reload"). The offer fires once: answering it, or running
+`fiber import` first, writes the receipt, and the offer never shows again.
+
 **The workspace chip** names the workspace in use: the one last picked, else
 the directory the terminal was launched in. Clicking it opens the workspace
 picker, the same on every client. It is an overlay centred over home, unless

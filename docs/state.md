@@ -168,6 +168,11 @@ ships"). `pinned.json` records each declared path's size, modification time
 and hash, so a session hashes a file again only when one of the first two
 changed. It is an index: deleting it costs a re-hash and nothing else.
 
+**Import receipts.** `import-claude-code.json` and `import-codex.json` at
+the top of Fiber home record one completed import each: the source, the time
+and the counts (`docs/configuration.md`, "Importing"). Deleting one means
+the next `fiber import` for that source runs again.
+
 **Approvals.** One file per decision about code a repository ships, named by
 the content's hash; it says whether the decision is approve or never.
 Deleting it withdraws the decision, and the next session offers the code
