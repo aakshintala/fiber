@@ -1073,6 +1073,10 @@ right-aligned. Clicking a notice shows the whole text in an overlay.
 - A notice that arrives during a drag waits for the release.
 - In the screen-reader mode notices are lines in reading order.
 
+An accepted `/import` answer is one notice per `fiber import` line,
+naming what the import copied and left behind, plus a `/reload` reminder
+(`docs/configuration.md`, "Importing").
+
 When the hub sends `stream_closed` for the open session (it cannot read
 the session's log to serve this terminal), the conversation keeps every line
 it received and one notice shows: code `stream_closed`, "this session's log
