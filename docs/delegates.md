@@ -286,6 +286,9 @@ final message, any questions, usage totals and worktree state. Their keys are
     `delegate_fork`, so no tool call is left without a result.
   - Every provider's cache key is the root session's id, shared by the whole
     lineage (`docs/prompt-cache.md`, "Cache markers and keys").
+  - A call whose ancestry reaches a command root is refused: the point walk
+    stops at a root call with `ran_by.command_id`, and the call fails with
+    `invalid_arguments`.
 - Other harnesses have no fork: a Fiber conversation cannot be handed to them.
 
 ## Harness extensions
