@@ -561,14 +561,14 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
     // a model nor a credential, and a resume carries neither, continuing
     // the recorded session.
     let (model, overrides, resume, forked_from, forked_seq) = match &launched.start {
-        jobs::Start::Fresh(jobs::Fresh::Spawn { credential }) => {
+        jobs::Start::Fresh(jobs::Fresh::Spawn { model, credential }) => {
             // A role naming a credential label runs the child under it: the
             // label travels as a run override, so the child's `preamble_built`
             // records it. The value is a JSON string, so a label that parses
             // as JSON still arrives as a string.
             let overrides = match credential.as_deref() {
                 Some(label) => {
-                    let provider = launched.model.split('/').next().unwrap_or_default();
+                    let provider = model.split('/').next().unwrap_or_default();
                     let key = config::path::display(&[
                         "providers".to_owned(),
                         provider.to_owned(),
@@ -579,7 +579,7 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
                 }
                 None => Vec::new(),
             };
-            (Some(launched.model.clone()), overrides, false, None, None)
+            (Some(model.clone()), overrides, false, None, None)
         }
         jobs::Start::Fresh(jobs::Fresh::Fork { from }) => (
             None,

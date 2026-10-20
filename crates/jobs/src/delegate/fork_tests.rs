@@ -16,14 +16,14 @@ use std::time::Duration;
 
 use contract::inbox::Delivery;
 use contract::jobs::{JobRecord, Jobs as _};
-use contract::shapes::{Failure, Point};
+use contract::shapes::{ContentPart, Failure, Point};
 use contract::tool::{Answered, Ask, Asking, Tool as _};
 use contract::{ActionId, Seq};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, within};
 
-use super::super::run::{Launch, Launched, Watch};
+use super::super::run::{Fresh, Launch, Launched, Start, Watch};
 use super::super::{DelegateFork, ForkPoint, Forking};
 use crate::registry::Registry;
 
@@ -81,7 +81,6 @@ fn rig() -> Rig {
             session_id: launched.session_id.clone(),
             job_id: launched.job_id.clone(),
             parent: launched.parent.clone(),
-            model: launched.model.clone(),
             prompt: launched.prompt.clone(),
             workspace: launched.workspace.clone(),
             start: launched.start.clone(),
@@ -410,7 +409,26 @@ fn the_start_writes_the_point_model_verbatim_with_its_point() {
         .expect("the launcher ran");
     assert_eq!(launched.job_id, started.job_id);
     assert_eq!(launched.session_id, delegate.delegate_session_id);
-    assert_eq!(launched.model, "fiber:fake/m:high");
+    let Start::Fresh(Fresh::Fork { from }) = &launched.start else {
+        panic!("a fork launches with its point");
+    };
+    assert_eq!(from, &forking());
+    // The receipt names the job and its log: deleting either half of the
+    // text breaks this.
+    let [ContentPart::Text { text }] = &output.content[..] else {
+        panic!("a good call answers with its receipt: {:?}", output.content);
+    };
+    assert_eq!(
+        text,
+        &format!(
+            "Started delegate {}. Its log is {}.",
+            started.job_id.0,
+            rig.sessions
+                .join(&delegate.delegate_session_id.0)
+                .join("events.jsonl")
+                .to_string_lossy(),
+        ),
+    );
     assert_eq!(rig.registry.stop_delegates(), 1);
     let Delivery::Job(notice) = Deadline::after(DEADLINE)
         .recv(&rig.inbox)
@@ -441,7 +459,7 @@ fn the_schema_names_only_description_prompt_and_timeout_ms() {
     );
     assert!(
         !properties.contains_key("isolation"),
-        "no isolation: it moves to #544"
+        "a fork takes no isolation key"
     );
     assert!(!properties.contains_key("model"), "a fork takes no model");
     // The optional `timeout_ms` keeps the schema out of the strict

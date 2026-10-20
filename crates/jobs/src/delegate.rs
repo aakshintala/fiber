@@ -71,7 +71,7 @@ pub struct DelegateSpawn {
 /// returns as soon as the child has spawned and the job is recorded; the
 /// runner thread owns everything after that. The point the job continues
 /// from arrives through `point`, read after the argument check and before
-/// admission; Part 3 supplies the reader that walks the caller's ancestry.
+/// admission; the caller wires the reader.
 ///
 /// The fields are wired by `main`: like a spawn's, delegates of `parent`
 /// share `workspace` and log under `sessions`; `bound` is the stop bound
@@ -104,8 +104,8 @@ pub struct DelegateFork {
     pub watch: Watch,
 }
 
-/// Reads the point a fork continues from: the caller's ancestry for the
-/// point (Part 3 supplies the reader; the fork only calls it). The
+/// Reads the point a fork continues from: the caller wires the reader,
+/// and the fork only calls it. The
 /// argument is the calling action, for the root walk, or `None` where no
 /// call runs.
 pub type ForkPoint = Arc<dyn Fn(Option<&ActionId>) -> Result<Forking, Failure> + Send + Sync>;
@@ -205,6 +205,25 @@ pub(crate) struct Started {
     delegate: DelegateStarted,
 }
 
+/// The start's receipt: the child's job id and log path, with the start
+/// records the runner's end joins later. Both delegate tools answer
+/// with it.
+pub(crate) fn receipt(start: Started) -> Output {
+    Output {
+        content: vec![ContentPart::Text {
+            text: format!(
+                "Started delegate {}. Its log is {}.",
+                start.job_id.0, start.output_path
+            ),
+        }],
+        jobs: vec![
+            JobRecord::Started(start.started),
+            JobRecord::DelegateStarted(start.delegate),
+        ],
+        ..Output::default()
+    }
+}
+
 impl Tool for DelegateSpawn {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
@@ -273,19 +292,7 @@ impl Tool for DelegateSpawn {
         _emit: &dyn Emit,
     ) -> Output {
         match self.start(arguments, None) {
-            Ok(start) => Output {
-                content: vec![ContentPart::Text {
-                    text: format!(
-                        "Started delegate {}. Its log is {}.",
-                        start.job_id.0, start.output_path
-                    ),
-                }],
-                jobs: vec![
-                    JobRecord::Started(start.started),
-                    JobRecord::DelegateStarted(start.delegate),
-                ],
-                ..Output::default()
-            },
+            Ok(start) => receipt(start),
             Err(error) => error.output(false),
         }
     }
@@ -453,28 +460,32 @@ impl Starter<'_> {
         timeout: Option<Duration>,
         mut extension: Option<ExtensionStart<'_>>,
     ) -> Result<Started, JobsError> {
-        // The launch's model and credential, and the record's model and
-        // point: a spawn resolves its argument and records the resolved
-        // reference; a fork writes its point's reference verbatim and
-        // its point, carrying no credential.
-        let (model, start, delegate_model, forked_from) = match origin {
+        // The launch's start, and the record's model and point: a spawn
+        // resolves its argument and records the resolved reference; a
+        // fork writes its point's reference verbatim and its point,
+        // carrying no credential.
+        let (start, delegate_model, forked_from) = match origin {
             Origin::Spawn {
                 resolved,
                 credential,
-            } => (
-                resolved.clone(),
-                Start::Fresh(Fresh::Spawn { credential }),
-                format!("fiber:{resolved}"),
-                None,
-            ),
-            Origin::Fork { from } => {
-                let point = from.point.clone();
-                let model = from.model.clone();
+            } => {
+                let delegate_model = format!("fiber:{resolved}");
                 (
-                    model.clone(),
+                    Start::Fresh(Fresh::Spawn {
+                        model: resolved,
+                        credential,
+                    }),
+                    delegate_model,
+                    None,
+                )
+            }
+            Origin::Fork { from } => {
+                let delegate_model = from.model.clone();
+                let forked_from = Some(from.point.clone());
+                (
                     Start::Fresh(Fresh::Fork { from }),
-                    model,
-                    Some(point),
+                    delegate_model,
+                    forked_from,
                 )
             }
         };
@@ -504,7 +515,6 @@ impl Starter<'_> {
                     session_id: session_id.clone(),
                     job_id: job_id.clone(),
                     parent: self.parent.clone(),
-                    model,
                     prompt,
                     workspace: self.workspace.clone(),
                     start,

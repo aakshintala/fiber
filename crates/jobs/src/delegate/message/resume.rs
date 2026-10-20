@@ -135,7 +135,6 @@ impl DelegateMessage {
                 session_id: resumable.delegate.delegate_session_id.clone(),
                 job_id: JobId(id.clone()),
                 parent: parent.clone(),
-                model: resumable.delegate.model.clone(),
                 prompt: message.clone(),
                 workspace: PathBuf::from(&resumable.delegate.workspace),
                 start: Start::Resume,

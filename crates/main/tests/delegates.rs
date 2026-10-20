@@ -3927,16 +3927,31 @@ fn assert_no_fork_log(setup: &support::Setup, new: &str) {
     );
 }
 
-#[test]
-fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
+/// A parent session with one completed turn: the setup the fork tests
+/// share, its armed watchdog guard, the responding providers that must
+/// stay alive while the fork child runs, the parent id, its sessions
+/// directory and its log lines. Both fork tests start from this parent
+/// and then pick the seq they fork from.
+struct ForkParent {
+    setup: support::Setup,
+    _guard: SessionGuard,
+    _servers: (ProviderServer, ProviderServer),
+    parent_id: String,
+    sessions: PathBuf,
+    parent_lines: Vec<Value>,
+}
+
+/// Starts the parent both fork tests share: one turn on `pa/m`, closed
+/// once the turn completes, so the log holds a preamble before its last
+/// line. A plain session idles after its turn, so this closes it once
+/// the turn completes.
+#[track_caller]
+fn fork_parent() -> ForkParent {
     let setup = support::Setup::new();
     let _guard = arm(&setup);
     let parent = ProviderServer::start_responding(fork_text).unwrap();
     let child = ProviderServer::start_responding(fork_text).unwrap();
     providers(&setup, &parent, &child);
-    // The parent the later cases fork from: one turn on `pa/m`, so its
-    // log holds a preamble before its last line. A plain session idles
-    // after its turn, so the test closes it once the turn completes.
     let parent_id = doors::mint("s_");
     let mut parent_running = Running::start(
         &setup,
@@ -3953,11 +3968,24 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
     drop(client);
     let (parent_status, _, parent_stderr) = parent_running.wait();
     assert_eq!(parent_status.code(), Some(0), "{parent_stderr}");
-    let parent_lines = read_lines(
-        &sessions_in(&setup.home(), &setup.workspace())
-            .join(&parent_id)
-            .join("events.jsonl"),
-    );
+    let sessions = sessions_in(&setup.home(), &setup.workspace());
+    let parent_lines = read_lines(&sessions.join(&parent_id).join("events.jsonl"));
+    ForkParent {
+        setup,
+        _guard,
+        _servers: (parent, child),
+        parent_id,
+        sessions,
+        parent_lines,
+    }
+}
+
+#[test]
+fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
+    let fork = fork_parent();
+    let setup = &fork.setup;
+    let parent_id = &fork.parent_id;
+    let parent_lines = &fork.parent_lines;
     assert_eq!(parent_lines.first().unwrap()["kind"], "session_started");
     let first_seq = parent_lines.first().unwrap()["seq"].as_u64().unwrap();
     assert!(
@@ -3988,7 +4016,7 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
     assert_no_fork_log(&setup, &new_a);
     // Case (b): `--forked-from` names a corrupt log.
     let corrupt = doors::mint("s_");
-    let corrupt_dir = sessions_in(&setup.home(), &setup.workspace()).join(&corrupt);
+    let corrupt_dir = fork.sessions.join(&corrupt);
     fs::create_dir_all(&corrupt_dir).unwrap();
     fs::write(corrupt_dir.join("events.jsonl"), "this is not a log line\n").unwrap();
     let new_b = doors::mint("s_");
@@ -4029,37 +4057,61 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
         "{lines:?}"
     );
     assert_no_fork_log(&setup, &new_c);
+    // Case (d): the point's session directory cannot be listed at all.
+    // A self-looping link fails the metadata read with an error other
+    // than missing, so the failure is `io_failed`, not
+    // `session_not_found`.
+    let looped = doors::mint("s_");
+    let looped_link = fork.sessions.join(&looped);
+    std::os::unix::fs::symlink(&looped_link, &looped_link).unwrap();
+    let new_d = doors::mint("s_");
+    let (failed_d, _) = start_fork_child(
+        &setup,
+        &new_d,
+        &looped,
+        1,
+        &looped,
+        &doors::mint("j_"),
+        Stdio::null(),
+    );
+    let (status, lines, stderr) = failed_d.wait();
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        one(&lines, "fiber_exited")["error"]["code"],
+        "io_failed",
+        "{lines:?}"
+    );
+    assert_no_fork_log(&setup, &new_d);
+    // Case (e): a file where the point's session directory belongs is
+    // no session either: `session_not_found`, as a missing one.
+    let filed = doors::mint("s_");
+    fs::write(fork.sessions.join(&filed), "not a session\n").unwrap();
+    let new_e = doors::mint("s_");
+    let (failed_e, _) = start_fork_child(
+        &setup,
+        &new_e,
+        &filed,
+        1,
+        &filed,
+        &doors::mint("j_"),
+        Stdio::null(),
+    );
+    let (status, lines, stderr) = failed_e.wait();
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        one(&lines, "fiber_exited")["error"]["code"],
+        "session_not_found",
+        "{lines:?}"
+    );
+    assert_no_fork_log(&setup, &new_e);
 }
 
 #[test]
 fn a_fork_child_of_a_worktree_parent_holds_the_shared_lock() {
-    let setup = support::Setup::new();
-    let _guard = arm(&setup);
-    let parent = ProviderServer::start_responding(fork_text).unwrap();
-    let child = ProviderServer::start_responding(fork_text).unwrap();
-    providers(&setup, &parent, &child);
-    // The parent: one turn on `pa/m`, so the fork inherits its build.
-    // A plain session idles after its turn, so the test closes it once
-    // the turn completes.
-    let parent_id = doors::mint("s_");
-    let mut parent_running = Running::start(
-        &setup,
-        &parent_id,
-        &["--model", "pa/m", "--prompt", "say hello"],
-    );
-    parent_running.wait_line("the parent's turn completes", |line| {
-        line["kind"] == "turn_completed"
-    });
-    let client = parent_running.connect(&setup, &parent_id);
-    subscribe(&client);
-    close_now(&client);
-    let _tail = support::until_close(&client);
-    drop(client);
-    let (parent_status, _, parent_stderr) = parent_running.wait();
-    assert_eq!(parent_status.code(), Some(0), "{parent_stderr}");
-    let parent_log = sessions_in(&setup.home(), &setup.workspace())
-        .join(&parent_id)
-        .join("events.jsonl");
+    let fork = fork_parent();
+    let setup = &fork.setup;
+    let parent_id = &fork.parent_id;
+    let parent_log = fork.sessions.join(parent_id).join("events.jsonl");
     let parent_lines = read_lines(&parent_log);
     let last_seq = parent_lines.last().unwrap()["seq"].as_u64().unwrap();
     // The parent ran in a worktree: its `session_started` names one at
@@ -4118,11 +4170,7 @@ fn a_fork_child_of_a_worktree_parent_holds_the_shared_lock() {
     drop(probe);
     // The child names its parent and its point, and no rewind.
     let started = one(
-        &read_lines(
-            &sessions_in(&setup.home(), &setup.workspace())
-                .join(&new)
-                .join("events.jsonl"),
-        ),
+        &read_lines(&fork.sessions.join(&new).join("events.jsonl")),
         "session_started",
     );
     assert_eq!(

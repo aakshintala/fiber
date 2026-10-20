@@ -6,13 +6,12 @@
 
 use contract::ActionId;
 use contract::emit::Emit;
-use contract::jobs::JobRecord;
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, DeclaredEffects, Effect};
+use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::{Ask, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
-use super::{DelegateFork, Started, check_effects_arguments};
+use super::{DelegateFork, check_effects_arguments, receipt};
 
 impl Tool for DelegateFork {
     fn definition(&self) -> ToolDefinition {
@@ -102,24 +101,6 @@ impl DelegateFork {
             Ok(start) => receipt(start),
             Err(error) => error.output(false),
         }
-    }
-}
-
-/// The start's receipt: the child's job id and log path, with the start
-/// records the runner's end joins later.
-fn receipt(start: Started) -> Output {
-    Output {
-        content: vec![ContentPart::Text {
-            text: format!(
-                "Started delegate {}. Its log is {}.",
-                start.job_id.0, start.output_path
-            ),
-        }],
-        jobs: vec![
-            JobRecord::Started(start.started),
-            JobRecord::DelegateStarted(start.delegate),
-        ],
-        ..Output::default()
     }
 }
 

@@ -59,9 +59,6 @@ pub struct Launched {
     pub job_id: JobId,
     /// The parent session.
     pub parent: SessionId,
-    /// The child's model: a spawn's resolved `provider/model[:level]`,
-    /// or a fork's verbatim reference, which its argv never emits.
-    pub model: String,
     /// The prompt, on argv.
     pub prompt: String,
     /// The parent's workspace, which the delegate shares.
@@ -88,10 +85,13 @@ pub enum Start {
 /// carrying one is unrepresentable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fresh {
-    /// A spawn: the credential label the child session runs under, as a
-    /// run override: `Some` on a new launch whose role names a stored
+    /// A spawn: the resolved `provider/model[:level]` the child runs
+    /// under, and the credential label it runs with, as a run
+    /// override: `Some` on a new launch whose role names a stored
     /// label, `None` on a launch without one.
     Spawn {
+        /// The resolved reference the child's `--model` names.
+        model: String,
         /// The credential label, when the role names one.
         credential: Option<String>,
     },

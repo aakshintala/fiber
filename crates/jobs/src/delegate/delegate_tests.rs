@@ -66,7 +66,6 @@ fn rig() -> Rig {
             session_id: launched.session_id.clone(),
             job_id: launched.job_id.clone(),
             parent: launched.parent.clone(),
-            model: launched.model.clone(),
             prompt: launched.prompt.clone(),
             workspace: launched.workspace.clone(),
             start: launched.start.clone(),
@@ -310,7 +309,10 @@ fn a_role_starts_its_resolved_reference_and_records_it() {
         .recv(&rig.launched)
         .expect("the launcher ran");
     assert_eq!(launched.job_id, started.job_id);
-    assert_eq!(launched.model, "fake/m:high");
+    let Start::Fresh(Fresh::Spawn { model, .. }) = &launched.start else {
+        panic!("a spawn launches fresh");
+    };
+    assert_eq!(model, "fake/m:high");
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
 }
@@ -367,7 +369,10 @@ fn a_good_call_returns_its_receipt_with_started_records() {
     assert_eq!(launched.job_id, started.job_id);
     assert_eq!(launched.session_id, delegate.delegate_session_id);
     assert_eq!(launched.parent.0, "s_parent");
-    assert_eq!(launched.model, "fake/m");
+    let Start::Fresh(Fresh::Spawn { model, .. }) = &launched.start else {
+        panic!("a spawn launches fresh");
+    };
+    assert_eq!(model, "fake/m");
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
 }
@@ -1032,10 +1037,10 @@ fn a_role_credential_reaches_the_launcher() {
     let launched = Deadline::after(DEADLINE)
         .recv(&rig.launched)
         .expect("the launcher ran");
-    assert_eq!(launched.model, "fake/m:high");
-    let Start::Fresh(Fresh::Spawn { credential }) = &launched.start else {
+    let Start::Fresh(Fresh::Spawn { model, credential }) = &launched.start else {
         panic!("a spawn launches fresh");
     };
+    assert_eq!(model, "fake/m:high");
     assert_eq!(*credential, Some("work".to_owned()));
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
@@ -1057,10 +1062,10 @@ fn a_full_reference_launches_with_no_credential() {
     let launched = Deadline::after(DEADLINE)
         .recv(&rig.launched)
         .expect("the launcher ran");
-    assert_eq!(launched.model, "fake/m");
-    let Start::Fresh(Fresh::Spawn { credential }) = &launched.start else {
+    let Start::Fresh(Fresh::Spawn { model, credential }) = &launched.start else {
         panic!("a spawn launches fresh");
     };
+    assert_eq!(model, "fake/m");
     assert_eq!(*credential, None);
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);

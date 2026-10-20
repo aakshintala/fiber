@@ -339,10 +339,12 @@ fn launched() -> jobs::Launched {
         session_id: SessionId("s_child".into()),
         job_id: contract::JobId("j_1".into()),
         parent: SessionId("s_parent".into()),
-        model: "fake/m:high".to_owned(),
         prompt: "scan the tree".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
-        start: jobs::Start::Fresh(jobs::Fresh::Spawn { credential: None }),
+        start: jobs::Start::Fresh(jobs::Fresh::Spawn {
+            model: "fake/m:high".to_owned(),
+            credential: None,
+        }),
     }
 }
 
@@ -544,7 +546,6 @@ fn resumed() -> jobs::Launched {
         session_id: SessionId("s_child".into()),
         job_id: contract::JobId("j_1".into()),
         parent: SessionId("s_parent".into()),
-        model: "fake/m:high".to_owned(),
         prompt: "- also check Y".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
         start: jobs::Start::Resume,
@@ -619,9 +620,9 @@ fn a_fork_builds_the_fork_argv_with_no_model_or_credential() {
     // credential pair and the label, none of which the fork emits.
     let spawned = jobs::Launched {
         start: jobs::Start::Fresh(jobs::Fresh::Spawn {
+            model: "fake/m:high".to_owned(),
             credential: Some("work".to_owned()),
         }),
-        model: "fake/m:high".to_owned(),
         prompt: "scan the tree".to_owned(),
         ..launched()
     };
@@ -1127,9 +1128,10 @@ fn a_repository_layer_role_credential_is_ignored() {
     // The launch then passes no `-c`: the child reads the provider's
     // configured label.
     let mut launch = launched();
-    launch.start = jobs::Start::Fresh(jobs::Fresh::Spawn {
-        credential: (resolve.credential)("fast").unwrap(),
-    });
+    let jobs::Start::Fresh(jobs::Fresh::Spawn { credential, .. }) = &mut launch.start else {
+        panic!("a new launch is a fresh spawn");
+    };
+    *credential = (resolve.credential)("fast").unwrap();
     let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -1150,9 +1152,10 @@ fn the_catalogue_never_prints_a_role_label() {
 #[test]
 fn a_new_launch_with_a_credential_passes_it_as_a_run_override() {
     let mut launch = launched();
-    launch.start = jobs::Start::Fresh(jobs::Fresh::Spawn {
-        credential: Some("work".to_owned()),
-    });
+    let jobs::Start::Fresh(jobs::Fresh::Spawn { credential, .. }) = &mut launch.start else {
+        panic!("a new launch is a fresh spawn");
+    };
+    *credential = Some("work".to_owned());
     let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -1168,9 +1171,10 @@ fn a_new_launch_with_a_credential_passes_it_as_a_run_override() {
 #[test]
 fn a_label_that_parses_as_json_is_still_a_string() {
     let mut launch = launched();
-    launch.start = jobs::Start::Fresh(jobs::Fresh::Spawn {
-        credential: Some("123".to_owned()),
-    });
+    let jobs::Start::Fresh(jobs::Fresh::Spawn { credential, .. }) = &mut launch.start else {
+        panic!("a new launch is a fresh spawn");
+    };
+    *credential = Some("123".to_owned());
     let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())

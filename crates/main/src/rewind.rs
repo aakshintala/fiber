@@ -63,7 +63,24 @@ pub(crate) fn session_forked(
     };
     let sessions = log::sessions_dir(&home, &doors::project(&workspace));
     let from_dir = sessions.join(&from.session_id.0);
-    if !from_dir.is_dir() {
+    // A missing session is `session_not_found`; any other failure to
+    // read its directory (permissions, a broken link) is `io_failed`
+    // and names the path (`docs/errors.md`). `is_dir` folds both into
+    // `false`, so the metadata error is matched instead.
+    let missing = match std::fs::metadata(&from_dir) {
+        Ok(meta) => !meta.is_dir(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            return ask_failed(failed(
+                ErrorCode::IoFailed,
+                format!(
+                    "Cannot read session directory `{}`: {e}",
+                    from_dir.display()
+                ),
+            ));
+        }
+    };
+    if missing {
         return ask_failed(failed(
             ErrorCode::SessionNotFound,
             format!("No session `{}`.", from.session_id.0),

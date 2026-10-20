@@ -287,10 +287,12 @@ impl Rig {
             session_id: SessionId("s_child".into()),
             job_id: self.job.clone(),
             parent: SessionId("s_parent".into()),
-            model: "fake/m".into(),
             prompt: "hi".into(),
             workspace: self.events.parent().unwrap().to_path_buf(),
-            start: Start::Fresh(Fresh::Spawn { credential: None }),
+            start: Start::Fresh(Fresh::Spawn {
+                model: "fake/m".into(),
+                credential: None,
+            }),
         };
         let (child, listing) = runner.spawn(&launch, &launched).unwrap();
         let (_started, finish) = self.registry.open_started(
@@ -2432,10 +2434,12 @@ fn the_fold_starts_from_the_run_boundary() {
         session_id: SessionId("s_child".into()),
         job_id: rig.job.clone(),
         parent: SessionId("s_parent".into()),
-        model: "fake/m".into(),
         prompt: "hi".into(),
         workspace: rig.events.parent().unwrap().to_path_buf(),
-        start: Start::Fresh(Fresh::Spawn { credential: None }),
+        start: Start::Fresh(Fresh::Spawn {
+            model: "fake/m".into(),
+            credential: None,
+        }),
     };
     let (child, listing) = runner.spawn(&launch, &launched).unwrap();
     let (_started, finish) = rig.registry.open_started(
