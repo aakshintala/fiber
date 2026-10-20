@@ -1116,8 +1116,13 @@ impl Pages {
                 .and_then(|at| fold.reply_at(at))
                 .map(|id| Target::Copy { reply: id, block }),
             Target::Image(id) => self
-                .image_path(id)
-                .and_then(|path| fold.images.ids.get(path).copied())
+                .image(id)
+                .and_then(|part| {
+                    fold.images
+                        .ids
+                        .get(&(part.session.clone(), part.path.clone()))
+                        .copied()
+                })
                 .map(Target::Image),
             Target::Login => Some(Target::Login),
             Target::Note(_) | Target::Orphans(_) => None,
@@ -1270,11 +1275,11 @@ impl Pages {
         for at in pins {
             fold.pins.pin(at.saturating_add(len));
         }
-        for (id, part) in &self.images.parts {
-            fold.images.parts.entry(*id).or_insert_with(|| part.clone());
-        }
-        for (path, id) in &self.images.ids {
-            fold.images.ids.entry(path.clone()).or_insert(*id);
+        // The chain keeps one id per `(session, path)`: each carried
+        // part re-notes under its own segment, so the same path in two
+        // segments keeps two ids.
+        for part in self.images.parts.values() {
+            fold.images.note(part);
         }
     }
 
@@ -1408,10 +1413,6 @@ impl Pages {
     }
 
     /// The path of the image `id` names, if it drew.
-    fn image_path(&self, id: u32) -> Option<&str> {
-        self.images.parts.get(&id).map(|part| part.path.as_str())
-    }
-
     /// Every resident turn, closed pages first.
     fn turns(&self) -> impl Iterator<Item = &Turn> {
         let pending = self

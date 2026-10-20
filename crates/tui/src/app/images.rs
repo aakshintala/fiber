@@ -1,5 +1,5 @@
-//! The per-session image registry: viewer fetches and the out-queue
-//! (`docs/tui.md`, "Images").
+//! The chain's image viewer state: fetches and the out-queue, keyed by
+//! each part's segment session (`docs/tui.md`, "Images").
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,10 +26,10 @@ struct Fetch {
 #[derive(Default)]
 pub(crate) struct Images {
     fetches: BTreeMap<String, Fetch>,
-    /// Images whose file would not open, by logged path: missing, too
-    /// large or refused. They stay their line, with the notice said
-    /// once, and are not asked for again in this session.
-    refused: BTreeSet<String>,
+    /// Images whose file would not open, by `(session, path)`: missing,
+    /// too large or refused. They stay their line, with the notice said
+    /// once, and are not asked for again in that segment.
+    refused: BTreeSet<(String, String)>,
     out: image::Out,
     generation: u64,
 }
@@ -39,18 +39,28 @@ impl App {
     /// file again with `read_file`, the terminal keeping no bytes.
     /// While one fetch for it is out, another click does nothing;
     /// with the link down nothing goes out; and an image whose file
-    /// would not open is not asked for again in this session.
+    /// would not open is not asked for again in its segment.
     pub(crate) fn view_image(&mut self, id: u32) -> Effect {
         let Some(part) = self.screen.pages().image(id) else {
             return Effect::None;
         };
+        // The read runs under the part's segment session, not the
+        // attached one: an ancestor image resolves under its own log.
+        let session = part.session.clone();
         let path = part.path.clone();
-        if self.images.refused.contains(&path)
-            || self.images.fetches.values().any(|fetch| fetch.path == path)
+        if self
+            .images
+            .refused
+            .contains(&(session.0.clone(), path.clone()))
+            || self
+                .images
+                .fetches
+                .values()
+                .any(|fetch| fetch.session == session.0 && fetch.path == path)
         {
             return Effect::None;
         }
-        let Some(session) = self.session().cloned() else {
+        if self.session().is_none() {
             return Effect::None;
         };
         if self.link != Link::Up {
@@ -86,7 +96,9 @@ impl App {
             .and_then(Value::as_str)
         else {
             let name = file_name(&fetch.path);
-            self.images.refused.insert(fetch.path);
+            self.images
+                .refused
+                .insert((fetch.session.clone(), fetch.path));
             self.cant_open(&name, "the answer carried no file");
             return true;
         };
@@ -107,7 +119,9 @@ impl App {
             return false;
         };
         let name = file_name(&fetch.path);
-        self.images.refused.insert(fetch.path);
+        self.images
+            .refused
+            .insert((fetch.session.clone(), fetch.path));
         self.cant_open(&name, message);
         true
     }
@@ -127,8 +141,13 @@ impl App {
             return;
         }
         if let Err(reason) = result {
-            if let Some(path) = self.screen.pages().image(id).map(|part| part.path.clone()) {
-                self.images.refused.insert(path);
+            if let Some(key) = self
+                .screen
+                .pages()
+                .image(id)
+                .map(|part| (part.session.0.clone(), part.path.clone()))
+            {
+                self.images.refused.insert(key);
             }
             self.cant_open(name, &reason);
         }

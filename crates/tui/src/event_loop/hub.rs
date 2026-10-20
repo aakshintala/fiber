@@ -204,8 +204,24 @@ impl Connection {
         while from <= range.end().0 {
             let to = from.saturating_add(HISTORY_LINES - 1).min(range.end().0);
             let id = mint();
-            let args = serde_json::json!({"from_seq": from, "to_seq": to});
-            let command = session_command(&id, "history", session, Some(args)).to_string();
+            let mut args = serde_json::json!({"from_seq": from, "to_seq": to});
+            // An ancestor window rides the serving session's chain read:
+            // the command stays routed to the serving session, and the
+            // args name the ancestor segment. Own windows carry no
+            // session, exactly as today.
+            let top = match app.paging_session() {
+                Some(serving) if serving != session => {
+                    if let Some(object) = args.as_object_mut() {
+                        object.insert(
+                            "session_id".to_owned(),
+                            serde_json::Value::String(session.0.clone()),
+                        );
+                    }
+                    serving
+                }
+                _ => session,
+            };
+            let command = session_command(&id, "history", top, Some(args)).to_string();
             let written = self
                 .hub
                 .as_ref()

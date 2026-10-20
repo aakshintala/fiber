@@ -140,3 +140,40 @@ fn an_image_line_counts_one_row_and_names_its_target() {
     assert_eq!(found[0].0, "▣ a.png · 1280×800");
     assert!(matches!(found[0].1, Some(Target::Image(1))));
 }
+
+/// The other segment: the chain's first session.
+const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
+
+#[test]
+fn one_path_noted_under_two_sessions_draws_two_ids() {
+    let mut pages = pages();
+    pages.note_images(&started(&["artifacts/shot.png"]));
+    let mut ancestor = started(&["artifacts/shot.png"]);
+    ancestor.session_id = SessionId(OTHER.to_owned());
+    pages.note_images(&ancestor);
+    let one = pages
+        .images
+        .id(&SessionId(SESSION.to_owned()), "artifacts/shot.png")
+        .expect("the own image draws");
+    let two = pages
+        .images
+        .id(&SessionId(OTHER.to_owned()), "artifacts/shot.png")
+        .expect("the ancestor image draws");
+    assert_ne!(one, two, "one path in two segments draws two ids");
+    assert_eq!(
+        pages.image(one).map(|part| part.session.clone()),
+        Some(SessionId(SESSION.to_owned()))
+    );
+    assert_eq!(
+        pages.image(two).map(|part| part.session.clone()),
+        Some(SessionId(OTHER.to_owned()))
+    );
+    // A refold keeps both ids.
+    pages.note_images(&ancestor);
+    assert_eq!(
+        pages
+            .images
+            .id(&SessionId(OTHER.to_owned()), "artifacts/shot.png"),
+        Some(two)
+    );
+}

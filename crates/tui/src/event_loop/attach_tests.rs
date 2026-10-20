@@ -3840,3 +3840,155 @@ fn a_held_reconnect_replay_leaves_one_job_card() {
     // different frames of the same card: the counts above pin the one
     // card, the panel pins its state.
 }
+
+/// The ancestor's session: the chain's first segment.
+const ANCESTOR: &str = "s_bbbbbbbbbbbbbbbb";
+
+/// Ancestor lines, `turns` turns numbered from `seq 0` under [`ANCESTOR`].
+fn ancestor_lines(turns: usize) -> Vec<contract::Envelope> {
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for turn in 0..turns {
+        for input in super::turn_lines(&format!("ancestor reply {turn}"), turn + 100, &mut seq) {
+            if let Input::Hub(Line::Session(mut envelope)) = input {
+                envelope.session_id = contract::SessionId(ANCESTOR.to_owned());
+                lines.push(envelope);
+            }
+        }
+    }
+    lines
+}
+
+/// Answers every `history` window from the pool its args name: the
+/// ancestor's lines when the args carry [`ANCESTOR`], the own log's
+/// otherwise.
+fn chain_answers(
+    owned: Vec<contract::Envelope>,
+    ancestor: Vec<contract::Envelope>,
+) -> super::Script {
+    Box::new(move |command: &serde_json::Value| {
+        if command["command"] != "history" {
+            return Vec::new();
+        }
+        let id = command["id"].as_str().unwrap_or_default().to_owned();
+        let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+        let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+        let pool = match command["args"].get("session_id").and_then(|id| id.as_str()) {
+            Some(ANCESTOR) => &ancestor,
+            _ => &owned,
+        };
+        let lines: Vec<contract::Envelope> = pool
+            .iter()
+            .filter(|line| line.seq.is_some_and(|seq| from <= seq.0 && seq.0 <= to))
+            .cloned()
+            .collect();
+        vec![Input::Hub(Line::Session(command_answer(&id, lines)))]
+    })
+}
+
+#[test]
+fn history_fetch_names_each_window_with_its_segment_session() {
+    use contract::Seq;
+    use std::ops::RangeInclusive;
+    let (mut lp, theirs, tx, rx) = opened();
+    let owned = session();
+    let ancestor = ancestor_lines(8);
+    let serving = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let seen = serve(
+        theirs,
+        tx.clone(),
+        chain_answers(owned.clone(), ancestor.clone()),
+    );
+    // The own run's windows carry no session: absent means the serving
+    // session, exactly as today.
+    let range: RangeInclusive<Seq> = Seq(0)..=Seq(300);
+    let lines = lp
+        .hub
+        .fetch(&rx, &serving, &range, &mut lp.app, &lp.tick)
+        .unwrap_or_else(|err| panic!("own fetch: {err}"));
+    assert_eq!(lines.len(), 301, "both own windows answer");
+    // The ancestor's window rides the serving session's chain read: the
+    // top-level session stays the serving one, and the args name the
+    // ancestor.
+    let last = u64::try_from(ancestor.len())
+        .expect("ancestor lines")
+        .saturating_sub(1);
+    let arange: RangeInclusive<Seq> = Seq(0)..=Seq(last);
+    let alines = lp
+        .hub
+        .fetch(
+            &rx,
+            &contract::SessionId(ANCESTOR.to_owned()),
+            &arange,
+            &mut lp.app,
+            &lp.tick,
+        )
+        .unwrap_or_else(|err| panic!("ancestor fetch: {err}"));
+    assert_eq!(alines.len(), ancestor.len(), "the ancestor window answers");
+    assert!(
+        alines
+            .iter()
+            .all(|line| line.session_id == contract::SessionId(ANCESTOR.to_owned())),
+        "the ancestor's lines come back under its session"
+    );
+    let seen = seen.lock().unwrap_or_else(|err| panic!("seen: {err}"));
+    assert_eq!(seen.len(), 3, "two own windows and one ancestor window");
+    for command in &seen[..2] {
+        assert_eq!(command["command"], "history");
+        assert_eq!(command["session_id"], "s_aaaaaaaaaaaaaaaa");
+        assert!(
+            command["args"].get("session_id").is_none(),
+            "an own window names no session: {command}"
+        );
+    }
+    assert_eq!(seen[0]["args"]["from_seq"], 0);
+    assert_eq!(seen[0]["args"]["to_seq"], 255);
+    assert_eq!(seen[1]["args"]["from_seq"], 256);
+    assert_eq!(seen[1]["args"]["to_seq"], 300);
+    assert_eq!(seen[2]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(seen[2]["args"]["session_id"], ANCESTOR);
+    assert_eq!(seen[2]["args"]["from_seq"], 0);
+    assert_eq!(seen[2]["args"]["to_seq"], last);
+}
+
+#[test]
+fn history_fetch_past_the_point_fails_with_its_message() {
+    use contract::Seq;
+    use std::ops::RangeInclusive;
+    let (mut lp, theirs, tx, rx) = opened();
+    let seen = serve(
+        theirs,
+        tx.clone(),
+        Box::new(|command: &serde_json::Value| {
+            if command["command"] != "history" {
+                return Vec::new();
+            }
+            let id = command["id"].as_str().unwrap_or_default().to_owned();
+            if command["args"].get("session_id").and_then(|id| id.as_str()) == Some(ANCESTOR) {
+                let mut rejected = line("command_rejected", None, None, json!({}));
+                rejected.payload =
+                    json!({"command_id": id, "message": "from_seq is past the point"})
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default();
+                return vec![Input::Hub(Line::Session(rejected))];
+            }
+            vec![Input::Hub(Line::Session(command_answer(&id, Vec::new())))]
+        }),
+    );
+    let range: RangeInclusive<Seq> = Seq(0)..=Seq(10);
+    let err = lp
+        .hub
+        .fetch(
+            &rx,
+            &contract::SessionId(ANCESTOR.to_owned()),
+            &range,
+            &mut lp.app,
+            &lp.tick,
+        )
+        .expect_err("past the point fails");
+    assert_eq!(err, "from_seq is past the point");
+    let seen = seen.lock().unwrap_or_else(|err| panic!("seen: {err}"));
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0]["args"]["session_id"], ANCESTOR);
+}

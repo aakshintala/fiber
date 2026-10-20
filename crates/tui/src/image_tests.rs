@@ -12,6 +12,14 @@ use crate::format;
 use crate::rows::Rows;
 use crate::theme::Role;
 
+fn session() -> contract::SessionId {
+    contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned())
+}
+
+fn other() -> contract::SessionId {
+    contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned())
+}
+
 fn image(path: &str, width: u32, height: u32) -> ContentPart {
     ContentPart::Image {
         path: path.to_owned(),
@@ -23,10 +31,11 @@ fn image(path: &str, width: u32, height: u32) -> ContentPart {
 
 #[test]
 fn part_from_content_keeps_path_and_size() {
-    let part = super::Part::from_content(&image("artifacts/i_a.png", 1280, 800));
+    let part = super::Part::from_content(&session(), &image("artifacts/i_a.png", 1280, 800));
     assert_eq!(
         part,
         Some(super::Part {
+            session: session(),
             path: "artifacts/i_a.png".to_owned(),
             width: 1280,
             height: 800,
@@ -49,7 +58,7 @@ fn parts_skip_text_and_unknown() {
         ContentPart::Unknown,
         image("artifacts/b.png", 30, 40),
     ];
-    let kept = parts(&content);
+    let kept = parts(&session(), &content);
     assert_eq!(
         kept.iter()
             .map(|part| part.path.clone())
@@ -65,7 +74,7 @@ fn label_names_the_file_and_size() {
         ("shot.png", 1, 1, "▣ shot.png · 1×1"),
         ("", 0, 0, "▣  · 0×0"),
     ] {
-        let Some(part) = super::Part::from_content(&image(path, width, height)) else {
+        let Some(part) = super::Part::from_content(&session(), &image(path, width, height)) else {
             panic!("kept {path}");
         };
         assert_eq!(part.label(), label, "{path}");
@@ -76,6 +85,7 @@ fn label_names_the_file_and_size() {
 fn drawn(label: &str, columns: u16) -> Vec<(String, Option<Target>)> {
     let mut layout = Layout::default();
     let part = super::Part {
+        session: session(),
         path: "artifacts/a.png".to_owned(),
         width: 1280,
         height: 800,
@@ -95,7 +105,7 @@ fn a_long_label_is_cut_to_its_width_and_draws_one_row() {
     // A 200-character file name at width 40: one row, ending in `…`.
     let name = "a".repeat(200) + ".png";
     let path = format!("artifacts/{name}");
-    let Some(part) = super::Part::from_content(&image(&path, 1280, 800)) else {
+    let Some(part) = super::Part::from_content(&session(), &image(&path, 1280, 800)) else {
         panic!("kept");
     };
     let mut layout = Layout::default();
@@ -171,6 +181,7 @@ fn a_label_cut_inside_its_name_draws_wholly_as_the_link() {
 fn lines_at_indented(columns: u16, indent: u16) -> Vec<Line<'static>> {
     let mut layout = Layout::default();
     let part = super::Part {
+        session: session(),
         path: "artifacts/a.png".to_owned(),
         width: 1280,
         height: 800,
@@ -211,6 +222,7 @@ fn an_image_line_counts_one_row_and_names_its_target() {
 fn a_right_aligned_line_stays_right_aligned() {
     let mut layout = Layout::default();
     let part = super::Part {
+        session: session(),
         path: "artifacts/a.png".to_owned(),
         width: 10,
         height: 20,
@@ -227,6 +239,7 @@ fn a_right_aligned_line_stays_right_aligned() {
 fn a_line_names_its_own_paths_id() {
     let mut layout = Layout::default();
     let first = super::Part {
+        session: session(),
         path: "artifacts/a.png".to_owned(),
         width: 10,
         height: 20,
@@ -241,5 +254,20 @@ fn a_line_names_its_own_paths_id() {
     super::rows(&second, &layout, 60, Align::Left { indent: 0 }, &mut out);
     let (rows, _) = out.into_parts();
     assert!(matches!(rows[0].1, Some(Target::Image(2))));
-    assert_eq!(layout.id("artifacts/c.png"), None);
+    assert_eq!(layout.id(&session(), "artifacts/c.png"), None);
+}
+
+#[test]
+fn one_path_in_two_segments_draws_two_ids() {
+    let mut layout = Layout::default();
+    let first = super::Part::from_content(&session(), &image("artifacts/a.png", 10, 20))
+        .expect("the own image is kept");
+    let second = super::Part::from_content(&other(), &image("artifacts/a.png", 10, 20))
+        .expect("the ancestor image is kept");
+    let one = layout.note(&first);
+    let two = layout.note(&second);
+    assert_ne!(one, two, "one path in two segments draws two ids");
+    assert_eq!(layout.id(&session(), "artifacts/a.png"), Some(one));
+    assert_eq!(layout.id(&other(), "artifacts/a.png"), Some(two));
+    assert_eq!(layout.note(&first), one, "refolding keeps the id");
 }

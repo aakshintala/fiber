@@ -466,9 +466,21 @@ impl App {
         }
         let to = from.saturating_add(HISTORY_LINES - 1).min(last);
         let id = mint();
-        let args = serde_json::json!({"from_seq": from, "to_seq": to});
+        // An ancestor page's window rides the serving session's chain
+        // read: the command stays routed to the serving session, and
+        // the args name the page's segment.
+        let args = if entry.session == session {
+            serde_json::json!({"from_seq": from, "to_seq": to})
+        } else {
+            serde_json::json!({
+                "session_id": entry.session.0.clone(),
+                "from_seq": from,
+                "to_seq": to
+            })
+        };
         let line = session_command(&id, "history", &session, Some(args)).to_string();
-        self.find.send(id, page, width, revision, held, line);
+        self.find
+            .send(id, page, entry.session.clone(), width, revision, held, line);
     }
 
     /// The search's unsent command lines.
@@ -507,6 +519,10 @@ impl App {
                 );
             }
             Ok(lines) => {
+                debug_assert!(
+                    lines.iter().all(|line| line.session_id == fetch.session),
+                    "the fetch answers under its page's segment session"
+                );
                 fetch.held.extend(lines.iter().cloned());
                 let last = fetch.held.last().and_then(|line| line.seq).map(|seq| seq.0);
                 let end = self

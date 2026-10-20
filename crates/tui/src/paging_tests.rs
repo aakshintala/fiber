@@ -3642,9 +3642,12 @@ fn image_targets_resolve_by_path() {
     for line in &stream.lines {
         pages.apply(line);
     }
-    assert_eq!(pages.image_path(1), Some("artifacts/shot.png"));
-    assert_eq!(pages.image_path(0), None, "no image at zero");
-    assert_eq!(pages.image_path(2), None, "one image only");
+    assert_eq!(
+        pages.image(1).map(|part| part.path.as_str()),
+        Some("artifacts/shot.png")
+    );
+    assert_eq!(pages.image(0), None, "no image at zero");
+    assert_eq!(pages.image(2), None, "one image only");
 }
 
 /// A page with rows but no line holds no seq: the row's piece starts

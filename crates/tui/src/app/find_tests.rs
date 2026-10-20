@@ -2821,3 +2821,148 @@ fn a_moved_revision_on_a_dropped_page_counts_the_rescan_once() {
         "the fetch reads the moved page"
     );
 }
+
+/// The ancestor's session: the chain's first segment.
+const ANCESTOR: &str = "s_bbbbbbbbbbbbbbbb";
+
+/// A durable line numbered `seq` in segment `session`.
+fn segment(
+    seq: &mut u64,
+    session: &str,
+    kind: &str,
+    action: Option<&str>,
+    payload: Value,
+) -> contract::Envelope {
+    *seq += 1;
+    contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 1_000 + *seq,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action.map(|id| contract::ActionId(id.to_owned())),
+        seq: Some(contract::Seq(*seq - 1)),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }
+}
+
+/// One turn's eight lines under `session`, numbered from `seq`; the
+/// first ancestor turn carries the needle.
+fn chain_turn(seq: &mut u64, session: &str, turn: usize, needle: bool) -> Vec<contract::Envelope> {
+    let message = format!("f_m{turn}");
+    let thought = format!("f_r{turn}");
+    let reply = if needle {
+        "the needle hides here".to_owned()
+    } else {
+        format!("reply {turn}")
+    };
+    let prompt = format!("prompt {turn}");
+    [
+        segment(
+            seq,
+            session,
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": prompt}]}]}),
+        ),
+        segment(seq, session, "step_started", None, json!({})),
+        segment(
+            seq,
+            session,
+            "assistant_message_started",
+            Some(&message),
+            json!({}),
+        ),
+        segment(seq, session, "reasoning_started", Some(&thought), json!({})),
+        segment(
+            seq,
+            session,
+            "reasoning_completed",
+            Some(&thought),
+            json!({"text": "weigh it"}),
+        ),
+        segment(
+            seq,
+            session,
+            "text_completed",
+            Some(&message),
+            json!({"text": reply}),
+        ),
+        segment(
+            seq,
+            session,
+            "assistant_message_completed",
+            Some(&message),
+            json!({"outcome": "completed"}),
+        ),
+        segment(
+            seq,
+            session,
+            "turn_completed",
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ]
+    .into_iter()
+    .collect()
+}
+
+#[test]
+fn an_ancestor_fetch_names_its_session() {
+    let mut app = attached(40, 10);
+    // The ancestor run pages straight into the preview, as history
+    // would; the own run streams live.
+    let mut aseq = 0u64;
+    for turn in 0..12 {
+        for line in chain_turn(&mut aseq, ANCESTOR, turn, turn == 0) {
+            app.attached_screen_mut().pages_mut().apply(&line);
+        }
+    }
+    let mut dseq = 0u64;
+    for turn in 12..14 {
+        for line in chain_turn(&mut dseq, SESSION, turn, false) {
+            app.on_line(Line::Session(line));
+        }
+    }
+    // Off the top: the ancestor's closed pages drop.
+    assert!(
+        app.pages().part(0).is_none(),
+        "the ancestor's first page dropped"
+    );
+    // The search fetches the dropped ancestor page first.
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    let mut generation = app.find.generation();
+    for ch in "needle".chars() {
+        generation += 1;
+        assert_eq!(
+            app.on_key(Key::Char(ch), now()),
+            Effect::FindPause {
+                generation,
+                after: FIND_PAUSE,
+            }
+        );
+    }
+    let outgoing = app.find_due(generation);
+    assert_eq!(outgoing.len(), 1, "one fetch on the wire");
+    let command: Value = serde_json::from_str(&outgoing[0]).expect("a history command");
+    assert_eq!(command["command"], "history");
+    assert_eq!(
+        command["args"]["session_id"].as_str(),
+        Some(ANCESTOR),
+        "the fetch names the page's segment"
+    );
+    let fetch = app.find.take_fetch().expect("the ancestor fetch");
+    assert_eq!(
+        fetch.session,
+        contract::SessionId(ANCESTOR.to_owned()),
+        "the in-flight fetch carries the page's session"
+    );
+    let page = app
+        .pages()
+        .index()
+        .pages()
+        .get(fetch.page)
+        .unwrap_or_else(|| panic!("page {}", fetch.page));
+    assert_eq!(page.session, contract::SessionId(ANCESTOR.to_owned()));
+}
