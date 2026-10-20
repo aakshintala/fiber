@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used, reason = "test code")]
 
 use super::*;
+use std::collections::BTreeMap;
 
 fn full() -> ProviderRequest {
     ProviderRequest {
@@ -19,6 +20,13 @@ fn full() -> ProviderRequest {
         headers_ms: Some(41),
         first_token_ms: Some(57),
         total_ms: 180,
+        prefix_hashes: Some(PrefixHashes {
+            system: Some("9f2c".into()),
+            tools: Some("41ab".into()),
+            messages: vec!["c7d0".into(), "e91f".into()],
+        }),
+        cache_read: Some(9585),
+        cache_write: Some(BTreeMap::from([("1h".into(), 57)])),
     }
 }
 
@@ -54,6 +62,9 @@ fn an_absent_option_is_left_out_never_null() {
         headers_ms: None,
         first_token_ms: None,
         total_ms: 3,
+        prefix_hashes: None,
+        cache_read: None,
+        cache_write: None,
     };
     let line = serde_json::to_string(&request).unwrap();
     assert_eq!(
@@ -62,6 +73,9 @@ fn an_absent_option_is_left_out_never_null() {
          \"request_bytes\":0,\"response_bytes\":0,\"total_ms\":3}"
     );
     assert!(!line.contains("null"), "{line}");
+    for absent in ["prefix_hashes", "cache_read", "cache_write"] {
+        assert!(!line.contains(absent), "{absent} is absent: {line}");
+    }
 }
 
 #[test]
@@ -121,7 +135,10 @@ fn a_provider_request_writes_present_fields_in_order_and_leaves_absent_ones_out(
         "{\"provider\":\"fake\",\"model\":\"m\",\"purpose\":\"model_call\",\
          \"host\":\"127.0.0.1:50731\",\"path\":\"/v1/responses\",\"status\":200,\
          \"attempt\":1,\"request_bytes\":2214,\"response_bytes\":913,\
-         \"headers_ms\":41,\"first_token_ms\":57,\"total_ms\":180}"
+         \"headers_ms\":41,\"first_token_ms\":57,\"total_ms\":180,\
+         \"prefix_hashes\":{\"system\":\"9f2c\",\"tools\":\"41ab\",\
+         \"messages\":[\"c7d0\",\"e91f\"]},\"cache_read\":9585,\
+         \"cache_write\":{\"1h\":57}}"
     );
     let request = ProviderRequest {
         model: None,
@@ -132,6 +149,9 @@ fn a_provider_request_writes_present_fields_in_order_and_leaves_absent_ones_out(
         first_token_ms: None,
         purpose: Purpose::ModelList,
         response_bytes: 0,
+        prefix_hashes: None,
+        cache_read: None,
+        cache_write: None,
         ..full()
     };
     assert_eq!(
@@ -139,4 +159,27 @@ fn a_provider_request_writes_present_fields_in_order_and_leaves_absent_ones_out(
         "{\"provider\":\"fake\",\"purpose\":\"model_list\",\"attempt\":1,\
          \"request_bytes\":2214,\"response_bytes\":0,\"total_ms\":180}"
     );
+}
+
+#[test]
+fn a_prefix_hash_without_optional_segments_leaves_them_out() {
+    let request = ProviderRequest {
+        prefix_hashes: Some(PrefixHashes {
+            system: None,
+            tools: None,
+            messages: Vec::new(),
+        }),
+        cache_read: None,
+        cache_write: None,
+        ..full()
+    };
+    let line = serde_json::to_string(&request).unwrap();
+    assert!(
+        line.contains("\"prefix_hashes\":{\"messages\":[]}"),
+        "no system or tools member: {line}"
+    );
+    assert!(!line.contains("null"), "{line}");
+    for absent in ["cache_read", "cache_write"] {
+        assert!(!line.contains(absent), "{absent} is absent: {line}");
+    }
 }

@@ -240,6 +240,29 @@ parameter, missed it on Anthropic and GPT-6 Luna.
 cache, input written to the cache by lifetime, and output. Every provider
 prices these differently, so no cost can be computed without the split.
 
+## Cache diagnostics
+
+An opt-in setting, `cache.diagnostics` (`docs/configuration.md`, "Keys"),
+asks each debug `provider_request` line for a model call to say what prefix
+the request sent and what cache use the response reported, so a miss can be
+told from noise. The rest of this section names the setting, what is
+hashed, where the log goes and the redaction rule; the shape below is
+pinned first, and the code follows it.
+
+### Prefix hashes
+
+`prefix_hashes` is a labelled object, never a list: `system` holds the
+system prompt segment's digest, `tools` the tool definitions segment's,
+and `messages` the cumulative message prefixes in order, so a reader
+needs no index convention. Each present string is the lowercase hex
+SHA-256 of the encoded segment as it went on the wire: the bytes the
+provider's cache keys on, not the model request they were built from.
+`system` and `tools` are absent when the request sends none;
+`messages[i]` covers the cumulative conversation encoding through
+message boundary `i`. Digests are comparable within one protocol only:
+each protocol hashes its own encoding, and the same inputs on two
+protocols hash differently by design.
+
 ## What misses the cache on purpose
 
 Each of these costs one rebuild and is logged:

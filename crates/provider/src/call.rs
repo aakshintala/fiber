@@ -188,6 +188,9 @@ impl ObservationFinish {
             headers_ms: self.headers_at.map(|at| ms_since(self.start, at)),
             first_token_ms: self.first_token_at.map(|at| ms_since(self.start, at)),
             total_ms: ms_since(self.start, total),
+            prefix_hashes: None,
+            cache_read: None,
+            cache_write: None,
         });
     }
 }
