@@ -1433,12 +1433,14 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
             send(&sender, r#"{"id":"c_noargs","command":"handoff"}"#);
             send(&sender, r#"{"id":"c_close","command":"close"}"#);
             let wait = Deadline::after(DEADLINE);
+            // The drop is answered at once and never delivered: the reader
+            // took its entry off the shared queue, so the drain has
+            // nothing to reconcile.
             assert_eq!(
-                (0..8).map(|_| take(&inbox, &wait)).collect::<Vec<_>>(),
+                (0..7).map(|_| take(&inbox, &wait)).collect::<Vec<_>>(),
                 vec![
                     "prompt hi".to_owned(),
                     "steer more".to_owned(),
-                    "drop c_steer".to_owned(),
                     "reply r_1".to_owned(),
                     "handoff c_handoff Some(\"focus on tests\")".to_owned(),
                     "handoff c_bare None".to_owned(),
@@ -1448,18 +1450,21 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
             );
             log.append(&step(), None, None).unwrap();
             let own = until(&sender, |line| line["seq"].as_u64() == Some(0));
-            let ids: Vec<&str> = own.iter().filter_map(command_id).collect();
+            let mut ids: Vec<&str> = own.iter().filter_map(command_id).collect();
+            // The at-once steer and drop answers race the answers the
+            // stand-in takes, so the acknowledgement order is not pinned.
+            ids.sort();
             assert_eq!(
                 ids,
                 vec![
-                    "c_prompt",
-                    "c_steer",
-                    "c_drop",
-                    "c_reply",
-                    "c_handoff",
                     "c_bare",
+                    "c_close",
+                    "c_drop",
+                    "c_handoff",
                     "c_noargs",
-                    "c_close"
+                    "c_prompt",
+                    "c_reply",
+                    "c_steer"
                 ]
             );
             assert!(own.iter().all(|line| kind(line) != "command_rejected"));

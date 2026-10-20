@@ -25,9 +25,9 @@ use contract::SessionId;
 use contract::inbox::Delivery;
 use contract::inbox::Rejection;
 use contract::shapes::ContentPart;
-use contract::{ErrorCode, SCHEMA_VERSION};
+use contract::{CommandId, ErrorCode, SCHEMA_VERSION};
 use doors::{Steered, mint};
-use fakes::Deadline;
+use fakes::{Client, Deadline};
 
 /// A commit that counts its calls and answers as told.
 struct Commit {
@@ -117,14 +117,14 @@ fn listen(home: &std::path::Path, id: &SessionId) -> UnixListener {
 }
 
 #[test]
-fn an_accepted_steer_delivers_one_text_part_after_the_probe_proved_it_queued() {
+fn an_accepted_steer_answers_at_once_and_is_still_delivered() {
     let opened = Opened::open(vec![]);
     let home = opened.home.clone();
     let id = opened.id.clone();
     let command = mint("c_");
     let calls = Arc::new(AtomicUsize::new(0));
     let queued = Arc::new(AtomicUsize::new(0));
-    let (answered, queued_rx, steered_in) = spawn_steer(
+    let (answered, _queued, steered_in) = spawn_steer(
         home,
         id,
         command,
@@ -152,9 +152,6 @@ fn an_accepted_steer_delivers_one_text_part_after_the_probe_proved_it_queued() {
             // The probe's answer proves the message is queued: the
             // accept below is answered only after it arrived, so its
             // order against the steer's own answer is not a race.
-            Deadline::after(DEADLINE)
-                .recv(&queued_rx)
-                .expect("the probe proved it queued before the accept");
             ack.0(Ok(None));
             Ok(())
         })
@@ -164,14 +161,14 @@ fn an_accepted_steer_delivers_one_text_part_after_the_probe_proved_it_queued() {
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     assert_eq!(
         queued.load(Ordering::SeqCst),
-        1,
-        "on_queued ran once, before the accept"
+        0,
+        "the steer's own accept arrives before any probe accept: the reader answers in line order"
     );
     close_within(opened.session, opened.log);
 }
 
 #[test]
-fn a_rejected_steer_reports_its_code_and_message() {
+fn a_loop_side_rejection_after_the_at_once_accept_never_reaches_the_client() {
     let opened = Opened::open(vec![]);
     let home = opened.home.clone();
     let id = opened.id.clone();
@@ -195,6 +192,8 @@ fn a_rejected_steer_reports_its_code_and_message() {
             else {
                 panic!("a steer is delivered");
             };
+            // The client was already accepted at once: this rejection
+            // answers the forwarded no-op ack, so it reaches nobody.
             ack.0(Err(Rejection {
                 code: ErrorCode::MessageRefused,
                 message: "not now".to_owned(),
@@ -202,10 +201,7 @@ fn a_rejected_steer_reports_its_code_and_message() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(
-        steered(&answered),
-        Steered::Rejected(doors::failure(ErrorCode::MessageRefused, "not now"))
-    );
+    assert_eq!(steered(&answered), Steered::Accepted);
     steered_in.join().expect("the steer thread ended");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     close_within(opened.session, opened.log);
@@ -535,4 +531,95 @@ fn a_blocked_send_holds_no_lock_and_ends_gone_on_close() {
     blocked.join().expect("the steer thread ended");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     served.join().expect("the server closed");
+}
+
+#[test]
+fn an_admitted_steer_then_dropped_answers_both_at_once_and_delivers_only_the_steer() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"steer","args":{"content":[{"type":"text","text":"use x"}]}}"#,
+            );
+            // The row draws before the accept, by program order on the
+            // reader thread.
+            let rows = until(&client, |line| {
+                kind(line) == "steering_queue"
+                    && !line["payload"]["messages"].as_array().unwrap().is_empty()
+            });
+            let row = rows.last().expect("the queue row arrived");
+            assert_eq!(
+                row["payload"]["messages"][0]["content"][0]["text"],
+                "use x"
+            );
+            assert_eq!(row["payload"]["messages"][0]["command_id"], "c_1");
+            let accept = response(&client, "c_1");
+            assert_eq!(kind(&accept), "command_accepted", "{accept}");
+            send(
+                &client,
+                r#"{"id":"c_2","command":"steer_drop","args":{"command_id":"c_1"}}"#,
+            );
+            let _emptied = until(&client, |line| {
+                kind(line) == "steering_queue"
+                    && line["payload"]["messages"].as_array().unwrap().is_empty()
+            });
+            let dropped = response(&client, "c_2");
+            assert_eq!(kind(&dropped), "command_accepted", "{dropped}");
+            // Only the steer reaches the inbox: the drop took its entry
+            // off at once, so nothing follows it.
+            let wait = Deadline::after(DEADLINE);
+            let Delivery::Steer(message, ack) =
+                wait.recv(&inbox).expect("the steer is delivered")
+            else {
+                panic!("a steer is delivered");
+            };
+            assert_eq!(
+                message.sender.command_id,
+                Some(CommandId("c_1".to_owned()))
+            );
+            ack.0(Ok(None));
+            assert!(
+                Deadline::after(SLICE).recv(&inbox).is_err(),
+                "no drop delivery follows the at-once drop"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn a_drop_for_an_unknown_id_is_rejected_stale_at_once() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_9","command":"steer_drop","args":{"command_id":"c_nope"}}"#,
+            );
+            let answer = response(&client, "c_9");
+            assert_eq!(
+                rejection(&answer),
+                (
+                    "stale_request",
+                    "That steering message was already applied, or was never queued."
+                )
+            );
+            assert!(
+                Deadline::after(SLICE).recv(&inbox).is_err(),
+                "a stale drop never reaches the inbox"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
 }

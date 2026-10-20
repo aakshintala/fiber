@@ -23,6 +23,7 @@ use contract::events::{
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
+use contract::steering::Queue;
 use contract::tool::Tool;
 use contract::{CommandId, ErrorCode, SessionId};
 use log::{Injector, Log, Watcher};
@@ -95,6 +96,11 @@ pub(crate) struct Gate {
     /// each entry is one admitted command, a job's end or a hook's delivery,
     /// and the loop drains it at step boundaries.
     inbox: Mutex<Option<Sender<Delivery>>>,
+    /// The steering queue every connection thread shares
+    /// (`docs/architecture.md`, "One inbox"): a reader admits a `steer`
+    /// into it at once and answers `command_accepted`, and the loop
+    /// reconciles each delivery against it at its next drain.
+    pub(crate) steering: Arc<Queue>,
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.
     cancel: OnceLock<Arc<dyn Fn() -> bool + Send + Sync>>,
@@ -725,6 +731,17 @@ impl Gate {
             drop(delivery);
         }
     }
+
+    /// Hands `delivery` to the loop when it is listening: false when the
+    /// inbox is gone or closed, so a steer's admission answers `closing`
+    /// instead of queueing what no drain will ever reconcile.
+    pub(crate) fn try_deliver(&self, delivery: Delivery) -> bool {
+        let inbox = lock(&self.inbox);
+        let Some(inbox) = inbox.as_ref() else {
+            return false;
+        };
+        inbox.send(delivery).is_ok()
+    }
 }
 
 /// [`Session::inbox_wake`]'s wake.
@@ -785,6 +802,7 @@ fn open_in(
         credentials: OnceLock::new(),
         accepted: Accepted::new(),
         inbox: Mutex::new(None),
+        steering: Arc::new(Queue::new()),
         cancel: OnceLock::new(),
         close_now: OnceLock::new(),
         driver_shell: OnceLock::new(),
