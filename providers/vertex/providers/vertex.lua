@@ -13,7 +13,8 @@
 -- Each command's `--format` prints only the token and its expiry, so no
 -- other field, such as the account or a refresh token, reaches Fiber. gcloud
 -- keeps a token until 5 minutes before it expires, as Fiber does, so a
--- refresh gets a new one. A token never appears in an error.
+-- refresh gets a new one. A token never appears in an error, and gcloud's
+-- own failure line has its account and anything token-like masked.
 
 local HELPER = "config config-helper"
 local HELPER_FORMAT = "--format=json(credential.access_token,credential.token_expiry)"
@@ -79,11 +80,23 @@ local function unix_seconds(text)
 end
 
 -- The line of gcloud's stderr that says what failed: its first `ERROR:`
--- line, else its first line that is not blank, at most 200 bytes. A
--- `WARNING:` before it can name a file under the person's home.
+-- line, without the `ERROR: (gcloud.<command>)` that names the command
+-- again, else its first line that is not blank. A `WARNING:` before it can
+-- name a file under the person's home. gcloud can name the account, as in
+-- "Your current active account [alice@example.com] does not have any valid
+-- credentials", and no credential is known yet to redact a secret with, so
+-- an address becomes `[account]` and each run of 20 or more token-like
+-- characters `[redacted]`; then the line stops at 200 bytes.
 local function failure_line(stderr)
   local text = stderr or ""
   local line = text:match("ERROR:[^\r\n]*") or text:match("[^\r\n]*[^%s][^\r\n]*") or ""
+  line = line:gsub("^ERROR: %([%w%.%-]+%) ", "")
+  line = line:gsub("%[?[%w%.%%%+_%-]+@[%w%.%-]+%]?", "[account]")
+  line = line:gsub("[%w%+/=%._%-]+", function(run)
+    if #run >= 20 then
+      return "[redacted]"
+    end
+  end)
   if #line > 200 then
     line = line:sub(1, 200) .. "..."
   end
