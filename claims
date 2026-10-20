@@ -43,3 +43,4 @@ crates/main/tests/retry.rs	lane-2916	plan	2026-10-20T21:42:01Z	Amoghs-MacBook-Pr
 crates/main/tests/approve.rs	lane-2916	plan	2026-10-20T21:42:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/extension_remove_missing.rs	lane-2916	plan	2026-10-20T21:42:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/extension_step.rs	lane-2916	plan	2026-10-20T21:42:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/loop/tests/review_jig.rs	lane-2908	plan	2026-10-20T21:57:23Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
