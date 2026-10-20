@@ -195,9 +195,10 @@ impl App {
             let end = start.saturating_add(CARD_ROWS);
             // A focused "+" or "N ✓" sits one row above its card's
             // top: the reveal shows it too.
-            let top = if self.rail_state.focus == Some(Spot::Start(key))
-                || self.rail_state.focus == Some(Spot::Done(key))
-            {
+            let top = if matches!(
+                self.rail_state.focus,
+                Some(Spot::Start(k) | Spot::Done(k)) if k == key
+            ) {
                 start.saturating_sub(1)
             } else {
                 start
@@ -601,6 +602,7 @@ impl App {
         effect
     }
 
+    /// ⌥A, the badge and `/approvals` (`docs/tui.md`, "Bindings"): a
     /// put-aside offer opens again, else the approval panel opens at the
     /// first request waiting. With neither, the oldest card waiting other
     /// than the one on screen is switched to, and its request opens when

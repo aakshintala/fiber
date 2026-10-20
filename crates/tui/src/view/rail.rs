@@ -180,12 +180,6 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<RailRow> {
         let plus = 2u16
             .saturating_add(u16::try_from(format::width(&name)).unwrap_or(u16::MAX))
             .saturating_add(1);
-        // The count ends the right side, so it starts the count's
-        // width left of the text's end past the margin columns.
-        let done_w = u16::try_from(format::width(&done)).unwrap_or(u16::MAX);
-        let done_col = 2u16
-            .saturating_add(u16::try_from(text).unwrap_or(u16::MAX))
-            .saturating_sub(done_w);
         let mut header = vec![Span::raw("  ")];
         header.extend(sides(
             vec![
@@ -195,18 +189,30 @@ pub(crate) fn rows(app: &App, width: u16) -> Vec<RailRow> {
             vec![Span::styled(right, style(Role::Muted))],
             text,
         ));
-        let spots = group
+        // The count ends the right side, so it ends the drawn line:
+        // when the right side overflows the text, `sides` starts it at
+        // the margin instead of right-aligned. Read the count's start
+        // from that same placement and clip it to the visible columns.
+        let done_w = format::width(&done);
+        let line_w: usize = header.iter().map(Span::width).sum();
+        let done_start = line_w.saturating_sub(done_w);
+        let card_end = usize::from(card_w);
+        let shown_end = line_w.min(card_end);
+        let col = done_start.max(2).min(card_end);
+        let vis = shown_end.saturating_sub(col);
+        let mut spots: Vec<(u16, u16, u16, Spot)> = group
             .cards
             .first()
             .map(|card| (plus, 1, 1, Spot::Start(card.key)))
             .into_iter()
-            .chain(
-                group
-                    .cards
-                    .first()
-                    .map(|card| (done_col, done_w, 1, Spot::Done(card.key))),
-            )
             .collect();
+        if vis > 0
+            && let Some(card) = group.cards.first()
+        {
+            let done_col = u16::try_from(col).unwrap_or(u16::MAX);
+            let done_vis = u16::try_from(vis).unwrap_or(u16::MAX);
+            spots.push((done_col, done_vis, 1, Spot::Done(card.key)));
+        }
         out.push(RailRow {
             line: Line::from(header),
             tint: None,

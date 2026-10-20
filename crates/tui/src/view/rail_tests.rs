@@ -439,6 +439,45 @@ fn a_narrow_header_cuts_the_name_but_keeps_plus_and_count_whole() {
     );
 }
 
+/// An overflowing header starts its right side at the margin, so the
+/// "N ✓" target follows the drawn count instead of the right edge:
+/// 12 columns leave 8 text columns for the 11-wide "$0.00 · 0 ✓",
+/// and only the count's first column stays visible.
+#[test]
+fn an_overflowing_header_clips_its_done_target_to_the_visible_count() {
+    let app = two(20.0, json!({}));
+    let drawn = super::rows(&app, 12);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    assert!(text.starts_with("  $0.00 · 0"), "{text:?}");
+    assert_eq!(
+        header
+            .spots
+            .iter()
+            .find(|(_, _, _, spot)| matches!(spot, Spot::Done(_)))
+            .map(|(col, wide, high, spot)| (*col, *wide, *high, *spot)),
+        Some((10, 1, 1, Spot::Done(key(&app, A)))),
+        "{text:?}"
+    );
+}
+
+/// A header narrower than its right side hides the count whole: with
+/// nothing of "N ✓" drawn there is no target for it.
+#[test]
+fn a_header_narrower_than_its_right_side_draws_no_done_target() {
+    let app = two(20.0, json!({}));
+    let drawn = super::rows(&app, 10);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    assert!(
+        header
+            .spots
+            .iter()
+            .all(|(_, _, _, spot)| !matches!(spot, Spot::Done(_))),
+        "{text:?}"
+    );
+}
+
 /// A card's third row, when it is not waiting, is a dim "⎇ " followed
 /// by the branch (`docs/tui.md`, "The rail").
 #[test]
