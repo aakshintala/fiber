@@ -16,14 +16,14 @@ mod support;
 
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::ProviderServer;
 use serde_json::json;
-use support::{KillGroup, Setup, StdoutRun, group_alive, hello, spawn_watched};
+use support::{KillGroup, Setup, StdoutRun, files_holding, group_alive, hello, spawn_watched};
 
 impl Setup {
     /// Runs `fiber` with `args` in `dir` under `home`, waits for it under
@@ -118,31 +118,6 @@ fn install_provider(home: &Path, root: &Path, server: &ProviderServer) {
     .commit()
     .unwrap();
     support::write_json(&home.join("config.json"), &json!({"model": "fake/m"}));
-}
-
-/// Every regular file under `roots` holding `needle`, sorted.
-fn files_holding(roots: &[PathBuf], needle: &[u8]) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut dirs: Vec<PathBuf> = roots.to_vec();
-    while let Some(dir) = dirs.pop() {
-        for entry in fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                dirs.push(path);
-            } else if path.is_file()
-                && fs::read(&path)
-                    .map(|bytes| {
-                        needle.is_empty()
-                            || bytes.windows(needle.len()).any(|window| window == needle)
-                    })
-                    .unwrap_or(false)
-            {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    found
 }
 
 #[test]

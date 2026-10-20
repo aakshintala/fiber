@@ -94,6 +94,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
             "mcp",
             "approve",
             "config",
+            "import",
             "login",
             "logout",
             "doctor",
@@ -180,6 +181,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     ("config", &["get", "set"], &["-h", "--help"]),
     ("config get", &[], &["-h", "--help"]),
     ("config set", &[], &["--project", "--repo", "-h", "--help"]),
+    ("import", &[], &["-h", "--help"]),
     (
         "hub",
         &[

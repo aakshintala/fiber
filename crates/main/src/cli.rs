@@ -54,6 +54,7 @@ MCP servers:
 Configuration:
   config get <key>                              Print the effective value and the layer it came from
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
+  import <claude-code | codex>                   Copy another harness's configuration into Fiber home, once
 
 The hub:
   hub add [--default] <name> <address>  Add a hub to this client's list
@@ -185,6 +186,12 @@ pub(crate) enum Commands {
     /// Print a configuration value, or write one
     #[command(subcommand, arg_required_else_help = false)]
     Config(ConfigCommands),
+    /// Copy another harness's configuration into Fiber home, once
+    Import {
+        /// The harness to import from: `claude-code` or `codex`.
+        #[arg(value_name = "source")]
+        source: ImportSource,
+    },
     /// Store a provider's key or an extension's secret
     Login(LoginArgs),
     /// Delete a provider's stored key
@@ -573,6 +580,24 @@ pub(crate) struct McpRemoveArgs {
     /// The server's name.
     #[arg(value_name = "name", value_parser = clap::builder::NonEmptyStringValueParser::new())]
     pub(crate) name: String,
+}
+
+/// The harness `fiber import` copies configuration from. The names are
+/// lowercase and matched exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum ImportSource {
+    #[value(name = "claude-code")]
+    ClaudeCode,
+    Codex,
+}
+
+impl From<ImportSource> for config::ImportSource {
+    fn from(source: ImportSource) -> Self {
+        match source {
+            ImportSource::ClaudeCode => Self::ClaudeCode,
+            ImportSource::Codex => Self::Codex,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
