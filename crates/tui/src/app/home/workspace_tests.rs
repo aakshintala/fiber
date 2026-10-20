@@ -902,9 +902,10 @@ fn a_disconnect_asks_in_flight_directories_once_more() {
     assert_eq!(resent.len(), 1);
     assert_eq!(resent[0].1, "/");
     assert_ne!(resent[0].0, sent[0].0);
-    // An answer under the old id changes nothing.
+    // An answer under the old id changes nothing; the hello already
+    // ended the drop's cause, so its notice is gone with the reconnect.
     answer(&mut app, &sent[0].0, &["stale"], "/");
-    assert_eq!(app.notice(), Some("Connection lost."));
+    assert_eq!(app.notice(), None);
     assert_eq!(focused(&app), None);
     answer(&mut app, &resent[0].0, &["a1"], "/");
     assert_eq!(focused(&app), Some("a1".to_owned()));

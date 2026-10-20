@@ -2837,11 +2837,20 @@ fn search_text() -> String {
 
 #[test]
 fn a_completed_rescan_clears_the_search_text() {
-    let (mut app, log, fetch) = dropped_fetch();
+    let (mut app, log, _) = dropped_fetch();
     app.find_lost();
     assert_eq!(app.notice(), Some(search_text().as_str()));
-    // The refetch answers and the scan reconciles: the cause is over.
-    answer_all(&mut app, &log, vec![fetch]);
+    // The settle finds nothing resident to rescan, but its pump
+    // refetches the dropped page: with a fetch in flight the notice
+    // stands.
+    app.settle_find();
+    assert_eq!(app.notice(), Some(search_text().as_str()));
+    let mut outgoing = app.find_outgoing();
+    assert_eq!(outgoing.len(), 1, "the pump refetches the dropped page");
+    let (id, from, to) = command(&outgoing.remove(0));
+    app.on_line(hub_answer(&id, &log, from, to));
+    // The answer landed: the next settle walks the whole order with
+    // nothing on the wire, and the search is whole again.
     app.settle_find();
     assert!(app.notices().is_empty());
 }

@@ -4172,7 +4172,9 @@ fn has_code(app: &App, code: &str) -> bool {
 #[test]
 fn a_send_while_busy_pushes_the_pending_notice() {
     let (mut app, seam) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn: the send's own fold must not end it, or the
+    // turn-end fold would clear the row just pushed.
+    app.on_line(turn_started());
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     assert_eq!(line["command"], json!("model"));
@@ -4222,7 +4224,9 @@ fn an_idle_send_is_silent() {
 #[test]
 fn an_accept_while_busy_adds_no_notice() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn: the acceptance changes the model without
+    // ending the turn, so the pending row stands on, silent.
+    app.on_line(turn_started());
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     let id = line["id"].as_str().expect("an id").to_owned();
@@ -4254,7 +4258,9 @@ fn an_idle_acceptance_writes_with_no_notice() {
 #[test]
 fn a_rejection_after_acceptance_pushes_without_replacing() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn: the folds must not end it, or the turn-end
+    // fold would clear the rows this test reasons about.
+    app.on_line(turn_started());
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     let id = line["id"].as_str().expect("an id").to_owned();
@@ -4271,7 +4277,8 @@ fn a_rejection_after_acceptance_pushes_without_replacing() {
 #[test]
 fn a_rejection_replaces_the_pending_notice() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn, so only the rejection path clears.
+    app.on_line(turn_started());
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     let id = line["id"].as_str().expect("an id").to_owned();
@@ -4290,7 +4297,8 @@ fn a_rejection_replaces_the_pending_notice() {
 #[test]
 fn a_duplicate_rejection_mid_turn_is_silent_and_drops_the_writes() {
     let (mut app, seam) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn, so the stranded row stands on.
+    app.on_line(turn_started());
     open(&mut app);
     // Session-only, so the wait names the row and no write waits.
     let line = sent(ctrl_s(&mut app));
@@ -4312,7 +4320,8 @@ fn a_duplicate_rejection_mid_turn_is_silent_and_drops_the_writes() {
 #[test]
 fn a_rejection_after_leaving_drops_the_stash_without_a_notice() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn, so the send's own fold ends nothing.
+    app.on_line(turn_started());
     open(&mut app);
     // Session-only, so leaving drops its whole wait.
     let line = sent(ctrl_s(&mut app));
@@ -4356,7 +4365,8 @@ fn a_dismiss_leaves_a_newer_other_code_standing() {
 #[test]
 fn a_dismiss_leaves_a_newer_other_choice_standing() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn, so the late rejection takes only its share.
+    app.on_line(turn_started());
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     let id = line["id"].as_str().expect("an id").to_owned();
@@ -4399,10 +4409,49 @@ fn count_code(app: &App, code: &str) -> usize {
         .count()
 }
 
+/// A `turn_started` envelope for the attached session: a real running
+/// turn, so refusing a choice mid-turn ends no turn and the rejection
+/// path alone clears.
+fn turn_started() -> Line {
+    Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [(
+            "input".to_owned(),
+            json!([{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]),
+        )]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A `turn_completed` envelope for the attached session: the running
+/// turn ends, so the turn-end fold clears the applied shares.
+fn turn_completed() -> Line {
+    Line::Session(contract::Envelope {
+        kind: "turn_completed".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("outcome".to_owned(), json!("completed"))]
+            .into_iter()
+            .collect(),
+    })
+}
+
 #[test]
 fn two_identical_pending_choices_stack_and_one_rejection_leaves_one() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    app.on_line(turn_started());
     open(&mut app);
     let first = sent(app.on_key(Key::Enter, now()));
     let first_id = first["id"].as_str().expect("an id").to_owned();
@@ -4417,8 +4466,9 @@ fn two_identical_pending_choices_stack_and_one_rejection_leaves_one() {
         app.notice(),
         Some("acme/m1 · high applies when this turn ends")
     );
-    // Rejecting the second command voids only its share: the rejection's
-    // own notice lands on top, and the surviving share keeps its text.
+    // Rejecting the second command voids only its share: the turn still
+    // runs, so only the rejection path clears, and the surviving share
+    // keeps its text under the rejection's own notice.
     app.on_line(refused(
         SESSION,
         &second_id,
@@ -4427,10 +4477,11 @@ fn two_identical_pending_choices_stack_and_one_rejection_leaves_one() {
     ));
     assert_eq!(count_code(&app, "switch_pending"), 1);
     assert!(app.notices().into_iter().any(|line| matches!(line,
-        crate::app::NoticeLine::Notice { code, text }
+        crate::app::NoticeLine::Notice { code, text, .. }
         if code == "switch_pending" && text == "acme/m1 · high applies when this turn ends")));
-    // Rejecting the first clears the last share.
-    app.on_line(refused(SESSION, &first_id, "credential_missing", "no key."));
+    // The turn ending applies the last share: the turn-end fold clears
+    // it, with no rejection in play.
+    app.on_line(turn_completed());
     assert!(!has_code(&app, "switch_pending"));
 }
 

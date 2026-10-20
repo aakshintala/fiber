@@ -23,15 +23,24 @@ impl App {
         &self.motion
     }
 
+    /// The earliest live unpaused event expiry beside the motion and
+    /// items wakes: what the frame arms the tick with after the draw.
+    pub(crate) fn notices_wake(&self) -> Option<Instant> {
+        self.notices.notices_wake()
+    }
+
     /// The earliest wake the frame asked for, leaving none behind: what
-    /// the loop arms the tick with after the draw. The earlier of the
-    /// motion wake and the reconciler's retry wake.
+    /// the loop arms the tick with after the draw. The earliest of the
+    /// motion wake, the reconciler's retry wake and the notices wake.
     pub(crate) fn take_wake(&self) -> Option<Instant> {
-        match (self.motion.take_wake(), self.items_wake()) {
-            (Some(motion), Some(items)) => Some(motion.min(items)),
-            (motion, None) => motion,
-            (None, items) => items,
-        }
+        [
+            self.motion.take_wake(),
+            self.items_wake(),
+            self.notices_wake(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Whether spinners, the glimmer and the pulse stay still. Home sets

@@ -350,6 +350,9 @@ impl App {
     pub(crate) fn attach(&mut self, session: SessionId) {
         self.end_overlay();
         self.switch_session(&session);
+        // Another session's stale rows end with the attachment; the open
+        // session's own notice stands until `stream_reopened` ends it.
+        self.notices.drop_stream_closed_except(&session.0);
         // A fresh attachment supersedes an exit that arrived after the
         // last one: opening resumes the session, and its live update has
         // yet to land.
@@ -870,6 +873,8 @@ impl App {
                 let session = SessionId(session.to_owned());
                 match line.kind.as_str() {
                     "stream_reopened" => {
+                        // The cause ended for this session: its notice goes.
+                        self.notices.clear_code("stream_closed", &session.0);
                         self.passes.retain(|(held, _)| held != &session);
                         if let Some(last) = line.payload.get("last_seq").and_then(Value::as_u64) {
                             self.passes.push((session.clone(), Pass::Until(Seq(last))));
@@ -978,7 +983,13 @@ impl App {
     /// Births unborn notices and removes expired events; the frame calls
     /// it before each draw and again after, and `run_with` calls it
     /// before the first arm.
-    pub(crate) fn sweep_notices(&mut self, _now: Instant) {}
+    #[allow(
+        dead_code,
+        reason = "the frame and startup sweeps land with the loop wiring"
+    )]
+    pub(crate) fn sweep_notices(&mut self, now: Instant) {
+        self.notices.sweep(now);
+    }
 
     /// The hub could not be reached, or runs a schema this terminal cannot
     /// read: the notice for the first failure in a run, and a held `start`
@@ -1422,8 +1433,14 @@ impl App {
             // keep what arrived, say so, and leave the retry to a reopen.
             "stream_closed" => {
                 let closed = hub_string(&hub.payload, "session_id");
-                if closed.as_deref() == self.session().map(|session| session.0.as_str()) {
-                    self.notices.push("stream_closed", STREAM_CLOSED.to_owned());
+                if closed.as_deref() == self.session().map(|session| session.0.as_str())
+                    && let Some(session) = closed
+                {
+                    self.notices.push_identified(
+                        "stream_closed",
+                        session,
+                        STREAM_CLOSED.to_owned(),
+                    );
                 }
                 Vec::new()
             }
@@ -1662,7 +1679,13 @@ impl App {
 
     fn set_busy(&mut self, busy: bool) {
         if let Phase::Attached { busy: flag, .. } = &mut self.phase {
+            let ending = *flag && !busy;
             *flag = busy;
+            if ending {
+                // The turn applied every pending choice: the applied
+                // shares go with it.
+                self.notices.clear_code_all("switch_pending");
+            }
         }
     }
 

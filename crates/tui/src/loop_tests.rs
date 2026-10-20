@@ -2292,8 +2292,16 @@ fn take_wake_folds_the_notices_wake() {
         app.take_wake(),
         Some(t0 + std::time::Duration::from_secs(10))
     );
-    // Past the fade the wake is gone with the rows.
+    // Past the first notice's fade only it expires: the younger notice
+    // stands, and the wake moves to its expiry.
     app.sweep_notices(t0 + std::time::Duration::from_secs(10));
+    assert_eq!(notice_codes(&app), ["config_invalid"]);
+    assert_eq!(
+        app.take_wake(),
+        Some(t0 + std::time::Duration::from_secs(15))
+    );
+    // Past every fade the wake is gone with the rows.
+    app.sweep_notices(t0 + std::time::Duration::from_secs(15));
     assert!(app.notices().is_empty());
     assert_eq!(app.take_wake(), None);
 }

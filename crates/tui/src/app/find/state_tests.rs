@@ -470,8 +470,22 @@ fn fetch() -> super::Fetch {
 
 #[test]
 fn reconnect_clears_connection_texts_but_not_the_search_text() {
-    let mut app = attached(40, 10);
-    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    // No attached session: the reconnect reopens no session, so the
+    // reset that would close the bar never runs and the search stands
+    // on the reconnect alone.
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    app.set_size(40, 10);
+    assert!(
+        app.on_line(crate::app::Line::Hub(contract::HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: serde_json::Map::new(),
+        }))
+        .is_empty()
+    );
+    // No session to type into: the bar opens by hand.
+    app.find.open = true;
     app.find.fetch = Some(fetch());
     app.disconnected();
     app.connect_failed("Could not reach the hub: refused".to_owned());
@@ -483,11 +497,12 @@ fn reconnect_clears_connection_texts_but_not_the_search_text() {
             "connection_failed"
         ]
     );
-    // Reconnect ends both connection texts; the search text stands until
-    // the bar closes or a rescan completes.
+    // Reconnect ends both connection texts; the search text stands
+    // until the bar closes or a rescan completes.
     app.reconnected();
     assert_eq!(codes(&app), ["connection_failed"]);
     assert_eq!(app.notice(), Some(search_text().as_str()));
+    assert!(app.find.open);
     app.close_find();
     assert!(app.notices().is_empty());
 }

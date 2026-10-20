@@ -97,17 +97,9 @@ struct Notice {
     code: String,
     /// What dedupes repeats while stacked: the session for `stream_closed`,
     /// one share per sent command for `switch_pending`, else the text.
-    #[allow(
-        dead_code,
-        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
-    )]
     identity: String,
     text: String,
     /// When the first sweep after the push saw it: expiry counts from here.
-    #[allow(
-        dead_code,
-        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
-    )]
     born: Option<Instant>,
 }
 
@@ -203,7 +195,7 @@ impl Notices {
     /// [`Notices::clear_code`].
     #[allow(
         dead_code,
-        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+        reason = "the frame and startup sweeps land with the loop wiring"
     )]
     pub(crate) fn sweep(&mut self, now: Instant) {
         for notice in &mut self.stack {
@@ -237,10 +229,6 @@ impl Notices {
     /// release or close, so arming never ticks in a loop on a paused
     /// expiry. `None` with no unpaused event stacked. Reads post-sweep
     /// births: the frame sweeps before it arms.
-    #[allow(
-        dead_code,
-        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
-    )]
     pub(crate) fn notices_wake(&self) -> Option<Instant> {
         let held = self.held_from;
         let overlay = self.overlay;
@@ -255,13 +243,24 @@ impl Notices {
             .min()
     }
 
+    /// Drops every notice under `code`, closing a single overlay on a
+    /// dropped row. The turn-end fold clears `switch_pending` this way:
+    /// every share standing applied when the turn ended.
+    pub(crate) fn clear_code_all(&mut self, code: &str) {
+        self.drop_where(|notice| notice.code == code);
+    }
+
+    /// Drops every notice under `code` except `keep_identity`, closing a
+    /// single overlay on a dropped row. The reconnect fold clears
+    /// `connection_failed` this way: both connection texts go, never the
+    /// search-incomplete text.
+    pub(crate) fn clear_code_except(&mut self, code: &str, keep_identity: &str) {
+        self.drop_where(|notice| notice.code == code && notice.identity != keep_identity);
+    }
+
     /// Drops the notice under `code` and `identity`, closing a single
     /// overlay showing it, as [`Notices::dismiss`] does. Clearing an
     /// absent notice changes nothing, and either order with ✕ ends the same.
-    #[allow(
-        dead_code,
-        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
-    )]
     pub(crate) fn clear_code(&mut self, code: &str, identity: &str) {
         if let Some(at) = self
             .stack
@@ -279,14 +278,17 @@ impl Notices {
     /// another session ends no cause, so only other sessions' stale rows
     /// go. The session's own notice stands until `stream_reopened` ends
     /// its cause.
-    #[allow(
-        dead_code,
-        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
-    )]
     pub(crate) fn drop_stream_closed_except(&mut self, session: &str) {
+        self.drop_where(|notice| notice.code == "stream_closed" && notice.identity != session);
+    }
+
+    /// Drops every stacked notice `drop` accepts, closing a single
+    /// overlay showing a dropped row. Every cause-end clear funnels here,
+    /// so held rows a sweep would pause still end with their cause.
+    fn drop_where(&mut self, drop: impl Fn(&Notice) -> bool) {
         let mut dropped = Vec::new();
         self.stack.retain(|notice| {
-            let stale = notice.code == "stream_closed" && notice.identity != session;
+            let stale = drop(notice);
             if stale {
                 dropped.push(notice.id);
             }
