@@ -2660,3 +2660,108 @@ fn an_unnamed_segment_across_the_seam_ends_the_tail_as_failed() {
         "above the point fails"
     );
 }
+/// A segment's durable lines under `session`: a `session_started`
+/// carrying `parent` as its `forked_from`, then `turns` turns replying
+/// `marker N`, numbered from zero.
+fn chain_segment(
+    session: &str,
+    parent: Option<(&str, u64)>,
+    marker: &str,
+    turns: usize,
+) -> Vec<contract::Envelope> {
+    let mut lines = Vec::new();
+    let mut started = json!({});
+    if let Some((parent_session, point)) = parent {
+        started = json!({"forked_from": {"session_id": parent_session, "seq": point}});
+    }
+    lines.push(contract::Envelope {
+        kind: "session_started".to_owned(),
+        session_id: id(session),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(0)),
+        payload: started.as_object().cloned().unwrap_or_default(),
+    });
+    let mut seq = 1u64;
+    for turn_at in 0..turns {
+        for line in turn(
+            &mut seq,
+            &format!("a_m{turn_at}"),
+            &format!("{marker} {turn_at}"),
+        ) {
+            if let Line::Session(mut envelope) = line {
+                envelope.session_id = id(session);
+                // Distinct actions per segment: the seqs repeat across
+                // the seam.
+                if let Some(action) = envelope.action_id.take() {
+                    envelope.action_id = Some(contract::ActionId(format!("{session}{action:?}")));
+                }
+                lines.push(envelope);
+            }
+        }
+    }
+    lines
+}
+
+/// Reads `child` then `ancestor` through `app`'s tail, routing each
+/// answer by the args' `session_id`, and installs the preview.
+fn install_chain(app: &mut App, ancestor: &[contract::Envelope], child: &[contract::Envelope]) {
+    while let Some(args) = app.tail_next() {
+        let pool = if args.get("session_id").is_some() {
+            ancestor
+        } else {
+            child
+        };
+        app.tail_lines(doors(pool, &args));
+    }
+    app.install_tail();
+}
+
+/// The acceptance screen across one continuation point: the preview
+/// the chain walk installs and the screen the pass lands show the
+/// same paged rows, root and child turns both.
+#[test]
+fn the_landed_screen_matches_the_preview_across_the_seam() {
+    let ancestor = chain_segment(ANCESTOR, None, "root reply", 3);
+    let point = ancestor.len() as u64 - 1;
+    let child = chain_segment(SESSION, Some((ANCESTOR, point)), "child reply", 2);
+    let mut app = reading();
+    install_chain(&mut app, &ancestor, &child);
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    let before = row_texts(&app);
+    assert!(
+        before.iter().any(|row| row.contains("root reply 0")),
+        "the preview draws the root"
+    );
+    assert!(
+        before.iter().any(|row| row.contains("child reply 1")),
+        "the preview draws the child"
+    );
+    // Raise, then replay the own run through the pass to its end.
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|panic| panic!("{panic}"));
+    let raise_id = raise["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    let last = child.len() as u64 - 1;
+    assert!(
+        app.on_line(raise_accepted(SESSION, raise_id, last))
+            .is_empty()
+    );
+    assert!(
+        matches!(app.overlay, Overlay::Folding { .. }),
+        "the pass folds"
+    );
+    for envelope in &child {
+        app.on_line(Line::Session(envelope.clone()));
+    }
+    assert!(matches!(app.overlay, Overlay::None), "the pass lands");
+    let after = row_texts(&app);
+    assert_eq!(
+        after, before,
+        "the landing shows the same paged rows across the seam"
+    );
+}

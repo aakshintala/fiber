@@ -2774,6 +2774,9 @@ enum Full {
 enum History {
     /// The doors' window: the last 256 lines at or below `to_seq`.
     Windows,
+    /// The chain's pools: the own log, then the ancestor log when the
+    /// args name a session, each read through the doors' window.
+    Chain { ancestor: Vec<contract::Envelope> },
     /// Rejects with the message.
     Reject(&'static str),
     /// Answers no lines.
@@ -2976,6 +2979,17 @@ fn tail_open(
                                 &id,
                                 json!({"lines": doors_window(&log, &command["args"])}),
                             )),
+                            History::Chain { ancestor } => {
+                                let pool = if command["args"].get("session_id").is_some() {
+                                    ancestor
+                                } else {
+                                    &log
+                                };
+                                write(session_ack(
+                                    &id,
+                                    json!({"lines": doors_window(pool, &command["args"])}),
+                                ))
+                            }
                             History::Reject(message) => write(session_rejected(&id, message)),
                             History::Empty => write(session_ack(&id, json!({"lines": []}))),
                             History::Drop => break,
@@ -3991,4 +4005,143 @@ fn history_fetch_past_the_point_fails_with_its_message() {
     let seen = seen.lock().unwrap_or_else(|err| panic!("seen: {err}"));
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0]["args"]["session_id"], ANCESTOR);
+}
+
+/// A `session_started` opening `session` at seq zero, continuing from
+/// `parent` when rewound.
+fn started(session: &str, parent: Option<(&str, u64)>) -> contract::Envelope {
+    let mut payload = json!({});
+    if let Some((parent_session, point)) = parent {
+        payload = json!({"forked_from": {"session_id": parent_session, "seq": point}});
+    }
+    contract::Envelope {
+        kind: "session_started".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(0)),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }
+}
+
+/// `turns` full turns under `session` from `seq`, each replying
+/// `marker N`, rehomed from the loop session.
+fn segment_turns(
+    session: &str,
+    marker: &str,
+    turn_at: usize,
+    turns: usize,
+    seq: &mut u64,
+) -> Vec<contract::Envelope> {
+    let mut lines = Vec::new();
+    for turn in 0..turns {
+        let message = format!("a_m{turn_at}_{turn}");
+        push_line(
+            &mut lines,
+            seq,
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "prompt"}]}]}),
+        );
+        push_line(&mut lines, seq, "step_started", None, json!({}));
+        push_line(
+            &mut lines,
+            seq,
+            "assistant_message_started",
+            Some(&message),
+            json!({}),
+        );
+        push_line(
+            &mut lines,
+            seq,
+            "text_completed",
+            Some(&message),
+            json!({"text": format!("{marker} {turn}")}),
+        );
+        push_line(
+            &mut lines,
+            seq,
+            "assistant_message_completed",
+            Some(&message),
+            json!({"outcome": "completed"}),
+        );
+        push_line(
+            &mut lines,
+            seq,
+            "turn_completed",
+            None,
+            json!({"outcome": "completed"}),
+        );
+    }
+    for envelope in &mut lines {
+        envelope.session_id = contract::SessionId(session.to_owned());
+    }
+    lines
+}
+
+/// An open across a continuation point walks the chain: the own
+/// windows, then the ancestor's under its session, and the joint
+/// total matches the joint fold.
+#[test]
+fn the_open_walks_the_chain_and_shows_the_joint_total() {
+    const ROOT: &str = "s_arrrrrrrrrrrrrr";
+    const CHILD: &str = "s_aaaaaaaaaaaaaaaa";
+    let mut root_seq = 1u64;
+    let mut ancestor = vec![started(ROOT, None)];
+    ancestor.extend(segment_turns(ROOT, "root reply", 100, 3, &mut root_seq));
+    let point = root_seq - 1;
+    let mut child = vec![started(CHILD, Some((ROOT, point)))];
+    let mut child_seq = 1u64;
+    child.extend(segment_turns(CHILD, "child reply", 200, 2, &mut child_seq));
+    let open = tail_open(
+        child.clone(),
+        Full::Hung,
+        History::Chain {
+            ancestor: ancestor.clone(),
+        },
+        Vec::new(),
+    );
+    let histories: Vec<serde_json::Value> = open
+        .seen
+        .lock()
+        .map(|held| {
+            held.iter()
+                .filter(|command| command["command"] == "history")
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        histories
+            .iter()
+            .map(|command| &command["args"])
+            .collect::<Vec<_>>(),
+        vec![&json!({}), &json!({"session_id": ROOT, "to_seq": point}),],
+        "the own window, then the ancestor's under its session: {histories:?}"
+    );
+    let mut preview = crate::window::Pages::new(60);
+    for line in ancestor.iter().chain(&child) {
+        preview.apply(line);
+    }
+    assert_eq!(
+        open.lp.app.scroll().1,
+        preview.index().total(),
+        "the joint total spans the chain"
+    );
+    // The preview follows to the bottom: the last frame shows the
+    // child, the joint total counts the chain, and the trimmed
+    // ancestor page stays paged under its own session for a scroll up.
+    let drawn = frames(&open).join("\n");
+    assert!(drawn.contains("child reply 1"), "the child shows: {drawn}");
+    let pages = open.lp.app.pages();
+    let total = pages.index().total();
+    let top_needs = pages.needs(0, total);
+    assert!(
+        top_needs.iter().any(|(session, range)| session.0 == ROOT
+            && *range == (contract::Seq(0)..=contract::Seq(point))),
+        "the ancestor stays paged under its session: {top_needs:?}"
+    );
 }
