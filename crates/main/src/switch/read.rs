@@ -287,8 +287,6 @@ impl Reads {
         let mut state = self.lock();
         state.waiting.remove(&id);
         drop(state);
-        // Held only when a test armed a pause, so the test lands its
-        // cancel between the answer and this check on every run.
         #[cfg(test)]
         self.pause_after_answered();
         if got.is_ok() && self.lock().cancelled {
@@ -867,7 +865,6 @@ impl Reads {
     /// Arms one pause after the next `run`'s value arrived and before it
     /// answers: the run sends on `entered` once it holds its value and
     /// blocks until `release` arrives. The pause is one-shot.
-    #[cfg(test)]
     pub(crate) fn pause_at_answered(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
         *self
             .answered_pause
@@ -877,7 +874,6 @@ impl Reads {
 
     /// Reports the run holds its value and blocks until the test
     /// releases it. Runs free unless a test armed a pause meanwhile.
-    #[cfg(test)]
     fn pause_after_answered(&self) {
         let point = self
             .answered_pause
