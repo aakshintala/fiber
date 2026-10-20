@@ -1332,7 +1332,7 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
     let command = format!(
-        "echo $$ > {ready}; sleep 1000 & until ps -o comm= -p $! | grep -q sleep; do :; done; exit 3",
+        "echo $$ > {ready}; sleep 1000 & until ps -o comm= -p $! | grep -q sleep; do :; done; echo $$ >> {ready}; exit 3",
         ready = quote(ready.path()),
     );
     let running = start_jobs(
@@ -1344,6 +1344,7 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
         CancelToken::new(),
     );
     let pgid = ready.wait(CHILD_START)[0];
+    let _started = ready.wait(CHILD_START);
     let watchdog = Watchdog::group(pgid);
     let output = Deadline::after(DEADLINE)
         .recv(&running.output)
