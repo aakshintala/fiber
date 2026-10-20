@@ -16,9 +16,12 @@ use serde_json::json;
 use support::hello;
 use support::pty::Grid;
 
-/// Installs the fake provider and spawns the terminal at 120 by 32.
-/// The hub exits a second after its last client leaves, so `wait`
-/// never outlasts the test's deadline.
+/// Installs the fake provider and spawns the terminal at 160 by 32.
+/// 160 columns keep the conversation's 84-column minimum beside the
+/// rail and the panel (layout::split sheds the rail at 120), so the
+/// rail's WORKING card is drawn while attached and the working half can
+/// gate on it. The hub exits a second after its last client leaves, so
+/// `wait` never outlasts the test's deadline.
 fn terminal(setup: &support::Setup, server: &ProviderServer) -> support::pty::Run {
     setup.provider(server);
     support::write_json(
@@ -27,7 +30,7 @@ fn terminal(setup: &support::Setup, server: &ProviderServer) -> support::pty::Ru
     );
     support::pty::Run::spawn(
         setup,
-        120,
+        160,
         32,
         &[],
         &[
@@ -95,6 +98,14 @@ fn working_overlay(command: &str) -> Vec<String> {
         "the first request to reach the server"
     );
     run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));
+    // The Working Ns line fires on turn_started (session stream) while
+    // quit() reads the feed row's State (session_status{streaming}); the
+    // rail WORKING word (view/rail.rs word maps Working|Jobs, both of
+    // which make quit ask) proves the feed row caught up, so the command
+    // takes the ask branch instead of the idle-quit branch.
+    run.wait_screen("the rail working card", |grid| {
+        grid.contents.contains("WORKING")
+    });
     run.write(format!("{command}\r").as_bytes());
     let grid: Grid = run.wait_screen("the quit question", |grid| {
         grid.contents.contains("Quit") && grid.contents.contains("1 session working")
