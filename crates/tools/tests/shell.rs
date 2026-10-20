@@ -32,10 +32,12 @@ use tools::Shell;
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
-/// The bound on a child's first ready line. How long a child takes to start
+/// The bound on a child's startup-marker ready lines. How long a child takes to start
 /// follows the machine's load, not the test: at a load of 40 to 100 on 11
 /// cores 5 s was not enough. 20 s is the per-wait bound `crates/main/tests`
-/// use. Later lines come from the running command and keep `DEADLINE`.
+/// use. A later startup marker (for example the second line proving `sleep`
+/// exec'd before the exit) keeps `CHILD_START`; other later lines come from
+/// the running command and keep `DEADLINE`.
 const CHILD_START: Duration = Duration::from_secs(20);
 
 /// One bound for a whole `print_steps` sequence.
