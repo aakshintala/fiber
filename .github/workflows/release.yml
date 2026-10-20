@@ -376,3 +376,201 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: scripts/release-pack draft-delete "${{ needs.preflight.outputs.version }}"
+
+  # Benchmarks report, never gate: a slow sample or a missing figure is a
+  # line in the summary, not a failure (docs/ci.md, "Releases"). The Linux
+  # leg runs the full harness; the macOS leg runs the harness for the
+  # wheel timings only and measures the paging jig and the idle window at
+  # workflow level. Neither job is needed by the publish job.
+  benchmark-linux:
+    name: Benchmarks (Linux arm64)
+    needs: [preflight, build]
+    if: needs.preflight.outputs.version-changed == 'true'
+    runs-on: ubuntu-24.04-arm
+    # A new job gets a generous bound: a cold release jig, the 60 s idle
+    # window and the full harness at its default 5 runs (docs/ci.md, "Job time limits").
+    timeout-minutes: 60
+    env:
+      CC_aarch64_unknown_linux_musl: musl-gcc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only the backstop saves the build cache (docs/ci.md); a release restores it.
+          shared-key: release
+          save-if: false
+      - name: Install the musl target, GNU time and strace
+        # A mirror that stops answering must fail the step, not hold the job to its bound.
+        timeout-minutes: 5
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS update
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools time strace
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-aarch64-unknown-linux-musl
+          path: ${{ runner.temp }}/release
+      - name: Run the harness on the release artifacts
+        run: |
+          out=$RUNNER_TEMP/bench
+          mkdir -p "$out"
+          tar -xzf "$RUNNER_TEMP/release/fiber-aarch64-unknown-linux-musl.tar.gz" -C "$out"
+          cargo build -p bench --example bench
+          # The jig ships in the release profile for the target that ships
+          # (docs/performance.md, "Measuring").
+          cargo build --release --target aarch64-unknown-linux-musl -p tui --example paging
+          status=0
+          target/debug/examples/bench --fiber "$out/fiber" --out "$out/head.json" \
+            --only all --idle-secs 60 \
+            --paging target/aarch64-unknown-linux-musl/release/examples/paging \
+            > "$out/harness.log" 2>&1 || status=$?
+          echo "harness=$status" >> "$GITHUB_OUTPUT"
+          [ "$status" -eq 0 ] || echo "the harness exited $status; its log is in the artifact."
+          exit 0
+      - name: Report the benchmarks
+        if: always()
+        run: |
+          out=$RUNNER_TEMP/bench
+          {
+            echo "## Benchmarks (Linux arm64, ${{ needs.preflight.outputs.version }})"
+            echo ""
+            if [ -f "$out/head.json" ]; then
+              echo "CPU: $(jq -r '.cpu // "unknown"' "$out/head.json")"
+              echo "Idle window: $(jq -r '.idle_secs // "unknown"' "$out/head.json") s"
+              echo ""
+              echo "Failures the harness noted:"
+              jq -r '.failures[] // empty' "$out/head.json"
+            else
+              echo "The harness wrote no results file."
+            fi
+            echo ""
+            echo "Reported, never gated (docs/ci.md, \"Releases\")."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: benchmarks-linux-arm64-${{ needs.preflight.outputs.version }}
+          path: ${{ runner.temp }}/bench/
+          retention-days: 90
+
+  benchmark-macos:
+    name: Benchmarks (macOS arm64)
+    needs: [preflight, build]
+    if: needs.preflight.outputs.version-changed == 'true'
+    runs-on: macos-26
+    # A new job gets a generous bound: cold builds, two jig runs, the 60 s
+    # idle window and the notarised binary (docs/ci.md, "Job time limits").
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only the backstop saves the build cache (docs/ci.md); a release restores it.
+          shared-key: release
+          save-if: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-aarch64-apple-darwin
+          path: ${{ runner.temp }}/release
+      - name: Run the harness for the wheel timings
+        run: |
+          out=$RUNNER_TEMP/bench
+          mkdir -p "$out"
+          tar -xzf "$RUNNER_TEMP/release/fiber-aarch64-apple-darwin.tar.gz" -C "$out"
+          cargo build -p bench --example bench
+          # The harness measures Linux only; Wheel is the one mode it
+          # supports elsewhere, for the wheel timing rows.
+          status=0
+          target/debug/examples/bench --fiber "$out/fiber" --out "$out/wheel.json" \
+            --only wheel > "$out/harness.log" 2>&1 || status=$?
+          echo "harness=$status" >> "$GITHUB_OUTPUT"
+          [ "$status" -eq 0 ] || echo "the harness exited $status; its log is in the artifact."
+          exit 0
+      - name: Run the paging jig under time -l
+        run: |
+          # The jig ships in the release profile for the target that ships
+          # (docs/performance.md, "Measuring"); its scales are pinned on
+          # the command line, as the harness pins them on Linux.
+          cargo build --release -p tui --example paging
+          out=$RUNNER_TEMP/bench
+          jig=target/release/examples/paging
+          for scale in 1 16; do
+            if [ "$scale" = 1 ]; then args="1 160 48"; else args="16 160 48"; fi
+            # shellcheck disable=SC2086 # the scale's pinned arguments
+            /usr/bin/time -l "$jig" $args > "$out/jig-$scale.out" 2> "$out/time-$scale.err" || true
+            # The maximum resident set size is the peak footprint
+            # (docs/dependencies.md, "Measuring memory").
+            scripts/release-pack parse-time-l "$out/time-$scale.err" > "$out/footprint-$scale.txt" || true
+          done
+          exit 0
+      - name: Hold the release artifact idle and sample its footprint
+        run: |
+          out=$RUNNER_TEMP/bench
+          export FIBER_HOME="$out/home"
+          mkdir -p "$FIBER_HOME" "$out/work"
+          "$out/fiber" session --id bench --workspace "$out/work" > "$out/session.log" 2>&1 &
+          session=$!
+          trap 'kill $session 2> /dev/null || true' EXIT
+          started=0
+          for _ in $(seq 1 60); do
+            if grep -q session_started "$out/session.log" 2> /dev/null; then started=1; break; fi
+            sleep 1
+          done
+          if [ "$started" -eq 1 ]; then
+            sleep 60
+            footprint -p "$session" > "$out/footprint-idle.txt" 2>&1 || true
+            scripts/release-pack parse-footprint "$out/footprint-idle.txt" > "$out/footprint-idle-bytes.txt" || true
+          else
+            echo "the session never started; no idle sample." > "$out/footprint-idle.txt"
+          fi
+          exit 0
+      - name: Report the benchmarks
+        if: always()
+        run: |
+          out=$RUNNER_TEMP/bench
+          {
+            echo "## Benchmarks (macOS arm64, ${{ needs.preflight.outputs.version }})"
+            echo ""
+            if [ -f "$out/wheel.json" ]; then
+              echo "CPU: $(jq -r '.cpu // "unknown"' "$out/wheel.json")"
+            else
+              echo "The harness wrote no results file."
+            fi
+            echo ""
+            echo "Paging jig timings:"
+            grep -h -E "open pass and first frame: |slowest frame that loaded pages: |slowest jump frame: |slowest append frame: " "$out"/jig-*.out 2> /dev/null || echo "the jig printed no timing lines."
+            echo ""
+            for scale in 1 16; do
+              if [ -s "$out/footprint-$scale.txt" ]; then
+                echo "Paging peak footprint at scale $scale: $(cat "$out/footprint-$scale.txt") bytes."
+              else
+                echo "No paging footprint at scale $scale."
+              fi
+            done
+            if [ -s "$out/footprint-idle-bytes.txt" ]; then
+              echo "Idle peak footprint: $(cat "$out/footprint-idle-bytes.txt") bytes."
+            else
+              echo "No idle footprint sample."
+            fi
+            echo ""
+            echo "Per-thread switch counts are Linux-only and omitted here."
+            echo "Reported, never gated (docs/ci.md, \"Releases\")."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: benchmarks-macos-arm64-${{ needs.preflight.outputs.version }}
+          path: ${{ runner.temp }}/bench/
+          retention-days: 90
