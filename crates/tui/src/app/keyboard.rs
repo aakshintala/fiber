@@ -128,7 +128,8 @@ impl App {
         if self.keys_screen_open() && !self.quit_open() {
             // The notice overlay hides the screen: Esc closes the
             // overlay, Ctrl+C goes through the bindings, and every other
-            // stroke reaches neither the screen nor the draft.
+            // stroke reaches neither the screen nor the draft. A `None`
+            // falls through to the bindings below.
             let effect = if self.notice_overlay().is_none() {
                 let height = self.keys_height();
                 let outcome = match self.keyboard.screen.as_mut() {
@@ -136,35 +137,33 @@ impl App {
                     None => Outcome::Nothing,
                 };
                 match outcome {
-                    Outcome::Nothing => Effect::None,
+                    Outcome::Nothing => Some(Effect::None),
                     Outcome::Close => {
                         self.keyboard.screen = None;
-                        Effect::None
+                        Some(Effect::None)
                     }
-                    Outcome::Apply(next) => self.apply_keys(next),
+                    Outcome::Apply(next) => Some(self.apply_keys(next)),
                     // Ctrl+C goes through the bindings below, clearing
                     // then quitting as on any screen.
-                    Outcome::Pass => return self.bindings_effect(stroke, now),
+                    Outcome::Pass => None,
                 }
             } else if stroke == esc() {
                 self.notices.close();
-                Effect::None
+                Some(Effect::None)
             } else if stroke == ctrl_c() {
-                return self.bindings_effect(stroke, now);
+                None
             } else {
                 return Effect::None;
             };
-            self.edited();
-            self.settle();
-            return effect;
+            if let Some(effect) = effect {
+                self.edited();
+                self.settle();
+                return effect;
+            }
         }
-        self.bindings_effect(stroke, now)
-    }
-
-    /// One stroke through the bindings below, settling what they ran:
-    /// `on_key` and `on_edit` settle themselves, so only an action
-    /// settles here, once per input, from this Loop entry.
-    fn bindings_effect(&mut self, stroke: Stroke, now: Instant) -> Effect {
+        // The bindings settle here: `on_key` and `on_edit` settle
+        // themselves, so only an action settles from this Loop entry,
+        // once per input.
         let (effect, settle) = self.bindings_press(stroke, now);
         if settle {
             self.settle();
