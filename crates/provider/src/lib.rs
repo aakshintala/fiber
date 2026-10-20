@@ -8,6 +8,9 @@
 
 pub mod anthropic_messages;
 mod anthropic_messages_decode;
+pub mod bedrock_converse;
+mod bedrock_converse_decode;
+mod bedrock_converse_request;
 mod call;
 mod error;
 mod event_stream;
@@ -176,6 +179,27 @@ pub struct Compat {
     /// event-stream framing (`docs/model-routing.md`, "Protocols and
     /// providers").
     pub bedrock_invoke: bool,
+    /// `bedrock-converse`: the model takes `cachePoint` blocks, placed where
+    /// Anthropic's cache markers go, each after a text block
+    /// (`docs/prompt-cache.md`, "Cache markers and keys"). Absent, a
+    /// request carries no marker.
+    pub cache_point: bool,
+    /// `bedrock-converse`: the `additionalModelRequestFields` field that
+    /// carries the thinking level (`docs/model-routing.md`, "Thinking").
+    /// Absent, no level is sent.
+    pub reasoning_field: Option<ReasoningField>,
+}
+
+/// The field a `bedrock-converse` model reads its thinking level from,
+/// inside `additionalModelRequestFields` (`docs/model-routing.md`,
+/// "Thinking").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningField {
+    /// `reasoning_effort: <level>`, as gpt-oss takes it.
+    ReasoningEffort,
+    /// `reasoningConfig: {type: "enabled", maxReasoningEffort: <level>}`,
+    /// as Nova 2 Lite takes it; at `high` no `maxTokens` is sent beside it.
+    ReasoningConfig,
 }
 
 impl Compat {
@@ -195,6 +219,12 @@ impl Compat {
             thinking_budget: flag("thinking_budget").unwrap_or(false),
             bearer: flag("bearer").unwrap_or(false),
             bedrock_invoke: flag("bedrock_invoke").unwrap_or(false),
+            cache_point: flag("cache_point").unwrap_or(false),
+            reasoning_field: match data.get("reasoning_field").and_then(Value::as_str) {
+                Some("reasoning_effort") => Some(ReasoningField::ReasoningEffort),
+                Some("reasoningConfig") => Some(ReasoningField::ReasoningConfig),
+                Some(_) | None => None,
+            },
         }
     }
 }

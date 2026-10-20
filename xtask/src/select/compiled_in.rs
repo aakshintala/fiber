@@ -120,6 +120,58 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "provider",
     ),
     (
+        "research/bedrock-converse-probe/raw/bad-model.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/cache-read.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/cache-write.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/classify/global.zai.glm-5.3.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/plain.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/reasoning-oss-low.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/redacted-first.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/redacted-first.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/signature.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/signature.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/tool-ministral.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/tool-oss.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/validation.json",
+        "provider",
+    ),
+    (
         "research/bedrock-invoke-probe/raw/adaptive.json",
         "provider",
     ),

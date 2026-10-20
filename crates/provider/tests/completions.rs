@@ -1020,6 +1020,8 @@ fn compat_flags_are_read_from_the_models_data_and_unset_when_absent() {
             thinking_budget: false,
             bearer: false,
             bedrock_invoke: false,
+            cache_point: false,
+            reasoning_field: None,
         }
     );
     assert_eq!(

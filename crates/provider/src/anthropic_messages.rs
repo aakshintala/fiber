@@ -83,7 +83,7 @@ impl Messages {
                     &[],
                     format!(
                         "{base_url}/model/{}/invoke-with-response-stream",
-                        path_segment(&endpoint.model)
+                        crate::wire::path_segment(&endpoint.model)
                     ),
                     |stream, _, sink| decode_bedrock_tracked(stream, sink),
                 )
@@ -547,22 +547,6 @@ fn block_of(
             vec![result]
         }
     }
-}
-
-/// `text` as one URL path segment: every byte outside RFC 3986's unreserved
-/// set percent-encoded, so a Bedrock model id such as
-/// `global.anthropic.claude-haiku-4-5-20251001-v1:0` keeps its `:` as `%3A`,
-/// as AWS's own SDKs send it.
-fn path_segment(text: &str) -> String {
-    let mut encoded = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            encoded.push(char::from(byte));
-        } else {
-            encoded.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    encoded
 }
 
 /// One message of `blocks`, collapsing an unmarked single text block to a

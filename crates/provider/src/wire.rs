@@ -1,6 +1,6 @@
-//! Shared wire helpers for the four protocols: reading a string field
-//! and decoding a tool call's argument text (`docs/events.md`,
-//! `tool_call_requested`, `arguments`).
+//! Shared wire helpers for the protocols: reading a string field, decoding
+//! a tool call's argument text (`docs/events.md`, `tool_call_requested`,
+//! `arguments`) and encoding a model id into a URL path.
 
 use contract::provider::ToolDefinition;
 use serde_json::{Map, Value};
@@ -41,4 +41,20 @@ pub(crate) fn sorted_by_name(tools: &[ToolDefinition]) -> Vec<&ToolDefinition> {
     let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
     sorted
+}
+
+/// `text` as one URL path segment: every byte outside RFC 3986's unreserved
+/// set percent-encoded, so a Bedrock model id such as
+/// `global.anthropic.claude-haiku-4-5-20251001-v1:0` keeps its `:` as `%3A`,
+/// as AWS's own SDKs send it.
+pub(crate) fn path_segment(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }

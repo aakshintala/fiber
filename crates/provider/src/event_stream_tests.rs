@@ -6,7 +6,7 @@ use super::{Message, crc32, read};
 use crate::Error;
 
 /// One header value as the framing writes it: its type byte and its bytes.
-enum Value<'a> {
+pub(crate) enum Value<'a> {
     True,
     False,
     Byte(i8),
@@ -20,7 +20,7 @@ enum Value<'a> {
 }
 
 /// One message framed as AWS frames it, both checksums computed.
-fn frame(headers: &[(&str, Value<'_>)], payload: &[u8]) -> Vec<u8> {
+pub(crate) fn frame(headers: &[(&str, Value<'_>)], payload: &[u8]) -> Vec<u8> {
     let mut encoded = Vec::new();
     for (name, value) in headers {
         encoded.push(u8::try_from(name.len()).unwrap());
@@ -99,10 +99,10 @@ fn messages(stream: impl Read) -> Result<Vec<Message>, Error> {
 
 /// Hands out its bytes `step` at a time, so a message arrives split across
 /// reads.
-struct Trickle {
-    bytes: Vec<u8>,
-    at: usize,
-    step: usize,
+pub(crate) struct Trickle {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) at: usize,
+    pub(crate) step: usize,
 }
 
 impl Read for Trickle {
