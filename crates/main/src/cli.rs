@@ -733,6 +733,18 @@ pub(crate) struct SessionArgs {
     )]
     pub(crate) rewound_from: Option<String>,
 
+    /// Continue in the worktree of the session `start` names: hidden
+    /// and free to change, passed by the hub that starts a session with
+    /// `continues` (`docs/invocation.md`, "Isolation").
+    #[arg(
+        long = "continues",
+        value_name = "session_id",
+        value_parser = parse_session_id,
+        hide = true,
+        conflicts_with_all = ["resume", "rewound_from", "parent"]
+    )]
+    pub(crate) continues: Option<String>,
+
     /// The parent session: its id. A Fiber delegate records it and its job
     /// id on `session_started` (`docs/delegates.md`, "Events").
     #[arg(
@@ -777,6 +789,7 @@ impl From<&SessionArgs> for contract::session_argv::SessionArgv {
             credential: args.credential.clone(),
             worktree: args.worktree,
             rewound_from: args.rewound_from.clone().map(contract::SessionId),
+            continues: args.continues.clone().map(contract::SessionId),
             parent: args.parent.clone().map(contract::SessionId),
             delegate_id: args.delegate_id.clone().map(contract::JobId),
             depth: args.depth,

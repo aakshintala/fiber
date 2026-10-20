@@ -587,6 +587,7 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         credential: None,
         worktree: false,
         rewound_from: None,
+        continues: None,
         parent: Some(launched.parent.clone()),
         delegate_id: Some(launched.job_id.clone()),
         depth: Some(launched.depth),
