@@ -262,6 +262,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "delegate_message",
             "delegate_models",
             "delegate_spawn",
+            "delegate_fork",
             "edit",
             "handoff",
             "name_session",
@@ -284,6 +285,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "delegate_message",
             "delegate_models",
             "delegate_spawn",
+            "delegate_fork",
             "edit",
             "handoff",
             "name_session",
@@ -609,6 +611,7 @@ const STRICT_KEYWORDS: &[&str] = &[
 /// `strict: false`.
 const NOT_STRICT: &[&str] = &[
     "ask_user",       // "Asking the person", "The call"
+    "delegate_fork",  // "Background jobs"
     "delegate_spawn", // "Background jobs"
     "jobs",           // "Background jobs"
     "name_session",   // "Naming the session"
@@ -786,7 +789,12 @@ fn every_builtin_fits_the_strict_shape_unless_its_section_says_strict_false() {
         walked.push(definition.name);
     }
     walked.sort();
-    assert_eq!(walked, contract::tool::BUILT_IN_TOOLS);
+    // `contract::tool::BUILT_IN_TOOLS` is frozen, so the fork the session
+    // registers beside spawn is listed here.
+    let mut listed = contract::tool::BUILT_IN_TOOLS.to_vec();
+    listed.push("delegate_fork");
+    listed.sort();
+    assert_eq!(walked, listed);
 }
 
 /// The names an extension must list in `replaces` are exactly the names
@@ -800,10 +808,14 @@ fn built_in_tools_is_every_name_builtin_registers() {
         names.sort();
         names
     };
-    let listed: Vec<String> = contract::tool::BUILT_IN_TOOLS
+    // `contract::tool::BUILT_IN_TOOLS` is frozen, so the fork the session
+    // registers beside spawn is listed here.
+    let mut listed: Vec<String> = contract::tool::BUILT_IN_TOOLS
         .iter()
         .map(|name| (*name).to_owned())
         .collect();
+    listed.push("delegate_fork".to_owned());
+    listed.sort();
     assert_eq!(names(Some("web_search_20250305")), listed);
     let mut without = names(None);
     without.push("web_search".to_owned());
@@ -933,6 +945,42 @@ fn session_message_declares_writes_with_no_paths() {
     assert!(!effects.declared.reversible);
     assert_eq!(effects.declared.paths, None);
     assert!(!effects.always_reviewed);
+}
+
+/// `delegate_fork` is always judged by the parent's reviewer: no fast path,
+/// session grant or standing allow skips it (`docs/delegates.md`,
+/// "Permissions"), as `delegate_spawn` is.
+#[test]
+fn delegate_fork_declares_always_reviewed() {
+    let root = fakes::TempDir::new("fiber-builtin-fork-reviewed");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, _, _, _, _) = super::builtin(
+        root.path().join("fiber-stub"),
+        &root.path().join("home"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        None,
+        &delegates(),
+        skills(),
+    )
+    .unwrap();
+    let (_, tool) = tools
+        .iter()
+        .find(|(_, tool)| tool.definition().name == "delegate_fork")
+        .expect("delegate_fork is registered");
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("description".to_owned(), serde_json::Value::from("scan"));
+    arguments.insert("prompt".to_owned(), serde_json::Value::from("hi"));
+    let effects = tool.effects(&arguments).unwrap();
+    assert!(effects.always_reviewed);
 }
 
 #[test]
