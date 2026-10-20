@@ -316,6 +316,42 @@ fn disconnect_drops_the_fetch() {
     assert_eq!(app.notice(), Some("Connection lost."));
 }
 
+/// A fetch blocks only its own `(session, path)`: the same path in
+/// another segment, and another path in the same session, still ask.
+/// Kills the `&&` to `||` mutant on the in-flight check, which would
+/// refuse either half-match.
+#[test]
+fn a_fetch_blocks_only_its_own_session_and_path() {
+    let mut app = app();
+    ancestor_image(&mut app, "artifacts/a.png");
+    started_with_image(&mut app, "artifacts/a.png");
+    started_with_image(&mut app, "artifacts/b.png");
+    // The own fetch for `a.png` is out: ids are per segment path, so
+    // the ancestor's `a.png` is 1, the own run's `a.png` is 2 and its
+    // `b.png` is 3.
+    let _ = sent(app.view_image(2));
+    // The ancestor's same path is another segment's fetch: it asks
+    // under the ancestor's session.
+    let lines = sent(app.view_image(1));
+    let value: Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": OTHER, "path": "artifacts/a.png"}))
+    );
+    // The own run's other path is another fetch: it asks too.
+    let lines = sent(app.view_image(3));
+    let value: Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": SESSION, "path": "artifacts/b.png"}))
+    );
+    // While both are out, the same session and path asks nothing.
+    assert_eq!(app.view_image(1), Effect::None);
+    assert_eq!(app.view_image(2), Effect::None);
+}
+
 /// Folds an ancestor turn whose prompt carried an image at `path`.
 /// The ancestor never streams live, so it applies straight to the
 /// pages, as paged history would.

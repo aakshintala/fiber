@@ -935,3 +935,88 @@ fn prepend_from_shifts_the_runs_it_keeps() {
     assert_eq!(index.pages().len(), len);
     check_runs(&index);
 }
+
+/// An empty open page takes only a changed session: carrying the
+/// ancestor runs lands them ahead of the fold's empty open page, and
+/// the next own line starts its run there without a cut. Kills the
+/// `!=` to `==` mutant, which would leave the own line on the
+/// ancestor's run. This is the land path: a fresh fold's open page is
+/// empty with runs already carried.
+#[test]
+fn an_empty_open_page_takes_only_a_changed_session() {
+    let mut other = Index::default();
+    let mut aseq = 0u64;
+    chunk(&mut other, &ancestor(), &mut aseq);
+    let carried = other.pages().len();
+    let mut index = Index::default();
+    index.prepend_from(&other, carried);
+    assert_eq!(
+        index.pages().len(),
+        carried + 1,
+        "the carried runs land ahead of the empty open page"
+    );
+    let cut = index.push(&session(), Seq(0), "usage_recorded", None, true);
+    assert_eq!(cut, Cut::None, "nothing folded yet, so nothing cuts");
+    assert_eq!(
+        index.pages().last().map(|page| page.session.clone()),
+        Some(session()),
+        "the empty open page takes the pushed session"
+    );
+    assert_eq!(
+        index.page_of(&session(), Seq(0)),
+        Some(carried),
+        "the own run starts past the carried runs"
+    );
+}
+
+/// A page holding no lines holds no seq: its range may still name it,
+/// but nothing is on it. Kills the `>` to `>=` mutant on the
+/// `page.lines > 0` guard, which would seat a seq on an empty page.
+#[test]
+fn page_of_skips_a_page_holding_no_lines() {
+    let mut index = Index::default();
+    push(&mut index, 0, "usage_recorded", None, true);
+    // A page covering 1..=5 that holds no lines: its range still names
+    // it, but no line folded there.
+    index.pages.push(Page {
+        session: session(),
+        first_seq: Seq(1),
+        last_seq: Seq(5),
+        lines: 0,
+        rows: 0,
+    });
+    index.revisions.push(0);
+    assert_eq!(index.page_of(&session(), Seq(0)), Some(0));
+    assert_eq!(
+        index.page_of(&session(), Seq(3)),
+        None,
+        "no line folded on the empty page"
+    );
+}
+
+/// `prepend_from` stops before the run starting at the boundary: a run
+/// whose first page is `len` stays with the fold. Kills the `<` to
+/// `<=` mutant on the `segment.first < len` take, which would carry a
+/// run with no carried page in it.
+#[test]
+fn prepend_from_stops_before_the_run_at_the_boundary() {
+    let mut other = Index::default();
+    let mut aseq = 0u64;
+    chunk(&mut other, &ancestor(), &mut aseq);
+    let mut bseq = 0u64;
+    chunk(&mut other, &session(), &mut bseq);
+    assert_eq!(other.pages().len(), 4, "two pages per chunk");
+    let mut index = Index::default();
+    let mut oseq = 0u64;
+    chunk(&mut index, &session(), &mut oseq);
+    let own_pages = index.pages().len();
+    // `len` is the own run's first page: exactly the second run's start.
+    index.prepend_from(&other, 2);
+    assert_eq!(index.pages().len(), 2 + own_pages);
+    assert_eq!(
+        index.segments.len(),
+        2,
+        "only the ancestor run carries; the run starting at the boundary stays"
+    );
+    check_runs(&index);
+}

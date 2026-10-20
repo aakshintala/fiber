@@ -4639,3 +4639,226 @@ fn chain_joined_except(pages: &mut Pages, log: &[Envelope], skip: usize) -> Vec<
     }
     out
 }
+
+/// One durable line under `session` at `seq`, for the carry-chain edge
+/// tests: turns open with a text prompt, everything else is bare.
+fn edge_line(session: &str, seq: u64, kind: &str) -> Envelope {
+    let payload = if kind == "turn_started" {
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "hi"}]}]})
+    } else {
+        json!({})
+    };
+    Envelope {
+        kind: kind.to_owned(),
+        session_id: SessionId(session.to_owned()),
+        ts: seq,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(Seq(seq)),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }
+}
+
+/// A preview holding three closed ancestor pages and one closed own page,
+/// with the open page on the own run, and a fold holding one closed own
+/// page. Returns the pair with the carried page count and the carried
+/// summary count, both asserted so a fixture drift fails loudly instead
+/// of weakening the edges below.
+fn carry_edge() -> (Pages, Pages, usize, usize) {
+    let mut preview = Pages::new(80);
+    for seq in 0..64 {
+        preview.apply(&edge_line(ANCESTOR, seq, "usage_recorded"));
+    }
+    preview.apply(&edge_line(ANCESTOR, 64, "turn_started"));
+    for seq in 65..129 {
+        preview.apply(&edge_line(ANCESTOR, seq, "usage_recorded"));
+    }
+    preview.apply(&edge_line(ANCESTOR, 129, "turn_started"));
+    // The child's first line cuts the session onto a new page, which the
+    // open holds alone: the land path's session-change close.
+    preview.apply(&edge_line(SESSION, 0, "session_started"));
+    for seq in 1..66 {
+        preview.apply(&edge_line(SESSION, seq, "usage_recorded"));
+    }
+    preview.apply(&edge_line(SESSION, 66, "turn_started"));
+    let seam = preview
+        .index()
+        .pages()
+        .iter()
+        .position(|page| page.session == SessionId(SESSION.to_owned()))
+        .expect("the own run");
+    assert_eq!(seam, 3, "three closed ancestor pages precede the seam");
+    assert_eq!(preview.page_count(), 5, "four closes and the open page");
+    let attached = preview
+        .index()
+        .pages()
+        .last()
+        .map(|page| page.session.clone())
+        .expect("the open page");
+    let len = preview
+        .index()
+        .pages()
+        .iter()
+        .take(preview.page_count() - 1)
+        .take_while(|page| page.session != attached)
+        .count();
+    assert_eq!(len, 3, "the carried ancestor run");
+    // Mirrors `carry_chain`'s carried summary count.
+    let mut summaries = 0;
+    for at in 0..len {
+        summaries = summaries.max(preview.page_first(at).unwrap_or(0).saturating_add(1));
+        if let Some(part) = preview.part(at) {
+            summaries = summaries.max(part.first.saturating_add(part.turns.len().max(1)));
+        }
+    }
+    summaries = summaries.min(preview.summaries.len());
+    assert_eq!(summaries, 2, "the two ancestor turns");
+    let mut fold = Pages::new(80);
+    for seq in 0..64 {
+        fold.apply(&edge_line(SESSION, seq, "usage_recorded"));
+    }
+    fold.apply(&edge_line(SESSION, 64, "turn_started"));
+    (preview, fold, len, summaries)
+}
+
+/// `carry_chain` carries only generations below the carried summaries:
+/// the fold's own move with them, and the entry at the boundary stays
+/// behind. Kills every `<` mutant on the generations guard (`<=` keeps
+/// the boundary, `==` and `>` drop the carried one).
+#[test]
+fn carry_chain_carries_only_generations_below_the_carried_summaries() {
+    let (mut preview, mut fold, _len, summaries) = carry_edge();
+    preview
+        .generations
+        .insert(contract::GenerationId("g_in".to_owned()), 0);
+    preview
+        .generations
+        .insert(contract::GenerationId("g_edge".to_owned()), summaries);
+    fold.generations
+        .insert(contract::GenerationId("g_fold".to_owned()), 0);
+    preview.carry_chain(&mut fold);
+    assert_eq!(
+        fold.generations
+            .get(&contract::GenerationId("g_in".to_owned())),
+        Some(&0),
+        "the carried generation keeps its turn"
+    );
+    assert!(
+        !fold
+            .generations
+            .contains_key(&contract::GenerationId("g_edge".to_owned())),
+        "the generation at the boundary stays behind"
+    );
+    assert_eq!(
+        fold.generations
+            .get(&contract::GenerationId("g_fold".to_owned())),
+        Some(&summaries),
+        "the fold's own generation moves with the summaries"
+    );
+}
+
+/// `carry_chain` carries only shells below the carried count: the
+/// fold's own shift by it, and the shell at the boundary stays behind.
+/// Kills every `<` mutant on the shells filter.
+#[test]
+fn carry_chain_carries_only_shells_below_the_carried_count() {
+    let (mut preview, mut fold, len, summaries) = carry_edge();
+    preview.shells.push((0, 0, "ancestor output".to_owned()));
+    preview.shell_index.entry((0, 0)).or_default().push(0);
+    preview.shells.push((len, 1, "own output".to_owned()));
+    preview.shell_index.entry((len, 1)).or_default().push(1);
+    fold.shells.push((1, 0, "fold output".to_owned()));
+    fold.shell_index.entry((1, 0)).or_default().push(0);
+    preview.carry_chain(&mut fold);
+    assert_eq!(
+        fold.shells,
+        vec![
+            (0, 0, "ancestor output".to_owned()),
+            (1 + len, summaries, "fold output".to_owned()),
+        ],
+        "the carried shell lands first and the fold's own shifts past it"
+    );
+}
+
+/// `carry_chain` carries only stale pages below the carried count, and
+/// shifts the fold's own by it. Kills every `<` mutant on the stale
+/// remap (`<=` keeps the boundary, `==` and `>` drop the carried one).
+#[test]
+fn carry_chain_carries_only_stale_below_the_carried_count() {
+    use std::collections::BTreeSet;
+    let (mut preview, mut fold, len, _summaries) = carry_edge();
+    preview.stale.insert(0);
+    preview.stale.insert(1);
+    preview.stale.insert(len);
+    fold.stale.insert(1);
+    preview.carry_chain(&mut fold);
+    assert_eq!(
+        fold.stale,
+        BTreeSet::from([0, 1, 1 + len]),
+        "the carried stale move over and the fold's own shifts past them"
+    );
+}
+
+/// `carry_chain` carries only failed pages below the carried count, and
+/// shifts the fold's own by it. Kills every `<` mutant on the failed
+/// remap.
+#[test]
+fn carry_chain_carries_only_failed_below_the_carried_count() {
+    use std::collections::BTreeSet;
+    let (mut preview, mut fold, len, _summaries) = carry_edge();
+    preview.fail(&SessionId(ANCESTOR.to_owned()), Seq(0));
+    preview.fail(&SessionId(SESSION.to_owned()), Seq(2));
+    fold.fail(&SessionId(SESSION.to_owned()), Seq(64));
+    preview.carry_chain(&mut fold);
+    assert_eq!(
+        fold.failed,
+        BTreeSet::from([0, 1 + len]),
+        "the carried failure moves over and the fold's own shifts past it"
+    );
+}
+
+/// `carry_chain` carries only resident pages below the carried count,
+/// and shifts the fold's own by it. The preview keeps its own closed
+/// page resident exactly at the boundary, which also kills the `&&` to
+/// `||` mutant: the boundary page must not join the fold's set.
+/// Together the two asserts kill every `<` mutant on the resident guard
+/// too (`<=` and `||` keep the boundary, `==` and `>` drop the carried
+/// ones).
+#[test]
+fn carry_chain_carries_only_residents_below_the_carried_count() {
+    use std::collections::BTreeSet;
+    let (preview, mut fold, len, _summaries) = carry_edge();
+    assert!(
+        preview.part(len).is_some(),
+        "the own page at the boundary is resident"
+    );
+    fold.resident_set.clear();
+    fold.resident_set.insert(5);
+    preview.carry_chain(&mut fold);
+    assert_eq!(
+        fold.resident_set,
+        BTreeSet::from([0, 1, 2, 5 + len]),
+        "the carried residents move over and the fold's own shifts past them"
+    );
+}
+
+/// `carry_chain` carries only pins below the carried count, and shifts
+/// the fold's own by it. Kills every `<` mutant on the pins filter
+/// (`<=` keeps the boundary pin, `>` drops the carried one).
+#[test]
+fn carry_chain_carries_only_pins_below_the_carried_count() {
+    let (mut preview, mut fold, len, _summaries) = carry_edge();
+    preview.want(0);
+    preview.want(len);
+    fold.want(1);
+    preview.carry_chain(&mut fold);
+    let mut pinned: Vec<usize> = fold.pins.pages().collect();
+    pinned.sort_unstable();
+    assert_eq!(
+        pinned,
+        vec![0, 1 + len],
+        "the carried pin moves over and the fold's own shifts past it"
+    );
+}

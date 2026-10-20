@@ -2835,3 +2835,31 @@ fn the_landed_screen_matches_the_preview_across_the_seam() {
         "the landing shows the same paged rows across the seam"
     );
 }
+
+/// An ended read is done even before its start: `chain_done` is the
+/// ended flag or the root, never both. Kills the `||` to `&&` mutant,
+/// which would wait for the start after the end.
+#[test]
+fn an_ended_read_is_done_even_before_its_start() {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    tail.end();
+    assert!(!tail.start_reached(), "nothing was read");
+    assert!(tail.chain_done(), "an ended read is done without its start");
+}
+
+/// Seq zero with no parent pends no seam: `seam_pending` needs the
+/// first line and the named parent together. Kills the `&&` to `||`
+/// mutant, which would cross past the chain root.
+#[test]
+fn seq_zero_with_no_parent_pends_no_seam() {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    tail.prepend(segment_lines(SESSION, 1, None))
+        .unwrap_or_else(|_| panic!("the root's first line"));
+    assert!(tail.start_reached(), "seq zero ends the segment");
+    assert!(
+        !tail.seam_pending(),
+        "the root's first line names no parent"
+    );
+}

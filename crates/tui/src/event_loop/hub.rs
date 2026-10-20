@@ -207,11 +207,10 @@ impl Connection {
             // An ancestor window rides the serving session's chain read:
             // the command stays routed to the serving session, and the
             // args name the ancestor segment. Own windows carry no
-            // session, exactly as today.
-            let top = match app.paging_session() {
-                Some(serving) if serving != session => serving,
-                _ => session,
-            };
+            // session, exactly as today: when the serving session is the
+            // window's own, it is the same value either way, so no guard
+            // is left for mutants to flip.
+            let top = app.paging_session().unwrap_or(session);
             let args = history_args(top, session, Some(from), Some(to));
             let command = session_command(&id, "history", top, Some(args)).to_string();
             let written = self
