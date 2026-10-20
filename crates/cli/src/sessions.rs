@@ -19,7 +19,7 @@ use crate::{failed, project_of, usage, with_dirs, write_line};
 const DELETE_PROMPT: &str = "delete? [y/N]";
 
 /// The usage failure when there is nobody to ask.
-const DELETE_NOBODY: &str =
+pub(crate) const DELETE_NOBODY: &str =
     "`fiber sessions delete` has no terminal to ask on. Pass `--yes` to delete without asking.";
 
 /// The `id` of the one command `delete` sends.
