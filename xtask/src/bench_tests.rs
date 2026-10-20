@@ -717,10 +717,6 @@ fn every_gated_row_but_one_is_measured() {
         assert!(!not_measured.contains(budget), "{budget}:\n{comment}");
         assert!(row(&comment, budget).ends_with("| pass |"), "{comment}");
     }
-    assert!(
-        !not_measured.contains("`session_list`, waiting") && !not_measured.contains("#581"),
-        "{comment}"
-    );
     for budget in [
         "Terminal to its first frame, attaching",
         "Listing 1,000 sessions in one project, warm cache",
@@ -2738,8 +2734,7 @@ fn both_paging_ratio_rows_are_measured_and_scale_one_stays() {
         let line = row(&out.comment, budget);
         assert!(line.ends_with("| pass |"), "{line}");
     }
-    // The #581 ticket moved into MEASURED with the session_list row,
-    // and all six scale-1 paging metrics still judge their rows.
+    // All six scale-1 paging metrics still judge their rows.
     assert!(!not_measured.contains("#581"), "{not_measured}");
     assert!(!not_measured.contains("#2210"), "{not_measured}");
     for budget in [
@@ -4029,12 +4024,13 @@ fn a_head_failure_with_a_missing_base_metric_shows_unavailable() {
 const FAST_ATTACH_DATA: &str = include_str!("../tests/class_data/9v45-attach-10mib.json");
 const PERFORMANCE_DOC: &str = include_str!("../../docs/performance.md");
 
-/// The attaching row's fast ceiling (ms) and fast tolerance (%) in `docs/performance.md`.
-fn doc_fast_attach_gate() -> (f64, f64) {
+/// A gated row's fast ceiling (ms) and fast tolerance (%) in
+/// `docs/performance.md`: the row whose text starts with `prefix`.
+fn doc_gate(prefix: &str) -> (f64, f64) {
     let line = PERFORMANCE_DOC
         .lines()
-        .find(|l| l.starts_with("| Terminal to its first frame, attaching"))
-        .expect("attaching row");
+        .find(|l| l.starts_with(prefix))
+        .unwrap_or_else(|| panic!("no performance row starting with {prefix:?}"));
     let cells: Vec<&str> = line.split('|').map(str::trim).collect();
     let number = |cell: &str| -> f64 {
         cell.split_whitespace()
@@ -4051,9 +4047,14 @@ fn median_of(samples: &[f64]) -> f64 {
     s[s.len() / 2]
 }
 
-#[test]
-fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
-    let files: Vec<Value> = serde_json::from_str(FAST_ATTACH_DATA).unwrap();
+/// The pin both fast-class ceiling tests share: every stored file's samples
+/// pin the row's fast ceiling, and the stored per-file medians pin its fast
+/// tolerance. Each pin sample must be finite and at or above zero before
+/// any ceiling or median math, so an appended -1, NaN or infinite entry
+/// fails here. A per-file median under the 1 ms quantum counts as 1 ms
+/// when `quantum` holds, so a zero median never divides the tolerance.
+fn pinned_gate(data: &str, prefix: &str, label: &str, quantum: bool) {
+    let files: Vec<Value> = serde_json::from_str(data).unwrap();
     assert!(files.len() >= 5, "the class gates only with 5 stored files");
     let samples: Vec<Vec<f64>> = files
         .iter()
@@ -4066,14 +4067,29 @@ fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
                 .collect()
         })
         .collect();
+    for (file, file_samples) in files.iter().zip(&samples) {
+        for s in file_samples {
+            assert!(
+                s.is_finite() && *s >= 0.0,
+                "{label}_pin_samples_are_finite_and_non_negative: {} holds {s}",
+                file["file"]
+            );
+        }
+    }
     let max_sample = samples.iter().flatten().copied().fold(0.0, f64::max);
-    let medians: Vec<f64> = samples.iter().map(|s| median_of(s)).collect();
+    let medians: Vec<f64> = samples
+        .iter()
+        .map(|s| {
+            let m = median_of(s);
+            if quantum && m < 1.0 { 1.0 } else { m }
+        })
+        .collect();
     let max_median = medians.iter().copied().fold(0.0, f64::max);
     let min_median = medians.iter().copied().fold(f64::MAX, f64::min);
-    let (ceiling, tolerance) = doc_fast_attach_gate();
+    let (ceiling, tolerance) = doc_gate(prefix);
     assert!(
         ceiling >= max_sample,
-        "fast attach ceiling {ceiling} ms sits below stored sample {max_sample} ms"
+        "{label} ceiling {ceiling} ms sits below stored sample {max_sample} ms"
     );
     assert_eq!(
         ceiling,
@@ -4081,9 +4097,16 @@ fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
         "ceiling is the max sample rounded up"
     );
     let want = (100.0 * (max_median / min_median - 1.0)).ceil();
-    assert_eq!(
-        tolerance, want,
-        "fast attach tolerance for the stored medians"
+    assert_eq!(tolerance, want, "{label} tolerance for the stored medians");
+}
+
+#[test]
+fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
+    pinned_gate(
+        FAST_ATTACH_DATA,
+        "| Terminal to its first frame, attaching",
+        "fast attach",
+        false,
     );
 }
 
@@ -4092,69 +4115,12 @@ fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
 /// Every stored 9V45 file's session_list samples: plain numbers per file.
 const SESSION_LIST_DATA: &str = include_str!("../tests/class_data/9v45-session-list.json");
 
-/// The session_list row's fast ceiling (ms) and fast tolerance (%) in `docs/performance.md`.
-fn doc_session_list_gate() -> (f64, f64) {
-    let line = PERFORMANCE_DOC
-        .lines()
-        .find(|l| l.starts_with("| `session_list`, waiting for every running"))
-        .expect("session_list row");
-    let cells: Vec<&str> = line.split('|').map(str::trim).collect();
-    let number = |cell: &str| -> f64 {
-        cell.split_whitespace()
-            .next()
-            .and_then(|n| n.parse().ok())
-            .unwrap_or_else(|| panic!("no number in {cell:?}"))
-    };
-    (number(cells[5]), number(cells[8]))
-}
-
 #[test]
 fn session_list_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
-    let files: Vec<Value> = serde_json::from_str(SESSION_LIST_DATA).unwrap();
-    assert!(files.len() >= 5, "the class gates only with 5 stored files");
-    let samples: Vec<Vec<f64>> = files
-        .iter()
-        .map(|f| {
-            f["samples"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|s| s.as_f64().unwrap())
-                .collect()
-        })
-        .collect();
-    // Every pin sample is finite and at or above zero before any
-    // ceiling or median math: an appended -1, NaN or infinite entry
-    // fails here, never slipping into the derivation below.
-    for (file, file_samples) in files.iter().zip(&samples) {
-        for s in file_samples {
-            assert!(
-                s.is_finite() && *s >= 0.0,
-                "session_list_pin_samples_are_finite_and_non_negative: {} holds {s}",
-                file["file"]
-            );
-        }
-    }
-    let max_sample = samples.iter().flatten().copied().fold(0.0, f64::max);
-    // A per-file median under the 1 ms quantum counts as 1 ms, so a
-    // zero median never divides the tolerance.
-    let quantum = |m: f64| if m < 1.0 { 1.0 } else { m };
-    let medians: Vec<f64> = samples.iter().map(|s| quantum(median_of(s))).collect();
-    let max_median = medians.iter().copied().fold(0.0, f64::max);
-    let min_median = medians.iter().copied().fold(f64::MAX, f64::min);
-    let (ceiling, tolerance) = doc_session_list_gate();
-    assert!(
-        ceiling >= max_sample,
-        "fast session_list ceiling {ceiling} ms sits below stored sample {max_sample} ms"
-    );
-    assert_eq!(
-        ceiling,
-        max_sample.ceil(),
-        "ceiling is the max sample rounded up"
-    );
-    let want = (100.0 * (max_median / min_median - 1.0)).ceil();
-    assert_eq!(
-        tolerance, want,
-        "fast session_list tolerance for the stored medians"
+    pinned_gate(
+        SESSION_LIST_DATA,
+        "| `session_list`, waiting for every running",
+        "fast session_list",
+        true,
     );
 }

@@ -163,23 +163,27 @@ scripts/class-data fast "$row" "10 MiB" "$missing" >/dev/null 2>"$err" || rc=$?
 # head.json files, never the committed 9v45-session-list.json. The
 # session_list row takes the fixture "none" and emits plain numbers.
 session_row="\`session_list\`, waiting for every running session's status"
+
+# one_head builds a single-live-head fixture: $1 is the dir, $2 the full
+# sha; the caller writes benchmarks-$2/head.json next.
+one_head() {
+  mkdir -p "$1"
+  jq -n --arg a "$2" '{total_count: 1, artifacts: [{name: ("benchmarks-" + $a), expired: false, workflow_run: {head_branch: "main", head_repository_id: 7, repository_id: 7}}]}' >"$1/listing.json"
+  mkdir -p "$1/benchmarks-$2"
+}
+
 slist=$tmp/slist
-mkdir -p "$slist"
-# The two heads below are written by hand, plain numbers only.
+# The head below is written by hand, plain numbers only.
 fast_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-fast_b="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-mkdir -p "$slist/benchmarks-$fast_a" "$slist/benchmarks-$fast_b"
+one_head "$slist" "$fast_a"
 printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, 26.1]}}\n' >"$slist/benchmarks-$fast_a/head.json"
-printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [24.1, 24.3, 24.0, 24.2, 24.4]}}\n' >"$slist/benchmarks-$fast_b/head.json"
-jq -n --arg a "$fast_a" --arg b "$fast_b" '{total_count: 2, artifacts: [{name: ("benchmarks-" + $a), expired: false, workflow_run: {head_branch: "main", head_repository_id: 7, repository_id: 7}}, {name: ("benchmarks-" + $b), expired: false, workflow_run: {head_branch: "main", head_repository_id: 7, repository_id: 7}}]}' >"$slist/listing.json"
 
 # The accepted row+none pair emits the fixture's plain numbers.
 if ! scripts/class-data fast "$session_row" none "$slist" >"$tmp/slist.json" 2>"$err"; then
   echo "scripts/test-class-data: class-data fast session_list none failed:" >&2; cat "$err" >&2; exit 1
 fi
-[ "$(grep -c '"file"' "$tmp/slist.json" || true)" -eq 2 ] || fail "session_list output has no two entries:"
-grep -Fq '"file": "main aaaaaaaa", "samples": [25.8, 25.4, 25, 26, 26.1]' "$tmp/slist.json" || fail "session_list output lost the first head's samples"
-grep -Fq '"file": "main bbbbbbbb", "samples": [24.1, 24.3, 24, 24.2, 24.4]' "$tmp/slist.json" || fail "session_list output lost the second head's samples"
+[ "$(grep -c '"file"' "$tmp/slist.json" || true)" -eq 1 ] || fail "session_list output has no single entry:"
+grep -Fq '"file": "main aaaaaaaa", "samples": [25.8, 25.4, 25, 26, 26.1]' "$tmp/slist.json" || fail "session_list output lost the head's samples"
 
 # A fixture value for the session_list row exits 2, as does the bare id.
 rc=0
@@ -213,6 +217,7 @@ if ! scripts/class-data fast "$session_row" none "$smixed" >"$tmp/sfast.json" 2>
 fi
 [ "$(grep -c '"file"' "$tmp/sfast.json" || true)" -eq 1 ] || fail "fast session_list output over the mixed fixture has no single entry"
 grep -Fq '"file": "main cccccccc"' "$tmp/sfast.json" || fail "fast session_list output lost the fast head"
+grep -Fq '"samples": [25.8, 25.4, 25, 26, 26.1]' "$tmp/sfast.json" || fail "fast session_list output lost the plain-number formatting"
 grep -Fq "dddddddd" "$tmp/sfast.json" && fail "fast session_list output holds the 7763 head"
 grep -Fq "eeeeeeee" "$tmp/sfast.json" && fail "fast session_list output holds the 9V74 head"
 if ! scripts/class-data slow "$session_row" none "$smixed" >"$tmp/sslow.json" 2>"$err"; then
@@ -234,9 +239,7 @@ grep -Fq "eeeeeeee" "$tmp/sattach.json" && fail "slow attaching output holds the
 
 # A session_list head without the metric contributes no entry.
 nometric=$tmp/nometric
-mkdir -p "$nometric"
-jq -n --arg a "$fast_a" '{total_count: 1, artifacts: [{name: ("benchmarks-" + $a), expired: false, workflow_run: {head_branch: "main", head_repository_id: 7, repository_id: 7}}]}' >"$nometric/listing.json"
-mkdir -p "$nometric/benchmarks-$fast_a"
+one_head "$nometric" "$fast_a"
 printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {}}\n' >"$nometric/benchmarks-$fast_a/head.json"
 if ! scripts/class-data fast "$session_row" none "$nometric" >"$tmp/nometric.json" 2>"$err"; then
   echo "scripts/test-class-data: class-data over the metric-less session_list fixture failed:" >&2; cat "$err" >&2; exit 1
@@ -246,9 +249,7 @@ fi
 # A session_list entry shaped like an object, not a plain number, fails
 # the run instead of emitting silently: array-of-objects and bare object.
 objshape=$tmp/objshape
-mkdir -p "$objshape"
-jq -n --arg a "$fast_a" '{total_count: 1, artifacts: [{name: ("benchmarks-" + $a), expired: false, workflow_run: {head_branch: "main", head_repository_id: 7, repository_id: 7}}]}' >"$objshape/listing.json"
-mkdir -p "$objshape/benchmarks-$fast_a"
+one_head "$objshape" "$fast_a"
 printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [{"ms": 25.8}]}}\n' >"$objshape/benchmarks-$fast_a/head.json"
 rc=0
 scripts/class-data fast "$session_row" none "$objshape" >/dev/null 2>"$err" || rc=$?
@@ -261,18 +262,10 @@ scripts/class-data fast "$session_row" none "$objshape" >/dev/null 2>"$err" || r
 # session_list_rejects_non_finite_or_negative_sample: a -1, NaN or
 # infinite plain-number sample fails the run instead of emitting.
 badnum=$tmp/badnum
-mkdir -p "$badnum"
-jq -n --arg a "$fast_a" '{total_count: 1, artifacts: [{name: ("benchmarks-" + $a), expired: false, workflow_run: {head_branch: "main", head_repository_id: 7, repository_id: 7}}]}' >"$badnum/listing.json"
-mkdir -p "$badnum/benchmarks-$fast_a"
-printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, -1]}}\n' >"$badnum/benchmarks-$fast_a/head.json"
-rc=0
-scripts/class-data fast "$session_row" none "$badnum" >/dev/null 2>"$err" || rc=$?
-[ "$rc" -eq 1 ] || fail "session_list_rejects_non_finite_or_negative_sample: -1 exited $rc, want 1"
-printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, NaN]}}\n' >"$badnum/benchmarks-$fast_a/head.json"
-rc=0
-scripts/class-data fast "$session_row" none "$badnum" >/dev/null 2>"$err" || rc=$?
-[ "$rc" -eq 1 ] || fail "session_list_rejects_non_finite_or_negative_sample: NaN exited $rc, want 1"
-printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, 1e999]}}\n' >"$badnum/benchmarks-$fast_a/head.json"
-rc=0
-scripts/class-data fast "$session_row" none "$badnum" >/dev/null 2>"$err" || rc=$?
-[ "$rc" -eq 1 ] || fail "session_list_rejects_non_finite_or_negative_sample: infinite exited $rc, want 1"
+one_head "$badnum" "$fast_a"
+for bad in -1 NaN 1e999; do
+  printf '{"cpu": "AMD EPYC 9V45 96-Core Processor", "schema": 1, "runs": 5, "metrics": {"session_list_ms": [25.8, 25.4, 25.0, 26.0, %s]}}\n' "$bad" >"$badnum/benchmarks-$fast_a/head.json"
+  rc=0
+  scripts/class-data fast "$session_row" none "$badnum" >/dev/null 2>"$err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "session_list_rejects_non_finite_or_negative_sample: $bad exited $rc, want 1"
+done

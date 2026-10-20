@@ -58,25 +58,51 @@ case $class in
     ;;
 esac
 
-# The supported rows and their metrics: attaching reads {fixture, ms}
-# objects filtered by fixture, session_list reads plain-number samples.
-attach_row="Terminal to its first frame, attaching"
-session_row="\`session_list\`, waiting for every running session's status"
-if [ "$row" = "$attach_row" ]; then
-  metric=terminal_attach_ms
-  if [ "$fixture" != "10 MiB" ]; then
-    usage
-    exit 2
+# The supported rows as entries: name|metric|fixture|second slow-class CPU.
+# Attaching reads {fixture, ms} objects filtered by fixture, session_list
+# reads plain-number samples. The attach row keeps its single-CPU class
+# filter, so its fourth field stays empty.
+rows=(
+  "Terminal to its first frame, attaching|terminal_attach_ms|10 MiB|"
+  "\`session_list\`, waiting for every running session's status|session_list_ms|none|$slow_second_model"
+)
+metric=""
+want_fixture=""
+row_second=""
+for entry in "${rows[@]}"; do
+  IFS='|' read -r name m f alt <<<"$entry"
+  if [ "$row" = "$name" ]; then
+    metric=$m
+    want_fixture=$f
+    row_second=$alt
+    break
   fi
-elif [ "$row" = "$session_row" ]; then
-  metric=session_list_ms
-  if [ "$fixture" != "none" ]; then
-    usage
-    exit 2
-  fi
-else
+done
+if [ -z "$metric" ]; then
   usage
   exit 2
+fi
+if [ "$fixture" != "$want_fixture" ]; then
+  usage
+  exit 2
+fi
+# The class admits one CPU, plus the row's second slow-class CPU when this
+# run is slow: settled once here, never re-tested per file.
+second=$model
+if [ "$class" = "slow" ] && [ -n "$row_second" ]; then
+  second=$row_second
+fi
+# The extraction filter, chosen once by metric shape: plain numbers for
+# session_list_ms, the .fixture filter for terminal_attach_ms.
+# shellcheck disable=SC2016 # $id and $fixture expand in jq, not the shell.
+if [ "$metric" = "session_list_ms" ]; then
+  extract='(.metrics[$id] // []) as $vals
+    | if ($vals | type) != "array" then error("\($id): not an array")
+      elif ([$vals[] | select(type != "number" or isnan or ((isfinite | not)) or . < 0)] | length) > 0 then error("\($id): not a finite number at or above zero")
+      else [$vals[] | ((. * 1000 | round) / 1000 | tostring)] | join(", ")
+      end'
+else
+  extract='[.metrics[$id] // [] | .[] | select(.fixture == $fixture) | ((.ms * 1000 | round) / 1000 | tostring)] | join(", ")'
 fi
 
 lines=$(mktemp)
@@ -89,9 +115,10 @@ trap cleanup EXIT
 
 # Prints the class line for one artifact: $1 is the artifact name, $2 its
 # head.json. Skips what is not this class's data: a foreign name, a CPU
-# outside the class, or no samples for the row. A head.json that cannot
-# be read is a read failure. A session_list_ms sample that is not a plain
-# finite number at or above zero fails the run instead of emitting.
+# outside the admitted set, or no samples for the row. A head.json that
+# cannot be read is a read failure. A session_list_ms sample that is not
+# a plain finite number at or above zero fails the run instead of
+# emitting; the extraction filter above already encodes that.
 emit() {
   local name=$1 head=$2
   case $name in
@@ -102,27 +129,11 @@ emit() {
   local short=${full:0:8}
   local cpu
   cpu=$(jq -r '.cpu // "" | ascii_downcase' "$head") || return 1
-  if [ "$metric" = "session_list_ms" ] && [ "$class" = "slow" ]; then
-    if [ "$cpu" != "$model" ] && [ "$cpu" != "$slow_second_model" ]; then
-      return 0
-    fi
-  elif [ "$cpu" != "$model" ]; then
+  if [ "$cpu" != "$model" ] && [ "$cpu" != "$second" ]; then
     return 0
   fi
   local samples
-  if [ "$metric" = "session_list_ms" ]; then
-    samples=$(jq -r --arg id "$metric" '
-      (.metrics[$id] // []) as $vals
-      | if ($vals | type) != "array" then error("\($id): not an array")
-        elif ([$vals[] | select(type != "number" or isnan or ((isfinite | not)) or . < 0)] | length) > 0 then error("\($id): not a finite number at or above zero")
-        else [$vals[] | ((. * 1000 | round) / 1000 | tostring)] | join(", ")
-        end' \
-      "$head") || return 1
-  else
-    samples=$(jq -r --arg id "$metric" --arg fixture "$fixture" \
-      '[.metrics[$id] // [] | .[] | select(.fixture == $fixture) | ((.ms * 1000 | round) / 1000 | tostring)] | join(", ")' \
-      "$head") || return 1
-  fi
+  samples=$(jq -r --arg id "$metric" --arg fixture "$fixture" "$extract" "$head") || return 1
   if [ -z "$samples" ]; then
     return 0
   fi
