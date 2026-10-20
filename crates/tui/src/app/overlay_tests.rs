@@ -2863,3 +2863,100 @@ fn seq_zero_with_no_parent_pends_no_seam() {
         "the root's first line names no parent"
     );
 }
+
+/// A `session_started` past seq zero names no parent: `forked_from`
+/// needs the kind and seq zero together. Kills the `||` to `&&`
+/// mutant, which would read the parent off a later `session_started`.
+#[test]
+fn a_session_started_past_seq_zero_names_no_parent() {
+    use crate::app::overlay::Tail;
+    let mut held = segment_lines(SESSION, 1, Some((ANCESTOR, 9)));
+    held[0].seq = Some(contract::Seq(5));
+    let mut tail = Tail::new();
+    tail.prepend(held)
+        .unwrap_or_else(|_| panic!("the held run"));
+    assert!(
+        tail.forked_from().is_none(),
+        "seq 5 is not the segment's first line"
+    );
+    // The parent lookup misses, so a chunk across the seam is
+    // refused even under the named point: the mutant would accept it.
+    let ancestor = segment_lines(ANCESTOR, 5, None);
+    assert!(
+        tail.prepend(ancestor).is_err(),
+        "no parent crosses the seam"
+    );
+}
+
+/// A non-`session_started` first line at seq zero names no parent:
+/// `forked_from` needs the kind and seq zero together. Kills the `||`
+/// to `&&` mutant, which would read the parent off another kind.
+#[test]
+fn a_non_session_started_first_line_at_seq_zero_names_no_parent() {
+    use crate::app::overlay::Tail;
+    let Line::Session(mut first) = line(
+        "usage_recorded",
+        0,
+        None,
+        json!({"forked_from": {"session_id": ANCESTOR, "seq": 9}}),
+    ) else {
+        panic!("a session line");
+    };
+    first.session_id = id(SESSION);
+    let mut tail = Tail::new();
+    tail.prepend(vec![first])
+        .unwrap_or_else(|_| panic!("the held run"));
+    assert!(tail.start_reached(), "seq zero ends the segment");
+    assert!(tail.forked_from().is_none(), "another kind names no parent");
+    assert!(
+        !tail.seam_pending(),
+        "another kind at seq zero pends no seam"
+    );
+    assert!(tail.chain_done(), "another kind at seq zero ends the walk");
+}
+
+/// An older chunk above the named point is refused: `prepend` rejects
+/// a newest seq strictly greater than the held run's `forked.seq`.
+/// Kills the `>` to `<` mutant, which would accept the chunk above.
+#[test]
+fn an_older_chunk_above_the_named_point_is_refused() {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    tail.prepend(segment_lines(SESSION, 10, Some((ANCESTOR, 9))))
+        .unwrap_or_else(|_| panic!("the held run"));
+    let above = segment_lines(ANCESTOR, 11, None);
+    assert_eq!(
+        above.last().and_then(|line| line.seq),
+        Some(contract::Seq(10)),
+        "the chunk's newest sits above the point"
+    );
+    assert!(
+        tail.prepend(above).is_err(),
+        "a newest seq above the point is refused"
+    );
+}
+
+/// An older chunk ending at the named point is accepted: `prepend`
+/// only refuses above it, so `>` does not fire at equality. Pins the
+/// contiguity edge beside the refusal above.
+#[test]
+fn an_older_chunk_ending_at_the_named_point_is_accepted() {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    tail.prepend(segment_lines(SESSION, 10, Some((ANCESTOR, 9))))
+        .unwrap_or_else(|_| panic!("the held run"));
+    let at_point = segment_lines(ANCESTOR, 10, None);
+    assert_eq!(
+        at_point.last().and_then(|line| line.seq),
+        Some(contract::Seq(9)),
+        "the chunk's newest sits on the point"
+    );
+    assert!(
+        tail.prepend(at_point).is_ok(),
+        "a newest seq on the point crosses"
+    );
+    assert!(
+        !tail.seam_pending(),
+        "the crossing lands on the ancestor's first line"
+    );
+}
