@@ -55,7 +55,8 @@ impl Setup {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
-            root: fakes::TempDir::new("fiber-ext-damaged"),
+            // A short root: socket paths under a Fiber home are limited to SUN_LEN bytes.
+            root: fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-ext-damaged"),
         };
         fs::create_dir_all(setup.home()).unwrap();
         setup.source("healthy", "acme");
