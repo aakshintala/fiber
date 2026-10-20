@@ -964,3 +964,27 @@ fn the_recorded_full_sha_reinstalls_and_a_short_commit_is_refused() {
     let (_, commit) = record_commit(&home, "github.com/aakshintala/fiber/extensions/memory");
     assert_eq!(commit, head);
 }
+
+/// `fiber --version` prints the version alone when no commit was recorded
+/// (`docs/releasing.md`, "Versions"): a build with no git history, such
+/// as a source tarball or a mutation-testing copy, leaves `FIBER_COMMIT`
+/// unset, so the line is `fiber <version>` with no commit suffix. With a
+/// recorded commit the line names its first 7 characters.
+#[test]
+fn version_prints_the_version_alone_without_a_recorded_commit() {
+    let release = Release::serve();
+    let version = release.fiber(&["--version"], &[]);
+    assert_eq!(version.code, Some(0), "{}", version.stderr);
+    match option_env!("FIBER_COMMIT").filter(|commit| !commit.is_empty()) {
+        Some(commit) => assert_eq!(
+            version.stdout,
+            format!("fiber {VERSION} ({})\n", commit.get(..7).unwrap_or(commit)),
+            "--version names the recorded commit's first 7 characters"
+        ),
+        None => assert_eq!(
+            version.stdout,
+            format!("fiber {VERSION}\n"),
+            "--version without a recorded commit is the version alone"
+        ),
+    }
+}

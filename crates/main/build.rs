@@ -2,8 +2,9 @@
 //! (`docs/releasing.md`, "Versions"). With no git history, such as a
 //! source tarball or a mutation-testing copy, the lookup fails and
 //! `FIBER_COMMIT` stays unset, so `fiber --version` prints
-//! `fiber <version>`; a present-but-malformed SHA leaves it unset too.
+//! `fiber <version>`; a present-but-malformed SHA fails the build.
 
+#![allow(clippy::panic, reason = "a build script fails the build by panicking")]
 #![allow(
     clippy::print_stdout,
     reason = "cargo reads build-script instructions from stdout"
@@ -28,10 +29,10 @@ fn main() {
     {
         println!("cargo:rerun-if-changed={path}");
     }
-    // A present-but-malformed SHA leaves `FIBER_COMMIT` unset, as with
-    // no git history: `rev-parse HEAD` either prints a full SHA or fails.
     if is_commit(&commit) {
         println!("cargo:rustc-env=FIBER_COMMIT={commit}");
+    } else {
+        panic!("FIBER_COMMIT: `{commit}` is not a commit SHA.");
     }
 }
 
