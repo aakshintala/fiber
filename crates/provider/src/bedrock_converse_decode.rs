@@ -24,7 +24,8 @@ pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply
 }
 
 /// As [`decode`], also carrying what the stream had seen when it failed: its
-/// usage so far, under no generation, since Converse names none.
+/// usage so far, under no generation, since no event names one; the call
+/// names it from the response's `x-amzn-requestid`.
 #[allow(
     clippy::result_large_err,
     reason = "the decode carries its partial alongside the error for the call's usage"

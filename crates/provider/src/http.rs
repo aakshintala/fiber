@@ -131,7 +131,8 @@ impl Route {
 /// POSTs `body` to `url` with the headers `signer` adds for this request,
 /// and returns the response body to read with the response's
 /// `x-should-retry` header, which also governs a failure the body reports
-/// later; or the failure a non-2xx status reports. `route` chooses the
+/// later, and its `x-amzn-requestid`; or the failure a non-2xx status
+/// reports. `route` chooses the
 /// proxy and the socket limits: `Via::Environment` reads
 /// `ureq::Proxy::try_from_env()` at the call, so tests pass an explicit
 /// [`Via::Through`] value instead.
@@ -143,15 +144,15 @@ pub(crate) fn post_signed(
     route: &Route,
     cancel: &Arc<Cancel>,
     secrets: &mut Secrets,
-) -> Result<(impl Read + use<>, Option<bool>), Error> {
+) -> Result<(impl Read + use<>, Option<bool>, Option<String>), Error> {
     let signed = prepare(url, headers, body, signer, cancel, secrets)?;
     let (result, _) = send(url, headers, &signed, body, route, cancel, None);
     let response = result?;
-    let (status, should_retry) = head(&response);
+    let (status, should_retry, request_id) = head(&response);
     if !(200..300).contains(&status) {
         return Err(status_error(response, url, should_retry, status));
     }
-    Ok((response.into_body().into_reader(), should_retry))
+    Ok((response.into_body().into_reader(), should_retry, request_id))
 }
 
 /// Signs the request and checks every header that will be sent: the fixed
@@ -267,18 +268,20 @@ struct SendObservation<'a> {
     clock: &'a Arc<dyn Clock>,
     timing: Option<&'a Timing>,
 }
-/// A response's status with its `x-should-retry` header, read once the
-/// status line and headers have arrived.
-fn head(response: &ureq::http::Response<ureq::Body>) -> (u16, Option<bool>) {
-    let header = |name: &str| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.trim().to_ascii_lowercase())
-    };
-    let should_retry = header("x-should-retry").and_then(|v| v.parse::<bool>().ok());
-    (response.status().as_u16(), should_retry)
+/// A response's status with its `x-should-retry` header and AWS's
+/// `x-amzn-requestid`, kept only when it is not empty, read once
+/// the status line and headers have arrived. A protocol that takes the
+/// request id as its generation's says so on its call
+/// (`docs/model-routing.md`, "Bedrock Converse wire facts").
+fn head(response: &ureq::http::Response<ureq::Body>) -> (u16, Option<bool>, Option<String>) {
+    let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok());
+    let should_retry = header("x-should-retry")
+        .map(|v| v.trim().to_ascii_lowercase())
+        .and_then(|v| v.parse::<bool>().ok());
+    let request_id = header("x-amzn-requestid")
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned);
+    (response.status().as_u16(), should_retry, request_id)
 }
 
 /// One non-2xx response's header fields: the parsed `retry-after` wait,
@@ -443,10 +446,12 @@ pub(crate) struct ObservedFailure {
 }
 
 /// What the observed send reports on success: the counted body with the
-/// response's `x-should-retry` header and the send milestones.
+/// response's `x-should-retry` and `x-amzn-requestid` headers and the send
+/// milestones.
 pub(crate) struct ObservedSend {
     pub(crate) stream: CountingReader<ureq::BodyReader<'static>>,
     pub(crate) should_retry: Option<bool>,
+    pub(crate) request_id: Option<String>,
     pub(crate) status: u16,
     pub(crate) start: Instant,
     pub(crate) headers_at: Instant,
@@ -495,7 +500,7 @@ pub(crate) fn post_signed_observed(
         }),
     })?;
     let headers_at = clock.now();
-    let (status, should_retry) = head(&response);
+    let (status, should_retry, request_id) = head(&response);
     if !(200..300).contains(&status) {
         return Err(observed_status_error(
             response,
@@ -509,6 +514,7 @@ pub(crate) fn post_signed_observed(
     Ok(ObservedSend {
         stream: CountingReader::new(response.into_body().into_reader()),
         should_retry,
+        request_id,
         status,
         start,
         headers_at,

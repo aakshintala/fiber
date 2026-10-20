@@ -20,7 +20,7 @@ use contract::provider::{
     CallError, Delta, Finish, ImageRef, Input, ModelRequest, PdfRef, Provider, Reply, ReplyAction,
     ToolDefinition,
 };
-use contract::{ActionId, ErrorCode, ProviderCallId, ThinkingLevel};
+use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId, ThinkingLevel};
 use fakes::{ProviderServer, Response, fingerprint};
 use provider::bedrock_converse::Converse;
 use provider::{Compat, Endpoint, ReasoningField};
@@ -68,6 +68,18 @@ fn stream(body: &[u8]) -> Response {
         drop_connection: false,
         stall: false,
     }
+}
+
+/// A synthetic request id: a fixed fake UUID, never one AWS issued.
+const REQUEST_ID: &str = "11111111-2222-4333-8444-555555555555";
+
+/// As [`stream`], naming the request in `x-amzn-RequestId` as AWS does.
+fn stream_named(body: &[u8], request_id: &str) -> Response {
+    let mut response = stream(body);
+    response
+        .headers
+        .push(("x-amzn-RequestId".to_owned(), request_id.to_owned()));
+    response
 }
 
 /// The reply `body` decodes into, with its deltas, through one call.
@@ -811,4 +823,91 @@ fn a_recorded_error_reply_is_classified_by_its_x_amzn_errortype() {
         assert_eq!(failure.code, code, "{said}");
         assert_eq!(failure.provider.unwrap().message, said);
     }
+}
+
+#[test]
+fn the_responses_request_id_names_the_generation_and_a_missing_or_empty_one_leaves_it_unnamed() {
+    for (response, named) in [
+        (
+            stream_named(PLAIN, REQUEST_ID),
+            Some(GenerationId(REQUEST_ID.into())),
+        ),
+        (stream_named(PLAIN, ""), None),
+        (stream(PLAIN), None),
+    ] {
+        let server = ProviderServer::start([response]).unwrap();
+        let (reply, _) = run(Converse::new(endpoint(&server)).call(&harness::request()));
+        let reply = reply.unwrap();
+        assert_eq!(reply.generation_id, named);
+        assert_eq!(reply.text(), "Hello! How\u{2019}s it goin\u{2019} now?");
+    }
+}
+
+#[test]
+fn a_stream_that_fails_after_the_head_still_names_its_generation() {
+    // The recording without its last message, `metadata`.
+    let mut at = 0;
+    let mut ends = Vec::new();
+    while at < PLAIN.len() {
+        at += usize::try_from(u32::from_be_bytes(PLAIN[at..at + 4].try_into().unwrap())).unwrap();
+        ends.push(at);
+    }
+    let cut = &PLAIN[..ends[ends.len() - 2]];
+    let server = ProviderServer::start([stream_named(cut, REQUEST_ID)]).unwrap();
+    let (reply, _) = run(Converse::new(endpoint(&server)).call(&harness::request()));
+    let Err(CallError::Failed { failure, usage, .. }) = reply else {
+        panic!("expected a failure: {reply:?}");
+    };
+    assert_eq!(failure.code, ErrorCode::StreamIncomplete);
+    assert_eq!(usage.generation_id, Some(GenerationId(REQUEST_ID.into())));
+}
+
+/// A debug writer that keeps nothing, so a call runs observed.
+struct Debugging;
+
+impl contract::diag::DebugLog for Debugging {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn provider_request(&self, _: &contract::diag::ProviderRequest) {}
+}
+
+#[test]
+fn an_observed_call_names_its_generation_from_the_request_id_too() {
+    let server = ProviderServer::start([stream_named(PLAIN, REQUEST_ID)]).unwrap();
+    let observation = provider::RequestObservation::new(
+        std::sync::Arc::new(Debugging),
+        fakes::clock::FakeClock::new(),
+        std::num::NonZeroU32::MIN,
+    );
+    let call = Converse::new(endpoint(&server)).call_observed(&harness::request(), observation);
+    let (reply, _) = run(call);
+    assert_eq!(
+        reply.unwrap().generation_id,
+        Some(GenerationId(REQUEST_ID.into()))
+    );
+}
+
+#[test]
+fn another_protocol_never_takes_the_request_id_as_its_generation() {
+    // A Chat Completions stream that names no generation, behind a gateway
+    // that adds `x-amzn-RequestId`.
+    let body = harness::completions_sse(&[
+        json!({"object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}]}),
+        json!({"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 1}}),
+    ]);
+    let mut response = Response::stream(body);
+    response
+        .headers
+        .push(("x-amzn-RequestId".to_owned(), REQUEST_ID.to_owned()));
+    let server = ProviderServer::start([response]).unwrap();
+    let (reply, _) = run(Box::new(
+        provider::openai_completions::Completions::new(harness::endpoint("gateway", &server))
+            .request(&harness::request()),
+    ));
+    let reply = reply.unwrap();
+    assert_eq!(reply.text(), "hi");
+    assert_eq!(reply.generation_id, None);
 }

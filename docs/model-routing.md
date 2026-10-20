@@ -394,8 +394,13 @@ signed reasoning block (`research/bedrock-converse-probe`).
   input beside 2,121 read. `cacheReadInputTokens` is the call's `cache_read`,
   and `cacheWriteInputTokens` a write under `"5m"`, the lifetime of a
   `cachePoint` sent without `ttl` (`docs/prompt-cache.md`, "Cache markers and
-  keys"). No reply carried the `cacheDetails` AWS documents. No event names
-  the generation.
+  keys"). No reply carried the `cacheDetails` AWS documents.
+- Converse names no generation in its stream. Fiber takes the response's
+  `x-amzn-RequestId` header, AWS's id for the call, as the generation id, so
+  the model's declared prices apply ("Cost"). A 200 stream and a 400 error
+  both carried one, a UUID. A response without it, or with an empty one,
+  leaves the generation unnamed: Fiber mints its id, and the call is
+  unpriced.
 - A failure before the stream names its exception in `X-Amzn-ErrorType`, and
   one during it is an `exception` message, as on Invoke (`docs/errors.md`,
   "Recognising an AWS exception"). An unknown model id answered 400

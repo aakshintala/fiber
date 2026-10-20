@@ -64,15 +64,42 @@ fn run(setup: &Setup, args: &[&str], env: &[(&str, &str)]) -> Run {
     ))
 }
 
-/// The fake server answering once with `body` as Bedrock frames it, and the
+/// A synthetic request id: a fixed fake UUID, never one AWS issued.
+const REQUEST_ID: &str = "11111111-2222-4333-8444-555555555555";
+
+/// The event kinds of one Converse turn that answers in text.
+const CONVERSE_TURN: [&str; 15] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "extension_exec",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// The fake server answering once with `body` as Bedrock frames it, naming
+/// the request in `x-amzn-RequestId` when `request_id` is set, and the
 /// installed package's region: the server's host, read from `AWS_REGION`.
-fn bedrock(setup: &Setup, body: &[u8]) -> (ProviderServer, String) {
+fn bedrock(setup: &Setup, body: &[u8], request_id: Option<&str>) -> (ProviderServer, String) {
+    let mut headers = vec![(
+        "content-type".to_owned(),
+        "application/vnd.amazon.eventstream".to_owned(),
+    )];
+    if let Some(id) = request_id {
+        headers.push(("x-amzn-RequestId".to_owned(), id.to_owned()));
+    }
     let server = ProviderServer::start([Response {
         status: 200,
-        headers: vec![(
-            "content-type".to_owned(),
-            "application/vnd.amazon.eventstream".to_owned(),
-        )],
+        headers,
         body: body.to_vec(),
         drop_connection: false,
         stall: false,
@@ -90,7 +117,7 @@ fn bedrock(setup: &Setup, body: &[u8]) -> (ProviderServer, String) {
 #[test]
 fn a_bedrock_api_key_completes_a_turn_on_the_invoke_api() {
     let setup = Setup::new();
-    let (server, host) = bedrock(&setup, PLAIN);
+    let (server, host) = bedrock(&setup, PLAIN, None);
 
     let run = run(
         &setup,
@@ -175,7 +202,7 @@ fn a_bedrock_api_key_completes_a_turn_on_the_invoke_api() {
 #[test]
 fn a_bedrock_api_key_completes_a_turn_on_the_converse_api() {
     let setup = Setup::new();
-    let (server, host) = bedrock(&setup, CONVERSE_PLAIN);
+    let (server, host) = bedrock(&setup, CONVERSE_PLAIN, Some(REQUEST_ID));
 
     let run = run(
         &setup,
@@ -192,26 +219,7 @@ fn a_bedrock_api_key_completes_a_turn_on_the_converse_api() {
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "extension_exec",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ]
-    );
+    assert_eq!(run.kinds(), CONVERSE_TURN);
     // `credential()` reading the environment is logged, but never the key.
     assert_eq!(run.first("extension_exec")["payload"]["program"], "/bin/sh");
     assert!(
@@ -224,9 +232,14 @@ fn a_bedrock_api_key_completes_a_turn_on_the_converse_api() {
         run.first("text_completed")["payload"]["text"],
         "Hello! How\u{2019}s it goin\u{2019} now?"
     );
+    // AWS's request id names the generation, so the model's declared prices
+    // apply: 15 input and 11 output tokens at $0.15 per million each.
     let usage = &run.first("usage_recorded")["payload"];
+    assert_eq!(usage["generation_id"], REQUEST_ID);
     assert_eq!(usage["tokens"]["input"], 15);
     assert_eq!(usage["tokens"]["output"], 11);
+    let cost = usage["cost"].as_f64().unwrap();
+    assert!((cost - 26.0 * 0.15 / 1e6).abs() < 1e-12, "{cost}");
 
     let requests = server.requests();
     assert_eq!(requests.len(), 1, "{requests:?}");
@@ -262,4 +275,32 @@ fn a_bedrock_api_key_completes_a_turn_on_the_converse_api() {
         "{body}"
     );
     assert_eq!(body["messages"][0]["role"], "user");
+}
+
+#[test]
+fn a_converse_reply_without_a_request_id_is_minted_its_id_and_left_unpriced() {
+    let setup = Setup::new();
+    let (_server, host) = bedrock(&setup, CONVERSE_PLAIN, None);
+
+    let run = run(
+        &setup,
+        &[
+            "ask",
+            "--model",
+            "bedrock/mistral.ministral-3-8b-instruct",
+            "hi",
+        ],
+        &[
+            ("AWS_BEARER_TOKEN_BEDROCK", "bedrock-test-key"),
+            ("AWS_REGION", &host),
+        ],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), CONVERSE_TURN);
+    let usage = &run.first("usage_recorded")["payload"];
+    let id = usage["generation_id"].as_str().unwrap();
+    assert!(id.starts_with("fiber-"), "{id}");
+    assert_eq!(usage["tokens"]["input"], 15);
+    assert_eq!(usage["cost"], Value::Null);
 }

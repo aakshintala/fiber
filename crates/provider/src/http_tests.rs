@@ -233,7 +233,7 @@ fn called(
             &mut secrets,
         );
         let outcome = match sent {
-            Ok((mut stream, flag)) => {
+            Ok((mut stream, flag, _)) => {
                 let mut text = String::new();
                 match std::io::Read::read_to_string(&mut stream, &mut text) {
                     Ok(_) => Ok((text, flag)),
@@ -595,7 +595,7 @@ fn proxy_child_main() {
         },
         limits: net::LIMITS,
     };
-    let (mut body, _) = super::post_signed(
+    let (mut body, _, _) = super::post_signed(
         &format!("{url}/v1"),
         &[],
         b"{}",

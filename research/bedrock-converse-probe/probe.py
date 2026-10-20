@@ -269,6 +269,12 @@ class Run:
             # price, so the record holds the timeout alone.
             status, raw, got = "timeout", b"", {}
         kept = {k.lower(): v for k, v in got.items() if k.lower() in ("content-type", "x-amzn-errortype")}
+        # The request id is kept only as a synthetic value and its shape,
+        # never as it came.
+        request_id = next((v for k, v in got.items() if k.lower() == "x-amzn-requestid"), None)
+        if request_id is not None:
+            kept["x-amzn-requestid"] = "00000000-0000-0000-0000-000000000000"
+            kept["x-amzn-requestid-shape"] = "uuid" if UUID.fullmatch(request_id.strip()) else f"{len(request_id)} characters"
         record = {
             "case": name,
             "model": model,
@@ -672,6 +678,13 @@ def case_classify(run):
                  body([user(text("Call get_weather for Paris."))], max_tokens=cap, tools=[WEATHER]))
 
 
+def case_request_id(run):
+    """Whether a reply names its request in `x-amzn-RequestId`, on a 200
+    stream and on an error."""
+    run.call("request-id", MINISTRAL, body([user(text("Say ok."))], max_tokens=8))
+    run.call("request-id-error", "mistral.nonexistent-v9:0", body([user(text("hi"))]))
+
+
 def case_errors(run):
     run.call("bad-model", "mistral.nonexistent-v9:0", body([user(text("hi"))]))
     run.call("validation", MINISTRAL, body([user(text("hi"))], max_tokens=0))
@@ -695,6 +708,7 @@ CASES = {
     "shapes": case_shapes,
     "errors": case_errors,
     "classify": case_classify,
+    "request-id": case_request_id,
 }
 
 
@@ -730,7 +744,8 @@ def rescrub(account):
         with open(os.path.join(RAW, name), "rb") as f:
             data = f.read()
         assert not leaks(data, account), name
-        assert not UUID.search(data.decode(errors="replace")), name
+        found = UUID.findall(data.decode(errors="replace"))
+        assert all(set(u) <= set("0-") for u in found), name
 
 
 def main():

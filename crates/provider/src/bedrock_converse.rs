@@ -58,6 +58,9 @@ impl Converse {
             body(endpoint, request),
             |stream, _, sink| decode_tracked(stream, sink),
         )
+        // No event names the generation: AWS's id for the request does
+        // (`docs/model-routing.md`, "Bedrock Converse wire facts").
+        .named_by_request_id()
     }
 
     /// Builds the observed call for `request`: as the plain request, writing

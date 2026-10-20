@@ -37,8 +37,9 @@ only). No resource was created and no model access was requested.
 ## Spend
 
 Prices are models.dev's `amazon-bedrock` entry, per million tokens. The probe
-kept a running total in `raw/spent.json`: $0.025472. The saved records sum to
-$0.025032; the difference is a first `tool-results` run whose records were
+kept a running total in `raw/spent.json`: $0.025474, the request-id check's
+$0.000002 included. The saved records sum to
+$0.025034; the difference is a first `tool-results` run whose records were
 overwritten when it was rerun with a valid tool-use id. One check,
 `nvidia.nemotron-super-3-120b`, timed out with no reply to price; at its
 200-token cap it cost at most $0.00015.
@@ -54,8 +55,8 @@ overwritten when it was rerun with a valid tool-use id. One check,
 | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | 2 | 128 | 127 | 0 | 0 | $0.000763 |
 | `deepseek.v3.2` | 3 | 727 | 78 | 0 | 0 | $0.000594 |
 | `openai.gpt-oss-20b-1:0` | 13 | 1,615 | 1,234 | 0 | 0 | $0.000483 |
-| `mistral.ministral-3-8b-instruct` | 12 | 726 | 132 | 0 | 0 | $0.000129 |
-| 41 other models and ids, mostly one `classify` check each | 47 | | | | | $0.005303 |
+| `mistral.ministral-3-8b-instruct` | 13 | 738 | 135 | 0 | 0 | $0.000131 |
+| 41 other models and ids, mostly one `classify` check each | 48 | | | | | $0.005303 |
 
 ## The stream
 
@@ -85,7 +86,10 @@ padding.
   `redactedContent` (Grok 4.6 and 4.7). Nova 2 Lite streams the literal text
   `[REDACTED]`. No model other than Claude sent a signature.
 - `messageStop.stopReason` seen: `end_turn`, `tool_use`, `max_tokens`.
-- No event names the generation: there is no message id.
+- No event names the generation: there is no message id. `request-id`,
+  `request-id-error`: the 200 stream and a 400 error each carried an
+  `x-amzn-RequestId` header holding a UUID. The records keep only a
+  synthetic value in its place and its shape.
 - `usage` holds `inputTokens`, `outputTokens`, `totalTokens`,
   `serverToolUsage`, and on a model that caches, `cacheReadInputTokens` and
   `cacheWriteInputTokens` (each repeated as `...TokenCount`). `inputTokens`
@@ -185,8 +189,11 @@ Run the same day with `fiber ask` and the `bedrock` package from the pull
 request that adds `bedrock-converse`, the credential label naming the
 probe's AWS profile (so `credential()` ran `aws configure export-credentials`
 and `sign()` signed with SigV4), `AWS_REGION=ap-south-1`, and an isolated
-Fiber home. Fiber logged `cost: null` for every call, since Converse names no
-generation; the cost below is the tokens at models.dev's prices.
+Fiber home. Fiber logged `cost: null` for every call but the last: those runs
+predate taking `x-amzn-RequestId` as the generation id, so each call's id was
+minted. The last run's id was the request's UUID, and Fiber logged its cost,
+$0.00022267, the tokens at the model's declared prices. The cost column is
+the tokens at models.dev's prices.
 
 | Run | Model | Requests | Input | Cache write | Cache read | Output | Cost |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -196,6 +203,7 @@ generation; the cost below is the tokens at models.dev's prices.
 | the same, again | `apac.amazon.nova-micro-v1:0` | 2 | 0 | 15,362 | 20,324 | 66 | $0.000766 |
 | `:low` | `openai.gpt-oss-20b-1:0` | 1 | 3,038 | | | 15 | $0.000217 |
 | `:high` | `global.amazon.nova-2-lite-v1:0` | 1 | 0 | 18,894 | | 727 | $0.007486 |
+| plain text, priced | `openai.gpt-oss-20b-1:0` | 1 | 3,031 | | | 35 | $0.000223 |
 
 Every run exited 0. The Ministral run sent Bedrock's own `toolUseId` back
 with the result and was answered. In the first Nova Micro run the second
@@ -204,7 +212,7 @@ second request read 17,164 tokens up to the previous request's end, so
 Fiber's markers read when the request lands where the write did. The `:low`
 run's reasoning was one sentence, and the `:high` run, which sends no
 `maxTokens`, streamed `[REDACTED].` before its answer. Fiber's spend:
-$0.011307, for a total with the probe of $0.036779, plus at most $0.00015
+$0.011530, for a total with the probe of $0.037004, plus at most $0.00015
 for the check that timed out.
 
 ## Where AWS's documentation and the recordings differ

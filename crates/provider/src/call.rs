@@ -219,6 +219,10 @@ pub struct Call {
     decode: Decode,
     on_error: fn(Error) -> Error,
     observation: Option<RequestObservation>,
+    /// Whether the response's `x-amzn-requestid` names the generation when
+    /// the stream names none, as on `bedrock-converse`
+    /// (`docs/model-routing.md`, "Bedrock Converse wire facts").
+    named_by_request_id: bool,
 }
 
 impl Call {
@@ -246,7 +250,42 @@ impl Call {
             decode,
             on_error: std::convert::identity,
             observation: None,
+            named_by_request_id: false,
         }
+    }
+
+    /// Takes the response's `x-amzn-requestid` as the generation's id, for a
+    /// protocol whose stream names none. Without the header, or with an
+    /// empty one, the generation stays unnamed and Fiber mints its id.
+    #[must_use]
+    pub(crate) fn named_by_request_id(self) -> Call {
+        Call {
+            named_by_request_id: true,
+            ..self
+        }
+    }
+
+    /// `decoded`, its generation named by `request_id` on a call that takes
+    /// the request id; unchanged on any other call.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the decode carries its partial alongside the error for the call's usage"
+    )]
+    fn named(
+        &self,
+        mut decoded: Result<Reply, (Error, Option<CallUsage>)>,
+        request_id: Option<String>,
+    ) -> Result<Reply, (Error, Option<CallUsage>)> {
+        if !self.named_by_request_id {
+            return decoded;
+        }
+        let generation = match &mut decoded {
+            Ok(reply) => &mut reply.generation_id,
+            Err((_, Some(partial))) => &mut partial.generation_id,
+            Err((_, None)) => return decoded,
+        };
+        *generation = request_id.map(contract::GenerationId);
+        decoded
     }
 
     /// Runs `hook` over a failed send's error, after `should_retry` is
@@ -303,7 +342,7 @@ impl Call {
                     &self.cancel,
                     &mut secrets,
                 )
-                .map(|(body, _)| OpenBody::plain(Box::new(body)))
+                .map(|(body, _, _)| OpenBody::plain(Box::new(body)))
             }
             Some(observation) => self.open_observed(observation),
         }
@@ -402,8 +441,11 @@ impl Call {
             &self.cancel,
             secrets,
         ) {
-            Ok((stream, should_retry)) => (
-                (self.decode)(&mut BufReader::new(stream), self.lifetime, sink),
+            Ok((stream, should_retry, request_id)) => (
+                self.named(
+                    (self.decode)(&mut BufReader::new(stream), self.lifetime, sink),
+                    request_id,
+                ),
                 should_retry,
             ),
             Err(e) => {
@@ -506,7 +548,7 @@ impl Call {
                 // the reader's end, says what came.
                 record.set_bytes(counted.count());
                 finish = Some(record);
-                (decoded, sent.should_retry)
+                (self.named(decoded, sent.request_id), sent.should_retry)
             }
             Err(failed) => {
                 if let Some(dispatched) = failed.sent {
