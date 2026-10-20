@@ -8,6 +8,7 @@ use super::{
 };
 use crate::app::App;
 use crate::link::Line;
+use contract::clock::Clock;
 use contract::{Envelope, Seq};
 use fakes::Deadline;
 use ratatui::backend::TestBackend;
@@ -617,6 +618,162 @@ fn the_paging_report_times_the_resize_and_absent_search() {
         ms("search of the whole log with no match: ") > 0.0,
         "the absent search is timed: {report}"
     );
+}
+
+/// A clock reading a scripted instant per `now()` call: the frame calls
+/// `now()` for `items_due`, the pre-draw sweep and the post-draw sweep
+/// in that order, so the script sets each sweep's instant exactly. No
+/// fake-clock advance and no real-clock read.
+struct ScriptClock {
+    script: Vec<std::time::Instant>,
+    at: std::sync::atomic::AtomicUsize,
+}
+
+impl ScriptClock {
+    fn clock(script: Vec<std::time::Instant>) -> Arc<Self> {
+        Arc::new(Self {
+            script,
+            at: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+}
+
+impl contract::clock::Clock for ScriptClock {
+    fn now(&self) -> std::time::Instant {
+        let at = self.at.fetch_add(1, Ordering::SeqCst);
+        self.script[at.min(self.script.len() - 1)]
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH
+    }
+
+    fn sleep(&self, _d: Duration) {}
+
+    fn wait_until(
+        &self,
+        _until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        wait(Some(Duration::ZERO));
+    }
+
+    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+}
+
+/// The frame sweeps notices before the draw and again before arming.
+/// Frame one's script births the pushed event at the pre-draw sweep,
+/// shows it in the draw, then expires it at the post-draw sweep past
+/// the fade: the draw saw it, but nothing arms and nothing stacks.
+/// Frame two births its event after the fade with a steady clock and
+/// arms its expiry; frame three past that expiry removes it before
+/// the draw, so it never draws. A missing pre-draw sweep would leave
+/// frame one's event unborn at the draw and stacked past the post-draw
+/// expiry; a missing post-draw sweep would stack it and arm its wake.
+#[test]
+fn frames_sweep_notices_before_and_after_the_draw() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let past = origin + crate::app::FADE + Duration::from_secs(1);
+    // Three `now()` reads per frame: `items_due`, the pre-draw sweep,
+    // the post-draw sweep.
+    let clock = ScriptClock::clock(vec![
+        origin,
+        origin,
+        past, // frame one: birth, then expiry
+        past,
+        past,
+        past, // frame two: birth after the fade
+        past + crate::app::FADE + Duration::from_secs(1),
+        past + crate::app::FADE + Duration::from_secs(1),
+        past + crate::app::FADE + Duration::from_secs(1),
+    ]);
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    let prompt = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    let mut seq = 0u64;
+    for (kind, action, payload) in [
+        ("turn_started", None, prompt),
+        (
+            "tool_call_requested",
+            Some("a_t0"),
+            json!({"name": "read", "arguments": {}}),
+        ),
+        (
+            "assistant_message_completed",
+            Some("a_m"),
+            json!({"outcome": "completed"}),
+        ),
+        (
+            "tool_call_completed",
+            Some("a_t0"),
+            json!({"status": "completed", "content": []}),
+        ),
+        ("turn_completed", None, json!({"outcome": "completed"})),
+    ] {
+        seq += 1;
+        app.on_line(Line::Session(line(kind, Some(seq), action, payload)));
+    }
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let screen =
+        Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen,
+        hub: Connection::new(None),
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: clock.clone(),
+        wakeups: 0,
+        files_out: None,
+        search: None,
+        reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
+        paste_reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
+        open_command: None,
+        viewer: Vec::new(),
+        images_dir: PathBuf::new(),
+        title: crate::osc::Title::default(),
+        shape: crate::osc::Shape::default(),
+        tick: crate::tick::TickThread::idle(),
+    };
+    lp.hub.store(ours);
+    drop(theirs);
+    let (_tx, rx) = mpsc::channel();
+    lp.app
+        .push_notice("io_failed", "frame fade probe".to_owned());
+    // Frame one: the pre-draw sweep births the pushed event at the
+    // birth instant, the draw shows it, and the post-draw sweep past
+    // the fade expires it before arming: drawn once, stacked never.
+    assert_eq!(lp.frame(&rx), None);
+    assert!(shown(&lp).contains("frame fade probe"), "{}", shown(&lp));
+    assert!(lp.app.notices().is_empty());
+    assert_eq!(lp.app.take_wake(), None);
+    // Frame two after the fade: the pre-draw sweep births the new push
+    // at its instant and the arm covers its expiry.
+    lp.app.push_notice("io_failed", "second probe".to_owned());
+    assert_eq!(lp.frame(&rx), None);
+    assert!(shown(&lp).contains("second probe"), "{}", shown(&lp));
+    assert_eq!(notice_codes(&lp.app), ["io_failed"]);
+    assert_eq!(lp.app.take_wake(), Some(past + crate::app::FADE));
+    // Frame three past that expiry: the pre-draw sweep removes it
+    // before the draw, so it never draws and nothing arms.
+    assert_eq!(lp.frame(&rx), None);
+    assert!(lp.app.notices().is_empty());
+    assert!(!shown(&lp).contains("second probe"), "{}", shown(&lp));
+    assert_eq!(lp.app.take_wake(), None);
 }
 
 /// A clock that ticks one millisecond per `now()`, so the paging jig's
@@ -2242,4 +2399,115 @@ fn a_disconnect_among_full_batches_ends_the_batch_with_its_own_frame() {
     push_markers(&mut inputs, tail, &mut seq, &mut turn);
     assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
     assert_eq!(flushes.get(), 3);
+}
+
+/// A hub line of `kind` for `session`.
+fn hub_for(kind: &str, session: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: kind.to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"session_id": session})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// The notice rows' codes, oldest first.
+fn notice_codes(app: &App) -> Vec<String> {
+    app.notices()
+        .into_iter()
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { code, .. } => Some(code),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn take_wake_folds_the_notices_wake() {
+    let clock = fakes::clock::FakeClock::new();
+    let t0 = clock.now();
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    // Quiet: no motion, no items, no notices.
+    assert_eq!(app.take_wake(), None);
+    // One event: the wake is its expiry.
+    app.push_notice("io_failed", "x".to_owned());
+    app.sweep_notices(t0);
+    assert_eq!(
+        app.take_wake(),
+        Some(t0 + std::time::Duration::from_secs(10))
+    );
+    // Two staggered events: the earlier expiry wins.
+    app.push_notice("config_invalid", "y".to_owned());
+    app.sweep_notices(t0 + std::time::Duration::from_secs(5));
+    assert_eq!(
+        app.take_wake(),
+        Some(t0 + std::time::Duration::from_secs(10))
+    );
+    // Past the first notice's fade only it expires: the younger notice
+    // stands, and the wake moves to its expiry.
+    app.sweep_notices(t0 + std::time::Duration::from_secs(10));
+    assert_eq!(notice_codes(&app), ["config_invalid"]);
+    assert_eq!(
+        app.take_wake(),
+        Some(t0 + std::time::Duration::from_secs(15))
+    );
+    // Past every fade the wake is gone with the rows.
+    app.sweep_notices(t0 + std::time::Duration::from_secs(15));
+    assert!(app.notices().is_empty());
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
+fn reopen_clears_only_the_closed_sessions_stream_closed() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    // A close for the open session shows; one for another session is not
+    // this terminal's cause.
+    app.on_line(hub_for("stream_closed", SESSION));
+    assert_eq!(notice_codes(&app), ["stream_closed"]);
+    app.on_line(hub_for("stream_closed", "s_bbbbbbbbbbbbbbbb"));
+    assert_eq!(notice_codes(&app), ["stream_closed"]);
+    // Attaching elsewhere drops only the other session's stale row.
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    assert!(app.notices().is_empty());
+    // A close for the now-open session shows until its reopen ends it.
+    app.on_line(hub_for("stream_closed", "s_bbbbbbbbbbbbbbbb"));
+    assert_eq!(notice_codes(&app), ["stream_closed"]);
+    app.on_line(hub_for("stream_reopened", "s_bbbbbbbbbbbbbbbb"));
+    assert!(app.notices().is_empty());
+    // A stale reopen for a session with no row changes nothing.
+    app.on_line(hub_for("stream_reopened", SESSION));
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn login_url_survives_sweeps_and_falls_to_dismiss() {
+    let clock = fakes::clock::FakeClock::new();
+    let t0 = clock.now();
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.push_notice("login_url", "open the link to log in".to_owned());
+    app.push_notice("io_failed", "x".to_owned());
+    app.sweep_notices(t0);
+    // Past the fade the event is gone and the condition stands: no
+    // terminal-visible signal ends it, only the person's ✕ does.
+    app.sweep_notices(t0 + std::time::Duration::from_secs(30));
+    assert_eq!(notice_codes(&app), ["login_url"]);
+    let id = app
+        .notices()
+        .into_iter()
+        .find_map(|line| match line {
+            crate::app::NoticeLine::Notice { id, .. } => Some(id),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .expect("the login row");
+    app.on_click(crate::mouse::TargetId::DismissNotice(id));
+    assert!(app.notices().is_empty());
 }

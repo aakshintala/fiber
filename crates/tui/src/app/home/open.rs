@@ -484,6 +484,11 @@ impl App {
                 }
                 return Some(Vec::new());
             }
+            // The raise's acceptance ends the gate: the full open
+            // succeeded, so a stale close notice for this session ends
+            // with it. A log still cut past here re-pushes
+            // `stream_closed` when its replay reaches the cut.
+            self.notices.clear_code("stream_closed", &session.0);
             if let Some(home) = self.home.as_mut() {
                 home.subs.opening = None;
             }

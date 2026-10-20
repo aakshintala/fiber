@@ -34,6 +34,13 @@ const HISTORY_LINES: u64 = 256;
 /// What a lost connection fails the scan with.
 const LOST: &str = "connection lost";
 
+/// The search-incomplete notice's identity: the text `find_lost` pushes.
+/// Reconnect keeps this text standing; the bar closing or a completed
+/// rescan clears it.
+pub(super) fn search_incomplete_text() -> String {
+    format!("Could not search all of history: {LOST}")
+}
+
 /// The search bar as drawn: its query and its match count.
 pub(crate) struct FindBar {
     /// What was typed into the bar.
@@ -569,10 +576,8 @@ impl App {
     /// incomplete with the notice that says why.
     pub(in crate::app) fn find_lost(&mut self) {
         if self.find.lose() {
-            self.notices.push(
-                "connection_failed",
-                format!("Could not search all of history: {LOST}"),
-            );
+            self.notices
+                .push("connection_failed", search_incomplete_text());
         }
     }
 
@@ -591,6 +596,10 @@ impl App {
         }
         let old = self.find.current().cloned();
         let old_selected = self.find.selected_match();
+        // A dropped page answers into the scratch scan, never into the
+        // resident set, so the rescan completing need not rescan
+        // anything here: the reach walking the whole order is the
+        // completion, wherever each position scanned.
         if self.scan_resident_all() {
             if let Some(old) = old {
                 self.find.reconcile(old);
@@ -599,6 +608,14 @@ impl App {
                 let height = self.results_height();
                 self.find.remap_selected(old, height);
             }
+        }
+        if !self.find.fetching() && self.find.cursor() >= self.screen.pages().page_count() {
+            // The scan is whole again with nothing on the wire: every
+            // position scanned at its revision, so the search-incomplete
+            // text goes. A fetch still out, or a position still
+            // unscanned, leaves it standing.
+            self.notices
+                .clear_code("connection_failed", &search_incomplete_text());
         }
         self.pump_find();
         self.reveal_current();
@@ -668,8 +685,12 @@ impl App {
         None
     }
 
-    /// Closes the bar, going home.
+    /// Closes the bar, going home. The search it ran ends with it: its
+    /// incomplete text goes, while any connection text stands until the
+    /// reconnect ends that cause.
     pub(super) fn close_find(&mut self) {
+        self.notices
+            .clear_code("connection_failed", &search_incomplete_text());
         self.find.close();
     }
 

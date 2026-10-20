@@ -44,12 +44,16 @@ fn unspoken(reference: &str) -> Failure {
 
 /// Where a session runs: the workspace a `scripted` model's path resolves
 /// against, and the clock its pauses wait on (`docs/model-routing.md`, "The
-/// scripted provider").
+/// scripted provider"). The cache-diagnostics opt-in rides here too,
+/// read once from the startup configuration: the observed factories built
+/// from here carry it (`docs/prompt-cache.md`, "Cache diagnostics").
 pub(crate) struct Here {
     /// The session's workspace.
     pub(crate) workspace: PathBuf,
     /// The session's clock.
     pub(crate) clock: Arc<dyn Clock>,
+    /// Whether observed model calls hash their cacheable prefix segments.
+    pub(crate) cache_diagnostics: bool,
 }
 
 /// The `scripted` protocol for the script at `id`, resolved against the
@@ -130,6 +134,7 @@ fn observed<P>(
     clock: &Arc<dyn Clock>,
     protocol: P,
     call: fn(&P, &ModelRequest, RequestObservation) -> Box<dyn ModelCall>,
+    cache_diagnostics: bool,
 ) -> Option<Observe>
 where
     P: Clone + Send + Sync + 'static,
@@ -149,7 +154,8 @@ where
                 &protocol,
                 request,
                 RequestObservation::new(Arc::clone(&log), Arc::clone(&clock), attempt)
-                    .with_timing(Arc::clone(&timings)),
+                    .with_timing(Arc::clone(&timings))
+                    .with_cache_diagnostics(cache_diagnostics),
             )
         },
     ))
@@ -210,6 +216,7 @@ fn build(
                     &here.clock,
                     responses.clone(),
                     Responses::call_observed,
+                    here.cache_diagnostics,
                 )
             });
             (Arc::new(responses), observe)
@@ -225,6 +232,7 @@ fn build(
                     &here.clock,
                     completions.clone(),
                     Completions::call_observed,
+                    here.cache_diagnostics,
                 )
             });
             (Arc::new(completions), observe)
@@ -235,7 +243,13 @@ fn build(
                 None => Messages::new(endpoint),
             };
             let observe = diag.and_then(|diag| {
-                observed(diag, &here.clock, messages.clone(), Messages::call_observed)
+                observed(
+                    diag,
+                    &here.clock,
+                    messages.clone(),
+                    Messages::call_observed,
+                    here.cache_diagnostics,
+                )
             });
             (Arc::new(messages), observe)
         }
@@ -245,7 +259,13 @@ fn build(
                 None => Gemini::new(endpoint),
             };
             let observe = diag.and_then(|diag| {
-                observed(diag, &here.clock, gemini.clone(), Gemini::call_observed)
+                observed(
+                    diag,
+                    &here.clock,
+                    gemini.clone(),
+                    Gemini::call_observed,
+                    here.cache_diagnostics,
+                )
             });
             (Arc::new(gemini), observe)
         }

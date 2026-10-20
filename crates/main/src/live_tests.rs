@@ -191,6 +191,7 @@ fn live_reviewer() {
     let here = crate::Here {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
+        cache_diagnostics: false,
     };
     let provider = connect(
         reviewer,

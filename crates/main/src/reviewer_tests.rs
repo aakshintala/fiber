@@ -36,6 +36,7 @@ fn here() -> crate::Here {
     crate::Here {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
+        cache_diagnostics: false,
     }
 }
 
