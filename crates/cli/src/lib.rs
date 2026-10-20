@@ -86,8 +86,20 @@ mod prune;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod release;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod sessions;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod sessions_list;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod sessions_search;
 mod table;
 
