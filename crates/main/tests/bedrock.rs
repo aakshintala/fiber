@@ -101,6 +101,7 @@ fn a_bedrock_api_key_completes_a_turn_on_the_invoke_api() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
+            "extension_exec",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -116,6 +117,14 @@ fn a_bedrock_api_key_completes_a_turn_on_the_invoke_api() {
             "turn_completed",
             "fiber_exited",
         ]
+    );
+    // `credential()` reading the environment is logged, but never the key.
+    assert_eq!(run.first("extension_exec")["payload"]["program"], "/bin/sh");
+    assert!(
+        run.lines
+            .iter()
+            .all(|line| !line.to_string().contains("bedrock-test-key")),
+        "the key reached the session log"
     );
     assert_eq!(
         run.first("text_completed")["payload"]["text"],
