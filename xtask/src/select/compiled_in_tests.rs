@@ -334,6 +334,14 @@ fn extensions_reads_a_package() -> RustFile {
     )
 }
 
+fn provider_reads_a_package() -> RustFile {
+    package_src(
+        "provider",
+        "crates/provider/tests/responses.rs",
+        "fn package(name: &str) -> PathBuf {\n    Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers\").join(name)\n}\n",
+    )
+}
+
 fn xtask_reads_a_package() -> RustFile {
     package_src(
         "xtask",
@@ -348,6 +356,7 @@ fn package_ok_files() -> Vec<RustFile> {
         config_reads_a_package(),
         extensions_reads_a_package(),
         main_reads_a_package(),
+        provider_reads_a_package(),
         xtask_reads_a_package(),
     ]
 }
@@ -384,6 +393,7 @@ fn a_listed_crate_with_no_reading_source_fails() {
             "cli: listed as reading a first-party package, but no source reads one",
             "extensions: listed as reading a first-party package, but no source reads one",
             "main: listed as reading a first-party package, but no source reads one",
+            "provider: listed as reading a first-party package, but no source reads one",
             "xtask: listed as reading a first-party package, but no source reads one"
         ]
     );
