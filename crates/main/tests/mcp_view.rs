@@ -43,6 +43,10 @@ struct Driver {
     overheard: Vec<String>,
     client: Socket,
     setup: support::Setup,
+    /// Every line the startup wait read, including the ones its check
+    /// read past: a `full` subscribe replays the log, so a server's
+    /// failure may already sit here before the test's first query.
+    startup: Vec<Value>,
 }
 
 impl Driver {
@@ -87,7 +91,7 @@ impl Driver {
         // `extensions_loaded` have arrived, in any order.
         let mut seen_clients = false;
         let mut seen_extensions = false;
-        until(&client, "startup", |line| {
+        let startup = until(&client, "startup", |line| {
             if line["kind"] == "clients" {
                 seen_clients = true;
             }
@@ -104,6 +108,7 @@ impl Driver {
             overheard: Vec::new(),
             client,
             setup,
+            startup,
         }
     }
 
@@ -346,6 +351,18 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Whether `line` is the remote server's first start failing as
+/// not-logged-in: the signal the login test's first `mcp_servers` query
+/// waits for, so it never reads the `connecting` row of a start still in
+/// flight (`docs/mcp.md`, "Servers, their state and the per-server
+/// commands"). It names the server and the reason, so no other server's
+/// failure releases the wait early.
+fn remote_not_logged_in(line: &Value) -> bool {
+    line["kind"] == "mcp_server_failed"
+        && line["payload"]["server"] == "remote"
+        && line["payload"]["reason"] == "not_logged_in"
+}
+
 /// Sends one OAuth callback to the loopback redirect in `auth_url`.
 fn drive_callback(auth_url: &str) {
     let redirect = query_param(auth_url, "redirect_uri");
@@ -477,6 +494,19 @@ fn login_against_a_fake_authorization_server_makes_the_server_ready() {
     );
     let mut driver = Driver::start(setup, &doors::mint("s_"), empty.as_os_str());
 
+    // The session starts its servers before the test's `full` subscribe
+    // replays the log, so the failure may already sit in the startup
+    // lines the startup wait read past: only when it does not, wait for
+    // its live line. Either way the failure is recorded before the first
+    // query, so the row reads `needs-login`, never the `connecting` of a
+    // start still in flight.
+    if !driver.startup.iter().any(remote_not_logged_in) {
+        until(
+            &driver.client,
+            "the remote server to fail its first start as not logged in",
+            remote_not_logged_in,
+        );
+    }
     let rows = driver.servers("c_before");
     let before = Driver::row(&rows, "remote");
     assert_eq!(before["state"], "needs-login", "{rows:?}");
