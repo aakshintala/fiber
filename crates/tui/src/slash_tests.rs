@@ -57,7 +57,7 @@ fn built_ins_are_drawn_built_ins_plus_credential_and_rewind() {
         .iter()
         .filter(|name| !BUILT_INS.iter().any(|(built_in, _, _)| built_in == *name))
         .collect();
-    assert_eq!(extra, [&"credential", &"rewind"]);
+    assert_eq!(extra, [&"credential", &"rewind", &"import"]);
     assert!(is_built_in("credential"));
     assert!(is_built_in("rewind"));
     assert!(!is_built_in("tdd"));

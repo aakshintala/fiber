@@ -1657,6 +1657,7 @@ later release still applies.
 | `/login` | Logs in ("Logging in"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
+| `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/close` | Stops the session on screen ("Quit"). |
 | `/quit` | Quits ("Quit"). |
 | `/?`, `/help` | Opens the key map. |
