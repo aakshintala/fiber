@@ -233,6 +233,15 @@ fn world(default: bool) -> World {
     drop(listener);
     let server = ProviderServer::start([support::hello()]).unwrap();
     provider_with_port(&a, &server, port);
+    // The hub machine already imported: the first-run offer reads the
+    // hub's receipts, and these cases cover the picker and resume
+    // flows with the offer down, never the offer itself.
+    for receipt in ["import-claude-code.json", "import-codex.json"] {
+        write_json(
+            &a.home().join(receipt),
+            &json!({"source": receipt, "imported_at": 1}),
+        );
+    }
     // `~/` on the hub expands against the inherited `HOME`, which the
     // harness otherwise points at the setup root: point it at the hub's
     // home, as production has it, so the picker browses the hub's home.

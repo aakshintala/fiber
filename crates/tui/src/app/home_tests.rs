@@ -5158,6 +5158,30 @@ fn the_offer_keys_send_the_named_source_with_no_session() {
 }
 
 #[test]
+fn the_offer_press_before_the_link_holds_until_hello() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    // The link is down: the press queues the import instead of
+    // dropping it, and the offer stays open for its answer.
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::None = app.on_key(Key::Char('1'), now) else {
+        panic!("the early press holds");
+    };
+    assert!(app.home_screen().unwrap().question_import);
+    let lines: Vec<Value> = commands(app.on_line(hello()));
+    let import = lines
+        .iter()
+        .find(|line| line["command"] == "import")
+        .unwrap_or_else(|| panic!("the held import goes out on hello"));
+    assert_eq!(import["args"], json!({"source": "claude-code"}));
+    assert_eq!(import.get("session_id"), None);
+}
+
+#[test]
 fn the_offer_swallows_enter_arrows_and_other_keys() {
     let seam = Arc::new(Fake::new(Vec::new()));
     if let Ok(mut pending) = seam.pending.lock() {

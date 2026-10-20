@@ -73,6 +73,26 @@ fn seam_import_runs_the_shared_import_into_the_seam_home() {
     assert!(error.message.contains("claude-code") && error.message.contains("codex"));
 }
 
+/// The pending operation answers from the seam's own home: on the
+/// hub machine that home holds the receipts `import` writes, so a
+/// remote terminal's offer follows the hub's state, never the
+/// terminal's.
+#[test]
+fn import_pending_reads_the_seam_homes_receipts() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let seam = Seam::new(home.clone());
+    assert_eq!(
+        result(&seam, "import_pending", json!({})),
+        json!({"pending": true})
+    );
+    write(&home.join("import-claude-code.json"), "{}");
+    assert_eq!(
+        result(&seam, "import_pending", json!({})),
+        json!({"pending": false})
+    );
+}
+
 fn install(home: &Path) {
     crate::test_support::install_extension(
         home,

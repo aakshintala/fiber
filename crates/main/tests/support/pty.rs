@@ -602,22 +602,6 @@ pub(crate) struct Exited {
 }
 
 impl Run {
-    /// Spawns `fiber` with `args` on a `cols` by `rows` pty: standard
-    /// input, output and error all on the terminal side, as on a real
-    /// terminal. Each run starts from a cleared environment with only
-    /// `PATH`, `HOME`, `FIBER_HOME` and `TERM=xterm-256color`, then
-    /// applies `env` in order, so the grid is a fixed dark xterm: the
-    /// binary never reads the ambient terminal's kind or theme. The
-    /// slave is dropped after the spawn, and the master is CLOEXEC, so
-    /// no hub `fiber` starts holds it open.
-    /// Waits up to `within` for the next terminal output chunk: pacing
-    /// key retries to the terminal's own frames, so a slow answer
-    /// never floods its input with repeats. A fixed bound outside the
-    /// run's deadline, as a fake's own wait would be.
-    pub(crate) fn wait_chunk(&self, within: std::time::Duration) -> bool {
-        fakes::Deadline::after(within).recv(&self.wakes).is_ok()
-    }
-
     /// Spawns without seeding import receipts: the first-run offer
     /// test's fresh home.
     #[track_caller]
@@ -631,6 +615,8 @@ impl Run {
         Self::spawn_inner(setup, cols, rows, args, env, false)
     }
 
+    /// Spawns with seeding import receipts: every other test's
+    /// home, where the offer stays down.
     #[track_caller]
     pub(crate) fn spawn(
         setup: &Setup,
@@ -642,6 +628,14 @@ impl Run {
         Self::spawn_inner(setup, cols, rows, args, env, true)
     }
 
+    /// Spawns `fiber` with `args` on a `cols` by `rows` pty: standard
+    /// input, output and error all on the terminal side, as on a real
+    /// terminal. Each run starts from a cleared environment with only
+    /// `PATH`, `HOME`, `FIBER_HOME` and `TERM=xterm-256color`, then
+    /// applies `env` in order, so the grid is a fixed dark xterm: the
+    /// binary never reads the ambient terminal's kind or theme. The
+    /// slave is dropped after the spawn, and the master is CLOEXEC, so
+    /// no hub `fiber` starts holds it open.
     #[track_caller]
     fn spawn_inner(
         setup: &Setup,

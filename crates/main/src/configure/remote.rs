@@ -534,6 +534,14 @@ impl hub::Machine for Seam {
                 a.shape(&["path"], &[])?;
                 json!({"text":self.skill_text(Path::new(a.string("path")?)).map_err(from_view)?})
             }
+            // Whether the first-run offer shows on a remote terminal:
+            // neither source has a completed receipt under the hub
+            // machine's own Fiber home, as the hub's `import` writes
+            // them there, never under the terminal's home.
+            "import_pending" => {
+                a.shape(&[], &[])?;
+                json!({"pending":config::import_pending(&self.home)})
+            }
             _ => return Err(invalid()),
         };
         Ok(Some(result))

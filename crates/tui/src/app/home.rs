@@ -43,11 +43,16 @@ pub(super) struct Home {
     pub(super) launch: Launch,
     /// A `start` went out in this run.
     prompted: bool,
-    /// The first-run import offer is still eligible: resolved once at
-    /// startup from the seam, cleared by Esc or by its accepted
-    /// answer, never re-resolved, so a receipt landing mid-run
-    /// neither retracts a shown offer nor re-fires a dismissed one.
+    /// The first-run import offer is still eligible: resolved once,
+    /// cleared by Esc or by its accepted answer, never re-resolved,
+    /// so a receipt landing mid-run neither retracts a shown offer
+    /// nor re-fires a dismissed one.
     pub(super) import_offer: bool,
+    /// The offer's pending state still owes its hub read: set on a
+    /// remote home, whose receipts live on the hub machine past a link
+    /// the startup resolve cannot use. The first outgoing pass reads
+    /// it from the hub and clears this, so the read runs once.
+    pub(super) import_owed: bool,
     /// The chip focused last: ↓ from the entry bar and ↑ from the
     /// first row land here while drawn, else on the workspace chip.
     /// Always a chip; starts `Spot::Workspace`.
@@ -199,10 +204,15 @@ impl App {
         // The picker's scope starts from launch, then from what
         // `/scoped-models` saves.
         self.model_picker.scoped = launch.scoped_models.clone();
+        // A remote home owes the offer its hub read: the receipts live
+        // on the hub machine, past the link the startup resolve cannot
+        // use. A local home resolves from its own seam at startup.
+        let import_owed = matches!(launch.location, crate::home::LaunchLocation::Remote { .. });
         self.home = Some(Home {
             launch,
             prompted: false,
             import_offer: false,
+            import_owed,
             sessions: Sessions::default(),
             fed: false,
             feed_id: None,
@@ -491,6 +501,10 @@ impl App {
         if !self.outbox.is_up() {
             return Vec::new();
         }
+        // A remote home's offer waits for the hub: the startup
+        // resolve reads the terminal's own home, while the receipts
+        // live on the hub machine.
+        self.resolve_import_offer();
         let mut asks = self.picker_asks();
         asks.extend(self.start_model_pick());
         let Some(home) = self.home.as_mut() else {

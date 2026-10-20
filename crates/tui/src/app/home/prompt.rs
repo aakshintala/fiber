@@ -7,9 +7,10 @@ use ratatui::layout::Rect;
 use serde_json::{Map, Value, json};
 
 use super::super::reconnect::UNANSWERED;
-use super::super::{App, Effect, mint, session_command};
+use super::super::{App, Effect, Kind, mint, session_command};
 use super::{refusal, refusal_code};
 use crate::home::{Level, Spot, State, dependents};
+use crate::input::Draft;
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::view::max_question_scroll;
@@ -381,11 +382,14 @@ impl App {
 
     /// `1` or `2` in the import offer: the hub `import` for `source`,
     /// answered once and never resent, like the offer. With the link
-    /// down nothing goes out and the offer stays.
+    /// down the line waits in the outbox and goes out with the
+    /// hello pass, so the offer stays until its answer.
     fn send_import(&mut self, source: &str) -> Effect {
-        if !self.outbox.is_up() {
-            return Effect::None;
-        }
+        // An early press is held until the hub connects, like `start`:
+        // the offer shows on the first frame, before the link is up,
+        // and a swallowed press would read as a dead key. The held
+        // line goes out with the hello pass, and the answer folds as
+        // usual; a rejection returns an empty draft, keeping the box.
         let command = mint();
         let line = json!({
             "id": command,
@@ -394,9 +398,15 @@ impl App {
         })
         .to_string();
         if let Some(home) = self.home.as_mut() {
-            home.questions.asks.insert(command, Ask::Import);
+            home.questions.asks.insert(command.clone(), Ask::Import);
         }
-        Effect::Send(vec![line])
+        match self
+            .outbox
+            .send(command, Kind::Command, Draft::default(), line)
+        {
+            Some(line) => Effect::Send(vec![line]),
+            None => Effect::None,
+        }
     }
 
     /// Resolves the first-run import offer once, from the seam, at
@@ -409,6 +419,42 @@ impl App {
         home.import_offer = pending;
         if pending && home.questions.prompt.is_none() {
             home.questions.prompt = Some(Prompt::Import);
+        }
+    }
+
+    /// Resolves a remote home's offer from the hub machine's home, on
+    /// the first outgoing pass once the link is up: the startup
+    /// resolve cannot reach past it, so the offer waits for the hub.
+    /// A refused or unreadable answer is one notice and the offer
+    /// stays down; the read never re-runs, so a receipt landing
+    /// mid-run neither retracts a shown offer nor re-fires a
+    /// dismissed one.
+    pub(super) fn resolve_import_offer(&mut self) {
+        if !self.home.as_ref().is_some_and(|home| home.import_owed) {
+            return;
+        }
+        let pending = match self.remote() {
+            Some(remote) => match remote.import_pending_hub() {
+                Ok(pending) => Some(pending),
+                Err(error) => {
+                    let code = serde_json::to_value(&error.code)
+                        .ok()
+                        .and_then(|code| code.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| "io_failed".to_owned());
+                    if let Some(home) = self.home.as_mut() {
+                        home.import_owed = false;
+                    }
+                    self.push_notice(&code, error.message);
+                    return;
+                }
+            },
+            None => None,
+        };
+        if let Some(home) = self.home.as_mut() {
+            home.import_owed = false;
+        }
+        if let Some(pending) = pending {
+            self.set_import_offer(pending);
         }
     }
 

@@ -82,7 +82,10 @@ On the first interactive run, with no import receipt yet
 another harness's configuration: Claude Code's or Codex's.
 The offer runs the same shared import `fiber import` runs, and imported
 items apply on the next `/reload` with the reload's usual cache cost
-(`docs/mcp.md`, "Reload"). The offer fires once: answering it, or running
+(`docs/mcp.md`, "Reload"). A `1` or `2` pressed before the hub connects
+still imports once it does, so an early press is never lost. Over a
+remote hub connection the receipts are the hub machine's, where that
+import runs (`docs/configuration.md`, "Importing"). The offer fires once: answering it, or running
 `fiber import` first, writes the receipt, and the offer never shows again.
 
 **The workspace chip** names the workspace in use: the one last picked, else

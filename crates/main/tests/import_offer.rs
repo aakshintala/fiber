@@ -51,20 +51,14 @@ fn the_offer_imports_the_pressed_source_and_its_receipt_closes_it() {
     run.wait_screen("the first-run import offer", |grid| {
         grid.rows.iter().any(|row| row.contains("Import settings"))
     });
-    // The key goes out with no session: pressing again only repeats
-    // the send until the hub answers, so polling the receipt is the
-    // wait, under the run's deadline.
+    // The key goes out with no session, once: the offer closes only
+    // when the hub's import answer folds, so the close waits under
+    // the run's deadline for the answer instead of pacing retries.
+    run.write(b"1");
+    run.wait_screen("the answered offer closes", |grid| {
+        grid.rows.iter().all(|row| !row.contains("Import settings"))
+    });
     let receipt = setup.home().join("import-claude-code.json");
-    loop {
-        if receipt.is_file() {
-            break;
-        }
-        assert!(!setup.deadline.left().is_zero(), "the import receipt lands");
-        run.write(b"1");
-        // One press per terminal reaction: the terminal folds the
-        // answer between chunks, so retries never flood its input.
-        let _ = run.wait_chunk(std::time::Duration::from_secs(1));
-    }
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&receipt).unwrap()).unwrap();
     assert_eq!(report["source"], "claude-code");
@@ -74,9 +68,6 @@ fn the_offer_imports_the_pressed_source_and_its_receipt_closes_it() {
         !setup.home().join("import-codex.json").is_file(),
         "only the pressed source ran"
     );
-    run.wait_screen("the answered offer closes", |grid| {
-        grid.rows.iter().all(|row| !row.contains("Import settings"))
-    });
     // Quitting gracefully lets the hub exit with the terminal: a
     // dropped run kills only the terminal, orphaning `hub serve`.
     run.write(b"\x03\x03\r");
