@@ -27,8 +27,9 @@ use std::sync::PoisonError;
 use std::time::Duration;
 
 use contract::diag::Op;
-use contract::{ErrorCode, SessionId};
+use contract::{ErrorCode, JobId, SessionId};
 use log::diag::Severity;
+use serde_json::Value;
 
 use crate::connection::{Hub, Refused};
 use crate::start::{self, Bind};
@@ -81,6 +82,71 @@ fn exited_in(dir: &Path) -> bool {
 /// cannot be read is not.
 fn is_delegate_in(dir: &Path) -> bool {
     recorded(dir).is_some_and(|recorded| recorded.delegate)
+}
+
+/// Whether `session` is a finished delegate whose parent holds no open run
+/// for its job: its log's tail is `fiber_exited`, its `session_started`
+/// names a parent session and job, and the parent's log holds no
+/// `job_started` for that job without a later `job_completed`. A parent
+/// with no log, or one whose log cannot be read, holds no open run. One
+/// log lookup each, no locks: a `full` subscribe answered here replays the
+/// log instead of resuming or refusing the delegate.
+pub(crate) fn exited_delegate(home: &Path, session: &SessionId) -> bool {
+    let Some((_, dir)) = crate::recent::lookup_logged(home, session) else {
+        return false;
+    };
+    if !exited_in(&dir) {
+        return false;
+    }
+    let Some((parent, job)) = delegate_job(&dir) else {
+        return false;
+    };
+    !parent_run_open(home, &parent, &job)
+}
+
+/// The parent session and job the log's `session_started` names, when both
+/// are strings: the delegate's identity for the resume-window check. A log
+/// whose history cannot be read names none.
+fn delegate_job(dir: &Path) -> Option<(SessionId, JobId)> {
+    let segments = log::history(dir).ok()?;
+    let started = segments.first()?.range(0, 1).ok()?;
+    let first = started.first()?;
+    if first.kind != "session_started" {
+        return None;
+    }
+    let parent = first.payload.get("parent")?;
+    let session = parent.get("session_id")?.as_str()?;
+    let job = parent.get("delegate_id")?.as_str()?;
+    Some((SessionId(session.to_owned()), JobId(job.to_owned())))
+}
+
+/// Whether the parent's log holds an open run for `job`: a `job_started`
+/// naming it with no later `job_completed`. A parent with no log, or one
+/// whose log cannot be read, holds no open run.
+fn parent_run_open(home: &Path, parent: &SessionId, job: &JobId) -> bool {
+    let Some((_, dir)) = crate::recent::lookup_logged(home, parent) else {
+        return false;
+    };
+    let Ok(segments) = log::history(&dir) else {
+        return false;
+    };
+    let mut open = false;
+    for segment in &segments {
+        let Ok(lines) = segment.lines(0) else {
+            return false;
+        };
+        for line in &lines {
+            if line.payload.get("job_id").and_then(Value::as_str) != Some(job.0.as_str()) {
+                continue;
+            }
+            if line.kind == "job_started" {
+                open = true;
+            } else if line.kind == "job_completed" {
+                open = false;
+            }
+        }
+    }
+    open
 }
 
 /// One pass of [`reach`]: an answer, or a wait for the exiting process,

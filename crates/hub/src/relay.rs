@@ -200,6 +200,36 @@ pub(crate) fn route(
         return;
     };
     let order = lock(relays).order.clone();
+    // A `full` subscribe for a finished delegate never reaches a relay,
+    // an opener or a resume: the exited run's log is the view, replayed
+    // below, and the kept subscription follows a resume. Above
+    // `serve_existing`, so the live relay never sees the command. The
+    // credential check runs first, so a malformed subscribe gains no
+    // accepted answer.
+    if stripped.get("command").and_then(Value::as_str) == Some("subscribe")
+        && stripped
+            .get("args")
+            .and_then(|args| args.get("level"))
+            .and_then(Value::as_str)
+            == Some("full")
+    {
+        if let Err(refused) = startup_credential(&stripped) {
+            crate::retire::refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                id,
+                &refused.code,
+                &refused.message,
+            );
+            return;
+        }
+        if crate::resume::exited_delegate(&hub.home, &SessionId(session.to_owned())) {
+            replay_exited_delegate(id, session, &stripped, hub, writer, relays);
+            return;
+        }
+    }
     // Serves the command on the session's published relay, when one
     // outlives this call's check: every path below serves it and reports
     // true. False when no relay for the session is published: the caller
@@ -395,6 +425,176 @@ pub(crate) fn route(
         None,
         true,
     );
+}
+
+/// Serves a `full` subscribe for a finished delegate from its log: the
+/// replay branch of [`route`] calls this when
+/// [`crate::resume::exited_delegate`] holds, before any opener, relay or
+/// resume. The fold the exited run left is the view: one relay thread owns
+/// a socket pair preloaded with the accept and the fold, so settling,
+/// forwarding and teardown run exactly as for a session close. The entry
+/// is born retiring, so a command routed while it drains queues and is
+/// passed on, never written into the preloaded void; the kept `full`
+/// subscription the accept settles survives the teardown, so the rejoin
+/// sweep follows the delegate into its resumed run with no client command.
+/// A log that vanished answers `session_not_found`, one that cannot be
+/// read `log_corrupt`: never a partial fold, never a hang.
+fn replay_exited_delegate(
+    id: &CommandId,
+    session: &str,
+    stripped: &Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+) {
+    let Some((_, dir)) = crate::recent::lookup_logged(&hub.home, &SessionId(session.to_owned()))
+    else {
+        crate::retire::refuse_not_found(writer, hub, relays, session, id);
+        return;
+    };
+    let fold = match exited_fold(&dir) {
+        Ok(fold) => fold,
+        Err(code) => {
+            crate::retire::refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                id,
+                &code,
+                &format!("The log of session `{session}` cannot be replayed."),
+            );
+            return;
+        }
+    };
+    let last = fold.last().and_then(|line| line.seq.map(|seq| seq.0));
+    let mut result = Map::new();
+    if let Some(last) = last {
+        result.insert("last_seq".into(), Value::from(last));
+    }
+    let mut payload = Map::new();
+    payload.insert("command_id".into(), Value::String(id.0.clone()));
+    payload.insert("result".into(), Value::Object(result));
+    let mut preloaded = crate::connection::line(hub, "command_accepted", payload);
+    preloaded.push(b'\n');
+    for line in &fold {
+        if let Ok(bytes) = serde_json::to_vec(line) {
+            preloaded.extend_from_slice(&bytes);
+            preloaded.push(b'\n');
+        }
+    }
+    let order = lock(relays).order.clone();
+    crate::retire::enqueue_new(&order, session, id, stripped);
+    let kept: Kept = Arc::new(Mutex::new(vec![(id.0.clone(), stripped.clone(), true)]));
+    let mark = crate::rejoin::Mark::now(&hub.home, session);
+    let (hub_end, preload_end) = match UnixStream::pair() {
+        Ok(pair) => pair,
+        Err(_) => {
+            crate::retire::refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                id,
+                &ErrorCode::IoFailed,
+                &format!("The hub could not replay session `{session}`."),
+            );
+            return;
+        }
+    };
+    let reader = match hub_end.try_clone() {
+        Ok(reader) => reader,
+        Err(_) => {
+            crate::retire::refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                id,
+                &ErrorCode::IoFailed,
+                &format!("The hub could not replay session `{session}`."),
+            );
+            return;
+        }
+    };
+    let mut held = lock(relays);
+    let epoch = held.mint();
+    crate::rejoin::admit(&mut held, session, false, mark, epoch);
+    let owned = RelayThread {
+        epoch,
+        reopen: None,
+        replayed: Replayed::default(),
+        kept: Arc::clone(&kept),
+        order: Arc::clone(&order),
+        gone: held.rejoin.closed_flag(),
+    };
+    // The entry is pushed before the thread starts, so the settling accept
+    // always finds it: born retiring, it takes no writes, and a command
+    // routed while it drains queues on it and is passed on at its end.
+    let relayed = thread::Builder::new().name("hub-relay".to_owned()).spawn({
+        let hub = Arc::clone(hub);
+        let writer = Arc::clone(writer);
+        let relays = Arc::clone(relays);
+        let session = session.to_owned();
+        move || relay(owned, &session, reader, &hub, &writer, &relays)
+    });
+    let Ok(thread) = relayed else {
+        drop(held);
+        crate::retire::refuse(
+            writer,
+            hub,
+            relays,
+            session,
+            id,
+            &ErrorCode::IoFailed,
+            &format!("The hub could not replay session `{session}`."),
+        );
+        return;
+    };
+    held.entries.push(Relay {
+        session: session.to_owned(),
+        epoch,
+        writer: hub_end,
+        kept,
+        replayed: Replayed::default(),
+        thread: Some(thread),
+        retiring: Some(Retire::Dead),
+    });
+    drop(held);
+    // The relay thread drains this side: a write that fails leaves a
+    // thread that ends at once, and its drain drops the kept command
+    // without an answer, as a session close does today.
+    if write_all(&preload_end, &preloaded).is_ok() {
+        preload_end.shutdown(Shutdown::Write).unwrap_or(());
+    }
+}
+
+/// The durable lines of an exited delegate's log, root first: the fold a
+/// `full` subscribe replays. `NotFound` when the log vanished mid-route,
+/// `LogCorrupt` when its history cannot be read.
+fn exited_fold(dir: &std::path::Path) -> Result<Vec<contract::Envelope>, ErrorCode> {
+    let segments = log::history(dir).map_err(|error| match error {
+        log::Error::NotFound(_) => ErrorCode::SessionNotFound,
+        log::Error::Held { .. }
+        | log::Error::Poisoned { .. }
+        | log::Error::Ambiguous { .. }
+        | log::Error::Exists(_)
+        | log::Error::Pointer { .. }
+        | log::Error::Unreadable { .. }
+        | log::Error::Encode(_)
+        | log::Error::Io { .. } => ErrorCode::LogCorrupt,
+    })?;
+    let mut fold = Vec::new();
+    for segment in &segments {
+        match segment.lines(0) {
+            Ok(lines) => fold.extend(lines),
+            Err(_) => return Err(ErrorCode::LogCorrupt),
+        }
+    }
+    if fold.is_empty() {
+        return Err(ErrorCode::LogCorrupt);
+    }
+    Ok(fold)
 }
 
 /// Sends the kept subscription again under a hub-minted id the relay
