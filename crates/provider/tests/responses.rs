@@ -2093,7 +2093,7 @@ fn a_required_nullable_property_uses_strict_mode() {
 /// The generated opencode-go file's entry for `id`, such as its `compat`.
 fn generated_opencode_go_model(id: &str) -> Value {
     let file: Value = serde_json::from_str(include_str!(
-        "../../providers/opencode/providers/opencode-go.json"
+        "../../../providers/opencode/providers/opencode-go.json"
     ))
     .unwrap();
     file["models"]
