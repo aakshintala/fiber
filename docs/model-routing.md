@@ -121,7 +121,11 @@ a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`; AWS keys in
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with `AWS_SESSION_TOKEN`
 when set; and the AWS CLI's own default chain, which reads `AWS_PROFILE`.
 Credentials with an `Expiration` are refreshed before it, as any token is
-("Keys, tokens and OAuth"). The AWS region is the package's `region` setting,
+("Keys, tokens and OAuth"). With none of these, the call fails with
+`credential_failed`, and the message says to set `AWS_BEARER_TOKEN_BEDROCK`
+or name a profile. `fiber login bedrock` is not supported: it stores a key,
+and a provider with `credential()` reads none ("Which credential a session
+uses"), so a Bedrock API key comes from the environment only. The AWS region is the package's `region` setting,
 the per-account host its base URL names, read from `AWS_REGION` when unset
 ("A per-account host").
 

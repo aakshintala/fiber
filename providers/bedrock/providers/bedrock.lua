@@ -18,7 +18,7 @@
 -- Credentials with an `Expiration` are used until Fiber refreshes them,
 -- shortly before it (docs/model-routing.md, "Keys, tokens and OAuth").
 --
--- Lua reads no environment, so one `sh` prints the four variables,
+-- Lua reads no environment, so one `/bin/sh` prints the four variables,
 -- separated by NUL, which no environment value holds. AWS credentials ride
 -- to `sign()` as the bearer token's JSON; `sign()` replaces that header
 -- with the SigV4 one, so they are never sent. A key or credential never
@@ -40,9 +40,9 @@ local ENV_SCRIPT = 'printf "%s\\000%s\\000%s\\000%s" '
 
 -- The four variables, each "" when unset.
 local function environment()
-  local ran = host.exec("sh", { "-c", ENV_SCRIPT })
+  local ran = host.exec("/bin/sh", { "-c", ENV_SCRIPT })
   if ran.exit_code ~= 0 then
-    error("bedrock credential: `sh` could not read the environment", 0)
+    error("bedrock credential: `/bin/sh` could not read the environment", 0)
   end
   local values = {}
   for value in (ran.stdout .. "\0"):gmatch("([^\0]*)\0") do
@@ -116,6 +116,16 @@ local function unix_seconds(text)
   return days * 86400 + tonumber(h) * 3600 + tonumber(mi) * 60 + tonumber(s) - offset
 end
 
+-- What to set when no credential was found: under `default` the
+-- environment was read too, so the message names both ways in.
+local function remedy(profile)
+  if profile ~= nil then
+    return ""
+  end
+  return "; set AWS_BEARER_TOKEN_BEDROCK to a Bedrock API key, or name an AWS"
+    .. " profile as the credential label, `providers.\"bedrock\".credential`"
+end
+
 -- The AWS CLI's credentials for `profile`, or for its own default chain
 -- when `profile` is nil.
 local function exported(profile)
@@ -127,15 +137,15 @@ local function exported(profile)
   local ok, ran = pcall(host.exec, "aws", args)
   if not ok then
     local why = type(ran) == "table" and ran.message or tostring(ran)
-    error("bedrock credential: the AWS CLI (`aws`) could not be run (" .. why .. ");"
-      .. " install it, or set AWS_BEARER_TOKEN_BEDROCK or AWS_ACCESS_KEY_ID and"
-      .. " AWS_SECRET_ACCESS_KEY", 0)
+    error("bedrock credential: the AWS CLI (`aws`) could not be run (" .. why .. ")"
+      .. remedy(profile), 0)
   end
   if ran.exit_code ~= 0 then
     local first = (ran.stderr or ""):match("[^\r\n]*[^%s][^\r\n]*") or ""
     error("bedrock credential: `aws configure export-credentials` failed"
       .. " (exit " .. tostring(ran.exit_code) .. ")"
-      .. (first ~= "" and (": " .. first) or ""), 0)
+      .. (first ~= "" and (": " .. first) or "")
+      .. remedy(profile), 0)
   end
   local parsed, body = pcall(json.decode, ran.stdout)
   if not parsed

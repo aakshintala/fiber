@@ -15,7 +15,7 @@
     "exec": [
       {
         "request": {
-          "program": "sh"
+          "program": "/bin/sh"
         },
         "reply": {
           "code": 0,
