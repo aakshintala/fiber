@@ -28,9 +28,7 @@ crates/tui/src/loop_tests.rs	lane-2824	plan	2026-10-20T17:34:08Z	Amoghs-MacBook-
 crates/tui/src/app/find/state_tests.rs	box-2764	grant	2026-10-20T18:12:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	2887
 crates/main/src/rewind.rs	368-p5	plan	2026-10-20T18:18:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/loop/src/rewind_tests.rs	368-p5	plan	2026-10-20T18:18:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/main/build.rs	412	plan	2026-10-20T18:18:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/session_argv_tests.rs	543	plan	2026-10-20T18:19:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/cli.rs	412	grant	2026-10-20T18:27:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 research/tui-prototype/check/credential.md	box-724	plan	2026-10-20T19:24:44Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/completion_tests.rs	box-724	plan	2026-10-20T19:49:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/bench/examples/bench/pty.rs	2841	grant	2026-10-20T20:19:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
