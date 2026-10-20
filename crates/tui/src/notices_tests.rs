@@ -324,7 +324,7 @@ fn the_sessions_notices_and_the_terminals_own_share_the_stack() {
 fn a_hub_refusal_keeps_its_code() {
     let mut app = attached();
     // A refused `reply` carries its draft back with the hub's code.
-    app.pending.insert(
+    app.outbox.pending.insert(
         "c_1".to_owned(),
         (crate::app::Kind::Reply, crate::input::Draft::default()),
     );
@@ -338,7 +338,7 @@ fn a_hub_refusal_keeps_its_code() {
 #[test]
 fn a_hub_refusal_with_no_code_is_malformed() {
     let mut app = attached();
-    app.pending.insert(
+    app.outbox.pending.insert(
         "c_1".to_owned(),
         (crate::app::Kind::Reply, crate::input::Draft::default()),
     );
@@ -349,7 +349,7 @@ fn a_hub_refusal_with_no_code_is_malformed() {
 #[test]
 fn a_session_refusal_keeps_its_code() {
     let mut app = attached();
-    app.pending.insert(
+    app.outbox.pending.insert(
         "c_1".to_owned(),
         (crate::app::Kind::Reply, crate::input::Draft::default()),
     );

@@ -149,7 +149,7 @@ impl App {
     /// link down nothing goes out. A refusal of the close becomes the
     /// row's note and a notice.
     pub(super) fn stop_or_ask(&mut self, key: u64) -> Effect {
-        if !self.on_home() || self.link != Link::Up {
+        if !self.on_home() || self.outbox.link != Link::Up {
             return Effect::None;
         }
         let row = self
@@ -287,7 +287,7 @@ impl App {
         let Some((id, expect)) = ask else {
             return Effect::None;
         };
-        if self.link != Link::Up {
+        if self.outbox.link != Link::Up {
             return Effect::None;
         }
         let command = mint();
@@ -310,11 +310,19 @@ impl App {
         Effect::Send(vec![line])
     }
 
-    /// Takes the stop or delete waiting on command `id`, if any.
+    /// Takes the stop or delete waiting on command `id`, if any. A
+    /// taken ask's answer settles its kept line, which no fold path
+    /// pops a pending entry for; any other command's entry stays for
+    /// its own answer.
     pub(super) fn take_ask(&mut self, id: &str) -> Option<Ask> {
-        self.home
+        let ask = self
+            .home
             .as_mut()
-            .and_then(|home| home.questions.asks.remove(id))
+            .and_then(|home| home.questions.asks.remove(id));
+        if ask.is_some() {
+            self.outbox.answered(id);
+        }
+        ask
     }
 
     /// A refusal shows on the row, in place of its detail.

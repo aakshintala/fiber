@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use contract::SessionId;
-use contract::events::{CommandAccepted, CommandResult};
+use contract::events::CommandAccepted;
 use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
@@ -22,53 +22,6 @@ use crate::slash;
 const NO_SESSION: &str = "No session on screen.";
 
 /// The `@` panel's state.
-#[derive(Debug)]
-pub(super) struct FilePanel {
-    /// The draft position of the `@`.
-    anchor: usize,
-    /// The latest search result: matching paths, or why there are none.
-    result: Option<Result<Vec<String>, String>>,
-}
-
-/// The `/` and `@` panels' and the key map overlay's state.
-#[derive(Debug)]
-pub(super) struct Overlays {
-    /// The `/` list: built-in commands, then the attached session's
-    /// `commands` answer.
-    slash_rows: Vec<slash::Row>,
-    /// The extension commands of the latest `commands` answer, in answer
-    /// order: only its answer fills the list.
-    extensions: Vec<String>,
-    /// The id of the latest `commands` sent; only its answer fills the list.
-    commands_id: Option<String>,
-    /// Esc closed the `/` panel for this draft.
-    slash_closed: bool,
-    /// The selected row of the open completion panel.
-    selected: usize,
-    /// The `@` panel, while open.
-    files: Option<FilePanel>,
-    /// Bumped when the `@` panel opens and on every query change, never
-    /// reset; a search result tagged with another is stale.
-    generation: u64,
-    /// The key map overlay's state, while it is open.
-    keymap: Option<KeyMap>,
-}
-
-impl Default for Overlays {
-    fn default() -> Self {
-        Self {
-            slash_rows: slash::rows(&[]),
-            extensions: Vec::new(),
-            commands_id: None,
-            slash_closed: false,
-            selected: 0,
-            files: None,
-            generation: 0,
-            keymap: None,
-        }
-    }
-}
-
 pub(crate) use crate::completion_rows::{Completions, Rows};
 
 /// The draft's content as a prompt's `content` argument: text runs and
@@ -79,6 +32,282 @@ pub(super) fn content_arg(draft: &Draft) -> serde_json::Value {
     let content =
         serde_json::to_value(draft.content()).unwrap_or(serde_json::Value::Array(Vec::new()));
     json!({ "content": content })
+}
+
+/// One built-in command: adding one is one row plus its handler, which
+/// lives beside the state it touches.
+pub(crate) struct CommandEntry {
+    /// The name typed after `/`.
+    pub(crate) name: &'static str,
+    /// A one-line description, drawn in the `/` list.
+    pub(crate) description: &'static str,
+    /// An argument hint, such as `[instructions]`.
+    pub(crate) hint: Option<&'static str>,
+    /// Runs the command on the rest of the draft.
+    pub(crate) run: fn(&mut App, &str) -> Option<Effect>,
+}
+
+/// The single command table: the `/` list and dispatch both read it.
+/// `?` and `help` are two rows sharing one handler.
+pub(crate) static TABLE: &[CommandEntry] = &[
+    CommandEntry {
+        name: "home",
+        description: "Goes home, focused on the session on screen's row.",
+        hint: None,
+        run: run_home,
+    },
+    CommandEntry {
+        name: "new",
+        description: "Goes home with the cursor in the input box, to pick the workspace, worktree, model and thinking level for a new session. The session left keeps running.",
+        hint: None,
+        run: run_new,
+    },
+    CommandEntry {
+        name: "resume",
+        description: "Goes home, focused on the first exited row.",
+        hint: None,
+        run: run_resume,
+    },
+    CommandEntry {
+        name: "model",
+        description: "Opens the model picker.",
+        hint: None,
+        run: run_model,
+    },
+    CommandEntry {
+        name: "thinking",
+        description: "Sets the thinking level, or opens the model picker on it.",
+        hint: Some("[<level>]"),
+        run: run_thinking,
+    },
+    CommandEntry {
+        name: "scoped-models",
+        description: "Chooses which models the model picker shows.",
+        hint: None,
+        run: run_scoped_models,
+    },
+    CommandEntry {
+        name: "tools",
+        description: "Opens the tools view.",
+        hint: None,
+        run: run_tools,
+    },
+    CommandEntry {
+        name: "context",
+        description: "Opens the context breakdown.",
+        hint: None,
+        run: run_context,
+    },
+    CommandEntry {
+        name: "usage",
+        description: "Opens the usage view.",
+        hint: None,
+        run: run_usage,
+    },
+    CommandEntry {
+        name: "quota",
+        description: "Opens the quota view and fetches every label's quota.",
+        hint: None,
+        run: run_quota,
+    },
+    CommandEntry {
+        name: "panel",
+        description: "Shows or hides the panel.",
+        hint: None,
+        run: run_panel,
+    },
+    CommandEntry {
+        name: "rail",
+        description: "Shows or hides the rail.",
+        hint: None,
+        run: run_rail,
+    },
+    CommandEntry {
+        name: "rules",
+        description: "Opens the standing rules.",
+        hint: None,
+        run: run_rules,
+    },
+    CommandEntry {
+        name: "settings",
+        description: "Opens the configuration keys.",
+        hint: None,
+        run: run_settings,
+    },
+    CommandEntry {
+        name: "keys",
+        description: "Opens the rebinding screen.",
+        hint: None,
+        run: run_keys,
+    },
+    CommandEntry {
+        name: "skills",
+        description: "Opens the skills.",
+        hint: None,
+        run: run_skills,
+    },
+    CommandEntry {
+        name: "handoff",
+        description: "Starts a handoff.",
+        hint: Some("[instructions]"),
+        run: run_handoff,
+    },
+    CommandEntry {
+        name: "name",
+        description: "Names the session.",
+        hint: Some("<text>"),
+        run: run_name,
+    },
+    CommandEntry {
+        name: "login",
+        description: "Logs in.",
+        hint: None,
+        run: run_login,
+    },
+    CommandEntry {
+        name: "reload",
+        description: "Reloads configuration, MCP servers and extensions.",
+        hint: None,
+        run: run_reload,
+    },
+    CommandEntry {
+        name: "close",
+        description: "Stops the session on screen.",
+        hint: None,
+        run: run_close,
+    },
+    CommandEntry {
+        name: "quit",
+        description: "Quits.",
+        hint: None,
+        run: run_quit,
+    },
+    CommandEntry {
+        name: "approvals",
+        description: "Reopens the waiting approvals and questions.",
+        hint: None,
+        run: run_approvals,
+    },
+    CommandEntry {
+        name: "?",
+        description: "Opens the key map.",
+        hint: None,
+        run: run_keymap,
+    },
+    CommandEntry {
+        name: "help",
+        description: "Opens the key map.",
+        hint: None,
+        run: run_keymap,
+    },
+];
+
+fn run_home(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.leave_on_row())
+}
+
+fn run_new(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.leave())
+}
+
+fn run_resume(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.resume_list())
+}
+
+fn run_model(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_model_picker(crate::model_picker::Mode::Choose))
+}
+
+fn run_thinking(app: &mut App, rest: &str) -> Option<Effect> {
+    Some(app.thinking_command(rest))
+}
+
+fn run_scoped_models(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.scoped_models_command())
+}
+
+fn run_panel(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.toggle_panel())
+}
+
+fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.toggle_rail())
+}
+
+fn run_handoff(app: &mut App, rest: &str) -> Option<Effect> {
+    let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
+    Some(app.send_command("handoff", args))
+}
+
+fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
+    Some(app.send_command("name", Some(json!({ "text": rest }))))
+}
+
+fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
+    // A reloaded extension draws again: its next failure reports anew.
+    app.renderer_reported.clear();
+    Some(app.send_command("reload", None))
+}
+
+fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.close())
+}
+
+fn run_quit(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.quit())
+}
+
+fn run_approvals(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.next_request())
+}
+
+fn run_settings(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Settings))
+}
+
+fn run_keys(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_keys())
+}
+
+fn run_tools(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Tools))
+}
+
+fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Skills))
+}
+
+fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Context))
+}
+
+fn run_usage(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Usage))
+}
+
+fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.quota_view())
+}
+
+fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Rules))
+}
+
+fn run_login(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Login))
+}
+
+fn run_keymap(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    app.open_keymap();
+    Some(Effect::None)
 }
 
 impl App {
@@ -121,24 +350,8 @@ impl App {
         if let Some(effect) = self.home_edit(&edit) {
             return effect;
         }
-        if let Some(map) = self.overlays.keymap.as_mut() {
-            match edit {
-                // Left and Right move between the key map's tabs.
-                Edit::Left => map.move_tab(-1),
-                Edit::Right => map.move_tab(1),
-                // Every other edit does nothing behind the key map; a
-                // paste never reaches the draft.
-                Edit::ShiftEnter
-                | Edit::CtrlJ
-                | Edit::WordLeft
-                | Edit::WordRight
-                | Edit::DeleteWord
-                | Edit::LineStart
-                | Edit::LineEnd
-                | Edit::Delete
-                | Edit::Paste(_) => {}
-            }
-            return Effect::None;
+        if let Some(effect) = self.keyboard.edit_key(&edit) {
+            return effect;
         }
         // The `/keys` screen takes every stroke in `on_press`, so only
         // a paste reaches here, and it does nothing behind the screen.
@@ -161,7 +374,7 @@ impl App {
             return effect;
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
-        self.overlays.selected = 0;
+        self.completion.selected = 0;
         let effect = self.query_changed();
         self.settle();
         effect
@@ -200,82 +413,6 @@ impl App {
         }
     }
 
-    /// The completion panel above the input line, while one is open and
-    /// the approval panel is closed. An empty `/` list shows "no
-    /// matches", an empty `@` result "no files match"; before an `@`
-    /// search answers, no panel shows.
-    pub(crate) fn completions(&self) -> Option<Completions> {
-        if self.panel().is_some() {
-            return None;
-        }
-        if let Some(search) = self.search_panel() {
-            return Some(search);
-        }
-        if self.slash_open() {
-            let query = self.slash_query();
-            let all: Vec<slash::Row> = slash::filter(&self.overlays.slash_rows, &query)
-                .into_iter()
-                .cloned()
-                .collect();
-            return Some(Completions::slash(all, self.overlays.selected, query));
-        }
-        let query = self.file_query().unwrap_or_default();
-        match self
-            .overlays
-            .files
-            .as_ref()
-            .and_then(|panel| panel.result.as_ref())
-        {
-            Some(Ok(paths)) => Some(Completions::files(paths, self.overlays.selected, query)),
-            Some(Err(error)) => Some(Completions::message(format!("No files: {error}"), query)),
-            None => None,
-        }
-    }
-
-    /// Whether the `/` panel is open: the draft starts with `/`, holds no
-    /// whitespace, and Esc has not closed the panel for it.
-    fn slash_open(&self) -> bool {
-        let text = self.draft.expand();
-        !self.overlays.slash_closed && text.starts_with('/') && !text.contains(char::is_whitespace)
-    }
-
-    /// The text after the `/`.
-    fn slash_query(&self) -> String {
-        self.draft.expand().get(1..).unwrap_or_default().to_owned()
-    }
-
-    /// The names of the `/` panel's rows, in order.
-    fn slash_names(&self) -> Vec<String> {
-        slash::filter(&self.overlays.slash_rows, &self.slash_query())
-            .into_iter()
-            .map(|row| row.name.clone())
-            .collect()
-    }
-
-    /// The paths the `@` panel offers, in order.
-    fn file_paths(&self) -> &[String] {
-        match self
-            .overlays
-            .files
-            .as_ref()
-            .and_then(|panel| panel.result.as_ref())
-        {
-            Some(Ok(paths)) => paths,
-            Some(Err(_)) | None => &[],
-        }
-    }
-
-    /// The `@` panel's query: the text after its `@` up to whitespace.
-    fn file_query(&self) -> Option<String> {
-        let anchor = self.overlays.files.as_ref()?.anchor;
-        self.draft.mention(anchor).map(|(query, _)| query)
-    }
-
-    /// Whether the `@` panel is open.
-    pub(crate) fn files_open(&self) -> bool {
-        self.overlays.files.is_some()
-    }
-
     /// The workspace in use: the attached session's row workspace on
     /// home, else the launch directory, else none on a remote home.
     /// Never an empty path: every conversion filters empty values out.
@@ -289,180 +426,7 @@ impl App {
 
     /// The current search generation.
     pub(crate) fn generation(&self) -> u64 {
-        self.overlays.generation
-    }
-
-    /// A search result tagged `generation`: shown when it is the current
-    /// generation and the `@` panel is open; otherwise it is stale and
-    /// changes nothing.
-    pub(crate) fn on_files(&mut self, generation: u64, result: Result<Vec<String>, String>) {
-        if generation != self.overlays.generation {
-            return;
-        }
-        if let Some(panel) = &mut self.overlays.files {
-            let len = result.as_ref().map_or(0, Vec::len);
-            self.overlays.selected = self.overlays.selected.min(len.saturating_sub(1));
-            panel.result = Some(result);
-        }
-        self.settle();
-    }
-
-    /// Keeps the panels in step with the draft after every key: the `/`
-    /// panel may open again once the draft no longer starts with `/`, and
-    /// the `@` panel closes once its `@` is gone or the cursor leaves the
-    /// query, the text from the `@` to whitespace.
-    pub(super) fn edited(&mut self) {
-        self.history.sync(&self.draft.expand());
-        if !self.draft.expand().starts_with('/') {
-            self.overlays.slash_closed = false;
-        }
-        if let Some(panel) = &self.overlays.files
-            && self.draft.mention(panel.anchor).is_none()
-        {
-            self.overlays.files = None;
-        }
-    }
-
-    /// Types one character at the cursor. An `@` at the draft's start or
-    /// after whitespace opens the `@` panel.
-    pub(super) fn type_char(&mut self, ch: char) -> Effect {
-        let opens = ch == '@' && self.draft.after_space();
-        self.draft.insert(ch);
-        self.overlays.selected = 0;
-        if opens {
-            self.overlays.files = Some(FilePanel {
-                anchor: self.draft.position().saturating_sub(1),
-                result: None,
-            });
-            self.overlays.generation = self.overlays.generation.saturating_add(1);
-            return self.search_files(String::new(), true);
-        }
-        self.query_changed()
-    }
-
-    /// Deletes the piece before the cursor.
-    pub(super) fn backspace(&mut self) -> Effect {
-        self.draft.backspace();
-        self.overlays.selected = 0;
-        self.query_changed()
-    }
-
-    /// After an edit: a new search while the `@` panel stays open.
-    fn query_changed(&mut self) -> Effect {
-        self.edited();
-        let Some(query) = self.file_query() else {
-            return Effect::None;
-        };
-        self.overlays.generation = self.overlays.generation.saturating_add(1);
-        self.search_files(query, false)
-    }
-
-    /// Remote panels never start a client-side walk, including while detached.
-    fn search_files(&mut self, query: String, fresh: bool) -> Effect {
-        if let Some(remote) = self.remote() {
-            // With no local workspace no hub search runs: there is no
-            // directory to list.
-            let Some(workspace) = self.workspace() else {
-                return Effect::None;
-            };
-            if let Err(error) = remote.search(&workspace, &query, fresh, self.overlays.generation) {
-                self.on_files(self.overlays.generation, Err(error.to_string()));
-            }
-            Effect::None
-        } else if fresh {
-            Effect::ListFiles
-        } else {
-            Effect::Search {
-                generation: self.overlays.generation,
-                query,
-            }
-        }
-    }
-
-    /// A key for the open completion panel; `None` when no panel is open
-    /// or the key is the input box's.
-    pub(super) fn completion_key(&mut self, key: &Key) -> Option<Effect> {
-        let names = if self.slash_open() {
-            self.slash_names()
-        } else if self.overlays.files.is_some() {
-            self.file_paths().to_vec()
-        } else {
-            return None;
-        };
-        let chosen = names.get(self.overlays.selected).cloned();
-        match key {
-            Key::Up => self.overlays.selected = self.overlays.selected.saturating_sub(1),
-            Key::Down => {
-                self.overlays.selected = self
-                    .overlays
-                    .selected
-                    .saturating_add(1)
-                    .min(names.len().saturating_sub(1));
-            }
-            Key::Esc => {
-                if self.overlays.files.take().is_none() {
-                    self.overlays.slash_closed = true;
-                }
-            }
-            Key::Tab | Key::Enter => {
-                let chosen = chosen?;
-                if let Some(panel) = self.overlays.files.take() {
-                    if chosen.ends_with('/')
-                        && let Some((_, end)) = self.draft.mention(panel.anchor)
-                    {
-                        // A directory row enters the new base and keeps
-                        // searching it: the `@` stays and the text after
-                        // it becomes the row, with no trailing space. The
-                        // panel stays open on a newer generation, and the
-                        // old rows go, so Enter never inserts a stale one.
-                        self.draft
-                            .replace(panel.anchor.saturating_add(1)..end, &chosen);
-                        self.overlays.files = Some(FilePanel {
-                            anchor: panel.anchor,
-                            result: None,
-                        });
-                        self.overlays.selected = 0;
-                        self.overlays.generation = self.overlays.generation.saturating_add(1);
-                        let Some(query) = self.file_query() else {
-                            return Some(Effect::None);
-                        };
-                        return Some(self.search_files(query, false));
-                    }
-                    let end = self
-                        .draft
-                        .mention(panel.anchor)
-                        .map_or(panel.anchor, |(_, end)| end);
-                    self.draft.replace(panel.anchor..end, &format!("{chosen} "));
-                } else if *key == Key::Tab {
-                    self.draft.set(&format!("/{chosen} "));
-                } else {
-                    self.draft.set(&format!("/{chosen}"));
-                    return Some(self.on_enter());
-                }
-            }
-            // Ctrl+V never reaches the draft behind an open panel.
-            Key::CtrlV | Key::CtrlL => {}
-            Key::Char(_)
-            | Key::Backspace
-            | Key::CtrlC
-            | Key::PageUp
-            | Key::PageDown
-            | Key::End
-            | Key::AltA
-            | Key::AltUp
-            | Key::AltDown
-            | Key::AltX
-            | Key::AltP
-            | Key::AltR
-            | Key::AltDigit(_)
-            | Key::BackTab
-            | Key::F1
-            | Key::CtrlO
-            | Key::CtrlG
-            | Key::CtrlR
-            | Key::CtrlF => return None,
-        }
-        Some(Effect::None)
+        self.completion.generation
     }
 
     /// Runs the draft when its first word is an extension command or a
@@ -477,7 +441,7 @@ impl App {
         let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
         let name = head.strip_prefix('/')?;
-        if self.overlays.extensions.iter().any(|known| known == name) {
+        if self.completion.extensions.iter().any(|known| known == name) {
             let rest = rest.trim();
             let args = if rest.is_empty() {
                 Some(json!({"name": name}))
@@ -490,69 +454,10 @@ impl App {
             return None;
         }
         let rest = rest.trim().to_owned();
-        let effect = match name {
-            "home" => self.leave_on_row(),
-            "new" => self.leave(),
-            "resume" => self.resume_list(),
-            "model" => {
-                self.draft.clear();
-                self.open_model_picker(crate::model_picker::Mode::Choose)
-            }
-            "thinking" => self.thinking_command(&rest),
-            "scoped-models" => self.scoped_models_command(),
-            "panel" => {
-                self.draft.clear();
-                self.toggle_panel()
-            }
-            "rail" => {
-                self.draft.clear();
-                self.toggle_rail()
-            }
-            "handoff" => {
-                let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-                self.send_command("handoff", args)
-            }
-            "name" => self.send_command("name", Some(json!({ "text": rest }))),
-            "reload" => {
-                // A reloaded extension draws again: its next failure
-                // reports anew.
-                self.renderer_reported.clear();
-                self.send_command("reload", None)
-            }
-            "close" => self.close(),
-            "quit" => self.quit(),
-            "approvals" => {
-                self.draft.clear();
-                self.next_request()
-            }
-            "settings" => self.open_config_view(super::ConfigView::Settings),
-            "keys" => self.open_keys(),
-            "tools" => self.open_config_view(super::ConfigView::Tools),
-            "skills" => self.open_config_view(super::ConfigView::Skills),
-            "context" => {
-                self.draft.clear();
-                self.open_session_view(super::SessionView::Context)
-            }
-            "usage" => {
-                self.draft.clear();
-                self.open_session_view(super::SessionView::Usage)
-            }
-            "quota" => {
-                self.draft.clear();
-                self.quota_view()
-            }
-            "rules" => self.open_config_view(super::ConfigView::Rules),
-            "login" => self.open_config_view(super::ConfigView::Login),
-            // `?` and `help`.
-            "?" | "help" => {
-                self.draft.clear();
-                self.overlays.keymap = Some(KeyMap::default());
-                Effect::None
-            }
-            // A built-in the terminal does not run goes out as typed.
-            _ => return None,
-        };
-        Some(effect)
+        // One table drives dispatch: a built-in the terminal does not
+        // draw goes out as typed.
+        let entry = TABLE.iter().find(|entry| entry.name == name)?;
+        (entry.run)(self, &rest)
     }
 
     /// Returns to the screen before a session: the conversation and the
@@ -596,9 +501,9 @@ impl App {
         self.panel_state.reset();
         self.session_views_reset();
         self.offer = crate::offer::Offer::default();
-        self.overlays.slash_rows = slash::rows(&[]);
-        self.overlays.extensions.clear();
-        self.overlays.commands_id = None;
+        self.completion.slash_rows = slash::rows(&[]);
+        self.completion.extensions.clear();
+        self.completion.commands_id = None;
         true
     }
 
@@ -612,7 +517,7 @@ impl App {
             self.draft.clear();
             return None;
         };
-        (self.link == Link::Up).then(|| (session.clone(), *busy))
+        (self.outbox.link == Link::Up).then(|| (session.clone(), *busy))
     }
 
     /// Sends `command` to the attached session. A rejection returns the
@@ -624,7 +529,7 @@ impl App {
         let id = mint();
         let line = session_command(&id, command, &session, args).to_string();
         let draft = std::mem::take(&mut self.draft);
-        self.pending.insert(id, (Kind::Command, draft));
+        self.outbox.insert(id, Kind::Command, draft);
         Effect::Send(vec![line])
     }
 
@@ -638,74 +543,52 @@ impl App {
         let lines =
             vec![session_command(&id, "close", &session, Some(json!({"now": true}))).to_string()];
         // Home has a fresh draft: a rejected `close` gives only its notice.
-        self.pending.insert(id, (Kind::Command, Draft::default()));
+        self.outbox.insert(id, Kind::Command, Draft::default());
         self.go_home();
         Effect::Send(lines)
     }
 
     /// The key map overlay's state, while it is open.
     pub(crate) fn keymap(&self) -> Option<&KeyMap> {
-        self.overlays.keymap.as_ref()
+        self.keyboard.keymap()
     }
 
     /// The key map overlay's top row, while it is open.
     pub(crate) fn keymap_top(&self) -> Option<usize> {
-        self.overlays.keymap.as_ref().map(KeyMap::top)
+        self.keyboard.keymap_top()
     }
 
     /// Closes the key map before a swapped view takes the conversation.
     pub(super) fn close_keymap(&mut self) {
-        self.overlays.keymap = None;
+        self.keyboard.close_keymap();
     }
 
     /// Opens the key map overlay at its top.
     pub(super) fn open_keymap(&mut self) -> Effect {
-        self.overlays.keymap = Some(KeyMap::default());
-        Effect::None
+        self.keyboard.open_keymap()
     }
 
     /// A key while the key map is open: it takes every key but Ctrl+C,
     /// ⌥R and ⌥1–9, which arm quit and switch sessions past it. `None`
     /// while it is closed.
     pub(super) fn keymap_key(&mut self, key: &Key) -> Option<Effect> {
-        use crate::keymap::KeyPress;
         let width = self.column_width();
         let height = self.conversation_height();
         let keyset = self.keys().clone();
-        let map = self.overlays.keymap.as_mut()?;
-        // The frame docks full width, so the inner columns are the
-        // conversation's less the frame's four blank ones.
-        match map.press(key, &keyset, width.saturating_sub(4), height) {
-            KeyPress::Close => self.overlays.keymap = None,
-            KeyPress::Through => return None,
-            KeyPress::Handled => {}
-        }
-        Some(Effect::None)
+        self.keyboard.keymap_key(key, &keyset, width, height)
     }
 
     /// A `commands` line for `session`, sent on attach and after each
     /// `reloaded`; its answer, and no older one, fills the `/` list.
     /// Until it answers, the list holds the built-ins only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
-        let id = mint();
-        let line = session_command(&id, "commands", session, None).to_string();
-        self.overlays.slash_rows = slash::rows(&[]);
-        self.overlays.extensions.clear();
-        self.overlays.commands_id = Some(id);
-        line
+        self.completion.ask_commands(session)
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
     /// sent replaces the session's rows of the `/` list.
     pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) {
-        if self.overlays.commands_id.as_deref() != Some(accepted.command_id.0.as_str()) {
-            return;
-        }
-        if let Some(CommandResult::Commands { commands }) = &accepted.result {
-            self.overlays.slash_rows = slash::rows(commands);
-            self.overlays.extensions = slash::extensions(commands);
-            self.overlays.commands_id = None;
-        }
+        self.completion.commands_answered(accepted);
     }
 
     /// Enter sends the draft: `start` with no session, `prompt` when
@@ -733,7 +616,7 @@ impl App {
         }
         // A command sent after the connection is lost goes nowhere, so the
         // draft stays. An empty draft stays too, unless it holds an image.
-        if matches!(self.link, Link::Down | Link::Refused) {
+        if matches!(self.outbox.link, Link::Down | Link::Refused) {
             return Effect::None;
         }
         if !has_image && text.trim().is_empty() {
@@ -787,15 +670,10 @@ impl App {
             };
         }
         let draft = std::mem::take(&mut self.draft);
-        self.pending.insert(id, (kind, draft));
         let line = line.to_string();
-        if self.link == Link::Up {
-            Effect::Send(vec![line])
-        } else {
-            // An Enter before the hub connects is held, not lost: `start`
-            // goes out once the hub speaks `hub_hello`.
-            self.held.push(line);
-            Effect::None
+        match self.outbox.send(id, kind, draft, line) {
+            Some(line) => Effect::Send(vec![line]),
+            None => Effect::None,
         }
     }
 
@@ -806,7 +684,7 @@ impl App {
         let id = mint();
         let args = content_arg(&draft);
         let line = session_command(&id, "prompt", session, Some(args)).to_string();
-        self.pending.insert(id, (Kind::Prompt, draft));
+        self.outbox.insert(id, Kind::Prompt, draft);
         line
     }
 
@@ -823,7 +701,7 @@ impl App {
         };
         let id = mint();
         let line = session_command(&id, "cancel", &session, None).to_string();
-        self.pending.insert(id, (Kind::Cancel, Draft::default()));
+        self.outbox.insert(id, Kind::Cancel, Draft::default());
         Effect::Send(vec![line])
     }
 
@@ -863,7 +741,7 @@ impl App {
             (Ok(text), Target::Draft) => self.draft.edited(&text),
             (Ok(_), Target::Item) => {}
         }
-        self.overlays.selected = 0;
+        self.completion.selected = 0;
         self.edited();
         self.settle();
     }
@@ -888,5 +766,9 @@ impl App {
 }
 
 #[cfg(test)]
-#[path = "app_commands_tests.rs"]
+#[path = "commands_testkit.rs"]
+pub(crate) mod commands_testkit;
+
+#[cfg(test)]
+#[path = "commands_tests.rs"]
 mod tests;

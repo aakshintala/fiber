@@ -1261,7 +1261,7 @@ fn clicking_a_row_tail_only_selects_the_row() {
 fn a_non_row_click_in_a_usage_quota_or_context_view_selects_nothing() {
     for view in [SessionView::Usage, SessionView::Quota, SessionView::Context] {
         let mut app = attached(80, 24);
-        app.link = crate::app::Link::Up;
+        app.outbox.link = crate::app::Link::Up;
         app.on_line(usage_line(SESSION, "g1", "model/m", None));
         app.on_line(context_preamble());
         app.on_line(context_status(50, 100));
@@ -1419,7 +1419,7 @@ fn sent(effect: Effect) -> Vec<Value> {
 #[test]
 fn slash_quota_opens_the_view_and_fetches_with_fetch_true() {
     let mut app = attached(80, 24);
-    app.link = crate::app::Link::Up;
+    app.outbox.link = crate::app::Link::Up;
     let lines = sent(slash_quota(&mut app));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "quota");
@@ -1452,7 +1452,7 @@ fn slash_quota_without_a_session_shows_a_notice_and_sends_nothing() {
 #[test]
 fn the_fetch_answer_redraws_the_view_and_clears_fetching() {
     let mut app = attached(80, 24);
-    app.link = crate::app::Link::Up;
+    app.outbox.link = crate::app::Link::Up;
     let lines = sent(slash_quota(&mut app));
     let id = lines[0]["id"].as_str().unwrap().to_owned();
     app.on_line(session_line(
@@ -1475,7 +1475,7 @@ fn the_fetch_answer_redraws_the_view_and_clears_fetching() {
 fn the_quota_view_renders_reset_times_against_the_injected_wall_clock() {
     const WALL_MS: u64 = 1_700_000_000_000;
     let mut app = attached(80, 24);
-    app.link = crate::app::Link::Up;
+    app.outbox.link = crate::app::Link::Up;
     app.set_now(now(), WALL_MS);
     let lines = sent(slash_quota(&mut app));
     let id = lines[0]["id"].as_str().unwrap().to_owned();

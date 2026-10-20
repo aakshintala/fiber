@@ -53,7 +53,7 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
-        if self.link != Link::Up {
+        if self.outbox.link != Link::Up {
             return Effect::None;
         }
         let command_id = mint();

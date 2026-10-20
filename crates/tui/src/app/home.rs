@@ -478,7 +478,7 @@ impl App {
     /// first unscoped `recent` page. The session list fills in when the
     /// hub's feed arrives.
     pub(super) fn home_outgoing(&mut self) -> Vec<String> {
-        if self.link != Link::Up {
+        if self.outbox.link != Link::Up {
             return Vec::new();
         }
         let mut asks = self.picker_asks();
@@ -559,7 +559,7 @@ impl App {
                     // box until the next `start` goes out. Reading
                     // `pending` first, it still reaches the rejection
                     // below, staying a notice as today.
-                    if !accepted && let Some((Kind::Start, _)) = self.pending.get(id) {
+                    if !accepted && let Some((Kind::Start, _)) = self.outbox.pending.get(id) {
                         if let Some(message) = hub.payload.get("message").and_then(Value::as_str)
                             && let Some(home) = self.home.as_mut()
                         {
@@ -964,7 +964,7 @@ impl App {
     /// Asks the first unscoped `recent` page again: an accepted delete
     /// fills the gap it left.
     fn ask_recent_first(&mut self) -> Vec<String> {
-        if self.link != Link::Up {
+        if self.outbox.link != Link::Up {
             return Vec::new();
         }
         let Some(home) = self.home.as_mut() else {

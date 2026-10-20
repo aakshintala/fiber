@@ -1,6 +1,7 @@
 //! Tests for the `/` list.
 
-use super::{BUILT_INS, Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
+use super::{Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
+use crate::app::commands::TABLE;
 use contract::commands::BUILT_IN_COMMANDS;
 use contract::events::CommandInfo;
 
@@ -45,22 +46,101 @@ fn template_row(name: &str) -> CommandInfo {
     }
 }
 
+/// The `/` list's built-in order, as drawn: the table keeps this order,
+/// and `docs/tui.md`'s "Slash commands" table matches it.
+const DRAWN_ORDER: &[&str] = &[
+    "home",
+    "new",
+    "resume",
+    "model",
+    "thinking",
+    "scoped-models",
+    "tools",
+    "context",
+    "usage",
+    "quota",
+    "panel",
+    "rail",
+    "rules",
+    "settings",
+    "keys",
+    "skills",
+    "handoff",
+    "name",
+    "login",
+    "reload",
+    "close",
+    "quit",
+    "approvals",
+    "?",
+    "help",
+];
+
+#[test]
+fn the_list_draws_every_drawn_command_once_in_drawn_order() {
+    let all = rows(&[]);
+    let names: Vec<&str> = all.iter().map(|row| row.name.as_str()).collect();
+    assert_eq!(names, DRAWN_ORDER);
+}
+
+// debt: this parser duplicates crates/contract/src/commands_tests.rs:609;
+// the dependency runs tui -> contract, so contract cannot name tui's
+// DRAWN_ORDER, and inlining the drawn order as a literal in contract
+// would make three sync points for one order; the plan fence places
+// doc-order tests in slash_tests. Revisit if the doc-table format
+// changes (both parsers change together) or a shared test-support
+// crate appears.
+#[test]
+fn the_doc_table_lists_the_drawn_commands_in_drawn_order() {
+    let doc = include_str!("../../../docs/tui.md");
+    let table = doc.split("### Slash commands").nth(1).unwrap();
+    let mut names = Vec::new();
+    for line in table.lines().skip_while(|l| !l.starts_with("| `")) {
+        if !line.starts_with("| `") {
+            break;
+        }
+        let cell = line.split('|').nth(1).unwrap_or("");
+        for part in cell.split(',') {
+            let part = part.trim().trim_matches('`');
+            // `/handoff [instructions]`, `/?`.
+            let name = part
+                .trim_start_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            if !name.is_empty() {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    let drawn: Vec<String> = names
+        .into_iter()
+        .filter(|name| DRAWN_ORDER.contains(&name.as_str()))
+        .collect();
+    assert_eq!(drawn, DRAWN_ORDER);
+}
+
 #[test]
 fn built_ins_are_drawn_built_ins_plus_credential_and_rewind() {
-    for (name, _, _) in BUILT_INS {
+    for name in table_names() {
         assert!(
-            BUILT_IN_COMMANDS.contains(name),
+            BUILT_IN_COMMANDS.contains(&name),
             "{name} drawn but not in the contract list"
         );
     }
     let extra: Vec<&&str> = BUILT_IN_COMMANDS
         .iter()
-        .filter(|name| !BUILT_INS.iter().any(|(built_in, _, _)| built_in == *name))
+        .filter(|name| !table_names().contains(name))
         .collect();
     assert_eq!(extra, [&"credential", &"rewind"]);
     assert!(is_built_in("credential"));
     assert!(is_built_in("rewind"));
     assert!(!is_built_in("tdd"));
+}
+
+/// The table's names, in order.
+fn table_names() -> Vec<&'static str> {
+    TABLE.iter().map(|entry| entry.name).collect()
 }
 
 fn names(rows: &[&Row]) -> Vec<String> {
@@ -72,10 +152,10 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
     let all = rows(&[skill("tdd"), skill("review")]);
     let all: Vec<&Row> = all.iter().collect();
     let built_ins = rows(&[]).len();
-    let table_names: Vec<&str> = BUILT_INS.iter().map(|(name, _, _)| *name).collect();
-    assert_eq!(table_names.len(), built_ins);
+    let listed = table_names();
+    assert_eq!(listed.len(), built_ins);
     let (table, answered) = all.split_at(built_ins);
-    assert_eq!(names(table), table_names);
+    assert_eq!(names(table), listed);
     assert!(table.iter().all(|row| is_built_in(&row.name)));
     assert_eq!(names(answered), ["tdd", "review"]);
     assert!(table.iter().all(|row| row.tag == "command"));
@@ -122,14 +202,23 @@ fn an_extension_row_takes_its_built_in_slot() {
     let all = rows(&[model, skill("tdd")]);
     let models: Vec<&Row> = all.iter().filter(|row| row.name == "model").collect();
     assert_eq!(models.len(), 1);
-    let table_names: Vec<&str> = BUILT_INS.iter().map(|(name, _, _)| *name).collect();
-    let at = table_names
+    let at = table_names()
         .iter()
         .position(|name| *name == "model")
         .unwrap();
     assert_eq!(all[at].name, "model");
     assert_eq!(all[at].tag, "acme");
     assert_eq!(all[at].line(), "/model [speed]  Picks a fast model.  acme");
+    // Every drawn slot, including the `?`/`help` shared-handler rows,
+    // keeps its position with the extension's tag.
+    let plain = rows(&[]);
+    for name in DRAWN_ORDER {
+        let at = plain.iter().position(|row| row.name == *name).unwrap();
+        let with = rows(&[extension_row(name)]);
+        assert_eq!(with.len(), plain.len(), "{name}");
+        assert_eq!(with[at].name, *name);
+        assert_eq!(with[at].tag, "acme");
+    }
 }
 
 #[test]

@@ -2882,6 +2882,38 @@ fn x_on_a_subscribed_row_sends_close_now_only() {
 }
 
 #[test]
+fn an_accepted_stop_drops_its_kept_line() {
+    let mut app = home();
+    two_rows(&mut app);
+    let lines = stop(&mut app);
+    let close = lines
+        .iter()
+        .find(|line| line["command"] == "close")
+        .unwrap_or_else(|| panic!("the ✕ closes: {lines:?}"));
+    let id = close["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    // The loop writes the close: a reconnect would send it again.
+    app.outbox.wrote(&close.to_string());
+    assert!(app.outbox.is_kept(id));
+    app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", id));
+    assert!(!app.outbox.is_kept(id));
+}
+
+#[test]
+fn take_ask_for_an_unknown_command_keeps_its_pending_entry() {
+    // Every command answer passes `take_ask` on its way through home:
+    // only a taken ask settles anything.
+    let mut app = home();
+    two_rows(&mut app);
+    app.outbox.insert(
+        "c_1".to_owned(),
+        crate::app::Kind::Start,
+        crate::input::Draft::default(),
+    );
+    assert!(app.take_ask("c_1").is_none());
+    assert!(app.outbox.pending.contains_key("c_1"));
+}
+
+#[test]
 fn the_foot_names_the_key_maps_bound_key() {
     let mut app = home();
     let mut user = serde_json::Map::new();

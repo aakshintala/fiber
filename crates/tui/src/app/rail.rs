@@ -451,7 +451,7 @@ impl App {
             // dropped link keeps a card's focus: Enter is inert there
             // until reconnect.
             if matches!(spot, Spot::Card(_))
-                && (self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }))
+                && (self.outbox.link != Link::Up || matches!(self.phase, Phase::Pending { .. }))
             {
                 return Some(Effect::None);
             }
@@ -692,7 +692,7 @@ impl App {
     /// agrees (`docs/tui.md`, "The rail"). Nothing goes out with the link
     /// not up or for a card that is not crashed.
     fn dismiss_card(&mut self, key: u64) -> Effect {
-        if self.link != Link::Up {
+        if self.outbox.link != Link::Up {
             return Effect::None;
         }
         let Some(session) = self
@@ -737,7 +737,7 @@ impl App {
     /// drops rail focus: the rail shows the new session on screen.
     fn switch_to(&mut self, key: u64) -> Effect {
         self.clear_rail_focus();
-        if self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
+        if self.outbox.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
             return Effect::None;
         }
         let Some(row) = self
