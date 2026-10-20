@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use contract::SessionId;
-use contract::events::{CommandAccepted, CommandResult};
+use contract::events::CommandAccepted;
 use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
@@ -22,53 +22,6 @@ use crate::slash;
 const NO_SESSION: &str = "No session on screen.";
 
 /// The `@` panel's state.
-#[derive(Debug)]
-pub(super) struct FilePanel {
-    /// The draft position of the `@`.
-    anchor: usize,
-    /// The latest search result: matching paths, or why there are none.
-    result: Option<Result<Vec<String>, String>>,
-}
-
-/// The `/` and `@` panels' and the key map overlay's state.
-#[derive(Debug)]
-pub(super) struct Overlays {
-    /// The `/` list: built-in commands, then the attached session's
-    /// `commands` answer.
-    slash_rows: Vec<slash::Row>,
-    /// The extension commands of the latest `commands` answer, in answer
-    /// order: only its answer fills the list.
-    extensions: Vec<String>,
-    /// The id of the latest `commands` sent; only its answer fills the list.
-    commands_id: Option<String>,
-    /// Esc closed the `/` panel for this draft.
-    slash_closed: bool,
-    /// The selected row of the open completion panel.
-    selected: usize,
-    /// The `@` panel, while open.
-    files: Option<FilePanel>,
-    /// Bumped when the `@` panel opens and on every query change, never
-    /// reset; a search result tagged with another is stale.
-    generation: u64,
-    /// The key map overlay's state, while it is open.
-    keymap: Option<KeyMap>,
-}
-
-impl Default for Overlays {
-    fn default() -> Self {
-        Self {
-            slash_rows: slash::rows(&[]),
-            extensions: Vec::new(),
-            commands_id: None,
-            slash_closed: false,
-            selected: 0,
-            files: None,
-            generation: 0,
-            keymap: None,
-        }
-    }
-}
-
 pub(crate) use crate::completion_rows::{Completions, Rows};
 
 /// The draft's content as a prompt's `content` argument: text runs and
@@ -358,7 +311,7 @@ fn run_login(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_keymap(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
-    app.overlays.keymap = Some(KeyMap::default());
+    app.open_keymap();
     Some(Effect::None)
 }
 
@@ -402,24 +355,8 @@ impl App {
         if let Some(effect) = self.home_edit(&edit) {
             return effect;
         }
-        if let Some(map) = self.overlays.keymap.as_mut() {
-            match edit {
-                // Left and Right move between the key map's tabs.
-                Edit::Left => map.move_tab(-1),
-                Edit::Right => map.move_tab(1),
-                // Every other edit does nothing behind the key map; a
-                // paste never reaches the draft.
-                Edit::ShiftEnter
-                | Edit::CtrlJ
-                | Edit::WordLeft
-                | Edit::WordRight
-                | Edit::DeleteWord
-                | Edit::LineStart
-                | Edit::LineEnd
-                | Edit::Delete
-                | Edit::Paste(_) => {}
-            }
-            return Effect::None;
+        if let Some(effect) = self.keyboard.edit_key(&edit) {
+            return effect;
         }
         // The `/keys` screen takes every stroke in `on_press`, so only
         // a paste reaches here, and it does nothing behind the screen.
@@ -442,7 +379,7 @@ impl App {
             return effect;
         }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
-        self.overlays.selected = 0;
+        self.completion.selected = 0;
         let effect = self.query_changed();
         self.settle();
         effect
@@ -481,82 +418,6 @@ impl App {
         }
     }
 
-    /// The completion panel above the input line, while one is open and
-    /// the approval panel is closed. An empty `/` list shows "no
-    /// matches", an empty `@` result "no files match"; before an `@`
-    /// search answers, no panel shows.
-    pub(crate) fn completions(&self) -> Option<Completions> {
-        if self.panel().is_some() {
-            return None;
-        }
-        if let Some(search) = self.search_panel() {
-            return Some(search);
-        }
-        if self.slash_open() {
-            let query = self.slash_query();
-            let all: Vec<slash::Row> = slash::filter(&self.overlays.slash_rows, &query)
-                .into_iter()
-                .cloned()
-                .collect();
-            return Some(Completions::slash(all, self.overlays.selected, query));
-        }
-        let query = self.file_query().unwrap_or_default();
-        match self
-            .overlays
-            .files
-            .as_ref()
-            .and_then(|panel| panel.result.as_ref())
-        {
-            Some(Ok(paths)) => Some(Completions::files(paths, self.overlays.selected, query)),
-            Some(Err(error)) => Some(Completions::message(format!("No files: {error}"), query)),
-            None => None,
-        }
-    }
-
-    /// Whether the `/` panel is open: the draft starts with `/`, holds no
-    /// whitespace, and Esc has not closed the panel for it.
-    fn slash_open(&self) -> bool {
-        let text = self.draft.expand();
-        !self.overlays.slash_closed && text.starts_with('/') && !text.contains(char::is_whitespace)
-    }
-
-    /// The text after the `/`.
-    fn slash_query(&self) -> String {
-        self.draft.expand().get(1..).unwrap_or_default().to_owned()
-    }
-
-    /// The names of the `/` panel's rows, in order.
-    fn slash_names(&self) -> Vec<String> {
-        slash::filter(&self.overlays.slash_rows, &self.slash_query())
-            .into_iter()
-            .map(|row| row.name.clone())
-            .collect()
-    }
-
-    /// The paths the `@` panel offers, in order.
-    fn file_paths(&self) -> &[String] {
-        match self
-            .overlays
-            .files
-            .as_ref()
-            .and_then(|panel| panel.result.as_ref())
-        {
-            Some(Ok(paths)) => paths,
-            Some(Err(_)) | None => &[],
-        }
-    }
-
-    /// The `@` panel's query: the text after its `@` up to whitespace.
-    fn file_query(&self) -> Option<String> {
-        let anchor = self.overlays.files.as_ref()?.anchor;
-        self.draft.mention(anchor).map(|(query, _)| query)
-    }
-
-    /// Whether the `@` panel is open.
-    pub(crate) fn files_open(&self) -> bool {
-        self.overlays.files.is_some()
-    }
-
     /// The workspace in use: the attached session's row workspace on
     /// home, else the launch directory, else none on a remote home.
     /// Never an empty path: every conversion filters empty values out.
@@ -570,180 +431,7 @@ impl App {
 
     /// The current search generation.
     pub(crate) fn generation(&self) -> u64 {
-        self.overlays.generation
-    }
-
-    /// A search result tagged `generation`: shown when it is the current
-    /// generation and the `@` panel is open; otherwise it is stale and
-    /// changes nothing.
-    pub(crate) fn on_files(&mut self, generation: u64, result: Result<Vec<String>, String>) {
-        if generation != self.overlays.generation {
-            return;
-        }
-        if let Some(panel) = &mut self.overlays.files {
-            let len = result.as_ref().map_or(0, Vec::len);
-            self.overlays.selected = self.overlays.selected.min(len.saturating_sub(1));
-            panel.result = Some(result);
-        }
-        self.settle();
-    }
-
-    /// Keeps the panels in step with the draft after every key: the `/`
-    /// panel may open again once the draft no longer starts with `/`, and
-    /// the `@` panel closes once its `@` is gone or the cursor leaves the
-    /// query, the text from the `@` to whitespace.
-    pub(super) fn edited(&mut self) {
-        self.history.sync(&self.draft.expand());
-        if !self.draft.expand().starts_with('/') {
-            self.overlays.slash_closed = false;
-        }
-        if let Some(panel) = &self.overlays.files
-            && self.draft.mention(panel.anchor).is_none()
-        {
-            self.overlays.files = None;
-        }
-    }
-
-    /// Types one character at the cursor. An `@` at the draft's start or
-    /// after whitespace opens the `@` panel.
-    pub(super) fn type_char(&mut self, ch: char) -> Effect {
-        let opens = ch == '@' && self.draft.after_space();
-        self.draft.insert(ch);
-        self.overlays.selected = 0;
-        if opens {
-            self.overlays.files = Some(FilePanel {
-                anchor: self.draft.position().saturating_sub(1),
-                result: None,
-            });
-            self.overlays.generation = self.overlays.generation.saturating_add(1);
-            return self.search_files(String::new(), true);
-        }
-        self.query_changed()
-    }
-
-    /// Deletes the piece before the cursor.
-    pub(super) fn backspace(&mut self) -> Effect {
-        self.draft.backspace();
-        self.overlays.selected = 0;
-        self.query_changed()
-    }
-
-    /// After an edit: a new search while the `@` panel stays open.
-    fn query_changed(&mut self) -> Effect {
-        self.edited();
-        let Some(query) = self.file_query() else {
-            return Effect::None;
-        };
-        self.overlays.generation = self.overlays.generation.saturating_add(1);
-        self.search_files(query, false)
-    }
-
-    /// Remote panels never start a client-side walk, including while detached.
-    fn search_files(&mut self, query: String, fresh: bool) -> Effect {
-        if let Some(remote) = self.remote() {
-            // With no local workspace no hub search runs: there is no
-            // directory to list.
-            let Some(workspace) = self.workspace() else {
-                return Effect::None;
-            };
-            if let Err(error) = remote.search(&workspace, &query, fresh, self.overlays.generation) {
-                self.on_files(self.overlays.generation, Err(error.to_string()));
-            }
-            Effect::None
-        } else if fresh {
-            Effect::ListFiles
-        } else {
-            Effect::Search {
-                generation: self.overlays.generation,
-                query,
-            }
-        }
-    }
-
-    /// A key for the open completion panel; `None` when no panel is open
-    /// or the key is the input box's.
-    pub(super) fn completion_key(&mut self, key: &Key) -> Option<Effect> {
-        let names = if self.slash_open() {
-            self.slash_names()
-        } else if self.overlays.files.is_some() {
-            self.file_paths().to_vec()
-        } else {
-            return None;
-        };
-        let chosen = names.get(self.overlays.selected).cloned();
-        match key {
-            Key::Up => self.overlays.selected = self.overlays.selected.saturating_sub(1),
-            Key::Down => {
-                self.overlays.selected = self
-                    .overlays
-                    .selected
-                    .saturating_add(1)
-                    .min(names.len().saturating_sub(1));
-            }
-            Key::Esc => {
-                if self.overlays.files.take().is_none() {
-                    self.overlays.slash_closed = true;
-                }
-            }
-            Key::Tab | Key::Enter => {
-                let chosen = chosen?;
-                if let Some(panel) = self.overlays.files.take() {
-                    if chosen.ends_with('/')
-                        && let Some((_, end)) = self.draft.mention(panel.anchor)
-                    {
-                        // A directory row enters the new base and keeps
-                        // searching it: the `@` stays and the text after
-                        // it becomes the row, with no trailing space. The
-                        // panel stays open on a newer generation, and the
-                        // old rows go, so Enter never inserts a stale one.
-                        self.draft
-                            .replace(panel.anchor.saturating_add(1)..end, &chosen);
-                        self.overlays.files = Some(FilePanel {
-                            anchor: panel.anchor,
-                            result: None,
-                        });
-                        self.overlays.selected = 0;
-                        self.overlays.generation = self.overlays.generation.saturating_add(1);
-                        let Some(query) = self.file_query() else {
-                            return Some(Effect::None);
-                        };
-                        return Some(self.search_files(query, false));
-                    }
-                    let end = self
-                        .draft
-                        .mention(panel.anchor)
-                        .map_or(panel.anchor, |(_, end)| end);
-                    self.draft.replace(panel.anchor..end, &format!("{chosen} "));
-                } else if *key == Key::Tab {
-                    self.draft.set(&format!("/{chosen} "));
-                } else {
-                    self.draft.set(&format!("/{chosen}"));
-                    return Some(self.on_enter());
-                }
-            }
-            // Ctrl+V never reaches the draft behind an open panel.
-            Key::CtrlV | Key::CtrlL => {}
-            Key::Char(_)
-            | Key::Backspace
-            | Key::CtrlC
-            | Key::PageUp
-            | Key::PageDown
-            | Key::End
-            | Key::AltA
-            | Key::AltUp
-            | Key::AltDown
-            | Key::AltX
-            | Key::AltP
-            | Key::AltR
-            | Key::AltDigit(_)
-            | Key::BackTab
-            | Key::F1
-            | Key::CtrlO
-            | Key::CtrlG
-            | Key::CtrlR
-            | Key::CtrlF => return None,
-        }
-        Some(Effect::None)
+        self.completion.generation
     }
 
     /// Runs the draft when its first word is an extension command or a
@@ -758,7 +446,7 @@ impl App {
         let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
         let name = head.strip_prefix('/')?;
-        if self.overlays.extensions.iter().any(|known| known == name) {
+        if self.completion.extensions.iter().any(|known| known == name) {
             let rest = rest.trim();
             let args = if rest.is_empty() {
                 Some(json!({"name": name}))
@@ -818,9 +506,9 @@ impl App {
         self.panel_state.reset();
         self.session_views_reset();
         self.offer = crate::offer::Offer::default();
-        self.overlays.slash_rows = slash::rows(&[]);
-        self.overlays.extensions.clear();
-        self.overlays.commands_id = None;
+        self.completion.slash_rows = slash::rows(&[]);
+        self.completion.extensions.clear();
+        self.completion.commands_id = None;
         true
     }
 
@@ -867,67 +555,45 @@ impl App {
 
     /// The key map overlay's state, while it is open.
     pub(crate) fn keymap(&self) -> Option<&KeyMap> {
-        self.overlays.keymap.as_ref()
+        self.keyboard.keymap()
     }
 
     /// The key map overlay's top row, while it is open.
     pub(crate) fn keymap_top(&self) -> Option<usize> {
-        self.overlays.keymap.as_ref().map(KeyMap::top)
+        self.keyboard.keymap_top()
     }
 
     /// Closes the key map before a swapped view takes the conversation.
     pub(super) fn close_keymap(&mut self) {
-        self.overlays.keymap = None;
+        self.keyboard.close_keymap();
     }
 
     /// Opens the key map overlay at its top.
     pub(super) fn open_keymap(&mut self) -> Effect {
-        self.overlays.keymap = Some(KeyMap::default());
-        Effect::None
+        self.keyboard.open_keymap()
     }
 
     /// A key while the key map is open: it takes every key but Ctrl+C,
     /// ⌥R and ⌥1–9, which arm quit and switch sessions past it. `None`
     /// while it is closed.
     pub(super) fn keymap_key(&mut self, key: &Key) -> Option<Effect> {
-        use crate::keymap::KeyPress;
         let width = self.column_width();
         let height = self.conversation_height();
         let keyset = self.keys().clone();
-        let map = self.overlays.keymap.as_mut()?;
-        // The frame docks full width, so the inner columns are the
-        // conversation's less the frame's four blank ones.
-        match map.press(key, &keyset, width.saturating_sub(4), height) {
-            KeyPress::Close => self.overlays.keymap = None,
-            KeyPress::Through => return None,
-            KeyPress::Handled => {}
-        }
-        Some(Effect::None)
+        self.keyboard.keymap_key(key, &keyset, width, height)
     }
 
     /// A `commands` line for `session`, sent on attach and after each
     /// `reloaded`; its answer, and no older one, fills the `/` list.
     /// Until it answers, the list holds the built-ins only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
-        let id = mint();
-        let line = session_command(&id, "commands", session, None).to_string();
-        self.overlays.slash_rows = slash::rows(&[]);
-        self.overlays.extensions.clear();
-        self.overlays.commands_id = Some(id);
-        line
+        self.completion.ask_commands(session)
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
     /// sent replaces the session's rows of the `/` list.
     pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) {
-        if self.overlays.commands_id.as_deref() != Some(accepted.command_id.0.as_str()) {
-            return;
-        }
-        if let Some(CommandResult::Commands { commands }) = &accepted.result {
-            self.overlays.slash_rows = slash::rows(commands);
-            self.overlays.extensions = slash::extensions(commands);
-            self.overlays.commands_id = None;
-        }
+        self.completion.commands_answered(accepted);
     }
 
     /// Enter sends the draft: `start` with no session, `prompt` when
@@ -1080,7 +746,7 @@ impl App {
             (Ok(text), Target::Draft) => self.draft.edited(&text),
             (Ok(_), Target::Item) => {}
         }
-        self.overlays.selected = 0;
+        self.completion.selected = 0;
         self.edited();
         self.settle();
     }
@@ -1103,6 +769,10 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "commands_testkit.rs"]
+pub(crate) mod commands_testkit;
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

@@ -40,6 +40,7 @@ mod steering;
 mod attention;
 mod chrome;
 pub(crate) mod commands;
+mod completion;
 mod config_views;
 #[path = "copy.rs"]
 pub(crate) mod copy;
@@ -220,8 +221,8 @@ pub(crate) struct App {
     steering: Steering,
     /// The session's name, from the latest `session_named`.
     name: Option<String>,
-    /// The `/` and `@` panels and the key map overlay.
-    overlays: commands::Overlays,
+    /// The `/` and `@` panels.
+    completion: completion::Completion,
     /// Prompt recall and the Ctrl+R panel.
     history: history::History,
     /// "Copied" shows, from a click on `copy` to the next key or click.
@@ -313,7 +314,7 @@ impl App {
             offer: crate::offer::Offer::default(),
             steering: Steering::default(),
             name: None,
-            overlays: commands::Overlays::default(),
+            completion: completion::Completion::default(),
             history: history::History::default(),
             copied: false,
             pending_turn: None,
