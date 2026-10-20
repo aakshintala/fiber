@@ -22,6 +22,48 @@ use contract::{ErrorCode, SessionId};
 
 use crate::{ask_failed, failed};
 
+/// The process context both session starts share: one reads for the
+/// process with its cancel guard, and the sessions dir. Home and current
+/// directory failures report before any session line is written, exactly
+/// as each function's inlined prologue did. The caller holds the context
+/// to the end of its run, so the reads stay open until the function
+/// returns whatever the result; there is no worktree isolation to outlive
+/// here.
+struct Context {
+    /// The sessions dir: `<home>/<project>/sessions`.
+    sessions: PathBuf,
+    /// One reads for the process.
+    reads: Arc<crate::switch::Reads>,
+    /// Cancels the reads when the caller returns.
+    _cancel: crate::switch::CancelOnDrop,
+}
+
+fn context() -> Result<Context, i32> {
+    // One reads for the process, cancelled when the caller returns
+    // whatever the result.
+    let reads = Arc::new(crate::switch::Reads::default());
+    let cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
+    let home = match config::fiber_home_from_env() {
+        Ok(home) => home,
+        Err(e) => return Err(ask_failed(failed(e.code(), e))),
+    };
+    let workspace = match std::env::current_dir() {
+        Ok(workspace) => workspace,
+        Err(e) => {
+            return Err(ask_failed(failed(
+                ErrorCode::IoFailed,
+                format!("the current directory: {e}"),
+            )));
+        }
+    };
+    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    Ok(Context {
+        sessions,
+        reads,
+        _cancel: cancel,
+    })
+}
+
 /// The internal session command with `--forked-from`/`--forked-seq`:
 /// starts `new` as the fork continuing `from`. A missing `from` log is
 /// `session_not_found`; a fold failure carries its code; a point with no
@@ -44,24 +86,11 @@ pub(crate) fn session_forked(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    // One reads for the process, cancelled when this returns whatever the
-    // result; there is no worktree isolation to outlive here.
-    let reads = Arc::new(crate::switch::Reads::default());
-    let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return ask_failed(failed(e.code(), e)),
+    let context = match context() {
+        Ok(context) => context,
+        Err(code) => return code,
     };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            return ask_failed(failed(
-                ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
-    };
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    let sessions = context.sessions;
     let from_dir = sessions.join(&from.session_id.0);
     // A missing session is `session_not_found`; any other failure to
     // read its directory (permissions, a broken link) is `io_failed`
@@ -138,7 +167,7 @@ pub(crate) fn session_forked(
             worktree,
             how: r#loop::Continuation::Fork { parent },
         }),
-        reads,
+        context.reads,
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),
@@ -155,24 +184,11 @@ pub(crate) fn session_rewound(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    // One reads for the process, cancelled when this returns whatever the
-    // result; there is no worktree isolation to outlive here.
-    let reads = Arc::new(crate::switch::Reads::default());
-    let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
-    let home = match config::fiber_home_from_env() {
-        Ok(home) => home,
-        Err(e) => return ask_failed(failed(e.code(), e)),
+    let context = match context() {
+        Ok(context) => context,
+        Err(code) => return code,
     };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
-        Err(e) => {
-            return ask_failed(failed(
-                ErrorCode::IoFailed,
-                format!("the current directory: {e}"),
-            ));
-        }
-    };
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    let sessions = context.sessions;
     let old_dir = sessions.join(&old.0);
     if !old_dir.is_dir() {
         return ask_failed(failed(
@@ -227,7 +243,7 @@ pub(crate) fn session_rewound(
                 name,
             },
         }),
-        reads,
+        context.reads,
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),

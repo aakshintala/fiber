@@ -442,6 +442,39 @@ pub(crate) struct Starter<'a> {
 }
 
 impl Starter<'_> {
+    /// The shared start, built from either tool's wired fields: the one
+    /// 10-field literal both tools' `starter()` share, so the wiring is
+    /// written once with two users.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one per wired field both delegate tools share"
+    )]
+    fn wired<'a>(
+        registry: &'a Arc<Registry>,
+        parent: &'a SessionId,
+        workspace: &'a PathBuf,
+        sessions: &'a PathBuf,
+        clock: &'a Arc<dyn contract::clock::Clock>,
+        bound: Duration,
+        cap: u64,
+        launch: &'a Launch,
+        watch: &'a Watch,
+        depth: u32,
+    ) -> Starter<'a> {
+        Starter {
+            registry,
+            parent,
+            workspace,
+            sessions,
+            clock,
+            bound,
+            cap,
+            launch,
+            watch,
+            depth,
+        }
+    }
+
     /// Admits, spawns and records one delegate: the cap check, the spawn
     /// and the record run with `start_gate` held, exactly as
     /// `DelegateSpawn::start` did before the fork shared it. `tool` is
@@ -610,36 +643,36 @@ impl Starter<'_> {
 impl DelegateSpawn {
     /// The shared start, built from this tool's wired fields.
     fn starter(&self) -> Starter<'_> {
-        Starter {
-            registry: &self.registry,
-            parent: &self.parent,
-            workspace: &self.workspace,
-            sessions: &self.sessions,
-            clock: &self.clock,
-            bound: self.bound,
-            cap: self.cap,
-            launch: &self.launch,
-            watch: &self.watch,
-            depth: self.depth,
-        }
+        Starter::wired(
+            &self.registry,
+            &self.parent,
+            &self.workspace,
+            &self.sessions,
+            &self.clock,
+            self.bound,
+            self.cap,
+            &self.launch,
+            &self.watch,
+            self.depth,
+        )
     }
 }
 
 impl DelegateFork {
     /// The shared start, built from this tool's wired fields.
     fn starter(&self) -> Starter<'_> {
-        Starter {
-            registry: &self.registry,
-            parent: &self.parent,
-            workspace: &self.workspace,
-            sessions: &self.sessions,
-            clock: &self.clock,
-            bound: self.bound,
-            cap: self.cap,
-            launch: &self.launch,
-            watch: &self.watch,
-            depth: self.depth,
-        }
+        Starter::wired(
+            &self.registry,
+            &self.parent,
+            &self.workspace,
+            &self.sessions,
+            &self.clock,
+            self.bound,
+            self.cap,
+            &self.launch,
+            &self.watch,
+            self.depth,
+        )
     }
 
     /// Runs the fork from its checked arguments and calling action:
