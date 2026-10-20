@@ -970,6 +970,14 @@ that differ are in reverse video. There is no syntax highlighting.
 A group opens by a click, by Ctrl+O, when a search match falls inside its
 ledger, and when one of its calls asks the person.
 
+An opened call or ledger holding the top row pins its header on the
+first conversation row: scrolling into the opened output keeps the call
+row over the covered content row, with the call's tint, so the context of
+what is on screen never scrolls away. The pin is the call's own row, so
+a click on it, or Enter on it focused, closes the call and lands the
+closed row on the top row. Landing, search reveals, focus steps and
+find matches stop under the pin, never on the covered row.
+
 ### Thinking
 
 Thinking belongs to the group it starts, since a group runs from one reply to
