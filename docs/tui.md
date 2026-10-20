@@ -2077,8 +2077,9 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   for the session's last lines. It cuts them into pages and asks for the
   lines before them until it holds the pages that fill the screen up from
   its last row, and begin at a turn's start. When the held run reaches the
-  session's `seq 0` still unfilled, the read continues past it into each
-  ancestor named by `forked_from` until the screen is full. The first frame draws those
+  session's `seq 0`, the read continues past it into each ancestor named
+  by `forked_from`, to the chain root: the display fills, the count
+  streams past filled. The first frame draws those
   pages. The terminal then raises the subscription to `full`.
   The pass goes over the session's lines as the `full` subscription sends
   them. It builds the panel's cards and counts every row, keeping each
@@ -2096,7 +2097,8 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   The one exception: rows that depend on turns before the held pages (an
   orphaned job's completion, an automatic handoff's trigger, a ledger
   toggled earlier: only rows of these kinds) may change in the frame where
-  the pass ends.
+  the pass ends. At an open the preview already holds the whole run to
+  the chain root, so the landing rewrites nothing.
   EOF, `stream_closed`, a failed read, a disconnect and lowering
   to `summary` end the pass too. The feed's `session_left` for a session
   ends that session's pass. Waiting work then runs against what is held,
