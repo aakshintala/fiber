@@ -1,7 +1,7 @@
 //! Tests for the `/` list.
 
 use super::{Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
-use crate::app::commands::dispatch_table;
+use crate::app::commands::TABLE;
 use contract::commands::BUILT_IN_COMMANDS;
 use contract::events::CommandInfo;
 
@@ -81,19 +81,6 @@ fn the_list_draws_every_drawn_command_once_in_drawn_order() {
     let all = rows(&[]);
     let names: Vec<&str> = all.iter().map(|row| row.name.as_str()).collect();
     assert_eq!(names, DRAWN_ORDER);
-    assert!(all.iter().all(|row| row.tag == "command"));
-    for name in DRAWN_ORDER {
-        assert!(is_built_in(name), "{name} drawn but not a built-in");
-    }
-    // The terminal draws every built-in but these two, which go out as
-    // typed.
-    let undrawn: Vec<&&str> = BUILT_IN_COMMANDS
-        .iter()
-        .filter(|name| !DRAWN_ORDER.contains(name))
-        .collect();
-    assert_eq!(undrawn, [&"credential", &"rewind"]);
-    assert!(is_built_in("credential"));
-    assert!(is_built_in("rewind"));
 }
 
 #[test]
@@ -158,7 +145,7 @@ fn built_ins_are_drawn_built_ins_plus_credential_and_rewind() {
 
 /// The table's names, in order.
 fn table_names() -> Vec<&'static str> {
-    dispatch_table().iter().map(|entry| entry.name).collect()
+    TABLE.iter().map(|entry| entry.name).collect()
 }
 
 fn names(rows: &[&Row]) -> Vec<String> {
