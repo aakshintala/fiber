@@ -426,6 +426,13 @@ pub enum CommandResult {
         /// Percent used at which little is left.
         notice_at: f64,
     },
+    /// For `import`: what landed and what was left behind, names only.
+    Import {
+        /// What the import copied, by final name in Fiber home.
+        imported: ImportedNames,
+        /// What the import did not copy, with reasons.
+        left_behind: Vec<LeftBehindEntry>,
+    },
     /// For `offered_file`: the file's text.
     OfferedFile {
         /// The file's full UTF-8 text.
@@ -504,6 +511,35 @@ pub struct QuotaCredit {
     /// The limit, when the provider reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<f64>,
+}
+
+/// What a one-time import copied, by final name in Fiber home: names only,
+/// never secret values (`docs/configuration.md`, "Importing").
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportedNames {
+    /// MCP servers written under `mcp.servers`, by name.
+    #[serde(default)]
+    pub mcp_servers: Vec<String>,
+    /// Skills written under `skills/`, by directory name.
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Flat commands and prompts wrapped as prompt templates, by skill
+    /// directory name.
+    #[serde(default)]
+    pub commands: Vec<String>,
+    /// Instruction files written at the top of Fiber home, by file name.
+    #[serde(default)]
+    pub instructions: Vec<String>,
+}
+
+/// One source item the import did not copy, and why: names only, never a
+/// secret value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeftBehindEntry {
+    /// The source item, by path or name, never a value.
+    pub item: String,
+    /// Why it was not imported.
+    pub reason: String,
 }
 
 /// One declared tool (`docs/tools.md`, "Seeing the tools").

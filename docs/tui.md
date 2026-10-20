@@ -79,7 +79,7 @@ line says so: "Connecting 2 MCP servers…".
 
 On the first interactive run, with no import receipt yet
 (`docs/configuration.md`, "Importing"), home offers a one-time import of
-another harness's configuration: Claude Code's or Codex's. (Built in P2.)
+another harness's configuration: Claude Code's or Codex's.
 The offer runs the same shared import `fiber import` runs, and imported
 items apply on the next `/reload` with the reload's usual cache cost
 (`docs/mcp.md`, "Reload"). The offer fires once: answering it, or running
