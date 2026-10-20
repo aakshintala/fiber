@@ -333,6 +333,87 @@ fn notice(session: &str, message: &str) -> Line {
     })
 }
 
+/// One durable tail line numbered `seq`, for the open's tail read.
+fn tail_line(seq: u64, kind: &str, action: Option<&str>, payload: Value) -> contract::Envelope {
+    contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: id("s_aaaaaaaaaaaaaaaa"),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action.map(|action| contract::ActionId(action.to_owned())),
+        seq: Some(contract::Seq(seq)),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }
+}
+
+/// One turn of durable lines from the log's start: a single tail
+/// window fills the read, so one answer installs the preview.
+fn tail_log() -> Vec<contract::Envelope> {
+    vec![
+        tail_line(
+            0,
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "prompt"}]}]}),
+        ),
+        tail_line(1, "step_started", None, json!({})),
+        tail_line(2, "assistant_message_started", Some("a_m"), json!({})),
+        tail_line(
+            3,
+            "text_completed",
+            Some("a_m"),
+            json!({"text": "the last reply holds quokkas"}),
+        ),
+        tail_line(
+            4,
+            "assistant_message_completed",
+            Some("a_m"),
+            json!({"outcome": "completed"}),
+        ),
+        tail_line(5, "turn_completed", None, json!({"outcome": "completed"})),
+    ]
+}
+
+/// A tail `history` answer arriving after the last draw still raises
+/// `full`: the raise waits on the installed tail, never on another
+/// draw or input. A late answer changes nothing, and the `full`
+/// subscribe goes out with no further input.
+#[test]
+fn a_history_answer_after_the_last_draw_still_raises_full() {
+    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
+    let lines = commands(app.on_line(hello()));
+    let first = lines[2]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let sent = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(sent.len(), 1, "the ack releases commands, got {sent:?}");
+    assert_eq!(sent[0]["command"], "commands");
+    assert!(app.tail_due().is_some(), "the tail read starts");
+    // The tail's window: one answer from the log's start fills it.
+    while let Some(args) = app.tail_next() {
+        assert_eq!(
+            args,
+            json!({}),
+            "the first window reads the tail, got {args:?}"
+        );
+        app.tail_lines(tail_log());
+    }
+    app.install_tail();
+    drawn(&mut app);
+    // The tail's `history` answer arrives after the last draw, with
+    // no further input: a late answer the installed preview drops.
+    app.tail_lines(tail_log());
+    assert_eq!(app.notice(), None);
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(raise["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(raise["args"], json!({"level": "full"}));
+    assert!(app.take_raise().is_none(), "one raise only");
+}
+
 /// A session `command_accepted` line for `id`.
 fn session_accepted(session: &str, command: &str) -> Line {
     Line::Session(contract::Envelope {
