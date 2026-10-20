@@ -250,8 +250,7 @@ fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     // A reloaded extension draws again: its next failure reports anew.
     // Its old renderer-failure rows go with the reported set, so the
     // re-failure's push stacks beside nothing instead of deduping
-    // against a stale row (#2843 comment 6289251824: a repeat push while
-    // stacked adds no row, and a genuine re-failure still reports anew).
+    // against a stale row (a repeat push while stacked adds no row).
     let stale: Vec<usize> = app
         .notices
         .lines()

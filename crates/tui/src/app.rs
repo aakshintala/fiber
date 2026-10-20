@@ -354,7 +354,7 @@ impl App {
         self.switch_session(&session);
         // Another session's stale rows end with the attachment; the open
         // session's own notice stands until `stream_reopened` ends it.
-        self.notices.drop_stream_closed_except(&session.0);
+        self.notices.clear_code_except("stream_closed", &session.0);
         // A fresh attachment supersedes an exit that arrived after the
         // last one: opening resumes the session, and its live update has
         // yet to land.

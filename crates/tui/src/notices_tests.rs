@@ -645,8 +645,14 @@ fn every_event_fades_and_every_condition_stands() {
     }
     notices.sweep(t0);
     // Past the fade every event is gone and every condition stands, in
-    // push order: the overlay lists every entry, past the shown cap.
-    notices.sweep(at(t0, 60_000));
+    // push order: drains batch by batch, since a sweep births only the
+    // shown rows and each expiry reveals the next batch to birth.
+    let mut now = t0;
+    for _ in 0..10 {
+        now = at(now, 60_000);
+        notices.sweep(now);
+        notices.sweep(now);
+    }
     notices.open_all();
     let entries = notices.overlay_entries().expect("the open list");
     assert_eq!(entries.entries.len(), CONDITIONS.len());
@@ -837,13 +843,84 @@ fn a_held_notice_and_an_overlay_notice_pause_expiry() {
     notices.push("io_failed", "during".to_owned());
     notices.sweep(at(t0, 30_000));
     assert!(notices.lines().is_empty());
-    // The release reveals it with its birth intact: born at the sweep
-    // past the fade of the older row, it fades on its own time.
+    // The held notice gained no birth while hidden, so it contributes
+    // no wake either: expiry counts from showing, not from the push.
     notices.release();
     assert_eq!(texts(&notices.lines()), ["during"]);
+    assert_eq!(notices.notices_wake(), None);
+    // The first sweep showing it births it; it fades ten seconds
+    // after that sweep.
+    notices.sweep(at(t0, 30_000));
+    assert_eq!(texts(&notices.lines()), ["during"]);
+    assert_eq!(notices.notices_wake(), Some(at(t0, 40_000)));
     notices.sweep(at(t0, 39_999));
     assert_eq!(texts(&notices.lines()), ["during"]);
     notices.sweep(at(t0, 40_000));
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
+fn a_notice_past_the_shown_cap_is_born_when_it_shows() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = stack("io_failed", &["a", "b", "c", "d"]);
+    notices.sweep(t0);
+    // Only the shown rows gain a birth; the fourth waits past the cap.
+    notices.sweep(at(t0, 10_000));
+    // Past the fade the shown three are gone and the fourth shows,
+    // still unborn: this sweep removed the rows, so it did not show
+    // it yet. The next sweep births it, ten seconds to its own fade.
+    assert_eq!(texts(&notices.lines()), ["d"]);
+    assert_eq!(notices.notices_wake(), None);
+    notices.sweep(at(t0, 10_000));
+    assert_eq!(notices.notices_wake(), Some(at(t0, 20_000)));
+    notices.sweep(at(t0, 19_999));
+    assert_eq!(texts(&notices.lines()), ["d"]);
+    notices.sweep(at(t0, 20_000));
+    assert!(notices.lines().is_empty());
+    assert_eq!(notices.notices_wake(), None);
+}
+
+#[test]
+fn a_held_boundary_notice_contributes_no_wake_until_released() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    notices.hold();
+    // The first notice pushed under the hold sits on the boundary:
+    // hidden, unborn, and contributing no wake.
+    notices.push("io_failed", "x".to_owned());
+    notices.sweep(at(t0, 1_000));
+    assert!(notices.lines().is_empty());
+    assert_eq!(notices.notices_wake(), None);
+    // The release shows it with a fresh birth: its wake starts then.
+    notices.release();
+    notices.sweep(at(t0, 1_000));
+    assert_eq!(texts(&notices.lines()), ["x"]);
+    assert_eq!(notices.notices_wake(), Some(at(t0, 11_000)));
+}
+
+#[test]
+fn an_open_overlay_births_notices_past_the_cap() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    // The open list shows every unheld notice past the cap, so its
+    // sweep births them all: past the fade every row is gone.
+    let mut notices = stack("io_failed", &["a", "b", "c", "d"]);
+    notices.open_all();
+    notices.sweep(t0);
+    notices.close();
+    notices.sweep(at(t0, 10_000));
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
+fn an_open_single_notice_past_the_cap_is_born() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    // The open single notice shows whole past the cap, so its sweep
+    // births it: past the fade it expires with the shown rows.
+    let mut notices = stack("io_failed", &["a", "b", "c", "d"]);
+    notices.open(3);
+    notices.sweep(t0);
+    notices.close();
+    notices.sweep(at(t0, 10_000));
     assert!(notices.lines().is_empty());
 }
 
@@ -880,6 +957,56 @@ fn clear_code_drops_only_that_notice() {
     assert_eq!(codes(&notices.lines()), ["stream_closed"]);
     notices.clear_code("stream_closed", "s_bbbbbbbbbbbbbbbb");
     assert!(notices.lines().is_empty());
+}
+
+#[test]
+fn clearing_the_open_single_notice_closes_the_overlay() {
+    let mut notices = stack("io_failed", &["one", "two"]);
+    notices.open(1);
+    // Clearing the notice the single overlay shows closes it.
+    notices.clear_code("io_failed", "two");
+    assert_eq!(notices.overlay_entries(), None);
+    assert_eq!(texts(&notices.lines()), ["one"]);
+}
+
+#[test]
+fn clearing_another_notice_leaves_the_single_overlay_open() {
+    let mut notices = stack("io_failed", &["one", "two"]);
+    notices.open(0);
+    // Clearing a row the single overlay does not show leaves it open.
+    notices.clear_code("io_failed", "two");
+    assert_eq!(notices.overlay(), Some(vec!["one".to_owned()]));
+}
+
+#[test]
+fn clear_code_except_keeps_only_the_kept_identity() {
+    let search = "Could not search all of history: connection lost".to_owned();
+    let mut notices = Notices::default();
+    notices.push("connection_failed", "Could not reach the hub.".to_owned());
+    notices.push("connection_failed", search.clone());
+    notices.push("io_failed", "a read failed".to_owned());
+    // The reconnect fold drops both connection texts but never the
+    // search-incomplete text, and never another code's row.
+    notices.clear_code_except("connection_failed", &search);
+    assert_eq!(
+        texts(&notices.lines()),
+        [search, "a read failed".to_owned()]
+    );
+}
+
+#[test]
+fn attach_drops_only_other_sessions_stream_closed() {
+    let mut app = attached();
+    app.notices.push_identified(
+        "stream_closed",
+        S_A.to_owned(),
+        "this session's log can't be read past here".to_owned(),
+    );
+    app.notices.push("io_failed", "a read failed".to_owned());
+    // Attaching elsewhere drops only the other session's stale row:
+    // the unrelated event row stands.
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    assert_eq!(texts(&app.notices()), ["a read failed"]);
 }
 
 const ERRORS: &str = include_str!("../../../docs/errors.md");

@@ -89,6 +89,48 @@ fn reload_sends_reload_without_args() {
 }
 
 #[test]
+fn reload_drops_only_stale_renderer_failure_rows() {
+    let mut app = attached();
+    app.renderer_reported
+        .insert(("alpha".to_owned(), "ledger_row".to_owned()));
+    app.push_notice(
+        "io_failed",
+        "extension alpha could not draw ledger_row: boom".to_owned(),
+    );
+    app.push_notice(
+        "hook_failed",
+        "extension alpha could not draw ledger_row: boom; the built-in row is drawn".to_owned(),
+    );
+    app.push_notice(
+        "hook_failed",
+        "extension beta could not draw ledger_row: boom; the built-in row is drawn".to_owned(),
+    );
+    app.push_notice("hook_failed", "a hook failed".to_owned());
+    let _ = enter(&mut app, "/reload");
+    // Only the reported renderer's stale row goes: the same code with
+    // another extension's text, the same text under another code, and
+    // every other row stand for the fade or ✕. The reported set clears
+    // with it, so a genuine re-failure reports anew.
+    let texts: Vec<String> = app
+        .notices()
+        .into_iter()
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { text, .. } => Some(text),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "extension alpha could not draw ledger_row: boom",
+            "extension beta could not draw ledger_row: boom; the built-in row is drawn",
+            "a hook failed",
+        ],
+    );
+    assert!(app.renderer_reported.is_empty());
+}
+
+#[test]
 fn a_rejected_handoff_returns_its_draft_with_the_notice() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/handoff do x"));

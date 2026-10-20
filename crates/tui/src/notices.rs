@@ -14,17 +14,9 @@ const SHOWN: usize = 3;
 
 /// How long an event notice shows before it fades: gone once it is this
 /// old, so the docs say "about 10 s" while the code uses 10 s exactly.
-#[allow(
-    dead_code,
-    reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
-)]
 pub(crate) const FADE: Duration = Duration::from_secs(10);
 
 /// Whether a notice row fades or stays until its cause ends.
-#[allow(
-    dead_code,
-    reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     /// A one-shot report: gone [`FADE`] after it shows.
@@ -36,10 +28,6 @@ enum Kind {
 /// Every notice code's class: conditions stay until their cause ends,
 /// events fade after [`FADE`]. A code the table does not name — hub
 /// refusals and session notices carrying any code — is an event.
-#[allow(
-    dead_code,
-    reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
-)]
 const KINDS: &[(&str, Kind)] = &[
     ("cache_rebuild", Kind::Event),
     ("closing", Kind::Event),
@@ -78,10 +66,6 @@ const KINDS: &[(&str, Kind)] = &[
 ];
 
 /// The code's class from [`KINDS`]: unlisted codes are events.
-#[allow(
-    dead_code,
-    reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
-)]
 fn kind(code: &str) -> Kind {
     KINDS
         .iter()
@@ -99,7 +83,9 @@ struct Notice {
     /// one share per sent command for `switch_pending`, else the text.
     identity: String,
     text: String,
-    /// When the first sweep after the push saw it: expiry counts from here.
+    /// When the first sweep showing it stamped it: expiry counts from
+    /// showing, so a held notice or one past the shown rows fades 10 s
+    /// after it shows, never before.
     born: Option<Instant>,
 }
 
@@ -186,20 +172,24 @@ impl Notices {
         });
     }
 
-    /// Births unborn notices at `now`, then removes expired events: an
-    /// event is gone once it is at least [`FADE`] old. A notice a drag
-    /// holds, or one visible in the open overlay, never expires until the
-    /// release or close; expiry then applies on the next sweep. Expired
-    /// rows leave before the draw, so none occupies a shown slot. The
-    /// single remover: every other end clears through `dismiss` or
+    /// Births the unborn notices this sweep shows, then removes expired
+    /// events: an event is gone once it is at least [`FADE`] old. Birth
+    /// counts from showing — the unheld notices in the shown rows, plus
+    /// what the open overlay lists — so a held notice or one past the
+    /// shown cap gains no birth until a sweep shows it, and never
+    /// expires before it first shows. A notice a drag holds, or one
+    /// visible in the open overlay, never expires until the release or
+    /// close; expiry then applies on the next sweep. Expired rows leave
+    /// before the draw, so none occupies a shown slot. The single
+    /// remover: every other end clears through `dismiss` or
     /// [`Notices::clear_code`].
     pub(crate) fn sweep(&mut self, now: Instant) {
+        let visible = self.visible_ids();
         for notice in &mut self.stack {
-            if notice.born.is_none() {
+            if notice.born.is_none() && visible.contains(&notice.id) {
                 notice.born = Some(now);
             }
         }
-        let held = self.held_from;
         let overlay = self.overlay;
         self.stack.retain(|notice| {
             if kind(&notice.code) != Kind::Event {
@@ -209,14 +199,35 @@ impl Notices {
             if now.saturating_duration_since(born) < FADE {
                 return true;
             }
-            if held.is_some_and(|from| notice.id >= from) {
-                return true;
-            }
-            if overlay == Some(Overlay::All) || overlay == Some(Overlay::One(notice.id)) {
-                return true;
-            }
-            false
+            Self::paused(overlay, notice.id)
         });
+    }
+
+    /// Whether `id` waits out its expiry in sweep and wake alike: a
+    /// notice visible in the open overlay keeps its row and contributes
+    /// no wake until the close. A held notice needs no pause here: birth
+    /// requires showing, and showing excludes held rows, so a held
+    /// notice is always unborn — the age rule already retains it and it
+    /// contributes no wake. Takes the copied overlay so the sweep's
+    /// `retain` can call it while holding the stack.
+    fn paused(overlay: Option<Overlay>, id: usize) -> bool {
+        overlay == Some(Overlay::All) || overlay == Some(Overlay::One(id))
+    }
+
+    /// The ids this sweep shows: the unheld notices in the shown rows,
+    /// plus what the open overlay lists past the cap.
+    fn visible_ids(&self) -> Vec<usize> {
+        let mut ids: Vec<usize> = self.shown().take(SHOWN).map(|notice| notice.id).collect();
+        match self.overlay {
+            Some(Overlay::All) => ids.extend(self.shown().skip(SHOWN).map(|notice| notice.id)),
+            Some(Overlay::One(id))
+                if self.shown().any(|notice| notice.id == id) && !ids.contains(&id) =>
+            {
+                ids.push(id);
+            }
+            Some(Overlay::One(_)) | None => {}
+        }
+        ids
     }
 
     /// The earliest live unpaused event expiry: what the frame arms the
@@ -226,15 +237,10 @@ impl Notices {
     /// expiry. `None` with no unpaused event stacked. Reads post-sweep
     /// births: the frame sweeps before it arms.
     pub(crate) fn notices_wake(&self) -> Option<Instant> {
-        let held = self.held_from;
-        let overlay = self.overlay;
         self.stack
             .iter()
             .filter(|notice| kind(&notice.code) == Kind::Event)
-            .filter(|notice| held.is_none_or(|from| notice.id < from))
-            .filter(|notice| {
-                overlay != Some(Overlay::All) && overlay != Some(Overlay::One(notice.id))
-            })
+            .filter(|notice| !Self::paused(self.overlay, notice.id))
             .filter_map(|notice| notice.born.map(|born| born + FADE))
             .min()
     }
@@ -248,8 +254,9 @@ impl Notices {
 
     /// Drops every notice under `code` except `keep_identity`, closing a
     /// single overlay on a dropped row. The reconnect fold clears
-    /// `connection_failed` this way: both connection texts go, never the
-    /// search-incomplete text.
+    /// `connection_failed` this way — both connection texts go, never the
+    /// search-incomplete text — and attaching clears `stream_closed`
+    /// this way: only other sessions' stale rows go.
     pub(crate) fn clear_code_except(&mut self, code: &str, keep_identity: &str) {
         self.drop_where(|notice| notice.code == code && notice.identity != keep_identity);
     }
@@ -258,24 +265,7 @@ impl Notices {
     /// overlay showing it, as [`Notices::dismiss`] does. Clearing an
     /// absent notice changes nothing, and either order with ✕ ends the same.
     pub(crate) fn clear_code(&mut self, code: &str, identity: &str) {
-        if let Some(at) = self
-            .stack
-            .iter()
-            .position(|notice| notice.code == code && notice.identity == identity)
-        {
-            let id = self.stack.remove(at).id;
-            if self.overlay == Some(Overlay::One(id)) {
-                self.overlay = None;
-            }
-        }
-    }
-
-    /// Drops every `stream_closed` notice except `session`'s: attaching to
-    /// another session ends no cause, so only other sessions' stale rows
-    /// go. The session's own notice stands until `stream_reopened` ends
-    /// its cause.
-    pub(crate) fn drop_stream_closed_except(&mut self, session: &str) {
-        self.drop_where(|notice| notice.code == "stream_closed" && notice.identity != session);
+        self.drop_where(|notice| notice.code == code && notice.identity == identity);
     }
 
     /// Drops every stacked notice `drop` accepts, closing a single
