@@ -128,6 +128,22 @@ fn slash_eight_of_forty() {
 }
 
 #[test]
+fn slash_exit_alias() {
+    let mut app = attached(160, 48);
+    type_text(&mut app, "/exit");
+    insta::assert_snapshot!("slash-exit-alias", screen(&app, 160, 48));
+    // The alias query finds exactly the quit entry, carrying `/exit`,
+    // with no range line.
+    let shown = screen(&app, 160, 48);
+    let quit = shown
+        .lines()
+        .find(|line| line.contains("Quits."))
+        .expect("the quit row");
+    assert!(quit.contains("/exit"), "{shown}");
+    assert!(!shown.contains(" of "), "{shown}");
+}
+
+#[test]
 fn a_scrolled_slash_list_counts_both_directions() {
     let mut app = forty();
     type_text(&mut app, "/");
@@ -530,6 +546,7 @@ fn windowed() -> Vec<crate::slash::Row> {
     (0..8)
         .map(|n| crate::slash::Row {
             name: format!("n{n}"),
+            alias: None,
             description: format!("Does n{n}."),
             hint: None,
             tag: "skill".to_owned(),
