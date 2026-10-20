@@ -179,6 +179,34 @@ answered 403 `AccessDeniedException` "not available for this account", and
 Not reached: an exception inside a stream, a throttling exception, a
 `stopReason` other than the three above, and a Bedrock API key.
 
+## Fiber's own sessions
+
+Run the same day with `fiber ask` and the `bedrock` package from the pull
+request that adds `bedrock-converse`, the credential label naming the
+probe's AWS profile (so `credential()` ran `aws configure export-credentials`
+and `sign()` signed with SigV4), `AWS_REGION=ap-south-1`, and an isolated
+Fiber home. Fiber logged `cost: null` for every call, since Converse names no
+generation; the cost below is the tokens at models.dev's prices.
+
+| Run | Model | Requests | Input | Cache write | Cache read | Output | Cost |
+|---|---|---:|---:|---:|---:|---:|---:|
+| plain text | `openai.gpt-oss-20b-1:0` | 1 | 3,035 | | | 32 | $0.000222 |
+| `read` a file, then answer | `mistral.ministral-3-8b-instruct` | 2 | 8,547 | | | 26 | $0.001286 |
+| the same | `apac.amazon.nova-micro-v1:0` | 2 | 0 | 35,415 | 0 | 131 | $0.001330 |
+| the same, again | `apac.amazon.nova-micro-v1:0` | 2 | 0 | 15,362 | 20,324 | 66 | $0.000766 |
+| `:low` | `openai.gpt-oss-20b-1:0` | 1 | 3,038 | | | 15 | $0.000217 |
+| `:high` | `global.amazon.nova-2-lite-v1:0` | 1 | 0 | 18,894 | | 727 | $0.007486 |
+
+Every run exited 0. The Ministral run sent Bedrock's own `toolUseId` back
+with the result and was answered. In the first Nova Micro run the second
+request wrote its prefix again rather than reading it; in the second run the
+second request read 17,164 tokens up to the previous request's end, so
+Fiber's markers read when the request lands where the write did. The `:low`
+run's reasoning was one sentence, and the `:high` run, which sends no
+`maxTokens`, streamed `[REDACTED].` before its answer. Fiber's spend:
+$0.011307, for a total with the probe of $0.036779, plus at most $0.00015
+for the check that timed out.
+
 ## Where AWS's documentation and the recordings differ
 
 - `toolResult.status` is documented for Nova and Claude only; five other
