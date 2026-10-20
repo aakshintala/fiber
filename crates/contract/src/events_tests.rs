@@ -1590,6 +1590,79 @@ fn result_of(payload: Value) -> CommandResult {
 }
 
 #[test]
+fn an_mcp_servers_result_reads_its_rows_and_omits_absent_keys() {
+    let result = result_of(json!({"command_id": "c_1", "result": {"servers": [
+        {"name": "linear", "layer": "repository", "state": "needs-login",
+         "reason": "connection refused Run `fiber mcp login linear` to log in.",
+         "tools": 3, "approved": false,
+         "auth_url": "http://127.0.0.1:9/cb?code=a"},
+        {"name": "up", "layer": "global", "state": "ready",
+         "reason": "", "tools": 1, "approved": true},
+        {"name": "new", "layer": "project", "state": "connecting",
+         "reason": "", "approved": true}]} }));
+    assert_eq!(
+        result,
+        CommandResult::McpServers {
+            servers: vec![
+                McpServerRow {
+                    name: "linear".into(),
+                    layer: McpServerLayer::Repository,
+                    state: McpServerState::NeedsLogin,
+                    reason: "connection refused Run `fiber mcp login linear` to log in.".into(),
+                    tools: Some(3),
+                    approved: false,
+                    auth_url: Some("http://127.0.0.1:9/cb?code=a".into()),
+                },
+                McpServerRow {
+                    name: "up".into(),
+                    layer: McpServerLayer::Global,
+                    state: McpServerState::Ready,
+                    reason: String::new(),
+                    tools: Some(1),
+                    approved: true,
+                    auth_url: None,
+                },
+                McpServerRow {
+                    name: "new".into(),
+                    layer: McpServerLayer::Project,
+                    state: McpServerState::Connecting,
+                    reason: String::new(),
+                    tools: None,
+                    approved: true,
+                    auth_url: None,
+                },
+            ]
+        }
+    );
+    let written = serde_json::to_value(&result).unwrap();
+    let rows = written["servers"].as_array().unwrap();
+    assert!(rows[1].get("auth_url").is_none(), "{written}");
+    assert!(rows[2].get("tools").is_none(), "{written}");
+    assert!(rows[2].get("auth_url").is_none(), "{written}");
+    assert_eq!(
+        result_of(json!({"command_id": "c_1", "result": {"servers": []}})),
+        CommandResult::McpServers { servers: vec![] }
+    );
+    for servers in [
+        json!([{"name": "x", "layer": "home", "state": "ready",
+            "reason": "", "approved": true}]),
+        json!([{"name": "x", "layer": "global", "state": "offline",
+            "reason": "", "approved": true}]),
+        json!([{"name": "x", "layer": "global", "state": "ready",
+            "reason": "", "approved": true, "future": 1}]),
+    ] {
+        assert!(
+            read(
+                "command_accepted",
+                json!({"command_id": "c_1", "result": {"servers": servers}})
+            )
+            .is_err(),
+            "{servers}"
+        );
+    }
+}
+
+#[test]
 fn a_subscribe_result_names_the_last_fold_line() {
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {"last_seq": 41}})),
