@@ -233,6 +233,15 @@ fn a_drop_released_while_the_push_is_held_still_lands_empty_last() {
         Deadline::after(BOUND)
             .recv(&entered_rx)
             .expect("the push appends while holding the lock");
+        // Structural, no scheduling: the append fired inside the push's
+        // section, so the lock must still be held — the test thread
+        // observes the mutex directly instead of asking the drop thread
+        // to prove blockedness. Under the old emit-after-unlock shape
+        // the append fires after the release and this fails.
+        assert!(
+            queued.is_locked_for_test(),
+            "the push holds the queue lock across its emit"
+        );
         // The drop reaches the acquisition path only after the push is
         // inside, so the gate holds the drop thread alone.
         let (gate_tx, gate_rx) = mpsc::channel();
