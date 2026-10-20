@@ -347,7 +347,7 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   be non-empty and free of `=` and NUL, and a value free of NUL.
   `extension_exec` does not log it. Inside a
   tool call, the tool's declared `executes` effect is what the permission
-  decision judges. Outside one, in a hook, watcher, timer or command, it runs
+  decision judges. Outside one, in a hook, watcher, timer, command or provider callback, it runs
   without asking: the person approved the extension, and a process extension
   can start programs unseen anyway. Fiber logs each such run as
   `extension_exec` (`docs/events.md`), so the session shows it happened.
@@ -674,16 +674,26 @@ A case may add `config`, written as the temporary home's global
 configuration. `host.http` and `host.exec` list requests and replies in order.
 An HTTP reply has `status` and `body`, or an `error` with `code` and `message`.
 An exec reply has `stdout` and `stderr` and either `code` or `signal`, an
-integer signal number the extension sees as a name such as `SIGKILL`.
+integer signal number the extension sees as a name such as `SIGKILL`. A reply
+of `{"hang": true}` stands for a process that never exits: the scripted exec
+parks on the case clock until the callback's deadline, as a real `host.exec`
+parks on the injected clock.
 Requests match the fields the
 case gives; a mismatch, an unscripted call or an unused reply fails the case.
 These host replies prevent network requests and program execution.
 
 `clock` is a list of positive `advance_ms` values. An entry may use `after` to
-name the event `kind` and its optional 1-based `nth` occurrence. The runner
-advances only when the operation is parked on that clock deadline. `until`
+name the event `kind` and its optional 1-based `nth` occurrence. An entry may
+use `hang` to name the 1-based exec entry it waits for: the runner holds that
+advance until the entry has matched as a hang. The runner
+advances only when the operation is parked on that clock deadline. After the
+last entry, a hang still parked fails the case, naming the request, and the
+runner advances to its deadline to end the session. `until`
 selects the event after which the runner closes the session; by default it
-closes after the first `turn_completed` or `turn_failed`.
+closes after the first `turn_completed` or `turn_failed`. `attended`
+defaults to true; `attended: false` runs the session with nobody attached,
+as it does for a call case: a call that would escalate to a person is
+denied instead ("Testing a tool that executes").
 
 ### Provider call cases
 
@@ -848,6 +858,42 @@ the allowed stream:
     {"kind": "step_started"},
     {"kind": "assistant_message_started"},
     {"kind": "text_completed", "payload": {"text": "Launched."}},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "turn_completed"},
+    {"kind": "fiber_exited"}
+  ]
+}
+```
+
+`tests/launch-denied.json` sets no reviewer and `attended: false`, so the
+same call is denied: no reviewer can be set up and nobody can answer. The
+denial is recorded as `permission_resolved` with `decided_by: no_reviewer` and
+`decision: deny`, no `permission_requested` is written, and
+`tool_call_completed` has `status: denied`:
+
+```json
+{
+  "script": {"steps": [{"tool_calls": [{"name": "launch", "arguments": {}}]}, {"text": "Denied."}]},
+  "prompt": "launch it",
+  "attended": false,
+  "expect": [
+    {"kind": "session_started"},
+    {"kind": "fiber_started"},
+    {"kind": "extensions_loaded"},
+    {"kind": "preamble_built"},
+    {"kind": "opening_message"},
+    {"kind": "turn_started"},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "tool_call_requested"},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "permission_resolved", "payload": {"decision": "deny", "decided_by": "no_reviewer"}},
+    {"kind": "tool_call_completed", "payload": {"status": "denied"}},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "text_completed", "payload": {"text": "Denied."}},
     {"kind": "usage_recorded"},
     {"kind": "assistant_message_completed"},
     {"kind": "turn_completed"},

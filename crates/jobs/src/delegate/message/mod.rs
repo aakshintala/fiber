@@ -601,6 +601,7 @@ impl DelegateMessage {
             | ErrorCode::StreamClosed
             | ErrorCode::StreamIncomplete
             | ErrorCode::SummaryFailed
+            | ErrorCode::SwitchPending
             | ErrorCode::Timeout
             | ErrorCode::TooLarge
             | ErrorCode::ToolDefinitionsLarge

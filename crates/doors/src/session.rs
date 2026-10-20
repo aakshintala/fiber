@@ -70,7 +70,7 @@ pub struct Replacement {
 
 type CredentialsRead = Arc<dyn Fn() -> Option<CredentialLabels> + Send + Sync>;
 type AdmittedRead = Arc<dyn Fn() -> String + Send + Sync>;
-type QuotaRead = Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>;
+type QuotaRead = Arc<dyn Fn(bool) -> (Vec<QuotaInfo>, f64) + Send + Sync>;
 const DEFAULT_QUOTA_NOTICE_AT: f64 = 80.0;
 
 /// What every connection thread shares. The session holds it strongly; the
@@ -658,10 +658,10 @@ impl Gate {
         lock(&self.commands).clone()
     }
 
-    pub(crate) fn quota(&self) -> (Vec<QuotaInfo>, f64) {
+    pub(crate) fn quota(&self, fetch: bool) -> (Vec<QuotaInfo>, f64) {
         self.quota
             .get()
-            .map_or_else(|| (Vec::new(), DEFAULT_QUOTA_NOTICE_AT), |read| read())
+            .map_or_else(|| (Vec::new(), DEFAULT_QUOTA_NOTICE_AT), |read| read(fetch))
     }
 
     pub(crate) fn credentials_reader(&self) -> Option<CredentialsRead> {

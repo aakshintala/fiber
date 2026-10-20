@@ -84,6 +84,10 @@ pub struct SessionExtensions {
     provider_vms: Mutex<BTreeMap<String, Weak<LuaExtension>>>,
     browser: Arc<crate::attend::SessionBrowser>,
     emitter: Mutex<Option<Arc<dyn contract::emit::Emit>>>,
+    /// The session inbox sender the last `deliver_to` received, kept for
+    /// provider VMs started after it: a later sender replaces it, as on
+    /// every live VM.
+    inbox: Mutex<Option<std::sync::mpsc::Sender<Delivery>>>,
     #[cfg(test)]
     late_pause: Mutex<Option<LatePause>>,
     /// The names of extensions refused for an undeclared Lua registration,
@@ -992,15 +996,23 @@ impl Hooks for SessionExtensions {
     }
 
     fn wait_for_runs(&self) {
-        for extension in &self.lua {
+        // Every live VM delivers to the session inbox, hook and provider
+        // alike, so the shutdown wait covers each one; a shared VM is
+        // waited on once.
+        for extension in self.attached_vms() {
             extension.wait_for_runs();
         }
     }
 
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
         // A later `deliver_to` (a resume hands a new sender) replaces the
-        // sender; each extension flushes what ended before the first one.
-        for extension in &self.lua {
+        // sender, on the retained copy and on every live VM; each extension
+        // flushes what ended before the first one. The guard drops before
+        // the sweep, so a concurrent late start never waits on this lock.
+        *self.inbox.lock().unwrap_or_else(PoisonError::into_inner) = Some(inbox.clone());
+        // Collected under the weak-map lock and released before handing the
+        // sender over, deduped so a shared VM is handed it once.
+        for extension in self.attached_vms() {
             extension.deliver_to(inbox.clone());
         }
     }

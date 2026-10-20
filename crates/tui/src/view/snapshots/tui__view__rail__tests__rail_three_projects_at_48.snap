@@ -2,7 +2,7 @@
 source: crates/tui/src/view/rail_tests.rs
 expression: text(&screen(&app))
 ---
-  fiber +                                $0.41
+  fiber +                          $0.41 · 0 ✓
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ 2 ✓ READY                                 9m                                                                                                                   /Users/you/work/fiber             auto
 ▌ fix the parser                                                                                                                                                 git  main
@@ -15,14 +15,14 @@ expression: text(&screen(&app))
 ▌ ⎇ detached
 ▌ $0.00
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  hub +                                  $1.35
+  hub +                            $1.35 · 0 ✓
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ 1 ! NEEDS INPUT                          16s
 ▌ fix flaky lock test
 ▌ approval: shell cargo mutants --in-place
 ▌ $1.35 ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆░░░░░░░░░░░ 70%
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀⋮                                                                                                              ⋮
-  site +                                 $0.00 ⋮                                                                                                              ⋮
+  site +                           $0.00 · 0 ✓ ⋮                                                                                                              ⋮
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄⋮                                                                                                              ⋮
 ▌ 4 ✗ CRASHED                                ✕
 ▌ deploy

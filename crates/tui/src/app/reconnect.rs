@@ -137,16 +137,25 @@ impl App {
 
     /// A session refused command `id`: a `duplicate_command` is a resent
     /// copy of one the session already holds, so the entry closes with no
-    /// notice; any other refusal returns its draft.
+    /// notice; a refusal for a choice from a dropped session stays
+    /// silent with it; any other refusal returns its draft.
     pub(super) fn refused(&mut self, id: &str, code: &ErrorCode, message: String) {
         if *code == ErrorCode::DuplicateCommand {
             self.pending.remove(id);
-            // A resent copy the session already holds still drops the
-            // writes its first answer waits on.
-            self.model_picker_rejected(id);
-        } else {
+            // A resent copy the session already holds drops the waits
+            // its first answer waits on, but keeps the send's pending
+            // notice: the held copy may still apply, so its claim
+            // stands. `model_picker_rejected` would dismiss it.
+            self.model_picker.awaiting.remove(id);
+            self.model_picker.only_pending.remove(id);
+            self.model_picker.sent.remove(id);
+        } else if self.model_picker_rejected(id) {
             let code = crate::format::code(code);
             self.rejected(id, &code, message);
+        } else {
+            // The choice belonged to a dropped session: its wait went
+            // with its notice, so the row closes with no further notice.
+            self.pending.remove(id);
         }
     }
 

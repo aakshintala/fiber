@@ -20,6 +20,8 @@ use contract::events::{
 pub(crate) enum SessionView {
     /// `/usage`.
     Usage,
+    /// `/quota`.
+    Quota,
     /// `/context`.
     Context,
     /// The Changed files list.
@@ -35,6 +37,8 @@ pub(crate) enum SessionView {
 enum Open {
     /// `/usage`.
     Usage(List),
+    /// `/quota`.
+    Quota(List),
     /// `/context`.
     Context(List),
     /// Changed files' paths.
@@ -75,6 +79,7 @@ impl App {
         self.session_views.diff_list = List::default();
         self.session_views.open = Some(match view {
             SessionView::Usage => Open::Usage(List::default()),
+            SessionView::Quota => Open::Quota(List::default()),
             SessionView::Context => Open::Context(List::default()),
             SessionView::ChangedFiles => Open::Files(List::default()),
             SessionView::Delegates => Open::Delegates(List::default()),
@@ -134,7 +139,9 @@ impl App {
             }
             return Some(Effect::None);
         }
-        if let Some(Open::Usage(list) | Open::Context(list)) = self.session_views.open.as_mut() {
+        if let Some(Open::Usage(list) | Open::Quota(list) | Open::Context(list)) =
+            self.session_views.open.as_mut()
+        {
             list.key(key, rows, height);
         }
         Some(Effect::None)
@@ -207,7 +214,8 @@ impl App {
             return Effect::None;
         }
         if let Spot::Row(at) = spot
-            && let Some(Open::Usage(list) | Open::Context(list)) = self.session_views.open.as_mut()
+            && let Some(Open::Usage(list) | Open::Quota(list) | Open::Context(list)) =
+                self.session_views.open.as_mut()
         {
             list.select(at, rows, height);
         }
@@ -220,7 +228,11 @@ impl App {
     fn session_view_open_selected(&mut self) -> Effect {
         let selected = match self.session_views.open.as_ref() {
             Some(Open::Delegates(list)) | Some(Open::Jobs(list)) => list.selected(),
-            Some(Open::Usage(_)) | Some(Open::Context(_)) | Some(Open::Files(_)) | None => {
+            Some(Open::Usage(_))
+            | Some(Open::Quota(_))
+            | Some(Open::Context(_))
+            | Some(Open::Files(_))
+            | None => {
                 return Effect::None;
             }
         };
@@ -251,9 +263,11 @@ impl App {
                     })
                 })
                 .collect(),
-            Some(Open::Usage(_)) | Some(Open::Context(_)) | Some(Open::Files(_)) | None => {
-                Vec::new()
-            }
+            Some(Open::Usage(_))
+            | Some(Open::Quota(_))
+            | Some(Open::Context(_))
+            | Some(Open::Files(_))
+            | None => Vec::new(),
         }
     }
 
@@ -265,6 +279,14 @@ impl App {
                 &self.session_views.usage,
                 self.panel_state.budget(),
                 *list,
+            )),
+            Open::Quota(list) => Some(crate::quota_view::frame(
+                &self.panel_state.quota.rows,
+                self.panel_state.quota.notice_at,
+                self.panel_state.quota.fetching(),
+                *list,
+                width,
+                epoch_ms(self),
             )),
             Open::Context(list) => {
                 let sized = self.panel_state.status().and_then(|status| {
@@ -435,6 +457,12 @@ impl App {
         self.session_views.diff = None;
         self.session_views.diff_list = List::default();
     }
+}
+
+/// The wall clock in milliseconds since the epoch, for the quota view's
+/// reset times: the frame's injected wall time, zero before it is set.
+fn epoch_ms(app: &App) -> u64 {
+    app.motion().wall_ms().unwrap_or(0)
 }
 
 #[cfg(test)]
