@@ -31,6 +31,16 @@ branch rather than a tag or sha; or makes `CI` pass where `docs/ci.md` says it
 fails (for example, a gating job missing from the `ci` job's `needs`, a renamed
 `CI` check, or `continue-on-error`).
 
+A maintainer is a person the owner names as one; today that is
+`shreeramkganesh`. A maintainer's pull requests, and those of the
+orchestrators a maintainer starts, merge without waiting for the owner, the
+cases above included. Before building a big change, a maintainer files a design
+issue labelled `needs-owner` that mentions `@aakshintala`, and starts building
+when the owner approves it in a comment. A change is big when it changes or
+removes a rule a doc states (adding to a doc is not), reopens an owner
+ruling, adds a crate, an area doc or a seam between crates, or changes how
+Fiber handles secrets, permissions, confinement or releases.
+
 The orchestrator judges an implementer's work from the diff and the gate's
 output, never from the implementer's account of it.
 
