@@ -1,6 +1,6 @@
 //! Screen snapshots: the whole in-memory screen against stored files.
 
-use super::{conversation_rows, cursor, render, text};
+use super::{conversation_rows, cursor, draw_row, render, text};
 use crate::app::App;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -9,7 +9,7 @@ use crate::markdown::Role;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Position, Rect};
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use std::path::PathBuf;
 
 const WIDTH: u16 = 60;
@@ -2357,6 +2357,75 @@ fn copied_sits_on_the_row_under_the_bar() {
 }
 
 #[test]
+fn copied_sits_on_the_top_row_while_the_results_view_is_open() {
+    // The bar is open and the results view over it: the offset the bar
+    // takes while the results are closed does not apply, so "Copied"
+    // sits on the conversation's top row (`docs/tui.md`, "Search",
+    // "Selection and copy"). Dropping the results check moves it under
+    // the slab.
+    let mut app = replying(60, 24, "copy this line");
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::CtrlF, now);
+    assert!(app.find_bar().is_some(), "the bar is open");
+    let shown = text(&buffer(&app, 60, 24));
+    let row = u16::try_from(
+        shown
+            .lines()
+            .position(|line| line.contains("copy this"))
+            .expect("the reply"),
+    )
+    .expect("a row");
+    // Anchor the selection while the conversation draws, open the
+    // results view, then drag and release: the release copies with the
+    // bar and the results view both open (a key clears an older copy,
+    // but nothing clears one the release sets after it).
+    use crate::keys::{Button, Mouse, MouseKind};
+    let (_, targets) = pointed(&mut app, 60, 24, None);
+    let _ = app.on_select(
+        &Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col: 0,
+            row,
+        },
+        &targets,
+    );
+    // A second Ctrl+F opens the results view; the bar stays open.
+    app.on_key(Key::CtrlF, now);
+    assert!(app.results_open(), "the results view is open");
+    let _ = app.on_select(
+        &Mouse {
+            kind: MouseKind::Drag(Button::Left),
+            col: 3,
+            row,
+        },
+        &targets,
+    );
+    let _ = app.on_select(
+        &Mouse {
+            kind: MouseKind::Release,
+            col: 3,
+            row,
+        },
+        &targets,
+    );
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    conversation_rows(&app, area, &mut buf, &mut targets);
+    // " Copied " is the only `info` on `surface`: it sits on the top
+    // row, with no bar offset while the results are open.
+    let rows: Vec<u16> = (0..10)
+        .filter(|y| {
+            (0..60).any(|x| {
+                let cell = &buf[(x, *y)];
+                cell.fg == Role::Info.color() && cell.bg == Role::Surface.color()
+            })
+        })
+        .collect();
+    assert_eq!(rows, vec![0]);
+}
+
+#[test]
 fn copied_stays_inside_a_short_or_narrow_area() {
     // The buffer around each area stays blank: with the bar open, a
     // five-row area omits "Copied" (its row is the next region's), a
@@ -2444,6 +2513,28 @@ fn copied_draws_nothing_on_a_zero_height_area() {
             );
         }
     }
+}
+
+#[test]
+fn a_zero_height_conversation_draws_no_pin() {
+    // A conversation area with no rows pins nothing, even with the top
+    // inside opened content: the height guard owns the pin, so widening
+    // it pins row 0 of nothing (`docs/tui.md`, "Pinned call").
+    let (mut app, _, call, _, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "a pinned call"
+    );
+    let area = Rect::new(0, 0, 60, 0);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 10));
+    let mut targets = Vec::new();
+    assert_eq!(
+        conversation_rows(&app, area, &mut buf, &mut targets),
+        None,
+        "no pin from a zero-height area"
+    );
 }
 
 #[test]
@@ -3207,6 +3298,39 @@ fn following_draws_no_pin() {
 }
 
 #[test]
+fn rows_above_the_top_take_no_zero_height_target() {
+    // The lines above the top draw no rows: their line and turn targets
+    // take no hit, not even a zero-height one. Widening either height
+    // guard pushes one (`docs/tui.md`, "Pinned call").
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, _, _, _, _) = pinned_call(30, true);
+    // The tail reply below the opened block: a plain row on top, so no
+    // pin, and no new output, so no pill.
+    let width = app.pages().wrap_width();
+    let (page, _) = app.pages().page_text(0).expect("the resident page");
+    let mut row = 0usize;
+    let mut tail = None;
+    for (line, _) in &page {
+        if line.to_string().contains("Run it") {
+            tail = Some(row);
+            break;
+        }
+        row += crate::view::rows(line.clone(), width);
+    }
+    let tail = tail.expect("the tail reply");
+    app.jump(tail);
+    assert!(app.pinned_row().is_none(), "a plain row pins nothing");
+    let (_, targets) = pointed(&mut app, W, H, None);
+    let empty: Vec<Rect> = targets
+        .iter()
+        .map(|target| target.rect)
+        .filter(|rect| rect.height == 0)
+        .collect();
+    assert!(empty.is_empty(), "no zero-height target: {empty:?}");
+}
+
+#[test]
 fn a_narrow_screen_still_pins_one_row() {
     const W: u16 = 40;
     const H: u16 = 12;
@@ -3277,6 +3401,27 @@ fn no_colour_pin_keeps_the_card_sides() {
             "│",
             "a right side on row {y}"
         );
+    }
+    crate::surface::init(&|_| None);
+}
+
+#[test]
+fn every_card_tint_draws_the_thin_box_sides() {
+    // The pin draws through `draw_row`, and the row loop shares its tint
+    // check: a turn, surface or handoff background draws the thin-box
+    // sides without colour, so flipping any arm of the check drops a side
+    // here (`docs/tui.md`, "Look").
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    for (name, role) in [
+        ("turn", Role::Turn),
+        ("surface", Role::Surface),
+        ("handoff", Role::Handoff),
+    ] {
+        let line = ratatui::text::Line::styled("tinted", Style::new().bg(role.color()));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        draw_row(line, Rect::new(0, 0, 20, 1), &mut buf);
+        assert_eq!(buf[(0, 0)].symbol(), "│", "{name} keeps its left side");
+        assert_eq!(buf[(19, 0)].symbol(), "│", "{name} keeps its right side");
     }
     crate::surface::init(&|_| None);
 }

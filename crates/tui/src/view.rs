@@ -403,18 +403,25 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     Some(Position::new(x, y))
 }
 
+/// Whether the line draws on a card tint: a turn, surface or handoff
+/// card, whose sides draw as a thin box without colour, and which marks
+/// the pinned row's tint (`docs/tui.md`, "Look").
+fn card_tint(line: &Line<'_>) -> bool {
+    line.style.bg == Some(Role::Turn.color())
+        || line.style.bg == Some(Role::Surface.color())
+        || line.style.bg == Some(Role::Handoff.color())
+}
+
 /// Draws one conversation row into its rect: the line with its own
 /// background filling the column, and, without colour on a card tint,
 /// the thin-box sides (`docs/tui.md`, "Look").
 fn draw_row(line: Line<'_>, rect: Rect, buf: &mut Buffer) {
+    let turn_tint = card_tint(&line);
     let fill = Style {
         bg: line.style.bg,
         ..Style::default()
     };
     paragraph(line).style(fill).render(rect, buf);
-    let turn_tint = fill.bg == Some(Role::Turn.color())
-        || fill.bg == Some(Role::Surface.color())
-        || fill.bg == Some(Role::Handoff.color());
     if crate::surface::box_fit(rect.width) && turn_tint {
         crate::surface::draw_sides(buf, rect);
     }
@@ -525,6 +532,7 @@ fn conversation_rows(
         // A short row and the wrapped rows of a long one fill the column
         // with the row's own background, so a card's surface tint reaches
         // the column's edge (`docs/tui.md`, "Look").
+        let turn_tint = card_tint(&line);
         let fill = Style {
             bg: line.style.bg,
             ..Style::default()
@@ -540,9 +548,6 @@ fn conversation_rows(
         // name the surface until the paint pass, so the pads the card
         // keeps are decorated without moving text; the prompt bubble
         // stays edge-free, and a cut card draws no corner it withheld.
-        let turn_tint = fill.bg == Some(Role::Turn.color())
-            || fill.bg == Some(Role::Surface.color())
-            || fill.bg == Some(Role::Handoff.color());
         if crate::surface::box_fit(area.width) && turn_tint {
             crate::surface::draw_sides(buf, rect);
         }

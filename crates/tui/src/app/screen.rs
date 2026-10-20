@@ -233,7 +233,6 @@ impl Screen {
             return;
         }
         // A landing under a pin is handled after the clamp below.
-        let pinned = |top: usize| self.pages.shown(top, height.max(1)).pin.is_some();
         let Some((_, rows, _)) = self
             .pages
             .focus_items()
@@ -247,7 +246,7 @@ impl Screen {
         let top = self.scroll.top.map_or(bottom, |top| top.min(bottom));
         let end = row.saturating_add(rows.min(height));
         let mut next = top.clamp(end.saturating_sub(height), row);
-        if next == row && pinned(next) {
+        if next == row && self.pages.shown(next, height.max(1)).pin.is_some() {
             next = next.saturating_sub(1);
         }
         if next >= bottom {

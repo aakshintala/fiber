@@ -568,12 +568,7 @@ fn nothing_pins_while_following() {
 
 #[test]
 fn nothing_pins_when_the_top_row_is_on_a_dropped_page() {
-    let (mut screen, _, calls) = read_group(1, &[true], 30, &[false]);
-    let first = opened_rows(&screen, calls[0])
-        .first()
-        .copied()
-        .expect("opened rows");
-    let _ = first;
+    let (mut screen, _, _) = read_group(1, &[true], 30, &[false]);
     let mut seq = 1000;
     for turn in 0..60 {
         for (kind, action, payload) in [

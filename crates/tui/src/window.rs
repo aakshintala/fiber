@@ -1346,6 +1346,7 @@ impl Pages {
         let mut turns = Vec::new();
         let mut spins = Vec::new();
         let mut pin: Option<Pin> = None;
+        let mut pin_done = false;
         let mut start = 0usize;
         for (at, page) in self.index.pages().iter().enumerate() {
             if start >= end {
@@ -1354,10 +1355,16 @@ impl Pages {
             let next = start.saturating_add(page.rows);
             if next > top {
                 first.get_or_insert(start);
+                // The first page drawing a visible row holds the top
+                // row: every page before it ends at or before `top`,
+                // and every later one starts past it. The pin is read
+                // once, from that page alone.
+                let top_page = !pin_done;
+                pin_done = true;
                 match self.part(at) {
                     Some(part) => {
                         let (rows, texts, _, page_turns) = self.draw_data(at, part, Draw::Shown);
-                        if pin.is_none() && top >= start && top < next {
+                        if top_page {
                             pin = self.pin_on_page(part, &rows, &texts, start, top);
                         }
                         let base = lines.len();

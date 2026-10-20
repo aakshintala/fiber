@@ -885,6 +885,17 @@ arrived after `sessions` was sent.
   lines; Enter on a focused row does the same. Enter again on the opened
   call, or a click on its "… N more lines (Enter to view)", opens the whole
   call in a swapped view ("Swapped views").
+- **While an opened call's row, or an open ledger's group line, is above the
+  conversation's top row and any of its content is on screen, that row stays
+  pinned to the conversation's top row.** Scrolling into the opened output
+  keeps the row over the covered content row, drawn as the row it stands for,
+  on the card's tint, with hover highlighting it like any click target. When a
+  call is opened inside an open ledger, only the innermost one pins: the
+  call's row. Clicking the pinned row closes what it opened, and the
+  conversation scrolls so the closed row sits at the top. Ctrl+O keeps its
+  current meaning. Whenever a find, a search-results jump, keyboard focus or
+  a reveal scrolls a row into view while a row is pinned, the visible top is
+  the row under the pin, with the pin staying.
 - **A call that changed a file is highlighted** in the ledger, with the file's
   name and its lines added and removed, so edits stand out from reads and
   commands. Its counts are in `added` and `removed`, where every other result
@@ -969,14 +980,6 @@ that differ are in reverse video. There is no syntax highlighting.
 
 A group opens by a click, by Ctrl+O, when a search match falls inside its
 ledger, and when one of its calls asks the person.
-
-An opened call or ledger holding the top row pins its header on the
-first conversation row: scrolling into the opened output keeps the call
-row over the covered content row, with the call's tint, so the context of
-what is on screen never scrolls away. The pin is the call's own row, so
-a click on it, or Enter on it focused, closes the call and lands the
-closed row on the top row. Landing, search reveals, focus steps and
-find matches stop under the pin, never on the covered row.
 
 ### Thinking
 
