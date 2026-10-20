@@ -1537,6 +1537,7 @@ impl App {
         {
             let id = accepted.command_id.0.clone();
             self.model_picker_accepted(&id, &envelope.session_id);
+            self.credential_accepted(&accepted);
         }
         // The open delegate's lines fold into the swapped screen, never
         // touching the attached busy flag; their command answers still

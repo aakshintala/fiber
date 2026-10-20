@@ -33,6 +33,7 @@ fn typing_filters_prefix_matches_first() {
         [
             "/resume  Goes home, focused on the first exited row.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
+            "/credential [<label>]  Switches the credential label, or opens the credential picker.  command",
             "/areview  Runs areview.  skill",
         ]
     );
@@ -518,7 +519,7 @@ fn slash_completions_carry_their_window() {
     type_text(&mut app, "/re");
     let completions = app.completions().expect("the panel shows");
     assert_eq!(completions.query, "re");
-    assert_eq!(completions.total, 3);
+    assert_eq!(completions.total, 4);
     assert_eq!(completions.start, 0);
     assert_eq!(completions.selected, Some(0));
     let names: Vec<&str> = match &completions.rows {
@@ -527,12 +528,13 @@ fn slash_completions_carry_their_window() {
             panic!("a slash window, not {:?}", completions.rows)
         }
     };
-    assert_eq!(names, ["resume", "reload", "areview"]);
+    assert_eq!(names, ["resume", "reload", "credential", "areview"]);
     assert_eq!(
         completions.lines(),
         [
             "/resume  Goes home, focused on the first exited row.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
+            "/credential [<label>]  Switches the credential label, or opens the credential picker.  command",
             "/areview  Runs areview.  skill",
         ]
     );
@@ -562,7 +564,7 @@ fn a_long_slash_list_windows_around_the_selection() {
             assert_eq!(rows.first().map(|row| row.name.as_str()), Some("model"));
             // `/mcp` sits after `/tools`: the window's last row moves
             // with the list, its start and selection unchanged.
-            assert_eq!(rows.last().map(|row| row.name.as_str()), Some("quota"));
+            assert_eq!(rows.last().map(|row| row.name.as_str()), Some("usage"));
         }
         Rows::Files(_) | Rows::Search(_) | Rows::Message(_) => {
             panic!("a slash window, not {:?}", completions.rows)

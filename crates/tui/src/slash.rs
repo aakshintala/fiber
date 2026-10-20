@@ -47,8 +47,7 @@ impl Row {
 }
 
 /// Whether `name` is a built-in command: the contract list, which also
-/// names the commands this terminal does not draw (`credential`,
-/// `rewind`).
+/// names the command this terminal does not draw (`rewind`).
 pub(crate) fn is_built_in(name: &str) -> bool {
     contract::commands::BUILT_IN_COMMANDS.contains(&name)
 }
