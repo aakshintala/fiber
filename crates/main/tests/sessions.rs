@@ -383,23 +383,15 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
     // finishing, so its row says `streaming` on every run.
     let poll_listed = |wanted: &str| loop {
         let stdout = fiber_in(&setup, &setup.workspace(), &["sessions", "--json"]);
-        if stdout.contains(&format!("\"id\":\"{live}\",\"state\":\"{wanted}\"")) {
-            assert!(
-                !setup.deadline.left().is_zero(),
-                "waited until the deadline for the hub to list the live session as {wanted}: {stdout}"
-            );
-            break stdout;
-        }
         assert!(
             !setup.deadline.left().is_zero(),
             "waited until the deadline for the hub to list the live session as {wanted}: {stdout}"
         );
+        if stdout.contains(&format!("\"id\":\"{live}\",\"state\":\"{wanted}\"")) {
+            break stdout;
+        }
     };
-    let held = poll_listed("streaming");
-    assert!(
-        held.contains(&format!("\"id\":\"{live}\",\"state\":\"streaming\"")),
-        "{held}"
-    );
+    poll_listed("streaming");
     server.release();
     // The reply the release sends finishes the turn: its end folds `idle`.
     support::until(&watch, "the live turn's idle status", |line| {
@@ -412,8 +404,6 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
     // edge between them, so poll until the live row itself says `idle`.
     let stdout = poll_listed("idle");
     assert_eq!(listed_ids(&stdout), [live.clone(), exited]);
-    let first: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
-    assert_eq!(first["state"], "idle", "{stdout}");
     support::close_session(&support::Socket::connect(
         Deadline::start(),
         &setup.session_socket(&live),
