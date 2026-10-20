@@ -161,7 +161,7 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
    renaming, as `fiber update` does. It takes the extensions lock, and records
    each extension at the release's version and the commit the binary was built
    from.
-7. runs `fiber setup` (`docs/invocation.md`, "Setting up"), which asks the
+7. runs `fiber setup` (`docs/invocation.md`, "Commands and flags"), which asks the
    rest: providers, import, default model, completions and the hub.
 
 The script reads its questions from `/dev/tty`, so they work under
