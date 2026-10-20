@@ -103,11 +103,18 @@ fn resolve(old: &SessionId, old_dir: &Path, workspace: &Path) -> Result<Worktree
         Err(_) => return Err(corrupt(old)),
     };
     // A first line still being written reads as missing, as the scan's
-    // `Incomplete` does: an empty log ends here too.
-    if !bytes.ends_with(b"\n") {
+    // `Incomplete` does: an empty log ends here too. Only the first
+    // line is read, as the scan does: later lines are the old session's
+    // still-arriving writes, never this check's.
+    let Some(end) = bytes.iter().position(|byte| *byte == b'\n') else {
         return Err(not_found(old));
-    }
-    let line: Value = match serde_json::from_slice(&bytes) {
+    };
+    let prefix = match bytes.get(..end) {
+        Some(prefix) => prefix,
+        // `end` indexes `bytes` by construction.
+        None => return Err(corrupt(old)),
+    };
+    let line: Value = match serde_json::from_slice(prefix) {
         Ok(line) => line,
         Err(_) => return Err(corrupt(old)),
     };

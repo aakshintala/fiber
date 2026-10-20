@@ -82,6 +82,18 @@ fn missing_log_is_not_found() {
 }
 
 #[test]
+fn a_longer_old_log_resolves_on_its_first_line() {
+    // A live old session keeps appending: only the first line is read.
+    // Parsing the whole log would refuse a log like this as corrupt.
+    let (_home, old_dir, workspace) = fixture("main-continues-long", None);
+    let mut log = started(&workspace, Some(worktree(&workspace)));
+    log.extend_from_slice(b"{\"kind\":\"fiber_started\"}\n{\"kind\":\"turn_completed\"}\n");
+    std::fs::write(old_dir.join("events.jsonl"), log).unwrap();
+    let recorded = resolve(&old(), &old_dir, &workspace).unwrap();
+    assert_eq!(recorded.path, workspace.to_string_lossy());
+}
+
+#[test]
 fn torn_first_line_is_not_found() {
     let mut first = started(Path::new("/wt"), None);
     first.pop();
