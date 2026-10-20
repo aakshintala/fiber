@@ -116,7 +116,7 @@ pub enum Command {
     /// Answers with every skill discovery found, switched-off and shadowed ones included.
     Skills,
     /// Answers with each provider credential label's cached quota.
-    Quota,
+    Quota(QuotaArgs),
     /// Answers with the labels of the provider a `credential` command would
     /// switch now, and the label that provider uses.
     Credentials,
@@ -371,6 +371,16 @@ pub struct CredentialArgs {
     pub label: String,
 }
 
+/// The `args` of `quota`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaArgs {
+    /// With `true`, starts a fetch for every label and answers once every
+    /// fetch it started has ended; absent means answer from the cache.
+    #[serde(default)]
+    pub fetch: bool,
+}
+
 /// How much of the stream a connection receives (`docs/invocation.md`,
 /// "Driver commands", `subscribe`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -469,6 +479,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "scoped-models",
     "context",
     "usage",
+    "quota",
     "tools",
     "panel",
     "rail",

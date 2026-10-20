@@ -5,7 +5,38 @@ use ratatui::text::{Line, Span};
 
 use super::{Row, sides, title_row};
 use crate::app::App;
+use crate::app::panel::Spot;
 use crate::markdown::{Role, style};
+use contract::events::{QuotaCredit, QuotaWindow};
+
+/// One window's figure, its remaining share and whether little is left,
+/// as the card draws them (shared with `/quota`): `None` for a window
+/// reporting neither usage nor reset.
+pub(crate) fn window_figure(window: &QuotaWindow, notice_at: f64) -> Option<(String, f64, bool)> {
+    if window.reset.is_some() {
+        Some(("reset".to_owned(), 100.0, false))
+    } else if let Some(used) = window.percent_used {
+        let share = (100.0 - used).clamp(0.0, 100.0);
+        Some((format!("{share:.0}%"), share, used >= notice_at))
+    } else {
+        None
+    }
+}
+
+/// One credit's figure, its remaining share and whether little is left,
+/// as the card draws them (shared with `/quota`).
+pub(crate) fn credit_figure(credit: &QuotaCredit, notice_at: f64) -> (String, Option<f64>, bool) {
+    let share = credit
+        .limit
+        .filter(|limit| *limit > 0.0)
+        .map(|limit| (credit.remaining / limit * 100.0).clamp(0.0, 100.0));
+    let figure = share.map_or_else(
+        || format!("{:.2}", credit.remaining),
+        |share| format!("{share:.0}%"),
+    );
+    let low = share.is_some_and(|share| 100.0 - share >= notice_at);
+    (figure, share, low)
+}
 
 struct Limit {
     name: String,
@@ -33,12 +64,7 @@ fn limits(app: &App) -> Vec<Limit> {
         };
         if let Some(windows) = &info.windows {
             for window in windows {
-                let (share, low, figure) = if window.reset.is_some() {
-                    (100.0, false, "reset".to_owned())
-                } else if let Some(used) = window.percent_used {
-                    let share = (100.0 - used).clamp(0.0, 100.0);
-                    (share, used >= query.notice_at, format!("{share:.0}%"))
-                } else {
+                let Some((figure, share, low)) = window_figure(window, query.notice_at) else {
                     continue;
                 };
                 out.push(Limit {
@@ -55,18 +81,12 @@ fn limits(app: &App) -> Vec<Limit> {
             }
         }
         if let Some(credit) = &info.credit {
-            let share = credit
-                .limit
-                .filter(|limit| *limit > 0.0)
-                .map(|limit| (credit.remaining / limit * 100.0).clamp(0.0, 100.0));
+            let (figure, share, low) = credit_figure(credit, query.notice_at);
             out.push(Limit {
                 name: format!("{provider} credit"),
                 short: provider,
-                figure: share.map_or_else(
-                    || format!("{:.2}", credit.remaining),
-                    |share| format!("{share:.0}%"),
-                ),
-                low: share.is_some_and(|share| 100.0 - share >= query.notice_at),
+                figure,
+                low,
                 share,
             });
         }
@@ -80,13 +100,16 @@ pub(super) fn rows(app: &App, text: usize) -> Vec<Row> {
     if limits.is_empty() {
         return Vec::new();
     }
-    let mut out = vec![title_row(
+    // The title and each data row open the quota view, which fetches
+    // every label's quota; the bars open nothing.
+    let mut title = title_row(
         "Quota",
         vec![Span::styled("extension", style(Role::Muted))],
         text,
-    )];
+    );
+    title.spot = Some(Spot::Quota);
+    let mut out = vec![title];
     for limit in limits {
-        // debt: quota rows and segments open nothing, upgrade trigger: #2526 lands.
         out.push(Row {
             line: sides(
                 vec![Span::styled(limit.name, style(Role::Muted))],
@@ -96,7 +119,7 @@ pub(super) fn rows(app: &App, text: usize) -> Vec<Row> {
                 ),
                 text,
             ),
-            spot: None,
+            spot: Some(Spot::Quota),
             tint: None,
             edge: false,
         });
@@ -120,7 +143,8 @@ pub(super) fn rows(app: &App, text: usize) -> Vec<Row> {
     clippy::cast_sign_loss,
     reason = "share is clamped to 0..=100 and fill is bounded by cells"
 )]
-fn bar(share: f64, cells: usize, low: bool) -> Vec<Span<'static>> {
+/// Shared with the `/quota` view, whose bars match the card's.
+pub(crate) fn bar(share: f64, cells: usize, low: bool) -> Vec<Span<'static>> {
     let fill = if share > 0.0 {
         ((share / 100.0 * cells as f64).round() as usize)
             .max(1)
@@ -137,7 +161,7 @@ fn bar(share: f64, cells: usize, low: bool) -> Vec<Span<'static>> {
     ]
 }
 
-/// The narrow layout's Q segment, with no click target until `/quota`.
+/// The narrow layout's Q segment, opening the quota view.
 pub(crate) fn segment_spans(app: &App) -> Option<Vec<Span<'static>>> {
     let limits = limits(app);
     if limits.is_empty() {

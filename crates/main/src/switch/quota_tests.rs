@@ -1018,3 +1018,339 @@ fn a_failed_loader_spawn_is_retried_by_the_model_reader() {
     receive(&ended, "the retried loader's end");
     assert!(store.state.lock().unwrap().started);
 }
+
+#[test]
+fn the_door_reader_fetches_only_with_the_flag() {
+    let fixture = http_fixture(vec![
+        fakes::Response::status(200, windows_body()),
+        fakes::Response::status(
+            200,
+            b"{\"windows\": [{\"name\": \"primary\", \"used_percent\": 11.0}]}".to_vec(),
+        ),
+    ]);
+    // The readers build their own store, as `Switching::quota_readers`
+    // wires them: the flag on the door reader selects the path.
+    let readers = fixture.switching.quota_readers();
+    let fetch = Arc::clone(&readers.door);
+    let (rows, notice_at) = fakes::within(
+        "the door reader's fetch answer",
+        MUST_SUCCEED_WITHIN,
+        move || fetch(true),
+    );
+    assert_eq!(fixture.server.requests().len(), 1, "no fetch started");
+    assert_eq!(notice_at, 80.0);
+    assert_eq!(
+        rows,
+        [info("qp", "work", QuotaEntry::Reported(quota_value())).unwrap()]
+    );
+    let cached = Arc::clone(&readers.door);
+    let (rows, _) = fakes::within(
+        "the door reader's cached answer",
+        MUST_SUCCEED_WITHIN,
+        move || cached(false),
+    );
+    assert_eq!(fixture.server.requests().len(), 1, "a fetch started");
+    assert_eq!(
+        rows,
+        [info("qp", "work", QuotaEntry::Reported(quota_value())).unwrap()]
+    );
+    let refetch = Arc::clone(&readers.door);
+    let (rows, _) = fakes::within(
+        "the door reader's refetch answer",
+        MUST_SUCCEED_WITHIN,
+        move || refetch(true),
+    );
+    assert_eq!(fixture.server.requests().len(), 2, "no fetch started");
+    assert_eq!(
+        rows,
+        [info(
+            "qp",
+            "work",
+            QuotaEntry::Reported(Quota::Windows(vec![Window {
+                name: "primary".to_owned(),
+                used: WindowUse::Percent {
+                    used: 11.0,
+                    resets_at: None,
+                },
+            }])),
+        )
+        .unwrap()]
+    );
+}
+
+#[test]
+fn fetch_true_starts_a_fetch_on_a_fresh_cache() {
+    let fixture = http_fixture(vec![
+        fakes::Response::status(200, windows_body()),
+        fakes::Response::status(
+            200,
+            b"{\"windows\": [{\"name\": \"primary\", \"used_percent\": 11.0}]}".to_vec(),
+        ),
+    ]);
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    let first = QuotaEntry::Reported(quota_value());
+    let lua = store.held_instance("qp");
+    assert_eq!(read_to_end(Arc::clone(&lua), pair_of("work")), first);
+    assert_eq!(fixture.server.requests().len(), 1);
+    // The cache is fresh: no clock ever moved, so its age is far below the
+    // 5-minute freshness bound and a due-check would never refetch. (The
+    // providers' clocks live inside the fixture, so the test cannot advance
+    // one; the frozen clock keeps the primed cache fresh by itself.) The
+    // fetch path still starts one fetch per label and answers its value.
+    let fetch = Arc::clone(&store);
+    let (rows, notice_at) =
+        fakes::within("the fetch path's answer", MUST_SUCCEED_WITHIN, move || {
+            fetch.answer_fetch()
+        });
+    assert_eq!(fixture.server.requests().len(), 2, "no fetch started");
+    assert_eq!(notice_at, 80.0);
+    assert_eq!(
+        rows,
+        [info(
+            "qp",
+            "work",
+            QuotaEntry::Reported(Quota::Windows(vec![Window {
+                name: "primary".to_owned(),
+                used: WindowUse::Percent {
+                    used: 11.0,
+                    resets_at: None,
+                },
+            }])),
+        )
+        .unwrap()]
+    );
+}
+
+#[test]
+fn without_fetch_the_answer_comes_from_cache_with_no_new_fetch() {
+    let fixture = http_fixture(vec![fakes::Response::status(200, windows_body())]);
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    let lua = store.held_instance("qp");
+    assert_eq!(
+        read_to_end(Arc::clone(&lua), pair_of("work")),
+        QuotaEntry::Reported(quota_value())
+    );
+    assert_eq!(fixture.server.requests().len(), 1);
+    let cached = Arc::clone(&store);
+    let (rows, notice_at) = fakes::within("the cached answer", MUST_SUCCEED_WITHIN, move || {
+        cached.answer()
+    });
+    assert_eq!(fixture.server.requests().len(), 1, "a fetch started");
+    assert_eq!(notice_at, 80.0);
+    assert_eq!(
+        rows,
+        [info("qp", "work", QuotaEntry::Reported(quota_value())).unwrap()]
+    );
+}
+
+#[test]
+fn a_failed_fetch_without_a_last_value_answers_unreachable() {
+    let fixture = http_fixture(vec![denied()]);
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    // Nothing ever fetched, so the failed fetch has no last value: the
+    // row is `unreachable` with no value, through the failure mapper.
+    let failed_fetch = Arc::clone(&store);
+    assert_eq!(
+        fakes::within(
+            "the failed fetch's answer",
+            MUST_SUCCEED_WITHIN,
+            move || failed_fetch.answer_fetch()
+        ),
+        (vec![failed("qp", "work")], 80.0)
+    );
+}
+
+#[test]
+fn a_failed_fetch_with_a_last_value_answers_unreachable_with_it() {
+    let fixture = http_fixture(vec![fakes::Response::status(200, windows_body()), denied()]);
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    let lua = store.held_instance("qp");
+    assert_eq!(
+        read_to_end(Arc::clone(&lua), pair_of("work")),
+        QuotaEntry::Reported(quota_value())
+    );
+    // The retry fails, keeping the last value: the row carries it with
+    // `unreachable`, through the value mapper.
+    let failed_fetch = Arc::clone(&store);
+    assert_eq!(
+        fakes::within(
+            "the failed fetch's answer",
+            MUST_SUCCEED_WITHIN,
+            move || failed_fetch.answer_fetch()
+        ),
+        (
+            vec![
+                info(
+                    "qp",
+                    "work",
+                    QuotaEntry::Unreachable {
+                        last: Some((quota_value(), Duration::from_secs(0))),
+                    },
+                )
+                .unwrap()
+            ],
+            80.0
+        )
+    );
+}
+
+#[test]
+fn fetch_true_waits_for_a_held_loader_then_answers() {
+    let fixture = fixture(false, false, &[]);
+    let store = fixture.switching.quota_store();
+    // A test-owned fake loader clock: its parks name the instants the
+    // waits below synchronize on.
+    let loader_clock = fakes::clock::FakeClock::new();
+    let mut now = fixture.switching.reloadable();
+    now.loader.clock = loader_clock.clone();
+    fixture.switching.reloaded(now);
+    let (entered, at_register) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    store.pause_at_register(entered, released);
+    let (found, got) = mpsc::channel();
+    let reader = store.clone();
+    std::thread::spawn(move || found.send(reader.answer_fetch()));
+    receive(&at_register, "the loader before the quota check");
+    // The loader is held before resolving any label: the fetch path parks
+    // on the loader wait instead of answering the empty snapshot as
+    // complete. The parked thread proves the reader reached its wait, and
+    // the held loader proves no answer can arrive before the release:
+    // no real-time wait is needed.
+    let end = loader_clock
+        .now()
+        .checked_add(LOADER_BUDGET)
+        .expect("the loader budget fits the clock");
+    assert!(
+        loader_clock.await_parked(end, MUST_SUCCEED_WITHIN),
+        "the fetch path parked on the loader wait"
+    );
+    release.send(()).unwrap();
+    let (rows, notice_at) = receive(&got, "the fetch path's answer");
+    assert_eq!(notice_at, 80.0);
+    let weekly = Quota::Windows(vec![Window {
+        name: "weekly".to_owned(),
+        used: WindowUse::Percent {
+            used: 35.0,
+            resets_at: None,
+        },
+    }]);
+    assert_eq!(
+        rows,
+        [
+            failed("qp", "broken"),
+            info("qp", "home", QuotaEntry::Reported(weekly.clone())).unwrap(),
+            info("qp", "work", QuotaEntry::Reported(weekly)).unwrap(),
+        ]
+    );
+}
+
+#[test]
+fn fetch_true_answers_unreachable_when_the_loader_budget_expires() {
+    let fixture = fixture(false, false, &[]);
+    let store = fixture.switching.quota_store();
+    // A test-owned fake loader clock: its parks name the instants the
+    // waits below synchronize on.
+    let loader_clock = fakes::clock::FakeClock::new();
+    let mut now = fixture.switching.reloadable();
+    now.loader.clock = loader_clock.clone();
+    fixture.switching.reloaded(now);
+    let (entered, at_register) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    store.pause_at_register(entered, released);
+    let (found, got) = mpsc::channel();
+    let reader = store.clone();
+    std::thread::spawn(move || found.send(reader.answer_fetch()));
+    receive(&at_register, "the loader before the quota check");
+    // Past the budget on the loader clock, which the waiter reads: no
+    // label resolved, so every startup label answers `unreachable`. The
+    // parked thread proves the reader reached its wait, and the advance
+    // names that park, never a sleep; reaching the deadline is enough,
+    // since the waiter's own check is `now >= end`.
+    let end = loader_clock
+        .now()
+        .checked_add(LOADER_BUDGET)
+        .expect("the loader budget fits the clock");
+    assert!(
+        loader_clock.await_parked(end, MUST_SUCCEED_WITHIN),
+        "the fetch path parked on the loader wait"
+    );
+    loader_clock.advance_when_parked(
+        Some(end),
+        None,
+        LOADER_BUDGET,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
+    assert_eq!(
+        receive(&got, "the expired budget's answer"),
+        (
+            vec![
+                failed("qp", "broken"),
+                failed("qp", "home"),
+                failed("qp", "work"),
+            ],
+            80.0
+        )
+    );
+    release.send(()).unwrap();
+}
+
+#[test]
+fn fetch_true_answers_unreachable_when_shutdown_fires_while_unchecked() {
+    let fixture = fixture(false, false, &[]);
+    let store = fixture.switching.quota_store();
+    drop(fixture.switching);
+    // The loader finds no session and ends it unchecked: every startup
+    // label answers `unreachable` at once, never partial and never empty
+    // as complete.
+    let unreachable = Arc::clone(&store);
+    assert_eq!(
+        fakes::within(
+            "the shutdown fetch's answer",
+            MUST_SUCCEED_WITHIN,
+            move || unreachable.answer_fetch()
+        ),
+        (
+            vec![
+                failed("qp", "broken"),
+                failed("qp", "home"),
+                failed("qp", "work"),
+            ],
+            80.0
+        )
+    );
+}
+
+#[test]
+fn a_fetched_no_quota_stays_absent() {
+    let fixture = http_fixture(vec![fakes::Response::status(200, b"null".to_vec())]);
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    // The forced fetch resolves no quota: the label stays absent, as in
+    // the cached path, instead of answering `unreachable`.
+    let empty = Arc::clone(&store);
+    assert_eq!(
+        fakes::within("the empty fetch's answer", MUST_SUCCEED_WITHIN, move || {
+            empty.answer_fetch()
+        }),
+        (Vec::new(), 80.0)
+    );
+}
