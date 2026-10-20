@@ -41,7 +41,11 @@ case $sub in
     for arg in "$@"; do
       case $arg in
         --* | "$tag" | release | upload | create | edit | delete | view) ;;
-        *) printf '%s\n' "${arg##*/}" >> "$state/uploads-$version" ;;
+        *)
+          # Like the real upload, a named file that is not there fails
+          # the step, so the failure step's cleanup runs.
+          if [ ! -f "$arg" ]; then printf 'upload: %s: no such file\n' "$arg" >&2; exit 1; fi
+          printf '%s\n' "${arg##*/}" >> "$state/uploads-$version" ;;
       esac
     done ;;
   edit)

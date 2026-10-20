@@ -102,16 +102,7 @@ impl Pack {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let (child, watchdog) = support::spawn_watched(&mut command);
-        let group = child.id();
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match self.deadline.recv(&finished) {
-            Ok(output) => output.unwrap(),
-            Err(_) => support::expired(self.deadline, group, &finished, "release-pack to exit"),
-        };
-        watchdog.stand_down(self.deadline.cleanup());
-        Output::from(output)
+        run_watched(&mut command, self.deadline, "release-pack to exit")
     }
 
     /// The members of `archive`, sorted, as `tar -tzf` lists them.
@@ -151,6 +142,22 @@ fn script() -> PathBuf {
 
 fn fixture_bin() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/release_pack_fixture/bin")
+}
+
+/// Runs `command` to completion under `deadline`: the watched-process
+/// wait and output handling both subprocess helpers share.
+#[track_caller]
+fn run_watched(command: &mut Command, deadline: Deadline, what: &str) -> Output {
+    let (child, watchdog) = support::spawn_watched(command);
+    let group = child.id();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match deadline.recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(_) => support::expired(deadline, group, &finished, what),
+    };
+    watchdog.stand_down(deadline.cleanup());
+    Output::from(output)
 }
 
 /// A release tree: two providers, one extension, docs with an excluded
@@ -429,21 +436,26 @@ fn a_failure_before_publish_leaves_no_tag_and_no_release() {
             .code,
         Some(0)
     );
-    assert_eq!(
-        pack.pack(&["draft-upload", "1.2.3", "out/missing-does-not-matter"])
-            .code,
-        Some(0)
+    // The upload names a file that is not there, as a failed step would:
+    // the stub refuses it, so the run fails before anything publishes.
+    let failed = pack.pack(&["draft-upload", "1.2.3", "out/missing-asset.tar.gz"]);
+    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+    assert!(
+        failed.stderr.contains("missing-asset.tar.gz"),
+        "{}",
+        failed.stderr
     );
+    assert!(
+        !pack.calls().lines().any(|line| line.starts_with("edit")),
+        "publish ran before the failure: {}",
+        pack.calls()
+    );
+    assert!(!pack.state().join("published-1.2.3").exists());
     // The failure step deletes the draft, with the tag its creation made.
     let run = pack.pack(&["draft-delete", "1.2.3"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert!(!pack.state().join("draft-1.2.3").exists());
     assert!(!pack.state().join("published-1.2.3").exists());
-    assert!(
-        !pack.calls().lines().any(|line| line.starts_with("edit")),
-        "publish ran before the failure step: {}",
-        pack.calls()
-    );
     let delete = pack
         .calls()
         .lines()
@@ -451,6 +463,23 @@ fn a_failure_before_publish_leaves_no_tag_and_no_release() {
         .unwrap()
         .to_owned();
     assert!(delete.contains("--cleanup-tag"), "{delete}");
+}
+
+#[test]
+fn a_hard_link_fails() {
+    // A hard-linked file would pack as a hard-link entry, which the
+    // shipped unpacker refuses, so the pack fails before writing.
+    let pack = Pack::start();
+    pack.wfile("tree/providers/alpha/manifest.json", b"{}", 0o644);
+    fs::hard_link(
+        pack.path("tree/providers/alpha/manifest.json"),
+        pack.path("tree/providers/alpha/copy.json"),
+    )
+    .unwrap();
+    let run = pack.pack(&["pack-extensions", "tree", "out"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(run.stderr.contains("hard link"), "{}", run.stderr);
+    assert!(!pack.path("out/fiber-extensions.tar.gz").exists());
 }
 
 #[test]
@@ -633,21 +662,11 @@ impl Release {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let (child, watchdog) = support::spawn_watched(&mut command);
-        let group = child.id();
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match self.setup.deadline.recv(&finished) {
-            Ok(output) => output.unwrap(),
-            Err(_) => support::expired(
-                self.setup.deadline,
-                group,
-                &finished,
-                &format!("{} to exit", tool.display()),
-            ),
-        };
-        watchdog.stand_down(self.setup.deadline.cleanup());
-        Output::from(output)
+        run_watched(
+            &mut command,
+            self.setup.deadline,
+            &format!("{} to exit", tool.display()),
+        )
     }
 
     /// The fixture's base URL: the loopback server's address.
@@ -944,28 +963,4 @@ fn the_recorded_full_sha_reinstalls_and_a_short_commit_is_refused() {
     assert_eq!(reinstalled.code, Some(0), "{}", reinstalled.stderr);
     let (_, commit) = record_commit(&home, "github.com/aakshintala/fiber/extensions/memory");
     assert_eq!(commit, head);
-}
-
-/// `fiber --version` prints the version alone when no commit was recorded
-/// (`docs/releasing.md`, "Versions"): a build with no git history, such
-/// as a source tarball or a mutation-testing copy, leaves `FIBER_COMMIT`
-/// unset, so the line is `fiber <version>` with no commit suffix. With a
-/// recorded commit the line names its first 7 characters.
-#[test]
-fn version_prints_the_version_alone_without_a_recorded_commit() {
-    let release = Release::serve();
-    let version = release.fiber(&["--version"], &[]);
-    assert_eq!(version.code, Some(0), "{}", version.stderr);
-    match option_env!("FIBER_COMMIT").filter(|commit| !commit.is_empty()) {
-        Some(commit) => assert_eq!(
-            version.stdout,
-            format!("fiber {VERSION} ({})\n", commit.get(..7).unwrap_or(commit)),
-            "--version names the recorded commit's first 7 characters"
-        ),
-        None => assert_eq!(
-            version.stdout,
-            format!("fiber {VERSION}\n"),
-            "--version without a recorded commit is the version alone"
-        ),
-    }
 }

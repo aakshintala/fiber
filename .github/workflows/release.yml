@@ -56,10 +56,6 @@ jobs:
           HEAD: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          fail() {
-            printf 'release: %s\n' "$1" >&2
-            exit "${2:-1}"
-          }
           version_at() {
             git show "$1:crates/main/Cargo.toml" 2> /dev/null | awk '
               /^\[package\]/{ package = 1; next }
@@ -72,7 +68,7 @@ jobs:
             *) base_version=$(version_at "$BEFORE") ;;
           esac
           head_version=$(version_at "$HEAD")
-          [ -n "$head_version" ] || fail "crates/main/Cargo.toml at $HEAD names no version."
+          [ -n "$head_version" ] || { printf 'release: %s\n' "crates/main/Cargo.toml at $HEAD names no version." >&2; exit 1; }
           if [ "$head_version" = "$base_version" ]; then
             echo "the fiber version is unchanged at $head_version; every release job skips."
             echo "version-changed=false" >> "$GITHUB_OUTPUT"
@@ -82,32 +78,21 @@ jobs:
           # A version decrease is never a release.
           if [ -n "$base_version" ]; then
             case $head_version.$base_version in
-              *[!0-9.]*) fail "a release version is three dot-separated numbers, not $base_version to $head_version." ;;
+              *[!0-9.]*) { printf 'release: %s\n' "a release version is three dot-separated numbers, not $base_version to $head_version." >&2; exit 1; } ;;
             esac
-            rest_new=$head_version
-            rest_old=$base_version
-            for _ in 1 2 3; do
-              new=${rest_new%%.*}
-              old=${rest_old%%.*}
-              if [ "$new" -ne "$old" ]; then
-                [ "$new" -gt "$old" ] || fail "the fiber version decreased from $base_version to $head_version."
-                break
-              fi
-              rest_new=${rest_new#*.}
-              rest_old=${rest_old#*.}
-            done
+            [ "$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)" = "$head_version" ] || { printf 'release: %s\n' "the fiber version decreased from $base_version to $head_version." >&2; exit 1; }
           fi
-          [ -f CHANGELOG.md ] || fail "CHANGELOG.md is missing; a release needs its $head_version section."
+          [ -f CHANGELOG.md ] || { printf 'release: %s\n' "CHANGELOG.md is missing; a release needs its $head_version section." >&2; exit 1; }
           esc_version=$(printf '%s' "$head_version" | sed 's/\./\\./g')
           header=$(grep -nE "^## \[?v?$esc_version\]?([[:space:]]|$)" CHANGELOG.md | head -n 1 | cut -d: -f1 || true)
-          [ -n "$header" ] || fail "CHANGELOG.md has no section for $head_version."
-          tags=$(git ls-remote --tags origin "refs/tags/v$head_version") || fail "could not list tags at origin."
+          [ -n "$header" ] || { printf 'release: %s\n' "CHANGELOG.md has no section for $head_version." >&2; exit 1; }
+          tags=$(git ls-remote --tags origin "refs/tags/v$head_version") || { printf 'release: %s\n' "could not list tags at origin." >&2; exit 1; }
           if [ -n "$tags" ]; then
-            fail "v$head_version already exists; refusing to build over it."
+            printf 'release: %s\n' "v$head_version already exists; refusing to build over it." >&2; exit 1
           fi
           state=$(gh release view "v$head_version" --json isDraft --jq .isDraft 2> /dev/null) || state=absent
           case $state in
-            false) fail "v$head_version is already published; refusing to build over it." ;;
+            false) { printf 'release: %s\n' "v$head_version is already published; refusing to build over it." >&2; exit 1; } ;;
           esac
           # A leftover draft from a failed run is fine: the publish job
           # deletes it before creating the new draft.
@@ -167,10 +152,6 @@ jobs:
         run: cargo build --locked --release --target "${{ matrix.target }}" --bin fiber
       - name: Generate THIRD-PARTY-NOTICES
         run: |
-          fail() {
-            printf 'release: %s\n' "$1" >&2
-            exit "${2:-1}"
-          }
           # The notices template ships here, not in the repository: it is
           # workflow mechanics, and no other step reads it.
           cat > "$RUNNER_TEMP/about.hbs" << 'EOF'
@@ -190,8 +171,8 @@ jobs:
           cargo about generate --manifest-path crates/main/Cargo.toml "$RUNNER_TEMP/about.hbs" --output-file "$notices"
           # cargo-about must name a licence the tree certainly holds; an
           # empty or schema-drifted render fails the release here, not silently.
-          [ -s "$notices" ] || fail "cargo-about wrote an empty notices file."
-          grep -q "Apache-2.0" "$notices" || fail "the notices file names no Apache-2.0 licence."
+          [ -s "$notices" ] || { printf 'release: %s\n' "cargo-about wrote an empty notices file." >&2; exit 1; }
+          grep -q "Apache-2.0" "$notices" || { printf 'release: %s\n' "the notices file names no Apache-2.0 licence." >&2; exit 1; }
       - name: Sign and notarise the macOS binary
         if: runner.os == 'macOS'
         env:
@@ -201,10 +182,6 @@ jobs:
           APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
           APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
         run: |
-          fail() {
-            printf 'release: %s\n' "$1" >&2
-            exit "${2:-1}"
-          }
           binary="target/${{ matrix.target }}/release/fiber"
           keychain="$RUNNER_TEMP/release.keychain-db"
           clean() {
@@ -212,7 +189,7 @@ jobs:
             rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/api-key.p8" "$RUNNER_TEMP/signed.zip"
           }
           trap clean EXIT
-          [ -n "$MACOS_CERTIFICATE_P12" ] || fail "the release environment holds no macOS certificate."
+          [ -n "$MACOS_CERTIFICATE_P12" ] || { printf 'release: %s\n' "the release environment holds no macOS certificate." >&2; exit 1; }
           printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode -o "$RUNNER_TEMP/cert.p12"
           printf '%s' "$APPSTORE_API_PRIVATE_KEY" > "$RUNNER_TEMP/api-key.p8"
           security create-keychain -p actions "$keychain"
@@ -222,7 +199,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$keychain"
           security list-keychains -d user -s "$keychain" "$(security list-keychains -d user | tr -d '"')"
           identity=$(security find-identity -v -p codesigning "$keychain" | grep "Developer ID Application" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
-          [ -n "$identity" ] || fail "the keychain holds no Developer ID Application identity."
+          [ -n "$identity" ] || { printf 'release: %s\n' "the keychain holds no Developer ID Application identity." >&2; exit 1; }
           codesign --sign "$identity" --options runtime --timestamp --force -v "$binary"
           (cd "$(dirname "$binary")" && ditto -c -k --keepParent "$(basename "$binary")" "$RUNNER_TEMP/signed.zip")
           xcrun notarytool submit "$RUNNER_TEMP/signed.zip" --key "$RUNNER_TEMP/api-key.p8" --key-id "$APPSTORE_API_KEY_ID" --issuer "$APPSTORE_API_ISSUER_ID" --wait
@@ -236,9 +213,35 @@ jobs:
           path: ${{ runner.temp }}/release/fiber-*
           if-no-files-found: error
 
+  assets:
+    name: Assets
+    needs: preflight
+    if: needs.preflight.outputs.version-changed == 'true'
+    runs-on: ubuntu-24.04
+    # A checkout plus three pack runs finishes inside the preflight bound (docs/ci.md, "Job time limits").
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Pack the docs, extensions and installer assets
+        # The release gate and the publish job share these exact files:
+        # the gate tests what the publish uploads.
+        run: |
+          mkdir -p "$RUNNER_TEMP/assets"
+          scripts/release-pack pack-docs . "$RUNNER_TEMP/assets"
+          scripts/release-pack pack-extensions . "$RUNNER_TEMP/assets"
+          scripts/release-pack stage-installer . "$RUNNER_TEMP/assets"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/assets/
+          if-no-files-found: error
+
   release-gate:
     name: Release gate (${{ matrix.runner }})
-    needs: [preflight, build]
+    needs: [preflight, build, assets]
     if: needs.preflight.outputs.version-changed == 'true'
     strategy:
       fail-fast: true
@@ -283,6 +286,10 @@ jobs:
         with:
           name: release-${{ matrix.target }}
           path: ${{ runner.temp }}/release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/assets
       - name: The full test suite, with no selection
         # The ci profile retries a failed binary-level test once, as on a
         # pull request (docs/ci.md). The root commit as base selects
@@ -301,17 +308,14 @@ jobs:
         # The release gate in docs/ci.md runs binary-level tests against
         # those exact artifacts: the packed docs and extensions archives go
         # through the shipped install code, so an archive the unpacker
-        # refuses fails the release here.
+        # refuses fails the release here. They arrive as the release-assets
+        # artifact the publish job uploads, so the gate tests what ships.
         run: |
-          fail() {
-            printf 'release: %s\n' "$1" >&2
-            exit "${2:-1}"
-          }
           probe="$RUNNER_TEMP/release-probe"
           mkdir -p "$probe/files/download/v$VERSION"
-          scripts/release-pack pack-docs . "$probe"
-          scripts/release-pack pack-extensions . "$probe"
-          cp "$probe"/fiber-*.tar.gz* "$probe/files/download/v$VERSION/"
+          cp "$RUNNER_TEMP/assets"/fiber-docs.tar.gz* "$probe/files/download/v$VERSION/"
+          cp "$RUNNER_TEMP/assets"/fiber-extensions.tar.gz* "$probe/files/download/v$VERSION/"
+          cp "$RUNNER_TEMP/release"/fiber-*.tar.gz* "$probe/files/download/v$VERSION/"
           (cd "$probe" && tar -xzf "$RUNNER_TEMP/release/fiber-${{ matrix.target }}.tar.gz")
           port=8901
           python3 -m http.server "$port" --directory "$probe/files" > "$probe/server.log" 2>&1 &
@@ -322,12 +326,12 @@ jobs:
             sleep 1
           done
           FIBER_HOME="$probe/home" "$probe/fiber" release-install "$VERSION" --base-url "http://127.0.0.1:$port"
-          [ -d "$probe/home/docs" ] || fail "release-install staged no docs."
-          [ -n "$(ls "$probe/home/extensions")" ] || fail "release-install staged no extensions."
+          [ -d "$probe/home/docs" ] || { printf 'release: %s\n' "release-install staged no docs." >&2; exit 1; }
+          [ -n "$(ls "$probe/home/extensions")" ] || { printf 'release: %s\n' "release-install staged no extensions." >&2; exit 1; }
 
   publish:
     name: Publish
-    needs: [preflight, build, release-gate]
+    needs: [preflight, build, assets, release-gate]
     if: needs.preflight.outputs.version-changed == 'true'
     runs-on: ubuntu-24.04
     # A generous bound for the draft, the asset uploads and the publish (docs/ci.md, "Job time limits").
@@ -348,26 +352,17 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: ${{ runner.temp }}/release
-      - name: Pack the docs, extensions and installer assets
-        run: |
-          scripts/release-pack pack-docs . "$RUNNER_TEMP/release"
-          scripts/release-pack pack-extensions . "$RUNNER_TEMP/release"
-          scripts/release-pack stage-installer . "$RUNNER_TEMP/release"
       - name: Create the draft, upload every asset, publish last
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          fail() {
-            printf 'release: %s\n' "$1" >&2
-            exit "${2:-1}"
-          }
           pack="$GITHUB_WORKSPACE/scripts/release-pack"
           cd "$RUNNER_TEMP/release" || exit 1
           esc_version=$(printf '%s' "$VERSION" | sed 's/\./\\./g')
           header=$(grep -nE "^## \[?v?$esc_version\]?([[:space:]]|$)" "$GITHUB_WORKSPACE/CHANGELOG.md" | head -n 1 | cut -d: -f1 || true)
-          [ -n "$header" ] || fail "CHANGELOG.md has no section for $VERSION."
+          [ -n "$header" ] || { printf 'release: %s\n' "CHANGELOG.md has no section for $VERSION." >&2; exit 1; }
           awk -v start="$header" 'NR > start && /^## /{ exit } NR > start' "$GITHUB_WORKSPACE/CHANGELOG.md" > notes.md
-          [ -s notes.md ] || fail "the $VERSION notes are empty."
+          [ -s notes.md ] || { printf 'release: %s\n' "the $VERSION notes are empty." >&2; exit 1; }
           "$pack" draft-begin "$VERSION" "$GITHUB_SHA" notes.md
           "$pack" draft-upload "$VERSION" install.sh fiber-*.tar.gz fiber-*.tar.gz.sha256
           "$pack" draft-publish "$VERSION"

@@ -101,8 +101,12 @@ check_name() {
 
 # Fails unless the tree at $1 holds only files, directories and relative
 # symlinks with no `..` that stay inside it, with owner `rw` files and
-# owner `rwx` directories.
+# owner `rwx` directories. A hard-linked file would pack as a hard-link
+# entry, which the shipped unpacker refuses (`unpack.rs` takes only file,
+# directory and symlink typeflags), so the tree must hold none.
 check_tree() {
+  hard=$(find "$1" -type f -links +1 -print -quit)
+  [ -z "$hard" ] || fail "${hard#"$1"/} shares its contents by hard link."
   while IFS= read -r path; do
     rel=${path#"$1"/}
     check_name "$rel"
@@ -184,12 +188,7 @@ pack_docs() {
     [ -e "$entry" ] || fail "$tree/docs holds no entries."
     set -- "$@" "${entry##*/}"
   done
-  (cd "$stage/docs" && tar --format=ustar -czf "$outdir/fiber-docs.tar.gz" "$@")
-  (cd "$outdir" && if command -v sha256sum > /dev/null 2>&1; then
-    sha256sum fiber-docs.tar.gz > fiber-docs.tar.gz.sha256
-  else
-    shasum -a 256 fiber-docs.tar.gz > fiber-docs.tar.gz.sha256
-  fi)
+  write_archive "$outdir/fiber-docs.tar.gz" "$stage/docs" "$@"
   trap - EXIT
   rm -rf "$stage"
 }

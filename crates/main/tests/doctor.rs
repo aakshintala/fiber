@@ -18,10 +18,11 @@ use support::{Setup, run_to_exit, write_json};
 /// and the recorded commit's first 7 characters.
 fn version_line() -> String {
     match option_env!("FIBER_COMMIT") {
-        Some(commit) => match commit.get(..7) {
-            Some(short) => format!("fiber {} ({short})", env!("CARGO_PKG_VERSION")),
-            None => format!("fiber {} ({commit})", env!("CARGO_PKG_VERSION")),
-        },
+        Some(commit) => format!(
+            "fiber {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            commit.get(..7).unwrap_or(commit)
+        ),
         None => format!("fiber {}", env!("CARGO_PKG_VERSION")),
     }
 }
