@@ -89,6 +89,121 @@ fn reload_sends_reload_without_args() {
 }
 
 #[test]
+fn import_sends_import_without_args_when_bare() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "import");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0].get("args"), None);
+}
+
+#[test]
+fn import_sends_its_source_when_named() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex "));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "import");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0]["args"], json!({"source": "codex"}));
+}
+
+#[test]
+fn an_accepted_import_reports_every_line_with_a_reload_reminder() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let accepted = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha"],
+                    "skills": ["lint"],
+                    "commands": ["plan"],
+                    "instructions": ["AGENTS.md"],
+                },
+                "left_behind": [{"item": "auth.json", "reason": "credentials are never imported"}],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    // At most three notices show: the first three report lines, then the
+    // count of the rest.
+    assert_eq!(
+        notice_texts(&app),
+        [
+            "imported imported skill lint",
+            "imported imported command plan",
+            "imported imported instruction AGENTS.md",
+            "+3 more",
+        ]
+    );
+    assert_eq!(
+        app.notice(),
+        Some("Run /reload to apply the imported items.")
+    );
+}
+
+#[test]
+fn an_accepted_import_without_cuts_shows_every_line() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import"));
+    let id = lines[0]["id"].clone();
+    let accepted = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha"],
+                    "skills": [],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [{"item": "auth.json", "reason": "credentials are never imported"}],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        notice_texts(&app),
+        [
+            "imported imported server alpha",
+            "imported left behind auth.json: credentials are never imported",
+            "imported Run /reload to apply the imported items.",
+        ]
+    );
+}
+
+/// Every notice showing, oldest first, each with its code: what the
+/// person reads after an accepted import.
+fn notice_texts(app: &App) -> Vec<String> {
+    app.notices()
+        .iter()
+        .map(|line| match line {
+            crate::app::NoticeLine::Notice { code, text, .. } => format!("{code} {text}"),
+            crate::app::NoticeLine::More(n) => format!("+{n} more"),
+        })
+        .collect()
+}
+
+#[test]
+fn a_rejected_import_keeps_the_existing_notice_path() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import vim"));
+    let id = lines[0]["id"].clone();
+    let rejected = session_line(
+        "command_rejected",
+        json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert_eq!(app.draft(), "/import vim");
+    assert_eq!(app.notice(), Some("No."));
+}
+
+#[test]
 fn a_rejected_handoff_returns_its_draft_with_the_notice() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/handoff do x"));
@@ -104,7 +219,14 @@ fn a_rejected_handoff_returns_its_draft_with_the_notice() {
 
 #[test]
 fn a_command_with_no_session_says_so() {
-    for command in ["/handoff x", "/name x", "/reload", "/close"] {
+    for command in [
+        "/handoff x",
+        "/name x",
+        "/reload",
+        "/import",
+        "/import codex",
+        "/close",
+    ] {
         let mut app = connected();
         assert_eq!(enter(&mut app, command), Effect::None, "{command}");
         assert_eq!(app.notice(), Some("No session on screen."), "{command}");
@@ -114,7 +236,14 @@ fn a_command_with_no_session_says_so() {
 
 #[test]
 fn a_command_with_the_link_down_keeps_its_draft() {
-    for command in ["/handoff x", "/name x", "/reload", "/close"] {
+    for command in [
+        "/handoff x",
+        "/name x",
+        "/reload",
+        "/import",
+        "/import codex",
+        "/close",
+    ] {
         let mut app = attached();
         app.disconnected();
         assert_eq!(enter(&mut app, command), Effect::None, "{command}");

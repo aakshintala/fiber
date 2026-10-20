@@ -1468,6 +1468,41 @@ impl App {
         self.outbox.answered(id);
     }
 
+    /// An accepted `import`: one notice per report line, as `fiber import`
+    /// prints them, plus a `/reload` reminder, since imported items apply
+    /// on the next reload. A rejection folds through `refused` unchanged.
+    fn import_answered(&mut self, accepted: &CommandAccepted) {
+        let Some(CommandResult::Import {
+            imported,
+            left_behind,
+        }) = &accepted.result
+        else {
+            return;
+        };
+        for name in &imported.skills {
+            self.push_notice("imported", format!("imported skill {name}"));
+        }
+        for name in &imported.commands {
+            self.push_notice("imported", format!("imported command {name}"));
+        }
+        for name in &imported.instructions {
+            self.push_notice("imported", format!("imported instruction {name}"));
+        }
+        for name in &imported.mcp_servers {
+            self.push_notice("imported", format!("imported server {name}"));
+        }
+        for left in left_behind {
+            self.push_notice(
+                "imported",
+                format!("left behind {}: {}", left.item, left.reason),
+            );
+        }
+        self.push_notice(
+            "imported",
+            "Run /reload to apply the imported items.".to_owned(),
+        );
+    }
+
     /// Drops a pending command, returning its draft to an empty box.
     fn fail(&mut self, id: &str) {
         if let Some((kind, draft)) = self.outbox.fail(id) {
@@ -1589,6 +1624,7 @@ impl App {
                 if let Some(accepted) = read!(envelope, CommandAccepted) {
                     let sent = self.outbox.answered(&accepted.command_id.0);
                     self.commands_answered(&accepted);
+                    self.import_answered(&accepted);
                     changed |= self.offer.file_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell

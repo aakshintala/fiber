@@ -51,7 +51,8 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         | CommandResult::OfferedFile { .. }
         | CommandResult::Start { .. }
         | CommandResult::Status { .. }
-        | CommandResult::Subscribe { .. } => None,
+        | CommandResult::Subscribe { .. }
+        | CommandResult::Import { .. } => None,
     }
 }
 

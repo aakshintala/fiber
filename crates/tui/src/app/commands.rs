@@ -171,6 +171,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_reload,
     },
     CommandEntry {
+        name: "import",
+        description: "Copies another harness's configuration into Fiber home, once.",
+        hint: Some("[<source>]"),
+        run: run_import,
+    },
+    CommandEntry {
         name: "close",
         description: "Stops the session on screen.",
         hint: None,
@@ -250,6 +256,14 @@ fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     // A reloaded extension draws again: its next failure reports anew.
     app.renderer_reported.clear();
     Some(app.send_command("reload", None))
+}
+
+fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
+    // A bare `/import` imports both sources; anything else goes out as
+    // `source`, and the session refuses what it does not take.
+    let rest = rest.trim();
+    let args = (!rest.is_empty()).then(|| json!({"source": rest}));
+    Some(app.send_command("import", args))
 }
 
 fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
