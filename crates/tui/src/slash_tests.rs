@@ -45,6 +45,98 @@ fn template_row(name: &str) -> CommandInfo {
     }
 }
 
+/// The `/` list's built-in order, as drawn: the table keeps this order,
+/// and `docs/tui.md`'s "Slash commands" table matches it.
+const DRAWN_ORDER: &[&str] = &[
+    "home",
+    "new",
+    "resume",
+    "model",
+    "thinking",
+    "scoped-models",
+    "tools",
+    "context",
+    "usage",
+    "quota",
+    "panel",
+    "rail",
+    "rules",
+    "settings",
+    "keys",
+    "skills",
+    "handoff",
+    "name",
+    "login",
+    "reload",
+    "close",
+    "quit",
+    "approvals",
+    "?",
+    "help",
+];
+
+#[test]
+fn the_list_draws_every_drawn_command_once_in_drawn_order() {
+    let all = rows(&[]);
+    let names: Vec<&str> = all.iter().map(|row| row.name.as_str()).collect();
+    assert_eq!(names, DRAWN_ORDER);
+    assert!(all.iter().all(|row| row.tag == "command"));
+    for name in DRAWN_ORDER {
+        assert!(is_built_in(name), "{name} drawn but not a built-in");
+    }
+    // The terminal draws every built-in but these two, which go out as
+    // typed.
+    let undrawn: Vec<&&str> = BUILT_IN_COMMANDS
+        .iter()
+        .filter(|name| !DRAWN_ORDER.contains(name))
+        .collect();
+    assert_eq!(undrawn, [&"credential", &"rewind"]);
+    assert!(is_built_in("credential"));
+    assert!(is_built_in("rewind"));
+}
+
+#[test]
+fn the_doc_table_lists_the_drawn_commands_in_drawn_order() {
+    let doc = include_str!("../../../docs/tui.md");
+    let table = doc.split("### Slash commands").nth(1).unwrap();
+    let mut names = Vec::new();
+    for line in table.lines().skip_while(|l| !l.starts_with("| `")) {
+        if !line.starts_with("| `") {
+            break;
+        }
+        let cell = line.split('|').nth(1).unwrap_or("");
+        for part in cell.split(',') {
+            let part = part.trim().trim_matches('`');
+            // `/handoff [instructions]`, `/?`.
+            let name = part
+                .trim_start_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            if !name.is_empty() {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    let drawn: Vec<String> = names
+        .into_iter()
+        .filter(|name| DRAWN_ORDER.contains(&name.as_str()))
+        .collect();
+    assert_eq!(drawn, DRAWN_ORDER);
+}
+
+#[test]
+fn an_extension_row_replacing_a_drawn_command_keeps_its_slot() {
+    let plain = rows(&[]);
+    for name in DRAWN_ORDER {
+        let at = plain.iter().position(|row| row.name == *name).unwrap();
+        let with = rows(&[extension_row(name)]);
+        assert_eq!(with.len(), plain.len(), "{name}");
+        assert_eq!(with[at].name, *name);
+        assert_eq!(with[at].tag, "acme");
+    }
+}
+
 #[test]
 fn built_ins_are_drawn_built_ins_plus_credential_and_rewind() {
     for (name, _, _) in BUILT_INS {
