@@ -409,7 +409,12 @@ fn a_conversation_renders_as_converse_blocks_with_images_beside_their_results() 
                 text: "Reading.".into(),
                 provider_item: Some(json!({"opaque": true})),
             },
-            call("a_1", Some("tooluse_1"), "read", json!({"path": "a.md"})),
+            call(
+                "a_1",
+                Some("tooluse_Ab12Cd34Ef"),
+                "read",
+                json!({"path": "a.md"}),
+            ),
             call("a_2", None, "shell", json!({"cmd": "ls"})),
             result("a_1", "contents", false, Vec::new()),
             result("a_2", "boom", true, vec![png("i.png")]),
@@ -426,11 +431,11 @@ fn a_conversation_renders_as_converse_blocks_with_images_beside_their_results() 
             {"role": "assistant", "content": [
                 reasoning,
                 {"text": "Reading."},
-                {"toolUse": {"toolUseId": "tooluse_1", "name": "read", "input": {"path": "a.md"}}},
+                {"toolUse": {"toolUseId": "tooluse_Ab12Cd34Ef", "name": "read", "input": {"path": "a.md"}}},
                 {"toolUse": {"toolUseId": "a_2", "name": "shell", "input": {"cmd": "ls"}}},
             ]},
             {"role": "user", "content": [
-                {"toolResult": {"toolUseId": "tooluse_1", "content": [{"text": "contents"}]}},
+                {"toolResult": {"toolUseId": "tooluse_Ab12Cd34Ef", "content": [{"text": "contents"}]}},
                 {"toolResult": {"toolUseId": "a_2", "content": [{"text": "boom"}], "status": "error"}},
                 image,
                 {"text": "go on"},
@@ -440,13 +445,58 @@ fn a_conversation_renders_as_converse_blocks_with_images_beside_their_results() 
 }
 
 #[test]
+fn an_id_whose_last_nine_are_not_letters_and_digits_is_replayed_as_its_action_id() {
+    // Mistral reads a `toolUseId`'s last nine characters and refuses any but
+    // letters and digits; another provider's id can end otherwise.
+    let request = ModelRequest {
+        conversation: vec![
+            user("go"),
+            call(
+                "a_00000000000000a1",
+                Some("tooluse_AbCdEfGhIjKlMn"),
+                "read",
+                json!({}),
+            ),
+            call(
+                "a_00000000000000a2",
+                Some("functions.read:0"),
+                "read",
+                json!({}),
+            ),
+            call("a_00000000000000a3", Some("call12345"), "read", json!({})),
+            result("a_00000000000000a1", "one", false, Vec::new()),
+            result("a_00000000000000a2", "two", false, Vec::new()),
+            result("a_00000000000000a3", "three", false, Vec::new()),
+        ],
+        ..harness::request()
+    };
+    let body = body_of(endpoint, &request);
+    let ids = |role: usize, key: &str| -> Vec<Value> {
+        body["messages"][role]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|block| block[key]["toolUseId"].clone())
+            .collect()
+    };
+    let expected = json!(["tooluse_AbCdEfGhIjKlMn", "a_00000000000000a2", "call12345"]);
+    assert_eq!(json!(ids(1, "toolUse")), expected);
+    assert_eq!(json!(ids(2, "toolResult")), expected);
+}
+
+#[test]
 fn a_pdfs_rendered_pages_ride_beside_its_result_and_a_text_only_model_gets_lines() {
     let session = fakes::TempDir::new("fiber-converse-request-pdf");
     std::fs::write(session.path().join("p.pdf"), b"%PDF").unwrap();
     std::fs::write(session.path().join("p-1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: vec![
-            call("a_1", Some("tooluse_1"), "read", json!({"path": "p.pdf"})),
+            call(
+                "a_1",
+                Some("tooluse_Ab12Cd34Ef"),
+                "read",
+                json!({"path": "p.pdf"}),
+            ),
             Input::ToolResult {
                 action_id: ActionId("a_1".into()),
                 text: "PDF: 1 page.".into(),
@@ -466,7 +516,7 @@ fn a_pdfs_rendered_pages_ride_beside_its_result_and_a_text_only_model_gets_lines
     assert_eq!(
         body["messages"][1]["content"],
         json!([
-            {"toolResult": {"toolUseId": "tooluse_1", "content": [{"text": "PDF: 1 page."}]}},
+            {"toolResult": {"toolUseId": "tooluse_Ab12Cd34Ef", "content": [{"text": "PDF: 1 page."}]}},
             {"image": {"format": "png", "source": {"bytes": "YWJjZA=="}}},
         ])
     );
@@ -477,7 +527,7 @@ fn a_pdfs_rendered_pages_ride_beside_its_result_and_a_text_only_model_gets_lines
     let body = body_of(text_only, &request);
     assert_eq!(
         body["messages"][1]["content"],
-        json!([{"toolResult": {"toolUseId": "tooluse_1", "content": [{"text":
+        json!([{"toolResult": {"toolUseId": "tooluse_Ab12Cd34Ef", "content": [{"text":
             "PDF: 1 page.\n[PDF p.pdf left out: this model does not take images.]"}]}}])
     );
 }
@@ -492,8 +542,10 @@ fn cache_points_follow_text_where_anthropics_markers_go_on_a_model_that_declares
         ..endpoint(server)
     };
     let point = json!({"cachePoint": {"type": "default"}});
-    let tool_use = json!({"toolUse": {"toolUseId": "tooluse_1", "name": "read", "input": {}}});
-    let tool_result = json!({"toolResult": {"toolUseId": "tooluse_1", "content": [{"text": "x"}]}});
+    let tool_use =
+        json!({"toolUse": {"toolUseId": "tooluse_Ab12Cd34Ef", "name": "read", "input": {}}});
+    let tool_result =
+        json!({"toolResult": {"toolUseId": "tooluse_Ab12Cd34Ef", "content": [{"text": "x"}]}});
     let mut request = ModelRequest {
         conversation: vec![
             user("first"),
@@ -502,7 +554,7 @@ fn cache_points_follow_text_where_anthropics_markers_go_on_a_model_that_declares
                 text: "ok".into(),
                 provider_item: None,
             },
-            call("a_1", Some("tooluse_1"), "read", json!({})),
+            call("a_1", Some("tooluse_Ab12Cd34Ef"), "read", json!({})),
             result("a_1", "x", false, Vec::new()),
         ],
         previous_end: Some(2),

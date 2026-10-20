@@ -166,7 +166,8 @@ fn cache_point() -> Value {
 fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     let reference = endpoint.reference();
     // A call's `toolUseId` is the provider's id for it, or its action id
-    // when the reply carried none; its result names the same one.
+    // when the reply carried none or one a Mistral model would refuse; its
+    // result names the same one.
     let call_ids: BTreeMap<&ActionId, &str> = request
         .conversation
         .iter()
@@ -177,7 +178,9 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 action_id,
                 call.provider_id
                     .as_ref()
-                    .map_or(action_id.0.as_str(), |id| id.0.as_str()),
+                    .map(|id| id.0.as_str())
+                    .filter(|id| ends_in_nine_letters_and_digits(id))
+                    .unwrap_or(action_id.0.as_str()),
             )),
             Input::User { .. }
             | Input::Assistant { .. }
@@ -239,6 +242,13 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     out.into_iter()
         .map(|(role, content)| json!({"role": role, "content": content}))
         .collect()
+}
+
+/// Whether an id ends in nine letters and digits, all a Mistral model reads
+/// of a replayed `toolUseId` (`docs/model-routing.md`, "Bedrock Converse
+/// wire facts"). Bedrock's own ids and Fiber's action ids do.
+fn ends_in_nine_letters_and_digits(id: &str) -> bool {
+    id.len() >= 9 && id.bytes().rev().take(9).all(|b| b.is_ascii_alphanumeric())
 }
 
 /// The Converse role an input belongs to.

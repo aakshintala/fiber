@@ -345,7 +345,8 @@ signed reasoning block (`research/bedrock-converse-probe`).
 - Consecutive inputs of one role fold into one `user` or `assistant` message,
   as on `anthropic-messages`. A person's text is a `text` block, and each
   image an `image` block, `{format, source: {bytes}}`, after it. A tool call
-  is `toolUse` with `toolUseId` (the provider's id, else the action id),
+  is `toolUse` with `toolUseId` (the provider's id when it ends in nine
+  letters and digits, else the action id),
   `name` and `input`. A result is `toolResult` with that `toolUseId` and
   `content: [{text}]`, plus `status: "error"` when the call failed: AWS
   documents the field for Nova and Claude only, and five other models
@@ -364,7 +365,8 @@ signed reasoning block (`research/bedrock-converse-probe`).
   send text.
 - A Mistral model reads the last nine characters of a replayed `toolUseId`,
   and refuses them unless they are letters and digits. An id Bedrock issued
-  passes.
+  passes, and so does an action id; another provider's id, such as
+  `functions.read:0`, may not, so Fiber sends the action id in its place.
 - The reply is AWS event-stream framing. Each message's `:event-type` names
   its event and its JSON payload is the event, beside a `p` field of padding:
   `messageStart`; per content block an optional `contentBlockStart`, its
