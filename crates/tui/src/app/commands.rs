@@ -81,6 +81,287 @@ pub(super) fn content_arg(draft: &Draft) -> serde_json::Value {
     json!({ "content": content })
 }
 
+/// One built-in command: adding one is one row plus its handler, which
+/// lives beside the state it touches.
+pub(crate) struct CommandEntry {
+    /// The name typed after `/`.
+    pub(crate) name: &'static str,
+    /// A one-line description, drawn in the `/` list.
+    pub(crate) description: &'static str,
+    /// An argument hint, such as `[instructions]`.
+    pub(crate) hint: Option<&'static str>,
+    /// Runs the command on the rest of the draft.
+    pub(crate) run: fn(&mut App, &str) -> Option<Effect>,
+}
+
+/// The built-in commands this terminal runs, in the order the `/` list
+/// draws them. `?` and `help` are two rows sharing one handler.
+static TABLE: &[CommandEntry] = &[
+    CommandEntry {
+        name: "home",
+        description: "Goes home, focused on the session on screen's row.",
+        hint: None,
+        run: run_home,
+    },
+    CommandEntry {
+        name: "new",
+        description: "Goes home with the cursor in the input box, to pick the workspace, worktree, model and thinking level for a new session. The session left keeps running.",
+        hint: None,
+        run: run_new,
+    },
+    CommandEntry {
+        name: "resume",
+        description: "Goes home, focused on the first exited row.",
+        hint: None,
+        run: run_resume,
+    },
+    CommandEntry {
+        name: "model",
+        description: "Opens the model picker.",
+        hint: None,
+        run: run_model,
+    },
+    CommandEntry {
+        name: "thinking",
+        description: "Sets the thinking level, or opens the model picker on it.",
+        hint: Some("[<level>]"),
+        run: run_thinking,
+    },
+    CommandEntry {
+        name: "scoped-models",
+        description: "Chooses which models the model picker shows.",
+        hint: None,
+        run: run_scoped_models,
+    },
+    CommandEntry {
+        name: "tools",
+        description: "Opens the tools view.",
+        hint: None,
+        run: run_tools,
+    },
+    CommandEntry {
+        name: "context",
+        description: "Opens the context breakdown.",
+        hint: None,
+        run: run_context,
+    },
+    CommandEntry {
+        name: "usage",
+        description: "Opens the usage view.",
+        hint: None,
+        run: run_usage,
+    },
+    CommandEntry {
+        name: "quota",
+        description: "Opens the quota view and fetches every label's quota.",
+        hint: None,
+        run: run_quota,
+    },
+    CommandEntry {
+        name: "panel",
+        description: "Shows or hides the panel.",
+        hint: None,
+        run: run_panel,
+    },
+    CommandEntry {
+        name: "rail",
+        description: "Shows or hides the rail.",
+        hint: None,
+        run: run_rail,
+    },
+    CommandEntry {
+        name: "rules",
+        description: "Opens the standing rules.",
+        hint: None,
+        run: run_rules,
+    },
+    CommandEntry {
+        name: "settings",
+        description: "Opens the configuration keys.",
+        hint: None,
+        run: run_settings,
+    },
+    CommandEntry {
+        name: "keys",
+        description: "Opens the rebinding screen.",
+        hint: None,
+        run: run_keys,
+    },
+    CommandEntry {
+        name: "skills",
+        description: "Opens the skills.",
+        hint: None,
+        run: run_skills,
+    },
+    CommandEntry {
+        name: "handoff",
+        description: "Starts a handoff.",
+        hint: Some("[instructions]"),
+        run: run_handoff,
+    },
+    CommandEntry {
+        name: "name",
+        description: "Names the session.",
+        hint: Some("<text>"),
+        run: run_name,
+    },
+    CommandEntry {
+        name: "login",
+        description: "Logs in.",
+        hint: None,
+        run: run_login,
+    },
+    CommandEntry {
+        name: "reload",
+        description: "Reloads configuration, MCP servers and extensions.",
+        hint: None,
+        run: run_reload,
+    },
+    CommandEntry {
+        name: "close",
+        description: "Stops the session on screen.",
+        hint: None,
+        run: run_close,
+    },
+    CommandEntry {
+        name: "quit",
+        description: "Quits.",
+        hint: None,
+        run: run_quit,
+    },
+    CommandEntry {
+        name: "approvals",
+        description: "Reopens the waiting approvals and questions.",
+        hint: None,
+        run: run_approvals,
+    },
+    CommandEntry {
+        name: "?",
+        description: "Opens the key map.",
+        hint: None,
+        run: run_keymap,
+    },
+    CommandEntry {
+        name: "help",
+        description: "Opens the key map.",
+        hint: None,
+        run: run_keymap,
+    },
+];
+
+/// The single command table: the `/` list and dispatch both read it.
+pub(crate) fn dispatch_table() -> &'static [CommandEntry] {
+    TABLE
+}
+
+fn run_home(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.leave_on_row())
+}
+
+fn run_new(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.leave())
+}
+
+fn run_resume(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.resume_list())
+}
+
+fn run_model(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_model_picker(crate::model_picker::Mode::Choose))
+}
+
+fn run_thinking(app: &mut App, rest: &str) -> Option<Effect> {
+    Some(app.thinking_command(rest))
+}
+
+fn run_scoped_models(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.scoped_models_command())
+}
+
+fn run_panel(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.toggle_panel())
+}
+
+fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.toggle_rail())
+}
+
+fn run_handoff(app: &mut App, rest: &str) -> Option<Effect> {
+    let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
+    Some(app.send_command("handoff", args))
+}
+
+fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
+    Some(app.send_command("name", Some(json!({ "text": rest }))))
+}
+
+fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
+    // A reloaded extension draws again: its next failure reports anew.
+    app.renderer_reported.clear();
+    Some(app.send_command("reload", None))
+}
+
+fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.close())
+}
+
+fn run_quit(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.quit())
+}
+
+fn run_approvals(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.next_request())
+}
+
+fn run_settings(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Settings))
+}
+
+fn run_keys(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_keys())
+}
+
+fn run_tools(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Tools))
+}
+
+fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Skills))
+}
+
+fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Context))
+}
+
+fn run_usage(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Usage))
+}
+
+fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.quota_view())
+}
+
+fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Rules))
+}
+
+fn run_login(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Login))
+}
+
+fn run_keymap(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    app.overlays.keymap = Some(KeyMap::default());
+    Some(Effect::None)
+}
+
 impl App {
     /// Handles one key at `now`, read from the injected clock. A recall
     /// waiting for a page waits on only through ↑ and the keys that move
@@ -490,69 +771,10 @@ impl App {
             return None;
         }
         let rest = rest.trim().to_owned();
-        let effect = match name {
-            "home" => self.leave_on_row(),
-            "new" => self.leave(),
-            "resume" => self.resume_list(),
-            "model" => {
-                self.draft.clear();
-                self.open_model_picker(crate::model_picker::Mode::Choose)
-            }
-            "thinking" => self.thinking_command(&rest),
-            "scoped-models" => self.scoped_models_command(),
-            "panel" => {
-                self.draft.clear();
-                self.toggle_panel()
-            }
-            "rail" => {
-                self.draft.clear();
-                self.toggle_rail()
-            }
-            "handoff" => {
-                let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-                self.send_command("handoff", args)
-            }
-            "name" => self.send_command("name", Some(json!({ "text": rest }))),
-            "reload" => {
-                // A reloaded extension draws again: its next failure
-                // reports anew.
-                self.renderer_reported.clear();
-                self.send_command("reload", None)
-            }
-            "close" => self.close(),
-            "quit" => self.quit(),
-            "approvals" => {
-                self.draft.clear();
-                self.next_request()
-            }
-            "settings" => self.open_config_view(super::ConfigView::Settings),
-            "keys" => self.open_keys(),
-            "tools" => self.open_config_view(super::ConfigView::Tools),
-            "skills" => self.open_config_view(super::ConfigView::Skills),
-            "context" => {
-                self.draft.clear();
-                self.open_session_view(super::SessionView::Context)
-            }
-            "usage" => {
-                self.draft.clear();
-                self.open_session_view(super::SessionView::Usage)
-            }
-            "quota" => {
-                self.draft.clear();
-                self.quota_view()
-            }
-            "rules" => self.open_config_view(super::ConfigView::Rules),
-            "login" => self.open_config_view(super::ConfigView::Login),
-            // `?` and `help`.
-            "?" | "help" => {
-                self.draft.clear();
-                self.overlays.keymap = Some(KeyMap::default());
-                Effect::None
-            }
-            // A built-in the terminal does not run goes out as typed.
-            _ => return None,
-        };
-        Some(effect)
+        // One table drives dispatch: a built-in the terminal does not
+        // draw goes out as typed.
+        let entry = dispatch_table().iter().find(|entry| entry.name == name)?;
+        (entry.run)(self, &rest)
     }
 
     /// Returns to the screen before a session: the conversation and the
@@ -888,5 +1110,5 @@ impl App {
 }
 
 #[cfg(test)]
-#[path = "app_commands_tests.rs"]
+#[path = "commands_tests.rs"]
 mod tests;

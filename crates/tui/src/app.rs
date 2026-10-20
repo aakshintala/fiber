@@ -40,8 +40,7 @@ mod steering;
 
 mod attention;
 mod chrome;
-#[path = "app_commands.rs"]
-mod commands;
+pub(crate) mod commands;
 mod config_views;
 #[path = "copy.rs"]
 pub(crate) mod copy;

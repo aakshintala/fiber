@@ -1,72 +1,11 @@
 //! The `/` list: built-in commands and the session's `commands` answer in
 //! one filtered list (`docs/tui.md`, "Keys" › "Rules", "Slash commands").
 
+use crate::app::commands::dispatch_table;
 use contract::events::CommandInfo;
 
 /// How many rows a completion panel shows at most.
 pub(crate) const SHOWN: usize = 8;
-
-/// The built-in commands this terminal runs, in the "Slash commands"
-/// table's order: name, description, argument hint.
-const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
-    (
-        "home",
-        "Goes home, focused on the session on screen's row.",
-        None,
-    ),
-    (
-        "new",
-        "Goes home with the cursor in the input box, to pick the workspace, worktree, model and thinking level for a new session. The session left keeps running.",
-        None,
-    ),
-    (
-        "resume",
-        "Goes home, focused on the first exited row.",
-        None,
-    ),
-    ("model", "Opens the model picker.", None),
-    (
-        "thinking",
-        "Sets the thinking level, or opens the model picker on it.",
-        Some("[<level>]"),
-    ),
-    (
-        "scoped-models",
-        "Chooses which models the model picker shows.",
-        None,
-    ),
-    ("tools", "Opens the tools view.", None),
-    ("context", "Opens the context breakdown.", None),
-    ("usage", "Opens the usage view.", None),
-    (
-        "quota",
-        "Opens the quota view and fetches every label's quota.",
-        None,
-    ),
-    ("panel", "Shows or hides the panel.", None),
-    ("rail", "Shows or hides the rail.", None),
-    ("rules", "Opens the standing rules.", None),
-    ("settings", "Opens the configuration keys.", None),
-    ("keys", "Opens the rebinding screen.", None),
-    ("skills", "Opens the skills.", None),
-    ("handoff", "Starts a handoff.", Some("[instructions]")),
-    ("name", "Names the session.", Some("<text>")),
-    ("login", "Logs in.", None),
-    (
-        "reload",
-        "Reloads configuration, MCP servers and extensions.",
-        None,
-    ),
-    ("close", "Stops the session on screen.", None),
-    ("quit", "Quits.", None),
-    (
-        "approvals",
-        "Reopens the waiting approvals and questions.",
-        None,
-    ),
-    ("?", "Opens the key map.", None),
-    ("help", "Opens the key map.", None),
-];
 
 /// The tag of a built-in command's row.
 pub(crate) const COMMAND: &str = "command";
@@ -103,8 +42,9 @@ pub(crate) fn is_built_in(name: &str) -> bool {
     contract::commands::BUILT_IN_COMMANDS.contains(&name)
 }
 
-/// The list: the built-in commands, then `commands`, the session's
-/// `commands` answer, in order, each with the hint and tag it gives. An
+/// The list: the built-in commands in the command table's order, then
+/// `commands`, the session's `commands` answer, in order, each with the
+/// hint and tag it gives. An
 /// extension row (`extension` set) named like a drawn built-in takes that
 /// row's slot, with its own description, hint and tag; any other row named
 /// like a built-in is left out.
@@ -114,8 +54,8 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
             .iter()
             .find(|command| command.name == name && command.extension)
     };
-    let built_ins = BUILT_INS.iter().map(|(name, description, hint)| {
-        if let Some(command) = replacement(name) {
+    let built_ins = dispatch_table().iter().map(|entry| {
+        if let Some(command) = replacement(entry.name) {
             Row {
                 name: command.name.clone(),
                 description: command.description.clone(),
@@ -124,14 +64,14 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
             }
         } else {
             Row {
-                name: (*name).to_owned(),
-                description: (*description).to_owned(),
-                hint: hint.map(str::to_owned),
+                name: entry.name.to_owned(),
+                description: entry.description.to_owned(),
+                hint: entry.hint.map(str::to_owned),
                 tag: COMMAND.to_owned(),
             }
         }
     });
-    let drawn = |name: &str| BUILT_INS.iter().any(|(built_in, _, _)| *built_in == name);
+    let drawn = |name: &str| dispatch_table().iter().any(|entry| entry.name == name);
     let session = commands
         .iter()
         .filter(|command| {

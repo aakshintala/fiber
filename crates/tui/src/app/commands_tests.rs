@@ -1424,6 +1424,20 @@ fn undrawn_built_ins_without_an_extension_go_out_as_typed() {
 }
 
 #[test]
+fn every_table_row_dispatches_and_undrawn_built_ins_fall_through() {
+    for entry in crate::app::commands::dispatch_table() {
+        let mut app = attached();
+        type_text(&mut app, &format!("/{}", entry.name));
+        assert!(app.built_in().is_some(), "/{}", entry.name);
+    }
+    for command in ["/credential", "/rewind"] {
+        let mut app = attached();
+        type_text(&mut app, command);
+        assert!(app.built_in().is_none(), "{command}");
+    }
+}
+
+#[test]
 fn a_stale_commands_answer_sets_neither_rows_nor_extensions() {
     let mut app = attached();
     let asked = app.on_line(reloaded(SESSION));

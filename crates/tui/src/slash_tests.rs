@@ -1,6 +1,7 @@
 //! Tests for the `/` list.
 
-use super::{BUILT_INS, Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
+use super::{Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
+use crate::app::commands::dispatch_table;
 use contract::commands::BUILT_IN_COMMANDS;
 use contract::events::CommandInfo;
 
@@ -139,20 +140,25 @@ fn an_extension_row_replacing_a_drawn_command_keeps_its_slot() {
 
 #[test]
 fn built_ins_are_drawn_built_ins_plus_credential_and_rewind() {
-    for (name, _, _) in BUILT_INS {
+    for name in table_names() {
         assert!(
-            BUILT_IN_COMMANDS.contains(name),
+            BUILT_IN_COMMANDS.contains(&name),
             "{name} drawn but not in the contract list"
         );
     }
     let extra: Vec<&&str> = BUILT_IN_COMMANDS
         .iter()
-        .filter(|name| !BUILT_INS.iter().any(|(built_in, _, _)| built_in == *name))
+        .filter(|name| !table_names().contains(name))
         .collect();
     assert_eq!(extra, [&"credential", &"rewind"]);
     assert!(is_built_in("credential"));
     assert!(is_built_in("rewind"));
     assert!(!is_built_in("tdd"));
+}
+
+/// The table's names, in order.
+fn table_names() -> Vec<&'static str> {
+    dispatch_table().iter().map(|entry| entry.name).collect()
 }
 
 fn names(rows: &[&Row]) -> Vec<String> {
@@ -164,10 +170,10 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
     let all = rows(&[skill("tdd"), skill("review")]);
     let all: Vec<&Row> = all.iter().collect();
     let built_ins = rows(&[]).len();
-    let table_names: Vec<&str> = BUILT_INS.iter().map(|(name, _, _)| *name).collect();
-    assert_eq!(table_names.len(), built_ins);
+    let listed = table_names();
+    assert_eq!(listed.len(), built_ins);
     let (table, answered) = all.split_at(built_ins);
-    assert_eq!(names(table), table_names);
+    assert_eq!(names(table), listed);
     assert!(table.iter().all(|row| is_built_in(&row.name)));
     assert_eq!(names(answered), ["tdd", "review"]);
     assert!(table.iter().all(|row| row.tag == "command"));
@@ -214,8 +220,7 @@ fn an_extension_row_takes_its_built_in_slot() {
     let all = rows(&[model, skill("tdd")]);
     let models: Vec<&Row> = all.iter().filter(|row| row.name == "model").collect();
     assert_eq!(models.len(), 1);
-    let table_names: Vec<&str> = BUILT_INS.iter().map(|(name, _, _)| *name).collect();
-    let at = table_names
+    let at = table_names()
         .iter()
         .position(|name| *name == "model")
         .unwrap();
