@@ -128,6 +128,22 @@ fn slash_eight_of_forty() {
 }
 
 #[test]
+fn slash_exit_alias() {
+    let mut app = attached(160, 48);
+    type_text(&mut app, "/exit");
+    insta::assert_snapshot!("slash-exit-alias", screen(&app, 160, 48));
+    // The alias query finds exactly the quit entry, carrying `/exit`,
+    // with no range line.
+    let shown = screen(&app, 160, 48);
+    let quit = shown
+        .lines()
+        .find(|line| line.contains("Quits."))
+        .expect("the quit row");
+    assert!(quit.contains("/exit"), "{shown}");
+    assert!(!shown.contains(" of "), "{shown}");
+}
+
+#[test]
 fn a_scrolled_slash_list_counts_both_directions() {
     let mut app = forty();
     type_text(&mut app, "/");
@@ -423,6 +439,32 @@ fn path_spans_bold_only_the_shown_part_of_a_match() {
 }
 
 #[test]
+fn alias_spans_bold_only_the_query() {
+    use super::alias_spans;
+    use ratatui::style::Style;
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let bold = dim.add_modifier(Modifier::BOLD);
+    // Past the " /" prefix the query reads bold between dim ends.
+    let spans = alias_spans(Some("exit"), "exi");
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| span.content.clone())
+            .collect::<Vec<_>>(),
+        [" /", "exi", "t"]
+    );
+    assert_eq!(spans[0].style, dim);
+    assert_eq!(spans[1].style, bold);
+    assert_eq!(spans[2].style, dim);
+    // No match: one dim span.
+    let spans = alias_spans(Some("exit"), "zzz");
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].style, dim);
+    // No alias: no spans.
+    assert!(alias_spans(None, "exi").is_empty());
+}
+
+#[test]
 fn the_panel_draws_over_the_conversation() {
     let mut app = attached(80, 24);
     for n in 1..=6 {
@@ -530,6 +572,7 @@ fn windowed() -> Vec<crate::slash::Row> {
     (0..8)
         .map(|n| crate::slash::Row {
             name: format!("n{n}"),
+            alias: None,
             description: format!("Does n{n}."),
             hint: None,
             tag: "skill".to_owned(),
