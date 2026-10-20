@@ -1243,8 +1243,9 @@ fn skill_taken(home: &Path, name: &str, bytes: &[u8], taken: &BTreeSet<String>) 
 /// Appends `-2`, `-3` until the name is free. At most `taken.len()`
 /// candidates can be occupied, so the first `taken.len() + 1` suffixes
 /// hold a free name and the walk is finite: a flipped exit returns a
-/// wrong name instead of hanging. No index arithmetic remains for a
-/// mutant to stick on.
+/// wrong name instead of hanging. The `+ 2` bound is pinned by the
+/// empty-taken unit below, where `* 2` would empty the range and hit
+/// the unreachable.
 fn suffixed(taken: &BTreeSet<String>, name: &str) -> String {
     for index in 2..=(taken.len() + 2) {
         let candidate = format!("{name}-{index}");
@@ -2252,6 +2253,14 @@ mod tests {
         assert!(skill_taken(&fixture.home(), "review", b"new\n", &taken));
         assert!(!skill_taken(&fixture.home(), "review", b"other\n", &taken));
         assert!(!skill_taken(&fixture.home(), "fresh", b"new\n", &taken));
+    }
+
+    #[test]
+    fn an_empty_taken_set_takes_the_first_suffix() {
+        // Pins the `taken.len() + 2` bound: with nothing taken the range
+        // still holds `-2`, while `taken.len() * 2` empties it and hits
+        // the unreachable in `suffixed`.
+        assert_eq!(suffixed(&BTreeSet::new(), "review"), "review-2");
     }
 
     #[test]
