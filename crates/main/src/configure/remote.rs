@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use config::{Imported, LeftBehind};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::shapes::Failure;
@@ -267,6 +268,54 @@ impl hub::DeviceLogin for DeviceLogin {
     }
 }
 impl hub::Machine for Seam {
+    fn import(
+        &self,
+        home: &Path,
+        source: Option<&str>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Option<Value>, Failure> {
+        // The hub already refused anything but the two; this names
+        // them again so the seam never misroutes a source.
+        let sources: &[config::ImportSource] = match source {
+            None => &[
+                config::ImportSource::ClaudeCode,
+                config::ImportSource::Codex,
+            ],
+            Some("claude-code") => &[config::ImportSource::ClaudeCode],
+            Some("codex") => &[config::ImportSource::Codex],
+            Some(_) => {
+                return Err(failure(
+                    ErrorCode::InvalidArguments,
+                    "`source` must be `claude-code` or `codex`.",
+                ));
+            }
+        };
+        // The ports the driver would print, minus the printing: each
+        // source's report extended into one answer, a failed source
+        // refusing the rest rather than answering a partial report.
+        let mut imported = Imported::default();
+        let mut left_behind = Vec::new();
+        for source in sources {
+            let report = config::import_source(
+                &self.home,
+                &config::source_home(home, *source),
+                *source,
+                clock.as_ref(),
+            )
+            .map_err(|error| failure(error.code(), error.to_string()))?;
+            imported.mcp_servers.extend(report.imported.mcp_servers);
+            imported.skills.extend(report.imported.skills);
+            imported.commands.extend(report.imported.commands);
+            imported.instructions.extend(report.imported.instructions);
+            left_behind.extend(report.left_behind.into_iter().map(|left| LeftBehind {
+                item: left.item,
+                reason: left.reason,
+            }));
+        }
+        Ok(Some(
+            json!({"imported": imported, "left_behind": left_behind}),
+        ))
+    }
     fn file_search(&self, workspace: &Path, home: Option<&Path>) -> Box<dyn hub::FileSearch> {
         let workspace = workspace.to_path_buf();
         let roots = tui::files::Roots::new(

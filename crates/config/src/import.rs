@@ -138,6 +138,14 @@ struct Receipt {
     left_behind: Vec<LeftBehind>,
 }
 
+/// Whether the first-run import offer shows: true when neither source
+/// has a completed receipt under `home`, so the offer fires at most
+/// until the first import lands.
+pub fn import_pending(home: &Path) -> bool {
+    !home.join(ImportSource::ClaudeCode.receipt_name()).is_file()
+        && !home.join(ImportSource::Codex.receipt_name()).is_file()
+}
+
 /// Copies another harness's configuration into Fiber home, once. With a
 /// completed receipt for `source`, succeeds with the receipt's report
 /// without reading `source_home` at all. Otherwise classifies every source

@@ -172,6 +172,16 @@ fn reads_stop_at_the_eight_mebibyte_total() {
 }
 
 #[test]
+fn the_offer_shows_until_a_receipt_lands() {
+    let fixture = Fixture::new();
+    let home = fixture.home();
+    std::fs::create_dir_all(&home).unwrap();
+    assert!(import_pending(&home));
+    fixture.run(ImportSource::Codex).unwrap();
+    assert!(!import_pending(&home), "one receipt stills the offer");
+}
+
+#[test]
 fn eight_one_mebibyte_skills_fit_without_a_budget_entry() {
     let fixture = Fixture::new();
     for index in 0..8 {

@@ -21,7 +21,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::fake::FakeStarter;
+use crate::fake::{FakeMachine, FakeStarter};
 use crate::testkit::{await_true, stop_within};
 use crate::{Started, Starter};
 use contract::events::SessionStatus;
@@ -257,6 +257,100 @@ fn names_outside_the_hub_table_are_unknown_command() {
         assert_eq!(code, "unknown_command");
         assert_eq!(echoed.as_deref(), Some(id));
     }
+}
+
+/// The import answer the driver answers with, scripted through the
+/// machine: names and reasons only, never secret values.
+fn import_report() -> Value {
+    json!({
+        "imported": {
+            "mcp_servers": ["notes"],
+            "skills": ["review"],
+            "commands": [],
+            "instructions": [],
+        },
+        "left_behind": [
+            {"item": "auth.json", "reason": "credentials are never imported"},
+        ],
+    })
+}
+
+#[test]
+fn import_runs_through_the_machine() {
+    let temp = Temp::new();
+    let timed: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let machine = Arc::new(FakeMachine::default());
+    machine
+        .imports
+        .lock()
+        .unwrap()
+        .extend([Ok(Some(import_report())), Ok(Some(import_report()))]);
+    // The hub machine's person home, which the source homes hang
+    // under: the environments carry it, the `directories` precedent.
+    let person = temp.dir.join("person");
+    let environments = crate::Environments::new(
+        vec![(
+            std::ffi::OsString::from("HOME"),
+            person.as_os_str().to_owned(),
+        )],
+        &temp.dir,
+    );
+    let hub = Arc::new(
+        crate::testkit::hub(&temp.dir, Arc::new(FakeStarter::hang(&temp.dir)), timed)
+            .with_machine(machine.clone())
+            .with_environments(environments),
+    );
+    let mut client = Client::connect(&hub);
+    client.hello();
+    // Bare imports both sources; a named source imports that one.
+    client.send(&command("c_1", "import", json!({})));
+    let (id, result) = accepted(&client.next("the bare answer"));
+    assert_eq!(id, "c_1");
+    assert_eq!(result, import_report());
+    client.send(&command("c_2", "import", json!({"source": "codex"})));
+    let (id, result) = accepted(&client.next("the sourced answer"));
+    assert_eq!(id, "c_2");
+    assert_eq!(result, import_report());
+    // An unknown source and a non-string source are refused
+    // `invalid_arguments`, naming the two sources, mirroring the
+    // driver; an extra key is refused the same code, the `directories`
+    // precedent.
+    for (id, args) in [
+        ("c_3", json!({"source": "vim"})),
+        ("c_4", json!({"source": 1})),
+    ] {
+        client.send(&command(id, "import", args));
+        let (code, echoed, message) = rejected(&client.next("the refusal"));
+        assert_eq!(code, "invalid_arguments");
+        assert_eq!(echoed.as_deref(), Some(id));
+        assert!(
+            message.contains("claude-code") && message.contains("codex"),
+            "{message}"
+        );
+    }
+    client.send(&command(
+        "c_5",
+        "import",
+        json!({"source": "codex", "extra": true}),
+    ));
+    let (code, echoed, _) = rejected(&client.next("the extra-key refusal"));
+    assert_eq!(code, "invalid_arguments");
+    assert_eq!(echoed.as_deref(), Some("c_5"));
+    // The machine saw the two accepted runs with the hub machine's
+    // person home, and no refused one.
+    let calls = machine.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["import"]["source"], Value::Null);
+    assert_eq!(calls[1]["import"]["source"], json!("codex"));
+    assert_eq!(
+        calls[0]["import"]["home"],
+        Value::String(person.to_string_lossy().into_owned()),
+        "the run reads the hub machine's person home"
+    );
+    assert_eq!(
+        calls[0]["import"]["home"], calls[1]["import"]["home"],
+        "both runs read the same person home"
+    );
 }
 
 #[test]

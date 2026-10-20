@@ -9,6 +9,10 @@ use crate::local_time::{new_york, turn_started_at};
 use contract::clock::Clock;
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use crate::Configure;
+use crate::configure_fake::Fake;
 
 /// An app on home at 80x24.
 fn home() -> App {
@@ -5031,4 +5035,256 @@ fn slash_resume_then_esc_returns_to_the_session_left() {
         Some("s_aaaaaaaaaaaaaaaa")
     );
     assert!(!app.on_home());
+}
+
+/// An app on home with `seam` answering configuration reads.
+fn offered(seam: Arc<Fake>) -> App {
+    let mut app = home();
+    app.set_configure(Some(seam as Arc<dyn Configure>));
+    app
+}
+
+/// The seam's pending answer, as the startup resolve reads it.
+fn resolve(app: &mut App, seam: &Fake) {
+    let pending = seam.import_pending();
+    app.set_import_offer(pending);
+}
+
+/// The offer's sent line, parsed: pressing `key` with no session, on
+/// a linked app.
+fn press(app: &mut App, key: Key) -> Value {
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(key, now) else {
+        panic!("the key sends");
+    };
+    assert_eq!(lines.len(), 1);
+    serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"))
+}
+
+/// A hub `command_accepted` carrying the offer's import `result`.
+fn hub_accepted(id: &str, result: Value) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"command_id": id, "result": result})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// A hub `command_rejected` for the offer's import.
+fn hub_rejected(id: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({
+            "command_id": id,
+            "code": "invalid_arguments",
+            "message": "No.",
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    })
+}
+
+/// The import report the hub answers with: names and reasons only.
+fn import_result() -> Value {
+    json!({
+        "imported": {
+            "mcp_servers": ["alpha"],
+            "skills": ["lint"],
+            "commands": ["plan"],
+            "instructions": ["AGENTS.md"],
+        },
+        "left_behind": [{"item": "auth.json", "reason": "credentials are never imported"}],
+    })
+}
+
+/// The offer's notices, oldest first, capped like the box shows.
+fn offer_notices(app: &App) -> Vec<String> {
+    app.notices()
+        .iter()
+        .map(|line| match line {
+            crate::app::NoticeLine::Notice { code, text, .. } => format!("{code} {text}"),
+            crate::app::NoticeLine::More(n) => format!("+{n} more"),
+        })
+        .collect()
+}
+
+#[test]
+fn the_offer_shows_iff_the_seam_says_pending() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let screen = app.home_screen().unwrap();
+    assert!(screen.question_import);
+    assert!(
+        screen
+            .question
+            .as_deref()
+            .unwrap()
+            .contains("Bring settings"),
+    );
+    let mut app = offered(seam);
+    resolve(&mut app, &Fake::new(Vec::new()));
+    let screen = app.home_screen().unwrap();
+    assert!(!screen.question_import);
+    assert_eq!(screen.question, None);
+}
+
+#[test]
+fn the_offer_keys_send_the_named_source_with_no_session() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let _ = linked(&mut app);
+    let line = press(&mut app, Key::Char('1'));
+    assert_eq!(line["command"], "import");
+    assert_eq!(line["args"], json!({"source": "claude-code"}));
+    assert_eq!(line.get("session_id"), None);
+    let line = press(&mut app, Key::Char('2'));
+    assert_eq!(line["args"], json!({"source": "codex"}));
+    assert_eq!(line.get("session_id"), None);
+}
+
+#[test]
+fn the_offer_swallows_enter_arrows_and_other_keys() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let _ = linked(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    for key in [
+        Key::Enter,
+        Key::Up,
+        Key::Down,
+        Key::Char('3'),
+        Key::Char('a'),
+    ] {
+        assert!(
+            matches!(app.on_key(key.clone(), now), Effect::None),
+            "{key:?} is swallowed"
+        );
+    }
+    assert!(app.home_screen().unwrap().question_import);
+}
+
+#[test]
+fn the_offer_sends_nothing_with_the_link_down() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let now = fakes::clock::FakeClock::new().now();
+    assert!(matches!(app.on_key(Key::Char('1'), now), Effect::None));
+    assert!(app.home_screen().unwrap().question_import);
+}
+
+#[test]
+fn an_accepted_offer_answer_notices_every_line_and_closes_the_offer() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let _ = linked(&mut app);
+    let line = press(&mut app, Key::Char('2'));
+    let id = line["id"].as_str().unwrap().to_owned();
+    assert!(app.on_line(hub_accepted(&id, import_result())).is_empty());
+    // The capped shape Task 3 pins for the same report: the first
+    // three lines, the count of the rest, and the reload reminder
+    // newest.
+    assert_eq!(
+        offer_notices(&app),
+        [
+            "imported imported skill lint",
+            "imported imported command plan",
+            "imported imported instruction AGENTS.md",
+            "+3 more",
+        ]
+    );
+    assert_eq!(
+        app.notice(),
+        Some("Run /reload to apply the imported items.")
+    );
+    assert!(!app.home_screen().unwrap().question_import);
+    assert!(!app.home.as_ref().unwrap().import_offer);
+}
+
+#[test]
+fn a_rejected_offer_answer_notices_and_leaves_the_offer_open() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let _ = linked(&mut app);
+    let line = press(&mut app, Key::Char('1'));
+    let id = line["id"].as_str().unwrap().to_owned();
+    assert!(app.on_line(hub_rejected(&id)).is_empty());
+    assert_eq!(app.notice(), Some("No."));
+    assert!(app.home_screen().unwrap().question_import);
+    // The taken ask is gone, so the offer sends again for a retry.
+    let retry = press(&mut app, Key::Char('1'));
+    assert_ne!(retry["id"], line["id"]);
+}
+
+#[test]
+fn esc_dismisses_for_the_run_only() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let _ = linked(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert!(matches!(app.on_key(Key::Esc, now), Effect::None));
+    assert!(!app.home_screen().unwrap().question_import);
+    // The next run resolves again: still no receipt means the offer
+    // fires again.
+    resolve(&mut app, &seam);
+    assert!(app.home_screen().unwrap().question_import);
+}
+
+#[test]
+fn a_receipt_landing_mid_run_neither_retracts_nor_blocks_the_offer() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    // The receipt lands mid-run: the seam now says no offer, but the
+    // shown offer stays, and its answer still folds.
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = false;
+    }
+    assert!(app.home_screen().unwrap().question_import);
+    let _ = linked(&mut app);
+    let line = press(&mut app, Key::Char('1'));
+    let id = line["id"].as_str().unwrap().to_owned();
+    assert!(app.on_line(hub_accepted(&id, import_result())).is_empty());
+    assert_eq!(
+        app.notice(),
+        Some("Run /reload to apply the imported items.")
+    );
+    assert!(!app.home_screen().unwrap().question_import);
 }

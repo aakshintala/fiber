@@ -147,6 +147,12 @@ pub(crate) fn run_with(
     // each `start` carries them in `overrides`.
     let launch_overrides = std::mem::take(&mut launch.overrides);
     app.set_home(launch);
+    // The first-run import offer resolves once, through the same seam
+    // the views read: no receipts means the home foot asks.
+    let pending = app
+        .configure_seam()
+        .is_some_and(|seam| seam.import_pending());
+    app.set_import_offer(pending);
     app.set_launch_overrides(launch_overrides);
     if pick_at_start {
         app.start_model_pick();

@@ -14,17 +14,22 @@ use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::view::max_question_scroll;
 use contract::SessionId;
+use contract::events::CommandAccepted;
 
 mod exit;
 
-/// A stop or delete waiting for its answer: a refusal becomes the row's
-/// note and a notice, an accepted delete drops the row.
+/// A stop, delete or import waiting for its answer: a refusal becomes
+/// the row's note and a notice, an accepted delete drops the row, an
+/// accepted import closes the first-run offer.
 pub(super) enum Ask {
     /// A `close` with `now` for a live row: stopping one session.
     Stop(SessionId),
     /// A `delete` for an exited row, cascading when the question named
     /// the sessions it would remove.
     Delete(SessionId),
+    /// An `import` from the first-run offer: a hub command answered
+    /// once, never resent, never on a session line.
+    Import,
 }
 
 /// The foot's question: deleting an exited session through the hub.
@@ -39,6 +44,11 @@ pub(super) enum Prompt {
         expect: Option<Vec<SessionId>>,
         scroll: usize,
     },
+    /// Offering the first-run import while no receipt exists: `1`
+    /// imports from Claude Code, `2` from Codex, Esc dismisses for the
+    /// run. It stores nothing: the head, the per-source legend and the
+    /// footer draw from the offer itself.
+    Import,
     /// Asking to quit while sessions work: Enter leaves them running,
     /// `c` closes them all now, Esc stays. It stores nothing: the
     /// question recomputes from the current rows on every frame.
@@ -46,11 +56,12 @@ pub(super) enum Prompt {
 }
 
 impl Prompt {
-    /// The session the question asks about; none for quitting.
+    /// The session the question asks about; none for the import offer
+    /// or quitting.
     fn id(&self) -> Option<&SessionId> {
         match self {
             Prompt::Delete { id, .. } => Some(id),
-            Prompt::Quit => None,
+            Prompt::Import | Prompt::Quit => None,
         }
     }
 }
@@ -76,10 +87,55 @@ impl Questions {
 }
 
 impl App {
+    /// The import offer's keys: `1` imports from Claude Code, `2`
+    /// from Codex, Esc dismisses for the run, Ctrl+C passes through
+    /// to quit, and anything else is swallowed, Enter included.
+    fn import_key(&mut self, key: &Key) -> Option<Effect> {
+        match key {
+            Key::Char('1') => Some(self.send_import("claude-code")),
+            Key::Char('2') => Some(self.send_import("codex")),
+            Key::Esc => {
+                self.close_import_prompt();
+                Some(Effect::None)
+            }
+            Key::CtrlC => None,
+            Key::Char(_)
+            | Key::Backspace
+            | Key::Enter
+            | Key::PageUp
+            | Key::PageDown
+            | Key::End
+            | Key::Up
+            | Key::Down
+            | Key::AltA
+            | Key::Tab
+            | Key::BackTab
+            | Key::F1
+            | Key::CtrlO
+            | Key::CtrlG
+            | Key::CtrlR
+            | Key::CtrlV
+            | Key::CtrlL
+            | Key::CtrlF
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_) => Some(Effect::None),
+        }
+    }
+
     /// The delete question's keys: Enter deletes, Esc keeps the
     /// session, Up and Down scroll its wrapped rows past the screen,
     /// Ctrl+C passes through to quit, and anything else is swallowed.
     pub(super) fn question_key(&mut self, key: &Key) -> Option<Effect> {
+        if matches!(
+            self.home.as_ref().and_then(|home| home.questions.prompt()),
+            Some(Prompt::Import)
+        ) {
+            return self.import_key(key);
+        }
         match key {
             Key::Enter => Some(self.send_delete()),
             Key::Esc => {
@@ -225,6 +281,19 @@ impl App {
         }
     }
 
+    /// Closes the import offer for the run, by Esc or by its accepted
+    /// answer: a `Prompt::Import` only, and the offer never re-fires
+    /// without a new run. The quit question and no prompt stay as
+    /// they are.
+    pub(super) fn close_import_prompt(&mut self) {
+        if let Some(home) = self.home.as_mut() {
+            home.import_offer = false;
+            if matches!(home.questions.prompt, Some(Prompt::Import)) {
+                home.questions.prompt = None;
+            }
+        }
+    }
+
     /// Scrolls the delete question one row: Up toward its first rows,
     /// Down toward its later ones, clamped to the wrapped rows past the
     /// screen. Scrolling a short question changes nothing drawn, and
@@ -282,7 +351,7 @@ impl App {
             .as_ref()
             .and_then(|home| match &home.questions.prompt {
                 Some(Prompt::Delete { id, expect, .. }) => Some((id.clone(), expect.clone())),
-                Some(Prompt::Quit) | None => None,
+                Some(Prompt::Import | Prompt::Quit) | None => None,
             });
         let Some((id, expect)) = ask else {
             return Effect::None;
@@ -308,6 +377,71 @@ impl App {
             home.questions.asks.insert(command, Ask::Delete(id));
         }
         Effect::Send(vec![line])
+    }
+
+    /// `1` or `2` in the import offer: the hub `import` for `source`,
+    /// answered once and never resent, like the offer. With the link
+    /// down nothing goes out and the offer stays.
+    fn send_import(&mut self, source: &str) -> Effect {
+        if !self.outbox.is_up() {
+            return Effect::None;
+        }
+        let command = mint();
+        let line = json!({
+            "id": command,
+            "command": "import",
+            "args": {"source": source},
+        })
+        .to_string();
+        if let Some(home) = self.home.as_mut() {
+            home.questions.asks.insert(command, Ask::Import);
+        }
+        Effect::Send(vec![line])
+    }
+
+    /// Resolves the first-run import offer once, from the seam, at
+    /// startup: pending opens the offer while no other question holds
+    /// the foot, and the flag never re-resolves after.
+    pub(crate) fn set_import_offer(&mut self, pending: bool) {
+        let Some(home) = self.home.as_mut() else {
+            return;
+        };
+        home.import_offer = pending;
+        if pending && home.questions.prompt.is_none() {
+            home.questions.prompt = Some(Prompt::Import);
+        }
+    }
+
+    /// Folds the offer's hub `import` answer: an acceptance renders
+    /// the `/import` row's notices and closes the offer, a rejection
+    /// takes the ask and falls through to the existing refused path
+    /// with the offer open. `None` when `id` is no offer import.
+    pub(super) fn import_answer(
+        &mut self,
+        id: &str,
+        accepted: bool,
+        payload: &Map<String, Value>,
+    ) -> Option<Vec<String>> {
+        if !matches!(
+            self.home.as_ref()?.questions.asks.get(id),
+            Some(Ask::Import)
+        ) {
+            return None;
+        }
+        if !accepted {
+            // The hub refused the offer's import: the feed and recent
+            // rows' notice, with the offer staying open for a retry.
+            self.take_ask(id);
+            let code = refusal_code(payload);
+            self.notices.push(&code, refusal(payload));
+            return Some(Vec::new());
+        }
+        let accepted =
+            serde_json::from_value::<CommandAccepted>(Value::Object(payload.clone())).ok()?;
+        self.take_ask(id);
+        self.import_answered(&accepted);
+        self.close_import_prompt();
+        Some(Vec::new())
     }
 
     /// Takes the stop or delete waiting on command `id`, if any. A
@@ -344,6 +478,9 @@ impl App {
         payload: &serde_json::Map<String, Value>,
     ) -> Vec<String> {
         match ask {
+            // The hub answers an import, never a session line: the
+            // hub fold takes the ask there, so nothing lands here.
+            Ask::Import => Vec::new(),
             Ask::Stop(session) => {
                 if !accepted {
                     let code = refusal_code(payload);

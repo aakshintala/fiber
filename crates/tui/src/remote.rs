@@ -715,6 +715,11 @@ impl Configure for Remote {
     ) -> Result<(), ConfigureError> {
         self.call("switch_skill",json!({"workspace":self.workspace(workspace)?,"name":name,"scope":scope_name(scope),"on":on}),Caller::Loop,|_| Some(()))
     }
+    /// The offer asks about the person's own sources: the hub command
+    /// it sends imports the same machine's home.
+    fn import_pending(&self) -> bool {
+        self.local.import_pending()
+    }
     fn skill_text(&self, path: &Path) -> Result<String, ConfigureError> {
         self.call(
             "skill_text",

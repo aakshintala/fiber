@@ -21,6 +21,58 @@ fn result(seam: &Seam, operation: &str, args: Value) -> Value {
     call(seam, operation, args).unwrap().unwrap()
 }
 
+/// A fake `~/.claude` under `person`: one skill, one instruction, and
+/// one credential the import must name but never read.
+fn claude_person(person: &Path) {
+    for (rel, content) in [
+        (
+            ".claude/skills/review/SKILL.md",
+            "---\nname: review\ndescription: Reviews code.\n---\n\nBody.\n",
+        ),
+        (".claude/CLAUDE.md", "Be kind.\n"),
+        (".claude/auth.json", "{\"token\": \"x\"}\n"),
+    ] {
+        let path = person.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+}
+
+fn import(seam: &Seam, person: &Path, source: Option<&str>) -> Result<Option<Value>, Failure> {
+    seam.import(person, source, fakes::clock::FakeClock::new())
+}
+
+#[test]
+fn seam_import_runs_the_shared_import_into_the_seam_home() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let person = dirs.workspace("person");
+    claude_person(&person);
+    let seam = Seam::new(home.clone());
+    let result = import(&seam, &person, None).unwrap().unwrap();
+    assert_eq!(result["imported"]["skills"], json!(["review"]));
+    assert_eq!(result["imported"]["instructions"], json!(["CLAUDE.md"]));
+    assert!(
+        result["left_behind"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|left| left["item"] == "auth.json"),
+        "{result}"
+    );
+    assert!(home.join("import-claude-code.json").is_file());
+    assert!(home.join("skills/review/SKILL.md").is_file());
+    // A named source imports that source only.
+    let result = import(&seam, &person, Some("claude-code"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(result["imported"]["skills"], json!(["review"]));
+    // An unknown source is refused naming the two sources.
+    let error = import(&seam, &person, Some("vim")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArguments);
+    assert!(error.message.contains("claude-code") && error.message.contains("codex"));
+}
+
 fn install(home: &Path) {
     crate::test_support::install_extension(
         home,
