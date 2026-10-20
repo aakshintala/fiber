@@ -107,6 +107,16 @@ pub(crate) fn run(
             fiber,
         );
     }
+    if let Some(old) = args.continues {
+        return crate::continue_session::session_continues(
+            SessionId(args.id),
+            SessionId(old),
+            crate::per_run(args.model, args.overrides),
+            clock,
+            &signals,
+            fiber,
+        );
+    }
     // A delegate's stdin is its lifeline: the parent holds the write end
     // open and never writes to it (`docs/delegates.md`, "Lifetime").
     let parent = args

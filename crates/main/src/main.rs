@@ -10,6 +10,7 @@ mod clock;
 mod completion;
 mod configure;
 mod connect;
+mod continue_session;
 mod credential;
 mod delegates;
 mod handoff;
