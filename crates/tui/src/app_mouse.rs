@@ -49,9 +49,19 @@ impl App {
                 // scrolls the closed row to the top; any other line
                 // click only opens or closes.
                 if self.pinned_row().is_some_and(|pin| pin.target == line) {
-                    let row = self.pinned_row().map_or(0, |pin| pin.row);
                     self.open(line);
-                    self.jump(row);
+                    // The covered row is gone with the closed output:
+                    // the closed header keeps its focus stop, so land it
+                    // on the top row.
+                    if let Some((header, _, _)) = self
+                        .screen
+                        .pages()
+                        .focus_items()
+                        .into_iter()
+                        .find(|(_, _, id)| *id == TargetId::Line(line))
+                    {
+                        self.jump(header);
+                    }
                 } else {
                     self.open(line);
                 }
