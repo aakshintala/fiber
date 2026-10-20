@@ -285,6 +285,10 @@ path's directory, ending in `/`.
   `google-generative-ai` an `inlineData` part in `functionResponse.parts`.
   `openai-completions` rejects a file part in a tool message, so it gets the
   pages rendered as images in a user message after the tool message.
+  `bedrock-converse` gets the rendered pages too, and carries them, as it
+  carries a result's images, as `image` blocks right after the `toolResult`
+  in the same user message: Mistral and Qwen models on Bedrock refused an
+  image inside it (`docs/model-routing.md`, "Bedrock Converse wire facts").
 - A path that does not exist fails with `not_found`.
 - Any other file that is not UTF-8 text, and any directory or device, fails
   with `unsupported_file`, giving its size and detected type.

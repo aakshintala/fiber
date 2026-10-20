@@ -138,7 +138,7 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | `quota_exceeded` | quota, billing or a subscription limit, as an HTTP status or inside the stream ("Recognising a quota or billing error") | never |
 | `authentication_failed` | HTTP 401, a rejected key, an AWS exception refusing the signature or the credential ("Recognising an AWS exception"), an OAuth refresh the token endpoint rejected, a login with nobody attached, or a login that did not finish within `credential()`'s timeout | never |
 | `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/handoff.md`, "Overflow") |
-| `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter` and a Gemini safety finish reason | never |
+| `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter`, a Gemini safety finish reason, and a `bedrock-converse` `stopReason` of `guardrail_intervened` or `content_filtered` | never |
 | `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"), or Bedrock's "The provided model identifier is invalid."; or AWS names a `ResourceNotFoundException`. A 404 alone is not enough, since a wrong base URL also returns 404 | never |
 | `invalid_request` | any other HTTP 4xx; for a 404 the message names the status and the requested host and path, never the query string | never |
 | `unknown_stop_reason` | a stop or finish reason the protocol does not map; the message carries the raw value | never |
@@ -229,7 +229,8 @@ reached it, so whether it is `quota_exceeded` or `rate_limited` is unsettled
 
 AWS names an exception only in the `X-Amzn-ErrorType` header of a failed
 response, and in the `:exception-type` of an exception message inside the
-stream (`docs/model-routing.md`, "Bedrock Invoke wire facts"). The name,
+stream, on Bedrock's Invoke and Converse APIs alike (`docs/model-routing.md`,
+"Bedrock Invoke wire facts" and "Bedrock Converse wire facts"). The name,
 matched without regard to case, decides the code:
 
 - `AccessDeniedException`, `UnrecognizedClientException`,
