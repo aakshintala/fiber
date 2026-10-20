@@ -174,7 +174,8 @@ On Linux x86_64 alone:
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
 - `shellcheck --shell=bash` on every other `scripts/` shell file: `bug-red`,
   `cache-prune`, `check`, `check-docs`, `flaky-tests`, `install-shells`,
-  `leak-scan`, `paging-jig`, `release-size`, `stored-results`,
+  `leak-scan`, `paging-jig`, `release-pack`, `release-size`,
+  `stored-results`,
   `test-bug-red`, `test-bug-red-cargo`, `test-flaky-tests`, `test-leak-probe`,
   `test-leak-scan`, and `lib/release.sh`
 - actionlint over every file in `.github/workflows/`, when the diff changes
@@ -389,14 +390,25 @@ renamed in the new release fails it, because `unknown_lints` is denied
 
 ## Releases
 
-Before the release workflow publishes anything, it:
+`.github/workflows/release.yml` runs on a push to `main` that changes the
+fiber version in `crates/main/Cargo.toml`. A `preflight` job compares the
+version at the push's base and head, and every release job runs only when
+it changed: any other push runs no release. A version decrease, a missing
+`CHANGELOG.md` section or an existing `v<version>` fails the run before
+anything builds. Before the release workflow publishes anything, it:
 
-- builds the release artifacts from the release commit
+- builds the release artifacts from the release commit, with `--locked`,
+  one target per runner
 - runs the full test suite, with no selection, on all three platforms, with
-  binary-level tests run against those exact artifacts
+  binary-level tests run against those exact artifacts, including the built
+  binary's fresh-home install of the built docs and extensions archives
 - runs cargo-deny's advisory check
 - measures the benchmarks on Linux arm64 and macOS arm64 and reports them,
   without gating (`docs/performance.md`)
+
+The Release is created as a draft and published last, with the version's
+`CHANGELOG.md` section as its notes; publishing is what creates
+`v<version>`, so a failure leaves no tag and no Release.
 
 What the artifacts are, how a release is triggered and how it is signed is
 `docs/releasing.md`.
@@ -404,7 +416,9 @@ What the artifacts are, how a release is triggered and how it is signed is
 ## The user docs site
 
 A workflow publishes `docs/user/` to GitHub Pages on every merge to `main`.
-The site's address is `https://aakshintala.github.io/fiber/`.
+The site's address is `https://aakshintala.com/fiber/`: GitHub serves the
+repository's Pages under the account's custom domain. The front page is a
+product page; the user guide sits beside it.
 The site carries the rest of `docs/` too, for readers who follow a link into
 an area doc. Nothing else hosts Fiber's documentation. The command reference
 in `docs/user/` is generated from the same command definitions as `fiber help`

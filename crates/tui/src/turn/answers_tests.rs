@@ -573,7 +573,7 @@ fn a_page_loaded_from_history_draws_the_same_card() {
         })
         .cloned()
         .collect();
-    pages.load(&history);
+    pages.load(&contract::SessionId(SESSION.to_owned()), &history);
     assert!(pages.part(0).is_some(), "the first page loaded again");
     assert_eq!(pages.rows(), live);
 }
@@ -943,7 +943,7 @@ fn a_declined_page_loaded_from_history_draws_the_same_row() {
         })
         .cloned()
         .collect();
-    pages.load(&history);
+    pages.load(&contract::SessionId(SESSION.to_owned()), &history);
     assert!(pages.part(0).is_some(), "the first page loaded again");
     assert_eq!(pages.rows(), live);
 }

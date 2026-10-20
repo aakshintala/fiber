@@ -206,6 +206,29 @@ pub(crate) fn session_command(
     line
 }
 
+/// The `history` args for `segment`'s window, read under the serving
+/// session `own`: `session_id` names the segment only for an ancestor
+/// range, absent meaning the serving session itself; `from_seq` and
+/// `to_seq` bound the window, each absent meaning its open end.
+pub(crate) fn history_args(
+    own: &SessionId,
+    segment: &SessionId,
+    from: Option<u64>,
+    to: Option<u64>,
+) -> Value {
+    let mut args = serde_json::Map::new();
+    if segment != own {
+        args.insert("session_id".to_owned(), Value::String(segment.0.clone()));
+    }
+    if let Some(from) = from {
+        args.insert("from_seq".to_owned(), Value::Number(from.into()));
+    }
+    if let Some(to) = to {
+        args.insert("to_seq".to_owned(), Value::Number(to.into()));
+    }
+    Value::Object(args)
+}
+
 #[cfg(test)]
 #[path = "outbox_tests.rs"]
 mod tests;
