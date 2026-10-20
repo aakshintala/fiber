@@ -495,6 +495,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "usage",
     "quota",
     "tools",
+    "mcp",
     "panel",
     "rail",
     "rules",

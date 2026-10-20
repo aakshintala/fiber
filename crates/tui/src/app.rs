@@ -1567,7 +1567,7 @@ impl App {
         self.items_line(envelope);
         self.output_line(envelope);
         self.session_views_line(envelope);
-        self.config_views_line(envelope);
+        send.extend(self.config_views_line(envelope));
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)
         {
