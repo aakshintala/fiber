@@ -7,9 +7,10 @@ use clap::error::ContextValue;
 use crate::completion::Shell;
 
 use super::{
-    ApproveArgs, AskArgs, Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation,
-    LoginArgs, LogoutArgs, MENU, McpAddArgs, McpCommands, McpRemoveArgs, SessionArgs, SessionsArgs,
-    SessionsCommands, TokenCommands, TopLevel, command, parse_from, usage_sentence, version_line,
+    ApproveArgs, AskArgs, Commands, ConfigCommands, ExtensionCommands, HubCommands, ImportSource,
+    Invocation, LoginArgs, LogoutArgs, MENU, McpAddArgs, McpCommands, McpRemoveArgs, SessionArgs,
+    SessionsArgs, SessionsCommands, TokenCommands, TopLevel, command, parse_from, usage_sentence,
+    version_line,
 };
 
 #[test]
@@ -250,6 +251,41 @@ fn the_menu_check_fails_when_a_command_line_is_gone() {
 /// Every successful parse the per-flag tests pinned, in one table: each
 /// row is the argv and the `Invocation` it parses to. The usage halves of
 /// those tests stay where they were, as one-sentence tests.
+#[test]
+fn import_takes_claude_code_or_codex_and_refuses_other_sources() {
+    for (word, source) in [
+        ("claude-code", ImportSource::ClaudeCode),
+        ("codex", ImportSource::Codex),
+    ] {
+        let Invocation::Run(Some(Commands::Import { source: actual }), _) =
+            parse_from(["fiber", "import", word])
+        else {
+            panic!("fiber import {word} did not parse");
+        };
+        assert_eq!(actual, source);
+        assert_eq!(
+            config::ImportSource::from(actual),
+            match source {
+                ImportSource::ClaudeCode => config::ImportSource::ClaudeCode,
+                ImportSource::Codex => config::ImportSource::Codex,
+            }
+        );
+    }
+    assert!(
+        MENU.contains("import <claude-code | codex>"),
+        "the menu names the import command:\n{MENU}"
+    );
+    let refused = sentence(&["fiber", "import", "vim"]);
+    assert!(
+        refused.contains("claude-code") && refused.contains("codex"),
+        "an unknown source names the two sources: {refused}"
+    );
+    assert!(
+        sentence(&["fiber", "import"]).contains("<source>"),
+        "a missing source names the missing argument"
+    );
+}
+
 #[test]
 fn parses_argv_into_its_invocation() {
     let cases: Vec<(&[&str], Invocation)> = vec![
@@ -2008,6 +2044,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "mcp",
             "approve",
             "config",
+            "import",
             "login",
             "logout",
             "doctor",
@@ -2077,6 +2114,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "mcp",
             "approve",
             "config",
+            "import",
             "login",
             "logout",
             "doctor",
@@ -3129,7 +3167,7 @@ fn synopses_come_from_command_tables_only() {
 #[test]
 fn doc_synopses_are_the_commands_section() {
     let synopses = doc_synopses();
-    assert_eq!(synopses.len(), 42);
+    assert_eq!(synopses.len(), 43);
     assert_eq!(synopses[0], "fiber [--model <model>] [-c <key>=<value>]...");
     assert_eq!(
         synopses[1],

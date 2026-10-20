@@ -243,6 +243,9 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Approve(args)), _) => {
             ::cli::approve(args.yes, env!("CARGO_PKG_VERSION"), Arc::clone(&clock))
         }
+        cli::Invocation::Run(Some(cli::Commands::Import { source }), _) => {
+            ::cli::import(source.into(), clock.as_ref())
+        }
         cli::Invocation::Run(Some(cli::Commands::Config(cmd)), _) => match cmd {
             cli::ConfigCommands::Get { key } => ::cli::config_get(&key),
             cli::ConfigCommands::Set {

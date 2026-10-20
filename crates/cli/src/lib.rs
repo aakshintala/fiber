@@ -55,6 +55,11 @@ mod hub_unit;
     clippy::result_large_err,
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
+mod import;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod login;
 #[allow(
     clippy::result_large_err,
@@ -104,6 +109,7 @@ pub use hub_refresh::hub_refresh;
 pub use hub_service::{hub_install, hub_restart, hub_uninstall};
 pub use hub_status::hub_status;
 pub use hub_token::{hub_token_list, hub_token_revoke};
+pub use import::import;
 pub use login::{
     LoginCancel, LoginName, LoginStored, LogoutTarget, ReviewerModels, browser_login, login_store,
     login_targets, providers_in, reviewer_models, run_login, run_logout, set_reviewer,
