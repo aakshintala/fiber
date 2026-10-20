@@ -998,7 +998,7 @@ impl App {
         self.passes.clear();
         self.abandoned_history.clear();
         self.end_overlay();
-        if self.outbox.link == Link::Up {
+        if self.outbox.is_up() {
             self.outbox.link = Link::Down;
             self.notices
                 .push("connection_failed", "Connection lost.".to_owned());
@@ -1042,7 +1042,7 @@ impl App {
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the
     /// connection has not ended since.
     pub(crate) fn connected(&self) -> bool {
-        self.outbox.link == Link::Up
+        self.outbox.is_up()
     }
 
     /// The attached session, if any.
@@ -1614,7 +1614,7 @@ impl App {
                 }
             }
             "reloaded" => {
-                if self.outbox.link == Link::Up {
+                if self.outbox.is_up() {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
             }

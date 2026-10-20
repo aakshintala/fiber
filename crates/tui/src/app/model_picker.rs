@@ -60,11 +60,11 @@ impl App {
     /// a models error is a notice as today, opening nothing.
     pub(crate) fn start_model_pick(&mut self) -> Vec<String> {
         let remote = self.remote().is_some();
-        if remote && self.outbox.link != super::Link::Up {
+        if remote && !self.outbox.is_up() {
             self.owe_start_pick();
             return Vec::new();
         }
-        if !remote && self.outbox.link == super::Link::Up {
+        if !remote && self.outbox.is_up() {
             // A local home picks once at startup, before the link
             // exists: later hellos must not reopen it.
             return Vec::new();
@@ -175,7 +175,7 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return self.choose_on_home(choice);
         };
-        if self.outbox.link != super::Link::Up {
+        if !self.outbox.is_up() {
             self.push_notice(
                 "connection_failed",
                 "The hub is not connected; nothing changed.".to_owned(),

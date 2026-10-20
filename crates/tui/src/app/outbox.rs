@@ -94,6 +94,12 @@ pub(crate) struct Outbox {
 }
 
 impl Outbox {
+    /// Whether the hub spoke a `hub_hello` this terminal reads, and the
+    /// connection has not ended since.
+    pub(crate) fn is_up(&self) -> bool {
+        self.link == Link::Up
+    }
+
     /// Records a made command.
     pub(crate) fn insert(&mut self, id: String, kind: Kind, draft: Draft) {
         self.pending.insert(id, (kind, draft));
@@ -109,7 +115,7 @@ impl Outbox {
         line: String,
     ) -> Option<String> {
         self.pending.insert(id, (kind, draft));
-        if self.link == Link::Up {
+        if self.is_up() {
             Some(line)
         } else {
             // An Enter before the hub connects is held, not lost: `start`

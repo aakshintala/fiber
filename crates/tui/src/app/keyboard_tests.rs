@@ -929,6 +929,21 @@ fn ctrl_n_goes_home_with_an_empty_draft_as_slash_new() {
 }
 
 #[test]
+fn an_action_settles_once_from_the_press_entry() {
+    let mut app = homed(80, 24);
+    // A key settles the attached layout first, so the action below has
+    // a stale layout to clear.
+    type_text(&mut app, "x");
+    assert!(app.chrome().layout().is_some());
+    assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
+    assert!(app.session().is_none());
+    assert_eq!(app.draft(), "");
+    // The entry settles the action's `leave`: the layout is home's,
+    // not the attached conversation's.
+    assert_eq!(app.chrome().layout(), None);
+}
+
+#[test]
 fn ctrl_n_from_a_focused_item_lands_on_the_entry_bar() {
     let mut app = groups(1, 80, 24);
     app.set_home(launch());
