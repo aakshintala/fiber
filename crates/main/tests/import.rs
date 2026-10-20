@@ -139,7 +139,7 @@ fn claude_import_lands_mapped_items_and_names_the_rest() {
     );
     assert_eq!(
         fs::read(home.join("skills/greet/SKILL.md")).unwrap(),
-        b"---\nname: greet\ndescription: Hello there.\ndisable-model-invocation: true\n---\n\nHello there.\n"
+        b"---\nname: greet\ndescription: \"Hello there.\"\ndisable-model-invocation: true\n---\n\nHello there.\n"
     );
     assert_eq!(fs::read(home.join("CLAUDE.md")).unwrap(), b"Be kind.\n");
     let servers: Value =

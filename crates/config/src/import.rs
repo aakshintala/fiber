@@ -275,7 +275,7 @@ fn read_skills(
     names.sort();
     for name in names {
         let entry = dir.join(&name);
-        if !is_dir(&entry) {
+        if !entry.is_dir() {
             left_behind.push(LeftBehind {
                 item: format!("skills/{name}"),
                 reason: "is not a directory".into(),
@@ -313,7 +313,7 @@ fn read_flat(
     names.sort();
     for name in names {
         let path = dir.join(&name);
-        if !is_file(&path) || !name.ends_with(".md") {
+        if !path.is_file() || !name.ends_with(".md") {
             left_behind.push(LeftBehind {
                 item: format!("{flat}/{name}"),
                 reason: "is not a command file".into(),
@@ -337,7 +337,8 @@ fn read_flat(
             continue;
         }
         let mut wrapped = format!(
-            "---\nname: {stem}\ndescription: {description}\ndisable-model-invocation: true\n---\n\n"
+            "---\nname: {stem}\ndescription: {}\ndisable-model-invocation: true\n---\n\n",
+            yaml_quoted(&description),
         );
         wrapped.push_str(&String::from_utf8_lossy(&bytes));
         commands.push(PlannedFile {
@@ -346,6 +347,25 @@ fn read_flat(
         });
     }
     Ok(())
+}
+
+/// Renders one single-line description as a double-quoted YAML scalar,
+/// so a first line starting with a hash cannot read as a comment and a
+/// quote or backslash cannot break the header: Fiber cuts a hash comment
+/// to an empty description and leaves the skill out, so the imported
+/// command could not be run by name.
+fn yaml_quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The body of a wrapped template's header: the first non-empty line, or
@@ -464,18 +484,6 @@ fn read_dir_names(dir: &Path) -> Result<Vec<String>, ConfigError> {
     }
     names.sort();
     Ok(names)
-}
-
-/// Whether `path` is a directory, following links. Anything else, or a
-/// missing path, is not.
-fn is_dir(path: &Path) -> bool {
-    fs::metadata(path).is_ok_and(|meta| meta.is_dir())
-}
-
-/// Whether `path` is a regular file, following links. Anything else, or a
-/// missing path, is not.
-fn is_file(path: &Path) -> bool {
-    fs::metadata(path).is_ok_and(|meta| meta.is_file())
 }
 
 /// One MCP server as the source states it, before validation.
@@ -724,13 +732,8 @@ fn classify_server(
             }
         }
     }
-    commit_server_entry(raw.name, entry, servers);
-}
-
-/// Records one validated server entry.
-fn commit_server_entry(name: String, entry: Map<String, Value>, servers: &mut Vec<PlannedServer>) {
     servers.push(PlannedServer {
-        name,
+        name: raw.name,
         value: Value::Object(entry),
     });
 }
@@ -1628,8 +1631,37 @@ mod tests {
         // non-empty line, and model invocation is disabled.
         assert_eq!(
         fs::read(fixture.home().join("skills/greet/SKILL.md")).unwrap(),
-        b"---\nname: greet\ndescription: Hello there.\ndisable-model-invocation: true\n---\n\n\nHello there.\n\nUsage: greet.\n"
+        b"---\nname: greet\ndescription: \"Hello there.\"\ndisable-model-invocation: true\n---\n\n\nHello there.\n\nUsage: greet.\n"
     );
+    }
+
+    #[test]
+    fn hash_quote_and_backslash_descriptions_are_quoted_not_comments() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.source().join("commands")).unwrap();
+        fs::write(fixture.source().join("commands/hash.md"), "# Hello.\n").unwrap();
+        fs::write(
+            fixture.source().join("commands/quote.md"),
+            "Say \"hi\" loudly.\n",
+        )
+        .unwrap();
+        fs::write(fixture.source().join("commands/slash.md"), "A \\ path.\n").unwrap();
+        let report = fixture.run(ImportSource::ClaudeCode).unwrap();
+        assert_eq!(report.imported.commands, ["hash", "quote", "slash"]);
+        // Unquoted, `# Hello.` would read as a comment: an empty
+        // description, and the skill left out (`loop::skill_header`).
+        assert_eq!(
+            fs::read(fixture.home().join("skills/hash/SKILL.md")).unwrap(),
+            b"---\nname: hash\ndescription: \"# Hello.\"\ndisable-model-invocation: true\n---\n\n# Hello.\n"
+        );
+        assert_eq!(
+            fs::read(fixture.home().join("skills/quote/SKILL.md")).unwrap(),
+            b"---\nname: quote\ndescription: \"Say \\\"hi\\\" loudly.\"\ndisable-model-invocation: true\n---\n\nSay \"hi\" loudly.\n"
+        );
+        assert_eq!(
+            fs::read(fixture.home().join("skills/slash/SKILL.md")).unwrap(),
+            b"---\nname: slash\ndescription: \"A \\\\ path.\"\ndisable-model-invocation: true\n---\n\nA \\ path.\n"
+        );
     }
 
     #[test]
@@ -1654,7 +1686,7 @@ mod tests {
         assert_eq!(report.imported.mcp_servers, ["alpha", "beta"]);
         assert_eq!(
         fs::read(fixture.home().join("skills/plan/SKILL.md")).unwrap(),
-        b"---\nname: plan\ndescription: Plan it.\ndisable-model-invocation: true\n---\n\nPlan it.\n"
+        b"---\nname: plan\ndescription: \"Plan it.\"\ndisable-model-invocation: true\n---\n\nPlan it.\n"
     );
         let servers: Value =
             serde_json::from_str(&fs::read_to_string(fixture.home().join("config.json")).unwrap())
