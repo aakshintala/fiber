@@ -83,6 +83,13 @@ fn the_list_draws_every_drawn_command_once_in_drawn_order() {
     assert_eq!(names, DRAWN_ORDER);
 }
 
+// debt: this parser duplicates crates/contract/src/commands_tests.rs:609;
+// the dependency runs tui -> contract, so contract cannot name tui's
+// DRAWN_ORDER, and inlining the drawn order as a literal in contract
+// would make three sync points for one order; the plan fence places
+// doc-order tests in slash_tests. Revisit if the doc-table format
+// changes (both parsers change together) or a shared test-support
+// crate appears.
 #[test]
 fn the_doc_table_lists_the_drawn_commands_in_drawn_order() {
     let doc = include_str!("../../../docs/tui.md");
@@ -111,18 +118,6 @@ fn the_doc_table_lists_the_drawn_commands_in_drawn_order() {
         .filter(|name| DRAWN_ORDER.contains(&name.as_str()))
         .collect();
     assert_eq!(drawn, DRAWN_ORDER);
-}
-
-#[test]
-fn an_extension_row_replacing_a_drawn_command_keeps_its_slot() {
-    let plain = rows(&[]);
-    for name in DRAWN_ORDER {
-        let at = plain.iter().position(|row| row.name == *name).unwrap();
-        let with = rows(&[extension_row(name)]);
-        assert_eq!(with.len(), plain.len(), "{name}");
-        assert_eq!(with[at].name, *name);
-        assert_eq!(with[at].tag, "acme");
-    }
 }
 
 #[test]
@@ -214,6 +209,16 @@ fn an_extension_row_takes_its_built_in_slot() {
     assert_eq!(all[at].name, "model");
     assert_eq!(all[at].tag, "acme");
     assert_eq!(all[at].line(), "/model [speed]  Picks a fast model.  acme");
+    // Every drawn slot, including the `?`/`help` shared-handler rows,
+    // keeps its position with the extension's tag.
+    let plain = rows(&[]);
+    for name in DRAWN_ORDER {
+        let at = plain.iter().position(|row| row.name == *name).unwrap();
+        let with = rows(&[extension_row(name)]);
+        assert_eq!(with.len(), plain.len(), "{name}");
+        assert_eq!(with[at].name, *name);
+        assert_eq!(with[at].tag, "acme");
+    }
 }
 
 #[test]
