@@ -33,3 +33,7 @@ crates/contract/src/session_argv_tests.rs	543	plan	2026-10-20T18:19:41Z	Amoghs-M
 crates/main/src/cli.rs	412	grant	2026-10-20T18:27:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 research/tui-prototype/check/credential.md	box-724	plan	2026-10-20T19:24:44Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/completion_tests.rs	box-724	plan	2026-10-20T19:49:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/bench/examples/bench/pty.rs	2841	grant	2026-10-20T20:19:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/bench/examples/bench/idle.rs	2841	grant	2026-10-20T20:19:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/bench/examples/bench/pty_tests.rs	2841	grant	2026-10-20T20:19:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/bench/examples/bench/idle_tests.rs	2841	grant	2026-10-20T20:19:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
