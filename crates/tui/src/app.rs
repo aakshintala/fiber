@@ -80,7 +80,7 @@ use screen::Screen;
 
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
-pub(crate) use outbox::{Kind, Link, Phase, mint, session_command};
+pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
 pub(crate) use session_views::SessionView;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
@@ -538,14 +538,26 @@ impl App {
     }
 
     /// The args of the open's next tail read: none when the walk
-    /// reached the chain root or ended, or no read runs. The display
-    /// phase may fill long before the root: the read continues for
-    /// counting until the chain root, with no filled stop.
+    /// reached the chain root or ended, when no read runs, or when the
+    /// display filled while the held run still reads its own segment.
+    /// Past a segment start the read keeps going for the joint total:
+    /// a `seq 0` with an unfollowed parent still asks. The pass counts
+    /// the lines above a filled display, so the open holds only the
+    /// filled run plus each seam crossing.
     pub(crate) fn tail_next(&mut self) -> Option<Value> {
         let Overlay::Reading(tail) = &self.overlay else {
             return None;
         };
         if tail.chain_done() {
+            return None;
+        }
+        let mut fresh = self.attached_screen().pages().fresh();
+        if let Some(lines) = tail.turn_lines() {
+            for line in lines {
+                fresh.apply(line);
+            }
+        }
+        if tail.filled(&fresh, self.conversation_height()) && !tail.seam_pending() {
             return None;
         }
         Some(tail.next_args())
@@ -723,13 +735,14 @@ impl App {
     /// Swaps the pass's second `Pages` in at its boundary: the preview's
     /// opens carry, focus remaps to the same call or clears, the
     /// selection clears, the kept busy applies, and the overlay ends. A
-    /// held landing keeps the preview's place: the top row's own `seq`
-    /// and its offset among that line's rows are read before the swap,
-    /// and after the unfreeze applies any deferred width the top is the
-    /// fold's row with that `seq`, at that offset kept within its rows,
-    /// or the end when the fold lacks the `seq`. A dropped page keeps
-    /// the old width's rows until it loads, so the pages hold the anchor
-    /// and each load finds the top again.
+    /// held landing keeps the preview's place: the top row's segment
+    /// session with its own `seq` and its offset among that line's rows
+    /// are read before the swap, and after the unfreeze applies any
+    /// deferred width the top is the fold's row with that session and
+    /// `seq`, at that offset kept within its rows, or the end when the
+    /// fold lacks it. A dropped page keeps the old width's rows until
+    /// it loads, so the pages hold the anchor and each load finds the
+    /// top again.
     fn land(&mut self, mut fold: Pages, held: bool) {
         // The preview's closed ancestor runs land in the fold front
         // beside the carried opens, under their own sessions, before the
@@ -748,9 +761,9 @@ impl App {
         };
         std::mem::swap(self.attached_screen_mut().pages_mut(), &mut fold);
         self.end_overlay();
-        if let Some((seq, offset)) = anchor {
+        if let Some((session, seq, offset)) = anchor {
             let pages = self.attached_screen_mut().pages_mut();
-            pages.hold_anchor(seq, offset);
+            pages.hold_anchor(&session, seq, offset);
             match pages.anchored_row() {
                 Some(row) => {
                     self.screen.jump_kept(row);
@@ -764,10 +777,10 @@ impl App {
         }
     }
 
-    /// The `seq` of the preview's top row and the row's offset among
-    /// that line's rows: the anchor a held landing keeps. None while
-    /// following or when the page holds no line.
-    fn top_anchor(&self) -> Option<(Seq, usize)> {
+    /// The preview's top row segment session with its `seq` and the
+    /// row's offset among that line's rows: the anchor a held landing
+    /// keeps. None while following or when the page holds no line.
+    fn top_anchor(&self) -> Option<(SessionId, Seq, usize)> {
         let top = self.attached_screen().top()?;
         self.attached_screen().pages().row_seq(top)
     }

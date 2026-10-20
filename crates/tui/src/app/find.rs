@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use super::{App, Effect, Target, mint, session_command};
+use super::{App, Effect, Target, history_args, mint, session_command};
 use crate::keys::{Edit, Key};
 use crate::link::history_answer;
 use crate::logical;
@@ -476,15 +476,7 @@ impl App {
         // An ancestor page's window rides the serving session's chain
         // read: the command stays routed to the serving session, and
         // the args name the page's segment.
-        let args = if entry.session == session {
-            serde_json::json!({"from_seq": from, "to_seq": to})
-        } else {
-            serde_json::json!({
-                "session_id": entry.session.0.clone(),
-                "from_seq": from,
-                "to_seq": to
-            })
-        };
+        let args = history_args(&session, &entry.session, Some(from), Some(to));
         let line = session_command(&id, "history", &session, Some(args)).to_string();
         self.find
             .send(id, page, entry.session.clone(), width, revision, held, line);

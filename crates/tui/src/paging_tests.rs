@@ -3490,21 +3490,21 @@ fn a_rows_seq_and_offset_find_the_row_again() {
     let total = pages.index().total();
     let check = |pages: &Pages| {
         for row in 0..total {
-            let (seq, offset) = pages
+            let (session, seq, offset) = pages
                 .row_seq(row)
                 .unwrap_or_else(|| panic!("row {row} has a seq"));
-            assert_eq!(pages.seq_row(seq, offset), Some(row), "row {row}");
+            assert_eq!(pages.seq_row(&session, seq, offset), Some(row), "row {row}");
             let last = pages
-                .seq_row(seq, usize::MAX)
+                .seq_row(&session, seq, usize::MAX)
                 .unwrap_or_else(|| panic!("row {row}'s piece has a last row"));
             assert!(last >= row, "row {row}");
             assert_eq!(
-                pages.row_seq(last).map(|(seq, _)| seq),
+                pages.row_seq(last).map(|(_, seq, _)| seq),
                 Some(seq),
                 "row {row}"
             );
             assert_ne!(
-                pages.row_seq(last.saturating_add(1)).map(|(at, _)| at),
+                pages.row_seq(last.saturating_add(1)).map(|(_, at, _)| at),
                 Some(seq),
                 "row {row}'s piece ends at {last}"
             );
@@ -3517,7 +3517,8 @@ fn a_rows_seq_and_offset_find_the_row_again() {
     check(&pages);
     let end = lines.iter().filter_map(|line| line.seq).max();
     let past = end.map(|seq| Seq(seq.0.saturating_add(1)));
-    assert_eq!(past.and_then(|seq| pages.seq_row(seq, 0)), None);
+    let session = SessionId(SESSION.to_owned());
+    assert_eq!(past.and_then(|seq| pages.seq_row(&session, seq, 0)), None);
     assert_eq!(pages.row_seq(total), None);
 }
 
@@ -3660,10 +3661,10 @@ fn row_seq_needs_a_line_on_the_page() {
     assert_eq!(pages.row_seq(2), None, "a page with no line holds no seq");
     assert_eq!(pages.row_seq(3), None, "past the last row");
     let pages = small();
-    let (seq, offset) = pages.row_seq(0).expect("the first row has a seq");
+    let (session, seq, offset) = pages.row_seq(0).expect("the first row has a seq");
     assert_eq!(offset, 0);
     assert_eq!(
-        pages.seq_row(seq, offset),
+        pages.seq_row(&session, seq, offset),
         Some(0),
         "the first row round-trips"
     );
@@ -3693,10 +3694,49 @@ fn seq_row_skips_seqs_without_a_piece() {
         }
     }
     let (at, between, second_start) = gap.expect("a seq between two pieces");
+    // The gap sits on the single test session's page.
+    let session = SessionId(SESSION.to_owned());
     assert_eq!(
-        pages.seq_row(between, 0),
+        pages.seq_row(&session, between, 0),
         Some(pages.index.start(at).saturating_add(second_start)),
         "a seq without a piece lands on the next one"
+    );
+}
+
+/// A landing anchor names its segment: a `seq` held by both the
+/// ancestor and the own run resolves to the anchor session's row,
+/// never the earliest segment's.
+#[test]
+fn a_landing_anchor_resolves_by_session_and_seq() {
+    let (_ancestor, log) = chain();
+    let mut pages = Pages::new(80);
+    for line in &log {
+        pages.apply(line);
+    }
+    let own = SessionId(SESSION.to_owned());
+    let seam = pages
+        .index()
+        .pages()
+        .iter()
+        .position(|page| page.session == own)
+        .expect("the own run");
+    // The seam's first row: its `seq` also runs in the ancestor,
+    // since both segments number from zero.
+    let row = pages.index().start(seam);
+    let (session, seq, offset) = pages.row_seq(row).expect("the seam row has a seq");
+    assert_eq!(session, own, "the seam row is the own run's");
+    assert!(
+        pages
+            .index()
+            .page_of(&SessionId(ANCESTOR.to_owned()), seq)
+            .is_some(),
+        "the ancestor shares the seq"
+    );
+    pages.hold_anchor(&session, seq, offset);
+    assert_eq!(
+        pages.anchored_row(),
+        Some(row),
+        "the anchor keeps its session"
     );
 }
 
@@ -4446,11 +4486,13 @@ fn chain_pages_load_under_their_own_session_and_count_the_chain() {
     }
     // One page never spans the continuation point: every page carries
     // the session of the lines it folded.
-    let segments = pages.index().segments();
-    assert_eq!(segments.len(), 2, "the ancestor run, then the own run");
-    assert_eq!(segments[0].0, SessionId(ANCESTOR.to_owned()));
-    assert_eq!(segments[1].0, SessionId(SESSION.to_owned()));
-    let seam = segments[1].1;
+    let seam = pages
+        .index()
+        .pages()
+        .iter()
+        .position(|page| page.session == SessionId(SESSION.to_owned()))
+        .expect("the own run");
+    assert!(seam > 0, "the ancestor runs first");
     assert!(
         pages.index().pages()[..seam]
             .iter()
@@ -4522,9 +4564,9 @@ fn a_failed_ancestor_page_keeps_every_count() {
     let joint = pages.index().total();
     let seam = pages
         .index()
-        .segments()
-        .get(1)
-        .map(|(_, at)| *at)
+        .pages()
+        .iter()
+        .position(|page| page.session == SessionId(SESSION.to_owned()))
         .expect("the own run starts past a seam");
     let failed = pages.index().pages()[seam - 1].clone();
     assert_eq!(

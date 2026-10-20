@@ -2155,8 +2155,9 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   lines before them until it holds the pages that fill the screen up from
   its last row, and begin at a turn's start. When the held run reaches the
   session's `seq 0`, the read continues past it into each ancestor named
-  by `forked_from`, to the chain root: the display fills, the count
-  streams past filled. The first frame draws those
+  by `forked_from`, to the chain root: on its own segment the read stops
+  once the display fills, while past a segment start it keeps going for
+  the joint total. The first frame draws those
   pages. The terminal then raises the subscription to `full`.
   The pass goes over the session's lines as the `full` subscription sends
   them. It builds the panel's cards and counts every row, keeping each
@@ -2174,8 +2175,10 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   The one exception: rows that depend on turns before the held pages (an
   orphaned job's completion, an automatic handoff's trigger, a ledger
   toggled earlier: only rows of these kinds) may change in the frame where
-  the pass ends. At an open the preview already holds the whole run to
-  the chain root, so the landing rewrites nothing.
+  the pass ends. At an open across the chain the preview already holds
+  the whole run to the chain root, so the landing rewrites nothing
+  across the seam. On one segment the preview holds the filled run and
+  the pass counts the rest, so the landing adds the rows above it.
   EOF, `stream_closed`, a failed read, a disconnect and lowering
   to `summary` end the pass too. The feed's `session_left` for a session
   ends that session's pass. Waiting work then runs against what is held,
@@ -2195,8 +2198,9 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   again with `history` under its `session_id`, and the fold still replays
   the own log only. Ancestor rows are counted by the same `history`
   streaming before the scroll bar appears, never from the subscription:
-  "until the screen is full" governs the display phase, and the count
-  phase keeps streaming past filled to the chain root.
+  "until the screen is full" governs the display phase on its segment,
+  and past a segment start the count phase keeps streaming to the chain
+  root.
 - **Pages are cut inside turns,** at `step_started`, about 64 lines each, and
   never inside a tool group, so each page renders on its own.
 - **The window** is the pages on screen plus one screen of rows above and

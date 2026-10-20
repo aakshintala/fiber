@@ -1891,12 +1891,58 @@ fn reads_stop_at_the_turn_start_that_fills_the_screen() {
             !tail.filled(&fresh, total + 1),
             "one past the total asks again"
         );
-        // The real path reads past the filled screen to the root: no
-        // filled stop, only the chain root ends it.
+        // The real path stops the read on its own segment once the
+        // display fills: the pass counts the lines above the preview.
+        // Below the height it still asks.
         let mut probe = app();
         probe.overlay = Overlay::Reading(tail);
-        assert!(probe.tail_next().is_some(), "past filled it still asks");
+        if *total >= height {
+            assert!(
+                probe.tail_next().is_none(),
+                "a filled display stops the read"
+            );
+        } else {
+            assert!(
+                probe.tail_next().is_some(),
+                "below the height it still asks"
+            );
+        }
     }
+}
+
+/// A filled display still walks the seam: the own run fills the
+/// screen inside one window, yet the next window asks the ancestor
+/// under its session, for the joint total.
+#[test]
+fn a_filled_display_still_walks_the_seam() {
+    let mut child = segment_lines(SESSION, 1, Some((ANCESTOR, 9)));
+    let mut seq = 1u64;
+    child.extend(envelopes(&roomy_turn(&mut seq, "a_m", "a new reply", 90)));
+    assert!(child.len() <= 256, "the own run fits one window");
+    let ancestor = segment_lines(ANCESTOR, 10, None);
+    let mut app = reading();
+    let height = app.conversation_height();
+    let mut fresh = app.attached_screen().pages().fresh();
+    for line in &child {
+        fresh.apply(line);
+    }
+    assert!(
+        fresh.index().total() >= height,
+        "the own run fills the screen"
+    );
+    // The first window fills the display, yet the seam still asks:
+    // the joint total needs the ancestor.
+    app.tail_lines(doors(&child, &json!({})));
+    let args = app
+        .tail_next()
+        .expect("a filled display still walks the seam");
+    assert_eq!(
+        args,
+        json!({"session_id": ANCESTOR, "to_seq": 9}),
+        "the ancestor under its session"
+    );
+    app.tail_lines(doors(&ancestor, &args));
+    assert!(app.tail_next().is_none(), "the ancestor root ends the walk");
 }
 
 /// A tail holding lines cut inside an older turn plus a newest turn
@@ -2137,11 +2183,12 @@ fn the_preview_is_exact_for_the_last_turns() {
     );
 }
 
-/// The landing rewrites nothing over the full preview: the open reads
-/// to the chain root, so the preview already holds every turn the
-/// pass replays, and the landed rows match it exactly.
+/// The landing adds the lines above a filled preview: the open
+/// holds the filled tail, the pass replays the whole log through to
+/// its end, and the landed screen keeps the preview's rows with the
+/// counted lines above them.
 #[test]
-fn the_landing_rewrites_nothing_over_the_full_preview() {
+fn the_landing_adds_the_lines_above_a_filled_preview() {
     let mut seq = 0u64;
     let mut lines = Vec::new();
     let mut push = |kind: &str, action: Option<&str>, payload: Value| {
@@ -2263,11 +2310,15 @@ fn the_landing_rewrites_nothing_over_the_full_preview() {
     }
     assert!(matches!(app.overlay, Overlay::None), "the pass lands");
     let after = row_texts(&app);
-    // The preview and the landed screen both hold the whole run and
-    // both follow to the bottom, so their rows align one to one.
-    assert_eq!(
-        before, after,
-        "the landing rewrites nothing over the full preview"
+    // The preview holds the filled tail while the pass replays the
+    // whole log: the landing adds the rows above it.
+    assert!(
+        after.len() > before.len(),
+        "the pass counts the lines above the preview"
+    );
+    assert!(
+        after.join("\n").contains("a held reply"),
+        "the held turn lands"
     );
 }
 
@@ -2295,13 +2346,13 @@ fn a_failed_load_clears_the_held_anchor_only_without_a_pass() {
         app.on_line(line);
     }
     let range = Seq(0)..=Seq(seq.saturating_sub(1));
-    app.screen.pages_mut().hold_anchor(Seq(0), 0);
+    app.screen.pages_mut().hold_anchor(&id(SESSION), Seq(0), 0);
     app.load_failed(&id(SESSION), &range, "boom");
     assert!(
         app.screen.pages_mut().anchored_row().is_none(),
         "with no pass the landing lets go"
     );
-    app.screen.pages_mut().hold_anchor(Seq(0), 0);
+    app.screen.pages_mut().hold_anchor(&id(SESSION), Seq(0), 0);
     app.passes.push((id(SESSION), Pass::Until(Seq(1_000))));
     app.load_failed(&id(SESSION), &range, "boom");
     assert!(
@@ -2423,17 +2474,35 @@ fn land_carries_closed_ancestor_pages_across_the_swap() {
         app.on_line(line.clone());
     }
     let before = app.attached_screen().pages().index().total();
-    let segments = app.attached_screen().pages().index().segments();
-    assert_eq!(segments.len(), 2, "the ancestor run, then the own run");
+    // The ancestor run, then the own run: each page carries its
+    // segment's session, so the runs read through the pages alone.
+    let seam = app
+        .attached_screen()
+        .pages()
+        .index()
+        .pages()
+        .iter()
+        .position(|page| page.session == id(SESSION))
+        .expect("the own run");
+    assert!(seam > 0, "the ancestor runs first");
     // The fold replays the own log only.
     let fold = folded(&descendant);
     app.land(fold, false);
     let pages = app.attached_screen().pages();
     assert_eq!(pages.index().total(), before, "the landing keeps every row");
-    let segments = pages.index().segments();
-    assert_eq!(segments.len(), 2, "the chain survives the swap");
-    assert_eq!(segments[0].0, id(ANCESTOR));
-    assert_eq!(segments[1].0, id(SESSION));
+    let carried = pages
+        .index()
+        .pages()
+        .iter()
+        .position(|page| page.session == id(SESSION))
+        .expect("the own run");
+    assert!(carried > 0, "the chain survives the swap");
+    assert!(
+        pages.index().pages()[..carried]
+            .iter()
+            .all(|page| page.session == id(ANCESTOR)),
+        "every carried page is the ancestor's"
+    );
     // Every ancestor seq routes to an ancestor page.
     for line in &ancestor {
         let Line::Session(envelope) = line else {
@@ -2448,7 +2517,7 @@ fn land_carries_closed_ancestor_pages_across_the_swap() {
     }
     // Away from the seam and back: each dropped side reloads under its
     // own session, and the joint count holds.
-    let seam = pages.index().start(segments[1].1);
+    let seam = pages.index().start(carried);
     let combined: Vec<Line> = ancestor.iter().chain(&descendant).cloned().collect();
     app.jump(0);
     app.jump(seam);

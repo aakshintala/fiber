@@ -373,6 +373,8 @@ fn segment_turn(seq: &mut u64, session: &str, turn: usize) -> Vec<Envelope> {
 
 /// The ancestor's session: the chain's first segment.
 const ANCESTOR: &str = "s_bbbbbbbbbbbbbbbb";
+/// The own run's session: the chain's last segment.
+const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 #[test]
 fn the_window_over_the_seam_asks_each_side_under_its_session() {
@@ -395,9 +397,13 @@ fn the_window_over_the_seam_asks_each_side_under_its_session() {
         log.extend(lines);
     }
     // The seam cuts a page: no page holds both segments' lines.
-    let segments = screen.pages().index().segments();
-    assert_eq!(segments.len(), 2, "the ancestor run, then the own run");
-    let seam = segments[1].1;
+    let seam = screen
+        .pages()
+        .index()
+        .pages()
+        .iter()
+        .position(|page| page.session == SessionId(SESSION.to_owned()))
+        .expect("the own run");
     assert!(seam > 1, "the ancestor spans pages");
     let joint = total(&screen);
     // Over the seam, the window holds pages from both sides.

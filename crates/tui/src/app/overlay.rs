@@ -6,7 +6,7 @@
 use contract::{Envelope, Seq, SessionId};
 use serde_json::{Value, json};
 
-use super::App;
+use super::{App, history_args};
 use crate::window::Pages;
 
 /// What the screen holds while an open is in flight: nothing once the
@@ -130,10 +130,16 @@ impl Tail {
             .and_then(|forked| serde_json::from_value(forked.clone()).ok())
     }
 
+    /// Whether the held run reached its segment's first line with a
+    /// parent still to read: the next window crosses the seam even
+    /// past a filled display, for the joint total.
+    pub(super) fn seam_pending(&self) -> bool {
+        self.lines.first().and_then(|line| line.seq) == Some(Seq(0))
+            && self.forked_from().filter(|_| !self.crossed).is_some()
+    }
+
     /// Whether the walk reached the chain root: the read ended, or a
-    /// segment ended with no onward parent. The display phase may fill
-    /// long before this: the read continues for counting until the
-    /// root.
+    /// segment ended with no onward parent.
     pub(super) fn chain_done(&self) -> bool {
         self.ended || (self.start && (self.crossed || self.forked_from().is_none()))
     }
@@ -145,25 +151,31 @@ impl Tail {
     pub(super) fn next_args(&self) -> Value {
         match self.lines.first().and_then(|line| line.seq) {
             Some(first) => {
+                // The tip stays on the attached segment: the walk only
+                // ever prepends the named parent, so the newest line's
+                // session is the serving one.
+                let Some(newest) = self.lines.last() else {
+                    return json!({});
+                };
                 if first == Seq(0)
                     && let Some(forked) = self.forked_from().filter(|_| !self.crossed)
                 {
-                    return json!({
-                        "session_id": forked.session_id.0,
-                        "to_seq": forked.seq.0
-                    });
-                }
-                let mut args = json!({"to_seq": first.0.saturating_sub(1)});
-                if let (Some(oldest), Some(newest)) = (self.lines.first(), self.lines.last())
-                    && oldest.session_id != newest.session_id
-                    && let Some(object) = args.as_object_mut()
-                {
-                    object.insert(
-                        "session_id".to_owned(),
-                        Value::String(oldest.session_id.0.clone()),
+                    return history_args(
+                        &newest.session_id,
+                        &forked.session_id,
+                        None,
+                        Some(forked.seq.0),
                     );
                 }
-                args
+                let Some(oldest) = self.lines.first() else {
+                    return json!({});
+                };
+                history_args(
+                    &newest.session_id,
+                    &oldest.session_id,
+                    None,
+                    Some(first.0.saturating_sub(1)),
+                )
             }
             None => json!({}),
         }
@@ -193,9 +205,8 @@ impl Tail {
     /// Whether the tail is filled: the start reached, the read ended,
     /// or the turn-start lines folded fresh report at least `height`
     /// rows. Lines cut before the first `turn_started` never count.
-    /// Tests only: the open reads past filled for counting, to the
-    /// chain root.
-    #[cfg(test)]
+    /// The open stops the read here on its own segment; past a seam it
+    /// keeps walking for the joint total (`seam_pending`).
     pub(super) fn filled(&self, fresh: &Pages, height: usize) -> bool {
         self.start
             || self.ended

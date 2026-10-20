@@ -76,26 +76,14 @@ enum Flight {
     Permission,
 }
 
-/// One chain segment's pages: the session whose lines they hold and the
-/// first page index. A session's pages are one contiguous run in chain
-/// order, ancestors before the descendant; a run ends where the next
-/// begins, the last at the open page. Pages are append-only, so a run's
-/// start never moves.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Segment {
-    session: SessionId,
-    first: usize,
-}
-
 /// The page index. Pages are contiguous in `seq` within their segment
 /// and never overlap; every durable line pushed belongs to exactly one,
-/// and the last is open.
+/// and the last is open. A page never spans a continuation point: each
+/// page carries the session whose lines it holds, so runs of one
+/// session are found through the pages alone.
 #[derive(Debug)]
 pub(crate) struct Index {
     pages: Vec<Page>,
-    /// One run per chain segment, in chain order: every page from
-    /// `first` to the next run's holds `session`'s lines.
-    segments: Vec<Segment>,
     /// One revision per page, pushed with it: a page's revision only
     /// grows, so a search rescans a page whose text moved (`docs/tui.md`,
     /// "History and paging"). Geometry alone never moves it: only an
@@ -128,7 +116,6 @@ impl Default for Index {
     fn default() -> Self {
         Self {
             pages: vec![Page::default()],
-            segments: Vec::new(),
             revisions: vec![0],
             clock: 0,
             prefix: OnceCell::from(vec![0, 0]),
@@ -170,37 +157,13 @@ impl Index {
         shown: bool,
     ) -> Cut {
         let mut cut = Cut::None;
-        if self.segments.is_empty() {
-            if let Some(open) = self.pages.last_mut() {
-                open.session = session.clone();
-            }
-            self.segments.push(Segment {
-                session: session.clone(),
-                first: 0,
-            });
-        } else if self.pages.last().is_some_and(|page| page.lines == 0) {
-            // An empty open page takes the pushed session: nothing folded
-            // yet, so there is nothing to cut from, but the run starts
-            // here when the session changes.
-            if self
-                .pages
-                .last()
-                .is_some_and(|page| page.session != *session)
+        if self.pages.last().is_some_and(|page| page.lines == 0) {
+            // An empty open page takes the pushing session: nothing folded
+            // yet, so there is nothing to cut from.
+            if let Some(open) = self.pages.last_mut()
+                && open.session != *session
             {
-                if let Some(open) = self.pages.last_mut() {
-                    open.session = session.clone();
-                }
-                let first = self.pages.len().saturating_sub(1);
-                if self
-                    .segments
-                    .last()
-                    .is_none_or(|segment| segment.session != *session)
-                {
-                    self.segments.push(Segment {
-                        session: session.clone(),
-                        first,
-                    });
-                }
+                open.session = session.clone();
             }
         } else if self
             .pages
@@ -283,21 +246,10 @@ impl Index {
         cut
     }
 
-    /// Opens a page for `session`'s next lines: it continues the open
-    /// page's run when `session` matches, and starts a new chain segment's
-    /// run after a continuation point. Same-segment cuts keep the run; a
-    /// new segment starts a new run.
+    /// Opens a page for `session`'s next lines after a continuation
+    /// point: no page spans one, so a new segment always starts a new
+    /// page.
     fn new_page(&mut self, session: &SessionId) {
-        if self
-            .segments
-            .last()
-            .is_none_or(|segment| segment.session != *session)
-        {
-            self.segments.push(Segment {
-                session: session.clone(),
-                first: self.pages.len(),
-            });
-        }
         let page = Page {
             session: session.clone(),
             ..Page::default()
@@ -331,15 +283,6 @@ impl Index {
     /// The pages, the open one last.
     pub(crate) fn pages(&self) -> &[Page] {
         &self.pages
-    }
-
-    /// One run per chain segment, in chain order: each page from the
-    /// run's first page on holds its session.
-    pub(crate) fn segments(&self) -> Vec<(SessionId, usize)> {
-        self.segments
-            .iter()
-            .map(|segment| (segment.session.clone(), segment.first))
-            .collect()
     }
 
     /// Sets page `at`'s row count, for geometry alone: wrapping at a new
@@ -399,86 +342,35 @@ impl Index {
     }
 
     /// The page holding segment `session`'s `seq`, if any does. A miss
-    /// covers an unknown segment and a `seq` outside every page, same as
-    /// the single-segment miss before it. Page order is chain order,
-    /// ancestors first, so the first run holding `seq` wins.
+    /// covers an unknown segment and a `seq` outside every page. Page
+    /// order is chain order, ancestors first, so the first page holding
+    /// `seq` wins.
     pub(crate) fn page_of(&self, session: &SessionId, seq: Seq) -> Option<usize> {
-        for (at, segment) in self.segments.iter().enumerate() {
-            if segment.session != *session {
-                continue;
-            }
-            let end = self
-                .segments
-                .get(at.saturating_add(1))
-                .map_or(self.pages.len(), |segment| segment.first);
-            let run = self.pages.get(segment.first..end)?;
-            let offset = run.partition_point(|page| page.last_seq < seq);
-            if let Some(page) = run.get(offset)
+        self.pages.iter().position(|page| {
+            page.session == *session
                 && page.lines > 0
                 && page.first_seq <= seq
                 && seq <= page.last_seq
-            {
-                return Some(segment.first.saturating_add(offset));
-            }
-        }
-        None
+        })
     }
 
     /// Prepends `other`'s first `len` pages with their revisions: the
     /// carried ancestor runs land ahead of the fold's own, keeping chain
-    /// order, ancestors first. Adjacent runs of one session join, so a
-    /// carried run merges with the fold's own run of its session. The
-    /// caller moves the runs' cards and remaps every position-keyed set
-    /// by the carried count. `len` is a run boundary of `other`'s.
+    /// order, ancestors first. Adjacent runs of one session join through
+    /// the pages alone. The caller moves the runs' cards and remaps
+    /// every position-keyed set by the carried count. `len` is a run
+    /// boundary of `other`'s.
     pub(crate) fn prepend_from(&mut self, other: &Index, len: usize) {
         let len = len.min(other.pages.len());
         if len == 0 {
             return;
         }
-        let mut segments: Vec<Segment> = other
-            .segments
-            .iter()
-            .take_while(|segment| segment.first < len)
-            .cloned()
-            .collect();
-        if segments.is_empty() {
-            // `len` pages imply a run: the segments just were not recorded.
-            let Some(page) = other.pages.get(len.saturating_sub(1)) else {
-                return;
-            };
-            segments.push(Segment {
-                session: page.session.clone(),
-                first: 0,
-            });
-        }
         self.pages
             .splice(..0, other.pages.iter().take(len).cloned());
         self.revisions
             .splice(..0, other.revisions.iter().take(len).copied());
-        if segments.last().is_some_and(|moved| {
-            self.segments
-                .first()
-                .is_some_and(|own| own.session == moved.session)
-        }) {
-            self.segments.remove(0);
-        }
-        for segment in &mut self.segments {
-            segment.first = segment.first.saturating_add(len);
-        }
-        segments.append(&mut self.segments);
-        self.segments = segments;
         self.prefix = OnceCell::new();
         debug_assert_eq!(self.pages.len(), self.revisions.len());
-    }
-
-    /// The first page holding `seq` in any segment, in chain order, if
-    /// one does: what row anchors read when the row's own segment is not
-    /// named. Row space is already global (`docs/tui.md`, "History and
-    /// paging"), so the earliest segment wins.
-    pub(crate) fn page_of_any(&self, seq: Seq) -> Option<usize> {
-        self.segments
-            .iter()
-            .find_map(|segment| self.page_of(&segment.session, seq))
     }
 
     /// Every row the conversation draws, from the cached prefixes.

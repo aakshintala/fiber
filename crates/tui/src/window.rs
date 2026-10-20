@@ -288,11 +288,12 @@ pub(crate) struct Pages {
     /// piece above, and the first piece starts at the page's first row.
     /// Counting sets it with the rows, so it keeps their width.
     row_seqs: Vec<Vec<(usize, Seq)>>,
-    /// A held landing's top, its `seq` and offset as [`Pages::seq_row`]
-    /// takes them, kept while a dropped page waits to be counted at the
-    /// width: its rows and pieces keep the old width until it loads, so
-    /// each load finds the top again.
-    anchor: Option<(Seq, usize)>,
+    /// A held landing's top, its segment's session with its `seq`
+    /// and offset as [`Pages::seq_row`] takes them, kept while a
+    /// dropped page waits to be counted at the width: its rows and
+    /// pieces keep the old width until it loads, so each load finds
+    /// the top again.
+    anchor: Option<(SessionId, Seq, usize)>,
     /// What the person opened or closed since, by target.
     overrides: BTreeMap<Target, bool>,
     /// Dropped pages whose row counts wait for a reload.
@@ -1132,19 +1133,14 @@ impl Pages {
     }
 
     /// Carries the preview's closed ancestor-segment runs into the fold
-    /// front beside `carry_opens`: the index runs, their seeds and their
+    /// front beside `carry_opens`: the index pages, their seeds and their
     /// resident cards move, and every position-keyed set shifts by the
     /// carried count. A dropped ancestor page loads again under its own
     /// session; the fold's own runs keep their keys and keep folding
     /// own-log lines after land. No page spans a continuation point. A
     /// preview with no ancestor runs carries nothing.
     pub(crate) fn carry_chain(&self, fold: &mut Pages) {
-        let Some(attached) = self
-            .index
-            .segments()
-            .last()
-            .map(|(session, _)| session.clone())
-        else {
+        let Some(attached) = self.index.pages().last().map(|page| page.session.clone()) else {
             return;
         };
         let len = self
@@ -1605,37 +1601,37 @@ impl Pages {
         out.into_parts().0
     }
 
-    /// The `seq` of the line whose piece draws conversation row `row`,
-    /// and the row's offset in that piece: the piece starting at or
-    /// above it on its page, else the page's first `seq` at offset 0.
-    /// `None` past the last row or on a page with no line.
-    pub(crate) fn row_seq(&self, row: usize) -> Option<(Seq, usize)> {
+    /// The segment session and `seq` of the line whose piece draws
+    /// conversation row `row`, and the row's offset in that piece: the
+    /// piece starting at or above it on its page, else the page's first
+    /// `seq` at offset 0. `None` past the last row or on a page with no
+    /// line.
+    pub(crate) fn row_seq(&self, row: usize) -> Option<(SessionId, Seq, usize)> {
         let (at, offset) = self.index.locate(row)?;
         let page = self.index.pages().get(at).filter(|page| page.lines > 0)?;
         let runs = self.row_seqs.get(at).map_or(&[][..], Vec::as_slice);
         let before = runs.partition_point(|(start, _)| *start <= offset);
-        Some(
-            before
-                .checked_sub(1)
-                .and_then(|run| runs.get(run))
-                .map_or((page.first_seq, 0), |(start, seq)| {
-                    (*seq, offset.saturating_sub(*start))
-                }),
-        )
+        let (seq, off) = before
+            .checked_sub(1)
+            .and_then(|run| runs.get(run))
+            .map_or((page.first_seq, 0), |(start, seq)| {
+                (*seq, offset.saturating_sub(*start))
+            });
+        Some((page.session.clone(), seq, off))
     }
 
     /// The conversation row `offset` rows into the piece drawn from
-    /// `seq`'s line, kept within the piece; else the first row of the
-    /// first piece after it on its page, else the page's first row.
-    /// `None` when no page holds `seq`. Row space is already global
-    /// (`docs/tui.md`, "History and paging"), so the row names no
-    /// segment: the first segment holding `seq` in chain order wins.
+    /// segment `session`'s `seq`'s line, kept within the piece; else the
+    /// first row of the first piece after it on its page, else the
+    /// page's first row. `None` when no page of the segment holds
+    /// `seq`: ancestor and descendant logs both start at `Seq(0)`, so
+    /// the row names its segment.
     /// No test pins `>` against `>=`
     /// below: the exact arm takes every `seq` a run starts at, so where
     /// the search runs `>=` matches `>` on every input.
     #[cfg_attr(false, mutants::skip)]
-    pub(crate) fn seq_row(&self, seq: Seq, offset: usize) -> Option<usize> {
-        let at = self.index.page_of_any(seq)?;
+    pub(crate) fn seq_row(&self, session: &SessionId, seq: Seq, offset: usize) -> Option<usize> {
+        let at = self.index.page_of(session, seq)?;
         let runs = self.row_seqs.get(at).map_or(&[][..], Vec::as_slice);
         let rows = self.index.pages().get(at).map_or(0, |page| page.rows);
         let exact = runs.iter().position(|(_, from)| *from == seq);
@@ -1654,11 +1650,11 @@ impl Pages {
         Some(self.index.start(at).saturating_add(within))
     }
 
-    /// Holds a landing's top at `seq` and `offset` until no dropped page
-    /// waits to be counted at the width: [`Pages::anchored_row`] finds
-    /// it again after each load.
-    pub(crate) fn hold_anchor(&mut self, seq: Seq, offset: usize) {
-        self.anchor = Some((seq, offset));
+    /// Holds a landing's top at its segment's session with its `seq`
+    /// and `offset` until no dropped page waits to be counted at the
+    /// width: [`Pages::anchored_row`] finds it again after each load.
+    pub(crate) fn hold_anchor(&mut self, session: &SessionId, seq: Seq, offset: usize) {
+        self.anchor = Some((session.clone(), seq, offset));
     }
 
     /// Releases the held pass's landing position.
@@ -1673,15 +1669,15 @@ impl Pages {
     }
 
     /// The held anchor's row as the pages count now, as
-    /// [`Pages::seq_row`] finds it; `None` with no anchor held. The
-    /// anchor lets go once every stale page is counted again or failed,
-    /// since then its row no longer moves.
+    /// [`Pages::seq_row`] finds it under its segment's session; `None`
+    /// with no anchor held. The anchor lets go once every stale page is
+    /// counted again or failed, since then its row no longer moves.
     pub(crate) fn anchored_row(&mut self) -> Option<usize> {
-        let (seq, offset) = self.anchor?;
+        let (session, seq, offset) = self.anchor.clone()?;
         if self.stale.iter().all(|at| self.failed.contains(at)) {
             self.anchor = None;
         }
-        self.seq_row(seq, offset)
+        self.seq_row(&session, seq, offset)
     }
 
     /// The page index.
