@@ -1283,3 +1283,367 @@ fn a_sent_shell_after_rewound_is_refused_and_writes_nothing() {
     }
     assert_eq!(saved_kinds(&home), ["session_started"]);
 }
+
+/// A reader-admitted steer the drain reconciles: the hook, its verdict and
+/// the shared row, without touching `inbox_tests`' other pins.
+use std::collections::VecDeque as SteerAnswers;
+use std::sync::Mutex as SteerSeen;
+
+use contract::CommandId as SteerId;
+use contract::hook::{
+    AfterToolAnswer as SteerAfterToolAnswer, AfterToolCall as SteerAfterToolCall,
+    AfterToolOutcome as SteerAfterToolOutcome, BeforeMessage as SteerBeforeMessage,
+    BeforeMessageAnswer as SteerBeforeMessageAnswer,
+    BeforeMessageOutcome as SteerBeforeMessageOutcome, BeforeToolAnswer as SteerBeforeToolAnswer,
+    BeforeToolCall as SteerBeforeToolCall, CheckAnswer as SteerCheckAnswer,
+    CheckOutcome as SteerCheckOutcome, ContextAnswer as SteerContextAnswer,
+    ContextOutcome as SteerContextOutcome, Hooks as SteerHooks, Replaced as SteerReplaced,
+};
+use contract::inbox::Message as SteerMessage;
+use contract::shapes::{ContentPart as SteerContent, Origin as SteerOrigin, Sender as SteerSender};
+use contract::steering::Queue as SteerQueue;
+
+struct FakeSteerHooks {
+    seen: SteerSeen<Vec<String>>,
+    answers: SteerSeen<SteerAnswers<SteerBeforeMessageAnswer>>,
+}
+
+impl FakeSteerHooks {
+    fn answer(&self, answer: SteerBeforeMessageAnswer) {
+        self.answers.lock().unwrap().push_back(answer);
+    }
+
+    fn count(&self) -> usize {
+        self.seen.lock().unwrap().len()
+    }
+}
+
+fn steer_passed() -> SteerBeforeMessageAnswer {
+    SteerBeforeMessageAnswer {
+        outcome: SteerBeforeMessageOutcome::Passed {
+            replaced: None,
+            context: Vec::new(),
+        },
+        notices: Vec::new(),
+    }
+}
+
+fn steer_replaced(text: &str, by: &str) -> SteerBeforeMessageAnswer {
+    SteerBeforeMessageAnswer {
+        outcome: SteerBeforeMessageOutcome::Passed {
+            replaced: Some(SteerReplaced {
+                content: vec![SteerContent::Text {
+                    text: text.to_owned(),
+                }],
+                changed_by: vec![by.to_owned()],
+            }),
+            context: Vec::new(),
+        },
+        notices: Vec::new(),
+    }
+}
+
+fn steer_refused(by: &str, reason: &str) -> SteerBeforeMessageAnswer {
+    SteerBeforeMessageAnswer {
+        outcome: SteerBeforeMessageOutcome::Refused(contract::hook::Refusal {
+            extension: by.to_owned(),
+            reason: reason.to_owned(),
+        }),
+        notices: Vec::new(),
+    }
+}
+
+impl SteerHooks for FakeSteerHooks {
+    fn after_tool(&self, _call: &SteerAfterToolCall<'_>) -> SteerAfterToolAnswer {
+        SteerAfterToolAnswer {
+            outcome: SteerAfterToolOutcome::Unchanged,
+            changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_tool(&self, _call: &SteerBeforeToolCall<'_>) -> SteerBeforeToolAnswer {
+        SteerBeforeToolAnswer {
+            outcome: contract::hook::BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(&self, _call: &SteerBeforeToolCall<'_>) -> SteerCheckAnswer {
+        SteerCheckAnswer {
+            outcome: SteerCheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(&self, message: &SteerBeforeMessage<'_>) -> SteerBeforeMessageAnswer {
+        self.seen
+            .lock()
+            .unwrap()
+            .push(crate::conversation::text(message.content));
+        self.answers
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(steer_passed)
+    }
+
+    fn session_start(&self, _start: &contract::hook::SessionStart<'_>) -> SteerContextAnswer {
+        SteerContextAnswer {
+            outcome: SteerContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_start(&self, _turn: &contract::hook::TurnStart<'_>) -> SteerContextAnswer {
+        SteerContextAnswer {
+            outcome: SteerContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_model_call(&self, _call: &contract::hook::BeforeModelCall<'_>) -> SteerCheckAnswer {
+        SteerCheckAnswer {
+            outcome: SteerCheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_end(&self, _end: &contract::hook::TurnEnd<'_>) -> SteerContextAnswer {
+        SteerContextAnswer {
+            outcome: SteerContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
+    fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
+}
+
+fn steer_text(text: &str) -> Vec<SteerContent> {
+    vec![SteerContent::Text { text: text.into() }]
+}
+
+fn steer_sender(id: &str) -> SteerSender {
+    SteerSender {
+        origin: SteerOrigin::Driver,
+        command_id: Some(SteerId(id.into())),
+    }
+}
+
+fn steer_message(text: &str, id: &str) -> SteerMessage {
+    SteerMessage {
+        content: steer_text(text),
+        sender: steer_sender(id),
+    }
+}
+
+fn steer_ignore() -> Ack {
+    Ack(Box::new(|_| {}))
+}
+
+fn started_with_steering(queue: Arc<SteerQueue>) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
+    let (looped, log, watched, home) = started();
+    (looped.steering(queue), log, watched, home)
+}
+
+/// The reader's at-once admit: the row appears, answered before the drain.
+fn steer_pushed(queue: &SteerQueue, log: &Arc<Log>, id: &str, text: &str) {
+    queue
+        .push(
+            SteerId(id.into()),
+            steer_text(text),
+            steer_sender(id),
+            &**log,
+        )
+        .unwrap();
+}
+
+/// Every `steering_queue` row's message texts, in arrival order.
+fn steer_rows(watched: &mut log::Watcher, count: usize) -> Vec<Vec<String>> {
+    let mut rows = Vec::new();
+    while rows.len() < count {
+        let line = watched
+            .recv_timeout(DEADLINE)
+            .expect("a line arrives in time")
+            .expect("the log outlives the drain")
+            .expect("the log ended before the row");
+        if line.kind == "steering_queue" {
+            rows.push(
+                line.payload["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|message| message["content"][0]["text"].as_str().unwrap().to_owned())
+                    .collect(),
+            );
+        }
+    }
+    rows
+}
+
+#[test]
+fn a_reader_admitted_steer_reconciles_through_the_hook_pass_and_queues_once() {
+    let queue = Arc::new(SteerQueue::new());
+    let (mut looped, log, mut watched, home) = started_with_steering(Arc::clone(&queue));
+    let turn = TurnId("t_test".into());
+    steer_pushed(&queue, &log, "c_1", "hello");
+    assert_eq!(steer_rows(&mut watched, 1), [vec!["hello".to_owned()]]);
+    looped
+        .admit_running(
+            Delivery::Steer(steer_message("hello", "c_1"), steer_ignore()),
+            &turn,
+        )
+        .unwrap();
+    assert_eq!(looped.queued.len(), 1, "one holder");
+    looped.apply_steering(&turn).unwrap();
+    assert_eq!(steer_rows(&mut watched, 1), [Vec::<String>::new()]);
+    assert!(
+        saved_kinds(&home).contains(&"steering_applied".to_owned()),
+        "the staged steer applies"
+    );
+}
+
+#[test]
+fn a_refused_reader_admitted_steer_removes_the_row_writes_the_notice_and_applies_nothing() {
+    let queue = Arc::new(SteerQueue::new());
+    let hooks = Arc::new(FakeSteerHooks {
+        seen: SteerSeen::new(Vec::new()),
+        answers: SteerSeen::new(SteerAnswers::new()),
+    });
+    hooks.answer(steer_refused("fiber.test/hooks", "nope"));
+    let (mut looped, log, mut watched, home) = started_with_steering(Arc::clone(&queue));
+    looped = looped.hooks(hooks.clone());
+    let turn = TurnId("t_test".into());
+    steer_pushed(&queue, &log, "c_1", "hello");
+    looped
+        .admit_running(
+            Delivery::Steer(steer_message("hello", "c_1"), steer_ignore()),
+            &turn,
+        )
+        .unwrap();
+    assert_eq!(hooks.count(), 1, "the drain hooks once");
+    assert!(looped.queued.is_empty(), "nothing queues");
+    assert_eq!(
+        steer_rows(&mut watched, 2),
+        [vec!["hello".to_owned()], Vec::<String>::new()]
+    );
+    looped.apply_steering(&turn).unwrap();
+    let kinds = saved_kinds(&home);
+    assert!(!kinds.contains(&"steering_applied".to_owned()));
+    // The notice is ephemeral: it arrives on the watcher, not the file.
+    let notice = loop {
+        let line = watched
+            .recv_timeout(DEADLINE)
+            .expect("a line arrives in time")
+            .expect("the log outlives the drain")
+            .expect("the log ended before the notice");
+        if line.kind == "notice" {
+            break line;
+        }
+    };
+    assert_eq!(notice.payload["code"], "message_refused");
+    assert!(
+        notice.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("fiber.test/hooks"),
+        "the notice names the extension"
+    );
+    assert!(
+        notice.payload["message"].as_str().unwrap().contains("nope"),
+        "the notice names the reason"
+    );
+}
+
+#[test]
+fn a_replaced_reader_admitted_steer_updates_the_row_and_applies_the_replacement() {
+    let queue = Arc::new(SteerQueue::new());
+    let hooks = Arc::new(FakeSteerHooks {
+        seen: SteerSeen::new(Vec::new()),
+        answers: SteerSeen::new(SteerAnswers::new()),
+    });
+    hooks.answer(steer_replaced("hooked", "fiber.test/hooks"));
+    let (mut looped, log, mut watched, home) = started_with_steering(Arc::clone(&queue));
+    looped = looped.hooks(hooks);
+    let turn = TurnId("t_test".into());
+    steer_pushed(&queue, &log, "c_1", "raw");
+    looped
+        .admit_running(
+            Delivery::Steer(steer_message("raw", "c_1"), steer_ignore()),
+            &turn,
+        )
+        .unwrap();
+    assert_eq!(
+        steer_rows(&mut watched, 2),
+        [vec!["raw".to_owned()], vec!["hooked".to_owned()]]
+    );
+    looped.apply_steering(&turn).unwrap();
+    assert_eq!(steer_rows(&mut watched, 1), [Vec::<String>::new()]);
+    let applied: Vec<_> = log::read(&home.path().join("s_test"))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|line| line.kind == "steering_applied")
+        .collect();
+    assert_eq!(applied.len(), 1, "one steering_applied");
+    assert_eq!(applied[0].payload["content"][0]["text"], "hooked");
+}
+
+#[test]
+fn a_steer_dropped_before_its_delivery_never_hooks_and_never_applies() {
+    let queue = Arc::new(SteerQueue::new());
+    let hooks = Arc::new(FakeSteerHooks {
+        seen: SteerSeen::new(Vec::new()),
+        answers: SteerSeen::new(SteerAnswers::new()),
+    });
+    let (mut looped, log, mut watched, home) = started_with_steering(Arc::clone(&queue));
+    looped = looped.hooks(hooks.clone());
+    let turn = TurnId("t_test".into());
+    steer_pushed(&queue, &log, "c_1", "dropped");
+    assert!(queue.remove(&SteerId("c_1".into()), &*log));
+    assert_eq!(
+        steer_rows(&mut watched, 2),
+        [vec!["dropped".to_owned()], Vec::<String>::new()]
+    );
+    looped
+        .admit_running(
+            Delivery::Steer(steer_message("dropped", "c_1"), steer_ignore()),
+            &turn,
+        )
+        .unwrap();
+    assert_eq!(hooks.count(), 0, "a dropped steer never hooks");
+    assert!(looped.queued.is_empty(), "nothing queues");
+    looped.apply_steering(&turn).unwrap();
+    assert!(!saved_kinds(&home).contains(&"steering_applied".to_owned()));
+}
+
+#[test]
+fn a_steer_dropped_after_staging_skips_the_apply() {
+    let queue = Arc::new(SteerQueue::new());
+    let hooks = Arc::new(FakeSteerHooks {
+        seen: SteerSeen::new(Vec::new()),
+        answers: SteerSeen::new(SteerAnswers::new()),
+    });
+    let (mut looped, log, mut watched, home) = started_with_steering(Arc::clone(&queue));
+    looped = looped.hooks(hooks.clone());
+    let turn = TurnId("t_test".into());
+    steer_pushed(&queue, &log, "c_1", "late");
+    looped
+        .admit_running(
+            Delivery::Steer(steer_message("late", "c_1"), steer_ignore()),
+            &turn,
+        )
+        .unwrap();
+    assert_eq!(hooks.count(), 1, "the drain hooks once");
+    assert_eq!(steer_rows(&mut watched, 1), [vec!["late".to_owned()]]);
+    assert!(queue.remove(&SteerId("c_1".into()), &*log));
+    looped.apply_steering(&turn).unwrap();
+    assert_eq!(steer_rows(&mut watched, 1), [Vec::<String>::new()]);
+    assert!(!saved_kinds(&home).contains(&"steering_applied".to_owned()));
+}

@@ -5,11 +5,13 @@
 //! refusal or a blocking failure rejects the command at once.
 
 use std::sync::Arc;
+use std::sync::mpsc;
 
-use contract::events::Event;
+use contract::events::{Event, Notice};
 use contract::hook::{BeforeMessage, BeforeMessageOutcome, Context, StateLine};
 use contract::inbox::{Ack, Message};
 use contract::shapes::ContentPart;
+use contract::steering;
 use contract::{CommandId, ErrorCode, TurnId};
 
 use crate::inbox::{self, TurnInput};
@@ -120,6 +122,75 @@ impl Loop {
         }
     }
 
+    /// Runs the hook pass over the reader-admitted entry `id` carries and
+    /// applies its outcome: `Passed` stages it in place (a replacement
+    /// updates the entry and re-emits the queue) and reports the admitted
+    /// message with its hook verdict for the caller to queue; any other
+    /// answer removes the entry and emits the queue, plus a notice naming
+    /// the code, extension and reason unless the loop is closing. A hook
+    /// outcome for an id no longer present is discarded with no second
+    /// emit (drop-wins). The already consumed ack makes every answer here
+    /// silent.
+    fn hook_pass(
+        &mut self,
+        id: &CommandId,
+        turn: Option<&TurnId>,
+    ) -> Result<Option<(Message, Hooked)>, Error> {
+        let Some((content, sender)) = self.steering.unstaged(id) else {
+            // Dropped between the caller's check and this pass.
+            return Ok(None);
+        };
+        // The probe carries the verdict out: `admitted` answers it exactly
+        // as it would the delivery's ack, then returns the outcome.
+        let (probe_tx, probe_rx) = mpsc::channel();
+        let probe = Ack(Box::new(move |answer| {
+            let _sent = probe_tx.send(answer);
+        }));
+        let outcome = self.admitted(Message { content, sender }, probe, turn)?;
+        let emit = inbox::TurnEmit {
+            log: &self.log,
+            turn: turn.cloned(),
+        };
+        match outcome {
+            Some((message, hooked, _)) => {
+                let staged = steering::Staged {
+                    state: hooked.state.clone(),
+                    changed_by: hooked.changed_by.clone(),
+                    context: hooked.context.clone(),
+                };
+                if self
+                    .steering
+                    .stage(id, message.content.clone(), staged, &emit)
+                {
+                    Ok(Some((message, hooked)))
+                } else {
+                    // Dropped during the hook pass: discard, no second emit.
+                    Ok(None)
+                }
+            }
+            None => {
+                // Refused, failed or shut down: admitted answered the
+                // probe. The entry leaves with no notice when the loop
+                // is closing: the session exit is the signal.
+                let _ = self.steering.take(id, &emit);
+                if let Ok(Err(rejection)) = probe_rx.try_recv()
+                    && rejection.code != ErrorCode::Closing
+                {
+                    self.write(
+                        &Event::Notice(Notice {
+                            code: rejection.code,
+                            message: rejection.message,
+                            extension: None,
+                        }),
+                        turn,
+                        None,
+                    )?;
+                }
+                Ok(None)
+            }
+        }
+    }
+
     /// Admits an idle `prompt`: the hook, then the slash expansion that
     /// reads its replacement. A prompt the expansion rejects never reaches
     /// the door; a refused or blocked one never reaches the expansion.
@@ -157,39 +228,128 @@ impl Loop {
         Ok(())
     }
 
-    /// Admits an idle `steer`: the hook, then attending, accepting and
-    /// queuing, as an unhooked steer is admitted today.
+    /// Admits an idle `steer`: a reader-admitted one moves into the turn's
+    /// input after the hook pass, keeping its id so a drop arriving in
+    /// the same wait still finds it; a direct-inbox one is hooked,
+    /// accepted and queued, as an unhooked steer is admitted today.
     pub(crate) fn take_steer_idle(
         &mut self,
         message: Message,
         ack: Ack,
         input: &mut TurnInput,
     ) -> Result<(), Error> {
-        let Some((message, hooked, ack)) = self.admitted(message, ack, None)? else {
-            return Ok(());
-        };
-        self.attended();
-        inbox::accept(ack);
-        input.pieces.push(Queued::Steer(message, hooked));
-        Ok(())
+        let id = message.sender.command_id.clone();
+        match id {
+            Some(id) if self.steering.unstaged(&id).is_some() => {
+                let Some((message, hooked)) = self.hook_pass(&id, None)? else {
+                    return Ok(());
+                };
+                let emit = inbox::TurnEmit {
+                    log: &self.log,
+                    turn: None,
+                };
+                if self.steering.move_out(&id, &emit).is_none() {
+                    // Dropped between stage and move: drop-wins.
+                    return Ok(());
+                }
+                self.attended();
+                inbox::accept(ack);
+                input.pieces.push(Queued::Steer(message, hooked));
+                Ok(())
+            }
+            Some(id) if self.steering.is_admitted(&id) => {
+                // Reader-removed or a duplicate delivery: the reader's
+                // answer stands; this ack answers idempotently.
+                inbox::accept(ack);
+                Ok(())
+            }
+            _ => {
+                let Some((message, hooked, ack)) = self.admitted(message, ack, None)? else {
+                    return Ok(());
+                };
+                self.attended();
+                inbox::accept(ack);
+                input.pieces.push(Queued::Steer(message, hooked));
+                Ok(())
+            }
+        }
     }
 
-    /// Admits a `steer` while a turn runs: the hook under the turn, then
-    /// attending, accepting, queuing and announcing the queue.
+    /// Admits a `steer` while a turn runs: a reader-admitted one stages in
+    /// place and queues its holder for the apply, in arrival order; a
+    /// direct-inbox one is hooked, accepted, queued and emitted, exactly
+    /// once through the shared queue.
     pub(crate) fn take_steer_running(
         &mut self,
         message: Message,
         ack: Ack,
         turn: &TurnId,
     ) -> Result<(), Error> {
-        let Some((message, hooked, ack)) = self.admitted(message, ack, Some(turn))? else {
-            return Ok(());
-        };
-        self.attended();
-        inbox::accept(ack);
-        self.queued.push_back(Queued::Steer(message, hooked));
-        self.emit_queue(Some(turn))?;
-        Ok(())
+        let id = message.sender.command_id.clone();
+        match id {
+            Some(id) if self.steering.unstaged(&id).is_some() => {
+                // Reader-admitted: the hook pass stages it in place and
+                // queues its holder for the apply, in arrival order; the
+                // ack is already consumed.
+                if let Some((message, hooked)) = self.hook_pass(&id, Some(turn))? {
+                    self.attended();
+                    inbox::accept(ack);
+                    self.queued.push_back(Queued::Steer(message, hooked));
+                }
+                Ok(())
+            }
+            Some(id) if self.steering.is_admitted(&id) => {
+                // Already dropped, or a duplicate delivery: the reader's
+                // answer stands; this ack answers idempotently.
+                inbox::accept(ack);
+                Ok(())
+            }
+            _ => {
+                let Some((message, hooked, ack)) = self.admitted(message, ack, Some(turn))? else {
+                    return Ok(());
+                };
+                self.attended();
+                inbox::accept(ack);
+                match message.sender.command_id.clone() {
+                    Some(id) => {
+                        let staged = steering::Staged {
+                            state: hooked.state.clone(),
+                            changed_by: hooked.changed_by.clone(),
+                            context: hooked.context.clone(),
+                        };
+                        let emit = inbox::TurnEmit {
+                            log: &self.log,
+                            turn: Some(turn.clone()),
+                        };
+                        // The id is absent from the shared queue, so the
+                        // admit lands; a concurrent reader push wins by
+                        // answering first, and this delivery stays a
+                        // duplicate.
+                        if self
+                            .steering
+                            .admit_hooked(
+                                id,
+                                message.content.clone(),
+                                message.sender.clone(),
+                                staged,
+                                &emit,
+                            )
+                            .is_err()
+                        {
+                            return Ok(());
+                        }
+                        self.queued.push_back(Queued::Steer(message, hooked));
+                        Ok(())
+                    }
+                    None => {
+                        // Fiber's own message carries no id to key the
+                        // queue by: it still applies, unannounced.
+                        self.queued.push_back(Queued::Steer(message, hooked));
+                        Ok(())
+                    }
+                }
+            }
+        }
     }
 }
 

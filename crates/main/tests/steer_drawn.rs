@@ -178,7 +178,12 @@ fn a_steer_draws_its_queue_row_then_its_card_rule() {
             saw_queue = true;
             break;
         }
-        let _ = Deadline::after(Duration::from_millis(50)).recv(&paused);
+        assert!(
+            Deadline::after(Duration::from_millis(50))
+                .recv(&paused)
+                .is_err(),
+            "the pause elapses with no signal"
+        );
     }
     server.release();
     // The release lets the turn land: the step boundary applies the steer
@@ -213,8 +218,12 @@ fn a_steer_draws_its_queue_row_then_its_card_rule() {
     for dx in 5..(dashes - x) {
         assert!(grid.cell(x + dx, y).dim, "rule separator col {dx}");
     }
-    for dx in dashes..cols {
+    // The rule fills the card's width past one space, not the terminal:
+    // every dash carries the rule tint, and nothing but spaces follows.
+    let mut dx = dashes;
+    while dx < cols && grid.cell(dx, y).symbol == "\u{2500}" {
         assert_eq!(grid.cell(dx, y).fg, RULE, "rule dash col {dx}");
+        dx += 1;
     }
     let text = row_with(&grid, "use x");
     assert_eq!(text, y + 1, "the steered text under its rule");

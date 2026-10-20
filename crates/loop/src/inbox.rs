@@ -7,12 +7,13 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use contract::commands::Reply;
-use contract::events::{
-    Event, ExtensionExec, ExtensionLog, QueuedMessage, ShellCommand, SteeringQueue, UsageRecorded,
-};
-use contract::inbox::{Ack, Delivery, Rejection};
+use contract::emit::Emit;
+use contract::events::{Event, ExtensionExec, ExtensionLog, ShellCommand, UsageRecorded};
+use contract::inbox::{Ack, Delivery, Message, Rejection};
+use contract::steering;
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
 
+use crate::before_message::Hooked;
 use crate::cancel::SignalState;
 use crate::jobs::Queued;
 use crate::{Error, Loop};
@@ -232,17 +233,30 @@ impl Loop {
             // ahead of whatever is already waiting. This holds after any
             // outcome, not only `interrupted`. While `closing` nothing
             // starts, so steers still queued are not run.
-            let kept = self.queued.len();
-            let kept_steer = self
-                .queued
-                .iter()
-                .any(|piece| matches!(piece, Queued::Steer(..)));
-            input.pieces.extend(self.take_queued());
-            if kept_steer {
-                // The queue moved into `turn_started`. Only steers are
-                // listed on `steering_queue`.
-                self.emit_queue(None)?;
-            }
+            // The queue moved into `turn_started`: the take below emits
+            // it when one moved. Only steers are listed on
+            // `steering_queue`. The queue already holds every payload in
+            // arrival order; holders whose entry left are skipped, as the
+            // apply skips them.
+            let rest: Vec<Queued> = self
+                .take_queued()
+                .into_iter()
+                .filter(|piece| match piece {
+                    Queued::Steer(message, _) => self.holder_live(message),
+                    Queued::Job(..)
+                    | Queued::Notice(..)
+                    | Queued::Line(_)
+                    | Queued::Handoff(..)
+                    | Queued::Pending(..) => true,
+                })
+                .collect();
+            let kept = rest.len();
+            input.pieces.extend(rest);
+            let emit = TurnEmit {
+                log: &self.log,
+                turn: None,
+            };
+            let _ = self.steering.take_staged(&emit);
             if kept > 0 || held {
                 if let Some(hooks) = self.hooks.clone() {
                     self.drain_state(&hooks, None)?;
@@ -311,6 +325,7 @@ impl Loop {
                 if self.closing && session_message::has_session_message(&input.pieces) {
                     self.ending.after_close = true;
                 }
+                self.forget_input(&input);
                 return Ok(Some(input));
             }
             // `rewound` was written in the drain above: its deliveries
@@ -336,16 +351,38 @@ impl Loop {
         self.queued.retain(|piece| {
             !matches!(piece, Queued::Steer(message, _) if !session_message::is_session(message))
         });
-        let mut input = TurnInput::of(self.take_queued());
+        // Session messages move into the turn's input first, ahead of
+        // whatever is already waiting, as kept steers do in
+        // `wait_for_turn`. Person steers still queued are dropped.
+        // `take_for_ending` emits the empty queue when a message moved.
+        let emit = TurnEmit {
+            log: &self.log,
+            turn: None,
+        };
+        let messages = self.steering.take_for_ending(&emit);
+        let mut input = TurnInput::of(messages.into_iter().map(queued_piece).collect());
+        // Message holders are already above as entries; drop them so no
+        // message joins twice.
+        let rest: Vec<Queued> = self
+            .take_queued()
+            .into_iter()
+            .filter(|piece| match piece {
+                Queued::Steer(message, _) => message.sender.command_id.is_none(),
+                Queued::Job(..)
+                | Queued::Notice(..)
+                | Queued::Line(_)
+                | Queued::Handoff(..)
+                | Queued::Pending(..) => true,
+            })
+            .collect();
+        input.pieces.extend(rest);
         for delivery in std::mem::take(&mut self.deferred) {
             self.admit_idle(delivery, &mut input)?;
         }
         // Every turn from here on starts after `close`.
         self.ending.after_close = true;
         if session_message::has_session_message(&input.pieces) {
-            // The queue moved into `turn_started`: stop listing it, as
-            // `wait_for_turn` does for kept steers.
-            self.emit_queue(None)?;
+            self.forget_input(&input);
             return Ok(Some(input));
         }
         if !self.has_jobs() {
@@ -353,6 +390,7 @@ impl Loop {
         }
         loop {
             if !input.pieces.is_empty() {
+                self.forget_input(&input);
                 return Ok(Some(input));
             }
             for delivery in self.inbox.try_iter() {
@@ -362,6 +400,7 @@ impl Loop {
             self.record_waiting_extension_jobs()?;
             let running = self.model_running(running);
             if !input.pieces.is_empty() {
+                self.forget_input(&input);
                 return Ok(Some(input));
             }
             if running.is_empty() {
@@ -370,9 +409,14 @@ impl Loop {
                 for delivery in self.inbox.try_iter() {
                     self.admit_idle(delivery, &mut input)?;
                 }
-                return Ok((!input.pieces.is_empty()).then_some(input));
+                if input.pieces.is_empty() {
+                    return Ok(None);
+                }
+                self.forget_input(&input);
+                return Ok(Some(input));
             }
             if self.notify_pending(running, &mut input.pieces) {
+                self.forget_input(&input);
                 return Ok(Some(input));
             }
             match self.recv_until(None, false, None)? {
@@ -415,45 +459,33 @@ impl Loop {
 
     /// Logs everything queued, in arrival order: each steer as
     /// `steering_applied`, each job notice as `job_completed`. Clears the
-    /// queue (`docs/loop.md`, "One step").
+    /// queue (`docs/loop.md`, "One step"). A steer's holder applies only
+    /// while its entry is still staged: a drop between the drain and the
+    /// apply leaves the holder with no entry, and the apply skips it. The
+    /// queue empties after the log, as it did when the emit followed the
+    /// write.
     pub(crate) fn apply_steering(&mut self, turn: &TurnId) -> Result<(), Error> {
-        if self.write_queued(turn)? {
-            self.emit_queue(Some(turn))?;
-        }
-        Ok(())
-    }
-
-    /// Writes the queue as it stands: every steering message still queued,
-    /// oldest first, empty when the queue is (`docs/events.md`,
-    /// `steering_queue`).
-    pub(crate) fn emit_queue(&mut self, turn: Option<&TurnId>) -> Result<(), Error> {
-        let event = contract::events::Event::SteeringQueue(SteeringQueue {
-            messages: self
-                .queued
-                .iter()
-                .filter_map(|piece| match piece {
-                    Queued::Steer(message, _) => Some(QueuedMessage {
-                        content: message.content.clone(),
-                        sender: message.sender.clone(),
-                    }),
-                    Queued::Job(..)
-                    | Queued::Notice(..)
-                    | Queued::Line(_)
-                    | Queued::Handoff(..)
-                    | Queued::Pending(..) => None,
-                })
-                .collect(),
+        // One lock per holder; never-admitted holders are forged kept
+        // steers the loop takes as it always did.
+        let steering = &self.steering;
+        self.queued.retain(|piece| match piece {
+            Queued::Steer(message, _) => match &message.sender.command_id {
+                None => true,
+                Some(id) => steering.is_staged(id) || !steering.is_admitted(id),
+            },
+            Queued::Job(..)
+            | Queued::Notice(..)
+            | Queued::Line(_)
+            | Queued::Handoff(..)
+            | Queued::Pending(..) => true,
         });
-        match turn {
-            Some(turn) => self.append(&event, turn, None),
-            // Between turns there is no turn to name. The line is
-            // ephemeral, so nothing renders it into the conversation.
-            None => self
-                .log
-                .append(&event, None, None)
-                .map(|_| ())
-                .map_err(crate::Error::Log),
-        }
+        self.write_queued(turn)?;
+        let emit = TurnEmit {
+            log: &self.log,
+            turn: Some(turn.clone()),
+        };
+        let _ = self.steering.take_staged(&emit);
+        Ok(())
     }
 
     /// Admits `delivery` while the loop waits for a reply to `pending`.
@@ -530,8 +562,19 @@ impl Loop {
         input: &mut TurnInput,
     ) -> Result<(), Error> {
         // Once `rewound` is set every later delivery is refused, and
-        // nothing is written (`docs/events.md`, "Rewind").
+        // nothing is written (`docs/events.md`, "Rewind"). A
+        // reader-admitted steer is removed with its delivery, so no
+        // orphaned entry outlives the session.
         if self.rewound {
+            if let Delivery::Steer(message, _) = &delivery
+                && let Some(id) = &message.sender.command_id
+            {
+                let emit = TurnEmit {
+                    log: &self.log,
+                    turn: None,
+                };
+                let _ = self.steering.take(id, &emit);
+            }
             crate::rewind::command::refuse_after_rewound(delivery);
             return Ok(());
         }
@@ -554,13 +597,22 @@ impl Loop {
             Delivery::Steer(message, ack) => {
                 // After `close` a steer joins only a turn a message starts.
                 if self.closing && !has_message(input) {
+                    // A reader-admitted steer leaves with its delivery,
+                    // so no orphaned entry outlives the session.
+                    if let Some(id) = &message.sender.command_id {
+                        let emit = TurnEmit {
+                            log: &self.log,
+                            turn: None,
+                        };
+                        let _ = self.steering.take(id, &emit);
+                    }
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
                     self.take_steer_idle(message, ack, input)?;
                 }
             }
             Delivery::SteerDrop(id, ack) => {
-                if drop_piece(input, &id) {
+                if drop_piece(input, &id) || self.remove_steer(&id, None) {
                     accept(ack);
                 } else {
                     reject(ack, ErrorCode::StaleRequest, STALE_STEER);
@@ -716,17 +768,29 @@ impl Loop {
                 }
             }
             // A turn started after `close` takes no steer; the turn in
-            // flight when it arrived still does.
-            Delivery::Steer(_, ack) if self.ending.after_close => {
+            // flight when it arrived still does. A reader-admitted steer
+            // leaves with its delivery, so no orphaned entry outlives
+            // the session.
+            Delivery::Steer(message, ack) if self.ending.after_close => {
+                if let Some(id) = &message.sender.command_id {
+                    let emit = TurnEmit {
+                        log: &self.log,
+                        turn: None,
+                    };
+                    let _ = self.steering.take(id, &emit);
+                }
                 reject(ack, ErrorCode::Closing, CLOSING);
             }
             Delivery::Steer(message, ack) => {
                 self.take_steer_running(message, ack, turn)?;
             }
             Delivery::SteerDrop(id, ack) => {
-                if drop_queued(&mut self.queued, &id) {
+                if self.remove_steer(&id, Some(turn)) {
                     accept(ack);
-                    self.emit_queue(Some(turn))?;
+                } else if self.steering.is_admitted(&id) {
+                    // Already dropped or a duplicate delivery: the
+                    // reader's answer stands, nothing left to do.
+                    accept(ack);
                 } else {
                     reject(ack, ErrorCode::StaleRequest, STALE_STEER);
                 }
@@ -840,6 +904,23 @@ impl Loop {
     }
 }
 
+/// The loop's steering-queue emitter: appends about the drain or boundary
+/// that reconciled, inside the shared queue's lock section. A poisoned log
+/// ends the loop at its next durable write: the line is ephemeral, so
+/// nothing durable is lost by dropping it here.
+pub(crate) struct TurnEmit<'a> {
+    pub(crate) log: &'a std::sync::Arc<log::Log>,
+    pub(crate) turn: Option<TurnId>,
+}
+
+impl Emit for TurnEmit<'_> {
+    fn emit(&self, event: &Event) {
+        match self.log.append(event, self.turn.clone(), None) {
+            Ok(_) | Err(_) => {}
+        }
+    }
+}
+
 /// Accepts a command that answers nothing.
 pub(crate) fn accept(ack: Ack) {
     (ack.0)(Ok(None));
@@ -889,15 +970,57 @@ fn shift_past(prompt_at: &mut [usize], removed: usize) {
     }
 }
 
-/// Removes the unapplied steer `id` names from `queued`.
-fn drop_queued(queued: &mut std::collections::VecDeque<Queued>, id: &CommandId) -> bool {
-    queued
-        .iter()
-        .position(
-            |piece| matches!(piece, Queued::Steer(message, _) if message.sender.command_id.as_ref() == Some(id) && !session_message::is_session(message)),
-        )
-        .map(|index| queued.remove(index))
-        .is_some()
+/// A shared-queue entry as the loop's queued piece: the hook verdict it
+/// staged, defaulting an unstaged move to unhooked.
+pub(crate) fn queued_piece(entry: steering::Entry) -> Queued {
+    let staged = entry.staged.unwrap_or_default();
+    Queued::Steer(
+        Message {
+            content: entry.content,
+            sender: entry.sender,
+        },
+        Hooked {
+            state: staged.state,
+            changed_by: staged.changed_by,
+            context: staged.context,
+        },
+    )
+}
+
+impl Loop {
+    /// Whether a queued steer holder still applies: unkeyed holders always
+    /// do; a keyed one while its entry is still staged. A never-admitted id
+    /// is a forged kept steer, which the loop takes as it always did.
+    fn holder_live(&self, message: &Message) -> bool {
+        match &message.sender.command_id {
+            None => true,
+            Some(id) => self.steering.is_staged(id) || !self.steering.is_admitted(id),
+        }
+    }
+
+    /// Removes the shared-queue entry `id` names, emitting the queue as the
+    /// section left it: `turn` names the drain or boundary that
+    /// reconciled. Reports whether one was removed.
+    fn remove_steer(&self, id: &CommandId, turn: Option<&TurnId>) -> bool {
+        let emit = TurnEmit {
+            log: &self.log,
+            turn: turn.cloned(),
+        };
+        self.steering.remove(id, &emit)
+    }
+
+    /// Forgets the shared-queue ids of the steers `input` carries: the turn
+    /// takes them, so a later drop is stale
+    /// (`docs/invocation.md`, "What each command does").
+    fn forget_input(&self, input: &TurnInput) {
+        for piece in &input.pieces {
+            if let Queued::Steer(message, _) = piece
+                && let Some(id) = &message.sender.command_id
+            {
+                self.steering.forget(id);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

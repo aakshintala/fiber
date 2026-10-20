@@ -68,9 +68,11 @@ fn queued(queue: &Queue, id: &str, text: &str, log: &Recorded) {
 fn messages_of(events: &[Event]) -> Vec<Vec<QueuedMessage>> {
     events
         .iter()
-        .map(|event| match event {
-            Event::SteeringQueue(queue) => queue.messages.clone(),
-            event => panic!("only steering_queue is emitted: {event:?}"),
+        .map(|event| {
+            let Event::SteeringQueue(queue) = event else {
+                panic!("only steering_queue is emitted: {event:?}");
+            };
+            queue.messages.clone()
         })
         .collect()
 }
@@ -183,11 +185,11 @@ impl BlockingEmit {
 impl Emit for BlockingEmit {
     fn emit(&self, event: &Event) {
         // Acknowledged FIFO-style: the test takes one entered per append.
-        let _ = self.entered.send(());
+        let _sent = self.entered.send(());
         if *Self::lock(&self.held) {
             *Self::lock(&self.held) = false;
             // The push waits here, inside its queue-lock section.
-            let _ = Self::lock(&self.release).recv();
+            let _released = Self::lock(&self.release).recv();
         }
         Self::lock(&self.events).push(event.clone());
     }
@@ -203,13 +205,13 @@ struct ReleaseOnDrop {
 
 impl ReleaseOnDrop {
     fn release(&self) {
-        let _ = self.tx.send(());
+        let _sent = self.tx.send(());
     }
 }
 
 impl Drop for ReleaseOnDrop {
     fn drop(&mut self) {
-        let _ = self.tx.send(());
+        let _sent = self.tx.send(());
     }
 }
 
@@ -245,14 +247,14 @@ fn a_drop_released_while_the_push_is_held_still_lands_empty_last() {
         let (done_tx, done_rx) = mpsc::channel();
         let dropped = scope.spawn(move || {
             let removed = queued.remove(&CommandId("c_a".into()), emitting);
-            let _ = done_tx.send(removed);
+            let _sent = done_tx.send(removed);
         });
         Deadline::after(BOUND)
             .recv(&gate_rx)
             .expect("the drop waits at the gate");
         // The test releases the drop while the push is still held: the
         // drop can only proceed to the real lock, still held by the push.
-        let _ = free_tx.send(());
+        let _sent = free_tx.send(());
         // The drop must not complete while the push holds the lock:
         // several bounded receives time out, proving it is blocked on
         // the held lock rather than descheduled.
@@ -265,11 +267,10 @@ fn a_drop_released_while_the_push_is_held_still_lands_empty_last() {
         // Only then is the push released: it emits `[A]`, the drop takes
         // the lock, removes A and emits `[]` last.
         release.release();
-        assert_eq!(
+        assert!(
             Deadline::after(BOUND)
                 .recv(&done_rx)
                 .expect("the drop completes after the release"),
-            true,
             "the drop removed the pushed entry"
         );
         pushed

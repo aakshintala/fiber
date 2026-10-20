@@ -121,8 +121,8 @@ impl Queue {
         {
             let gate = lock(&self.entry_gate).take();
             if let Some(gate) = gate {
-                let _ = gate.entered.send(());
-                let _ = gate.release.recv();
+                let _sent = gate.entered.send(());
+                let _released = gate.release.recv();
             }
         }
         lock(&self.inner)
@@ -208,6 +208,16 @@ impl Queue {
         true
     }
 
+    /// Whether `id` names a staged entry: hook-passed and still queued.
+    /// One lock, no emit: the apply checks each holder against it, so a
+    /// drop between the drain and the apply skips the holder.
+    pub fn is_staged(&self, id: &CommandId) -> bool {
+        self.acquire()
+            .entries
+            .iter()
+            .any(|entry| entry.id == *id && entry.staged.is_some())
+    }
+
     /// Whether the reader or the loop's legacy path already answered `id`.
     pub fn is_admitted(&self, id: &CommandId) -> bool {
         self.acquire().admitted.contains(id)
@@ -239,13 +249,35 @@ impl Queue {
         let Some(at) = position(&inner.entries, id) else {
             return false;
         };
-        let replaced = inner.entries[at].content != content;
-        inner.entries[at].content = content;
-        inner.entries[at].staged = Some(staged);
+        let Some(entry) = inner.entries.get_mut(at) else {
+            return false;
+        };
+        let replaced = entry.content != content;
+        entry.content = content;
+        entry.staged = Some(staged);
         if replaced {
             emit.emit(&queue_event(&inner.entries));
         }
         true
+    }
+
+    /// Removes the queued `id` and reports it without forgetting it: an
+    /// idle drain moves the entry into the turn's input, keeping its id so
+    /// a drop arriving in the same wait still finds it. Emits the queue as
+    /// it stands when an entry moved, under the same lock. The turn forgets
+    /// the id once it takes the input, so a later drop is stale.
+    pub fn move_out(&self, id: &CommandId, emit: &dyn Emit) -> Option<Entry> {
+        let mut inner = self.acquire();
+        let at = position(&inner.entries, id)?;
+        let entry = inner.entries.remove(at)?;
+        emit.emit(&queue_event(&inner.entries));
+        Some(entry)
+    }
+
+    /// Forgets `id` without touching the queue: the entry already left, so
+    /// no emit follows. The turn took its input, so a later drop is stale.
+    pub fn forget(&self, id: &CommandId) {
+        self.acquire().admitted.remove(id);
     }
 
     /// Removes the non-session entry `id` names and forgets its id,
@@ -255,7 +287,7 @@ impl Queue {
     pub fn take(&self, id: &CommandId, emit: &dyn Emit) -> Option<Entry> {
         let mut inner = self.acquire();
         let at = position(&inner.entries, id)?;
-        let entry = inner.entries.remove(at).expect("position held it");
+        let entry = inner.entries.remove(at)?;
         inner.admitted.remove(id);
         emit.emit(&queue_event(&inner.entries));
         Some(entry)
@@ -287,11 +319,11 @@ impl Queue {
         taken
     }
 
-    /// Moves every session-message entry into the caller's turn input
-    /// and drops every person steer still queued, forgetting the dropped
-    /// ids: after `close` no person steer runs. Emits the queue, empty,
-    /// when a message moved; a persons-only clear stays silent, as the
-    /// running queue did. Returns the messages, oldest first.
+    /// Whether a session message waits in the queue: the loop is not idle
+    /// while one does (`docs/invocation.md`, "Lifecycle").
+    pub fn has_session(&self) -> bool {
+        self.acquire().entries.iter().any(is_session)
+    }
 
     /// The queued entries oldest-first, without taking them.
     pub fn snapshot(&self) -> Vec<QueuedMessage> {
