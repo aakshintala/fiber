@@ -1,10 +1,10 @@
 # Signing in
 
-Fiber signs in per provider. The two sign-ins in the friends release are **codex** (ChatGPT login) and **opencode-go** (Muse). How labels, stored credentials and the reviewer pick work is [Logging in](../model-routing.md) (`docs/model-routing.md`, "Logging in"), [Credentials](../model-routing.md) (`docs/model-routing.md`, "Credentials"), and [Keys, tokens and OAuth](../model-routing.md) (`docs/model-routing.md`, "Keys, tokens and OAuth").
+Fiber signs in per provider. The two sign-ins in the friends release are **codex** (ChatGPT login) and **opencode-go** (Muse). How labels, stored credentials and the reviewer pick work is (`docs/model-routing.md`, "Logging in"), (`docs/model-routing.md`, "Credentials"), and (`docs/model-routing.md`, "Keys, tokens and OAuth").
 
 ## codex
 
-`fiber login codex` signs in with the ChatGPT subscription through the browser. On a machine without a browser, add `--device` to sign in with a device code instead. The full flag list is [Commands and flags](../invocation.md) (`docs/invocation.md`, "Commands and flags").
+`fiber login codex` signs in with the ChatGPT subscription through the browser. On a machine without a browser, add `--device` to sign in with a device code instead. The full flag list is (`docs/invocation.md`, "Commands and flags").
 
 codex is a subscription login: the only other login of that kind Fiber ships, and the reviewer prompt below still applies to it.
 
@@ -24,4 +24,4 @@ The login asks which model reviews that provider's calls, with the saved pick pr
 
 ## From inside the terminal
 
-`/login` signs in from the terminal with the same flow as `fiber login`: a provider list, then a browser wait, a device-code step, or a key entry, then the same reviewer step. The steps are [Logging in](../tui.md) (`docs/tui.md`, "Logging in").
+`/login` signs in from the terminal with the same flow as `fiber login`: a provider list, then a browser wait, a device-code step, or a key entry, then the same reviewer step. The steps are (`docs/tui.md`, "Logging in").

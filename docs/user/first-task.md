@@ -1,6 +1,6 @@
 # A first task
 
-Run `fiber` to open the terminal. It opens on home: the session list, the input box at the bottom, and the chip row with the workspace, the model and the thinking level. Typing a prompt and pressing Enter starts a session in the chosen workspace. What each part of home does is [Home](../tui.md) (`docs/tui.md`, "Home").
+Run `fiber` to open the terminal. It opens on home: the session list, the input box at the bottom, and the chip row with the workspace, the model and the thinking level. Typing a prompt and pressing Enter starts a session in the chosen workspace. What each part of home does is (`docs/tui.md`, "Home").
 
 Pick the model first if you have one in mind: the model chip opens the model picker. `fiber models` lists the installed providers' models from the command line, with the configured default marked.
 
@@ -8,7 +8,7 @@ Type the task as one prompt and press Enter. Small and concrete wins the first t
 
 ## One-shot runs
 
-`fiber ask "review the diff on this branch"` runs one session of one turn and prints its events to stdout. `fiber ask --resume <id>` sends a prompt to an existing session. The whole command line is [Commands and flags](../invocation.md) (`docs/invocation.md`, "Commands and flags").
+`fiber ask "review the diff on this branch"` runs one session of one turn and prints its events to stdout. `fiber ask --resume <id>` sends a prompt to an existing session. The whole command line is (`docs/invocation.md`, "Commands and flags").
 
 ## Coming back
 
