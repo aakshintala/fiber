@@ -2110,6 +2110,10 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "provider",
     ),
     (
+        "research/vertex-probe/raw/gemini-expired-token.json",
+        "provider",
+    ),
+    (
         "research/vertex-probe/raw/gemini-imgparts-call.sse",
         "provider",
     ),

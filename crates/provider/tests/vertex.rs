@@ -209,6 +209,10 @@ const RECORDS: &[(&str, &str)] = &[
         include_str!("../../../research/vertex-probe/raw/gemini-bad-request.json"),
     ),
     (
+        "gemini-expired-token.json",
+        include_str!("../../../research/vertex-probe/raw/gemini-expired-token.json"),
+    ),
+    (
         "gemini-unknown-model.json",
         include_str!("../../../research/vertex-probe/raw/gemini-unknown-model.json"),
     ),
@@ -420,10 +424,11 @@ fn geminis_vertex_failures_take_their_codes() {
         recorded_failure("gemini-429.json"),
         recorded_failure("gemini-bad-request.json"),
         recorded_failure("gemini-api-key-header.json"),
+        recorded_failure("gemini-expired-token.json"),
     ])
     .unwrap();
     let gemini = Gemini::new(gemini(&server));
-    let codes: Vec<ErrorCode> = (0..4)
+    let codes: Vec<ErrorCode> = (0..5)
         .map(|_| failed(gemini.call(&request())).0.code)
         .collect();
     assert_eq!(
@@ -432,6 +437,7 @@ fn geminis_vertex_failures_take_their_codes() {
             ErrorCode::ModelNotFound,
             ErrorCode::RateLimited,
             ErrorCode::InvalidRequest,
+            ErrorCode::AuthenticationFailed,
             ErrorCode::AuthenticationFailed,
         ]
     );
