@@ -63,8 +63,15 @@ fn hub_session(
         ));
     }
     let mut start = || start_hub(binary.unwrap_or_default());
-    let (stream, hello) = if let doors::hub::Target::Listed { name, .. } = &target {
-        let hub = name.clone();
+    // The 5 s bound covers Unix-address listed targets only: they carry no
+    // token and skip authentication, so the bound is exactly connect-plus-hello.
+    // Any other listed address keeps the legacy connect_target call below.
+    let unix_hub = if let doors::hub::Target::Listed { name, address, .. } = &target {
+        matches!(address, doors::hub::Address::Unix(_)).then(|| name.clone())
+    } else {
+        None
+    };
+    let (stream, hello) = if let Some(hub) = unix_hub {
         connect_listed(&home, target, &hub)?
     } else {
         doors::hub::connect_target(&home, &target, &mut start, clock).map_err(io::Error::other)?
