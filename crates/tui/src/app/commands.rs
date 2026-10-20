@@ -47,9 +47,9 @@ pub(crate) struct CommandEntry {
     pub(crate) run: fn(&mut App, &str) -> Option<Effect>,
 }
 
-/// The built-in commands this terminal runs, in the order the `/` list
-/// draws them. `?` and `help` are two rows sharing one handler.
-static TABLE: &[CommandEntry] = &[
+/// The single command table: the `/` list and dispatch both read it.
+/// `?` and `help` are two rows sharing one handler.
+pub(crate) static TABLE: &[CommandEntry] = &[
     CommandEntry {
         name: "home",
         description: "Goes home, focused on the session on screen's row.",
@@ -201,11 +201,6 @@ static TABLE: &[CommandEntry] = &[
         run: run_keymap,
     },
 ];
-
-/// The single command table: the `/` list and dispatch both read it.
-pub(crate) fn dispatch_table() -> &'static [CommandEntry] {
-    TABLE
-}
 
 fn run_home(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.leave_on_row())
@@ -461,7 +456,7 @@ impl App {
         let rest = rest.trim().to_owned();
         // One table drives dispatch: a built-in the terminal does not
         // draw goes out as typed.
-        let entry = dispatch_table().iter().find(|entry| entry.name == name)?;
+        let entry = TABLE.iter().find(|entry| entry.name == name)?;
         (entry.run)(self, &rest)
     }
 

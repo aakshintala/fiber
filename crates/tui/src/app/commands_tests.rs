@@ -519,7 +519,7 @@ fn undrawn_built_ins_without_an_extension_go_out_as_typed() {
 
 #[test]
 fn every_table_row_dispatches_and_undrawn_built_ins_fall_through() {
-    for entry in crate::app::commands::dispatch_table() {
+    for entry in crate::app::commands::TABLE {
         let mut app = attached();
         type_text(&mut app, &format!("/{}", entry.name));
         assert!(app.built_in().is_some(), "/{}", entry.name);

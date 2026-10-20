@@ -1,7 +1,7 @@
 //! The `/` list: built-in commands and the session's `commands` answer in
 //! one filtered list (`docs/tui.md`, "Keys" › "Rules", "Slash commands").
 
-use crate::app::commands::dispatch_table;
+use crate::app::commands::TABLE;
 use contract::events::CommandInfo;
 
 /// How many rows a completion panel shows at most.
@@ -54,7 +54,7 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
             .iter()
             .find(|command| command.name == name && command.extension)
     };
-    let built_ins = dispatch_table().iter().map(|entry| {
+    let built_ins = TABLE.iter().map(|entry| {
         if let Some(command) = replacement(entry.name) {
             Row {
                 name: command.name.clone(),
@@ -71,7 +71,7 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
             }
         }
     });
-    let drawn = |name: &str| dispatch_table().iter().any(|entry| entry.name == name);
+    let drawn = |name: &str| TABLE.iter().any(|entry| entry.name == name);
     let session = commands
         .iter()
         .filter(|command| {
