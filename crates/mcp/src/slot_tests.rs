@@ -2,7 +2,7 @@
 //! cached server starts it, later calls reuse it, a failed start dies once,
 //! a removed tool fails without a call, and the cache follows the live list.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use contract::ErrorCode;
@@ -151,6 +151,18 @@ fn code(output: &contract::tool::Output) -> Option<ErrorCode> {
 fn initializes(dir: &std::path::Path) -> usize {
     let log = std::fs::read_to_string(dir.join("requests.log")).expect("requests.log");
     log.matches(r#""method":"initialize""#).count()
+}
+
+#[test]
+fn live_names_hold_the_running_servers_tools() {
+    // Pins `restart`'s before-set: it diffs `slot.live_names()` into
+    // `removed`, so a mutant emptying the live list would drop nothing.
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = started.servers.slot("fx").expect("a slot names fx");
+    assert_eq!(slot.live_names(), HashSet::from(["echo".to_owned()]));
+    setup.stop(started.servers);
 }
 
 #[test]

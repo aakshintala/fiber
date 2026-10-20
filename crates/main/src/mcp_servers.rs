@@ -13,6 +13,7 @@
 pub(crate) mod repository_servers;
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,8 +21,10 @@ use std::time::Duration;
 use config::{Config, Source};
 use contract::ErrorCode;
 use contract::events::{McpServerFailed, Notice, ToolInfo, ToolSource};
+use contract::inbox::Rejection;
 use contract::shapes::Failure;
 use contract::tool::Tool;
+use extensions::Browser as _;
 use serde_json::Value;
 
 /// What `main` starts: the specs and the skip notices for the log.
@@ -450,6 +453,467 @@ fn hints(config: &Config, server: &str) -> BTreeMap<String, mcp::Hints> {
         }
     }
     overrides
+}
+
+/// The hub side of the MCP driver commands, installed where the session
+/// installs its other hub providers (`docs/mcp.md`, "Servers, their
+/// state and the per-server commands").
+pub(crate) struct McpProviders {
+    /// The `mcp_servers` answer's reader.
+    pub refresh: doors::ServersRefresh,
+    /// The `mcp_login` runner, guarding its own in-flight map.
+    pub login: doors::McpLogin,
+    /// The `mcp_reconnect` entry, merging its own registry news.
+    pub reconnect: r#loop::ReconnectServer,
+}
+
+impl crate::reload::State {
+    /// Builds the MCP hub providers from the session's own configuration,
+    /// servers, declaration writer and log: the same inputs the startup
+    /// used, so queries, logins and reconnects agree with it.
+    pub(crate) fn mcp_providers(&self) -> McpProviders {
+        // One entry per server with a login running, holding its
+        // authorization URL while it waits for the callback. The session
+        // shares the one map its providers close over.
+        let waiting = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        McpProviders {
+            refresh: servers_refresh(
+                self.sources.clone(),
+                Arc::clone(&self.servers),
+                Arc::downgrade(&self.log),
+                self.log.clock().clone(),
+                Arc::clone(&waiting),
+            ),
+            login: mcp_login(self.sources.clone(), waiting, self.log.clock().clone()),
+            reconnect: reconnect_server(
+                self.sources.clone(),
+                Arc::clone(&self.servers),
+                self.declare.clone(),
+                self.artifacts.clone(),
+                Arc::clone(&self.images),
+                self.log.clock().clone(),
+            ),
+        }
+    }
+}
+
+/// Reads the `mcp_servers` answer from the tools answer's rows: one row
+/// per configured server, in configuration order, folding the session's
+/// own log so a mid-session death reads failed exactly as the startup
+/// notice did (`docs/mcp.md`, "Servers, their state and the per-server
+/// commands").
+fn servers_refresh(
+    sources: config::Sources,
+    servers: Arc<mcp::Servers>,
+    log: std::sync::Weak<log::Log>,
+    clock: Arc<dyn contract::clock::Clock>,
+    waiting: Arc<std::sync::Mutex<HashMap<String, Option<String>>>>,
+) -> doors::ServersRefresh {
+    Arc::new(move |tools: Vec<contract::events::ToolInfo>| {
+        let declared = cli::declared_servers(
+            &sources.home,
+            &sources.workspace,
+            &clock,
+            &sources.overrides,
+        )
+        .map_err(Failure::from)?;
+        let mut failed: HashMap<String, contract::events::McpServerFailed> = HashMap::new();
+        if let Some(log) = log.upgrade() {
+            let count = usize::try_from(log.count()).unwrap_or(usize::MAX);
+            let envelopes = log.range(0, count).map_err(|error| Failure {
+                code: error.code(),
+                message: error.to_string(),
+                retry_after_ms: None,
+                provider: None,
+            })?;
+            for envelope in &envelopes {
+                let event =
+                    contract::events::Event::from_envelope(envelope).map_err(|error| Failure {
+                        code: contract::ErrorCode::LogCorrupt,
+                        message: error.to_string(),
+                        retry_after_ms: None,
+                        provider: None,
+                    })?;
+                match event {
+                    Some(contract::events::Event::McpServerFailed(failed_server)) => {
+                        failed.insert(failed_server.server.clone(), failed_server);
+                    }
+                    Some(contract::events::Event::McpServerReady(ready)) => {
+                        failed.remove(&ready.server);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for info in &tools {
+            if let contract::events::ToolSource::Mcp { server, .. } = &info.source {
+                *counts.entry(server).or_default() += 1;
+            }
+        }
+        let waiting = waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let rows: Vec<contract::events::McpServerRow> = declared
+            .iter()
+            .map(|declared| {
+                let count = || {
+                    let count = counts
+                        .get(declared.name.as_str())
+                        .copied()
+                        .unwrap_or_default();
+                    u64::try_from(count).unwrap_or(u64::MAX)
+                };
+                let (state, reason, tools) = if servers.running(&declared.name) {
+                    (
+                        contract::events::McpServerState::Ready,
+                        String::new(),
+                        Some(count()),
+                    )
+                } else {
+                    match failed.get(&declared.name) {
+                        Some(failed)
+                            if failed.reason == contract::events::ServerFailure::NotLoggedIn =>
+                        {
+                            (
+                                contract::events::McpServerState::NeedsLogin,
+                                failed.error.message.clone(),
+                                Some(count()),
+                            )
+                        }
+                        Some(failed) => (
+                            contract::events::McpServerState::Failed,
+                            failed.error.message.clone(),
+                            Some(count()),
+                        ),
+                        None => (
+                            contract::events::McpServerState::Connecting,
+                            String::new(),
+                            None,
+                        ),
+                    }
+                };
+                contract::events::McpServerRow {
+                    name: declared.name.clone(),
+                    layer: match declared.layer {
+                        config::Layer::Global => contract::events::McpServerLayer::Global,
+                        config::Layer::Project => contract::events::McpServerLayer::Project,
+                        config::Layer::Repository => contract::events::McpServerLayer::Repository,
+                    },
+                    state,
+                    reason,
+                    tools,
+                    approved: declared.approved,
+                    auth_url: waiting.get(&declared.name).cloned().flatten(),
+                }
+            })
+            .collect();
+        Ok(rows)
+    })
+}
+
+/// Runs one server's `fiber mcp login` flow on the login thread the door
+/// spawns: the authorization URL the flow presents lands in the shared
+/// waiting map, so the `mcp_servers` answer shows `auth_url` while it
+/// waits, and the stored token is picked up by the reconnect the thread
+/// delivers before it answers (`docs/mcp.md`, "Servers, their state and
+/// the per-server commands").
+fn mcp_login(
+    sources: config::Sources,
+    waiting: Arc<std::sync::Mutex<HashMap<String, Option<String>>>>,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> doors::McpLogin {
+    Arc::new(
+        move |server: &str, deliver: Arc<dyn Fn(contract::inbox::Delivery) + Send + Sync>| {
+            {
+                let mut waiting = waiting
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if waiting.contains_key(server) {
+                    return Err(Failure {
+                        code: contract::ErrorCode::Busy,
+                        message: format!(
+                            "A login for `{server}` is already in flight; answer its browser prompt first."
+                        ),
+                        retry_after_ms: None,
+                        provider: None,
+                    });
+                }
+                waiting.insert(server.to_owned(), None);
+            }
+            let finish = |waiting: &Arc<std::sync::Mutex<HashMap<String, Option<String>>>>| {
+                waiting
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(server);
+            };
+            let url = match cli::login_target(
+                &sources.home,
+                &sources.workspace,
+                server,
+                &|| {},
+                &clock,
+                &sources.overrides,
+            ) {
+                Ok(url) => url,
+                Err(error) => {
+                    finish(&waiting);
+                    return Err(login_target_failure(error));
+                }
+            };
+            if mcp::url_has_userinfo(&url) {
+                finish(&waiting);
+                return Err(Failure::from(cli::CliError::UrlHasUserinfo {
+                    server: server.to_owned(),
+                }));
+            }
+            let files = config::McpTokenFiles::new(sources.home.clone());
+            let present = |auth_url: &str| {
+                waiting
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(server.to_owned(), Some(auth_url.to_owned()));
+                extensions::SystemBrowser::default().open(auth_url);
+            };
+            let outcome = mcp::login(&files, &url, &present, clock.as_ref());
+            waiting
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(server.to_owned(), None);
+            if let Err(error) = outcome {
+                finish(&waiting);
+                return Err(Failure {
+                    code: error.code(),
+                    message: error.to_string(),
+                    retry_after_ms: None,
+                    provider: None,
+                });
+            }
+            let (tx, rx) = std::sync::mpsc::channel::<contract::inbox::Answer>();
+            deliver(contract::inbox::Delivery::McpReconnect(
+                contract::commands::McpServerArgs {
+                    server: server.to_owned(),
+                },
+                contract::inbox::Ack(Box::new(move |answer| {
+                    drop(tx.send(answer));
+                })),
+            ));
+            // The reconnect serves the login's token; a turn in progress
+            // rejects it, and the server starts on its first call
+            // instead. Either way the login itself succeeded. Every
+            // delivery path answers — a loop that cannot has aborted or
+            // is exiting with the process — so the wait ends with the
+            // answer, or with a dropped acknowledgement nobody needs.
+            let answer = rx.recv();
+            finish(&waiting);
+            match answer {
+                Err(_) => Ok(()),
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(rejection)) if rejection.code == contract::ErrorCode::Busy => Ok(()),
+                Ok(Err(rejection)) => Err(Failure {
+                    code: rejection.code,
+                    message: rejection.message,
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+            }
+        },
+    )
+}
+
+/// Maps a login target failure to the hub's answer: an undeclared or
+/// stdio server is not runnable through a login, so `invalid_arguments`
+/// carries the CLI's own sentence; approval and configuration failures
+/// keep the CLI's codes.
+fn login_target_failure(error: cli::CliError) -> Failure {
+    if matches!(
+        error,
+        cli::CliError::McpServerUnknown { .. } | cli::CliError::McpServerStdio { .. }
+    ) {
+        Failure {
+            code: contract::ErrorCode::InvalidArguments,
+            message: error.to_string(),
+            retry_after_ms: None,
+            provider: None,
+        }
+    } else {
+        Failure::from(error)
+    }
+}
+
+/// Restarts one failed server for the `mcp_reconnect` command: declared
+/// and approved first, through the same checks the CLI's `mcp login`
+/// shares, then served in place when the session started it, or adopted
+/// from a fresh single-server start when it never did. The declaration
+/// writer moves with the restart, so the `mcp_servers` answer agrees
+/// with the registry. Both the adopted start and the declared snapshot
+/// load the configuration with the session's own overrides, as a reload
+/// does (`docs/mcp.md`, "Servers, their state and the per-server
+/// commands").
+fn reconnect_server(
+    sources: config::Sources,
+    servers: Arc<mcp::Servers>,
+    declare: doors::Declare,
+    artifacts: std::path::PathBuf,
+    images: Arc<dyn contract::images::Images>,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> r#loop::ReconnectServer {
+    Arc::new(move |server: &str| {
+        let (_, project) =
+            cli::project_of(&sources.home, &sources.workspace).map_err(|failure| Rejection {
+                code: failure.code,
+                message: failure.message,
+            })?;
+        let config = config::Config::load(config::Sources {
+            home: sources.home.clone(),
+            workspace: sources.workspace.clone(),
+            project,
+            overrides: sources.overrides.clone(),
+        })
+        .map_err(|error| Rejection {
+            code: error.code(),
+            message: error.to_string(),
+        })?;
+        let declared = cli::declared_servers(
+            &sources.home,
+            &sources.workspace,
+            &clock,
+            &sources.overrides,
+        )
+        .map_err(|error| {
+            let failure = Failure::from(error);
+            Rejection {
+                code: failure.code,
+                message: failure.message,
+            }
+        })?;
+        let Some(row) = declared.iter().find(|declared| declared.name == server) else {
+            let failure = login_target_failure(cli::CliError::McpServerUnknown {
+                server: server.to_owned(),
+            });
+            return Err(Rejection {
+                code: failure.code,
+                message: failure.message,
+            });
+        };
+        if !row.approved {
+            let failure = Failure::from(cli::CliError::McpUnapproved {
+                server: server.to_owned(),
+            });
+            return Err(Rejection {
+                code: failure.code,
+                message: failure.message,
+            });
+        }
+        let (used, removed, records) = if servers.has_slot(server) {
+            let Some(restarted) = mcp::restart(&servers, server, &artifacts, &images) else {
+                return Err(Rejection {
+                    code: contract::ErrorCode::InvalidArguments,
+                    message: format!(
+                        "The MCP server `{server}` stopped before its reconnect ran; try it again."
+                    ),
+                });
+            };
+            (restarted.used, restarted.removed, restarted.records)
+        } else {
+            adopt_server(
+                &config, &sources, &servers, server, &artifacts, &images, &clock,
+            )?
+        };
+        for name in &removed {
+            declare(name.as_str(), None);
+        }
+        for (_, tool, info) in &used {
+            declare(&tool.definition().name, Some(info.clone()));
+        }
+        Ok(r#loop::Reconnected {
+            tools: used
+                .into_iter()
+                .map(|(owner, tool, _)| (owner, tool))
+                .collect(),
+            removed,
+            records,
+        })
+    })
+}
+
+/// What a reconnect adopted and restarted: the loop registry's news
+/// and the log's lines.
+type Adopted = (
+    Vec<(
+        String,
+        Arc<dyn contract::tool::Tool>,
+        contract::events::ToolInfo,
+    )>,
+    Vec<String>,
+    Vec<contract::tool::ServerRecord>,
+);
+
+/// Starts the one server the session never started and adopts its slot,
+/// so the restart serves it exactly once: a second failure stays a
+/// failure the log carries, and a success declares its tools. A declared
+/// server with nothing runnable, or a repository server the offer flow
+/// owns, is `invalid_arguments`, not a start.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one server's startup inputs, as at session start"
+)]
+fn adopt_server(
+    config: &config::Config,
+    sources: &config::Sources,
+    servers: &Arc<mcp::Servers>,
+    server: &str,
+    artifacts: &std::path::Path,
+    images: &Arc<dyn contract::images::Images>,
+    clock: &Arc<dyn contract::clock::Clock>,
+) -> Result<Adopted, Rejection> {
+    let invalid = |message: String| Rejection {
+        code: contract::ErrorCode::InvalidArguments,
+        message,
+    };
+    let specs = specs(config).map_err(|failure| Rejection {
+        code: failure.code,
+        message: failure.message,
+    })?;
+    if specs.repository.iter().any(|spec| spec.spec.name == server) {
+        return Err(invalid(format!(
+            "The MCP server `{server}` is a repository server: the session starts it with its repository, not through a reconnect."
+        )));
+    }
+    let Some(spec) = specs.specs.iter().find(|spec| spec.name == server).cloned() else {
+        return Err(invalid(format!(
+            "The MCP server `{server}` has nothing runnable to start; fix its declaration and reload."
+        )));
+    };
+    let started = mcp::start_observed(
+        vec![spec],
+        &sources.workspace,
+        artifacts,
+        Arc::clone(images),
+        &config::mcp_cache_dir(&sources.home),
+        clock,
+        env!("CARGO_PKG_VERSION"),
+        servers.timing(),
+    );
+    let records = started
+        .failed
+        .into_iter()
+        .map(contract::tool::ServerRecord::Failed)
+        .collect();
+    let used = started
+        .tools
+        .into_iter()
+        .filter_map(|(owner, tool)| {
+            started
+                .infos
+                .iter()
+                .find(|info| info.name == tool.definition().name)
+                .cloned()
+                .map(|info| (owner, tool, info))
+        })
+        .collect();
+    servers.adopt(started.servers);
+    Ok((used, Vec::new(), records))
 }
 
 #[cfg(test)]

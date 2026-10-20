@@ -104,6 +104,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_tools,
     },
     CommandEntry {
+        name: "mcp",
+        description: "Opens the MCP servers view.",
+        hint: None,
+        run: run_mcp,
+    },
+    CommandEntry {
         name: "context",
         description: "Opens the context breakdown.",
         hint: None,
@@ -286,6 +292,10 @@ fn run_keys(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_tools(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Tools))
+}
+
+fn run_mcp(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Mcp))
 }
 
 fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
