@@ -583,8 +583,24 @@ fn an_admitted_steer_then_dropped_answers_both_at_once_and_delivers_only_the_ste
                 Some(CommandId("c_1".to_owned()))
             );
             ack.0(Ok(None));
+            // A reader-handled probe on the same connection proves the
+            // reader passed the drop: its answer arrives only after the
+            // reader processed everything before it, so nothing follows
+            // it in the inbox.
+            send(
+                &client,
+                r#"{"id":"c_3","command":"steer_drop","args":{"command_id":"c_nope"}}"#,
+            );
+            let probe = response(&client, "c_3");
+            assert_eq!(
+                rejection(&probe),
+                (
+                    "stale_request",
+                    "That steering message was already applied, or was never queued."
+                )
+            );
             assert!(
-                Deadline::after(SLICE).recv(&inbox).is_err(),
+                inbox.try_recv().is_err(),
                 "no drop delivery follows the at-once drop"
             );
             Ok(())
@@ -614,8 +630,24 @@ fn a_drop_for_an_unknown_id_is_rejected_stale_at_once() {
                     "That steering message was already applied, or was never queued."
                 )
             );
+            // A reader-handled probe on the same connection proves the
+            // reader passed the stale drop: its answer arrives only after
+            // the reader processed everything before it, so nothing
+            // follows it in the inbox.
+            send(
+                &client,
+                r#"{"id":"c_10","command":"steer_drop","args":{"command_id":"c_nope"}}"#,
+            );
+            let probe = response(&client, "c_10");
+            assert_eq!(
+                rejection(&probe),
+                (
+                    "stale_request",
+                    "That steering message was already applied, or was never queued."
+                )
+            );
             assert!(
-                Deadline::after(SLICE).recv(&inbox).is_err(),
+                inbox.try_recv().is_err(),
                 "a stale drop never reaches the inbox"
             );
             Ok(())
