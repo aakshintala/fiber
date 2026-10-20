@@ -458,3 +458,53 @@ pub(crate) fn with(mut object: Value, extra: Option<Value>) -> Value {
 fn carrier(signature: Value) -> Value {
     with(json!({"text": ""}), Some(signature))
 }
+
+#[cfg(test)]
+mod body_segments_tests {
+    use super::*;
+
+    /// Pins each returned segment to its exact bytes: any content change
+    /// flips one assert, so the whole-return default mutant
+    /// (`Some(Default::default()), None, vec![Default::default()]`) fails
+    /// all three.
+    #[test]
+    fn body_segments_pins_each_segment_exactly() {
+        let endpoint = Endpoint::default();
+        let request = ModelRequest {
+            system_prompt: "You are terse.".to_owned(),
+            tools: vec![ToolDefinition {
+                name: "get_weather".to_owned(),
+                description: "Get the weather.".to_owned(),
+                input_schema: json!({"type": "object"}),
+                deferred: false,
+                hosted: None,
+            }],
+            thinking: None,
+            tool_choice: "auto".to_owned(),
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            cache_key: "s_root".to_owned(),
+            conversation: vec![Input::User {
+                text: "hi".to_owned(),
+                images: Vec::new(),
+            }],
+            sent_tools: None,
+            previous_end: None,
+            max_output_tokens: None,
+            session_dir: std::path::PathBuf::new(),
+        };
+        let (system, tools, contents) = body_segments(&endpoint, &request);
+        assert_eq!(system, Some(json!({"parts": [{"text": "You are terse."}]})));
+        assert_eq!(
+            tools,
+            Some(json!([{"functionDeclarations": [{
+                "name": "get_weather",
+                "description": "Get the weather.",
+                "parametersJsonSchema": {"type": "object"},
+            }]}]))
+        );
+        assert_eq!(
+            contents,
+            vec![json!({"role": "user", "parts": [{"text": "hi"}]})]
+        );
+    }
+}
