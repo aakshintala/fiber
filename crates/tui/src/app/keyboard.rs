@@ -4,7 +4,8 @@
 use std::time::Instant;
 
 use super::{App, Effect};
-use crate::keys::{Event, default_event};
+use crate::keymap::{KeyMap, KeyPress};
+use crate::keys::{Edit, Event, Key, default_event};
 use crate::keyset::{Context, KeysSetup, Keyset, Resolved, load};
 use crate::rebind::{KeysScreen, Outcome};
 use crate::stroke::{Code, Mods, Stroke};
@@ -33,6 +34,72 @@ fn ctrl_c() -> Stroke {
 pub(super) struct Keyboard {
     keys: Keyset,
     screen: Option<KeysScreen>,
+    keymap: Option<KeyMap>,
+}
+
+impl Keyboard {
+    /// The key map overlay, while it is open.
+    pub(super) fn keymap(&self) -> Option<&KeyMap> {
+        self.keymap.as_ref()
+    }
+
+    /// The key map overlay's top row, while it is open.
+    pub(super) fn keymap_top(&self) -> Option<usize> {
+        self.keymap.as_ref().map(KeyMap::top)
+    }
+
+    /// Closes the key map before a swapped view takes the conversation.
+    pub(super) fn close_keymap(&mut self) {
+        self.keymap = None;
+    }
+
+    /// Opens the key map overlay at its top.
+    pub(super) fn open_keymap(&mut self) -> Effect {
+        self.keymap = Some(KeyMap::default());
+        Effect::None
+    }
+
+    /// A key while the key map is open: it takes every key but Ctrl+C,
+    /// ⌥R and ⌥1–9, which arm quit and switch sessions past it. `None`
+    /// while it is closed.
+    pub(super) fn keymap_key(
+        &mut self,
+        key: &Key,
+        keyset: &Keyset,
+        width: u16,
+        height: usize,
+    ) -> Option<Effect> {
+        let map = self.keymap.as_mut()?;
+        // The frame docks full width, so the inner columns are the
+        // conversation's less the frame's four blank ones.
+        match map.press(key, keyset, width.saturating_sub(4), height) {
+            KeyPress::Close => self.keymap = None,
+            KeyPress::Through => return None,
+            KeyPress::Handled => {}
+        }
+        Some(Effect::None)
+    }
+
+    /// An edit while the key map is open: Left and Right move between
+    /// its tabs, every other edit does nothing behind it, and a paste
+    /// never reaches the draft. `None` while it is closed.
+    pub(super) fn edit_key(&mut self, edit: &Edit) -> Option<Effect> {
+        let map = self.keymap.as_mut()?;
+        match edit {
+            Edit::Left => map.move_tab(-1),
+            Edit::Right => map.move_tab(1),
+            Edit::ShiftEnter
+            | Edit::CtrlJ
+            | Edit::WordLeft
+            | Edit::WordRight
+            | Edit::DeleteWord
+            | Edit::LineStart
+            | Edit::LineEnd
+            | Edit::Delete
+            | Edit::Paste(_) => {}
+        }
+        Some(Effect::None)
+    }
 }
 
 impl App {

@@ -178,6 +178,11 @@ included with `#[cfg(test)] mod tests;`, so a file's length is its code. A
 test file, named `tests.rs` or ending in `_tests.rs` or under a crate's
 `tests/` directory, is never counted.
 
+A feature joins the app through a registration seam, so features stop
+colliding on one file: a built-in command is one table row; a view's
+state is its own struct behind one `App` field; a feature's tests go in
+a file named for the feature.
+
 ## Comments
 
 Agents and future contributors are the readers. The owner does not read the

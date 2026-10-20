@@ -573,7 +573,7 @@ impl App {
         if !self.panel_cards().iter().any(|card| card == "session") {
             return None;
         }
-        if self.link != Link::Up {
+        if self.outbox.link != Link::Up {
             return None;
         }
         if self.attached_row().is_some_and(|row| row.left.is_some()) {
@@ -636,7 +636,7 @@ impl App {
                     .to_string();
                 let mut draft = Draft::default();
                 draft.set("!!git --no-optional-locks status");
-                self.pending.insert(id, (Kind::Shell, draft));
+                self.outbox.pending.insert(id, (Kind::Shell, draft));
                 Effect::Send(vec![line])
             }
             Spot::Waiting => self.show_rail(),

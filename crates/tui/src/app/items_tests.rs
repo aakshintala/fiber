@@ -901,9 +901,9 @@ fn an_accepted_delegate_steer_closes_its_pending_entry() {
         | Effect::ReadImage(_) => panic!("Enter sends"),
     };
     let id = out[0]["id"].as_str().unwrap_or_else(|| panic!("an id"));
-    assert!(app.pending.contains_key(id));
+    assert!(app.outbox.pending.contains_key(id));
     app.on_line(session_accepted(DELEGATE_A, id));
-    assert!(!app.pending.contains_key(id));
+    assert!(!app.outbox.pending.contains_key(id));
 }
 
 #[test]

@@ -2089,3 +2089,42 @@ fn a_required_nullable_property_uses_strict_mode() {
     .unwrap();
     assert_eq!(sent_body(&server, 0)["tools"][0]["strict"], true);
 }
+
+/// The generated opencode-go file's entry for `id`, such as its `compat`.
+fn generated_opencode_go_model(id: &str) -> Value {
+    let file: Value = serde_json::from_str(include_str!(
+        "../../../providers/opencode/providers/opencode-go.json"
+    ))
+    .unwrap();
+    file["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["id"] == id)
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn an_opencode_go_muse_request_sends_store_false() {
+    // The endpoint's compat comes from the generated opencode-go file's
+    // muse-spark entry, not from a hand-set flag, so the capture fails
+    // when the table stops declaring store:false there.
+    let model = generated_opencode_go_model("muse-spark-1.3-contributor");
+    assert_eq!(model["protocol"], "openai-responses");
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let endpoint = Endpoint {
+        model: model["id"].as_str().unwrap().into(),
+        base_url: format!("{}/zen/go/v1", server.url()),
+        compat: Compat::from_data(model["compat"].as_object().unwrap()),
+        ..harness::endpoint("opencode", &server)
+    };
+    run(Box::new(Responses::new(endpoint).request(&request())))
+        .0
+        .unwrap();
+    assert_eq!(sent_body(&server, 0)["store"], false);
+}

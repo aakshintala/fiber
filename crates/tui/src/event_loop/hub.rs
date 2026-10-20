@@ -377,7 +377,7 @@ impl Connection {
                 app.write_failed(lines.get(at..).unwrap_or_default());
                 return;
             }
-            app.wrote(line);
+            app.outbox.wrote(line);
         }
     }
 

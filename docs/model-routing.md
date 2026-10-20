@@ -243,6 +243,9 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
   missing x-opencode-session and cannot be routed efficiently", measured on
   October 1, 2026. Cloudflare answers 403 "error code: 1010" to Python's
   default `User-Agent`, so the probe sent its own.
+- Go sends `store: false` on its `openai-responses` and
+  `openai-completions` requests, as the OpenAI provider does on every
+  request; its `anthropic-messages` requests carry no `store` key.
 
 ### The scripted provider
 

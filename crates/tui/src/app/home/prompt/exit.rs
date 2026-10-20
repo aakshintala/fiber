@@ -115,7 +115,7 @@ impl App {
     /// is written and no `write_failed` runs.
     fn close_all(&mut self) -> Effect {
         let working = self.working();
-        if working.is_empty() || self.link != Link::Up {
+        if working.is_empty() || self.outbox.link != Link::Up {
             return Effect::Quit;
         }
         let mut lines = Vec::new();

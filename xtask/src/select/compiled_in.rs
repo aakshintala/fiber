@@ -84,6 +84,8 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/opencode/providers/opencode-go.json", "config"),
     ("providers/opencode/providers/opencode-zen.json", "config"),
     ("providers/openrouter/providers/openrouter.json", "config"),
+    ("providers/opencode/providers/opencode-go.json", "provider"),
+    ("providers/opencode/providers/opencode-go.json", "xtask"),
     (
         "providers/openrouter/tests/models-from-the-recording.json",
         "main",
@@ -2093,7 +2095,8 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
 /// Crates whose tests read a first-party package under `providers/` or
 /// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
 /// sources by `package_reader_mismatches`.
-pub(super) const PACKAGE_READERS: &[&str] = &["cli", "config", "extensions", "main", "xtask"];
+pub(super) const PACKAGE_READERS: &[&str] =
+    &["cli", "config", "extensions", "main", "provider", "xtask"];
 
 fn include_path(stream: TokenStream) -> Option<String> {
     let mut tokens = stream.into_iter();

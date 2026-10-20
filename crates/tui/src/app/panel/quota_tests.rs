@@ -12,7 +12,7 @@ use crate::link::Line;
 fn attached() -> App {
     let mut app = home();
     app.on_line(crate::app::items::testkit::hello());
-    app.link = Link::Up;
+    app.outbox.link = Link::Up;
     app.attach(contract::SessionId(SESSION.to_owned()));
     app
 }
@@ -47,7 +47,7 @@ fn answer(app: &mut App, id: &str) {
 fn attach_and_focus_send_once_and_never_enter_pending() {
     let mut app = attached();
     let id = first(&mut app);
-    assert!(!app.pending.contains_key(&id));
+    assert!(!app.outbox.pending.contains_key(&id));
     assert!(app.quota_keypress().is_none());
     assert!(app.quota_focus().is_none());
     answer(&mut app, &id);
@@ -246,16 +246,16 @@ fn a_left_row_sends_nothing_and_reattach_discards_a_lost_answer() {
 #[test]
 fn no_queries_without_a_card_session_or_live_link() {
     let mut app = home();
-    app.link = Link::Up;
+    app.outbox.link = Link::Up;
     assert!(app.quota_focus().is_none());
     let mut app = attached();
     app.home.as_mut().unwrap().launch.panel_cards = vec!["session".to_owned()];
     assert!(queries(app.on_line(session_line("clients", json!({"clients": []})))).is_empty());
     assert!(app.quota_focus().is_none());
     let mut app = attached();
-    app.link = Link::Down;
+    app.outbox.link = Link::Down;
     assert!(app.quota_focus().is_none());
-    app.link = Link::Up;
+    app.outbox.link = Link::Up;
     first(&mut app);
 }
 
@@ -290,7 +290,11 @@ fn opening_the_view_sends_fetch_true_and_shares_the_flight() {
     assert_eq!(lines[0]["command"], "quota");
     assert_eq!(lines[0]["session_id"], SESSION);
     assert_eq!(lines[0]["args"], json!({"fetch": true}));
-    assert!(!app.pending.contains_key(lines[0]["id"].as_str().unwrap()));
+    assert!(
+        !app.outbox
+            .pending
+            .contains_key(lines[0]["id"].as_str().unwrap())
+    );
     assert!(app.session_view_open());
     assert!(app.panel_state.quota.fetching());
     // A second opening shares the in-flight fetch: no new line.
@@ -323,7 +327,7 @@ fn opening_the_view_replaces_a_panel_query_in_flight_with_a_fetch() {
 #[test]
 fn opening_the_view_without_a_live_link_sends_nothing() {
     let mut app = attached();
-    app.link = Link::Down;
+    app.outbox.link = Link::Down;
     assert!(sent(app.quota_view()).is_empty());
     assert!(app.session_view_open());
     assert!(!app.panel_state.quota.fetching());

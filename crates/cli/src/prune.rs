@@ -20,7 +20,7 @@ mod worktrees;
 
 use crate::approve::{confirmed, say};
 use crate::sessions::Ask;
-use crate::{failed, usage, with_dirs, write_line};
+use crate::{CliError, with_dirs, write_line};
 
 pub(crate) use diagnostics::{OldFile, old_diagnostics};
 
@@ -30,9 +30,6 @@ const PRUNE_PROMPT: &str = "prune? [y/N]";
 /// The usage failure when there is nobody to ask.
 const PRUNE_NOBODY: &str =
     "`fiber sessions prune` has no terminal to ask on. Pass `--yes` to prune without asking.";
-
-const OLDER_THAN_USAGE: &str =
-    "`--older-than` takes a duration such as `30d`: a whole number and `s`, `m`, `h` or `d`.";
 
 /// `fiber sessions prune`'s arguments.
 pub struct PruneArgs {
@@ -89,19 +86,21 @@ fn prune_run(
     ask: Ask<'_>,
     out: &mut dyn Write,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let now = clock.wall();
     let older_than = match &args.older_than {
         None => None,
         Some(text) => match config::parse_duration(text) {
             Some(duration) => Some(duration),
-            None => return Err(usage(OLDER_THAN_USAGE)),
+            None => return Err(CliError::OlderThanUnreadable),
         },
     };
     // No terminal and no `--yes` is a usage error before anything is
     // scanned. `--dry-run` never asks and needs no terminal.
     if !args.dry_run && !ask.yes && !ask.terminal {
-        return Err(usage(PRUNE_NOBODY));
+        return Err(CliError::NobodyToAsk {
+            message: PRUNE_NOBODY.to_owned(),
+        });
     }
     let logs = old_diagnostics(&home.join("logs"), now);
     let crashes = old_diagnostics(&home.join("crashes"), now);
@@ -126,7 +125,7 @@ fn prune_run(
             &crashes,
             now,
         )?;
-        write_line(out, &format!("freed {}", format_size(0)))?;
+        write_line(out, &format!("freed {}", format_size(0))).map_err(CliError::from)?;
         return Ok(());
     }
     let would_free = session_listed_bytes(&selected.rows)
@@ -144,7 +143,8 @@ fn prune_run(
             &crashes,
             now,
         )?;
-        write_line(out, &format!("would free {}", format_size(would_free)))?;
+        write_line(out, &format!("would free {}", format_size(would_free)))
+            .map_err(CliError::from)?;
         return Ok(());
     }
     print_rows(
@@ -245,21 +245,22 @@ fn print_rows(
     logs: &[OldFile],
     crashes: &[OldFile],
     now: SystemTime,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     for row in sessions {
-        write_line(out, &session_line(row))?;
+        write_line(out, &session_line(row)).map_err(CliError::from)?;
     }
     for row in worktrees {
-        write_line(out, &worktrees::worktree_line(row))?;
+        write_line(out, &worktrees::worktree_line(row)).map_err(CliError::from)?;
     }
     for row in pinned {
-        write_line(out, &pinned::pinned_line(row))?;
+        write_line(out, &pinned::pinned_line(row)).map_err(CliError::from)?;
     }
     for file in logs {
-        write_line(out, &diag_line("log", &file.path, file.bytes, now))?;
+        write_line(out, &diag_line("log", &file.path, file.bytes, now)).map_err(CliError::from)?;
     }
     for file in crashes {
-        write_line(out, &diag_line("crash", &file.path, file.bytes, now))?;
+        write_line(out, &diag_line("crash", &file.path, file.bytes, now))
+            .map_err(CliError::from)?;
     }
     Ok(())
 }
@@ -450,7 +451,7 @@ fn reconcile(
     diag_total: usize,
     other_total: usize,
     err: &mut dyn Write,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let mut freed = diag_freed;
     let mut failures = failures;
     for row in &selected.rows {
@@ -531,8 +532,8 @@ fn finish(
     failures: Vec<(String, ErrorCode, String)>,
     diag_total: usize,
     other_total: usize,
-) -> Result<(), Failure> {
-    write_line(out, &format!("freed {}", format_size(freed)))?;
+) -> Result<(), CliError> {
+    write_line(out, &format!("freed {}", format_size(freed))).map_err(CliError::from)?;
     if failures.is_empty() {
         return Ok(());
     }
@@ -558,10 +559,11 @@ fn finish(
             .first()
             .cloned()
             .unwrap_or((String::new(), ErrorCode::IoFailed, String::new()));
-    Err(failed(
+    Err(CliError::PruneFailed {
         code,
-        format!("{} of {} could not be deleted", failures.len(), total),
-    ))
+        failed: failures.len(),
+        total,
+    })
 }
 
 #[cfg(test)]

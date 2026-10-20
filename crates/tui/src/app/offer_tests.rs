@@ -270,7 +270,7 @@ fn reconnect_closes_source_and_replay_shows_the_offer_list() {
         panic!("Enter requests the offered source");
     };
     let command: Value = serde_json::from_str(&lines[0]).unwrap();
-    app.wrote(&lines[0]);
+    app.outbox.wrote(&lines[0]);
     assert!(app.offer.source_open());
     app.disconnected();
     let resent = app.on_line(Line::Hub(contract::HubLine {

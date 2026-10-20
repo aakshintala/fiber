@@ -536,6 +536,55 @@ fn an_open_with_summary_expected_sends_no_subscribe() {
     assert!(app.take_raise().is_none(), "one raise only");
 }
 
+/// A non-attached session held at `full` with nothing in flight and a
+/// live row: reconcile's setup. The acceptance itself would reconcile
+/// on a live link, so it goes out while the link is down; the setup
+/// ends with the link up and queues no lowering line.
+fn full_with_live_row(app: &mut App, session: &str) {
+    app.on_line(status(session));
+    let subscribe: Value = serde_json::from_str(&app.subscribe(&id(session), Level::Full))
+        .unwrap_or_else(|err| panic!("{err}"));
+    let ack = subscribe["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("full id"));
+    app.outbox.link = crate::app::Link::Down;
+    app.on_line(session_accepted(session, ack));
+    app.outbox.link = crate::app::Link::Up;
+    assert!(
+        app.home.as_mut().unwrap().subs.take_outbox().is_empty(),
+        "setup queues no lowering line"
+    );
+}
+
+#[test]
+fn reconcile_lowers_a_full_live_row_when_the_link_is_up() {
+    let mut app = home_at(OpenAt::Home);
+    app.on_line(hello());
+    full_with_live_row(&mut app, "s_aaaaaaaaaaaaaaaa");
+    // Past the gate: the id answers no open, so only the lowering
+    // line can appear.
+    app.subscribe_accepted(&id("s_aaaaaaaaaaaaaaaa"), "no-such-subscribe");
+    let queued = app.home.as_mut().unwrap().subs.take_outbox();
+    assert_eq!(queued.len(), 1);
+    let line: Value = serde_json::from_str(&queued[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "subscribe");
+    assert_eq!(line["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(line["args"], json!({"level": "summary"}));
+}
+
+#[test]
+fn reconcile_queues_nothing_when_the_link_is_down() {
+    let mut app = home_at(OpenAt::Home);
+    app.on_line(hello());
+    full_with_live_row(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.outbox.link = crate::app::Link::Down;
+    app.subscribe_accepted(&id("s_aaaaaaaaaaaaaaaa"), "no-such-subscribe");
+    assert!(
+        app.home.as_mut().unwrap().subs.take_outbox().is_empty(),
+        "a lost connection lowers nothing"
+    );
+}
+
 /// The raise a frame releases, parsed from its line.
 fn raise_line(app: &mut App) -> Value {
     let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));

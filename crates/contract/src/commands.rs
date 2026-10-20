@@ -493,6 +493,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "login",
     "approvals",
     "reload",
+    "import",
     "close",
     "quit",
     "?",
