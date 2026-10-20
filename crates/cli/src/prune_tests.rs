@@ -942,7 +942,6 @@ fn finish_takes_the_first_failures_code() {
     );
 }
 
-/// A writer that always fails.
 struct Closed;
 
 impl Write for Closed {

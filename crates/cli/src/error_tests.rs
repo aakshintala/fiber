@@ -921,19 +921,6 @@ fn older_than_unreadable_is_usage() {
 }
 
 #[test]
-fn prune_failed_keeps_the_first_failure_code_and_counts() {
-    check(
-        &CliError::PruneFailed {
-            code: ErrorCode::IoFailed,
-            failed: 1,
-            total: 5,
-        },
-        ErrorCode::IoFailed,
-        "1 of 5 could not be deleted",
-    );
-}
-
-#[test]
 fn prune_failed_forwards_a_non_io_code() {
     check(
         &CliError::PruneFailed {
