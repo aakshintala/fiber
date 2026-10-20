@@ -411,6 +411,11 @@ impl Call {
                     );
                     finish.dispatched(&dispatched);
                     finish.set_redact(self.redact_with(&secrets));
+                    // The bytes went out, so their digests are known even
+                    // though the reply failed; the usage stays absent.
+                    if let Some(hashes) = &self.hashes {
+                        finish.set_hashes(hashes.clone());
+                    }
                     finish.finish();
                 }
                 Err(failed.error)
@@ -568,10 +573,13 @@ impl Call {
                 );
                 // The buffered reader may have read ahead: the count, not
                 // the reader's end, says what came. A decoded reply reports
-                // its cache use; a failure leaves it absent, so those lines
+                // its cache use only with the setting on; a failure or an
+                // unflagged observation leaves it absent, so those lines
                 // stay out of a miss count.
                 record.set_bytes(counted.count());
-                if let Ok(reply) = &decoded {
+                if observation.cache_diagnostics()
+                    && let Ok(reply) = &decoded
+                {
                     record.set_usage(&reply.tokens);
                 }
                 finish = Some(record);
@@ -588,6 +596,11 @@ impl Call {
                     );
                     record.dispatched(&dispatched);
                     record.set_redact(self.redact_with(&secrets));
+                    // The bytes went out, so their digests are known even
+                    // though the reply failed; the usage stays absent.
+                    if let Some(hashes) = &self.hashes {
+                        record.set_hashes(hashes.clone());
+                    }
                     finish = Some(record);
                 }
                 let should_retry = failed.error.should_retry();
