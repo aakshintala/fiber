@@ -252,41 +252,6 @@ fn the_menu_check_fails_when_a_command_line_is_gone() {
 /// row is the argv and the `Invocation` it parses to. The usage halves of
 /// those tests stay where they were, as one-sentence tests.
 #[test]
-fn import_takes_claude_code_or_codex_and_refuses_other_sources() {
-    for (word, source) in [
-        ("claude-code", ImportSource::ClaudeCode),
-        ("codex", ImportSource::Codex),
-    ] {
-        let Invocation::Run(Some(Commands::Import { source: actual }), _) =
-            parse_from(["fiber", "import", word])
-        else {
-            panic!("fiber import {word} did not parse");
-        };
-        assert_eq!(actual, source);
-        assert_eq!(
-            config::ImportSource::from(actual),
-            match source {
-                ImportSource::ClaudeCode => config::ImportSource::ClaudeCode,
-                ImportSource::Codex => config::ImportSource::Codex,
-            }
-        );
-    }
-    assert!(
-        MENU.contains("import <claude-code | codex>"),
-        "the menu names the import command:\n{MENU}"
-    );
-    let refused = sentence(&["fiber", "import", "vim"]);
-    assert!(
-        refused.contains("claude-code") && refused.contains("codex"),
-        "an unknown source names the two sources: {refused}"
-    );
-    assert!(
-        sentence(&["fiber", "import"]).contains("<source>"),
-        "a missing source names the missing argument"
-    );
-}
-
-#[test]
 fn parses_argv_into_its_invocation() {
     let cases: Vec<(&[&str], Invocation)> = vec![
         (
@@ -1085,6 +1050,24 @@ fn parses_argv_into_its_invocation() {
                     key: "model".to_owned(),
                     value: "a/b".to_owned(),
                 })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "import", "claude-code"],
+            Invocation::Run(
+                Some(Commands::Import {
+                    source: ImportSource::ClaudeCode,
+                }),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "import", "codex"],
+            Invocation::Run(
+                Some(Commands::Import {
+                    source: ImportSource::Codex,
+                }),
                 TopLevel::default(),
             ),
         ),
@@ -2550,6 +2533,20 @@ fn config_set_without_a_value_names_it() {
         sentence(&["fiber", "config", "set", "model"]).contains("<value>"),
         "{}",
         sentence(&["fiber", "config", "set", "model"])
+    );
+}
+
+#[test]
+fn import_rejects_anything_but_the_two_sources() {
+    let refused = sentence(&["fiber", "import", "vim"]);
+    assert!(
+        refused.contains("claude-code") && refused.contains("codex"),
+        "{refused}"
+    );
+    let missing = sentence(&["fiber", "import"]);
+    assert!(
+        missing.starts_with("The following required arguments were not provided: <source>"),
+        "{missing}"
     );
 }
 
