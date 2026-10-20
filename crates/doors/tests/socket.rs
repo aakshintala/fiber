@@ -6001,3 +6001,56 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
         .unwrap();
     bare.close();
 }
+
+#[test]
+fn an_undelivered_ack_answers_after_the_inbox_guard_releases() {
+    // R42: dropping an undeliverable delivery answers `closing` only after
+    // the inbox guard releases, so an answer that delivers again on the
+    // same thread cannot deadlock on it.
+    let opened = Opened::open(vec![]);
+    let work = Temp::new();
+    opened.session.notes_workspace(work.0.clone());
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            // Only the receiver is gone: the slot stays `Some`, and the
+            // connections are not yet stopped.
+            drop(inbox);
+            let (notes_tx, notes_rx) = mpsc::channel();
+            let (model_tx, model_rx) = mpsc::channel();
+            let mut args = Map::new();
+            args.insert("topic".to_owned(), Value::String("never".to_owned()));
+            let inner = Arc::clone(&driver);
+            driver.drive(
+                "fiber.test/a",
+                "propose_notes",
+                args,
+                Ack(Box::new(move |answer| {
+                    // From inside the answer, `model` delivers again on
+                    // this same thread: under the old `deliver` this
+                    // deadlocked on the inbox guard.
+                    let mut model = Map::new();
+                    model.insert("model".to_owned(), Value::String("fake/n".to_owned()));
+                    inner.drive(
+                        "fiber.test/a",
+                        "model",
+                        model,
+                        Ack(Box::new(move |answer| match model_tx.send(answer) {
+                            Ok(()) | Err(_) => {}
+                        })),
+                    );
+                    match notes_tx.send(answer) {
+                        Ok(()) | Err(_) => {}
+                    }
+                })),
+            );
+            let notes = Deadline::after(DEADLINE).recv_or_fail(&notes_rx, "the notes answer");
+            assert_eq!(notes.unwrap_err().code, ErrorCode::Closing);
+            let model = Deadline::after(DEADLINE).recv_or_fail(&model_rx, "the model answer");
+            assert_eq!(model.unwrap_err().code, ErrorCode::Closing);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}

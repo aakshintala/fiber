@@ -776,14 +776,22 @@ impl Gate {
     }
 
     pub(crate) fn deliver(&self, delivery: Delivery) {
-        let inbox = lock(&self.inbox);
-        let Some(inbox) = inbox.as_ref() else {
-            drop(delivery);
-            return;
+        // The ack's answer runs host code `doors` does not own, so no
+        // `doors` lock is held across it: under the guard only the slot
+        // read and the one send run, and the undelivered delivery drops
+        // after the guard releases.
+        let undelivered = {
+            let inbox = lock(&self.inbox);
+            if let Some(sender) = inbox.as_ref() {
+                match sender.send(delivery) {
+                    Ok(()) => None,
+                    Err(mpsc::SendError(delivery)) => Some(delivery),
+                }
+            } else {
+                Some(delivery)
+            }
         };
-        if let Err(mpsc::SendError(delivery)) = inbox.send(delivery) {
-            drop(delivery);
-        }
+        drop(undelivered);
     }
 }
 
