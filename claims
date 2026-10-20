@@ -3,3 +3,8 @@ crates/main/tests/quota_fetch_session.rs	lane-2526	grant	2026-10-19T20:54:05Z	Am
 crates/tui/src/app/panel_tests.rs	lane-2526	grant	2026-10-19T20:54:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2834
 crates/config/src/keys_tests.rs	lane-2844	grant	2026-10-20T00:24:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/find/state.rs	lane-2854	grant	2026-10-20T04:58:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2870
+crates/tui/src/jigs.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
+crates/tui/src/pages_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
+crates/tui/src/app/select_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
+crates/tui/src/app_focus_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
+crates/tui/src/turn/answers_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
