@@ -23,3 +23,4 @@ crates/tui/src/turn/images_tests.rs	lane-2764	grant	2026-10-20T15:04:40Z	Amoghs-
 crates/tui/src/turn_tests.rs	lane-2764	grant	2026-10-20T15:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	2887
 crates/tui/src/local_time_tests.rs	lane-2764	grant	2026-10-20T15:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	2887
 crates/contract/src/session_argv.rs	543	plan	2026-10-20T17:27:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home/open_at_tests.rs	lane-2824	plan	2026-10-20T17:33:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
