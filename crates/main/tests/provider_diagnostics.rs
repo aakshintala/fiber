@@ -664,3 +664,224 @@ fn a_delegate_child_uses_its_own_process_and_id() {
         "the parent's lines name only its provider"
     );
 }
+
+/// A debug ask with the cache-diagnostics setting on.
+fn ask_debug_diagnostics(setup: &Setup, server: &ProviderServer, extra: Value) -> Run {
+    let mut merged = json!({"cache": {"diagnostics": true}});
+    let object = merged
+        .as_object_mut()
+        .expect("the merged config is an object");
+    for (key, value) in extra.as_object().unwrap() {
+        object.insert(key.clone(), value.clone());
+    }
+    ask_debug(setup, server, merged)
+}
+
+/// The single `provider_request` line of a one-call debug run.
+#[allow(clippy::indexing_slicing, reason = "len checked on the line above")]
+fn the_request(setup: &Setup, run: &Run) -> Value {
+    let id = run.session_id().to_owned();
+    let lines = diagnostic_file(setup, &format!("ask-{id}.log"));
+    let requests: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "provider_request")
+        .collect();
+    assert_eq!(requests.len(), 1, "one call writes one line");
+    let line = *requests.first().expect("one call writes one line");
+    assert_eq!(line["session_id"], id.as_str());
+    assert_eq!(line["data"]["attempt"], 1);
+    (*line).clone()
+}
+
+/// A 64-character lowercase hex digest, as the flagged line holds them.
+fn hex64(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+#[test]
+fn with_cache_diagnostics_a_turns_line_carries_hashes_and_reported_use() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    let run = ask_debug_diagnostics(&setup, &server, json!({}));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the model request arrived"
+    );
+    let line = the_request(&setup, &run);
+    let data = &line["data"];
+    assert_eq!(data["status"], 200);
+    let hashes = data.get("prefix_hashes").expect("hashes are set");
+    assert!(hex64(&hashes["system"]), "the system segment hashes");
+    assert!(hex64(&hashes["tools"]), "the tools list hashes");
+    let messages = hashes["messages"].as_array().expect("messages hash");
+    assert!(!messages.is_empty(), "the conversation hashes");
+    for digest in messages {
+        assert!(hex64(digest), "each message boundary hashes");
+    }
+    assert_eq!(data["cache_read"], 4, "the reported read");
+    assert!(data["cache_write"].is_object(), "the reported write");
+    // The flagged line stays redacted: neither the asked text, the
+    // reply text nor the key reaches it. The envelope still carries the
+    // session id: that is the canary's join key.
+    let wire = serde_json::to_string(&line).unwrap();
+    for sentinel in ["hi", "Hello.", "sk-test"] {
+        assert!(
+            !wire.contains(sentinel),
+            "no content in the line: {sentinel}"
+        );
+    }
+}
+
+#[test]
+fn without_the_setting_the_line_holds_what_it_always_held() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    let run = ask_debug(&setup, &server, json!({}));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the model request arrived"
+    );
+    let line = the_request(&setup, &run);
+    let data = line["data"].as_object().expect("the data is an object");
+    for field in ["prefix_hashes", "cache_read", "cache_write"] {
+        assert!(
+            !data.contains_key(field),
+            "nothing new with the setting off: {field}"
+        );
+    }
+}
+
+#[test]
+fn a_retried_call_with_diagnostics_joins_by_session_and_attempt() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([Response::status(503, "try again"), hello()]).unwrap();
+    let run = ask_debug_diagnostics(
+        &setup,
+        &server,
+        json!({"retry": {"attempts": 1, "initial_delay_ms": 0, "max_delay_ms": 0}}),
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "both attempts arrived"
+    );
+    let id = run.session_id().to_owned();
+    let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
+    let requests: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "provider_request")
+        .collect();
+    assert_eq!(requests.len(), 2, "one line per attempt");
+    for line in &requests {
+        assert_eq!(line["session_id"], id.as_str(), "joined by session");
+    }
+    assert_eq!(requests[0]["data"]["attempt"], 1);
+    assert_eq!(requests[0]["data"]["status"], 503);
+    assert!(
+        requests[0]["data"].get("cache_read").is_none(),
+        "no usage on the failure: {}",
+        requests[0]
+    );
+    assert_eq!(requests[1]["data"]["attempt"], 2);
+    assert_eq!(requests[1]["data"]["status"], 200);
+    assert_eq!(requests[1]["data"]["cache_read"], 4, "usage on the success");
+    // The retry reposts the same bytes, so both lines hash them.
+    assert_eq!(
+        requests[0]["data"]["prefix_hashes"], requests[1]["data"]["prefix_hashes"],
+        "the retry rejoins on the same prefix"
+    );
+}
+
+/// One protocol's answered `Hello.` with the reported cache counts the
+/// diagnostics line asserts on.
+fn protocol_hello(protocol: &str) -> Response {
+    match protocol {
+        "anthropic-messages" => Response::stream(
+            [
+                json!({"type": "message_start", "message": {"id": "msg_1"}}),
+                json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+                json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello."}}),
+                json!({"type": "content_block_stop", "index": 0}),
+                json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"input_tokens": 10, "cache_read_input_tokens": 4, "output_tokens": 3}}),
+                json!({"type": "message_stop"}),
+            ]
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+        ),
+        "openai-completions" => Response::stream({
+            let mut body: String = [
+                json!({"id": "gen-1", "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello."}, "finish_reason": null}]}),
+                json!({"id": "gen-1", "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+                json!({"id": "gen-1", "choices": [], "usage": {"prompt_tokens": 10,
+                    "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 4}}}),
+            ]
+            .iter()
+            .map(|chunk| format!("data: {chunk}\n\n"))
+            .collect();
+            body.push_str("data: [DONE]\n\n");
+            body
+        }),
+        "google-generative-ai" => gemini_hello(),
+        _ => hello(),
+    }
+}
+
+#[test]
+fn each_protocol_writes_one_diagnostics_line() {
+    for protocol in [
+        "openai-responses",
+        "openai-completions",
+        "anthropic-messages",
+        "google-generative-ai",
+    ] {
+        let setup = Setup::new();
+        let server = ProviderServer::start([protocol_hello(protocol)]).unwrap();
+        if protocol == "openai-responses" {
+            setup.provider(&server);
+            debug_config(&setup, json!({"cache": {"diagnostics": true}}));
+        } else {
+            install_protocol(&setup, protocol, &server);
+            debug_config(&setup, json!({"cache": {"diagnostics": true}}));
+        }
+        let run = ask(&setup);
+        assert_eq!(run.code, Some(0), "stderr on {protocol}: {}", run.stderr);
+        assert!(
+            server.await_requests(1, setup.deadline.left()),
+            "the model request arrived on {protocol}"
+        );
+        let line = the_request(&setup, &run);
+        let data = &line["data"];
+        assert_eq!(data["status"], 200, "the status on {protocol}");
+        let hashes = data.get("prefix_hashes").expect("hashes are set");
+        let messages = hashes["messages"].as_array().expect("messages hash");
+        assert!(
+            !messages.is_empty(),
+            "the conversation hashes on {protocol}"
+        );
+        for digest in messages {
+            assert!(hex64(digest), "each message boundary hashes on {protocol}");
+        }
+        assert!(
+            data.get("cache_read").is_some(),
+            "the reported read on {protocol}"
+        );
+        assert!(
+            data.get("cache_write").is_some(),
+            "the reported write on {protocol}"
+        );
+        let wire = serde_json::to_string(&line).unwrap();
+        for sentinel in ["hi", "Hello.", "sk-test"] {
+            assert!(
+                !wire.contains(sentinel),
+                "no content in the line on {protocol}: {sentinel}"
+            );
+        }
+    }
+}
