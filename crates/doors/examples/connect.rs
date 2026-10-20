@@ -5,6 +5,8 @@
 //! `cargo run -p doors --example connect -- [--hub <name>] [--fiber <binary>]`
 //! Either flag selects hub mode: --hub names an entry, else hub.default is
 //! used, else the local hub. A local target requires --fiber to start it.
+//! A listed hub answers `hub_hello` at once; one that does not answer
+//! within [`doors::hub::CONNECT_DEADLINE`] fails with a stderr line.
 
 #![allow(
     clippy::print_stdout,
@@ -61,12 +63,65 @@ fn hub_session(
         ));
     }
     let mut start = || start_hub(binary.unwrap_or_default());
-    let (stream, hello) =
-        doors::hub::connect_target(&home, &target, &mut start, clock).map_err(io::Error::other)?;
+    // The 5 s bound covers Unix-address listed targets only: they carry no
+    // token and skip authentication, so the bound is exactly connect-plus-hello.
+    // Any other listed address keeps the legacy connect_target call below.
+    let unix_hub = if let doors::hub::Target::Listed { name, address, .. } = &target {
+        matches!(address, doors::hub::Address::Unix(_)).then(|| name.clone())
+    } else {
+        None
+    };
+    let (stream, hello) = if let Some(hub) = unix_hub {
+        connect_listed(&home, target, &hub)?
+    } else {
+        doors::hub::connect_target(&home, &target, &mut start, clock).map_err(io::Error::other)?
+    };
     let mut stdout = io::stdout();
     let hello = serde_json::to_vec(&hello).map_err(io::Error::other)?;
     support::framing::write_line(&mut stdout, &hello)?;
     relay(Ok(stream), io::stdin(), &mut stdout)
+}
+
+/// Connects to a listed hub, which answers `hub_hello` at once: the whole
+/// connect waits at most [`doors::hub::CONNECT_DEADLINE`], then fails with
+/// a stderr line naming the hub instead of hanging silent. A listed hub is
+/// never started, so the wait runs on a thread the timeout abandons; the
+/// process exits right after, which ends the thread with it.
+fn connect_listed(
+    home: &std::path::Path,
+    target: doors::hub::Target,
+    hub: &str,
+) -> io::Result<doors::hub::Hub> {
+    let hub = hub.to_owned();
+    let home = home.to_path_buf();
+    let (done, waiting) = std::sync::mpsc::channel();
+    thread::Builder::new()
+        .name("connect-listed".to_owned())
+        .spawn(move || {
+            let mut start = || Err(io::Error::other("a listed hub is never started"));
+            let _sent = done.send(doors::hub::connect_target(
+                &home,
+                &target,
+                &mut start,
+                &fakes::clock::SystemClock,
+            ));
+        })
+        .map_err(io::Error::other)?;
+    // One bounded wait through the test deadline type, never a bare receive.
+    let bound = fakes::Deadline::after(doors::hub::CONNECT_DEADLINE);
+    match bound.recv(&waiting) {
+        Ok(result) => result.map_err(io::Error::other),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "the listed hub '{hub}' did not say hub_hello within {} s",
+                doors::hub::CONNECT_DEADLINE.as_secs()
+            ),
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::other(format!(
+            "the listed hub '{hub}' ended the connect without saying hub_hello"
+        ))),
+    }
 }
 
 /// Starts `<binary> hub serve` in its own process group with null stdio.
