@@ -517,7 +517,7 @@ impl App {
             self.draft.clear();
             return None;
         };
-        (self.outbox.link == Link::Up).then(|| (session.clone(), *busy))
+        (self.outbox.is_up()).then(|| (session.clone(), *busy))
     }
 
     /// Sends `command` to the attached session. A rejection returns the

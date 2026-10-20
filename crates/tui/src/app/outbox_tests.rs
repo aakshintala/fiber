@@ -28,6 +28,20 @@ fn prompt_line(id: &str) -> String {
 }
 
 #[test]
+fn is_up_only_when_the_link_is_up() {
+    assert!(up().is_up());
+    for link in [Link::Waiting, Link::Down, Link::Refused] {
+        assert!(
+            !Outbox {
+                link,
+                ..Default::default()
+            }
+            .is_up()
+        );
+    }
+}
+
+#[test]
 fn send_records_pending_and_returns_the_line_when_up() {
     let mut outbox = up();
     let mut draft = Draft::default();
