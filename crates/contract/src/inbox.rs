@@ -118,6 +118,11 @@ pub enum Delivery {
     Credential(crate::commands::CredentialArgs, Ack),
     /// Re-reads the session's configuration and declares its tools again.
     Reload(Ack),
+    /// Restarts one failed MCP server (`docs/mcp.md`, "Servers, their
+    /// state and the per-server commands"). Rejected `busy` while a turn
+    /// runs and `closing` after `close`, as a reload is; the loop
+    /// answers it once the restart's lines are written.
+    McpReconnect(crate::commands::McpServerArgs, Ack),
     /// The person's `name` command: written as `session_named` by
     /// `person` at the drain that takes it, then acknowledged `Ok(None)`.
     /// Refused `closing` while a shutdown settles and after `rewound`; a

@@ -1617,3 +1617,36 @@ fn the_overlay_cross_closes_the_search_panel_on_home() {
     assert_eq!(app.on_click(id), Effect::None);
     assert!(app.completions().is_none());
 }
+
+#[test]
+fn turn_end_clears_switch_pending_notices() {
+    let mut app = attached(80, 24);
+    app.phase = super::super::Phase::Attached {
+        session: contract::SessionId(SESSION.to_owned()),
+        busy: true,
+    };
+    app.push_notice("switch_pending", "a applies when this turn ends".to_owned());
+    app.push_notice("switch_pending", "b applies when this turn ends".to_owned());
+    assert_eq!(app.notices().len(), 2);
+    // Staying busy, or already idle, ends nothing.
+    app.set_busy(true);
+    assert_eq!(app.notices().len(), 2);
+    // The true-to-false fold clears the applied shares.
+    app.set_busy(false);
+    assert!(app.notices().is_empty());
+    // Clearing twice is a no-op.
+    app.set_busy(false);
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn loaded_history_clears_its_loading_notice() {
+    let (mut app, envelopes, _) = pending_copy();
+    assert_eq!(app.notice(), Some("Loading history…"));
+    load_needed(&mut app, &envelopes);
+    app.focus = Some(TargetId::Turn(0));
+    // The landed copy answers the press, and the wait's notice goes
+    // with the pending turn.
+    let _ = app.on_key(Key::Char('y'), now());
+    assert!(app.notices().is_empty(), "{:?}", app.notices());
+}

@@ -93,6 +93,9 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "background"}),
         json!({"id": "c", "command": "reload"}),
         json!({"id": "c", "command": "tools"}),
+        json!({"id": "c", "command": "mcp_servers"}),
+        json!({"id": "c", "command": "mcp_login", "args": {"server": "linear"}}),
+        json!({"id": "c", "command": "mcp_reconnect", "args": {"server": "linear"}}),
         json!({"id": "c", "command": "commands"}),
         json!({"id": "c", "command": "skills"}),
         json!({"id": "c", "command": "quota", "args": {"fetch": false}}),
@@ -241,6 +244,7 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         ("background", Command::Background),
         ("reload", Command::Reload),
         ("tools", Command::Tools),
+        ("mcp_servers", Command::McpServers),
         ("commands", Command::Commands),
         ("skills", Command::Skills),
         ("credentials", Command::Credentials),
@@ -262,6 +266,7 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
     for (name, command) in [
         ("commands", Command::Commands),
         ("skills", Command::Skills),
+        ("mcp_servers", Command::McpServers),
         ("credentials", Command::Credentials),
     ] {
         let line = CommandLine {
@@ -396,6 +401,8 @@ fn a_missing_args_on_a_command_with_a_required_key_is_refused() {
         "steer",
         "steer_drop",
         "artifact_page",
+        "mcp_login",
+        "mcp_reconnect",
         "offered_file",
         "model",
         "name",
@@ -403,6 +410,33 @@ fn a_missing_args_on_a_command_with_a_required_key_is_refused() {
     ] {
         let line = format!(r#"{{"id":"c","command":"{command}"}}"#);
         assert!(parse(&line).is_err(), "{command} without args");
+    }
+}
+
+#[test]
+fn mcp_login_and_reconnect_read_their_server_and_refuse_the_rest() {
+    for command in ["mcp_login", "mcp_reconnect"] {
+        let line = format!(r#"{{"id":"c","command":"{command}","args":{{"server":"linear"}}}}"#);
+        let parsed = parse(&line).unwrap();
+        let expected = McpServerArgs {
+            server: "linear".into(),
+        };
+        assert_eq!(
+            parsed.command,
+            if command == "mcp_login" {
+                Command::McpLogin(expected)
+            } else {
+                Command::McpReconnect(expected)
+            },
+            "{command}"
+        );
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), line);
+        let extra = format!(
+            r#"{{"id":"c","command":"{command}","args":{{"server":"linear","future":1}}}}"#
+        );
+        assert!(parse(&extra).is_err(), "{extra}");
+        let missing = format!(r#"{{"id":"c","command":"{command}","args":{{}}}}"#);
+        assert!(parse(&missing).is_err(), "{missing}");
     }
 }
 

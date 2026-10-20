@@ -102,7 +102,10 @@ pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::{DisabledReader, PromptInputs};
 pub use quota_notice::QuotaRead;
-pub use reload::{PrepareReload, PromptPatch, ReloadPrepared, ReloadRoute, ReloadSettings};
+pub use reload::{
+    PrepareReload, PromptPatch, ReconnectServer, Reconnected, ReloadPrepared, ReloadRoute,
+    ReloadSettings,
+};
 pub use resume::{Resumed, resumed};
 pub use retry::{Decision, Retry};
 pub use reviewer::{
@@ -312,6 +315,8 @@ pub struct Loop {
     switcher: Option<(Prepare, Switchable)>,
     /// Prepares a replacement configuration without changing the route.
     reloader: Option<PrepareReload>,
+    /// Restarts one failed MCP server; absent this, reconnect is unsupported.
+    reconnector: Option<ReconnectServer>,
     /// A reload built before the process's post-offer load was due.
     load_after_reload: bool,
     /// Switches admitted during a turn, applied at the next turn boundary.
@@ -608,6 +613,7 @@ impl Loop {
             warming: warm::Warming::default(),
             switcher: None,
             reloader: None,
+            reconnector: None,
             load_after_reload: false,
             pending: Vec::new(),
             chosen,

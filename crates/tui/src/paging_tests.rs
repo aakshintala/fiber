@@ -4253,7 +4253,7 @@ fn two_wrong_shapes_in_one_slot_report_twice() {
 }
 
 /// The reload command clears the reported set through the slash path:
-/// the same extension failing again reports anew.
+/// the same extension failing again dedupes onto the standing row.
 #[test]
 fn reload_reports_the_same_failure_again() {
     let lines = session(1, true);
@@ -4267,14 +4267,16 @@ fn reload_reports_the_same_failure_again() {
         app.on_key(Key::Char(ch), now());
     }
     let _ = app.on_key(Key::Enter, now());
-    // The same extension failing again is new again: one more notice.
+    // The same extension failing again adds no row: the re-failure's
+    // push dedupes onto the standing row, which stays until it fades
+    // or ✕ dismisses it.
     app.use_renderer(Rc::new(Fake::failing("alpha")));
     search(&app);
     assert!(app.drawn(&[]));
     let texts = notice_texts(&app);
-    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert_eq!(texts.len(), 1, "{texts:?}");
     assert!(
-        texts[1]
+        texts[0]
             .1
             .contains("extension alpha could not draw ledger_row:"),
         "{texts:?}"

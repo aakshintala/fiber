@@ -47,6 +47,17 @@ pub(crate) struct CommandEntry {
     pub(crate) run: fn(&mut App, &str) -> Option<Effect>,
 }
 
+/// A second name typed after `/` that runs the same command, drawn
+/// on the same list row: `/exit` on the quit row. `None` elsewhere,
+/// so the alias never doubles the row. The `/` list and dispatch both
+/// read it beside the table.
+pub(crate) fn alias_of(name: &str) -> Option<&'static str> {
+    match name {
+        "quit" => Some("exit"),
+        _ => None,
+    }
+}
+
 /// The single command table: the `/` list and dispatch both read it.
 /// `?` and `help` are two rows sharing one handler.
 pub(crate) static TABLE: &[CommandEntry] = &[
@@ -91,6 +102,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Opens the tools view.",
         hint: None,
         run: run_tools,
+    },
+    CommandEntry {
+        name: "mcp",
+        description: "Opens the MCP servers view.",
+        hint: None,
+        run: run_mcp,
     },
     CommandEntry {
         name: "context",
@@ -277,6 +294,10 @@ fn run_tools(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Tools))
 }
 
+fn run_mcp(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Mcp))
+}
+
 fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Skills))
 }
@@ -455,8 +476,10 @@ impl App {
         }
         let rest = rest.trim().to_owned();
         // One table drives dispatch: a built-in the terminal does not
-        // draw goes out as typed.
-        let entry = TABLE.iter().find(|entry| entry.name == name)?;
+        // draw goes out as typed. An alias runs its row's command.
+        let entry = TABLE
+            .iter()
+            .find(|entry| entry.name == name || alias_of(entry.name) == Some(name))?;
         (entry.run)(self, &rest)
     }
 
@@ -768,6 +791,10 @@ impl App {
 #[cfg(test)]
 #[path = "commands_testkit.rs"]
 pub(crate) mod commands_testkit;
+
+#[cfg(test)]
+#[path = "exit_alias_tests.rs"]
+mod exit_alias;
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

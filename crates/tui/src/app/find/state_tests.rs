@@ -440,3 +440,84 @@ fn settled_needs_every_page_and_the_verified_clock() {
         "a moved clock never reads settled"
     );
 }
+
+/// The search-incomplete notice's identity: the text `find_lost` pushes.
+fn search_text() -> String {
+    "Could not search all of history: connection lost".to_owned()
+}
+
+/// Every stacked notice's code, oldest first.
+fn codes(app: &App) -> Vec<String> {
+    app.notices()
+        .into_iter()
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { code, .. } => Some(code),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect()
+}
+
+/// A fetch on the wire, as a started scan would hold.
+fn fetch() -> super::Fetch {
+    super::Fetch {
+        id: "c_1".to_owned(),
+        page: 0,
+        session: contract::SessionId(SESSION.to_owned()),
+        generation: 0,
+        width: 40,
+        revision: 0,
+        held: Vec::new(),
+    }
+}
+
+#[test]
+fn reconnect_clears_connection_texts_but_not_the_search_text() {
+    // No attached session: the reconnect reopens no session, so the
+    // reset that would close the bar never runs and the search stands
+    // on the reconnect alone.
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    app.set_size(40, 10);
+    assert!(
+        app.on_line(crate::app::Line::Hub(contract::HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: serde_json::Map::new(),
+        }))
+        .is_empty()
+    );
+    // No session to type into: the bar opens by hand.
+    app.find.open = true;
+    app.find.fetch = Some(fetch());
+    app.disconnected();
+    app.connect_failed("Could not reach the hub: refused".to_owned());
+    assert_eq!(
+        codes(&app),
+        [
+            "connection_failed",
+            "connection_failed",
+            "connection_failed"
+        ]
+    );
+    // Reconnect ends both connection texts; the search text stands
+    // until the bar closes or a rescan completes.
+    app.reconnected();
+    assert_eq!(codes(&app), ["connection_failed"]);
+    assert_eq!(app.notice(), Some(search_text().as_str()));
+    assert!(app.find.open);
+    app.close_find();
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn closing_the_bar_clears_only_the_search_text() {
+    let mut app = attached(40, 10);
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    app.find.fetch = Some(fetch());
+    app.disconnected();
+    assert_eq!(codes(&app), ["connection_failed", "connection_failed"]);
+    // The bar closes: only its own text goes; the connection text stands
+    // until the reconnect ends its cause.
+    app.close_find();
+    assert_eq!(app.notice(), Some("Connection lost."));
+}

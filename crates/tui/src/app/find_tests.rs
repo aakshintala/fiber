@@ -2978,3 +2978,51 @@ fn an_ancestor_fetch_names_its_session() {
         .unwrap_or_else(|| panic!("page {}", fetch.page));
     assert_eq!(page.session, contract::SessionId(ANCESTOR.to_owned()));
 }
+
+/// The search-incomplete notice's identity: the text `find_lost` pushes.
+fn search_text() -> String {
+    "Could not search all of history: connection lost".to_owned()
+}
+
+#[test]
+fn a_completed_rescan_clears_the_search_text() {
+    let (mut app, log, _) = dropped_fetch();
+    app.find_lost();
+    assert_eq!(app.notice(), Some(search_text().as_str()));
+    // The settle finds nothing resident to rescan, but its pump
+    // refetches the dropped page: with a fetch in flight the notice
+    // stands.
+    app.settle_find();
+    assert_eq!(app.notice(), Some(search_text().as_str()));
+    let mut outgoing = app.find_outgoing();
+    assert_eq!(outgoing.len(), 1, "the pump refetches the dropped page");
+    let (id, from, to) = command(&outgoing.remove(0));
+    app.on_line(hub_answer(&id, &log, from, to));
+    // The answer landed: the next settle walks the whole order with
+    // nothing on the wire, and the search is whole again.
+    app.settle_find();
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn unscanned_positions_keep_the_search_text_with_no_fetch() {
+    let (mut app, _, _) = dropped_fetch();
+    // The link going down clears the fetch but leaves dropped pages
+    // unscanned, and the pump stays quiet while it is down: exactly
+    // one completion side holds.
+    app.disconnected();
+    assert!(!app.find.fetching(), "no fetch on the wire");
+    assert!(
+        app.find.cursor() < app.pages().page_count(),
+        "dropped pages still unscanned"
+    );
+    assert_eq!(app.notice(), Some(search_text().as_str()));
+    app.settle_find();
+    // Pins the && in the rescan-complete clear: || would clear on the
+    // no-fetch side alone.
+    assert_eq!(
+        app.notice(),
+        Some(search_text().as_str()),
+        "unscanned positions keep the text with no fetch"
+    );
+}

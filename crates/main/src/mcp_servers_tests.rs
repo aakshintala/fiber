@@ -138,6 +138,137 @@ fn no_servers_starts_nothing() {
     assert!(specs.notices.is_empty());
 }
 
+/// An image child that refuses everything: the tests below start no
+/// server, so it never runs.
+struct DummyImages;
+
+impl contract::images::Images for DummyImages {
+    fn process(
+        &self,
+        _bytes: &[u8],
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<contract::provider::ImageRef, contract::images::ImageError> {
+        Err(contract::images::ImageError::Unreadable(
+            "unused".to_owned(),
+        ))
+    }
+}
+
+/// No servers started: the hub's view of the session's slots.
+fn empty_servers(
+    rig: &crate::test_support::Rig,
+    clock: &std::sync::Arc<dyn contract::clock::Clock>,
+) -> std::sync::Arc<mcp::Servers> {
+    let started = mcp::start(
+        Vec::new(),
+        &rig.workspace,
+        &rig.root.path().join("artifacts"),
+        std::sync::Arc::new(DummyImages),
+        &config::mcp_cache_dir(&rig.home),
+        clock,
+        "test",
+    );
+    assert!(started.failed.is_empty());
+    std::sync::Arc::new(started.servers)
+}
+
+fn sources_of(rig: &crate::test_support::Rig) -> config::Sources {
+    config::Sources {
+        home: rig.home.clone(),
+        workspace: rig.workspace.clone(),
+        project: config::ProjectKey::new("test").unwrap(),
+        overrides: Vec::new(),
+    }
+}
+
+#[test]
+fn reconnecting_a_repository_server_is_invalid_arguments() {
+    // The repository arm fires before any start: a mutant matching any
+    // other server would let the reconnect through to adoption.
+    let setup = Setup::new();
+    setup.repository(&json!({"mcp": {"servers": {"db": {"command": "/bin/true"}}}}));
+    let config = setup.rig.config(Vec::<String>::new());
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let servers = empty_servers(&setup.rig, &clock);
+    let images: std::sync::Arc<dyn contract::images::Images> = std::sync::Arc::new(DummyImages);
+    let error = super::adopt_server(
+        &config,
+        &sources_of(&setup.rig),
+        &servers,
+        "db",
+        &setup.rig.root.path().join("artifacts"),
+        &images,
+        &clock,
+    )
+    .err()
+    .expect("a repository server never adopts");
+    assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+    assert!(
+        error.message.contains("is a repository server"),
+        "{error:?}"
+    );
+    servers.stop();
+}
+
+#[test]
+fn a_ready_after_a_failure_clears_the_failure() {
+    // The log fold drops a failure its ready supersedes: without the
+    // removal the stopped-then-restarted server would read failed.
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"db": {"command": "/bin/true"}}}}));
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let sessions = setup.rig.root.path().join("sessions");
+    let log = std::sync::Arc::new(
+        log::Log::create(
+            &sessions,
+            contract::SessionId("s_ready".into()),
+            clock.clone(),
+        )
+        .expect("the log opens"),
+    );
+    let failed = || {
+        contract::events::Event::McpServerFailed(contract::events::McpServerFailed {
+            server: "db".into(),
+            reason: contract::events::ServerFailure::StartFailed,
+            will_restart: false,
+            error: contract::shapes::Failure {
+                code: contract::ErrorCode::McpServerUnavailable,
+                message: "The MCP server `db` failed to start: refused.".into(),
+                retry_after_ms: None,
+                provider: None,
+            },
+        })
+    };
+    log.append(&failed(), None, None)
+        .expect("the failure appends");
+    log.append(
+        &contract::events::Event::McpServerReady(contract::events::McpServerReady {
+            server: "db".into(),
+        }),
+        None,
+        None,
+    )
+    .expect("the ready appends");
+    let servers = empty_servers(&setup.rig, &clock);
+    let waiting = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let refresh = super::servers_refresh(
+        sources_of(&setup.rig),
+        servers.clone(),
+        std::sync::Arc::downgrade(&log),
+        clock,
+        waiting,
+    );
+    let rows = refresh(Vec::new()).expect("the refresh reads");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "db");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::Connecting,
+        "{rows:?}"
+    );
+    servers.stop();
+}
+
 #[test]
 fn a_persons_server_becomes_a_spec_with_defaults() {
     let setup = Setup::new();

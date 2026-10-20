@@ -120,11 +120,27 @@ fn slash_eight_of_forty() {
     insta::assert_snapshot!("slash", screen(&app, 160, 48));
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
-    assert!(shown.contains("1–8 of 42 · ↓ 34 more"), "{shown}");
+    assert!(shown.contains("1–8 of 43 · ↓ 35 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
     assert_eq!(bars.len(), 1, "{shown}");
     assert!(row_text(&buf, bars[0]).contains("home"), "{shown}");
+}
+
+#[test]
+fn slash_exit_alias() {
+    let mut app = attached(160, 48);
+    type_text(&mut app, "/exit");
+    insta::assert_snapshot!("slash-exit-alias", screen(&app, 160, 48));
+    // The alias query finds exactly the quit entry, carrying `/exit`,
+    // with no range line.
+    let shown = screen(&app, 160, 48);
+    let quit = shown
+        .lines()
+        .find(|line| line.contains("Quits."))
+        .expect("the quit row");
+    assert!(quit.contains("/exit"), "{shown}");
+    assert!(!shown.contains(" of "), "{shown}");
 }
 
 #[test]
@@ -136,10 +152,10 @@ fn a_scrolled_slash_list_counts_both_directions() {
         assert_eq!(app.on_key(Key::Down, now), Effect::None);
     }
     let shown = screen(&app, 160, 48);
-    // `/quota` is one more built-in: the window is unchanged, the total
+    // `/mcp` is one more built-in: the window is unchanged, the total
     // and the count below move by one.
     assert!(
-        shown.contains("↑ 3 above · 4–11 of 42 · ↓ 31 more"),
+        shown.contains("↑ 3 above · 4–11 of 43 · ↓ 32 more"),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -324,7 +340,7 @@ fn narrow_slash() {
     app.set_size(100, 40);
     type_text(&mut app, "/");
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
-    assert!(screen(&app, 100, 40).contains("1–8 of 42 · ↓ 34 more"));
+    assert!(screen(&app, 100, 40).contains("1–8 of 43 · ↓ 35 more"));
 }
 
 #[test]
@@ -420,6 +436,32 @@ fn path_spans_bold_only_the_shown_part_of_a_match() {
     let spans = path_spans("src/main.rs", 0, None, 12);
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].style, accent);
+}
+
+#[test]
+fn alias_spans_bold_only_the_query() {
+    use super::alias_spans;
+    use ratatui::style::Style;
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let bold = dim.add_modifier(Modifier::BOLD);
+    // Past the " /" prefix the query reads bold between dim ends.
+    let spans = alias_spans(Some("exit"), "exi");
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| span.content.clone())
+            .collect::<Vec<_>>(),
+        [" /", "exi", "t"]
+    );
+    assert_eq!(spans[0].style, dim);
+    assert_eq!(spans[1].style, bold);
+    assert_eq!(spans[2].style, dim);
+    // No match: one dim span.
+    let spans = alias_spans(Some("exit"), "zzz");
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].style, dim);
+    // No alias: no spans.
+    assert!(alias_spans(None, "exi").is_empty());
 }
 
 #[test]
@@ -530,6 +572,7 @@ fn windowed() -> Vec<crate::slash::Row> {
     (0..8)
         .map(|n| crate::slash::Row {
             name: format!("n{n}"),
+            alias: None,
             description: format!("Does n{n}."),
             hint: None,
             tag: "skill".to_owned(),
@@ -638,9 +681,9 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     let shown = screen(&app, 80, 12);
     let bars = barred(&buf);
     assert_eq!(bars.len(), 1, "{shown}");
-    // `/quota` sits after `/usage`: ten downs bar `/panel` now.
-    assert!(row_text(&buf, bars[0]).contains("panel"), "{shown}");
-    assert!(shown.contains("of 42"), "{shown}");
+    // `/mcp` sits after `/tools`: ten downs bar `/quota` now.
+    assert!(row_text(&buf, bars[0]).contains("quota"), "{shown}");
+    assert!(shown.contains("of 43"), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,

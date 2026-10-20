@@ -19,7 +19,8 @@ use contract::clock::{Clock, Wake};
 use contract::diag::Timing;
 use contract::emit::Emit;
 use contract::events::{
-    Clients, CommandInfo, CommandResult, CredentialLabels, Event, QuotaInfo, SkillInfo, ToolInfo,
+    Clients, CommandInfo, CommandResult, CredentialLabels, Event, McpServerRow, QuotaInfo,
+    SkillInfo, ToolInfo,
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
@@ -71,6 +72,17 @@ pub struct Replacement {
 type CredentialsRead = Arc<dyn Fn() -> Option<CredentialLabels> + Send + Sync>;
 type AdmittedRead = Arc<dyn Fn() -> String + Send + Sync>;
 type QuotaRead = Arc<dyn Fn(bool) -> (Vec<QuotaInfo>, f64) + Send + Sync>;
+/// Reads the current MCP server rows for the `mcp_servers` answer from
+/// the tools answer's rows: installed by the session process, which owns
+/// the configuration, the servers and the log the rows fold.
+pub type ServersRefresh =
+    Arc<dyn Fn(Vec<ToolInfo>) -> Result<Vec<McpServerRow>, Failure> + Send + Sync>;
+/// Runs one server's login to completion: installed by the session
+/// process alongside the in-flight map the entry guards on. The door
+/// runs it on its own thread, so a waiting login never holds a
+/// connection reader.
+pub type McpLogin =
+    Arc<dyn Fn(&str, Arc<dyn Fn(Delivery) + Send + Sync>) -> Result<(), Failure> + Send + Sync>;
 const DEFAULT_QUOTA_NOTICE_AT: f64 = 80.0;
 
 /// What every connection thread shares. The session holds it strongly; the
@@ -90,6 +102,12 @@ pub(crate) struct Gate {
     skills: Mutex<Vec<SkillInfo>>,
     quota: OnceLock<QuotaRead>,
     credentials: OnceLock<(CredentialsRead, AdmittedRead)>,
+    /// The installed server-rows reader and login runner for the MCP
+    /// driver commands (`docs/mcp.md`, "Servers, their state and the
+    /// per-server commands"). With none installed, both commands are
+    /// unknown, as `commands` is empty until set.
+    servers_refresh: OnceLock<ServersRefresh>,
+    mcp_login: OnceLock<McpLogin>,
     pub(crate) accepted: Accepted,
     /// The loop's inbox (`docs/architecture.md`, "One inbox"): unbounded;
     /// each entry is one admitted command, a job's end or a hook's delivery,
@@ -374,6 +392,20 @@ impl Session {
     pub fn quota(&self, read: QuotaRead) {
         let stored = self.gate.quota.set(read);
         debug_assert!(stored.is_ok(), "quota is wired once");
+    }
+
+    /// Wires the server-rows reader for the `mcp_servers` answer before
+    /// the session runs.
+    pub fn mcp_servers(&self, refresh: ServersRefresh) {
+        let stored = self.gate.servers_refresh.set(refresh);
+        debug_assert!(stored.is_ok(), "mcp_servers is wired once");
+    }
+
+    /// Wires one server's login runner for the `mcp_login` command before
+    /// the session runs.
+    pub fn mcp_login(&self, login: McpLogin) {
+        let stored = self.gate.mcp_login.set(login);
+        debug_assert!(stored.is_ok(), "mcp_login is wired once");
     }
 
     /// Wires the credential labels reader and the admitted-provider reader
@@ -664,6 +696,16 @@ impl Gate {
             .map_or_else(|| (Vec::new(), DEFAULT_QUOTA_NOTICE_AT), |read| read(fetch))
     }
 
+    /// The installed server-rows reader, if one is wired.
+    pub(crate) fn servers_refresh(&self) -> Option<ServersRefresh> {
+        self.servers_refresh.get().cloned()
+    }
+
+    /// The installed login runner, if one is wired.
+    pub(crate) fn mcp_login(&self) -> Option<McpLogin> {
+        self.mcp_login.get().cloned()
+    }
+
     pub(crate) fn credentials_reader(&self) -> Option<CredentialsRead> {
         self.credentials.get().map(|(labels, _)| Arc::clone(labels))
     }
@@ -783,6 +825,8 @@ fn open_in(
         skills: Mutex::new(Vec::new()),
         quota: OnceLock::new(),
         credentials: OnceLock::new(),
+        servers_refresh: OnceLock::new(),
+        mcp_login: OnceLock::new(),
         accepted: Accepted::new(),
         inbox: Mutex::new(None),
         cancel: OnceLock::new(),

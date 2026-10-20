@@ -547,7 +547,10 @@ pub(crate) fn run_new(
     // `mcp_servers_started` writes after this read: the late preparer
     // drops the ones it would repeat and keeps the new ones.
     let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
+    let providers = reload.mcp_providers();
     let (reloader, late) = reload.preparers(written);
+    session.mcp_servers(providers.refresh);
+    session.mcp_login(providers.login);
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
     let reads = switching.reads();
@@ -658,6 +661,7 @@ pub(crate) fn run_new(
                         .on_handoff(forget)
                         .switcher(switcher, switchable)
                         .reloader(reloader)
+                        .reconnector(providers.reconnect)
                         .late_extensions(late)
                         .repository_code(offer)
                         .approved_code(load)

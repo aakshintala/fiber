@@ -152,6 +152,10 @@ pub(crate) enum Act {
     OpenLocal(Option<PathBuf>),
     /// Start the browser login for this provider.
     Login(String),
+    /// Reconnect this MCP server: the hub restarts the one slot.
+    McpReconnect(String),
+    /// Log in this MCP server: the hub runs the OAuth device flow.
+    McpLogin(String),
     /// Read the reviewer choices for this stored provider in the
     /// background, after its key was stored.
     Reviewer(String),

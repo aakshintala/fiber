@@ -45,6 +45,7 @@ mod login_view;
 mod login_worker;
 mod look;
 mod markdown;
+mod mcp_view;
 mod model_picker;
 mod motion;
 mod mouse;

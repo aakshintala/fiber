@@ -15,7 +15,7 @@ expression: "screen(&app, 160, 48)"
     Sessions                   Insert a line break                                                       Shift+Enter · Ctrl+J
     Sessions                   Close what is on top; interrupt the turn when nothing is open             Esc · click the overlay's ✕ or outside it; click "Esc
                                                                                                          to interrupt"
-    Sessions                   Clear the draft, then quit (twice within about a second on an empty box)  Ctrl+C · /quit
+    Sessions                   Clear the draft, then quit (twice within about a second on an empty box)  Ctrl+C · /quit, /exit
     Sessions                   Go home                                                                   ⌥0 · /home
     Sessions                   Start a new session                                                       Ctrl+N · /new
     Sessions                   Switch to the session of rail card N                                      ⌥1 to ⌥9 · click the card
