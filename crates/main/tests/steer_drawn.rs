@@ -162,16 +162,29 @@ fn a_steer_draws_its_queue_row_then_its_card_rule() {
     });
     // Enter during the turn sends the steer; the draft clears.
     run.write(b"use x\r");
+    // The held reply leaves on every path: the explicit release below
+    // frees it once the poll ends, and the guard frees it if the poll
+    // fails first, so a failure never strands the held reply. Releasing
+    // twice is harmless.
+    struct ReleaseHold<'a> {
+        server: &'a ProviderServer,
+    }
+    impl Drop for ReleaseHold<'_> {
+        fn drop(&mut self) {
+            self.server.release();
+        }
+    }
+    let _hold = ReleaseHold { server: &server };
     // The queue row while the steer waits: a fixed bound well under the
     // run deadline, recording a bool and never asserting inside the poll,
     // so the held reply is released on every path below before any
     // assertion, and a red run fails on the assertion, never hanging.
     // The bound is one Deadline whose remainder ends the poll; each pause
-    // is a short bounded receive on an empty channel, never a sleep, so
-    // no test code reads the clock and a poll pause is not a deadline
-    // (`docs/testing.md`, "Waits and timeouts").
+    // is a short bounded receive on a live but empty channel, never a
+    // sleep, and a poll pause is not a deadline (`docs/testing.md`,
+    // "Waits and timeouts").
     let bound = Deadline::after(Duration::from_secs(10));
-    let (_, paused) = std::sync::mpsc::channel::<()>();
+    let (_signal, paused) = std::sync::mpsc::channel::<()>();
     let mut saw_queue = false;
     while !bound.left().is_zero() {
         if queue_row(&run.screen()) {
