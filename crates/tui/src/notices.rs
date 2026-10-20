@@ -163,7 +163,12 @@ impl Notices {
     /// notice worth of state even beside an identical choice, so each
     /// push stacks its own row.
     pub(crate) fn push(&mut self, code: &str, text: String) {
-        self.push_identified(code, text.clone(), text);
+        let identity = if code == "switch_pending" {
+            format!("{}#{}", text, self.next)
+        } else {
+            text.clone()
+        };
+        self.push_identified(code, identity, text);
     }
 
     /// Adds `text` under `code` with `identity` on top, dropping a
@@ -171,6 +176,13 @@ impl Notices {
     /// for `stream_closed`, the full text otherwise, so a second message
     /// with another identity stacks beside the first.
     pub(crate) fn push_identified(&mut self, code: &str, identity: String, text: String) {
+        if self
+            .stack
+            .iter()
+            .any(|notice| notice.code == code && notice.identity == identity)
+        {
+            return;
+        }
         let id = self.next;
         self.next = self.next.saturating_add(1);
         self.stack.push(Notice {
@@ -193,7 +205,31 @@ impl Notices {
         dead_code,
         reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
     )]
-    pub(crate) fn sweep(&mut self, _now: Instant) {}
+    pub(crate) fn sweep(&mut self, now: Instant) {
+        for notice in &mut self.stack {
+            if notice.born.is_none() {
+                notice.born = Some(now);
+            }
+        }
+        let held = self.held_from;
+        let overlay = self.overlay;
+        self.stack.retain(|notice| {
+            if kind(&notice.code) != Kind::Event {
+                return true;
+            }
+            let born = notice.born.unwrap_or(now);
+            if now.saturating_duration_since(born) < FADE {
+                return true;
+            }
+            if held.is_some_and(|from| notice.id >= from) {
+                return true;
+            }
+            if overlay == Some(Overlay::All) || overlay == Some(Overlay::One(notice.id)) {
+                return true;
+            }
+            false
+        });
+    }
 
     /// The earliest live unpaused event expiry: what the frame arms the
     /// tick with beside the motion and items wakes. A held notice, and a
@@ -206,7 +242,17 @@ impl Notices {
         reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
     )]
     pub(crate) fn notices_wake(&self) -> Option<Instant> {
-        None
+        let held = self.held_from;
+        let overlay = self.overlay;
+        self.stack
+            .iter()
+            .filter(|notice| kind(&notice.code) == Kind::Event)
+            .filter(|notice| held.is_none_or(|from| notice.id < from))
+            .filter(|notice| {
+                overlay != Some(Overlay::All) && overlay != Some(Overlay::One(notice.id))
+            })
+            .filter_map(|notice| notice.born.map(|born| born + FADE))
+            .min()
     }
 
     /// Drops the notice under `code` and `identity`, closing a single
@@ -216,7 +262,18 @@ impl Notices {
         dead_code,
         reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
     )]
-    pub(crate) fn clear_code(&mut self, _code: &str, _identity: &str) {}
+    pub(crate) fn clear_code(&mut self, code: &str, identity: &str) {
+        if let Some(at) = self
+            .stack
+            .iter()
+            .position(|notice| notice.code == code && notice.identity == identity)
+        {
+            let id = self.stack.remove(at).id;
+            if self.overlay == Some(Overlay::One(id)) {
+                self.overlay = None;
+            }
+        }
+    }
 
     /// Drops every `stream_closed` notice except `session`'s: attaching to
     /// another session ends no cause, so only other sessions' stale rows
@@ -226,7 +283,21 @@ impl Notices {
         dead_code,
         reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
     )]
-    pub(crate) fn drop_stream_closed_except(&mut self, _session: &str) {}
+    pub(crate) fn drop_stream_closed_except(&mut self, session: &str) {
+        let mut dropped = Vec::new();
+        self.stack.retain(|notice| {
+            let stale = notice.code == "stream_closed" && notice.identity != session;
+            if stale {
+                dropped.push(notice.id);
+            }
+            !stale
+        });
+        if let Some(Overlay::One(id)) = self.overlay
+            && dropped.contains(&id)
+        {
+            self.overlay = None;
+        }
+    }
 
     /// The newest notice's text.
     #[cfg(test)]

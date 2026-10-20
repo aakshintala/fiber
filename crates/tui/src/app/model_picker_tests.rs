@@ -88,8 +88,10 @@ fn catalogue_notices_are_pushed_once_per_read() {
     assert_eq!(app.notices().len(), 2);
     assert_eq!(app.notice(), Some("second"));
     assert_eq!(first_code(&app), "model_invalid");
+    // A second identical read adds no rows: the same code with the same
+    // text while stacked dedupes (#2843: event repeats fade as one row).
     app.on_models(Ok(catalogue));
-    assert_eq!(app.notices().len(), 4);
+    assert_eq!(app.notices().len(), 2);
 }
 
 use std::time::Instant;

@@ -4256,14 +4256,16 @@ fn reload_reports_the_same_failure_again() {
         app.on_key(Key::Char(ch), now());
     }
     let _ = app.on_key(Key::Enter, now());
-    // The same extension failing again is new again: one more notice.
+    // The same extension failing again reports anew: /reload dropped the
+    // old row with the reported set, so the re-failure's push is the one
+    // row standing (#2843: a repeat push while stacked adds no row).
     app.use_renderer(Rc::new(Fake::failing("alpha")));
     search(&app);
     assert!(app.drawn(&[]));
     let texts = notice_texts(&app);
-    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert_eq!(texts.len(), 1, "{texts:?}");
     assert!(
-        texts[1]
+        texts[0]
             .1
             .contains("extension alpha could not draw ledger_row:"),
         "{texts:?}"

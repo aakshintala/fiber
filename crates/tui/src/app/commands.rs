@@ -248,6 +248,29 @@ fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
 
 fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     // A reloaded extension draws again: its next failure reports anew.
+    // Its old renderer-failure rows go with the reported set, so the
+    // re-failure's push stacks beside nothing instead of deduping
+    // against a stale row (#2843 comment 6289251824: a repeat push while
+    // stacked adds no row, and a genuine re-failure still reports anew).
+    let stale: Vec<usize> = app
+        .notices
+        .lines()
+        .into_iter()
+        .filter_map(|line| match line {
+            super::NoticeLine::Notice { id, code, text }
+                if code == "hook_failed"
+                    && app.renderer_reported.iter().any(|(extension, _)| {
+                        text.starts_with(&format!("extension {extension} could not draw "))
+                    }) =>
+            {
+                Some(id)
+            }
+            super::NoticeLine::Notice { .. } | super::NoticeLine::More(_) => None,
+        })
+        .collect();
+    for id in stale {
+        app.notices.dismiss(id);
+    }
     app.renderer_reported.clear();
     Some(app.send_command("reload", None))
 }
