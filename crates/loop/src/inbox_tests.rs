@@ -1465,12 +1465,15 @@ fn steer_pushed(queue: &SteerQueue, log: &Arc<Log>, id: &str, text: &str) {
         .unwrap();
 }
 
-/// Every `steering_queue` row's message texts, in arrival order.
+/// Every `steering_queue` row's message texts, in arrival order: one
+/// deadline for the whole drain, never one per row (`docs/testing.md`,
+/// "Waits and timeouts").
 fn steer_rows(watched: &mut log::Watcher, count: usize) -> Vec<Vec<String>> {
+    let wait = Deadline::after(DEADLINE);
     let mut rows = Vec::new();
     while rows.len() < count {
         let line = watched
-            .recv_timeout(DEADLINE)
+            .recv_timeout(wait.left())
             .expect("a line arrives in time")
             .expect("the log outlives the drain")
             .expect("the log ended before the row");
@@ -1511,6 +1514,44 @@ fn a_reader_admitted_steer_reconciles_through_the_hook_pass_and_queues_once() {
 }
 
 #[test]
+fn apply_claims_clears_and_emits_the_queue_before_logging_the_snapshot() {
+    let queue = Arc::new(SteerQueue::new());
+    let (mut looped, log, mut watched, _home) = started_with_steering(Arc::clone(&queue));
+    let turn = TurnId("t_test".into());
+    steer_pushed(&queue, &log, "c_1", "hello");
+    looped
+        .admit_running(
+            Delivery::Steer(steer_message("hello", "c_1"), steer_ignore()),
+            &turn,
+        )
+        .unwrap();
+    assert_eq!(steer_rows(&mut watched, 1), [vec!["hello".to_owned()]]);
+    looped.apply_steering(&turn).unwrap();
+    // The claim is one section: the staged entries leave the queue and
+    // the queue emits as the section left it before anything logs, so a
+    // drop racing the apply wins by presence instead of logging a steer
+    // it already acknowledged. One wait, one deadline
+    // (`docs/testing.md`, "Waits and timeouts").
+    let wait = Deadline::after(DEADLINE);
+    let mut kinds = Vec::new();
+    while !kinds.contains(&"steering_applied".to_owned()) {
+        let line = watched
+            .recv_timeout(wait.left())
+            .expect("a line arrives in time")
+            .expect("the log outlives the drain")
+            .expect("the log ended before the apply");
+        if line.kind == "steering_queue" || line.kind == "steering_applied" {
+            kinds.push(line.kind);
+        }
+    }
+    assert_eq!(
+        kinds,
+        vec!["steering_queue".to_owned(), "steering_applied".to_owned()],
+        "the queue clears and emits before the snapshot logs"
+    );
+}
+
+#[test]
 fn a_refused_reader_admitted_steer_removes_the_row_writes_the_notice_and_applies_nothing() {
     let queue = Arc::new(SteerQueue::new());
     let hooks = Arc::new(FakeSteerHooks {
@@ -1538,9 +1579,12 @@ fn a_refused_reader_admitted_steer_removes_the_row_writes_the_notice_and_applies
     let kinds = saved_kinds(&home);
     assert!(!kinds.contains(&"steering_applied".to_owned()));
     // The notice is ephemeral: it arrives on the watcher, not the file.
+    // Its own wait follows the apply, so its own deadline covers the
+    // whole scan (`docs/testing.md`, "Waits and timeouts").
+    let wait = Deadline::after(DEADLINE);
     let notice = loop {
         let line = watched
-            .recv_timeout(DEADLINE)
+            .recv_timeout(wait.left())
             .expect("a line arrives in time")
             .expect("the log outlives the drain")
             .expect("the log ended before the notice");
