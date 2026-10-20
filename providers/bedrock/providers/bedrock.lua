@@ -86,9 +86,19 @@ local function civil_from_days(z)
   return y, m, d
 end
 
+-- The number of days in month `m` of year `y`.
+local function days_in_month(y, m)
+  if m == 2 then
+    return (y % 4 == 0 and (y % 100 ~= 0 or y % 400 == 0)) and 29 or 28
+  end
+  return (m == 4 or m == 6 or m == 9 or m == 11) and 30 or 31
+end
+
 -- Unix seconds of an ISO 8601 time as the AWS CLI prints `Expiration`,
 -- such as `2026-10-20T03:43:31+00:00` or `2026-10-20T03:43:31Z`, with or
--- without fractional seconds. Nil for anything else.
+-- without fractional seconds. Nil for anything else, including a time with
+-- no zone or a field out of range, so a bad `Expiration` fails rather than
+-- putting off the refresh.
 local function unix_seconds(text)
   if type(text) ~= "string" then
     return nil
@@ -98,13 +108,20 @@ local function unix_seconds(text)
   if y == nil then
     return nil
   end
+  y, mo, d = tonumber(y), tonumber(mo), tonumber(d)
+  h, mi, s = tonumber(h), tonumber(mi), tonumber(s)
+  if mo < 1 or mo > 12 or d < 1 or d > days_in_month(y, mo)
+    or h > 23 or mi > 59 or s > 59
+  then
+    return nil
+  end
   rest = rest:gsub("^%.%d+", "")
   local offset
-  if rest == "Z" or rest == "" then
+  if rest == "Z" then
     offset = 0
   else
     local sign, oh, om = rest:match("^([+-])(%d%d):?(%d%d)$")
-    if sign == nil then
+    if sign == nil or tonumber(oh) > 23 or tonumber(om) > 59 then
       return nil
     end
     offset = (tonumber(oh) * 60 + tonumber(om)) * 60
@@ -112,8 +129,24 @@ local function unix_seconds(text)
       offset = -offset
     end
   end
-  local days = days_from_civil(tonumber(y), tonumber(mo), tonumber(d))
-  return days * 86400 + tonumber(h) * 3600 + tonumber(mi) * 60 + tonumber(s) - offset
+  return days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s - offset
+end
+
+-- The first line of the AWS CLI's stderr, at most 200 bytes, with each run
+-- of 20 or more key-like characters replaced: a profile's credential
+-- process can print a secret there, and no credential is known yet to
+-- redact it with.
+local function failure_line(stderr)
+  local first = (stderr or ""):match("[^\r\n]*[^%s][^\r\n]*") or ""
+  first = first:gsub("[%w+/=]+", function(run)
+    if #run >= 20 then
+      return "[redacted]"
+    end
+  end)
+  if #first > 200 then
+    first = first:sub(1, 200) .. "..."
+  end
+  return first
 end
 
 -- What to set when no credential was found: under `default` the
@@ -141,7 +174,7 @@ local function exported(profile)
       .. remedy(profile), 0)
   end
   if ran.exit_code ~= 0 then
-    local first = (ran.stderr or ""):match("[^\r\n]*[^%s][^\r\n]*") or ""
+    local first = failure_line(ran.stderr)
     error("bedrock credential: `aws configure export-credentials` failed"
       .. " (exit " .. tostring(ran.exit_code) .. ")"
       .. (first ~= "" and (": " .. first) or "")
