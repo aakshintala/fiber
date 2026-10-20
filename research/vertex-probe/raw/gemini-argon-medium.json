@@ -1,0 +1,51 @@
+{
+  "body": {
+    "error": {
+      "code": 403,
+      "message": "Request rejected in accordance with our terms of use and policies.",
+      "status": "PERMISSION_DENIED"
+    }
+  },
+  "cost": 0.0,
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-length": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Reply with the single word: ok"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 512,
+      "thinkingConfig": {
+        "includeThoughts": true,
+        "thinkingLevel": "MEDIUM"
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    }
+  },
+  "status": 403,
+  "usage": {}
+}

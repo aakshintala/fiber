@@ -1,0 +1,4 @@
+data: {"candidates": [{"content": {"role": "model","parts": [{"functionCall": {"name": "get_weather","args": {"city": "Paris","days": 1,"unit": "c"},"id": "call_1109680"},"thoughtSignature": "AY89a1+R7WvciZoUqgjy8r2JJ3QPgk+spyPDiiThxApg0wcopjwu7dKi+nPVwmFfR5n4mwyOKQiOs5r78QSrk35KtL6Brmbil5M5yRE1RDCvOr4v49boIddZauk="}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-3-flash-preview","createTime": "2026-10-20T16:58:36.031532Z","responseId": "00000000000000000000003"}
+
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": ""}]},"finishReason": "STOP"}],"usageMetadata": {"promptTokenCount": 58,"candidatesTokenCount": 26,"totalTokenCount": 84,"trafficType": "ON_DEMAND","promptTokensDetails": [{"modality": "TEXT","tokenCount": 58}],"candidatesTokensDetails": [{"modality": "TEXT","tokenCount": 26}]},"modelVersion": "gemini-3-flash-preview","createTime": "2026-10-20T16:58:36.031532Z","responseId": "00000000000000000000003"}
+
