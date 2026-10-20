@@ -220,6 +220,48 @@ fn enter_on_failed_sends_mcp_reconnect_and_its_answer_requeries() {
 }
 
 #[test]
+fn the_requery_after_a_reconnect_refills_the_rows() {
+    // `expect` names the re-sent command: a mutant dropping it leaves
+    // the rows stale, and the answered reconnect never shows.
+    let mut app = connected(Some(fake()));
+    let id = open_mcp(&mut app);
+    answer_servers(&mut app, &id);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    let reconnect = lines[0]["id"].as_str().unwrap_or_default().to_owned();
+    let lines = sent_lines(app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": reconnect}),
+    )));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "mcp_servers");
+    let requery = lines[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": requery, "result": serde_json::json!({"servers": [
+            {"name": "down", "layer": "project", "state": "ready",
+             "reason": "", "tools": 2, "approved": true, "auth_url": null},
+            {"name": "remote", "layer": "global", "state": "needs-login",
+             "reason": "The MCP server 'remote' failed to start: HTTP 401.",
+             "tools": 0, "approved": true, "auth_url": null}]})}),
+    ));
+    let frame = app.config_view_screen().expect("the view is open");
+    let texts: Vec<String> = frame
+        .rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|(text, _, _)| text.as_str())
+                .collect::<String>()
+        })
+        .collect();
+    assert!(
+        texts[0].contains("down") && texts[0].contains("ready"),
+        "{texts:?}"
+    );
+}
+
+#[test]
 fn enter_on_needs_login_sends_mcp_login_and_a_rejection_says() {
     let mut app = connected(Some(fake()));
     let id = open_mcp(&mut app);

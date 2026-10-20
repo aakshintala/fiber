@@ -519,6 +519,115 @@ fn login_against_a_fake_authorization_server_makes_the_server_ready() {
 }
 
 #[test]
+fn a_login_during_a_permission_hold_is_accepted_despite_the_busy_reconnect() {
+    // The turn holds on the shell call's permission ask, where the
+    // loop reads its inbox: it is busy while the login thread
+    // delivers its reconnect, which the turn rejects as busy. The
+    // login still succeeded, so its acknowledgement is an acceptance;
+    // a mutant answering the rejection would refuse it. Headless
+    // sessions allow shell without asking, so the standing ask rule
+    // holds the turn (`docs/permissions.md`, "Headless").
+    let setup = support::Setup::new();
+    let empty = setup.root.path().join("empty");
+    fs::create_dir_all(&empty).unwrap();
+    let remote = oauth_and_mcp();
+    let model = ProviderServer::start_with_fallback(
+        [support::stream(&[support::function_call(
+            "call_1",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )])],
+        support::hello(),
+    )
+    .unwrap();
+    setup.provider(&model);
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {"remote": {"url": format!("{}/mcp", remote.url())}}}}),
+    );
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo"})
+        ),
+    )
+    .unwrap();
+    let mut driver = Driver::start(setup, &doors::mint("s_"), empty.as_os_str());
+    driver.client.send(
+        &json!({"id": "c_prompt", "command": "prompt", "args": {"content": [{"type": "text", "text": "hi"}]}}).to_string(),
+    );
+    let mut request = String::new();
+    for line in support::until(&driver.client, "the shell permission request", |line| {
+        line["kind"] == "permission_requested"
+    }) {
+        if line["kind"] == "permission_requested" {
+            request = line["payload"]["request_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+        }
+    }
+    assert!(
+        !request.is_empty(),
+        "the permission ask carries its request id"
+    );
+    driver.client.send(
+        &json!({"id": "c_login", "command": "mcp_login", "args": {"server": "remote"}}).to_string(),
+    );
+    let auth_url = driver.stderr_until("the login to present its authorization URL", |line| {
+        line.contains("/authorize?")
+    });
+    drive_callback(&auth_url);
+    let logged_in = support::recv_answer(&driver.client, "c_login", "the login acknowledgement");
+    assert_eq!(logged_in["kind"], "command_accepted", "{logged_in:?}");
+    driver.client.send(
+        &json!({"id": "c_allow", "command": "reply", "args": {"request_id": request, "decision": "allow"}}).to_string(),
+    );
+    support::until(&driver.client, "the turn to complete", |line| {
+        line["kind"] == "turn_completed"
+    });
+    driver.finish();
+}
+
+#[test]
+fn a_login_whose_server_is_removed_before_its_callback_is_rejected() {
+    // Dropping the server and reloading before driving the callback
+    // makes the delivered reconnect unknown: the acknowledgement is
+    // a rejection, not an acceptance. A mutant accepting every
+    // rejection would accept it.
+    let setup = support::Setup::new();
+    let empty = setup.root.path().join("empty");
+    fs::create_dir_all(&empty).unwrap();
+    let remote = oauth_and_mcp();
+    let _model = configure(
+        &setup,
+        &json!({"remote": {"url": format!("{}/mcp", remote.url())}}),
+    );
+    let mut driver = Driver::start(setup, &doors::mint("s_"), empty.as_os_str());
+    driver.client.send(
+        &json!({"id": "c_login", "command": "mcp_login", "args": {"server": "remote"}}).to_string(),
+    );
+    let auth_url = driver.stderr_until("the login to present its authorization URL", |line| {
+        line.contains("/authorize?")
+    });
+    write_json(
+        &driver.setup.home().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {}}}),
+    );
+    let reloaded = driver.command("c_reload", "reload", json!({}));
+    assert_eq!(reloaded["kind"], "command_accepted", "{reloaded:?}");
+    drive_callback(&auth_url);
+    let logged_in = support::recv_answer(&driver.client, "c_login", "the login acknowledgement");
+    assert_eq!(logged_in["kind"], "command_rejected", "{logged_in:?}");
+    assert_eq!(
+        logged_in["payload"]["code"], "invalid_arguments",
+        "{logged_in:?}"
+    );
+    driver.finish();
+}
+
+#[test]
 fn reconnect_of_an_unknown_server_is_invalid_arguments() {
     let setup = support::Setup::new();
     let _model = configure(&setup, &json!({}));

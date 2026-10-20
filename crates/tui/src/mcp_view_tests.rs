@@ -129,6 +129,13 @@ fn inks(mcp: &Mcp) -> Vec<Ink> {
 }
 
 #[test]
+fn a_name_exactly_the_column_wide_is_not_cut() {
+    // The boundary a mutant flipping the comparison would cut with `…`.
+    let name = "r".repeat(super::NAME);
+    assert_eq!(fit_name(&name), name);
+}
+
+#[test]
 fn rows_show_name_layer_state_and_count() {
     let (_fake, mcp) = opened(&[ready("linear"), failed("down"), needs_login("remote")]);
     assert_eq!(
@@ -193,6 +200,20 @@ fn connecting_has_no_count_and_one_tool_sings_singular() {
     let texts = texts(&mcp);
     assert!(texts[0].contains("connecting") && !texts[0].contains("tool"));
     assert!(texts[1].contains("ready · 1 tool"));
+}
+
+#[test]
+fn page_down_moves_by_the_shown_height_not_one_row() {
+    // `shown` is the frame's rows in the 22-row context; a mutant
+    // returning one row would move a single row per page.
+    let servers: Vec<McpServerRow> = (0..25).map(|n| failed(&format!("s{n:02}"))).collect();
+    let (fake, mut mcp) = opened(&servers);
+    let context = context(&fake);
+    assert!(matches!(mcp.key(&Key::PageDown, &context), Act::Stay));
+    let Act::McpReconnect(name) = mcp.key(&Key::Enter, &context) else {
+        panic!("a page down and Enter reconnects");
+    };
+    assert_ne!(name, "s01", "a page moves more than one row");
 }
 
 #[test]
@@ -300,6 +321,55 @@ fn the_wait_shows_with_the_url_cut_to_fit() {
     assert_eq!(row.chars().count(), 80);
     assert_eq!(inks(&mcp)[0], Ink::Role(Role::Attention));
     let _ = &fake;
+}
+
+#[test]
+fn a_login_sent_without_a_url_yet_still_shows_the_wait() {
+    // The hub answers before the login presents its URL: the row still
+    // waits, with no URL to cut. A mutant dropping the sent wait, or
+    // requiring the URL beside it, reads plain needs-login.
+    let (fake, mut mcp) = opened(&[needs_login("remote")]);
+    mcp.sent("remote", "c_9".to_owned(), true);
+    let rows = texts(&mcp);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[0],
+        format!(
+            "  {} · global · needs-login · waiting for login",
+            fit_name("remote")
+        )
+    );
+    assert_eq!(inks(&mcp)[0], Ink::Role(Role::Attention));
+    let _ = &fake;
+}
+
+#[test]
+fn another_clients_login_url_shows_as_a_wait_cut_to_fit() {
+    // No command sent here: the snapshot carries another client's
+    // login URL, and the row waits on it, cut to the 80 columns the
+    // answer arrived for.
+    let url = format!("https://login.example/{}", "a".repeat(200));
+    let (_fake, mcp) = opened(&[row(
+        "remote",
+        McpServerLayer::Global,
+        McpServerState::NeedsLogin,
+        "The MCP server 'remote' failed to start: HTTP 401.",
+        Some(0),
+        true,
+        Some(&url),
+    )]);
+    let rows = texts(&mcp);
+    assert_eq!(rows.len(), 2);
+    let row = &rows[0];
+    assert!(
+        row.starts_with(&format!(
+            "  {} · global · needs-login · waiting for login · https://login.",
+            fit_name("remote")
+        )),
+        "the wait shows with the login URL: {row}"
+    );
+    assert_eq!(row.chars().count(), 80);
+    assert_eq!(inks(&mcp)[0], Ink::Role(Role::Attention));
 }
 
 #[test]
