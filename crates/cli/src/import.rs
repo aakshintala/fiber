@@ -69,7 +69,11 @@ mod tests {
     use super::*;
 
     /// The child's marker: set, the test runs the entry and exits with
-    /// its code, so the parent proves what `import` returns.
+    /// its code, so the parent proves what `import` returns. Only this
+    /// crate's own tests run against its mutants (`docs/testing/mutants.md`,
+    /// "Proving a test bites"), so the exit codes the binary tests pin
+    /// still need tests here: replacing the entry's return with a constant
+    /// must fail one of them.
     const CHILD: &str = "FIBER_CLI_IMPORT_CHILD";
 
     /// How long the re-run child may run before the test kills it and
@@ -80,10 +84,10 @@ mod tests {
         module_path!().split_once("::").unwrap().1.to_owned()
     }
 
-    /// The only child-process test here: the success path's exit code,
-    /// output and landed files are pinned by `crates/main/tests/import.rs`.
-    /// What only a child proves is the branch `run` takes before any
-    /// import: no `HOME` in the environment.
+    /// The failure exit code, and nothing else, is pinned here: output
+    /// and landed files are pinned by `crates/main/tests/import.rs`. What
+    /// only a child proves is the branch `run` takes before any import:
+    /// no `HOME` in the environment.
     #[test]
     fn import_without_a_home_dir_exits_nonzero() {
         if std::env::var_os(CHILD).is_some() {
@@ -102,5 +106,33 @@ mod tests {
             },
         );
         assert_ne!(output.status.code(), Some(0), "{output:?}");
+    }
+
+    /// The child's success marker: set, the test runs the entry and
+    /// exits with its code, so the parent proves the success path returns
+    /// zero.
+    const CHILD_SUCCESS: &str = "FIBER_CLI_IMPORT_CHILD_SUCCESS";
+
+    /// The success exit code, and nothing else: with a person's home
+    /// holding no source home the import succeeds printing nothing, so a
+    /// constant entry return fails this test.
+    #[test]
+    fn import_success_exits_zero() {
+        if std::env::var_os(CHILD_SUCCESS).is_some() {
+            let clock = FakeClock::new();
+            std::process::exit(import(ImportSource::Codex, clock.as_ref()));
+        }
+        let fixture = TempDir::new("fiber-import-cli");
+        let output = fakes::rerun_prepared(
+            &format!("{}::import_success_exits_zero", child_name()),
+            &[(CHILD_SUCCESS, "1")],
+            CHILD_WITHIN,
+            |command| {
+                command
+                    .env("FIBER_HOME", fixture.path().join("home"))
+                    .env("HOME", fixture.path());
+            },
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
     }
 }

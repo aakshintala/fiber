@@ -979,17 +979,20 @@ impl TomlReader {
 
 /// Strips a `#` comment outside quotes. `None` when a quote is left open:
 /// the value may continue on the next line, which the subset never reads.
-/// An escape at the last byte skips past the end, which ends the scan
-/// with the quote still open: `None`, exactly as not skipping does, so no
-/// bounds check guards the skip.
+/// The scan walks the bytes with an iterator and a flag for the byte after
+/// a backslash, so there is no index arithmetic a mutant can stick on
+/// (`docs/testing/mutants.md`, "Proving a test bites").
 fn strip_comment(line: &str) -> Option<&str> {
     let mut quote = None;
-    let bytes = line.as_bytes();
-    let mut index = 0;
-    while let Some(byte) = bytes.get(index).copied() {
+    let mut escaped = false;
+    for (index, byte) in line.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
         if let Some(open) = quote {
             if byte == b'\\' && open == b'"' {
-                index += 2;
+                escaped = true;
                 continue;
             }
             if byte == open {
@@ -1000,7 +1003,6 @@ fn strip_comment(line: &str) -> Option<&str> {
         } else if byte == b'#' {
             return Some(line.get(..index).unwrap_or(""));
         }
-        index += 1;
     }
     if quote.is_some() {
         return None;
@@ -1103,13 +1105,16 @@ fn parse_basic_string(rest: &str) -> Option<String> {
 fn split_top_level(text: &str) -> Option<Vec<&str>> {
     let mut parts = Vec::new();
     let mut quote = None;
+    let mut escaped = false;
     let mut start = 0;
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    while let Some(byte) = bytes.get(index).copied() {
+    for (index, byte) in text.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
         if let Some(open) = quote {
             if byte == b'\\' && open == b'"' {
-                index += 2;
+                escaped = true;
                 continue;
             }
             if byte == open {
@@ -1121,7 +1126,6 @@ fn split_top_level(text: &str) -> Option<Vec<&str>> {
             parts.push(text.get(start..index).unwrap_or("").trim());
             start = index + 1;
         }
-        index += 1;
     }
     if quote.is_some() {
         return None;
@@ -1232,16 +1236,21 @@ fn skill_taken(home: &Path, name: &str, bytes: &[u8], taken: &BTreeSet<String>) 
         .is_none_or(|current| current != bytes)
 }
 
-/// Appends `-2`, `-3` until the name is free.
+/// Appends `-2`, `-3` until the name is free. The candidates are walked
+/// with an iterator over a finite prefix — one more candidate than taken
+/// names, so one is free by construction — instead of a hand-stepped
+/// index, so a mutant fails with a wrong name, never a hang
+/// (`docs/testing/mutants.md`, "Proving a test bites"). The trailing
+/// fallback is unreachable: panics are denied, so it returns the last
+/// candidate instead.
 fn suffixed(taken: &BTreeSet<String>, name: &str) -> String {
-    let mut index = 2;
-    loop {
+    for index in 2..taken.len().saturating_add(3) {
         let candidate = format!("{name}-{index}");
         if !taken.contains(&candidate) {
             return candidate;
         }
-        index += 1;
     }
+    format!("{name}-{}", taken.len().saturating_add(2))
 }
 
 /// Writes every planned item one file at a time through the locked atomic
@@ -2143,7 +2152,7 @@ mod tests {
         fixture.tmp.write(
             "source/config.toml",
             "[mcp_servers.cooked]\n\
-             command = \"n\\nt\\tr\\rf\\fb\\\\g\\\"q\"\n\
+             command = \"n\\nt\\tr\\rf\\fb\\b\\\\g\\\"q\"\n\
              \n\
              [mcp_servers.lit]\n\
              command = 'tool'\n",
@@ -2155,7 +2164,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             written.pointer("/mcp/servers/cooked").unwrap(),
-            &json!({"command": "n\nt\tr\rf\u{c}b\\g\"q"})
+            &json!({"command": "n\nt\tr\rf\u{c}b\u{8}\\g\"q"})
         );
         assert_eq!(
             written.pointer("/mcp/servers/lit").unwrap(),
