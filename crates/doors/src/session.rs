@@ -522,6 +522,13 @@ impl Session {
         Arc::clone(&self.gate.admission)
     }
 
+    /// The steering queue the door shares with the loop: a reader admits
+    /// into it at once, and the loop reconciles each delivery against it
+    /// at the drain (`docs/architecture.md`, "One inbox").
+    pub fn steering(&self) -> Arc<Queue> {
+        Arc::clone(&self.gate.steering)
+    }
+
     /// The session's own id: its directory's name, which also names its
     /// socket in `run/`.
     pub fn id(&self) -> &SessionId {
