@@ -155,8 +155,8 @@ fn initializes(dir: &std::path::Path) -> usize {
 
 #[test]
 fn live_names_hold_the_running_servers_tools() {
-    // `restart` drops what the live list holds past the re-list, so a
-    // mutant emptying it would never drop a removed tool.
+    // Pins `restart`'s before-set: it diffs `slot.live_names()` into
+    // `removed`, so a mutant emptying the live list would drop nothing.
     let setup = Setup::new();
     setup.tools(&json!([{"name": "echo"}]));
     let started = setup.start(vec![setup.spec("fx")]);
