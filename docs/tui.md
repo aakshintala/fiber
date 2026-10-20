@@ -2076,7 +2076,9 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   terminal subscribes at `summary` and asks `history`, with no `from_seq`,
   for the session's last lines. It cuts them into pages and asks for the
   lines before them until it holds the pages that fill the screen up from
-  its last row, and begin at a turn's start. The first frame draws those
+  its last row, and begin at a turn's start. When the held run reaches the
+  session's `seq 0` still unfilled, the read continues past it into each
+  ancestor named by `forked_from` until the screen is full. The first frame draws those
   pages. The terminal then raises the subscription to `full`.
   The pass goes over the session's lines as the `full` subscription sends
   them. It builds the panel's cards and counts every row, keeping each
@@ -2103,6 +2105,13 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   once. Stashed lines fold in order before the new fold, whose lines are
   never stashed. The late answer is discarded by its id, and the page
   loads in a frame after the pass ends.
+- **A rewound session pages across its `forked_from` chain as one history,**
+  cut at each continuation point. The terminal reads `forked_from` from the
+  session's `session_started`, asks `history` with `session_id` set to that
+  ancestor and `to_seq` set to its `seq`, pages that session the same way,
+  and repeats for each further ancestor. Pages, row counts, search and the
+  opening pass treat the chain as one history. The terminal never reads a
+  log from disk.
 - **Pages are cut inside turns,** at `step_started`, about 64 lines each, and
   never inside a tool group, so each page renders on its own.
 - **The window** is the pages on screen plus one screen of rows above and
