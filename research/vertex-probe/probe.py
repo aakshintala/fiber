@@ -107,6 +107,9 @@ _IDS = {}
 
 
 def stand_in(found):
+    # A stand-in an earlier run wrote is kept, so a rescrub changes nothing.
+    if re.fullmatch(r"(?:[a-z]+_vrtx_)?0{5,}[0-9]{1,6}", found):
+        return found
     if found not in _IDS:
         n = str(len(_IDS) + 1)
         prefix = re.match(r"[a-z]+_vrtx_", found)
@@ -460,14 +463,14 @@ def case_claude_data_sharing():
     claude("claude-data-sharing", claude_body("hi", max_tokens=4), model="claude-fable-5")
 
 
-def case_claude_expired():
+def case_expired():
     """A token gcloud printed more than an hour ago, read from the file
     PROBE_EXPIRED_TOKEN names; the file is never saved."""
     with open(os.environ["PROBE_EXPIRED_TOKEN"]) as f:
         old = f.read().strip()
-    global _SECRETS
     secrets().append((old, "[expired token]"))
     claude("claude-expired-token", claude_body("hi", max_tokens=4), auth=old)
+    gemini("gemini-expired-token", gemini_body("hi"), auth=old)
 
 
 # --- Gemini -------------------------------------------------------------

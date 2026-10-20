@@ -64,8 +64,9 @@ nothing.
 | Every other case | 400, 401, 403, 404, 429 | | | | $0 |
 | **Probe** | | | | | **$0.007911** |
 | Fiber, `fiber ask` "Reply with the single word: hello" | 200 | 3,188 | 1 | | $0.000799 |
-| Fiber, a tool turn stopped by hand after 7 model and 7 reviewer calls | 200 each | | | | $0.008957 |
-| **Total** | | | | | **$0.017667** |
+| Fiber, a `gemini-3.1-flash-lite` tool turn stopped by hand: the model repeated one invalid `shell` call through 7 model and 7 reviewer calls | 200 each | | | | $0.008957 |
+| Fiber, `gemini-3-flash-preview` reading `notes.md` with `read`, then answering | 200, 200 | 3,197, 3,230 | 28, 3 | | $0.003306 |
+| **Total** | | | | | **$0.020973** |
 
 ## Gemini
 
@@ -174,7 +175,7 @@ holding one error object, `[{"error": {"code": ..., "message": ...,
 | `gemini-bad-request` (a role `robot`) | 400 | `INVALID_ARGUMENT`, "Please use a valid role: user, model." |
 | `gemini-bad-token`, `claude-bad-token` (a garbage bearer) | 401 | `UNAUTHENTICATED`, "Request had invalid authentication credentials. ...", `ErrorInfo` reason `ACCESS_TOKEN_TYPE_UNSUPPORTED` |
 | `claude-no-auth` (no `authorization`) | 401 | `UNAUTHENTICATED`, "Request is missing required authentication credential. ...", reason `CREDENTIALS_MISSING` |
-| `claude-expired-token` (a token gcloud printed more than an hour before) | see the file | see the file |
+| `claude-expired-token`, `gemini-expired-token` (a token past its expiry) | 401 | the same body and reason as a garbage bearer, `ACCESS_TOKEN_TYPE_UNSUPPORTED` |
 | `gemini-api-key-header` | 401 | `UNAUTHENTICATED`, "API keys are not supported by this API. ...", reason `CREDENTIALS_MISSING` |
 | `gemini-429` | 429 | `RESOURCE_EXHAUSTED`, "Resource exhausted. Please try again later. ..." |
 | `claude-data-sharing` | 403 | `PERMISSION_DENIED`, "Access to this model requires data sharing ..." |
