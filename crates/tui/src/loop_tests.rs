@@ -1429,20 +1429,6 @@ fn drain_by_chunk<T>(
     pump_until_stop(window, reached, release, finished, "no fold")
 }
 
-/// Pumps folds until the hub parks at `history`: each fold signal
-/// renews the no-progress window and sends one release, so a slow
-/// machine folds every chunk within the window; the hub's park ends the
-/// pump, so the window never covers the held `history` answer. The
-/// park's ping wakes the pump, which sees the park and stops.
-fn pump_until_parked(
-    window: Duration,
-    reached: &mpsc::Receiver<()>,
-    release: &mpsc::Sender<()>,
-    parked: &mpsc::Receiver<()>,
-) -> Result<(), String> {
-    pump_until_stop(window, reached, release, parked, "no fold nor park")
-}
-
 /// Unpacks a waited run thread return: the value, or a panic naming the
 /// run thread's state and each helper thread's last step, so the next
 /// sighting shows which stall candidate happened.
@@ -1488,7 +1474,8 @@ fn the_park_ends_the_pump_without_a_fold() {
         .send(())
         .unwrap_or_else(|err| panic!("park: {err}"));
     drop(parked_tx);
-    pump_until_parked(DRAIN, &reached, &release_tx, &parked).unwrap_or_else(|err| panic!("{err}"));
+    pump_until_stop(DRAIN, &reached, &release_tx, &parked, "no fold nor park")
+        .unwrap_or_else(|err| panic!("{err}"));
     assert!(release.try_recv().is_err(), "no fold was released");
 }
 
@@ -1496,28 +1483,13 @@ fn the_park_ends_the_pump_without_a_fold() {
 fn no_fold_and_no_park_fails_the_pump_window() {
     let (reached_tx, reached) = mpsc::channel();
     let (release_tx, _release) = mpsc::channel();
-    let (parked_tx, parked) = mpsc::channel();
-    let (done_tx, done) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("pump-park-fail".to_owned())
-        .spawn(move || {
-            // Both senders hang up below, so the pump fails on the
-            // hangup without outlasting any window: the window's length
-            // never elapses either way.
-            let pumped = pump_until_parked(DRAIN, &reached, &release_tx, &parked);
-            done_tx.send(pumped).unwrap_or(());
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (parked_tx, parked) = mpsc::channel::<()>();
     // No fold and no park will ever arrive: both senders hang up, so
     // the pump fails on the hangup without outlasting any window.
     drop(reached_tx);
     drop(parked_tx);
-    let err = match Deadline::after(DRAIN)
-        .recv_or_fail(&done, "the pump to fail with no fold and no park")
-    {
-        Ok(()) => panic!("the pump ended with no fold and no park"),
-        Err(err) => err,
-    };
+    let err = pump_until_stop(DRAIN, &reached, &release_tx, &parked, "no fold nor park")
+        .expect_err("the pump ended with no fold and no park");
     assert!(err.contains("no fold nor park"), "{err}");
 }
 
@@ -1889,7 +1861,13 @@ fn resume_open_replays_the_log_to_the_tail() {
     // park and stops. Panicking drops the history release sender, which
     // releases the held hub thread too.
     unpack_wait(
-        pump_until_parked(DRAIN, &fold_reached, &fold_release_tx, &history_parked),
+        pump_until_stop(
+            DRAIN,
+            &fold_reached,
+            &fold_release_tx,
+            &history_parked,
+            "no fold nor park",
+        ),
         format!("the loop neither folded nor parked at history for {DRAIN:?}"),
         &finished,
         &hub_progress,

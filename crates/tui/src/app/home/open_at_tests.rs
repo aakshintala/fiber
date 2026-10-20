@@ -334,15 +334,20 @@ fn notice(session: &str, message: &str) -> Line {
 }
 
 /// One durable tail line numbered `seq`, for the open's tail read.
-fn tail_line(seq: u64, kind: &str, action: Option<&str>, payload: Value) -> contract::Envelope {
+fn tail_line(
+    seq: contract::Seq,
+    kind: &str,
+    action: Option<contract::ActionId>,
+    payload: Value,
+) -> contract::Envelope {
     contract::Envelope {
         kind: kind.to_owned(),
         session_id: id("s_aaaaaaaaaaaaaaaa"),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         turn_id: None,
-        action_id: action.map(|action| contract::ActionId(action.to_owned())),
-        seq: Some(contract::Seq(seq)),
+        action_id: action,
+        seq: Some(seq),
         payload: payload.as_object().cloned().unwrap_or_default(),
     }
 }
@@ -352,27 +357,37 @@ fn tail_line(seq: u64, kind: &str, action: Option<&str>, payload: Value) -> cont
 fn tail_log() -> Vec<contract::Envelope> {
     vec![
         tail_line(
-            0,
+            contract::Seq(0),
             "turn_started",
             None,
             json!({"input": [{"type": "message", "source": "driver",
                 "content": [{"type": "text", "text": "prompt"}]}]}),
         ),
-        tail_line(1, "step_started", None, json!({})),
-        tail_line(2, "assistant_message_started", Some("a_m"), json!({})),
+        tail_line(contract::Seq(1), "step_started", None, json!({})),
         tail_line(
-            3,
+            contract::Seq(2),
+            "assistant_message_started",
+            Some(contract::ActionId("a_m".to_owned())),
+            json!({}),
+        ),
+        tail_line(
+            contract::Seq(3),
             "text_completed",
-            Some("a_m"),
+            Some(contract::ActionId("a_m".to_owned())),
             json!({"text": "the last reply holds quokkas"}),
         ),
         tail_line(
-            4,
+            contract::Seq(4),
             "assistant_message_completed",
-            Some("a_m"),
+            Some(contract::ActionId("a_m".to_owned())),
             json!({"outcome": "completed"}),
         ),
-        tail_line(5, "turn_completed", None, json!({"outcome": "completed"})),
+        tail_line(
+            contract::Seq(5),
+            "turn_completed",
+            None,
+            json!({"outcome": "completed"}),
+        ),
     ]
 }
 
