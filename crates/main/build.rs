@@ -1,7 +1,8 @@
 //! Records the full commit SHA so `fiber --version` can print it
-//! (`docs/releasing.md`, "Versions"). A failed lookup or a
-//! non-commit-shaped one fails the build: a release binary always names
-//! its commit.
+//! (`docs/releasing.md`, "Versions"). With no git history, such as a
+//! source tarball or a mutation-testing copy, the lookup fails and
+//! `FIBER_COMMIT` stays unset, so `fiber --version` prints
+//! `fiber <version>`; a present-but-malformed SHA fails the build.
 
 #![allow(clippy::panic, reason = "a build script fails the build by panicking")]
 #![allow(
@@ -12,9 +13,9 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let Some(commit) = git_line(&["rev-parse", "HEAD"]) else {
-        panic!(
-            "FIBER_COMMIT: `git rev-parse HEAD` failed; a release binary always names its commit."
-        );
+        // No git history: leave `FIBER_COMMIT` unset so `fiber --version`
+        // prints `fiber <version>` (`docs/releasing.md`, "Versions").
+        return;
     };
     // HEAD on a branch names the ref and does not change when the commit
     // does, so the ref file is watched too. A packed ref has no loose file;
@@ -45,7 +46,7 @@ fn git_line(args: &[&str]) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
 }
 
-/// What `git rev-parse HEAD` prints: lowercase hex, empty or not.
+/// Whether `text` is shaped like a commit: nonempty lowercase hex.
 fn is_commit(text: &str) -> bool {
     !text.is_empty()
         && text
