@@ -225,14 +225,18 @@ fn rearming_moves_the_deadline() {
     let (tx, rx) = mpsc::channel();
     let _finished = run(&ticker, clock.clone(), tx);
     ticker.arm(Some(first));
+    parked(&clock, first);
+    let mark = clock
+        .mark_parked(first, DEADLINE)
+        .expect("ticker did not park at the first deadline");
     ticker.arm(Some(moved));
-    // Past the first deadline the thread still parks at the moved one,
-    // and nothing arrives.
-    let mark = clock.advance_when_parked(Some(moved), None, TICK, &Deadline::after(DEADLINE));
     assert!(
         clock.await_parked_since(&mark, Some(moved), DEADLINE),
-        "waited {DEADLINE:?} for the ticker to park again"
+        "waited {DEADLINE:?} for the ticker to park at the moved deadline"
     );
+    // Past the first deadline the thread still parks at the moved one,
+    // and nothing arrives.
+    clock.advance_when_parked(Some(moved), None, TICK, &Deadline::after(DEADLINE));
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
 
