@@ -6,9 +6,11 @@
 -- The session's credential label names a gcloud configuration. Under any
 -- label but `default`, credential() takes the token of that configuration's
 -- account: `gcloud config config-helper --configuration <label>`. Under
--- `default` it takes the active configuration's, and when that has no
--- account logged in, the token of Application Default Credentials:
--- `gcloud auth application-default print-access-token`.
+-- `default` it takes the active configuration's, and only when gcloud has
+-- no account selected at all, the token of Application Default
+-- Credentials: `gcloud auth application-default print-access-token`. Any
+-- other failure, such as a login that needs reauthentication, fails rather
+-- than switching to another account.
 --
 -- Each command's `--format` prints only the token and its expiry, so no
 -- other field, such as the account or a refresh token, reaches Fiber. gcloud
@@ -20,6 +22,11 @@ local HELPER = "config config-helper"
 local HELPER_FORMAT = "--format=json(credential.access_token,credential.token_expiry)"
 local ADC = "auth application-default print-access-token"
 local ADC_FORMAT = "--format=json(token,expiry.datetime)"
+
+-- What gcloud says when no account is selected at all
+-- (`NoActiveAccountException` in its SDK): the one failure Application
+-- Default Credentials stand in for.
+local NO_ACCOUNT = "You do not currently have an active account selected"
 
 -- Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
 -- `days_from_civil`).
@@ -105,9 +112,9 @@ end
 
 -- Runs `gcloud <what> <format>`, with `--configuration <configuration>`
 -- when one is named, and returns what it printed, decoded. On failure,
--- nil, why, and how it failed: `missing` when gcloud could not be run at
--- all, `exit` when it exited non-zero, `output` when what it printed is
--- not JSON.
+-- nil, why, how it failed (`missing` when gcloud could not be run at all,
+-- `exit` when it exited non-zero, `output` when what it printed is not
+-- JSON), and its stderr when it exited non-zero.
 local function gcloud(what, format, configuration)
   local args = {}
   for word in what:gmatch("%S+") do
@@ -126,7 +133,7 @@ local function gcloud(what, format, configuration)
   if ran.exit_code ~= 0 then
     local first = failure_line(ran.stderr)
     return nil, "`gcloud " .. what .. "` failed (exit " .. tostring(ran.exit_code) .. ")"
-      .. (first ~= "" and (": " .. first) or ""), "exit"
+      .. (first ~= "" and (": " .. first) or ""), "exit", ran.stderr or ""
   end
   local parsed, body = pcall(json.decode, ran.stdout)
   if not parsed or type(body) ~= "table" then
@@ -156,7 +163,7 @@ fiber.provider("vertex", {
     if type(configuration) ~= "string" or configuration == "" or configuration == "default" then
       configuration = nil
     end
-    local body, why, failed = gcloud(HELPER, HELPER_FORMAT, configuration)
+    local body, why, failed, stderr = gcloud(HELPER, HELPER_FORMAT, configuration)
     if body ~= nil then
       local credential = type(body.credential) == "table" and body.credential or {}
       return returned(credential.access_token, credential.token_expiry, HELPER)
@@ -168,11 +175,16 @@ fiber.provider("vertex", {
       error("vertex credential: " .. why, 0)
     end
     -- gcloud ran and found no token: under a named configuration that is
-    -- the answer, and under `default` Application Default Credentials may
-    -- still hold one.
+    -- the answer. Under `default`, Application Default Credentials stand in
+    -- only when gcloud has no account selected at all; any other failure,
+    -- such as a login that needs reauthentication, keeps to the account
+    -- gcloud names rather than switching to whichever one ADC holds.
     if configuration ~= nil then
       error("vertex credential: " .. why .. "; the credential label names a gcloud"
         .. " configuration, and `gcloud config configurations list` lists them", 0)
+    end
+    if not stderr:find(NO_ACCOUNT, 1, true) then
+      error("vertex credential: " .. why .. "; run `gcloud auth login` to log in again", 0)
     end
     local adc, adc_why = gcloud(ADC, ADC_FORMAT, nil)
     if adc ~= nil then
