@@ -620,6 +620,162 @@ fn the_paging_report_times_the_resize_and_absent_search() {
     );
 }
 
+/// A clock reading a scripted instant per `now()` call: the frame calls
+/// `now()` for `items_due`, the pre-draw sweep and the post-draw sweep
+/// in that order, so the script sets each sweep's instant exactly. No
+/// fake-clock advance and no real-clock read.
+struct ScriptClock {
+    script: Vec<std::time::Instant>,
+    at: AtomicU64,
+}
+
+impl ScriptClock {
+    fn clock(script: Vec<std::time::Instant>) -> Arc<Self> {
+        Arc::new(Self {
+            script,
+            at: AtomicU64::new(0),
+        })
+    }
+}
+
+impl contract::clock::Clock for ScriptClock {
+    fn now(&self) -> std::time::Instant {
+        let at = self.at.fetch_add(1, Ordering::SeqCst) as usize;
+        self.script[at.min(self.script.len() - 1)]
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH
+    }
+
+    fn sleep(&self, _d: Duration) {}
+
+    fn wait_until(
+        &self,
+        _until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        wait(Some(Duration::ZERO));
+    }
+
+    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+}
+
+/// The frame sweeps notices before the draw and again before arming.
+/// Frame one's script births the pushed event at the pre-draw sweep,
+/// shows it in the draw, then expires it at the post-draw sweep past
+/// the fade: the draw saw it, but nothing arms and nothing stacks.
+/// Frame two births its event after the fade with a steady clock and
+/// arms its expiry; frame three past that expiry removes it before
+/// the draw, so it never draws. A missing pre-draw sweep would leave
+/// frame one's event unborn at the draw and stacked past the post-draw
+/// expiry; a missing post-draw sweep would stack it and arm its wake.
+#[test]
+fn frames_sweep_notices_before_and_after_the_draw() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let past = origin + crate::app::FADE + Duration::from_secs(1);
+    // Three `now()` reads per frame: `items_due`, the pre-draw sweep,
+    // the post-draw sweep.
+    let clock = ScriptClock::clock(vec![
+        origin,
+        origin,
+        past, // frame one: birth, then expiry
+        past,
+        past,
+        past, // frame two: birth after the fade
+        past + crate::app::FADE + Duration::from_secs(1),
+        past + crate::app::FADE + Duration::from_secs(1),
+        past + crate::app::FADE + Duration::from_secs(1),
+    ]);
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    let prompt = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    let mut seq = 0u64;
+    for (kind, action, payload) in [
+        ("turn_started", None, prompt),
+        (
+            "tool_call_requested",
+            Some("a_t0"),
+            json!({"name": "read", "arguments": {}}),
+        ),
+        (
+            "assistant_message_completed",
+            Some("a_m"),
+            json!({"outcome": "completed"}),
+        ),
+        (
+            "tool_call_completed",
+            Some("a_t0"),
+            json!({"status": "completed", "content": []}),
+        ),
+        ("turn_completed", None, json!({"outcome": "completed"})),
+    ] {
+        seq += 1;
+        app.on_line(Line::Session(line(kind, Some(seq), action, payload)));
+    }
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let screen =
+        Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen,
+        hub: Connection::new(None),
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: clock.clone(),
+        wakeups: 0,
+        files_out: None,
+        search: None,
+        reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
+        paste_reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
+        open_command: None,
+        viewer: Vec::new(),
+        images_dir: PathBuf::new(),
+        title: crate::osc::Title::default(),
+        shape: crate::osc::Shape::default(),
+        tick: crate::tick::TickThread::idle(),
+    };
+    lp.hub.store(ours);
+    drop(theirs);
+    let (_tx, rx) = mpsc::channel();
+    lp.app
+        .push_notice("io_failed", "frame fade probe".to_owned());
+    // Frame one: the pre-draw sweep births the pushed event at the
+    // birth instant, the draw shows it, and the post-draw sweep past
+    // the fade expires it before arming: drawn once, stacked never.
+    assert_eq!(lp.frame(&rx), None);
+    assert!(shown(&lp).contains("frame fade probe"), "{}", shown(&lp));
+    assert!(lp.app.notices().is_empty());
+    assert_eq!(lp.app.take_wake(), None);
+    // Frame two after the fade: the pre-draw sweep births the new push
+    // at its instant and the arm covers its expiry.
+    lp.app.push_notice("io_failed", "second probe".to_owned());
+    assert_eq!(lp.frame(&rx), None);
+    assert!(shown(&lp).contains("second probe"), "{}", shown(&lp));
+    assert_eq!(notice_codes(&lp.app), ["io_failed"]);
+    assert_eq!(lp.app.take_wake(), Some(past + crate::app::FADE));
+    // Frame three past that expiry: the pre-draw sweep removes it
+    // before the draw, so it never draws and nothing arms.
+    assert_eq!(lp.frame(&rx), None);
+    assert!(lp.app.notices().is_empty());
+    assert!(!shown(&lp).contains("second probe"), "{}", shown(&lp));
+    assert_eq!(lp.app.take_wake(), None);
+}
+
 /// A clock that ticks one millisecond per `now()`, so the paging jig's
 /// report holds nonzero durations. The origin is the fake clock's, since
 /// reading the process clock is banned in tests.

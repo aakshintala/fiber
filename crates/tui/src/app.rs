@@ -30,7 +30,7 @@ use notices::Notices;
 use overlay::Overlay;
 use steering::Steering;
 
-pub(crate) use notices::NoticeLine;
+pub(crate) use notices::{FADE, NoticeLine};
 
 #[path = "notices.rs"]
 mod notices;
