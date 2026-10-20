@@ -857,7 +857,7 @@ fn more_row(screen: &Screen, call: Target) -> usize {
 }
 
 #[test]
-fn reveal_onto_a_row_inside_an_opened_call_lands_it_under_the_pin() {
+fn reveal_stops_the_focus_row_under_the_pin() {
     let (mut screen, _, calls) = read_group(2, &[true, false], 30, &[false, false]);
     let call = calls[0];
     let more = more_row(&screen, call);
@@ -884,7 +884,7 @@ fn reveal_onto_a_row_inside_an_opened_call_lands_it_under_the_pin() {
 }
 
 #[test]
-fn reveal_without_a_pin_lands_on_the_row() {
+fn reveal_without_a_pin_is_unchanged() {
     let mut screen = screen(3);
     let turn = screen
         .pages()
@@ -910,7 +910,7 @@ fn reveal_without_a_pin_lands_on_the_row() {
 }
 
 #[test]
-fn land_stops_one_row_above_under_a_pin() {
+fn land_stops_under_the_pin() {
     let (mut screen, _, calls) = read_group(1, &[true], 30, &[false]);
     let call = calls[0];
     let first = opened_rows(&screen, call)
@@ -957,7 +957,7 @@ fn land_without_a_pin_jumps_to_the_row() {
 }
 
 #[test]
-fn landing_on_the_row_below_the_header_clears_the_pin() {
+fn landing_on_the_row_below_the_header_clears_the_pin_and_uses_the_true_top() {
     let (mut screen, group, _) = read_group(1, &[false], 5, &[false]);
     let header = line_row(&screen, group).expect("the header row");
     let below = header + 1;

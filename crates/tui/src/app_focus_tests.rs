@@ -1702,7 +1702,7 @@ fn text_row(app: &App, target: Target) -> usize {
 }
 
 #[test]
-fn stepping_onto_a_row_behind_the_pin_lands_it_under_the_pin() {
+fn focus_steps_under_the_pin() {
     let (mut app, _, call, second) = opened_call(30);
     frame(&mut app);
     let more = app

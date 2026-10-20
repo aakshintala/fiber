@@ -2989,7 +2989,7 @@ fn the_current_match_lands_under_the_pin() {
 }
 
 #[test]
-fn a_match_on_the_pinned_top_row_re_lands_under_the_pin() {
+fn a_match_on_the_pinned_top_row_moves_under_the_pin() {
     let (mut app, log, call, _, needles) = pinned_search_app(30, &[5], 12);
     assert_eq!(needles.len(), 1, "one needle row");
     // The top sits on the match, pinned over by the call.
@@ -3013,7 +3013,7 @@ fn a_match_on_the_pinned_top_row_re_lands_under_the_pin() {
 }
 
 #[test]
-fn a_match_with_no_pin_lands_on_the_top_row() {
+fn no_pin_no_offset() {
     let mut app = attached(60, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;

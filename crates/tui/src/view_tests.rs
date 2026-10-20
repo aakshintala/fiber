@@ -2904,9 +2904,13 @@ fn the_badge_warning_sign_is_split_from_the_rest_of_the_badge() {
 }
 
 /// An app with one group holding one read call with `lines` lines of
-/// output, the ledger and the call open. Returns the app, the call, its
-/// row and the first opened content row.
-fn pinned_call(lines: usize) -> (App, crate::app::Target, usize, usize) {
+/// output, the ledger and the call open. Returns the app, the group, the
+/// call, the call row and the first opened content row. With `tail`, a
+/// reply with a code block follows the turn.
+fn pinned_call(
+    lines: usize,
+    tail: bool,
+) -> (App, crate::app::Target, crate::app::Target, usize, usize) {
     use crate::app::Target as AppTarget;
     let mut app = empty();
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
@@ -2938,6 +2942,17 @@ fn pinned_call(lines: usize) -> (App, crate::app::Target, usize, usize) {
         Some("a_m"),
     ));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    if tail {
+        // A tail reply with a code block, for the copy test.
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "tip"));
+        app.on_line(session_line(
+            "s_aaaaaaaaaaaaaaaa",
+            "text_completed",
+            serde_json::json!({"text": "Run it:\n\n```sh\necho hi\n```"}),
+            Some("a_n"),
+        ));
+        app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    }
     let group = app
         .targets()
         .into_iter()
@@ -2967,45 +2982,608 @@ fn pinned_call(lines: usize) -> (App, crate::app::Target, usize, usize) {
     let header = header.expect("the call row");
     let first = first.expect("opened rows");
     assert_eq!(first, header + 1, "the opened content follows the call row");
-    (app, call, header, first)
+    (app, group, call, header, first)
+}
+
+/// The conversation rows area: the gutter dropped and split from the
+/// bar column, exactly as the render path computes it (`view.rs`).
+fn pin_rows(app: &App) -> Rect {
+    let inset = crate::layout::past_gutter(app.conversation_area(), app.chrome().gutter());
+    let (rows, _) = crate::view::scroll_bar::split(inset);
+    rows
 }
 
 #[test]
-fn the_pin_draws_the_call_row_over_row_zero() {
-    let (mut app, _, _, first) = pinned_call(30);
-    // Two rows into the opened output, the call pins row 0: the top
-    // row's own text sits below it.
+fn the_pinned_call_row_draws_on_the_first_row_as_the_row_it_stands_for() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, group, call, header, first) = pinned_call(30, true);
     app.jump(first + 2);
-    let shown: Vec<String> = sized(&mut app, WIDTH, HEIGHT)
-        .lines()
-        .map(str::to_owned)
-        .collect();
+    let pin = app.pinned_row().expect("a pinned call");
+    assert_eq!(pin.target, call, "the call pins");
+    let rows = pin_rows(&app);
+    assert_eq!(rows.y, 0, "the pin sits on the first row");
+    let (pinned_buf, _) = pointed(&mut app, W, H, None);
+    // One row up the summary itself is the top row, so nothing pins,
+    // and the call's own row shows below it for reference.
+    app.jump(header - 1);
+    assert!(app.pinned_row().is_none(), "the summary pins nothing");
+    let _ = group;
+    let (open_buf, _) = pointed(&mut app, W, H, None);
+    let at = rows.y + 1;
     assert!(
-        shown[0].contains("src/0.rs"),
-        "row 0 holds the call's row: {shown:?}"
+        row_text(&open_buf, at).contains("src/0.rs"),
+        "the call row shows below the summary: {:?}",
+        row_text(&open_buf, at)
     );
+    for x in rows.x..rows.right() {
+        let (pinned, open) = (&pinned_buf[(x, rows.y)], &open_buf[(x, at)]);
+        assert_eq!(
+            pinned.symbol(),
+            open.symbol(),
+            "the same cell at column {x}"
+        );
+        assert_eq!(pinned.bg, open.bg, "the same background at column {x}");
+    }
+}
+
+#[test]
+fn the_pinned_row_keeps_the_cards_margin_and_leaves_the_bar_column_free() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, _, call, _, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    assert!(app.pinned_row().is_some(), "a pinned call");
+    let rows = pin_rows(&app);
+    let (buf, _) = pointed(&mut app, W, H, None);
+    // The card-pad column left of the rows stays blank.
+    assert_eq!(buf[(rows.x.saturating_sub(1), rows.y)].symbol(), " ");
+    // The bar column keeps the bar's cell: a thumb or a blank.
     assert!(
-        shown[1].contains("L0004 of call"),
-        "the pin covers the top row, so the next row is below it: {shown:?}"
+        [" ", "┃"].contains(&buf[(rows.right(), rows.y)].symbol()),
+        "the bar column is the bar's: {:?}",
+        row_text(&buf, rows.y)
+    );
+    let _ = call;
+}
+
+#[test]
+fn the_pinned_row_is_a_line_target_over_row_zero_and_wins_the_hit() {
+    use crate::mouse::TargetId;
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, _, call, _, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    let rows = pin_rows(&app);
+    let (_, targets) = pointed(&mut app, W, H, None);
+    let drawn: Vec<(crate::app::Target, Rect)> = lines(&targets);
+    let pin = *drawn.last().expect("a last line target");
+    assert_eq!(
+        pin,
+        (call, Rect::new(rows.x, rows.y, rows.width, 1)),
+        "the pin is the last line target, over row zero"
+    );
+    assert_eq!(
+        crate::mouse::hit(&targets, rows.x, rows.y),
+        Some(TargetId::Line(call)),
+        "the pin wins the row-zero hit"
     );
 }
 
 #[test]
-fn the_moment_the_call_row_scrolls_off_the_top_row_zero_keeps_it() {
-    let (mut app, _, _, first) = pinned_call(30);
-    // On the first opened row, the call's row has just scrolled off, and
-    // the pin keeps it on row 0.
-    app.jump(first);
-    let shown: Vec<String> = sized(&mut app, WIDTH, HEIGHT)
-        .lines()
-        .map(str::to_owned)
+fn hover_lifts_the_pinned_call_row_like_any_target() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, _, _, _, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    let rows = pin_rows(&app);
+    let (plain, _) = pointed(&mut app, W, H, None);
+    let (hovered, _) = pointed(&mut app, W, H, Some((rows.x + 2, rows.y)));
+    let mut lifted = 0;
+    for x in rows.x..rows.right() {
+        let (was, is) = (plain[(x, rows.y)].bg, hovered[(x, rows.y)].bg);
+        if plain[(x, rows.y)].symbol() != " " {
+            assert_ne!(is, was, "a hovered cell lifts at column {x}");
+            assert_eq!(is, hovered[(rows.x, rows.y)].bg, "the lift is uniform");
+            lifted += 1;
+        }
+    }
+    assert!(lifted > 0, "the pin row holds text to lift");
+}
+
+#[test]
+fn a_row_that_is_not_pinned_is_not_drawn_pinned() {
+    use crate::app::Target as AppTarget;
+    const W: u16 = 60;
+    const H: u16 = 12;
+    // (a) The top row inside a closed ledger's area: nothing pins.
+    let (mut app, group, call, header, first) = pinned_call(30, true);
+    app.open(call);
+    app.open(group);
+    let _ = (call, first);
+    let closed = app
+        .pages()
+        .page_text(0)
+        .map(|(rows, _)| {
+            rows.iter()
+                .position(|(_, target)| *target == Some(group))
+                .expect("the closed group row")
+        })
+        .expect("the resident page");
+    app.jump(closed);
+    assert!(app.pinned_row().is_none(), "a closed ledger pins nothing");
+    let rows = pin_rows(&app);
+    let (buf, targets) = pointed(&mut app, W, H, None);
+    assert!(
+        row_text(&buf, rows.y).contains('▸'),
+        "row 0 is the covered summary: {:?}",
+        row_text(&buf, rows.y)
+    );
+    let drawn: Vec<(AppTarget, Rect)> = lines(&targets);
+    assert_eq!(
+        drawn
+            .iter()
+            .filter(|(_, rect)| rect.y == rows.y)
+            .map(|(target, _)| target)
+            .collect::<Vec<_>>(),
+        vec![&group],
+        "only the row's own target sits at y 0"
+    );
+    // (b) The top row on an opened call's own row: the group pins, and
+    // the call's row does not.
+    app.open(group);
+    app.open(call);
+    app.jump(header);
+    let pin = app.pinned_row().expect("the group pins");
+    assert_eq!(pin.target, group, "the summary pins, not the call");
+    let (buf, targets) = pointed(&mut app, W, H, None);
+    assert!(
+        row_text(&buf, rows.y).contains('▾'),
+        "row 0 is the group summary: {:?}",
+        row_text(&buf, rows.y)
+    );
+    let drawn: Vec<(AppTarget, Rect)> = lines(&targets);
+    let at_zero: Vec<AppTarget> = drawn
+        .iter()
+        .filter(|(_, rect)| rect.y == rows.y)
+        .map(|(target, _)| *target)
         .collect();
+    assert_eq!(at_zero, vec![group], "only the summary pins row 0");
+    // (c) The top row after the call's block: nothing pins, and row 0 is
+    // the covered row.
+    app.jump(first + 21);
+    assert!(app.pinned_row().is_none(), "past the block pins nothing");
+    let (buf, targets) = pointed(&mut app, W, H, None);
+    let covered = row_text(&buf, rows.y);
     assert!(
-        shown[0].contains("src/0.rs"),
-        "row 0 keeps the call's row: {shown:?}"
+        !covered.contains("src/0.rs"),
+        "row 0 is past the call: {covered:?}"
+    );
+    let drawn: Vec<(AppTarget, Rect)> = lines(&targets);
+    assert!(
+        drawn.iter().all(|(_, rect)| rect.y != rows.y),
+        "no line target sits at y 0"
+    );
+}
+
+#[test]
+fn following_draws_no_pin() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, _, _, _, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    assert!(app.pinned_row().is_some(), "a pinned call");
+    app.on_key(Key::End, fakes::clock::FakeClock::new().now());
+    assert_eq!(app.top(), None, "following pins nothing");
+    assert!(app.pinned_row().is_none(), "no pin while following");
+    let rows = pin_rows(&app);
+    let (buf, targets) = pointed(&mut app, W, H, None);
+    // Row 0 is the window's own first row: the pin does not cover it.
+    let (total, conv) = (app.scroll().1, app.conversation_height());
+    let (page, _) = app.pages().page_text(0).expect("the resident page");
+    let width = app.pages().wrap_width();
+    let mut row = 0usize;
+    let mut covered = None;
+    for (line, target) in &page {
+        let height = crate::view::rows(line.clone(), width);
+        if row + height > total.saturating_sub(conv) && covered.is_none() {
+            covered = Some((line.to_string(), *target));
+        }
+        row += height;
+    }
+    let (text, target) = covered.expect("a covered first row");
+    assert_eq!(
+        row_text(&buf, rows.y),
+        format!("{text:<width$}", width = usize::from(buf.area.width))
+    );
+    let drawn: Vec<(crate::app::Target, Rect)> = lines(&targets);
+    assert!(
+        drawn
+            .iter()
+            .filter(|(_, rect)| rect.y == rows.y)
+            .all(|(line_target, _)| Some(*line_target) == target),
+        "only the covered row's own target sits at y 0"
+    );
+}
+
+#[test]
+fn a_narrow_screen_still_pins_one_row() {
+    const W: u16 = 40;
+    const H: u16 = 12;
+    let (mut app, _, call, _, _) = pinned_call(30, true);
+    app.set_size(W, H);
+    // The rows shift when the width wraps them: find the opened content
+    // at this width.
+    let width = app.pages().wrap_width();
+    let (rows, texts) = app.pages().page_text(0).expect("the resident page");
+    let mut row = 0usize;
+    let mut first = None;
+    for ((line, _), text) in rows.iter().zip(&texts) {
+        if first.is_none() && text.scopes.last() == Some(&call) {
+            first = Some(row);
+        }
+        row += crate::view::rows(line.clone(), width);
+    }
+    let first = first.expect("opened rows");
+    let _ = call;
+    app.jump(first + 2);
+    assert!(app.pinned_row().is_some(), "a pinned call");
+    let (buf, _) = pointed(&mut app, W, H, None);
+    let rows = pin_rows(&app);
+    assert!(
+        row_text(&buf, rows.y).contains("read"),
+        "row 0 keeps the call row: {:?}",
+        row_text(&buf, rows.y)
+    );
+    // The narrow call row wraps: the pin still takes one drawn row, so
+    // row 1 is the window row after the covered top row, and the header's
+    // wrapped rest never leaks onto it.
+    let top = app.top().expect("a scrolled top");
+    let (rows_page, _) = app.pages().page_text(0).expect("the resident page");
+    let width = app.pages().wrap_width();
+    let mut row = 0usize;
+    let mut covered = None;
+    for (line, _) in &rows_page {
+        let height = crate::view::rows(line.clone(), width);
+        if row + height > top + 1 && covered.is_none() {
+            covered = Some(line.to_string());
+        }
+        row += height;
+    }
+    let covered = covered.expect("the row after the top");
+    assert!(
+        row_text(&buf, rows.y + 1).contains(covered.trim()),
+        "row 1 is the row after the top: {:?}",
+        row_text(&buf, rows.y + 1)
+    );
+}
+
+#[test]
+fn no_colour_pin_keeps_the_card_sides() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let (mut app, _, _, _, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    assert!(app.pinned_row().is_some(), "a pinned call");
+    let rows = pin_rows(&app);
+    let (buf, _) = pointed(&mut app, W, H, None);
+    // The pin's row takes the card's thin-box sides, as the other card
+    // rows do.
+    for y in [rows.y, rows.y + 1] {
+        assert_eq!(buf[(rows.x, y)].symbol(), "│", "a left side on row {y}");
+        assert_eq!(
+            buf[(rows.right().saturating_sub(1), y)].symbol(),
+            "│",
+            "a right side on row {y}"
+        );
+    }
+    crate::surface::init(&|_| None);
+}
+
+#[test]
+fn a_selected_pinned_row_keeps_the_cards_tint() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, _, _, _, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    let rows = pin_rows(&app);
+    let (plain, _) = pointed(&mut app, W, H, None);
+    select(&mut app, W, H, (0, 0), (20, 2));
+    // The drag copies, and " Copied " yields the pin: clear the flag so
+    // the selection stays and the pin draws again.
+    app.clear_copied();
+    let (selected, _) = pointed(&mut app, W, H, None);
+    // The pin draws after the selection marks: every cell of row 0 keeps
+    // the card tint it had without the selection.
+    for x in rows.x..rows.right() {
+        assert_eq!(
+            selected[(x, rows.y)].bg,
+            plain[(x, rows.y)].bg,
+            "the pin keeps its tint at column {x}"
+        );
+    }
+}
+
+#[test]
+fn the_pin_yields_to_the_new_messages_pill_and_copied_label() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, _, call, _, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    // New output while scrolled up raises the pill on the last row, and
+    // the pin stays on the first.
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "more"));
+    let (buf, _) = pointed(&mut app, W, H, None);
+    let rows = pin_rows(&app);
+    assert!(
+        row_text(&buf, rows.y).contains("src/0.rs"),
+        "the pin stays: {:?}",
+        row_text(&buf, rows.y)
     );
     assert!(
-        shown[1].contains("L0002 of call"),
-        "the pin covers the top row, so the next row is below it: {shown:?}"
+        row_text(&buf, rows.y + rows.height - 1).contains("New messages below"),
+        "the pill keeps its row: {:?}",
+        row_text(&buf, rows.y + rows.height - 1)
     );
+    // A copy puts " Copied " on the top row: the pin yields, and the
+    // covered row shows.
+    let copy_row = app
+        .targets()
+        .into_iter()
+        .find_map(|(row, target)| matches!(target, crate::app::Target::Copy { .. }).then_some(row))
+        .expect("a copy target in the tail");
+    app.jump(copy_row);
+    let (_, targets) = pointed(&mut app, W, H, None);
+    let copy = targets
+        .iter()
+        .find(|target| {
+            matches!(
+                target.id,
+                crate::mouse::TargetId::Line(crate::app::Target::Copy { .. })
+            )
+        })
+        .expect("the drawn copy target");
+    let (col, row) = (copy.rect.x, copy.rect.y);
+    click(&mut app, W, H, col, row);
+    assert!(app.copied(), "the copy lands");
+    app.jump(first + 2);
+    let (buf, targets) = pointed(&mut app, W, H, None);
+    assert!(
+        row_text(&buf, rows.y).contains("Copied"),
+        "the copied label keeps its cells: {:?}",
+        row_text(&buf, rows.y)
+    );
+    assert!(
+        !row_text(&buf, rows.y).contains("src/0.rs"),
+        "the pin yields to the label: {:?}",
+        row_text(&buf, rows.y)
+    );
+    let drawn: Vec<(crate::app::Target, Rect)> = lines(&targets);
+    assert!(
+        drawn.iter().all(|(_, rect)| rect.y != rows.y),
+        "no pin covers the copied row"
+    );
+    let _ = call;
+}
+
+/// The group summary's line, for the open-marker assertions.
+fn summary_text(app: &App, group: crate::app::Target) -> String {
+    let (rows, _) = app.pages().page_text(0).expect("the resident page");
+    rows.into_iter()
+        .find(|(_, target)| *target == Some(group))
+        .map(|(line, _)| line.to_string())
+        .expect("the summary line")
+}
+
+#[test]
+fn clicking_the_pinned_call_closes_it_and_puts_its_row_on_the_top_row() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, group, call, header, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the call pins"
+    );
+    let rows = pin_rows(&app);
+    click(&mut app, W, H, rows.x, rows.y);
+    // The call closed and its row jumped to the top row, where the open
+    // ledger's summary pins over it.
+    assert!(
+        app.targets()
+            .into_iter()
+            .all(|(_, target)| !matches!(target, crate::app::Target::CallView(_))),
+        "the opened rows are gone"
+    );
+    assert_eq!(app.top(), Some(header), "its row is the top row");
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(group),
+        "the summary pins the landed row"
+    );
+    let (buf, targets) = pointed(&mut app, W, H, None);
+    assert!(
+        row_text(&buf, rows.y).contains('▾'),
+        "the pin shows the summary: {:?}",
+        row_text(&buf, rows.y)
+    );
+    let drawn: Vec<(crate::app::Target, Rect)> = lines(&targets);
+    assert!(
+        drawn
+            .iter()
+            .filter(|(_, rect)| rect.y == rows.y)
+            .all(|(target, _)| *target == group),
+        "the covered row skips its hit"
+    );
+}
+
+#[test]
+fn clicking_the_pinned_group_closes_the_ledger_and_puts_the_group_line_on_the_top_row() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, group, call, header, _) = pinned_call(30, true);
+    let _ = call;
+    // The call closed, the top row on its row: the summary pins.
+    app.open(call);
+    app.jump(header);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(group),
+        "the summary pins"
+    );
+    let rows = pin_rows(&app);
+    click(&mut app, W, H, rows.x, rows.y);
+    // The ledger closed and its line jumped to the top row.
+    let summary = summary_text(&app, group);
+    assert!(summary.contains('▸'), "the ledger closed: {summary:?}");
+    let (buf, _) = pointed(&mut app, W, H, None);
+    assert!(
+        row_text(&buf, rows.y).contains('▸'),
+        "its line draws on row 0: {:?}",
+        row_text(&buf, rows.y)
+    );
+}
+
+#[test]
+fn clicking_the_pinned_call_inside_a_ledger_closes_only_the_call() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, group, call, header, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    let rows = pin_rows(&app);
+    click(&mut app, W, H, rows.x, rows.y);
+    assert_eq!(app.top(), Some(header), "its row is the top row");
+    // The ledger stays open around the closed call.
+    assert!(
+        summary_text(&app, group).contains('▾'),
+        "the ledger stays open"
+    );
+    assert!(
+        app.targets().into_iter().any(|(_, target)| target == call),
+        "the call row stays"
+    );
+    assert!(
+        app.targets()
+            .into_iter()
+            .all(|(_, target)| !matches!(target, crate::app::Target::CallView(_))),
+        "its opened rows are gone"
+    );
+}
+
+#[test]
+fn a_closed_row_near_the_bottom_clamps_like_settle() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, _, call, header, first) = pinned_call(30, false);
+    app.jump(first + 2);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the call pins"
+    );
+    let rows = pin_rows(&app);
+    click(&mut app, W, H, rows.x, rows.y);
+    // Closing leaves the header within the last screenful, so settle
+    // clamps the top to the bottom: the header is not on row 0.
+    let (top, total) = app.scroll();
+    assert_eq!(top, total.saturating_sub(app.conversation_height()));
+    assert!(
+        header > top,
+        "the header sits below the top: {header} > {top}"
+    );
+    let (buf, _) = pointed(&mut app, W, H, None);
+    let at = (0..H)
+        .find(|y| row_text(&buf, *y).contains("src/0.rs"))
+        .expect("the header on screen");
+    assert!(at > rows.y, "its row draws below row 0");
+}
+
+#[test]
+fn an_ordinary_click_on_a_visible_call_row_still_toggles_without_scrolling() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, _, call, header, _) = pinned_call(30, true);
+    // Scrolled so the call row shows below the summary's pin.
+    app.jump(header - 1);
+    let rows = pin_rows(&app);
+    let (buf, _) = pointed(&mut app, W, H, None);
+    let at = rows.y + 1;
+    assert!(
+        row_text(&buf, at).contains("src/0.rs"),
+        "the call row shows: {:?}",
+        row_text(&buf, at)
+    );
+    click(&mut app, W, H, rows.x, at);
+    // The visible row toggles, and the scroll does not move.
+    assert!(
+        app.targets()
+            .into_iter()
+            .all(|(_, target)| !matches!(target, crate::app::Target::CallView(_))),
+        "the call toggled"
+    );
+    assert_eq!(app.top(), Some(header - 1), "the scroll does not move");
+    let _ = call;
+}
+
+#[test]
+fn ctrl_o_keeps_its_meaning_while_pinned() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, _, call, _, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    let rows = pin_rows(&app);
+    let (buf, _) = pointed(&mut app, W, H, None);
+    assert!(
+        row_text(&buf, rows.y).contains("src/0.rs"),
+        "the pin draws before the key"
+    );
+    let top = app.top().expect("a scrolled top");
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::CtrlO, now);
+    // The ledgers close with any pinned call: the next frame pins
+    // nothing, and the top only moves when settle clamps it.
+    assert!(app.pinned_row().is_none(), "no pin with closed ledgers");
+    assert!(
+        app.top().is_none_or(|next| next <= top),
+        "the top is unchanged or clamped"
+    );
+    app.on_key(Key::CtrlO, now);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "reopening pins the call again"
+    );
+}
+
+#[test]
+fn has_new_still_marks_while_scrolled_up_after_the_closing_click() {
+    const W: u16 = 60;
+    const H: u16 = 12;
+    let (mut app, group, call, header, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    let rows = pin_rows(&app);
+    click(&mut app, W, H, rows.x, rows.y);
+    assert_eq!(app.top(), Some(header), "its row is the top row");
+    // New output while scrolled up raises the pill, and the group pins
+    // the summary on the first row.
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "later"));
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(group),
+        "the summary pins"
+    );
+    let (buf, _) = pointed(&mut app, W, H, None);
+    assert!(
+        row_text(&buf, rows.y).contains('▾'),
+        "the pin shares the frame: {:?}",
+        row_text(&buf, rows.y)
+    );
+    assert!(
+        row_text(&buf, rows.y + rows.height - 1).contains("New messages below"),
+        "the pill shares the frame: {:?}",
+        row_text(&buf, rows.y + rows.height - 1)
+    );
+    let _ = call;
 }

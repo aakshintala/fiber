@@ -232,7 +232,7 @@ pub(crate) fn render(
             let body = Rect::new(conversation.x, body_y, conversation.width, body_height);
             if app.item_view().is_some_and(|view| view.has_transcript) {
                 let inset = crate::layout::past_gutter(body, app.chrome().gutter());
-                conversation_rows(app, inset, buf, &mut targets);
+                let _ = conversation_rows(app, inset, buf, &mut targets);
                 marks::draw(app, inset, buf, &mut targets, app.hint_layout(inset).gap);
             } else {
                 item::draw_body(app, body, buf);
@@ -258,9 +258,20 @@ pub(crate) fn render(
                         // on the left while the layout applies.
                         let inset = crate::layout::past_gutter(conversation, app.chrome().gutter());
                         let (rows, bar) = scroll_bar::split(inset);
-                        conversation_rows(app, rows, buf, &mut targets);
+                        let pin = conversation_rows(app, rows, buf, &mut targets);
                         scroll_bar::draw(app, bar, buf);
                         marks::draw(app, inset, buf, &mut targets, app.hint_layout(inset).gap);
+                        // The pinned header over row 0, drawn as the row
+                        // it stands for, after the marks pass: never in an
+                        // item transcript, and never while following.
+                        if let Some(pin) = pin {
+                            let rect = Rect::new(rows.x, rows.y, rows.width, 1);
+                            draw_row(pin.line, rect, buf);
+                            targets.push(Target {
+                                id: TargetId::Line(pin.target),
+                                rect,
+                            });
+                        }
                     }
                 },
             }
@@ -409,6 +420,28 @@ fn draw_row(line: Line<'_>, rect: Rect, buf: &mut Buffer) {
     }
 }
 
+/// The row of the " Copied " confirmation in `area`, when drawn: on the
+/// row under the bar when the bar draws, else on the top row
+/// (`docs/tui.md`, "Selection and copy").
+fn copied_row(app: &App, area: Rect) -> Option<u16> {
+    if !app.copied() {
+        return None;
+    }
+    let offset = if app.find_bar().is_some() && !app.results_open() {
+        // The bar draws in the conversation's area with the scroll
+        // bar's column; this area drops that column on the main path.
+        let room = Rect::new(area.x, area.y, area.width.saturating_add(1), area.height);
+        match marks::bar_rect(room).map(|rect| rect.height) {
+            Some(3) => 5,
+            Some(_) => 1,
+            None => 0,
+        }
+    } else {
+        0
+    };
+    Some(area.y.saturating_add(offset))
+}
+
 /// Blanks the hint's reserved row with its card's tint, so no previous
 /// frame's cells show past the hint (`docs/tui.md`, "Links").
 fn blank_row(buf: &mut Buffer, area: Rect, y: u16, style: Style) {
@@ -420,7 +453,15 @@ fn blank_row(buf: &mut Buffer, area: Rect, y: u16, style: Style) {
 /// shorter than its area. Only the pages that draw a visible row are read;
 /// a page not loaded draws blank rows. Pushes a target over each shown line
 /// that opens something, and over "↓ New messages below" when drawn.
-fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+/// Returns the pinned header for the caller to draw after the marks pass,
+/// so covered-row selection, find and link looks never land on the pin
+/// (`docs/tui.md`, "Pinned call").
+fn conversation_rows(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) -> Option<crate::window::Pin> {
     let height = usize::from(area.height);
     // The focused link's hint reserves the row under its line, laid out
     // with the targets: rows on and below it draw one lower, so hint
@@ -454,7 +495,17 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
     // no hit, so the pin is the click and focus target on row 0 and the
     // covered row steps or reveals out from under it (`docs/tui.md`,
     // "Pinned call").
-    let pinned = pin.is_some() && !app.item_open() && app.top().is_some() && area.height > 0;
+    let mut pin = if !app.item_open() && app.top().is_some() && area.height > 0 {
+        pin
+    } else {
+        None
+    };
+    // On the top row the " Copied " confirmation wins over the pin,
+    // which yields (`docs/tui.md`, "Pinned call").
+    if copied_row(app, area) == Some(area.y) {
+        pin = None;
+    }
+    let pinned = pin.is_some();
     // A line wholly above `top` or below `end` shows no rows.
     for (at, (line, rows, open)) in lines.into_iter().enumerate() {
         let next = start.saturating_add(rows);
@@ -560,20 +611,6 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         }
     }
     targets.splice(base..base, turned);
-    // The pinned header over row 0, drawn as the row it stands for:
-    // never in an item transcript, and never while following.
-    if let Some(pin) = pin
-        && !app.item_open()
-        && app.top().is_some()
-        && area.height > 0
-    {
-        let rect = Rect::new(area.x, area.y, area.width, 1);
-        draw_row(pin.line, rect, buf);
-        targets.push(Target {
-            id: TargetId::Line(pin.target),
-            rect,
-        });
-    }
     // The hint's row past the last line, when the scroll freed it
     // there: blank it with the card tint, as in the loop.
     if gap.is_some_and(|gap| gap == y) {
@@ -615,23 +652,9 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             rect: Rect::new(start, row, end.saturating_sub(start), 1),
         });
     }
-    if app.copied() {
-        // " Copied " in `info` on the `surface` tint: on the row under
-        // the bar when the bar draws, else on the top row
+    if let Some(y) = copied_row(app, area) {
+        // " Copied " in `info` on the `surface` tint
         // (`docs/tui.md`, "Selection and copy").
-        let offset = if app.find_bar().is_some() && !app.results_open() {
-            // The bar draws in the conversation's area with the scroll
-            // bar's column; this area drops that column on the main path.
-            let room = Rect::new(area.x, area.y, area.width.saturating_add(1), area.height);
-            match marks::bar_rect(room).map(|rect| rect.height) {
-                Some(3) => 5,
-                Some(_) => 1,
-                None => 0,
-            }
-        } else {
-            0
-        };
-        let y = area.y.saturating_add(offset);
         // The row under a five-row bar in a five-row area is the next
         // region's: omit the confirmation rather than cover it, and clip
         // its width to the area (`docs/tui.md`, "Selection and copy").
@@ -645,6 +668,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
             buf.set_stringn(x, y, COPIED, usize::from(width), style(Role::Info));
         }
     }
+    pin
 }
 
 /// Where the conversation is scrolled to.
