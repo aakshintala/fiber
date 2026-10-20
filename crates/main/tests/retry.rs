@@ -32,7 +32,6 @@ impl Setup {
     }
 
     fn within(deadline: Deadline) -> Self {
-        // A short root: socket paths under a Fiber home are limited to SUN_LEN bytes.
         let root = fakes::TempDir::under(std::path::Path::new("/tmp"), "fa-retry");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();

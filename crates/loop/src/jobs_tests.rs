@@ -441,7 +441,6 @@ impl World {
         by_call: Vec<Vec<Delivery>>,
         tools: impl FnOnce(&Sender<Delivery>) -> Vec<Arc<dyn Tool>>,
     ) -> Self {
-        // A short root: socket paths under this directory are limited to SUN_LEN bytes.
         let home = fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-job-notices");
         let workspace = home.path().join("workspace");
         let credentials = home.path().join("credentials");

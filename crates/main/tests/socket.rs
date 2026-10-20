@@ -57,7 +57,7 @@ fn user_texts(body: &Value) -> Vec<String> {
 impl Setup {
     fn new_with_fa_root() -> Self {
         let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fa");
+        let root = fakes::TempDir::under(std::path::Path::new("/tmp"), "fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { deadline, root }
