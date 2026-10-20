@@ -353,7 +353,8 @@ signed reasoning block (`research/bedrock-converse-probe`).
   follow it as `image` blocks in the same user message: Ministral 3 8B and
   Qwen3 VL refused an image inside `toolResult`, and took it beside.
 - Each tool is `{toolSpec: {name, description, inputSchema: {json}}}`, in
-  name order, with no `strict`: Nova Micro refused the field, `true` or
+  name order, with no `description` when it is empty, as AWS documents one of
+  at least one character, and no `strict`: Nova Micro refused the field, `true` or
   `false`, where gpt-oss and Ministral took both. `toolChoice` is left out
   for `auto`, Converse's default, and for `none`, which Converse lacks; `any`
   sends `{any: {}}`, and a tool's name `{tool: {name}}`.
@@ -530,7 +531,10 @@ what Fiber records, or that Fiber relies on to read the reply:
 | `bedrock-converse` | `system`, `messages`, `toolConfig` |
 
 `google-generative-ai` and `bedrock-converse` carry the model and streaming
-in the URL, not the body. `cache_control` is reserved because cache markers
+in the URL, not the body. On `bedrock-converse`, `extra_body`'s
+`inferenceConfig` and `additionalModelRequestFields` are laid over Fiber's own
+key by key, so a model can add a field beside the output limit and the
+thinking level; the output limit still caps a `maxTokens` it names. `cache_control` is reserved because cache markers
 are Fiber's alone (`docs/prompt-cache.md`, "Cache markers and keys").
 
 A model whose `extra_body` names one of these is left out of the model list,
@@ -881,7 +885,7 @@ names in `compat.reasoning_field`, sent in `additionalModelRequestFields`:
 `reasoning_effort` sends `{reasoning_effort: <level>}`, as gpt-oss takes it,
 and `reasoningConfig` sends `{reasoningConfig: {type: "enabled",
 maxReasoningEffort: <level>}}`, as Nova 2 Lite takes it. At `high` the second
-sends no `inferenceConfig`, because Nova 2 Lite refuses `maxTokens` beside it.
+sends no `maxTokens`, because Nova 2 Lite refuses it beside that level.
 `off` sends neither field. A model without the flag is sent no level, so the
 `bedrock` package declares none for it ("Bedrock Converse wire facts").
 
