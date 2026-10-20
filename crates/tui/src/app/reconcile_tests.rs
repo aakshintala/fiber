@@ -263,7 +263,8 @@ fn a_rejected_sessions_keeps_the_rows() {
         ),
     );
     assert_eq!(rows(&app), ["✓  tidy docs"]);
-    assert_eq!(app.notice(), Some("Connection lost."));
+    // The reconnect ended the drop's cause: its notice goes with it.
+    assert_eq!(app.notice(), None);
 }
 
 #[test]

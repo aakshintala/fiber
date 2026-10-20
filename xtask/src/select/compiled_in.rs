@@ -27,6 +27,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("crates/tools/tests/pages/rust-ownership.md", "tools"),
     ("crates/tools/tests/pages/wiki-toml.md", "tools"),
     ("docs/errors.md", "contract"),
+    ("docs/errors.md", "tui"),
     ("docs/events.md", "contract"),
     ("docs/extensions.md", "extensions"),
     ("docs/extensions.md", "main"),

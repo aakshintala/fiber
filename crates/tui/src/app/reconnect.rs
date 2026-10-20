@@ -113,6 +113,11 @@ impl App {
         if !again {
             return Vec::new();
         }
+        // The connection is back: both connection texts ended with it,
+        // while a search the drop interrupted still waits on the bar or
+        // a rescan.
+        self.notices
+            .clear_code_except("connection_failed", &super::find::search_incomplete_text());
         if let Phase::Pending { command_id } = &self.phase {
             let id = command_id.clone();
             self.rejected(&id, "connection_failed", UNANSWERED.to_owned());
