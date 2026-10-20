@@ -120,7 +120,7 @@ struct Job {
     input: Option<Typer>,
     stop_sent: bool,
     /// The delegate's first run, when this is one: only `delegate_spawn`
-    /// opens one. `stop_delegates` reads it.
+    /// or `delegate_fork` opens one. `stop_delegates` reads it.
     delegate: Option<DelegateStarted>,
     /// A delegate's finish, kept past the end for a later `wait`.
     finished: Option<DelegateFinished>,
@@ -271,7 +271,7 @@ impl Registry {
 
     /// Records a running Fiber delegate under `job_id`, without creating
     /// an output file: the child writes its own log at `output_path`.
-    /// Only `delegate_spawn` opens one. The id is minted up front with
+    /// Only `delegate_spawn` or `delegate_fork` opens one. The id is minted up front with
     /// [`mint_job_id`], so the spawn and the record name the same job.
     pub(crate) fn open_started(
         self: &Arc<Self>,

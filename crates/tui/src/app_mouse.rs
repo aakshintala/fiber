@@ -45,7 +45,18 @@ impl App {
             // (`docs/tui.md`, "Images").
             TargetId::Line(Target::Image(id)) => self.view_image(id),
             TargetId::Line(line) => {
-                self.open(line);
+                // A click on the pinned row closes what it opened and
+                // scrolls the closed row to the top; any other line
+                // click only opens or closes.
+                if let Some(pin) = self.pinned_row().filter(|pin| pin.target == line) {
+                    self.open(line);
+                    // The covered row is gone with the closed output:
+                    // the closed header keeps its focus stop, so land it
+                    // on the top row.
+                    self.jump(pin.row);
+                } else {
+                    self.open(line);
+                }
                 Effect::None
             }
             TargetId::NewBelow => {

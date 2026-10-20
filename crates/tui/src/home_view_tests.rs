@@ -2612,16 +2612,16 @@ fn short_home_slash_keeps_its_selection_barred() {
     let shown = screen(&app, 80, 24);
     let accent = crate::theme::Role::Accent.color();
     let selected = (0..24)
-        .find(|y| row_text(&buf, *y, 80).contains("scoped-models"))
+        .find(|y| row_text(&buf, *y, 80).contains("credential"))
         .unwrap_or_else(|| panic!("the selected workspace draws:\n{shown}"));
     assert!(
         (0..80).any(|x| buf[(x, selected)].bg == accent),
         "the selected workspace stays barred:\n{shown}"
     );
     let row = row_text(&buf, selected, 80);
-    assert!(row.contains("scoped-models"), "{shown}");
-    // `/quota` is one more row in the list.
-    assert!(shown.contains("of 25"), "{shown}");
+    assert!(row.contains("credential"), "{shown}");
+    // `/mcp` is one more row in the list.
+    assert!(shown.contains("of 27"), "{shown}");
 }
 
 /// A git home at 80x24 with two live rows in the launch project and no

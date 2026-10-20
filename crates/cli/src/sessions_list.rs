@@ -6,19 +6,17 @@
 
 use std::io::{self, BufReader, Write};
 
-use contract::ErrorCode;
 use contract::SessionId;
 use contract::commands::hub::{HubCommand, SessionsArgs};
 use contract::events::{SessionState, WaitingKind};
-use contract::shapes::Failure;
 use contract::shapes::Usage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use support::text::one_line;
 
-use crate::sessions::request;
+use crate::sessions::request_value;
 use crate::table::pad;
-use crate::{failed, finish, write_line};
+use crate::{CliError, finish, write_line};
 
 /// The `id` of the one command `fiber sessions` sends.
 const LIST_ID: &str = "c_sessions";
@@ -125,7 +123,7 @@ pub fn list(
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> i32 {
     let ran = std::env::current_dir()
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))
+        .map_err(CliError::CurrentDirectory)
         .and_then(|workspace| {
             let project = doors::resolve_project(&workspace);
             run(&project, all, json, &mut io::stdout(), connect)
@@ -141,18 +139,13 @@ fn run(
     json: bool,
     out: &mut dyn Write,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let command = HubCommand::Sessions(SessionsArgs {
         project: (!all && project.in_repository).then(|| log::project_key(&project.path)),
     });
-    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
-    let result = request(&mut BufReader::new(stream), LIST_ID, command)?;
-    let answer: Answer = serde_json::from_value(result).map_err(|e| {
-        failed(
-            ErrorCode::IoFailed,
-            format!("the hub's answer to `sessions`: {e}"),
-        )
-    })?;
+    let (stream, _) = connect().map_err(CliError::Hub)?;
+    let result = request_value(&mut BufReader::new(stream), LIST_ID, command)?;
+    let answer: Answer = serde_json::from_value(result).map_err(CliError::SessionsAnswer)?;
     let lines = if json {
         json_lines(&rows(answer))?
     } else {
@@ -174,22 +167,17 @@ pub fn resolve_listed(
     selector: &str,
     hub: &str,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
-) -> Result<SessionId, Failure> {
+) -> Result<SessionId, CliError> {
     if selector.is_empty() {
         return Err(not_found(selector, hub));
     }
-    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
-    let result = request(
+    let (stream, _) = connect().map_err(CliError::Hub)?;
+    let result = request_value(
         &mut BufReader::new(stream),
         LIST_ID,
         HubCommand::Sessions(SessionsArgs { project: None }),
     )?;
-    let answer: Answer = serde_json::from_value(result).map_err(|e| {
-        failed(
-            ErrorCode::IoFailed,
-            format!("the hub's answer to `sessions`: {e}"),
-        )
-    })?;
+    let answer: Answer = serde_json::from_value(result).map_err(CliError::SessionsAnswer)?;
     let ids = answer
         .live
         .into_iter()
@@ -212,18 +200,18 @@ pub fn resolve_listed(
                 selector: selector.to_owned(),
                 matches,
             };
-            Err(failed(error.code(), error))
+            Err(CliError::Log(error))
         }
     }
 }
 
 /// No session on `hub` answers `selector`: the local sessions path does
 /// not exist here, so the sentence names the hub instead.
-fn not_found(selector: &str, hub: &str) -> Failure {
-    failed(
-        ErrorCode::SessionNotFound,
-        format!("no session matches \"{selector}\" on hub `{hub}`"),
-    )
+fn not_found(selector: &str, hub: &str) -> CliError {
+    CliError::SessionNotFoundOnHub {
+        selector: selector.to_owned(),
+        hub: hub.to_owned(),
+    }
 }
 
 /// Live rows in the hub's order, then exited rows in the hub's order.
@@ -290,12 +278,9 @@ fn spend(status: Option<&ListStatus>) -> f64 {
     })
 }
 
-fn json_lines(rows: &[Row]) -> Result<Vec<String>, Failure> {
+fn json_lines(rows: &[Row]) -> Result<Vec<String>, CliError> {
     rows.iter()
-        .map(|row| {
-            serde_json::to_string(row)
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("a session row: {e}")))
-        })
+        .map(|row| serde_json::to_string(row).map_err(CliError::SessionRow))
         .collect()
 }
 

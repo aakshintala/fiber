@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use super::{App, Effect, Target, mint, session_command};
+use super::{App, Effect, Target, history_args, mint, session_command};
 use crate::keys::{Edit, Key};
 use crate::link::history_answer;
 use crate::logical;
@@ -473,9 +473,13 @@ impl App {
         }
         let to = from.saturating_add(HISTORY_LINES - 1).min(last);
         let id = mint();
-        let args = serde_json::json!({"from_seq": from, "to_seq": to});
+        // An ancestor page's window rides the serving session's chain
+        // read: the command stays routed to the serving session, and
+        // the args name the page's segment.
+        let args = history_args(&session, &entry.session, Some(from), Some(to));
         let line = session_command(&id, "history", &session, Some(args)).to_string();
-        self.find.send(id, page, width, revision, held, line);
+        self.find
+            .send(id, page, entry.session.clone(), width, revision, held, line);
     }
 
     /// The search's unsent command lines.
@@ -517,6 +521,10 @@ impl App {
                 );
             }
             Ok(lines) => {
+                debug_assert!(
+                    lines.iter().all(|line| line.session_id == fetch.session),
+                    "the fetch answers under its page's segment session"
+                );
                 fetch.held.extend(lines.iter().cloned());
                 let last = fetch.held.last().and_then(|line| line.seq).map(|seq| seq.0);
                 let end = self
@@ -660,8 +668,9 @@ impl App {
         };
         let (top, _) = self.scroll();
         let height = self.conversation_height();
-        if !(top..top.saturating_add(height)).contains(&row) {
-            self.screen.jump(row);
+        let behind_pin = self.screen.pin(height).is_some() && row == top;
+        if !(top..top.saturating_add(height)).contains(&row) || behind_pin {
+            self.screen.land(row);
         }
         self.find.revealed();
     }

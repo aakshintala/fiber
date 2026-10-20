@@ -14,10 +14,15 @@ use fakes::ProviderServer;
 use serde_json::json;
 use support::{Setup, run_to_exit, write_json};
 
-/// The `fiber <version>` first line, as `version` pins it.
+/// The `fiber <version>` first line, as `version` pins it: the version
+/// and the recorded commit's first 7 characters.
 fn version_line() -> String {
     match option_env!("FIBER_COMMIT") {
-        Some(commit) => format!("fiber {} ({commit})", env!("CARGO_PKG_VERSION")),
+        Some(commit) => format!(
+            "fiber {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            commit.get(..7).unwrap_or(commit)
+        ),
         None => format!("fiber {}", env!("CARGO_PKG_VERSION")),
     }
 }

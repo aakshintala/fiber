@@ -4,12 +4,15 @@
 //! reload's cache rebuild costs. One view is open at a time; while it is,
 //! it takes every key but Ctrl+C.
 
+mod credential;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use contract::events::UsageRecorded;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 use contract::{Envelope, SessionId};
+use serde_json::{Value, json};
 
 use super::{App, Effect};
 use crate::ThemeSetting;
@@ -17,6 +20,7 @@ use crate::configure::{Configure, ConfigureError, Layer, Saved};
 use crate::keys::{Edit, Key};
 use crate::login_view::Login;
 use crate::login_worker::{LoginJob, LoginStart, LoginStep, LoginTicket, LoginWorker};
+use crate::mcp_view::Mcp;
 use crate::rules_view::Rules;
 use crate::settings_view::{Act, Ctx, Settings};
 use crate::skills_view::Skills;
@@ -39,6 +43,10 @@ pub(crate) enum ConfigView {
     Rules,
     /// `/login`.
     Login,
+    /// `/mcp`.
+    Mcp,
+    /// `/credential`.
+    Credential,
 }
 
 /// The open view.
@@ -54,6 +62,10 @@ enum Open {
     Rules(Rules),
     /// `/login`.
     Login(Login),
+    /// `/mcp`.
+    Mcp(Mcp),
+    /// `/credential`.
+    Credential(credential::Picker),
     /// A view with no seam to read through, by its title and the
     /// command that opened it.
     Unavailable(&'static str, &'static str),
@@ -66,6 +78,8 @@ impl Open {
         match self {
             Open::Tools(tools) => tools.rejected(id, message),
             Open::Skills(skills) => skills.rejected(id, message),
+            Open::Mcp(mcp) => mcp.rejected(id, message),
+            Open::Credential(picker) => picker.rejected(id, message),
             Open::Settings(_) | Open::Rules(_) | Open::Login(_) | Open::Unavailable(..) => {}
         }
     }
@@ -74,6 +88,11 @@ impl Open {
 /// `/tools` waiting for the `tools` command `id` sent.
 fn build_tools(id: String, ctx: &Ctx<'_>) -> Open {
     Open::Tools(Tools::open(id, ctx))
+}
+
+/// `/mcp` waiting for the `mcp_servers` command `id` sent.
+fn build_mcp(id: String, _ctx: &Ctx<'_>) -> Open {
+    Open::Mcp(Mcp::open(id))
 }
 
 /// `/skills` waiting for the `skills` command `id` sent.
@@ -106,6 +125,8 @@ pub(in crate::app) struct ConfigViews {
     tickets: LoginTicket,
     /// The browser login start the loop has not picked up yet.
     pending_login: Option<LoginStart>,
+    /// The newest credential query and saving switch awaiting answers.
+    credential: credential::Waits,
 }
 
 impl App {
@@ -222,6 +243,17 @@ impl App {
         self.close_session_view();
         self.config_views.open = None;
         let open = match (self.config_views.seam.clone(), view) {
+            (_, ConfigView::Credential) => {
+                let Some((id, line)) = self.send_config_command("credentials", None) else {
+                    return Effect::None;
+                };
+                self.outbox.pending.insert(
+                    id.clone(),
+                    (super::Kind::Command, crate::input::Draft::default()),
+                );
+                self.config_views.open = Some(Open::Credential(credential::Picker::open(id)));
+                return Effect::Send(vec![line]);
+            }
             (Some(seam), ConfigView::Settings) => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
@@ -240,6 +272,9 @@ impl App {
                 };
                 Open::Rules(Rules::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
+            (Some(seam), ConfigView::Mcp) => {
+                return self.open_asking(seam, "mcp_servers", build_mcp);
+            }
             (Some(seam), ConfigView::Login) => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
@@ -251,9 +286,24 @@ impl App {
             (None, ConfigView::Skills) => Open::Unavailable("Skills", "/skills"),
             (None, ConfigView::Rules) => Open::Unavailable("Rules", "/rules"),
             (None, ConfigView::Login) => Open::Unavailable("Log in", "/login"),
+            (None, ConfigView::Mcp) => Open::Unavailable("MCP servers", "/mcp"),
         };
         self.config_views.open = Some(open);
         Effect::None
+    }
+
+    /// Sends `command` with `args` to the session on screen: the sent
+    /// line and its id, for the caller to record and send. Nothing when
+    /// no session is attached.
+    fn send_config_command(
+        &mut self,
+        command: &str,
+        args: Option<Value>,
+    ) -> Option<(String, String)> {
+        let (session, _) = self.command_session()?;
+        let id = super::mint();
+        let line = super::session_command(&id, command, &session, args).to_string();
+        Some((id, line))
     }
 
     /// Opens a view on the session on screen that waits for its command's
@@ -265,11 +315,9 @@ impl App {
         command: &str,
         build: fn(String, &Ctx<'_>) -> Open,
     ) -> Effect {
-        let Some((session, _)) = self.command_session() else {
+        let Some((id, line)) = self.send_config_command(command, None) else {
             return Effect::None;
         };
-        let id = super::mint();
-        let line = super::session_command(&id, command, &session, None).to_string();
         let Some(workspace) = self.view_workspace() else {
             return Effect::None;
         };
@@ -339,6 +387,11 @@ impl App {
         if self.config_views.open.is_none() || self.quit_open() || *key == Key::CtrlC {
             return None;
         }
+        let height = self.config_view_height();
+        if let Some(Open::Credential(picker)) = &mut self.config_views.open {
+            let pick = picker.key(key, height);
+            return Some(self.credential_pick(pick));
+        }
         let act = match self.config_views.seam.clone() {
             Some(seam) => {
                 let Some(workspace) = self.view_workspace() else {
@@ -349,9 +402,10 @@ impl App {
                     Some(Open::Settings(settings)) => settings.key(key, &ctx),
                     Some(Open::Tools(tools)) => tools.key(key, &ctx),
                     Some(Open::Skills(skills)) => skills.key(key, &ctx),
+                    Some(Open::Mcp(mcp)) => mcp.key(key, &ctx),
                     Some(Open::Rules(rules)) => rules.key(key, &ctx),
                     Some(Open::Login(login)) => login.key(key, &ctx),
-                    Some(Open::Unavailable(..)) | None => esc(key),
+                    Some(Open::Credential(_) | Open::Unavailable(..)) | None => esc(key),
                 }
             }
             None => esc(key),
@@ -378,6 +432,7 @@ impl App {
                         tools.edit_key(edit);
                         Act::Stay
                     }
+                    Some(Open::Mcp(_)) => Act::Stay,
                     Some(Open::Skills(skills)) => {
                         skills.edit_key(edit);
                         Act::Stay
@@ -387,7 +442,7 @@ impl App {
                         login.edit_key(edit);
                         Act::Stay
                     }
-                    Some(Open::Unavailable(..)) | None => Act::Stay,
+                    Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
                 }
             }
             None => Act::Stay,
@@ -397,6 +452,11 @@ impl App {
 
     /// A click on the open view's `spot`.
     pub(in crate::app) fn config_view_click(&mut self, spot: Spot) -> Effect {
+        let height = self.config_view_height();
+        if let Some(Open::Credential(picker)) = &mut self.config_views.open {
+            let pick = picker.click(spot, height);
+            return self.credential_pick(pick);
+        }
         let act = match (self.config_views.seam.clone(), spot) {
             (_, Spot::Close) => Act::Close,
             (Some(seam), Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
@@ -408,9 +468,10 @@ impl App {
                     Some(Open::Settings(settings)) => settings.click(spot, &ctx),
                     Some(Open::Tools(tools)) => tools.click(spot, &ctx),
                     Some(Open::Skills(skills)) => skills.click(spot, &ctx),
+                    Some(Open::Mcp(mcp)) => mcp.click(spot, &ctx),
                     Some(Open::Rules(rules)) => rules.click(spot, &ctx),
                     Some(Open::Login(login)) => login.click(spot, &ctx),
-                    Some(Open::Unavailable(..)) | None => Act::Stay,
+                    Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
                 }
             }
             (None, Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
@@ -511,6 +572,8 @@ impl App {
                 }
                 Effect::None
             }
+            Act::McpReconnect(server) => self.send_mcp_driver("mcp_reconnect", &server, false),
+            Act::McpLogin(server) => self.send_mcp_driver("mcp_login", &server, true),
             Act::Copy(url) => {
                 // As a focused link's `y`: the copy goes through OSC 52
                 // and, on a local session, the system clipboard as well.
@@ -518,6 +581,32 @@ impl App {
                 Effect::Copy(url)
             }
         }
+    }
+
+    /// Sends a per-server driver command for the open MCP view and
+    /// remembers its id as the server's wait: the answer clears the wait
+    /// and queries the rows again. Nothing when no session is attached.
+    fn send_mcp_driver(&mut self, command: &str, server: &str, login: bool) -> Effect {
+        let Some((id, line)) = self.send_config_command(command, Some(json!({"server": server})))
+        else {
+            return Effect::None;
+        };
+        if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {
+            mcp.sent(server, id, login);
+        }
+        Effect::Send(vec![line])
+    }
+
+    /// Re-sends `mcp_servers` for the open MCP view: its answer fills
+    /// what `expect` names. Nothing when no session is attached.
+    fn remcp_query(&mut self) -> Vec<String> {
+        let Some((id, line)) = self.send_config_command("mcp_servers", None) else {
+            return Vec::new();
+        };
+        if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {
+            mcp.expect(id);
+        }
+        vec![line]
     }
 
     /// The browser login start the loop has not picked up yet, once.
@@ -565,6 +654,8 @@ impl App {
             Open::Settings(settings) => settings.frame(usage),
             Open::Tools(tools) => tools.frame(usage),
             Open::Skills(skills) => skills.frame(self.config_view_height()),
+            Open::Mcp(mcp) => mcp.frame(usage),
+            Open::Credential(picker) => picker.frame(),
             Open::Rules(rules) => rules.frame(),
             Open::Login(_) => return None,
             Open::Unavailable(title, command) => Frame {
@@ -633,29 +724,40 @@ impl App {
                 Some(Open::Settings(settings)) => settings.reread(&ctx),
                 Some(Open::Rules(rules)) => rules.reread(&ctx),
                 Some(Open::Skills(skills)) => skills.reread(&ctx),
-                Some(Open::Tools(_) | Open::Login(_) | Open::Unavailable(..)) | None => {}
+                Some(
+                    Open::Credential(_)
+                    | Open::Tools(_)
+                    | Open::Mcp(_)
+                    | Open::Login(_)
+                    | Open::Unavailable(..),
+                )
+                | None => {}
             }
         }
     }
 
     /// Folds a `command_accepted` or `command_rejected` on the session on
     /// screen into the open asking view: only the answer to the command
-    /// it sent, of its result kind, fills it. Every other line, and any
-    /// line with another view open, does nothing.
-    pub(in crate::app) fn config_views_line(&mut self, envelope: &Envelope) {
+    /// it sent, of its result kind, fills it. A follow-up driver answer
+    /// and a server event re-query the MCP rows. Every other line, and
+    /// any line with another view open, does nothing. Returns the lines
+    /// the fold sends.
+    pub(in crate::app) fn config_views_line(&mut self, envelope: &Envelope) -> Vec<String> {
+        let credential_send = self.credential_line(envelope);
         if !matches!(
             self.config_views.open,
-            Some(Open::Tools(_) | Open::Skills(_))
+            Some(Open::Tools(_) | Open::Skills(_) | Open::Mcp(_))
         ) {
-            return;
+            return credential_send;
         }
         let Some(seam) = self.config_views.seam.clone() else {
-            return;
+            return credential_send;
         };
         let Some(workspace) = self.view_workspace() else {
-            return;
+            return credential_send;
         };
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        let mut send = credential_send;
         match envelope.kind.as_str() {
             "command_accepted" => {
                 if let Some(accepted) = super::read!(envelope, CommandAccepted) {
@@ -673,8 +775,22 @@ impl App {
                                 skills.answered(&accepted.command_id.0, &answered, &ctx);
                             }
                         }
+                        Some(Open::Mcp(mcp)) => match accepted.result {
+                            Some(CommandResult::McpServers { servers }) => {
+                                mcp.answered(&accepted.command_id.0, &servers, &ctx);
+                            }
+                            // A follow-up driver answer carries no
+                            // result: its id clears the wait, and the
+                            // rows query again.
+                            _ => {
+                                if mcp.followup(&accepted.command_id.0) {
+                                    send.extend(self.remcp_query());
+                                }
+                            }
+                        },
                         Some(
-                            Open::Settings(_)
+                            Open::Credential(_)
+                            | Open::Settings(_)
                             | Open::Rules(_)
                             | Open::Login(_)
                             | Open::Unavailable(..),
@@ -691,8 +807,17 @@ impl App {
                     open.rejected(&id.0, &rejected.message);
                 }
             }
+            // A server's state changed, or its set did: the open view
+            // queries again, unless its last answer is still in flight.
+            "mcp_server_failed" | "mcp_server_ready" | "reloaded" => {
+                let live = matches!(&self.config_views.open, Some(Open::Mcp(mcp)) if mcp.live());
+                if live {
+                    send.extend(self.remcp_query());
+                }
+            }
             _ => {}
         }
+        send
     }
 
     /// A hub `command_rejected` for the command the asking view sent
@@ -741,3 +866,7 @@ mod login_tests;
 #[cfg(test)]
 #[path = "config_skills_tests.rs"]
 mod skills_tests;
+
+#[cfg(test)]
+#[path = "config_mcp_tests.rs"]
+mod mcp_tests;

@@ -92,6 +92,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_thinking,
     },
     CommandEntry {
+        name: "credential",
+        description: "Switches the credential label, or opens the credential picker.",
+        hint: Some("[<label>]"),
+        run: run_credential,
+    },
+    CommandEntry {
         name: "scoped-models",
         description: "Chooses which models the model picker shows.",
         hint: None,
@@ -102,6 +108,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Opens the tools view.",
         hint: None,
         run: run_tools,
+    },
+    CommandEntry {
+        name: "mcp",
+        description: "Opens the MCP servers view.",
+        hint: None,
+        run: run_mcp,
     },
     CommandEntry {
         name: "context",
@@ -288,6 +300,10 @@ fn run_tools(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Tools))
 }
 
+fn run_mcp(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Mcp))
+}
+
 fn run_skills(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Skills))
 }
@@ -300,6 +316,10 @@ fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_usage(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::Usage))
+}
+
+fn run_credential(app: &mut App, rest: &str) -> Option<Effect> {
+    Some(app.credential_command(rest))
 }
 
 fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {

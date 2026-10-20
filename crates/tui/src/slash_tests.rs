@@ -54,8 +54,10 @@ const DRAWN_ORDER: &[&str] = &[
     "resume",
     "model",
     "thinking",
+    "credential",
     "scoped-models",
     "tools",
+    "mcp",
     "context",
     "usage",
     "quota",
@@ -121,7 +123,7 @@ fn the_doc_table_lists_the_drawn_commands_in_drawn_order() {
 }
 
 #[test]
-fn built_ins_are_drawn_built_ins_plus_credential_and_rewind() {
+fn built_ins_are_drawn_built_ins_plus_rewind() {
     for name in table_names() {
         assert!(
             BUILT_IN_COMMANDS.contains(&name),
@@ -132,7 +134,10 @@ fn built_ins_are_drawn_built_ins_plus_credential_and_rewind() {
         .iter()
         .filter(|name| !table_names().contains(name))
         .collect();
-    assert_eq!(extra, [&"credential", &"rewind", &"import", &"exit"]);
+    assert_eq!(extra, [&"rewind", &"import", &"exit"]);
+    let rows = rows(&[]);
+    let credential = rows.iter().find(|row| row.name == "credential").unwrap();
+    assert!(credential.line().contains("/credential [<label>]"));
     assert!(is_built_in("credential"));
     assert!(is_built_in("rewind"));
     assert!(!is_built_in("tdd"));
@@ -258,7 +263,7 @@ fn prefix_matches_come_before_contains_matches() {
     // (case ignored); `prereview` contains it later on.
     assert_eq!(
         names(&filter(&all, "re")),
-        ["resume", "reload", "Review", "prereview"]
+        ["resume", "reload", "Review", "credential", "prereview"]
     );
     assert_eq!(names(&filter(&all, "RE")), names(&filter(&all, "re")));
     // Contains only: no row starts with `ose`.

@@ -23,6 +23,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--overlay CASE` | draws one overlay case over a dimmed conversation; see "Overlays (#1630)" |
 | `--rail-case CASE` | draws one rail-cards case instead of the conversation; see "The rail (#692)" |
 | `--quota-case CASE` | draws one quota-view case instead of the conversation; see "Quota view (#2526)" |
+| `--credential-case CASE` | draws one credential-picker case instead of the conversation; see "Credential picker (#724)" |
 | `--theme CASE` | draws the screen in another theme or colour depth; combines with any other flag; see "Themes (#1634)" |
 | `--rail A\|B\|C` | the session rail design at start: list, cards, or tabs; the default is B; F2 cycles; see "The rail (#692)" |
 | `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
@@ -183,6 +184,33 @@ cargo run --release -- fixtures/session.jsonl --static --quota-case quota-empty
 
 `./capture-quota.sh` captures every case in tmux at 160 by 48, plain text
 and SGR, for the ticket's PR body.
+
+## Credential picker (#724)
+
+`--credential-case CASE` draws the `/credential` swapped view instead of the
+conversation. Each case draws one static frame and waits for a key; Esc, q
+or Ctrl+C quits. The fixture loads but never draws beneath the picker.
+These are look fixtures, not interactive choices: typing, clicking and the
+footer's selection keys do nothing in the prototype.
+
+```sh
+cargo run --release -- fixtures/session.jsonl --static --credential-case credentials
+cargo run --release -- fixtures/session.jsonl --static --credential-case credentials-reading
+cargo run --release -- fixtures/session.jsonl --static --credential-case credentials-none
+```
+
+- credentials: the header Credentials bold, /credential dim and Esc returns dim right-aligned; default, home and work in order; only home marked ● current in accent and selected in reverse; fake plain above the bottom footer; the footer ↑↓ move · Enter choose · Ctrl+S this session · Esc close dim.
+- credentials-reading: the same header and footer, no label rows, and Reading the labels… plain above the bottom footer.
+- credentials-none: the same header and footer, no label rows, and scripted has no credential labels plain above the bottom footer.
+
+There is no filter and no session-only marker row. The planned picker uses
+Enter or a label click to switch and save; Ctrl+S switches for this session
+only. The current label starts selected.
+
+`bash capture-credential.sh` captures every case in tmux at 160 by 48, in
+plain text and SGR. It writes to
+`/home/aakshintala/work/fiber-worktrees/flywheel/run/fiber-724-captures`;
+set `OUT` to choose another directory.
 
 ## Login (#1736)
 

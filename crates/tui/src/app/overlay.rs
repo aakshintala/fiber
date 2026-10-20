@@ -6,7 +6,7 @@
 use contract::{Envelope, Seq, SessionId};
 use serde_json::{Value, json};
 
-use super::App;
+use super::{App, history_args};
 use crate::window::Pages;
 
 /// What the screen holds while an open is in flight: nothing once the
@@ -44,16 +44,21 @@ pub(super) enum Overlay {
 }
 
 /// What the read before the raise holds: the durable lines read so
-/// far, oldest first and contiguous (`docs/tui.md`, "History and
-/// paging").
+/// far, oldest first and contiguous within each segment, ancestors
+/// before the session (`docs/tui.md`, "History and paging").
 #[derive(Debug, Default)]
 pub(super) struct Tail {
     /// The lines read so far, oldest first.
     lines: Vec<Envelope>,
-    /// Whether an answer held no line: the read reached the start.
+    /// Whether an answer held no line, or the held run reached its
+    /// segment's first line: the current segment ended.
     start: bool,
     /// Whether the read ended: failed, abandoned, or lost.
     ended: bool,
+    /// Whether the held run already followed its oldest segment's
+    /// parent and the answer came back empty: the parent is unknown,
+    /// so the walk stops instead of asking again.
+    crossed: bool,
 }
 
 impl Tail {
@@ -63,17 +68,40 @@ impl Tail {
     }
 
     /// Puts `older` before the held lines. Refuses a line carrying no
-    /// seq, or an answer that leaves a gap: its last seq is not one
-    /// below the first held line.
+    /// seq, an answer that leaves a gap within the segment (its last
+    /// seq is not one below the first held line), or a new segment
+    /// across the seam that the held run does not name, that names
+    /// another session, or that reaches above the named point.
     pub(super) fn prepend(&mut self, older: Vec<Envelope>) -> Result<(), ()> {
         if older.is_empty() {
             self.start = true;
+            if self.forked_from().is_some() {
+                self.crossed = true;
+            }
             return Ok(());
         }
         if older.iter().any(|line| line.seq.is_none()) {
             return Err(());
         }
-        if let (Some(first), Some(last)) = (
+        let crossed_seam = match (self.lines.first(), older.last()) {
+            (Some(first), Some(newest)) => first.session_id != newest.session_id,
+            _ => false,
+        };
+        if crossed_seam {
+            let Some(forked) = self.forked_from() else {
+                return Err(());
+            };
+            let newest = older.last().and_then(|line| line.seq);
+            if newest.is_some_and(|seq| seq > forked.seq)
+                || older
+                    .iter()
+                    .any(|line| line.session_id != forked.session_id)
+            {
+                return Err(());
+            }
+            self.start = false;
+            self.crossed = false;
+        } else if let (Some(first), Some(last)) = (
             self.lines.first().and_then(|line| line.seq),
             older.last().and_then(|line| line.seq),
         ) && last.0.saturating_add(1) != first.0
@@ -87,18 +115,75 @@ impl Tail {
         Ok(())
     }
 
-    /// The args of the next read: `{}` first, then `to_seq` just below
-    /// the first held line.
+    /// The parent the held run continues from, when it reached its
+    /// segment's first line: the `forked_from` of the held
+    /// `session_started`; `None` at the chain root or without one.
+    /// Only the point parses, so a fuller line still crosses.
+    fn forked_from(&self) -> Option<contract::shapes::Point> {
+        let first = self.lines.first()?;
+        if first.kind != "session_started" || first.seq != Some(Seq(0)) {
+            return None;
+        }
+        first
+            .payload
+            .get("forked_from")
+            .and_then(|forked| serde_json::from_value(forked.clone()).ok())
+    }
+
+    /// Whether the held run reached its segment's first line with a
+    /// parent still to read: the next window crosses the seam even
+    /// past a filled display, for the joint total.
+    pub(super) fn seam_pending(&self) -> bool {
+        self.lines.first().and_then(|line| line.seq) == Some(Seq(0))
+            && self.forked_from().filter(|_| !self.crossed).is_some()
+    }
+
+    /// Whether the walk reached the chain root: the read ended, or a
+    /// segment ended with no onward parent.
+    pub(super) fn chain_done(&self) -> bool {
+        self.ended || (self.start && (self.crossed || self.forked_from().is_none()))
+    }
+
+    /// The args of the next read: `{}` first, `to_seq` just below the
+    /// first held line, or the parent the held run continues from when
+    /// it reached its segment's first line. Past the seam every window
+    /// names its segment: the held run spans the crossing.
     pub(super) fn next_args(&self) -> Value {
         match self.lines.first().and_then(|line| line.seq) {
-            Some(first) => json!({"to_seq": first.0.saturating_sub(1)}),
+            Some(first) => {
+                // The tip stays on the attached segment: the walk only
+                // ever prepends the named parent, so the newest line's
+                // session is the serving one.
+                let Some(newest) = self.lines.last() else {
+                    return json!({});
+                };
+                if first == Seq(0)
+                    && let Some(forked) = self.forked_from().filter(|_| !self.crossed)
+                {
+                    return history_args(
+                        &newest.session_id,
+                        &forked.session_id,
+                        None,
+                        Some(forked.seq.0),
+                    );
+                }
+                let Some(oldest) = self.lines.first() else {
+                    return json!({});
+                };
+                history_args(
+                    &newest.session_id,
+                    &oldest.session_id,
+                    None,
+                    Some(first.0.saturating_sub(1)),
+                )
+            }
             None => json!({}),
         }
     }
 
-    /// Whether the read reached the log's start: the first held seq is
-    /// zero, or an answer held no line. Tests only: production stops
-    /// through `filled`.
+    /// Whether the read reached its segment's start: the first held
+    /// seq is zero, or an answer held no line. Tests only: production
+    /// walks past the segment's start into each ancestor.
     #[cfg(test)]
     pub(super) fn start_reached(&self) -> bool {
         self.start
@@ -120,6 +205,8 @@ impl Tail {
     /// Whether the tail is filled: the start reached, the read ended,
     /// or the turn-start lines folded fresh report at least `height`
     /// rows. Lines cut before the first `turn_started` never count.
+    /// The open stops the read here on its own segment; past a seam it
+    /// keeps walking for the joint total (`seam_pending`).
     pub(super) fn filled(&self, fresh: &Pages, height: usize) -> bool {
         self.start
             || self.ended
@@ -133,7 +220,9 @@ impl Tail {
         self.ended = true;
     }
 
-    /// Whether the read ended.
+    /// Whether the read ended. Tests only: production reads it through
+    /// `chain_done`.
+    #[cfg(test)]
     pub(super) fn ended(&self) -> bool {
         self.ended
     }

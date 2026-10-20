@@ -363,6 +363,11 @@ pub enum CommandResult {
         /// One per declared tool.
         tools: Vec<ToolInfo>,
     },
+    /// For `mcp_servers`.
+    McpServers {
+        /// One per configured server.
+        servers: Vec<McpServerRow>,
+    },
     /// For `commands`.
     Commands {
         /// One per `/name` the session runs.
@@ -521,6 +526,59 @@ pub struct ToolInfo {
     /// Its estimated tokens; absent before the first request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<u64>,
+}
+
+/// One configured MCP server, as `mcp_servers` lists it
+/// (`docs/mcp.md`, "Servers, their state and the per-server commands").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerRow {
+    /// The server's name.
+    pub name: String,
+    /// The layer that declares it.
+    pub layer: McpServerLayer,
+    /// Its state.
+    pub state: McpServerState,
+    /// The failure's sentence; empty when the server did not fail.
+    pub reason: String,
+    /// Its tool count; absent while `connecting`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<u64>,
+    /// False only on a repository's server nobody approved.
+    pub approved: bool,
+    /// The login URL; only while a login waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_url: Option<String>,
+}
+
+/// The configuration layer that declares an MCP server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerLayer {
+    /// The global configuration.
+    Global,
+    /// The per-project configuration.
+    Project,
+    /// The repository's configuration.
+    Repository,
+}
+
+/// An MCP server's state, as `mcp_servers` reports it (`docs/mcp.md`,
+/// "Servers, their state and the per-server commands").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum McpServerState {
+    /// Declared but never started this session, with no failure recorded.
+    #[serde(rename = "connecting")]
+    Connecting,
+    /// Running, with its tools declared.
+    #[serde(rename = "ready")]
+    Ready,
+    /// The last start failed; the row carries its sentence.
+    #[serde(rename = "failed")]
+    Failed,
+    /// The last start failed `NotLoggedIn` with no later ready.
+    #[serde(rename = "needs-login")]
+    NeedsLogin,
 }
 
 /// One skill discovery found (`docs/invocation.md`, "What each command

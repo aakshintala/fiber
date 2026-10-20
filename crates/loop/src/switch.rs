@@ -294,6 +294,10 @@ impl Loop {
                 applied();
             }
             self.chosen = prepared.chosen;
+            // A switch rebuilds the preamble against the new provider;
+            // the rebuild drops the previous build's factory-inserted
+            // search from the loop's own name, so nothing here needs to
+            // (`docs/tools.md`, "Tool search").
             self.preamble = None;
             self.preamble_reason = contract::events::PreambleReason::Switch;
             self.warming.stop(self.log.clock().now());
