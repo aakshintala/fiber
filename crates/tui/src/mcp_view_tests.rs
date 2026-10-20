@@ -398,6 +398,22 @@ fn a_followup_answer_clears_its_wait_and_nothing_else() {
 }
 
 #[test]
+fn a_fresh_snapshot_keeps_only_the_waits_its_rows_show() {
+    // A wait for a server the snapshot still names survives; one for
+    // a server it no longer names is over. A mutant flipping the
+    // retain's comparison would keep the gone wait and drop the live
+    // one.
+    let (fake, mut mcp) = opened(&[needs_login("remote"), failed("down")]);
+    mcp.sent("remote", "c_9".to_owned(), true);
+    mcp.sent("down", "c_10".to_owned(), false);
+    let context = context(&fake);
+    mcp.expect("c_2".to_owned());
+    mcp.answered("c_2", &[needs_login("remote")], &context);
+    assert!(mcp.followup("c_9"), "the live wait survives");
+    assert!(!mcp.followup("c_10"), "the gone wait is over");
+}
+
+#[test]
 fn esc_closes_and_moving_clears_what_was_said() {
     let (fake, mut mcp) = opened(&[
         failed("down"),
