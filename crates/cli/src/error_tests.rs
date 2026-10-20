@@ -912,6 +912,41 @@ fn no_first_party_package_names_the_provider() {
 }
 
 #[test]
+fn older_than_unreadable_is_usage() {
+    check(
+        &CliError::OlderThanUnreadable,
+        ErrorCode::Usage,
+        "`--older-than` takes a duration such as `30d`: a whole number and `s`, `m`, `h` or `d`.",
+    );
+}
+
+#[test]
+fn prune_failed_keeps_the_first_failure_code_and_counts() {
+    check(
+        &CliError::PruneFailed {
+            code: ErrorCode::IoFailed,
+            failed: 1,
+            total: 5,
+        },
+        ErrorCode::IoFailed,
+        "1 of 5 could not be deleted",
+    );
+}
+
+#[test]
+fn prune_failed_forwards_a_non_io_code() {
+    check(
+        &CliError::PruneFailed {
+            code: ErrorCode::SessionHeld,
+            failed: 2,
+            total: 7,
+        },
+        ErrorCode::SessionHeld,
+        "2 of 7 could not be deleted",
+    );
+}
+
+#[test]
 fn finish_maps_a_cli_error_to_its_exit_code() {
     assert_eq!(finish(Err(CliError::LogoutNeedsProvider)), 2);
     assert_eq!(
