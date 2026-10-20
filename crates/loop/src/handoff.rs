@@ -179,9 +179,12 @@ impl Loop {
     }
 
     /// The request the preamble, the key and the previous request's end make
-    /// around `conversation`. `None` before the preamble is built.
+    /// around `conversation`. `None` before the preamble is built. Each
+    /// logged search renders against the preamble's deferred set
+    /// (`docs/tools.md`, "Tool search").
     pub(crate) fn request_for(&self, conversation: Vec<Input>) -> Option<ModelRequest> {
         let built = self.preamble.as_ref()?;
+        let conversation = crate::render_loaded::render(conversation, built.deferred.as_ref());
         Some(ModelRequest {
             system_prompt: built.system_prompt.clone(),
             tools: built.tools.clone(),
@@ -228,6 +231,23 @@ impl Loop {
         Some(measured.tokens.saturating_add(after))
     }
 
+    /// Runs one handoff and, when it completes, moves the loaded names the
+    /// new context dropped back to `Deferred` (`docs/tools.md`,
+    /// "Tool search").
+    fn run_handoff_rows(
+        &mut self,
+        turn: &TurnId,
+        source: note::Source,
+        tokens_before: u64,
+    ) -> Result<Outcome, Error> {
+        let before = self.loaded_names();
+        let outcome = self.run_handoff(turn, source, tokens_before)?;
+        if outcome == Outcome::Completed {
+            self.publish_handoff_rows(&before);
+        }
+        Ok(outcome)
+    }
+
     /// The check before each request (`docs/loop.md`, "One step"): hands off
     /// at the trigger, or gives the nudge once per context. Returns the
     /// turn's end when the handoff was cancelled.
@@ -243,7 +263,7 @@ impl Loop {
             return Ok(None);
         };
         if size >= trigger_at && !self.handoff.blocked {
-            return Ok(cancelled(self.run_handoff(
+            return Ok(cancelled(self.run_handoff_rows(
                 turn,
                 note::Source::Requested {
                     trigger: HandoffTrigger::Auto,
@@ -281,7 +301,7 @@ impl Loop {
             .collect();
         let instructions = (!parts.is_empty()).then(|| parts.join("\n\n"));
         let size = self.context_estimate();
-        let ended = cancelled(self.run_handoff(
+        let ended = cancelled(self.run_handoff_rows(
             turn,
             note::Source::Requested {
                 trigger: HandoffTrigger::Person,
@@ -311,7 +331,7 @@ impl Loop {
             return Ok(false);
         }
         let tokens_before = self.context_estimate();
-        let outcome = self.run_handoff(turn, note::Source::Tools { note }, tokens_before)?;
+        let outcome = self.run_handoff_rows(turn, note::Source::Tools { note }, tokens_before)?;
         Ok(outcome == Outcome::Completed)
     }
 
@@ -343,7 +363,7 @@ impl Loop {
             return Ok(Step::Ended(crate::ended(TurnOutcome::Failed, Some(over))));
         }
         let size = self.context_estimate();
-        match self.run_handoff(
+        match self.run_handoff_rows(
             turn,
             note::Source::Requested {
                 trigger: HandoffTrigger::Overflow,

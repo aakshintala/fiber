@@ -232,6 +232,7 @@ impl Screen {
         if height == 0 || self.frozen() {
             return;
         }
+        // A landing under a pin is handled after the clamp below.
         let Some((_, rows, _)) = self
             .pages
             .focus_items()
@@ -244,11 +245,33 @@ impl Screen {
         let bottom = self.bottom_top(height);
         let top = self.scroll.top.map_or(bottom, |top| top.min(bottom));
         let end = row.saturating_add(rows.min(height));
-        let next = top.clamp(end.saturating_sub(height), row);
+        let mut next = top.clamp(end.saturating_sub(height), row);
+        if next == row && self.pages.shown(next, height.max(1)).pin.is_some() {
+            next = next.saturating_sub(1);
+        }
         if next >= bottom {
             self.scroll.follow();
         } else {
             self.scroll.top = Some(next);
+        }
+    }
+
+    /// The pinned header for `height`: none while following, else the
+    /// `Shown` at the top row's pin.
+    pub(super) fn pin(&self, height: usize) -> Option<crate::window::Pin> {
+        self.scroll.top?;
+        let top = self.view_top(height);
+        self.pages.shown(top, height).pin
+    }
+
+    /// Jumps to `row`, or to the row above it when the `Shown` at `row`
+    /// pins, so the landing row stops under the pin.
+    pub(super) fn land(&mut self, row: usize) {
+        let pins = self.pages.shown(row, 1).pin.is_some();
+        if pins {
+            self.jump(row.saturating_sub(1));
+        } else {
+            self.jump(row);
         }
     }
 

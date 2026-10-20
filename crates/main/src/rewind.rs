@@ -235,6 +235,7 @@ pub(crate) fn session_rewound(
         None,
         None,
         Some(r#loop::Rewound {
+            factory: None,
             from: point,
             worktree,
             how: r#loop::Continuation::Rewind {
