@@ -582,22 +582,15 @@ impl App {
             .any(|(held, pass)| held == session && matches!(pass, Pass::Until(_)))
     }
 
-    /// The args of the open's next tail read: none when the tail is
-    /// filled or ended, or no read runs.
+    /// The args of the open's next tail read: none when the walk
+    /// reached the chain root or ended, or no read runs. The display
+    /// phase may fill long before the root: the read continues for
+    /// counting until the chain root, with no filled stop.
     pub(crate) fn tail_next(&mut self) -> Option<Value> {
         let Overlay::Reading(tail) = &self.overlay else {
             return None;
         };
-        if tail.ended() {
-            return None;
-        }
-        let mut fresh = self.attached_screen().pages().fresh();
-        if let Some(lines) = tail.turn_lines() {
-            for line in lines {
-                fresh.apply(line);
-            }
-        }
-        if tail.filled(&fresh, self.conversation_height()) {
+        if tail.chain_done() {
             return None;
         }
         Some(tail.next_args())

@@ -385,9 +385,11 @@ impl Pages {
         self.note_images(envelope);
         let kind = envelope.kind.as_str();
         let action = envelope.action_id.as_ref();
-        // A turn or step cut is decided before its line is folded; the
-        // others once the fold says whether the line showed.
-        let early = matches!(kind, "turn_started" | "step_started");
+        // A turn, step or session cut is decided before its line is
+        // folded; the others once the fold says whether the line
+        // showed. The session cut must come first, so a new segment's
+        // first line never folds into the closed ancestor part.
+        let early = matches!(kind, "turn_started" | "step_started" | "session_started");
         let mut cut = Cut::None;
         if early && let Some(seq) = envelope.seq {
             cut = self

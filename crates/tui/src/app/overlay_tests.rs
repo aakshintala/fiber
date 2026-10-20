@@ -1821,7 +1821,7 @@ fn reading() -> App {
     app
 }
 
-/// Reads `all` through the open's tail until it reports filled, then
+/// Reads `all` through the open's tail to the chain root, then
 /// installs the preview.
 fn install_preview(app: &mut App, all: &[contract::Envelope]) {
     while let Some(args) = app.tail_next() {
@@ -1890,14 +1890,11 @@ fn reads_stop_at_the_turn_start_that_fills_the_screen() {
             !tail.filled(&fresh, total + 1),
             "one past the total asks again"
         );
-        // The real path agrees at the conversation height.
+        // The real path reads past the filled screen to the root: no
+        // filled stop, only the chain root ends it.
         let mut probe = app();
         probe.overlay = Overlay::Reading(tail);
-        assert_eq!(
-            probe.tail_next().is_none(),
-            *total >= height,
-            "the real path agrees at the height"
-        );
+        assert!(probe.tail_next().is_some(), "past filled it still asks");
     }
 }
 
@@ -2139,12 +2136,11 @@ fn the_preview_is_exact_for_the_last_turns() {
     );
 }
 
-/// Only the rows that depend on turns before the held lines change in
-/// the frame where the full fold replaces the preview: an orphaned job
-/// completion, an automatic handoff trigger, and a ledger call requested
-/// before the held turns (B3).
+/// The landing rewrites nothing over the full preview: the open reads
+/// to the chain root, so the preview already holds every turn the
+/// pass replays, and the landed rows match it exactly.
 #[test]
-fn only_the_cross_turn_rows_change_at_landing() {
+fn the_landing_rewrites_nothing_over_the_full_preview() {
     let mut seq = 0u64;
     let mut lines = Vec::new();
     let mut push = |kind: &str, action: Option<&str>, payload: Value| {
@@ -2266,39 +2262,12 @@ fn only_the_cross_turn_rows_change_at_landing() {
     }
     assert!(matches!(app.overlay, Overlay::None), "the pass lands");
     let after = row_texts(&app);
-    // Every row the landing rewrites within the held lines is one of
-    // the allowed kinds: an orphaned job's completion, an automatic
-    // handoff's trigger, or a ledger call from before the held lines.
-    // The preview and the landed screen both follow to the bottom, so
-    // the held rows align at the tail; early turns' own rows stand
-    // above the preview and never align.
-    let offset = after.len().saturating_sub(before.len());
-    let mut changed = Vec::new();
-    for (at, row) in before.iter().enumerate() {
-        if after.get(offset + at) != Some(row) {
-            changed.push(("preview", row.clone()));
-            if let Some(landed) = after.get(offset + at) {
-                changed.push(("landed", landed.clone()));
-            }
-        }
-    }
-    if after.len() < before.len() {
-        for row in &after[..before.len() - after.len()] {
-            changed.push(("landed-only", row.clone()));
-        }
-    }
-    assert!(!changed.is_empty(), "the landing changes some row");
-    let bad: Vec<_> = changed
-        .iter()
-        .filter(|(_, row)| {
-            !(row.to_lowercase().contains("orphan")
-                || row.contains("handoff")
-                || row.contains("⇄")
-                || row.contains("src/a.rs")
-                || row.trim_start().starts_with('●'))
-        })
-        .collect();
-    assert!(bad.is_empty(), "only allowed rows change, got: {bad:?}");
+    // The preview and the landed screen both hold the whole run and
+    // both follow to the bottom, so their rows align one to one.
+    assert_eq!(
+        before, after,
+        "the landing rewrites nothing over the full preview"
+    );
 }
 
 /// Ending the tail read marks it ended: a fresh read is open, and
@@ -2513,5 +2482,181 @@ fn land_carries_closed_ancestor_pages_across_the_swap() {
         app.attached_screen().pages().index().total(),
         before,
         "the joint count survives the reload"
+    );
+}
+
+/// `count` durable lines under `session`, numbered from zero: a
+/// `session_started` carrying `parent` as its `forked_from`, then
+/// `usage_recorded` filler.
+fn segment_lines(
+    session: &str,
+    count: usize,
+    parent: Option<(&str, u64)>,
+) -> Vec<contract::Envelope> {
+    let mut lines = Vec::with_capacity(count);
+    let mut started = json!({});
+    if let Some((parent_session, point)) = parent {
+        started = json!({"forked_from": {"session_id": parent_session, "seq": point}});
+    }
+    lines.push(contract::Envelope {
+        kind: "session_started".to_owned(),
+        session_id: id(session),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(0)),
+        payload: started.as_object().cloned().unwrap_or_default(),
+    });
+    for seq in 1..count {
+        let seq = u64::try_from(seq).expect("a session line");
+        if let Line::Session(envelope) = line("usage_recorded", seq, None, json!({})) {
+            let mut envelope = envelope;
+            envelope.session_id = id(session);
+            lines.push(envelope);
+        }
+    }
+    lines
+}
+
+/// Reads `child` then its ancestor `root` through a fresh tail,
+/// routing each answer by the args' `session_id`, and returns each
+/// `next_args` in order.
+fn read_chain(
+    child: &[contract::Envelope],
+    root: &[contract::Envelope],
+) -> (Vec<Value>, crate::app::overlay::Tail) {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    let mut asked = Vec::new();
+    loop {
+        let args = tail.next_args();
+        asked.push(args.clone());
+        let pool = if args.get("session_id").is_some() {
+            root
+        } else {
+            child
+        };
+        let answer = doors(pool, &args);
+        let empty = answer.is_empty();
+        tail.prepend(answer)
+            .unwrap_or_else(|_| panic!("a contiguous answer"));
+        if tail.chain_done() || empty {
+            break;
+        }
+    }
+    (asked, tail)
+}
+
+/// The tail walks the chain past the seam: the own windows, then the
+/// ancestor's under its session, down to the root's first line.
+#[test]
+fn the_tail_walks_the_chain_past_the_seam() {
+    let root = segment_lines(ANCESTOR, 300, None);
+    let child = segment_lines(SESSION, 300, Some((ANCESTOR, 299)));
+    let (asked, tail) = read_chain(&child, &root);
+    assert_eq!(
+        asked,
+        vec![
+            json!({}),
+            json!({"to_seq": 43}),
+            json!({"session_id": ANCESTOR, "to_seq": 299}),
+            json!({"session_id": ANCESTOR, "to_seq": 43}),
+        ],
+        "the own windows, then the ancestor's under its session"
+    );
+    assert!(tail.chain_done(), "the root's first line ends the walk");
+    let held: Vec<(String, u64)> = tail
+        .turn_lines()
+        .unwrap_or_else(|| panic!("the held run"))
+        .iter()
+        .map(|line| {
+            (
+                line.session_id.0.clone(),
+                line.seq.map(|seq| seq.0).unwrap_or(u64::MAX),
+            )
+        })
+        .collect();
+    assert_eq!(held.len(), 600, "the joint run is held");
+    assert!(
+        held.iter()
+            .take(300)
+            .all(|(session, _)| session == ANCESTOR),
+        "ancestors first"
+    );
+    assert!(
+        held.iter().skip(300).all(|(session, _)| session == SESSION),
+        "then the own run"
+    );
+}
+
+/// An ancestor longer than one window walks every window: 255 and 256
+/// lines read one window, 257 and 258 read two, every window past the
+/// seam naming its segment.
+#[test]
+fn an_ancestor_longer_than_one_window_walks_every_window() {
+    for (count, expected) in [
+        (
+            255usize,
+            vec![json!({"session_id": ANCESTOR, "to_seq": 254})],
+        ),
+        (256, vec![json!({"session_id": ANCESTOR, "to_seq": 255})]),
+        (
+            257,
+            vec![
+                json!({"session_id": ANCESTOR, "to_seq": 256}),
+                json!({"session_id": ANCESTOR, "to_seq": 0}),
+            ],
+        ),
+        (
+            258,
+            vec![
+                json!({"session_id": ANCESTOR, "to_seq": 257}),
+                json!({"session_id": ANCESTOR, "to_seq": 1}),
+            ],
+        ),
+    ] {
+        let root = segment_lines(ANCESTOR, count, None);
+        let point = u64::try_from(count).expect("an ancestor line") - 1;
+        let child = segment_lines(SESSION, 3, Some((ANCESTOR, point)));
+        let (asked, tail) = read_chain(&child, &root);
+        let mut wants = vec![json!({})];
+        wants.extend(expected);
+        assert_eq!(asked, wants, "{count} ancestor lines");
+        assert!(tail.chain_done(), "{count} ancestor lines");
+        assert_eq!(
+            tail.turn_lines().map(|lines| lines.len()),
+            Some(count + 3),
+            "{count} ancestor lines"
+        );
+    }
+}
+
+/// A new segment the held run does not name, or one reaching above the
+/// named point, ends the tail as failed with the out-of-order notice.
+#[test]
+fn an_unnamed_segment_across_the_seam_ends_the_tail_as_failed() {
+    let child = segment_lines(SESSION, 10, Some((ANCESTOR, 299)));
+    let mut app = reading();
+    app.tail_lines(child.clone());
+    let mut wrong = segment_lines(ANCESTOR, 5, None);
+    for line in &mut wrong {
+        line.session_id = id("s_cccccccccccccccc");
+    }
+    app.tail_lines(wrong);
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: the answer was out of order"),
+        "another session across the seam fails"
+    );
+    let mut above = segment_lines(ANCESTOR, 5, None);
+    for line in &mut above {
+        line.seq = line.seq.map(|seq| contract::Seq(seq.0 + 300));
+    }
+    app.tail_lines(above);
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: the answer was out of order"),
+        "above the point fails"
     );
 }
