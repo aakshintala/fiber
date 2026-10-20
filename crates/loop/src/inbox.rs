@@ -459,19 +459,25 @@ impl Loop {
 
     /// Logs everything queued, in arrival order: each steer as
     /// `steering_applied`, each job notice as `job_completed`. Clears the
-    /// queue (`docs/loop.md`, "One step"). A steer's holder applies only
-    /// while its entry is still staged: a drop between the drain and the
-    /// apply leaves the holder with no entry, and the apply skips it. The
-    /// queue empties after the log, as it did when the emit followed the
-    /// write.
+    /// queue (`docs/loop.md`, "One step"). The apply first claims its
+    /// snapshot in one section: the staged entries leave the queue and
+    /// the queue emits as the section left it, with the lock released
+    /// before anything logs. Only the snapshot's holders apply: a drop
+    /// before the claim leaves the holder with no entry, and the apply
+    /// skips it, so a drop the reader already acknowledged never logs.
     pub(crate) fn apply_steering(&mut self, turn: &TurnId) -> Result<(), Error> {
-        // One lock per holder; never-admitted holders are forged kept
-        // steers the loop takes as it always did.
+        let emit = TurnEmit {
+            log: &self.log,
+            turn: Some(turn.clone()),
+        };
+        let taken = self.steering.take_staged(&emit);
+        // Never-admitted holders are forged kept steers the loop takes
+        // as it always did.
         let steering = &self.steering;
         self.queued.retain(|piece| match piece {
             Queued::Steer(message, _) => match &message.sender.command_id {
                 None => true,
-                Some(id) => steering.is_staged(id) || !steering.is_admitted(id),
+                Some(id) => taken.iter().any(|entry| entry.id == *id) || !steering.is_admitted(id),
             },
             Queued::Job(..)
             | Queued::Notice(..)
@@ -480,11 +486,6 @@ impl Loop {
             | Queued::Pending(..) => true,
         });
         self.write_queued(turn)?;
-        let emit = TurnEmit {
-            log: &self.log,
-            turn: Some(turn.clone()),
-        };
-        let _ = self.steering.take_staged(&emit);
         Ok(())
     }
 

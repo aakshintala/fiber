@@ -212,8 +212,8 @@ fn a_message_sent_during_the_final_reply_continues_the_turn() {
             "assistant_message_completed",
             "steering_queue",
             "step_started",
-            "steering_applied",
             "steering_queue",
+            "steering_applied",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",
@@ -248,7 +248,8 @@ fn a_message_waiting_at_a_step_boundary_is_applied_by_that_step() {
     let kinds = kinds(&lines);
     let second_step = kinds.iter().rposition(|k| *k == "step_started").unwrap();
     assert_eq!(kinds[second_step + 1], "steering_queue");
-    assert_eq!(kinds[second_step + 2], "steering_applied");
+    assert_eq!(kinds[second_step + 2], "steering_queue");
+    assert_eq!(kinds[second_step + 3], "steering_applied");
     assert_eq!(
         kinds.iter().filter(|k| **k == "steering_applied").count(),
         1
@@ -1170,9 +1171,9 @@ fn queued_steers_are_each_applied_in_order_and_listed_while_queued() {
             "step_started",
             "steering_queue",
             "steering_queue",
-            "steering_applied",
-            "steering_applied",
             "steering_queue",
+            "steering_applied",
+            "steering_applied",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
@@ -1243,8 +1244,8 @@ fn a_dropped_steer_leaves_the_queue_listing() {
             "steering_queue",
             "steering_queue",
             "steering_queue",
-            "steering_applied",
             "steering_queue",
+            "steering_applied",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
