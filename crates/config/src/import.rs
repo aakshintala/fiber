@@ -536,6 +536,7 @@ struct Budget {
 
 /// One source file's read: present bytes, a miss, or an over-cap skip the
 /// caller says nothing more about, already reported in left-behind.
+#[derive(Debug)]
 enum SourceFile {
     Read(Vec<u8>),
     Missing,
@@ -546,15 +547,17 @@ enum SourceFile {
 /// over 1 MiB, or one past the source's running 8 MiB total, is left unread
 /// and reported in left-behind under `item`, charging nothing. Read
 /// failures keep their `ConfigError` for the caller, which refuses or
-/// aborts as it does today.
+/// aborts as it does today. One open pins the file past both caps: a
+/// source file vanishing mid-import reads as missing only when the open
+/// misses it, and an open handle can no longer race the read.
 fn read_source(
     file: &Path,
     item: &str,
     budget: &mut Budget,
     left_behind: &mut Vec<LeftBehind>,
 ) -> Result<SourceFile, ConfigError> {
-    let len = match fs::metadata(file) {
-        Ok(meta) => meta.len(),
+    let mut handle = match fs::File::open(file) {
+        Ok(handle) => handle,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(SourceFile::Missing),
         Err(source) => {
             return Err(ConfigError::Io {
@@ -563,6 +566,13 @@ fn read_source(
             });
         }
     };
+    let len = handle
+        .metadata()
+        .map(|meta| meta.len())
+        .map_err(|source| ConfigError::Io {
+            file: file.to_path_buf(),
+            source,
+        })?;
     if len > MAX_FILE_BYTES {
         left_behind.push(LeftBehind {
             item: item.to_owned(),
@@ -577,19 +587,15 @@ fn read_source(
         });
         return Ok(SourceFile::Skipped);
     }
-    match fs::read(file) {
-        Ok(bytes) => {
-            budget.used = budget
-                .used
-                .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-            Ok(SourceFile::Read(bytes))
-        }
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(SourceFile::Missing),
-        Err(source) => Err(ConfigError::Io {
-            file: file.to_path_buf(),
-            source,
-        }),
-    }
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut handle, &mut bytes).map_err(|source| ConfigError::Io {
+        file: file.to_path_buf(),
+        source,
+    })?;
+    budget.used = budget
+        .used
+        .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+    Ok(SourceFile::Read(bytes))
 }
 
 /// One source directory's entry names, bounded: at most 513 entries are

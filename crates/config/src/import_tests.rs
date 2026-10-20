@@ -194,3 +194,94 @@ fn eight_one_mebibyte_skills_fit_without_a_budget_entry() {
     assert_eq!(report.imported.skills.len(), 8);
     assert!(report.left_behind.is_empty(), "{report:?}");
 }
+
+#[test]
+fn a_skill_without_its_file_is_left_behind() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(fixture.source().join("skills/review")).unwrap();
+    let report = fixture.run(ImportSource::ClaudeCode).unwrap();
+    assert!(report.imported.skills.is_empty(), "{report:?}");
+    assert!(
+        reasons(&report).contains(&("skills/review/SKILL.md", "holds no SKILL.md",)),
+        "{report:?}",
+    );
+}
+
+#[test]
+fn a_settings_dir_is_left_behind_unread() {
+    let fixture = Fixture::new();
+    // A directory where `settings.json` should be: the open succeeds,
+    // the read fails, and the import names it left behind instead of
+    // refusing.
+    std::fs::create_dir_all(fixture.source().join("settings.json")).unwrap();
+    let report = fixture.run(ImportSource::ClaudeCode).unwrap();
+    assert!(report.imported.mcp_servers.is_empty(), "{report:?}");
+    assert!(
+        reasons(&report).iter().any(
+            |(item, reason)| *item == "settings.json" && reason.starts_with("cannot be read: ")
+        ),
+        "{report:?}",
+    );
+}
+
+#[test]
+fn read_source_missing_file_is_missing() {
+    let fixture = Fixture::new();
+    let mut budget = Budget::default();
+    let mut left_behind = Vec::new();
+    let missing = fixture.source().join("skills/review/SKILL.md");
+    let got = read_source(
+        &missing,
+        "skills/review/SKILL.md",
+        &mut budget,
+        &mut left_behind,
+    )
+    .unwrap();
+    assert!(matches!(got, SourceFile::Missing), "{got:?}");
+    assert!(left_behind.is_empty());
+    assert_eq!(budget.used, 0);
+}
+
+#[test]
+fn read_source_other_io_error_is_an_error() {
+    // A NUL byte never reaches the syscall: the open fails the same way
+    // on every platform, pinning the error arm against the missing one.
+    let bad = PathBuf::from("skills/re\0view/SKILL.md");
+    let mut budget = Budget::default();
+    let mut left_behind = Vec::new();
+    let err = read_source(
+        &bad,
+        "skills/review/SKILL.md",
+        &mut budget,
+        &mut left_behind,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&err, ConfigError::Io { file, .. } if file == &bad),
+        "{err:?}",
+    );
+    assert!(left_behind.is_empty());
+    assert_eq!(budget.used, 0);
+}
+
+#[test]
+fn read_source_dir_missing_dir_is_empty() {
+    let fixture = Fixture::new();
+    let mut left_behind = Vec::new();
+    let names =
+        read_source_dir(&fixture.source().join("skills"), "skills", &mut left_behind).unwrap();
+    assert!(names.is_empty());
+    assert!(left_behind.is_empty());
+}
+
+#[test]
+fn read_source_dir_other_io_error_is_an_error() {
+    let bad = PathBuf::from("skills\0dir");
+    let mut left_behind = Vec::new();
+    let err = read_source_dir(&bad, "skills", &mut left_behind).unwrap_err();
+    assert!(
+        matches!(&err, ConfigError::Io { file, .. } if file == &bad),
+        "{err:?}",
+    );
+    assert!(left_behind.is_empty());
+}

@@ -354,6 +354,25 @@ fn import_runs_through_the_machine() {
 }
 
 #[test]
+fn import_without_a_machine_is_unknown_command() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    // Without a machine the `import` arm's guard misses, like the other
+    // machine commands: the hub refuses `unknown_command` instead of
+    // running the import.
+    client.send(&command("c_1", "import", json!({})));
+    let (code, echoed, message) = rejected(&client.next("the refusal"));
+    assert_eq!(code, "unknown_command");
+    assert_eq!(echoed.as_deref(), Some("c_1"));
+    assert!(
+        message.contains("`import` is not a hub command."),
+        "{message}"
+    );
+}
+
+#[test]
 fn status_answers_running_version_and_clients() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
