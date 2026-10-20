@@ -1,7 +1,7 @@
 //! The `/` list: built-in commands and the session's `commands` answer in
 //! one filtered list (`docs/tui.md`, "Keys" › "Rules", "Slash commands").
 
-use crate::app::commands::TABLE;
+use crate::app::commands::{TABLE, alias_of};
 use contract::events::CommandInfo;
 
 /// How many rows a completion panel shows at most.
@@ -15,6 +15,10 @@ pub(crate) const COMMAND: &str = "command";
 pub(crate) struct Row {
     /// The name typed after `/`.
     pub(crate) name: String,
+    /// A second name for the row, drawn after the name: `/exit` on the
+    /// quit row. `None` when an extension row named `exit` takes that
+    /// name, so only one `/exit` entry shows.
+    pub(crate) alias: Option<String>,
     /// A one-line description.
     pub(crate) description: String,
     /// An argument hint, such as `[instructions]`.
@@ -31,7 +35,14 @@ impl Row {
             .hint
             .as_ref()
             .map_or_else(String::new, |hint| format!(" {hint}"));
-        format!("/{}{hint}  {}  {}", self.name, self.description, self.tag)
+        let alias = self
+            .alias
+            .as_ref()
+            .map_or_else(String::new, |alias| format!(" /{alias}"));
+        format!(
+            "/{}{alias}{hint}  {}  {}",
+            self.name, self.description, self.tag
+        )
     }
 }
 
@@ -54,10 +65,16 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
             .iter()
             .find(|command| command.name == name && command.extension)
     };
+    // An extension row named `exit` takes that name: the quit row sheds
+    // its alias so only one `/exit` entry shows.
+    let exit_taken = commands
+        .iter()
+        .any(|command| command.name == "exit" && command.extension);
     let built_ins = TABLE.iter().map(|entry| {
         if let Some(command) = replacement(entry.name) {
             Row {
                 name: command.name.clone(),
+                alias: None,
                 description: command.description.clone(),
                 hint: command.argument_hint.clone(),
                 tag: command.tag.clone(),
@@ -65,6 +82,9 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
         } else {
             Row {
                 name: entry.name.to_owned(),
+                alias: alias_of(entry.name)
+                    .filter(|_| !exit_taken)
+                    .map(str::to_owned),
                 description: entry.description.to_owned(),
                 hint: entry.hint.map(str::to_owned),
                 tag: COMMAND.to_owned(),
@@ -83,6 +103,7 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
         })
         .map(|command| Row {
             name: command.name.clone(),
+            alias: None,
             description: command.description.clone(),
             hint: command.argument_hint.clone(),
             tag: command.tag.clone(),
@@ -101,20 +122,38 @@ pub(crate) fn extensions(commands: &[CommandInfo]) -> Vec<String> {
 }
 
 /// The rows matching `query`, the text after `/`, ignoring case: those
-/// whose name starts with it, then those whose name contains it elsewhere,
-/// each group in list order.
+/// whose name or alias starts with it, then those whose name or alias
+/// contains it elsewhere, each group in list order.
 pub(crate) fn filter<'a>(rows: &'a [Row], query: &str) -> Vec<&'a Row> {
     let query = query.to_lowercase();
-    let names: Vec<String> = rows.iter().map(|row| row.name.to_lowercase()).collect();
-    let starts = rows
+    // 0 starts with, 1 contains elsewhere, 2 no match: one pass ranks
+    // each row, then the stable sort keeps list order in each group.
+    let rank = |row: &Row| {
+        let name = row.name.to_lowercase();
+        let alias = row.alias.as_deref().map(str::to_lowercase);
+        let starts = name.starts_with(&query)
+            || alias
+                .as_deref()
+                .is_some_and(|alias| alias.starts_with(&query));
+        let hits =
+            name.contains(&query) || alias.as_deref().is_some_and(|alias| alias.contains(&query));
+        if starts {
+            0
+        } else if hits {
+            1
+        } else {
+            2
+        }
+    };
+    let mut ranked: Vec<(u8, &'a Row)> = rows
         .iter()
-        .zip(&names)
-        .filter(|(_, name)| name.starts_with(&query));
-    let contains = rows
-        .iter()
-        .zip(&names)
-        .filter(|(_, name)| !name.starts_with(&query) && name.contains(&query));
-    starts.chain(contains).map(|(row, _)| row).collect()
+        .filter_map(|row| {
+            let rank = rank(row);
+            (rank < 2).then_some((rank, row))
+        })
+        .collect();
+    ranked.sort_by_key(|(rank, _)| *rank);
+    ranked.into_iter().map(|(_, row)| row).collect()
 }
 
 /// The first row shown so that `selected` is in view: rows

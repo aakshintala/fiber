@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use super::super::{App, Effect, Link, Phase, mint, session_command};
+use super::super::{App, Effect, Phase, mint, session_command};
 use super::{refusal, refusal_code};
 use crate::home::{Level, Subs};
 use crate::keyset::Context;
@@ -238,7 +238,7 @@ impl App {
         if let Some(home) = self.home.as_mut() {
             home.came_from = Some(session.clone());
         }
-        let lowers = self.outbox.link == Link::Up
+        let lowers = self.outbox.is_up()
             && self.home.as_ref().is_some_and(|home| {
                 home.subs.expected(&session) == Some(Level::Full)
                     && home
@@ -323,7 +323,7 @@ impl App {
     /// session's commands. The conversation clears as going home does,
     /// and the gate holds until the last subscribe is answered.
     pub(in crate::app) fn open_entry(&mut self, key: u64) -> Effect {
-        if self.outbox.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
+        if !self.outbox.is_up() || matches!(self.phase, Phase::Pending { .. }) {
             return Effect::None;
         }
         let Some(row) = self
@@ -378,7 +378,7 @@ impl App {
     /// reads over its own connections, and subscribing each one would
     /// send a command to every live session.
     pub(super) fn reconcile(&mut self, session: &SessionId) {
-        let lowers = self.outbox.link == Link::Up
+        let lowers = self.outbox.is_up()
             && self.session() != Some(session)
             && self.home.as_ref().is_some_and(|home| {
                 home.subs.full(session)
@@ -484,6 +484,11 @@ impl App {
                 }
                 return Some(Vec::new());
             }
+            // The raise's acceptance ends the gate: the full open
+            // succeeded, so a stale close notice for this session ends
+            // with it. A log still cut past here re-pushes
+            // `stream_closed` when its replay reaches the cut.
+            self.notices.clear_code("stream_closed", &session.0);
             if let Some(home) = self.home.as_mut() {
                 home.subs.opening = None;
             }

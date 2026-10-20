@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use contract::{ActionId, Envelope, JobId, SessionId};
 
-use super::{App, Effect, Kind, Link, Phase, mint, session_command};
+use super::{App, Effect, Kind, Phase, mint, session_command};
 use crate::home::Level;
 use crate::keys::{Edit, Key};
 use crate::tty_screen::Output;
@@ -375,7 +375,7 @@ impl App {
         self.items
             .wants
             .insert(session.clone(), retry::Want::full());
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return Effect::None;
         }
         if self.subscribe_pending(session) {
@@ -456,7 +456,7 @@ impl App {
         let Phase::Attached { session, .. } = &self.phase else {
             return Effect::None;
         };
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return Effect::None;
         }
         let session = session.clone();
@@ -498,7 +498,7 @@ impl App {
     /// draft does, so the rail and the input box never steal the job's
     /// keys; the guards exist once, here.
     pub(super) fn item_job_target(&self) -> Option<(SessionId, JobId)> {
-        if self.queue.open() || self.outbox.link != Link::Up {
+        if self.queue.open() || !self.outbox.is_up() {
             return None;
         }
         let open = self.items.open.as_ref()?;
@@ -563,7 +563,7 @@ impl App {
         if !self.draft.has_image() && text.trim().is_empty() {
             return Some(Effect::None);
         }
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return Some(Effect::None);
         }
         let id = mint();

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-use super::{App, Effect, Link, mint};
+use super::{App, Effect, mint};
 use crate::image;
 
 /// One `read_file` out for a viewer open: what its answer needs to
@@ -53,7 +53,7 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return Effect::None;
         }
         let command_id = mint();

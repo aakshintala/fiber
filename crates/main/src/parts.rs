@@ -313,6 +313,7 @@ pub(crate) fn parts_in(
     let here = Here {
         workspace: workspace.clone(),
         clock: Arc::clone(&clock),
+        cache_diagnostics: config.flag("cache.diagnostics", None).unwrap_or_default(),
     };
     let (provider, observe) = connect_observed(
         model,

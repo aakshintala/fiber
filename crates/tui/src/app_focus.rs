@@ -146,8 +146,12 @@ impl App {
                 Some(Effect::None)
             }
             Key::Esc => {
+                // The overlay closes first: cancelling drops the pending
+                // turn, and with it the notice the overlay shows, so a
+                // later close would find nothing and drop the focus.
+                let overlay = self.notices.close();
                 self.cancel_pending_turn();
-                if !self.notices.close() {
+                if !overlay {
                     self.focus = None;
                 }
                 Some(Effect::None)
@@ -410,6 +414,10 @@ impl App {
     /// out again.
     pub(super) fn cancel_pending_turn(&mut self) {
         if let Some(pending) = self.pending_turn.take() {
+            // The wait is over, landed or abandoned: the notice the first
+            // press pushed goes with the pending turn.
+            self.notices
+                .clear_code("history_loading", "Loading history…");
             for at in pending.pages {
                 self.screen.pages_mut().unwant(at);
             }

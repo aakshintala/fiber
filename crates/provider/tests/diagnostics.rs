@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use contract::diag::{DebugLog, ProviderRequest};
+use contract::events::CacheLifetime;
 use contract::provider::{ModelCall, ModelRequest};
 use fakes::{ProviderServer, Response};
 use provider::Endpoint;
@@ -162,6 +163,60 @@ fn expected_path(protocol: &str) -> &'static str {
         "openrouter" => "/v1/chat/completions",
         "gemini" => "/v1/models/m:streamGenerateContent",
         _ => unreachable!(),
+    }
+}
+
+fn observation_flagged(
+    log: &Arc<Capture>,
+    clock: &Arc<StepClock>,
+    attempt: u32,
+) -> provider::RequestObservation {
+    observation(log, clock, attempt).with_cache_diagnostics(true)
+}
+
+/// A 64-character lowercase hex digest, as the line holds them.
+fn hex64(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// One observed call on `protocol` with the setting on.
+fn observed_flagged(
+    protocol: &str,
+    endpoint: &Endpoint,
+    request: &ModelRequest,
+    log: &Arc<Capture>,
+    clock: &Arc<StepClock>,
+    attempt: u32,
+) -> Box<dyn ModelCall> {
+    observed(
+        protocol,
+        endpoint,
+        request,
+        observation_flagged(log, clock, attempt),
+    )
+}
+
+#[test]
+fn with_the_setting_off_no_diagnostic_field_is_written() {
+    for protocol in ["anthropic", "opencode", "openrouter", "gemini"] {
+        let server = ProviderServer::start([completed(protocol)]).unwrap();
+        let endpoint = harness::endpoint(protocol, &server);
+        let log = Capture::new(true);
+        let clock = StepClock::new();
+        let call = observed(
+            protocol,
+            &endpoint,
+            &harness::request(),
+            observation(&log, &clock, 1),
+        );
+        let (reply, _) = harness::run(call);
+        assert!(reply.is_ok(), "the completed stream reads on {protocol}");
+        assert!(server.await_requests(1, harness::DEADLINE));
+        let lines = log.lines();
+        assert_eq!(lines.len(), 1, "one call writes one line on {protocol}");
+        assert_eq!(lines[0].prefix_hashes, None, "nothing new on {protocol}");
+        assert_eq!(lines[0].cache_read, None, "nothing new on {protocol}");
+        assert_eq!(lines[0].cache_write, None, "nothing new on {protocol}");
     }
 }
 
@@ -438,4 +493,230 @@ fn no_credential_header_value_or_body_reaches_a_line() {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].header("x-signature"), Some(signed_value));
+}
+
+/// The expected reported read per protocol's completed fixture: the three
+/// fixtures that report cached tokens read four, Gemini reports none and
+/// reads zero.
+fn expected_read(protocol: &str) -> u64 {
+    match protocol {
+        "anthropic" | "opencode" | "openrouter" => 4,
+        _ => 0,
+    }
+}
+
+#[test]
+fn with_the_setting_on_the_line_carries_hashes_and_reported_use() {
+    for protocol in ["anthropic", "opencode", "openrouter", "gemini"] {
+        let server = ProviderServer::start([completed(protocol)]).unwrap();
+        let endpoint = harness::endpoint(protocol, &server);
+        let log = Capture::new(true);
+        let clock = StepClock::new();
+        let call = observed_flagged(protocol, &endpoint, &harness::request(), &log, &clock, 1);
+        let (reply, _) = harness::run(call);
+        assert!(reply.is_ok(), "the completed stream reads on {protocol}");
+        let lines = log.lines();
+        assert_eq!(lines.len(), 1, "one call writes one line on {protocol}");
+        let hashes = lines[0]
+            .prefix_hashes
+            .as_ref()
+            .unwrap_or_else(|| panic!("hashes are set on {protocol}"));
+        assert!(
+            hashes.system.as_ref().is_some_and(|digest| hex64(digest)),
+            "the system segment hashes on {protocol}"
+        );
+        // A request with no tools sends no tool segment except on
+        // Responses, whose body always holds a tools list.
+        match protocol {
+            "opencode" => assert!(
+                hashes.tools.as_ref().is_some_and(|digest| hex64(digest)),
+                "the always-sent tools list hashes on {protocol}"
+            ),
+            _ => assert_eq!(hashes.tools, None, "no tool segment on {protocol}"),
+        }
+        assert!(
+            !hashes.messages.is_empty(),
+            "the conversation hashes on {protocol}"
+        );
+        for digest in &hashes.messages {
+            assert!(hex64(digest), "each message boundary hashes on {protocol}");
+        }
+        assert_eq!(
+            lines[0].cache_read,
+            Some(expected_read(protocol)),
+            "the reported read on {protocol}"
+        );
+        assert!(
+            lines[0].cache_write.is_some(),
+            "the reported write, empty here, is present on {protocol}"
+        );
+        // The flagged line stays redacted: no prompt, message, key or
+        // session text reaches it.
+        for secret in ["You are terse.", "hi", "session_1"] {
+            assert!(
+                !log.serialized()[0].contains(secret),
+                "no content in the flagged line on {protocol}: {secret}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_reported_write_is_keyed_by_the_request_lifetime() {
+    for (lifetime, key) in [
+        (CacheLifetime::OneHour, "1h"),
+        (CacheLifetime::FiveMinutes, "5m"),
+    ] {
+        let body = harness::responses_sse(&[serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_1",
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 20,
+                    "input_tokens_details": {
+                        "cached_tokens": 4,
+                        "cache_write_tokens": 7
+                    },
+                    "output_tokens": 3
+                }
+            }
+        })]);
+        let server = ProviderServer::start([Response::stream(body)]).unwrap();
+        let endpoint = harness::endpoint("opencode", &server);
+        let log = Capture::new(true);
+        let clock = StepClock::new();
+        let mut request = harness::request();
+        request.cache_lifetime = lifetime;
+        let call = observed_flagged("opencode", &endpoint, &request, &log, &clock, 1);
+        let (reply, _) = harness::run(call);
+        assert!(reply.is_ok(), "the completed stream reads for {key}");
+        let lines = log.lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].cache_read, Some(4));
+        assert_eq!(
+            lines[0].cache_write,
+            Some(std::collections::BTreeMap::from([(key.to_owned(), 7)])),
+            "the write is keyed {key}"
+        );
+    }
+}
+
+#[test]
+fn an_empty_system_prompt_leaves_the_system_segment_out() {
+    let server = ProviderServer::start([completed("anthropic")]).unwrap();
+    let endpoint = harness::endpoint("anthropic", &server);
+    let log = Capture::new(true);
+    let clock = StepClock::new();
+    let mut request = harness::request();
+    request.system_prompt = String::new();
+    let call = observed_flagged("anthropic", &endpoint, &request, &log, &clock, 1);
+    let (reply, _) = harness::run(call);
+    assert!(reply.is_ok());
+    let lines = log.lines();
+    assert_eq!(lines.len(), 1);
+    let hashes = lines[0]
+        .prefix_hashes
+        .as_ref()
+        .expect("the other segments still hash");
+    assert_eq!(hashes.system, None, "no system segment hashes");
+    assert_eq!(hashes.tools, None, "no tool segment hashes");
+    assert!(!hashes.messages.is_empty(), "the messages still hash");
+}
+
+#[test]
+fn a_tooled_request_hashes_the_tool_segment() {
+    let server = ProviderServer::start([completed("anthropic")]).unwrap();
+    let endpoint = harness::endpoint("anthropic", &server);
+    let log = Capture::new(true);
+    let clock = StepClock::new();
+    let mut request = harness::request();
+    request.tools = vec![contract::provider::ToolDefinition {
+        name: "read".to_owned(),
+        description: "reads a file".to_owned(),
+        input_schema: serde_json::json!({"type": "object"}),
+        deferred: false,
+        hosted: None,
+    }];
+    let call = observed_flagged("anthropic", &endpoint, &request, &log, &clock, 1);
+    let (reply, _) = harness::run(call);
+    assert!(reply.is_ok());
+    let lines = log.lines();
+    assert_eq!(lines.len(), 1);
+    let hashes = lines[0].prefix_hashes.as_ref().expect("hashes are set");
+    assert!(
+        hashes.tools.as_ref().is_some_and(|digest| hex64(digest)),
+        "the tool definitions hash"
+    );
+    // The tool text hashes but never lands in the line.
+    assert!(
+        !log.serialized()[0].contains("reads a file"),
+        "no tool text in the flagged line"
+    );
+}
+
+#[test]
+fn a_failed_attempt_carries_hashes_and_status_without_usage() {
+    for protocol in ["anthropic", "opencode", "openrouter", "gemini"] {
+        let server = ProviderServer::start([fakes::Response::status(503, "try again")]).unwrap();
+        let endpoint = harness::endpoint(protocol, &server);
+        let log = Capture::new(true);
+        let clock = StepClock::new();
+        let call = observed_flagged(protocol, &endpoint, &harness::request(), &log, &clock, 1);
+        let (reply, _) = harness::run(call);
+        assert!(reply.is_err(), "the 503 fails the call on {protocol}");
+        let lines = log.lines();
+        assert_eq!(lines.len(), 1, "the failure writes one line on {protocol}");
+        assert_eq!(lines[0].status, Some(503), "the status on {protocol}");
+        assert_eq!(lines[0].attempt, 1, "the attempt on {protocol}");
+        // The bytes went out, so their digests are known; the reply
+        // failed, so no usage is reported.
+        assert!(
+            lines[0].prefix_hashes.is_some(),
+            "hashes describe the posted bytes on {protocol}"
+        );
+        assert_eq!(lines[0].cache_read, None, "no usage on {protocol}");
+        assert_eq!(lines[0].cache_write, None, "no usage on {protocol}");
+    }
+}
+
+#[test]
+fn a_retry_writes_one_line_per_attempt_with_usage_only_on_success() {
+    for protocol in ["anthropic", "opencode", "openrouter", "gemini"] {
+        let server = ProviderServer::start([
+            fakes::Response::status(503, "try again"),
+            completed(protocol),
+        ])
+        .unwrap();
+        let endpoint = harness::endpoint(protocol, &server);
+        let log = Capture::new(true);
+        let clock = StepClock::new();
+        let request = harness::request();
+        let first = observed_flagged(protocol, &endpoint, &request, &log, &clock, 1);
+        let (failed, _) = harness::run(first);
+        assert!(failed.is_err(), "the first attempt fails on {protocol}");
+        let second = observed_flagged(protocol, &endpoint, &request, &log, &clock, 2);
+        let (reply, _) = harness::run(second);
+        assert!(reply.is_ok(), "the second attempt reads on {protocol}");
+        assert!(server.await_requests(2, harness::DEADLINE));
+        let lines = log.lines();
+        assert_eq!(lines.len(), 2, "one line per attempt on {protocol}");
+        assert_eq!(lines[0].attempt, 1);
+        assert_eq!(lines[0].status, Some(503));
+        assert_eq!(lines[0].cache_read, None, "no usage on the failure");
+        assert_eq!(lines[0].cache_write, None, "no usage on the failure");
+        // Both attempts posted the same bytes, so both lines hash them.
+        assert_eq!(
+            lines[0].prefix_hashes, lines[1].prefix_hashes,
+            "the retry reposts the same prefix on {protocol}"
+        );
+        assert_eq!(lines[1].attempt, 2);
+        assert_eq!(lines[1].status, Some(200));
+        assert_eq!(
+            lines[1].cache_read,
+            Some(expected_read(protocol)),
+            "usage on the success"
+        );
+        assert!(lines[1].cache_write.is_some(), "usage on the success");
+    }
 }

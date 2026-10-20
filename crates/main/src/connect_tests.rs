@@ -79,6 +79,7 @@ fn connect_fetches_quota_for_its_label() {
     let here = crate::connect::Here {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
+        cache_diagnostics: false,
     };
     // `connect` can wait on Lua registration, so it runs on its own thread
     // under a deadline instead of hanging the test.

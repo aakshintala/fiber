@@ -107,12 +107,17 @@ impl App {
     /// The link is not up yet when this runs: a second `hub_hello` on a
     /// live connection reopens nothing.
     pub(super) fn reconnected(&mut self) -> Vec<String> {
-        let again = self.reconnect.was_up && self.outbox.link != Link::Up;
+        let again = self.reconnect.was_up && !self.outbox.is_up();
         self.hub_reached();
         self.reconnect.was_up = true;
         if !again {
             return Vec::new();
         }
+        // The connection is back: both connection texts ended with it,
+        // while a search the drop interrupted still waits on the bar or
+        // a rescan.
+        self.notices
+            .clear_code_except("connection_failed", &super::find::search_incomplete_text());
         if let Phase::Pending { command_id } = &self.phase {
             let id = command_id.clone();
             self.rejected(&id, "connection_failed", UNANSWERED.to_owned());

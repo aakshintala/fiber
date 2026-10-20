@@ -1082,6 +1082,54 @@ the fold would reach the same line. The composer is unchanged, so a send is
 rejected `not_subscribed` and the draft comes back with that notice.
 Reopening the session subscribes again through the normal open path.
 
+A notice is an event or a condition. An event reports a failure once and
+then fades: it clears 10 seconds after it shows, or when dismissed with
+✕. A condition reports a state the terminal re-evaluates on its own
+loop, and it stays until its cause ends: reaching its end clears it,
+✕ only hides a row whose cause still holds. The loop sweeps notices
+before each draw and before arming its wake, so a faded row never draws
+and an expiry wakes the loop even with no input.
+
+| Code | Class | Clears when |
+|---|---|---|
+| `cache_rebuild` | event | Fades 10 s after it shows. |
+| `closing` | event | Fades 10 s after it shows. |
+| `command_conflict` | event | Fades 10 s after it shows. |
+| `config_invalid` | event | Fades 10 s after it shows. |
+| `config_key_ignored` | event | Fades 10 s after it shows. |
+| `connection_failed` | condition | The connection cause clears when the hub reconnects; the search-incomplete cause clears when the find bar closes or a rescan completes. A reconnect alone never clears the search text. |
+| `credential_failed` | event | Fades 10 s after it shows. |
+| `credential_missing` | event | Fades 10 s after it shows. |
+| `extension_failed` | event | Fades 10 s after it shows. |
+| `extension_incompatible` | event | Fades 10 s after it shows. |
+| `extension_shadowed` | event | Fades 10 s after it shows. |
+| `history_loading` | condition | History lands for the pending turn. |
+| `hook_failed` | event | Fades 10 s after it shows. |
+| `instructions_large` | event | Fades 10 s after it shows. |
+| `invalid_arguments` | event | Fades 10 s after it shows. |
+| `io_failed` | event | Fades 10 s after it shows. |
+| `login_url` | condition | No automatic clear: finish the login in X, then dismiss with ✕. |
+| `malformed` | event | Fades 10 s after it shows. |
+| `model_invalid` | event | Fades 10 s after it shows. |
+| `model_unconfigured` | event | Fades 10 s after it shows. |
+| `models_loading` | condition | The model list arrives. |
+| `no_model` | event | Fades 10 s after it shows. |
+| `repository_code_skipped` | event | Fades 10 s after it shows. |
+| `reviewer_selection_failed` | event | Fades 10 s after it shows. |
+| `session_held` | event | Fades 10 s after it shows. |
+| `session_not_found` | event | Fades 10 s after it shows. |
+| `skill_invalid` | event | Fades 10 s after it shows. |
+| `skill_shadowed` | event | Fades 10 s after it shows. |
+| `skills_large` | event | Fades 10 s after it shows. |
+| `stale_request` | event | Fades 10 s after it shows. |
+| `stream_closed` | condition | The session reopens; opening another session drops other sessions' rows. |
+| `switch_pending` | condition | The turn ends and the switch applies; rejecting a pending command voids its claim. |
+| `tool_definitions_large` | event | Fades 10 s after it shows. |
+| `web_search_unavailable` | event | Fades 10 s after it shows. |
+
+Codes no table lists — a refusal or driver code the hub names
+dynamically — are events: they fade after one showing.
+
 Notices are not logged, so they are this terminal's own memory. A client that
 attaches later never sees them.
 
@@ -1480,7 +1528,7 @@ search box and the draft shows without a cursor.
 | Send a prompt, or a steering message during a turn | `send` | Enter | |
 | Insert a line break | `line_break` | Shift+Enter | Ctrl+J |
 | Close what is on top; interrupt the turn when nothing is open | `close_or_interrupt` | Esc | click the overlay's ✕ or outside it; click "Esc to interrupt" |
-| Clear the draft, then quit | `clear_then_quit` | Ctrl+C, twice within about a second on an empty box | `/quit` |
+| Clear the draft, then quit | `clear_then_quit` | Ctrl+C, twice within about a second on an empty box | `/quit, /exit` |
 | Go home | `go_home` | ⌥0 | `/home` |
 | Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
@@ -1663,7 +1711,7 @@ later release still applies.
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/close` | Stops the session on screen ("Quit"). |
-| `/quit` | Quits ("Quit"). |
+| `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
 | `/?`, `/help` | Opens the key map. |
 
@@ -1748,7 +1796,7 @@ widening it. Esc goes back to the provider list.
 - **Ctrl+C clears, then quits.** It clears a draft in the input box. With the
   box empty, it says "Press Ctrl+C again to quit", and a second press within
   about a second quits. It never interrupts a turn on its own; Esc does that.
-- **Quit** is a second Ctrl+C, or `/quit`. With no session working, meaning
+- **Quit** is a second Ctrl+C, or `/quit`, `/exit`. With no session working, meaning
   no turn, job or delegate running, the terminal exits without asking. With
   some working, it asks in an overlay ("Look", "Overlays"): the title
   "Quit", "2 sessions working" dim, then three choices, "Enter" to leave them

@@ -16,6 +16,9 @@ impl App {
     /// Folds a model-list read's answer: each catalogue notice shows once,
     /// and a read error shows once with the old catalogue kept.
     pub(crate) fn on_models(&mut self, result: Result<Catalogue, String>) {
+        // The load landed, answered or not: its wait is over.
+        self.notices
+            .clear_code("models_loading", Self::MODELS_LOADING_TEXT);
         match &result {
             Ok(catalogue) => {
                 for notice in &catalogue.notices {
@@ -60,11 +63,11 @@ impl App {
     /// a models error is a notice as today, opening nothing.
     pub(crate) fn start_model_pick(&mut self) -> Vec<String> {
         let remote = self.remote().is_some();
-        if remote && self.outbox.link != super::Link::Up {
+        if remote && !self.outbox.is_up() {
             self.owe_start_pick();
             return Vec::new();
         }
-        if !remote && self.outbox.link == super::Link::Up {
+        if !remote && self.outbox.is_up() {
             // A local home picks once at startup, before the link
             // exists: later hellos must not reopen it.
             return Vec::new();
@@ -175,7 +178,7 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return self.choose_on_home(choice);
         };
-        if self.outbox.link != super::Link::Up {
+        if !self.outbox.is_up() {
             self.push_notice(
                 "connection_failed",
                 "The hub is not connected; nothing changed.".to_owned(),
@@ -638,10 +641,7 @@ impl App {
                 session_only: false,
             }),
             None => {
-                self.push_notice(
-                    "models_loading",
-                    "The model list is not read yet; try again in a moment.".to_owned(),
-                );
+                self.push_notice("models_loading", Self::MODELS_LOADING_TEXT.to_owned());
                 let want = self.model_picker.want;
                 self.model_picker.want =
                     Some(want.map_or(Refresh::Cached, |want| want.max(Refresh::Cached)));
@@ -649,6 +649,10 @@ impl App {
             }
         }
     }
+
+    /// The models-wait notice's identity: the text the empty-list path pushes.
+    /// The load landing ends the wait, answered or not.
+    const MODELS_LOADING_TEXT: &str = "The model list is not read yet; try again in a moment.";
 
     /// The model `/thinking` acts on: the session's, or the pending home
     /// choice's, else the home chips'.
