@@ -14,6 +14,20 @@ use std::sync::{Arc, OnceLock};
 pub type DisabledReader =
     Arc<dyn Fn() -> Result<Vec<String>, contract::events::Notice> + Send + Sync>;
 
+/// The configuration's deferral input (`docs/tools.md`, "Tool search"):
+/// which registered tools the preamble sends deferred. `PromptInputs::new`
+/// leaves every tool to its own definition.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Deferrals {
+    /// Per-tool override by name: when set, it wins over `full_servers`
+    /// ("key wins"). The factory-built search tool, matched by its
+    /// definition's name, is always left in full.
+    pub tools: std::collections::BTreeMap<String, bool>,
+    /// Servers declared in full: their tools are sent in full unless
+    /// `tools` names one.
+    pub full_servers: std::collections::BTreeSet<String>,
+}
+
 /// What a preamble build reads, once (`docs/system-prompt.md`, "The
 /// system prompt" and `docs/prompt-cache.md`, "The preamble").
 /// [`PromptInputs::new`] returns every optional input absent, and the
@@ -61,6 +75,9 @@ pub struct PromptInputs {
     /// The session's one reasoning setting (`docs/model-routing.md`,
     /// "Thinking"); `None` sends nothing.
     pub thinking: Option<contract::ThinkingLevel>,
+    /// Which registered tools the preamble sends deferred (`docs/tools.md`,
+    /// "Tool search").
+    pub deferrals: Deferrals,
 }
 
 impl PromptInputs {
@@ -93,6 +110,7 @@ impl PromptInputs {
             credential: None,
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             thinking: None,
+            deferrals: Deferrals::default(),
         }
     }
 }
@@ -324,12 +342,32 @@ pub(crate) fn system_prompt(
     parts.join("\n\n")
 }
 
+/// What `build` returns: the system prompt text, the tool definitions in
+/// name order for requests, the `preamble_built` payload, and the built
+/// search tool with its definition when a search is due.
+pub(crate) type Built = (
+    String,
+    Vec<contract::provider::ToolDefinition>,
+    contract::events::PreambleBuilt,
+    Option<(
+        std::sync::Arc<dyn contract::tool::Tool>,
+        contract::provider::ToolDefinition,
+    )>,
+);
+
 /// One preamble build: the system prompt text, the tool definitions in
 /// name order for requests, and the `preamble_built` payload
 /// (`docs/prompt-cache.md`, "The preamble" and `docs/events.md`,
 /// "`preamble_built`"). `thinking` is the inputs' level, absent when none;
 /// `credential` is the inputs' label. `trigger_at` is
-/// the automatic handoff's trigger, absent when it is off.
+/// the automatic handoff's trigger, absent when it is off. `factory`
+/// builds the search tool the build declares when due (`docs/tools.md`,
+/// "Tool search"): on a model without deferral, or without a factory,
+/// every tool is sent in full and no search is built. The fourth part is
+/// the built tool with its definition, `None` when no search is due: no
+/// factory, no deferral, an empty deferred set, or the factory-built name
+/// already registered, whose general rule keeps the registered tool and
+/// records the factory's loss in `replaced`.
 #[allow(
     clippy::too_many_arguments,
     reason = "the one build takes each preamble input; a struct would only rename them"
@@ -341,31 +379,135 @@ pub(crate) fn build(
     tools: &std::collections::BTreeMap<String, crate::calls::Registered>,
     provider: &dyn contract::provider::Provider,
     reason: contract::events::PreambleReason,
-    replaced: Vec<contract::events::ToolReplaced>,
+    mut replaced: Vec<contract::events::ToolReplaced>,
     trigger_at: Option<u64>,
-) -> (
-    String,
-    Vec<contract::provider::ToolDefinition>,
-    contract::events::PreambleBuilt,
-) {
-    let infos: Vec<(String, Option<String>, bool)> = tools
+    factory: Option<&crate::ToolSearchFactory>,
+) -> Built {
+    // The effective deferral of each registered tool (`docs/tools.md`,
+    // "Deferral is a property of the model" and "What is deferred by
+    // default"): a model without deferral, or no factory, defers nothing.
+    // Otherwise a per-tool key wins over `full_servers`, which wins over
+    // the tool's own definition.
+    let deferring = provider.defers() && factory.is_some();
+    let mut effective: std::collections::BTreeMap<&str, bool> = std::collections::BTreeMap::new();
+    for (name, (by, _, definition)) in tools.iter() {
+        let own = match inputs.deferrals.tools.get(name) {
+            Some(deferred) => *deferred,
+            None => definition.deferred && !inputs.deferrals.full_servers.contains(by),
+        };
+        effective.insert(name.as_str(), deferring && own);
+    }
+    // The catalogue and sources the factory builds the search tool from:
+    // the deferred definitions in registry order, and the sorted,
+    // de-duplicated `registered_by` of the deferred tools, leaving out
+    // `builtin`.
+    let catalogue: Vec<contract::provider::ToolDefinition> = tools
         .iter()
-        .map(|(name, (_, tool, definition))| (name.clone(), tool.guidelines(), definition.deferred))
+        .filter(|(name, _)| effective.get(name.as_str()).copied().unwrap_or(false))
+        .map(|(_, (_, _, definition))| definition.clone())
+        .collect();
+    let mut sources: Vec<String> = tools
+        .iter()
+        .filter(|(name, _)| effective.get(name.as_str()).copied().unwrap_or(false))
+        .map(|(_, (by, _, _))| by.clone())
+        .filter(|by| by != "builtin")
+        .collect();
+    sources.sort();
+    sources.dedup();
+    let mut built: Option<(
+        std::sync::Arc<dyn contract::tool::Tool>,
+        contract::provider::ToolDefinition,
+    )> = None;
+    let mut search_name: Option<String> = None;
+    if !catalogue.is_empty()
+        && let Some(factory) = factory
+    {
+        // The search name is read from the built tool's own definition,
+        // never a literal: the tool the factory builds is the search tool
+        // by role (`docs/architecture.md`, "Tool seam").
+        let search = factory(&catalogue, &sources);
+        let definition = search.definition();
+        let name = definition.name.clone();
+        if let Some((by, _, _)) = tools.get(&name) {
+            // The general replaces rule keeps the registered tool: the
+            // factory's tool is not registered, and the loss is recorded
+            // as `register` records one.
+            replaced.push(contract::events::ToolReplaced {
+                name: name.clone(),
+                from: "builtin".to_owned(),
+                to: by.clone(),
+            });
+            search_name = Some(name);
+        } else {
+            search_name = Some(name.clone());
+            built = Some((search, definition));
+        }
+    }
+    // The factory-built search name is never deferred: a configuration key
+    // naming it leaves its tool in full.
+    if let Some(name) = &search_name
+        && let Some(deferred) = effective.get_mut(name.as_str())
+    {
+        *deferred = false;
+    }
+    let search_definition = built.as_ref().map(|(_, definition)| definition.clone());
+    // Every declared definition in name order, the built search merged
+    // into registry order.
+    let mut ordered: Vec<(String, String, contract::provider::ToolDefinition, bool)> = tools
+        .iter()
+        .map(|(name, (by, _, definition))| {
+            (
+                name.clone(),
+                by.clone(),
+                definition.clone(),
+                effective.get(name.as_str()).copied().unwrap_or(false),
+            )
+        })
+        .collect();
+    if let Some(definition) = search_definition {
+        let at = ordered
+            .iter()
+            .position(|(name, _, _, _)| name > &definition.name)
+            .unwrap_or(ordered.len());
+        ordered.insert(
+            at,
+            (
+                definition.name.clone(),
+                "builtin".to_owned(),
+                definition,
+                false,
+            ),
+        );
+    }
+    let infos: Vec<(String, Option<String>, bool)> = ordered
+        .iter()
+        .map(|(name, _, _, deferred)| {
+            // A guideline comes from the registered tool, or from the built
+            // search tool when the row is the search the build declares.
+            let guidelines = tools
+                .get(name)
+                .and_then(|(_, tool, _)| tool.guidelines())
+                .or_else(|| {
+                    let (search, _) = built.as_ref()?;
+                    (search.definition().name == *name).then(|| search.guidelines())?
+                });
+            (name.clone(), guidelines, *deferred)
+        })
         .collect();
     let system = system_prompt(inputs, model, unattended, &infos);
-    let definitions: Vec<contract::provider::ToolDefinition> = tools
-        .values()
-        .map(|(_, _, definition)| definition.clone())
+    let definitions: Vec<contract::provider::ToolDefinition> = ordered
+        .iter()
+        .map(|(_, _, definition, _)| definition.clone())
         .collect();
     let wire = provider.wire_tools(&definitions);
-    let sent: Vec<contract::events::SentTool> = tools
+    let sent: Vec<contract::events::SentTool> = ordered
         .iter()
         .zip(wire)
         .map(
-            |((name, (by, _, definition)), definition_wire)| contract::events::SentTool {
+            |((name, by, _, deferred), definition_wire)| contract::events::SentTool {
                 name: name.clone(),
                 registered_by: by.clone(),
-                deferred: definition.deferred,
+                deferred: *deferred,
                 definition: definition_wire,
             },
         )
@@ -386,7 +528,7 @@ pub(crate) fn build(
         tools: sent,
         replaced,
     };
-    (system, definitions, event)
+    (system, definitions, event, built)
 }
 
 /// The `tool_definitions_large` notice, when the definitions declared in

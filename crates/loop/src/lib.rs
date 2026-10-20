@@ -7,7 +7,7 @@
 //! reply itself, on the loop thread (`docs/architecture.md`, "One inbox" and
 //! "Streaming").
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -15,7 +15,8 @@ use std::sync::mpsc::Receiver;
 pub(crate) use completion::Step;
 use contract::ErrorCode;
 use contract::events::{
-    CacheLifetime, Event, Grant, Parent, PreambleReason, SessionStarted, ToolReplaced,
+    CacheLifetime, Event, Grant, Parent, PreambleReason, SessionStarted, ToolInfo, ToolReplaced,
+    ToolState,
 };
 use contract::inbox::Delivery;
 use contract::provider::{Cost, Input, Provider, ToolDefinition};
@@ -64,6 +65,7 @@ mod prompt;
 mod questions;
 mod quota_notice;
 mod reload;
+mod render_loaded;
 mod resume;
 mod retry;
 mod reviewer;
@@ -100,7 +102,7 @@ pub use history::forked;
 pub use offer::{Approved, LoadApproved, OfferKey, OfferOutcome};
 pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
-pub use prompt::{DisabledReader, PromptInputs};
+pub use prompt::{Deferrals, DisabledReader, PromptInputs};
 pub use quota_notice::QuotaRead;
 pub use reload::{
     PrepareReload, PromptPatch, ReconnectServer, Reconnected, ReloadPrepared, ReloadRoute,
@@ -130,6 +132,29 @@ pub struct Model {
     /// Whether a subscription login serves it. Its calls are logged with
     /// `subscription`, and `budget.usd` never counts them.
     pub subscription: bool,
+}
+
+/// Builds the `tool_search` tool over the deferred definitions as sent and
+/// their sources (`docs/tools.md`, "Tool search"): the search tool by
+/// role, whatever its definition names it. The loop never names the tool.
+/// `main` sets one; without it the loop defers nothing.
+pub type ToolSearchFactory =
+    Arc<dyn Fn(&[ToolDefinition], &[String]) -> Arc<dyn Tool> + Send + Sync>;
+
+/// Publishes `/tools` rows as the loop's tool states move (`docs/tools.md`,
+/// "Seeing the tools"): `declare` after every preamble build, `state`
+/// when a loaded set moves. `main` wires the door's rows; without either
+/// closure the loop publishes nothing.
+#[allow(
+    clippy::type_complexity,
+    reason = "the setter holds two small closures; names would only rename them"
+)]
+#[derive(Clone)]
+pub struct ToolRows {
+    /// Adds or replaces the row named `name`, or removes it on `None`.
+    pub declare: Arc<dyn Fn(&str, Option<ToolInfo>) + Send + Sync>,
+    /// Moves the row named `name` to `state`.
+    pub state: Arc<dyn Fn(&str, ToolState) + Send + Sync>,
 }
 
 /// One session's loop.
@@ -325,6 +350,11 @@ pub struct Loop {
     chosen: Option<contract::ThinkingLevel>,
     /// Puts a wake in the inbox; `None` leaves tool interactions unanswerable.
     inbox_wake: Option<Arc<dyn contract::clock::Wake>>,
+    /// Builds the `tool_search` tool when the model defers; `None` defers
+    /// nothing (`docs/tools.md`, "Tool search").
+    tool_search: Option<ToolSearchFactory>,
+    /// Publishes `/tools` rows; `None` publishes nothing.
+    tool_rows: Option<ToolRows>,
     /// The admission the door and the loop share: once it closes, no session
     /// message enters the inbox (`docs/tools.md`, "Messaging other sessions").
     admission: Option<Arc<support::admission::Admission>>,
@@ -344,6 +374,14 @@ struct Preamble {
     system_prompt: String,
     /// The tools as sent, in name order.
     tools: Vec<ToolDefinition>,
+    /// The effective deferred names the preamble sends: `None` on a model
+    /// without deferral, `Some(D)` otherwise, with D empty when nothing
+    /// defers (`docs/tools.md`, "Tool search").
+    deferred: Option<BTreeSet<String>>,
+    /// The previous build's factory-inserted search tool, by name: the next
+    /// build drops it before rebuilding, so a rebuild never takes its own
+    /// insert for a name the general rule already holds.
+    search: Option<String>,
     /// The tools as the parent session sent them: a rewound session's
     /// first request sends these verbatim, so it matches its parent's
     /// bytes (`docs/events.md`, "Rewind"). `None` sends what `tools`
@@ -618,6 +656,8 @@ impl Loop {
             pending: Vec::new(),
             chosen,
             inbox_wake: None,
+            tool_search: None,
+            tool_rows: None,
             admission: None,
             message_waiting: false,
             #[cfg(test)]
@@ -685,6 +725,21 @@ impl Loop {
     /// the reviewer's provider directly.
     pub fn reviewer_observed(mut self, observe: Option<contract::diag::Observe>) -> Self {
         self.reviewer_observe = observe;
+        self
+    }
+
+    /// Builds the `tool_search` tool the preamble declares when the model
+    /// defers (`docs/tools.md`, "Tool search"). Default `None`, which
+    /// defers nothing.
+    pub fn tool_search(mut self, factory: ToolSearchFactory) -> Self {
+        self.tool_search = Some(factory);
+        self
+    }
+
+    /// Publishes `/tools` rows as tool states move (`docs/tools.md`,
+    /// "Seeing the tools"). Default `None`, which publishes nothing.
+    pub fn tool_rows(mut self, rows: ToolRows) -> Self {
+        self.tool_rows = Some(rows);
         self
     }
 

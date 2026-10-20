@@ -131,6 +131,7 @@ fn start(
             },
         },
         Rewound {
+            factory: None,
             from,
             worktree,
             how,
