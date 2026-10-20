@@ -148,8 +148,12 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
 3. checks the SHA-256 before moving anything into place
 4. extracts the binary next to its destination and renames it into place, so a
    failed install never leaves half a binary
-5. installs to `$FIBER_INSTALL_DIR`, or `~/.local/bin` if that is unset, and
-   warns without failing when that directory is not on `PATH`
+5. installs to the directory the person picks, offered as
+   `$FIBER_INSTALL_DIR`, or `~/.local/bin` if that is unset. When that
+   directory is not on `PATH`, it asks whether to add it, and yes appends one
+   line to the login shell's startup file (`~/.zshrc`, `~/.bashrc`, or
+   `fish_add_path` in `~/.config/fish/config.fish`) unless the line is
+   already there. No leaves `PATH` alone and prints the line to add.
 6. runs the binary it installed, once, with the internal install step,
    passing the version. That step downloads the same release's docs and
    extensions archives, checks each SHA-256, and puts `docs/` and each
@@ -157,6 +161,21 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
    renaming, as `fiber update` does. It takes the extensions lock, and records
    each extension at the release's version and the commit the binary was built
    from.
+7. runs `fiber setup` (`docs/invocation.md`, "Setting up"), which asks the
+   rest: providers, import, default model, completions and the hub.
+
+The script reads its questions from `/dev/tty`, so they work under
+`curl | sh`. Its flags answer them, after `sh -s --`:
+
+```sh
+curl -fsSL .../install.sh | sh -s -- --dir ~/bin --no-path -- --provider openrouter --no-hub
+```
+
+`--dir <path>` picks the directory, `--path` and `--no-path` answer the `PATH`
+question, and `--no-setup` skips step 7. Everything after a second `--` goes
+to `fiber setup` unchanged. Without a terminal the script asks nothing: it
+installs to the default directory, leaves `PATH` alone with a warning, and
+runs `fiber setup` without a terminal, which does only what its flags say.
 
 The binary unpacks the archives itself and refuses any entry that is not a
 file, a directory or a relative symlink inside its directory.
