@@ -403,6 +403,7 @@ fn a_rewound_loop_takes_its_thinking_and_its_trigger_from_the_logged_build() {
             },
         },
         Rewound {
+            factory: None,
             from: contract::shapes::Point {
                 session_id: SessionId("s_parent00000001".to_owned()),
                 seq: Seq(1),
@@ -534,6 +535,7 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
             },
         },
         Rewound {
+            factory: None,
             from: contract::shapes::Point {
                 session_id: SessionId("s_parent00000001".to_owned()),
                 seq: Seq(2),
@@ -627,6 +629,7 @@ fn rewound_from_parent(
             },
         },
         Rewound {
+            factory: None,
             from: contract::shapes::Point {
                 session_id: SessionId(parent_id.to_owned()),
                 seq: Seq(point_seq),
@@ -1636,6 +1639,7 @@ fn a_forked_loop_writes_no_model_changed_for_a_later_label_switch() {
             },
         },
         Rewound {
+            factory: None,
             from: contract::shapes::Point {
                 session_id: SessionId("s_parent00000001".to_owned()),
                 seq: Seq(2),
