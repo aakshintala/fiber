@@ -2517,31 +2517,41 @@ fn assert_card_stale(grid: &support::pty::Grid, gone: &str) {
     }
 }
 
-/// Quits and waits for the exit: the question's Enter leaves the
-/// restored terminal with its resume line, exiting zero.
-#[track_caller]
-fn quit(mut run: support::pty::Run) {
-    run.write(b"\x03\x03\r");
-    // The terminal is restored: the primary screen is back, the cursor
-    // shows, and one resume line per live session is on it ("On exit").
-    // The Enter goes out with the Ctrl+C bytes, so it is processed after
-    // them: when the terminal already exited it is never read.
-    run.wait_screen("the primary screen with the resume line", |grid| {
-        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
-    });
-    let output = run.wait();
-    assert_eq!(output.status.code(), Some(0));
+/// Whether some row outside the pending notice names `reference`
+/// (and, for a level choice, ends with that level): the card applies
+/// the pending choice once the turn ends, while the pending notice
+/// stands as its record. Rows are full-width, so the card's indent
+/// rules out `starts_with`; the pending notice carries its code, which
+/// rules it out instead.
+fn card_applies(grid: &support::pty::Grid, reference: &str, level: Option<&str>) -> bool {
+    grid.rows.iter().any(|row| {
+        row.contains(reference)
+            && !row.contains("switch_pending")
+            && level.is_none_or(|want| row.trim_end().ends_with(want))
+    })
 }
 
-/// Cancels the running turn, then quits: Esc interrupts the turn, and
-/// the quit leaves the restored terminal, exiting zero.
+/// The Session card applies the pending choice once the turn ends: a
+/// non-notice row names the new reference, and ends with the new level
+/// when the choice names one.
 #[track_caller]
-fn cancel_and_quit(mut run: support::pty::Run) {
+fn assert_card_applies(grid: &support::pty::Grid, reference: &str, level: Option<&str>) {
+    assert!(
+        card_applies(grid, reference, level),
+        "the Session card applies the pending choice {reference} {level:?}: {:?}",
+        grid.rows
+    );
+}
+
+/// Interrupts the running turn and waits for the interrupted screen:
+/// the turn never finishes on interrupt, and the loop admits the queued
+/// choice only after this boundary.
+#[track_caller]
+fn interrupt_turn(run: &mut support::pty::Run) {
     run.write(b"\x1b[27u");
     run.wait_screen("the interrupted turn", |grid| {
         grid.alternate_screen && grid.contents.contains("interrupted")
     });
-    quit(run);
 }
 
 #[test]
@@ -2586,7 +2596,17 @@ fn choosing_a_model_mid_turn_notices_that_it_applies_when_the_turn_ends() {
     // The chips hold the old model through the send; only the notice
     // names the new one.
     assert_card_stale(&sent, "fake/n");
-    cancel_and_quit(run);
+    interrupt_turn(&mut run);
+    // The loop admits the queued choice at the post-interrupt boundary
+    // and applies it: the card names the new model, with no new
+    // notice of its own.
+    let applied = run.wait_screen_reporting(
+        "the applied choice",
+        |grid| card_applies(grid, "fake/n", None),
+        || session_model_changed(&setup),
+    );
+    assert_card_applies(&applied, "fake/n", None);
+    quit_live(run);
 }
 
 #[test]
@@ -2620,13 +2640,23 @@ fn choosing_a_level_mid_turn_notices_that_it_applies_when_the_turn_ends() {
     run.write(b"\r");
     let sent = run.wait_screen_reporting(
         "the pending-choice notice",
-        |grid| shows(grid, "thinking medium"),
+        |grid| shows(grid, "thinking medium applies when this turn ends"),
         || session_model_changed(&setup),
     );
     // The chips hold the old level through the send; only the notice
     // names the new one.
     assert_card_stale(&sent, "medium");
-    cancel_and_quit(run);
+    interrupt_turn(&mut run);
+    // The loop admits the queued choice at the post-interrupt boundary
+    // and applies it: the card names the model with the chosen level,
+    // with no new notice of its own.
+    let applied = run.wait_screen_reporting(
+        "the applied choice",
+        |grid| card_applies(grid, "fake/m", Some("medium")),
+        || session_model_changed(&setup),
+    );
+    assert_card_applies(&applied, "fake/m", Some("medium"));
+    quit_live(run);
 }
 
 #[test]
@@ -2669,7 +2699,7 @@ fn choosing_a_model_while_idle_applies_at_once_with_no_pending_notice() {
         "no pending notice while idle: {:?}",
         switched.rows
     );
-    quit(run);
+    quit_live(run);
 }
 
 #[test]
@@ -2732,5 +2762,5 @@ fn choosing_an_unreadable_model_mid_turn_replaces_the_pending_notice_with_its_re
         rejected.rows
     );
     assert_card_stale(&rejected, "other/om");
-    quit(run);
+    quit_live(run);
 }

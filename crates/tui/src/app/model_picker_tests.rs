@@ -4327,3 +4327,62 @@ fn a_rejection_after_leaving_drops_the_stash_without_a_notice() {
         app.notices()
     );
 }
+
+#[test]
+fn a_dismiss_leaves_a_newer_other_code_standing() {
+    let (mut app, _) = choosing_app();
+    busy_mid_turn(&mut app);
+    open(&mut app);
+    let line = sent(app.on_key(Key::Enter, now()));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    // A newer notice with another code sits on top of the pending one:
+    // the dismissal keys on the stashed choice's exact wording, so the
+    // newest row survives while the stashed choice's own older notice
+    // is still taken.
+    app.push_notice("credential_missing", "no key.".to_owned());
+    app.dismiss_pending_notice("acme/m1", Some("high"));
+    assert_eq!(newest_code(&app), "credential_missing");
+    assert_eq!(app.notice(), Some("no key."));
+    assert!(!has_code(&app, "switch_pending"));
+    // The stash is untouched, so the later reject still replaces the
+    // pending notice with the rejection notice.
+    app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
+    assert_eq!(newest_code(&app), "credential_missing");
+    assert!(!has_code(&app, "switch_pending"));
+}
+
+#[test]
+fn a_dismiss_leaves_a_newer_other_choice_standing() {
+    let (mut app, _) = choosing_app();
+    busy_mid_turn(&mut app);
+    open(&mut app);
+    let line = sent(app.on_key(Key::Enter, now()));
+    let id = line["id"].as_str().expect("an id").to_owned();
+    // A newer pending notice names another choice: same code, other
+    // text. The dismissal keys on the stashed choice's exact wording,
+    // so the newest row survives it.
+    app.push_notice(
+        "switch_pending",
+        "other/om · low applies when this turn ends".to_owned(),
+    );
+    app.dismiss_pending_notice("acme/m1", Some("high"));
+    assert_eq!(
+        app.notice(),
+        Some("other/om · low applies when this turn ends")
+    );
+    assert!(has_code(&app, "switch_pending"));
+    // The stash is untouched, so the later reject still takes only the
+    // stashed choice's own notice, leaving the other's standing.
+    app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
+    assert_eq!(newest_code(&app), "credential_missing");
+    assert_eq!(app.notice(), Some("no key."));
+    assert!(
+        app.notices().into_iter().any(|line| matches!(
+            line,
+            crate::app::NoticeLine::Notice { text: shown, .. }
+            if shown == "other/om · low applies when this turn ends"
+        )),
+        "the other choice's pending notice stands: {:?}",
+        app.notices()
+    );
+}
