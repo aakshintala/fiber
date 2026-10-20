@@ -4086,3 +4086,75 @@ fn fast_attach_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
         "fast attach tolerance for the stored medians"
     );
 }
+
+// --- #2668 the 9V45 session_list class data pins its own ceiling ---
+
+/// Every stored 9V45 file's session_list samples: plain numbers per file.
+const SESSION_LIST_DATA: &str = include_str!("../tests/class_data/9v45-session-list.json");
+
+/// The session_list row's fast ceiling (ms) and fast tolerance (%) in `docs/performance.md`.
+fn doc_session_list_gate() -> (f64, f64) {
+    let line = PERFORMANCE_DOC
+        .lines()
+        .find(|l| l.starts_with("| `session_list`, waiting for every running"))
+        .expect("session_list row");
+    let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+    let number = |cell: &str| -> f64 {
+        cell.split_whitespace()
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no number in {cell:?}"))
+    };
+    (number(cells[5]), number(cells[8]))
+}
+
+#[test]
+fn session_list_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
+    let files: Vec<Value> = serde_json::from_str(SESSION_LIST_DATA).unwrap();
+    assert!(files.len() >= 5, "the class gates only with 5 stored files");
+    let samples: Vec<Vec<f64>> = files
+        .iter()
+        .map(|f| {
+            f["samples"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_f64().unwrap())
+                .collect()
+        })
+        .collect();
+    // Every pin sample is finite and at or above zero before any
+    // ceiling or median math: an appended -1, NaN or infinite entry
+    // fails here, never slipping into the derivation below.
+    for (file, file_samples) in files.iter().zip(&samples) {
+        for s in file_samples {
+            assert!(
+                s.is_finite() && *s >= 0.0,
+                "session_list_pin_samples_are_finite_and_non_negative: {} holds {s}",
+                file["file"]
+            );
+        }
+    }
+    let max_sample = samples.iter().flatten().copied().fold(0.0, f64::max);
+    // A per-file median under the 1 ms quantum counts as 1 ms, so a
+    // zero median never divides the tolerance.
+    let quantum = |m: f64| if m < 1.0 { 1.0 } else { m };
+    let medians: Vec<f64> = samples.iter().map(|s| quantum(median_of(s))).collect();
+    let max_median = medians.iter().copied().fold(0.0, f64::max);
+    let min_median = medians.iter().copied().fold(f64::MAX, f64::min);
+    let (ceiling, tolerance) = doc_session_list_gate();
+    assert!(
+        ceiling >= max_sample,
+        "fast session_list ceiling {ceiling} ms sits below stored sample {max_sample} ms"
+    );
+    assert_eq!(
+        ceiling,
+        max_sample.ceil(),
+        "ceiling is the max sample rounded up"
+    );
+    let want = (100.0 * (max_median / min_median - 1.0)).ceil();
+    assert_eq!(
+        tolerance, want,
+        "fast session_list tolerance for the stored medians"
+    );
+}
