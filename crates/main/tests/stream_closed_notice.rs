@@ -113,6 +113,22 @@ fn shows(screen: &Grid, needle: &str) -> bool {
     screen.contents.contains(needle)
 }
 
+/// The row holding `needle`.
+fn row_with(grid: &Grid, needle: &str) -> u16 {
+    u16::try_from(
+        grid.rows
+            .iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} in\n{}", grid.contents)),
+    )
+    .unwrap_or(u16::MAX)
+}
+
+/// A press and release at one cell, as the look tests click.
+fn click(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
 /// How many times `needle` occurs in the screen's text.
 fn occurrences(screen: &Grid, needle: &str) -> usize {
     screen.contents.matches(needle).count()
@@ -266,6 +282,33 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
         "the draft returns to the composer: {}",
         rejected.contents
     );
+    // The send and its rejection are activity, and the close's cause
+    // still holds, so the `stream_closed` notice stands beside the new
+    // rejection: no fade at binary level, only ends dismiss.
+    assert!(
+        shows(&rejected, "stream_closed"),
+        "the close notice survives the rejected send: {}",
+        rejected.contents
+    );
+    // ✕ on the rejection's row dismisses only that notice: the close's
+    // cause still holds, so its row stands for the reopen below.
+    let rejection_row = row_with(&rejected, "Send `subscribe` first.");
+    let dismiss_at = rejected.rows[rejection_row as usize]
+        .chars()
+        .collect::<Vec<_>>()
+        .iter()
+        .rposition(|cell| *cell == '✕')
+        .and_then(|x| u16::try_from(x).ok())
+        .unwrap_or(u16::MAX);
+    click(&mut run, dismiss_at, rejection_row);
+    let dismissed = run.wait_screen("the dismissed rejection", |screen| {
+        !shows(screen, "Send `subscribe` first.")
+    });
+    assert!(
+        shows(&dismissed, "stream_closed"),
+        "dismissing one notice keeps the other: {}",
+        dismissed.contents
+    );
 
     // The draft is cleared, so `/resume` leaves for home alone.
     run.write(b"\x03");
@@ -292,8 +335,13 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     // home from the conversation (#1903). Before Enter nothing is reopened:
     // the wait below must not be met by home, or `release_one` could run
     // before the reopened `subscribe` reaches the session.
+    // The reopened `stream_reopened` ends the close's cause, so the
+    // wait needs the conversation back and the notice gone: one wait,
+    // no sleep between the clear and the capture.
     let reopened_shown = |screen: &Grid| {
-        shows(screen, "zebraflight") && !shows(screen, "Enter opens the focused session")
+        shows(screen, "zebraflight")
+            && !shows(screen, "Enter opens the focused session")
+            && !shows(screen, "stream_closed")
     };
     let held = run.screen();
     assert!(
@@ -314,10 +362,12 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     });
     run.write(b"\x1b[A\r");
     let reopened = run.wait_screen("the reopened conversation", reopened_shown);
+    // The reopen ends the close's cause (`stream_reopened`), so the old
+    // row clears and the repaired replay opens no new one (#2843).
     assert_eq!(
         occurrences(&reopened, "stream_closed"),
-        1,
-        "no second close notice: {}",
+        0,
+        "the reopen clears the close notice: {}",
         reopened.contents
     );
 

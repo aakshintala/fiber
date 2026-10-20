@@ -18,7 +18,7 @@ use contract::clock::Clock;
 use contract::events::{McpServerFailed, ServerFailure, ToolInfo, ToolSource, ToolState};
 use contract::images::Images;
 use contract::provider::ToolDefinition;
-use contract::tool::Tool;
+use contract::tool::{ServerRecord, Tool};
 
 use crate::cache;
 use crate::effects::Hints;
@@ -404,12 +404,90 @@ impl Servers {
         self.resources_declared.load(Ordering::SeqCst)
     }
 
+    /// Finds the slot `name` runs on, if one names it.
+    /// The slot `name` runs in, if it is named; `None` when the server
+    /// never started.
+    pub(crate) fn slot(&self, name: &str) -> Option<Arc<Slot>> {
+        self.slots
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|slot| slot.spec().name == name)
+            .cloned()
+    }
+
+    /// Whether the server `name` runs now: it has a slot in `Running`
+    /// state. A name nothing started, one that failed to start and one
+    /// stopped all read false. The hub's `mcp_servers` answer reads this
+    /// live, so a server that died mid-session reads not-running and its
+    /// row falls back to the failure the log holds (`docs/mcp.md`,
+    /// "Servers, their state and the per-server commands").
+    pub fn running(&self, name: &str) -> bool {
+        self.slot(name).is_some_and(|slot| slot.is_running())
+    }
+
+    /// Whether the server `name` has a slot: false when the session
+    /// never started it, so the hub's reconnect adopts a fresh start
+    /// instead of restarting in place.
+    pub fn has_slot(&self, name: &str) -> bool {
+        self.slot(name).is_some()
+    }
+
     /// The timing context this start's attempts run under, for a later
     /// load that starts more servers into it. A clone of the context;
     /// reading it starts no guard.
     pub fn timing(&self) -> Option<contract::diag::Timing> {
         self.timing.clone()
     }
+}
+
+/// What restarting one server changed: the records to write, the tools
+/// to declare, and the qualified names to drop.
+pub struct Restarted {
+    /// The `mcp_server_failed`/`mcp_server_ready` lines the restart
+    /// observed, in order.
+    pub records: Vec<ServerRecord>,
+    /// The server's tools after the restart, with their owners and
+    /// infos, for the loop's registry and the `tools` answer.
+    pub used: Vec<(String, Arc<dyn Tool>, ToolInfo)>,
+    /// Qualified tool names the restart dropped, for both.
+    pub removed: Vec<String>,
+}
+
+/// Restarts the server `name`: its slot serves again, exactly as a first
+/// tool call serves it, so a healthy running server restarts to a no-op
+/// and a dead one stays dead. `None` when no slot names `name`. The
+/// caller declares `used`, drops `removed`, and writes `records`
+/// (`docs/mcp.md`, "Servers, their state and the per-server commands").
+pub fn restart(
+    servers: &Servers,
+    name: &str,
+    artifacts: &Path,
+    images: &Arc<dyn Images>,
+) -> Option<Restarted> {
+    let slot = servers.slot(name)?;
+    let before: BTreeSet<String> = slot
+        .live_names()
+        .iter()
+        .map(|tool| crate::name::qualified(name, tool))
+        .collect();
+    let records = match slot.serve() {
+        crate::slot::Served::Up(_, records) => records,
+        crate::slot::Served::Failed(failed) => failed.records,
+    };
+    let listed = slot.listed_tools();
+    let after: BTreeSet<String> = listed
+        .iter()
+        .map(|tool| crate::name::qualified(name, &tool.name))
+        .collect();
+    let removed: Vec<String> = before.difference(&after).cloned().collect();
+    let link = Arc::downgrade(&slot);
+    let used = declare(slot.spec(), &listed, &link, artifacts, images);
+    Some(Restarted {
+        records,
+        used,
+        removed,
+    })
 }
 
 /// The default startup deadline: 5 seconds (`docs/configuration.md`).

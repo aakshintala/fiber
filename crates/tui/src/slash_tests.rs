@@ -56,6 +56,7 @@ const DRAWN_ORDER: &[&str] = &[
     "thinking",
     "scoped-models",
     "tools",
+    "mcp",
     "context",
     "usage",
     "quota",
@@ -133,7 +134,7 @@ fn built_ins_are_drawn_built_ins_plus_credential_and_rewind() {
         .iter()
         .filter(|name| !table_names().contains(name))
         .collect();
-    assert_eq!(extra, [&"credential", &"rewind"]);
+    assert_eq!(extra, [&"credential", &"rewind", &"exit"]);
     assert!(is_built_in("credential"));
     assert!(is_built_in("rewind"));
     assert!(!is_built_in("tdd"));

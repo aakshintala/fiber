@@ -500,7 +500,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
     assert_eq!(
         config.merged(None),
         json!({
-            "cache": {"lifetime": "1h", "warm_cap": 2, "warm_idle": false},
+            "cache": {"lifetime": "1h", "warm_cap": 2, "warm_idle": false, "diagnostics": false},
             "diagnostics": {"level": "info"},
             "handoff": {"enabled": true, "nudge": true, "tokens": 400000, "window_fraction": 0.7},
             "model_lists": {"refresh_after": "24h"},

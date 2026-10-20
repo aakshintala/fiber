@@ -34,9 +34,9 @@ pub use host::{
     DelegateFinished, DelegateStarted, ExtensionExec, ExtensionLog, ExtensionMessage,
     ExtensionStateSet, ExtensionStateUnset, ExtensionUi, ExtensionsLoaded, FinishedWorktree,
     JobCompleted, JobDelta, JobLine, JobStarted, JobsPendingNotified, LoadedExtension,
-    McpServerFailed, McpServerReady, OnFork, PendingReason, QuotaCredit, QuotaInfo, QuotaWindow,
-    ReloadFailure, Reloaded, ReloadedServers, ServerFailure, SkillInfo, ToolInfo, ToolSource,
-    ToolState, Ui,
+    McpServerFailed, McpServerLayer, McpServerReady, McpServerRow, McpServerState, OnFork,
+    PendingReason, QuotaCredit, QuotaInfo, QuotaWindow, ReloadFailure, Reloaded, ReloadedServers,
+    ServerFailure, SkillInfo, ToolInfo, ToolSource, ToolState, Ui,
 };
 /// The import answer's names and reasons, re-exported beside the other
 /// acknowledgement payloads.

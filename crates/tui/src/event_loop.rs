@@ -213,6 +213,9 @@ pub(crate) fn run_with(
     if terminal.screen.draw(&mut terminal.app, None).is_err() {
         return Ok(1);
     }
+    // Startup pushes (config reads, session restores) gain births and
+    // wakes before the first arm, so they fade like every other event.
+    terminal.app.sweep_notices(terminal.clock.now());
     terminal.write_title();
     let (tx, rx) = mpsc::channel();
     terminal.files_out = Some(tx.clone());
@@ -706,9 +709,16 @@ impl<B: Backend> Loop<B> {
         // The viewer opens the loop queued: one worker per view, each
         // answering once with `Input::Viewed`.
         self.drain_images();
+        // The pre-draw sweep births in-frame pushes (page-in loads,
+        // image failures) so the draw sees them; the post-draw sweep
+        // births renderer-failure pushes before the arm, so a push
+        // already past the fade expires before arming and never draws
+        // twice.
+        self.app.sweep_notices(self.clock.now());
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
+        self.app.sweep_notices(self.clock.now());
         // The open's `full` raise goes out after the first frame draws,
         // so no `full` line is written before it.
         if let Some(line) = self.app.take_raise() {

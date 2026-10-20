@@ -866,7 +866,8 @@ fn a_duplicate_command_rejection_closes_the_entry_silently() {
         refused(S_A, &prompt_id(&opening), "duplicate_command", "Seen."),
     );
     assert!(app.outbox.pending.is_empty());
-    assert_eq!(app.notice(), Some("Connection lost."));
+    // The reconnect ended the drop's cause: its notice goes with it.
+    assert_eq!(app.notice(), None);
     assert_eq!(app.draft(), "");
 }
 
@@ -948,7 +949,8 @@ fn a_feed_answer_from_before_the_drop_is_ignored() {
             json!({"command_id": before[0]["id"], "code": "internal", "message": "old feed"}),
         ),
     );
-    assert_eq!(app.notice(), Some("Connection lost."));
+    // The reconnect ended the drop's cause: its notice goes with it.
+    assert_eq!(app.notice(), None);
 }
 
 #[test]

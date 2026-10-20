@@ -177,6 +177,7 @@ impl Loop {
             | Delivery::Message(_)
             | Delivery::Model(..)
             | Delivery::Reload(..)
+            | Delivery::McpReconnect(..)
             | Delivery::Credential(..)
             | Delivery::Name(..)
             | Delivery::Rewind(..)

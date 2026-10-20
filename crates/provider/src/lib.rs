@@ -8,6 +8,7 @@
 
 pub mod anthropic_messages;
 mod anthropic_messages_decode;
+mod cache_diagnostics;
 mod call;
 mod error;
 pub use call::RequestObservation;

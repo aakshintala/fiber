@@ -49,6 +49,7 @@ fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
         | Delivery::Handoff(..)
         | Delivery::Model(..)
         | Delivery::Reload(..)
+        | Delivery::McpReconnect(..)
         | Delivery::Credential(..)
         | Delivery::Reply(..)
         | Delivery::Rewind(..)

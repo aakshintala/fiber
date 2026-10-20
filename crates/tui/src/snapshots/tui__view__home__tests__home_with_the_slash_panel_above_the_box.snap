@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/home_view_tests.rs
-assertion_line: 248
 expression: "screen(&app, 80, 24)"
 ---
 ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
@@ -17,8 +16,8 @@ expression: "screen(&app, 80, 24)"
     thinking      Sets the thinking level, or opens the mod… [<level>] command
     scoped-models Chooses which models the model picker shows.         command
     tools         Opens the tools view.                                command
-    context       Opens the context breakdown.                         command
-  1–8 of 26 · ↓ 18 more
+    mcp           Opens the MCP servers view.                          command
+  1–8 of 27 · ↓ 19 more
 
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
