@@ -609,7 +609,10 @@ fn credential_picker_switches_saves_on_acceptance_and_names_the_admitted_provide
         assert!(credential_notice(
             &app,
             "cache_rebuild",
-            "switching rebuilds the cache: about 84,000 tokens"
+            &format!(
+                "switching rebuilds the cache: about {} tokens",
+                crate::swapped::about(84_000)
+            )
         ));
         assert!(!app.config_view_open());
         assert!(seam.writes().is_empty());
@@ -764,7 +767,10 @@ fn credential_shortcuts_replace_queries_and_save_the_trimmed_label() {
     assert!(credential_notice(
         &app,
         "cache_rebuild",
-        "switching rebuilds the cache: about 84,000 tokens"
+        &format!(
+            "switching rebuilds the cache: about {} tokens",
+            crate::swapped::about(84_000)
+        )
     ));
     credential_accept(&mut app, &switch["id"], Some("fake"));
     assert_eq!(seam.writes()[0].3, "home");

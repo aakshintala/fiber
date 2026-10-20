@@ -2,18 +2,28 @@
 //! "Swapped views"). Queries and switches belong to the session; only an
 //! accepted switch can write the global label.
 
+use super::{App, Effect, Open};
+use crate::app::{Kind, mint, session_command};
+use crate::input::Draft;
 use crate::keys::Key;
 use crate::swapped::{Frame, Ink, List, Spot, rows_height};
 use crate::theme::Role;
-use contract::events::CredentialLabels;
+use contract::events::{CommandAccepted, CommandRejected, CommandResult, CredentialLabels};
+use contract::{Envelope, SessionId};
+use serde_json::json;
 
 /// The labels query, its answer and the selection over that answer.
 #[derive(Debug)]
 pub(crate) struct Picker {
-    awaiting: Option<String>,
-    answer: Option<CredentialLabels>,
+    state: State,
     list: List,
-    said: Option<String>,
+}
+
+#[derive(Debug)]
+enum State {
+    Waiting(String),
+    Answered(CredentialLabels),
+    Rejected(String),
 }
 
 /// What a picker input asks the app to do.
@@ -31,37 +41,33 @@ impl Picker {
     /// Opens while the query with `id` waits.
     pub(crate) fn open(id: String) -> Self {
         Self {
-            awaiting: Some(id),
-            answer: None,
+            state: State::Waiting(id),
             list: List::default(),
-            said: None,
         }
     }
 
     /// Fills only the outstanding query, selecting its current label.
     pub(crate) fn answered(&mut self, id: &str, labels: CredentialLabels, height: usize) {
-        if self.awaiting.as_deref() != Some(id) {
+        if !matches!(&self.state, State::Waiting(waiting) if waiting == id) {
             return;
         }
-        self.awaiting = None;
         let selected = labels
             .credentials
             .iter()
             .position(|label| Some(label) == labels.credential.as_ref())
             .unwrap_or(0);
         let count = labels.credentials.len();
-        self.answer = Some(labels);
+        self.state = State::Answered(labels);
         self.list
             .select(selected, count, rows_height(&self.frame(), height));
     }
 
     /// Shows only the outstanding query's rejection.
     pub(crate) fn rejected(&mut self, id: &str, message: &str) {
-        if self.awaiting.as_deref() != Some(id) {
+        if !matches!(&self.state, State::Waiting(waiting) if waiting == id) {
             return;
         }
-        self.awaiting = None;
-        self.said = Some(message.to_owned());
+        self.state = State::Rejected(message.to_owned());
     }
 
     /// Moves, chooses or closes; typing never filters.
@@ -93,10 +99,7 @@ impl Picker {
             | Key::AltDigit(_)
             | Key::CtrlV
             | Key::CtrlL => {
-                let count = self
-                    .answer
-                    .as_ref()
-                    .map_or(0, |answer| answer.credentials.len());
+                let count = self.answer().map_or(0, |answer| answer.credentials.len());
                 self.list
                     .key(key, count, rows_height(&self.frame(), height));
                 Pick::Stay
@@ -109,7 +112,7 @@ impl Picker {
         match spot {
             Spot::Close => Pick::Close,
             Spot::Row(at) => {
-                let Some(answer) = &self.answer else {
+                let Some(answer) = self.answer() else {
                     return Pick::Stay;
                 };
                 let Some(label) = answer.credentials.get(at) else {
@@ -136,8 +139,7 @@ impl Picker {
     }
 
     fn choose(&self, session_only: bool) -> Pick {
-        self.answer
-            .as_ref()
+        self.answer()
             .and_then(|answer| answer.credentials.get(self.list.selected()))
             .map_or(Pick::Stay, |label| Pick::Choose {
                 label: label.clone(),
@@ -145,9 +147,16 @@ impl Picker {
             })
     }
 
+    fn answer(&self) -> Option<&CredentialLabels> {
+        match &self.state {
+            State::Answered(answer) => Some(answer),
+            State::Waiting(_) | State::Rejected(_) => None,
+        }
+    }
+
     /// Draws in the shared swapped-view frame.
     pub(crate) fn frame(&self) -> Frame {
-        let rows = self.answer.as_ref().map_or_else(Vec::new, |answer| {
+        let rows = self.answer().map_or_else(Vec::new, |answer| {
             answer
                 .credentials
                 .iter()
@@ -160,16 +169,16 @@ impl Picker {
                 })
                 .collect()
         });
-        let below = match (&self.said, &self.answer) {
-            (Some(message), _) => message.clone(),
-            (_, Some(answer)) => {
+        let below = match &self.state {
+            State::Rejected(message) => message.clone(),
+            State::Answered(answer) => {
                 if answer.credentials.is_empty() {
                     format!("{} has no credential labels", answer.provider)
                 } else {
                     answer.provider.clone()
                 }
             }
-            _ => "Reading the labels…".to_owned(),
+            State::Waiting(_) => "Reading the labels…".to_owned(),
         };
         Frame {
             title: "Credentials".to_owned(),
@@ -183,13 +192,6 @@ impl Picker {
     }
 }
 
-use super::{App, Effect, Open};
-use crate::app::{Kind, mint, session_command};
-use crate::input::Draft;
-use contract::events::{CommandAccepted, CommandRejected, CommandResult};
-use contract::{Envelope, SessionId};
-use serde_json::json;
-
 const NO_SAVE: &str = "Saving is not available; the switch is for this session only.";
 
 /// Only the latest query and latest saving switch wait for answers.
@@ -197,6 +199,16 @@ const NO_SAVE: &str = "Saving is not available; the switch is for this session o
 pub(in crate::app) struct Waits {
     ask: Option<Ask>,
     save: Option<Save>,
+}
+
+impl Waits {
+    fn take<T>(slot: &mut Option<T>, id: &str, key: fn(&T) -> &str) -> Option<T> {
+        if slot.as_ref().map(key) == Some(id) {
+            slot.take()
+        } else {
+            None
+        }
+    }
 }
 
 struct Ask {
@@ -263,7 +275,7 @@ impl App {
                 let Some(Open::Credential(picker)) = &self.config_views.open else {
                     return Effect::None;
                 };
-                let Some(labels) = picker.answer.clone() else {
+                let Some(labels) = picker.answer().cloned() else {
                     return Effect::None;
                 };
                 let send = self.credential_switch(&labels, label, session_only);
@@ -325,17 +337,11 @@ impl App {
 
     /// Saves only the newest switch under the provider that admitted it.
     pub(in crate::app) fn credential_accepted(&mut self, accepted: &CommandAccepted) {
-        if self
-            .config_views
-            .credential
-            .save
-            .as_ref()
-            .map(|save| save.id.as_str())
-            != Some(accepted.command_id.0.as_str())
-        {
-            return;
-        }
-        let Some(save) = self.config_views.credential.save.take() else {
+        let Some(save) = Waits::take(
+            &mut self.config_views.credential.save,
+            &accepted.command_id.0,
+            |save| &save.id,
+        ) else {
             return;
         };
         let Some(CommandResult::CredentialSwitch { provider }) = &accepted.result else {
@@ -370,20 +376,13 @@ impl App {
                 if let Some(Open::Credential(picker)) = &mut self.config_views.open {
                     picker.answered(&accepted.command_id.0, labels.clone(), height);
                 }
-                if self
-                    .config_views
-                    .credential
-                    .ask
-                    .as_ref()
-                    .map(|ask| ask.id.as_str())
-                    == Some(accepted.command_id.0.as_str())
+                if let Some(ask) = Waits::take(
+                    &mut self.config_views.credential.ask,
+                    &accepted.command_id.0,
+                    |ask| &ask.id,
+                ) && self.session() == Some(&ask.session)
                 {
-                    let Some(ask) = self.config_views.credential.ask.take() else {
-                        return Vec::new();
-                    };
-                    if self.session() == Some(&ask.session) {
-                        return self.credential_switch(&labels, ask.label, false);
-                    }
+                    return self.credential_switch(&labels, ask.label, false);
                 }
             }
             "command_rejected" => {
@@ -393,26 +392,10 @@ impl App {
                 let Some(id) = rejected.command_id else {
                     return Vec::new();
                 };
-                if self
-                    .config_views
-                    .credential
-                    .save
-                    .as_ref()
-                    .map(|save| save.id.as_str())
-                    == Some(id.0.as_str())
-                {
-                    self.config_views.credential.save = None;
-                }
-                if self
-                    .config_views
-                    .credential
-                    .ask
-                    .as_ref()
-                    .map(|ask| ask.id.as_str())
-                    == Some(id.0.as_str())
-                {
-                    self.config_views.credential.ask = None;
-                }
+                Waits::take(&mut self.config_views.credential.save, &id.0, |save| {
+                    &save.id
+                });
+                Waits::take(&mut self.config_views.credential.ask, &id.0, |ask| &ask.id);
                 if let Some(Open::Credential(picker)) = &mut self.config_views.open {
                     picker.rejected(&id.0, &rejected.message);
                 }

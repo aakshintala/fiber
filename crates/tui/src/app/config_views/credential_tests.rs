@@ -113,6 +113,51 @@ fn keys_clicks_and_session_only() {
 }
 
 #[test]
+fn only_waiting_pickers_accept_an_answer_or_rejection() {
+    let mut waiting = Picker::open("q".to_owned());
+    let mut rejected = Picker::open("q".to_owned());
+    rejected.rejected("q", "refused");
+    for picker in [&mut waiting, &mut rejected] {
+        assert_eq!(picker.key(&Key::Down, 24), Pick::Stay);
+        assert_eq!(picker.key(&Key::Enter, 24), Pick::Stay);
+        assert_eq!(picker.session_only(), Pick::Stay);
+        assert_eq!(picker.click(Spot::Row(0), 24), Pick::Stay);
+        assert_eq!(picker.frame().list.selected(), 0);
+    }
+    rejected.answered("q", labels(Some("work")), 24);
+    rejected.rejected("q", "replacement");
+    assert_eq!(rejected.frame().below, ["refused"]);
+    assert!(rejected.frame().rows.is_empty());
+
+    let mut answered = ready(Some("home"));
+    answered.answered("q", labels(Some("work")), 24);
+    answered.rejected("q", "refused");
+    assert_eq!(answered.frame().below, ["fake"]);
+    assert_eq!(answered.frame().list.selected(), 1);
+    assert_eq!(
+        answered.session_only(),
+        Pick::Choose {
+            label: "home".to_owned(),
+            session_only: true,
+        }
+    );
+}
+
+#[test]
+fn a_wait_slot_is_taken_only_by_its_matching_id() {
+    let mut slot = Some(Save {
+        id: "new".to_owned(),
+        label: "work".to_owned(),
+    });
+    assert!(Waits::take(&mut slot, "old", |save| &save.id).is_none());
+    assert_eq!(slot.as_ref().unwrap().label, "work");
+    let taken = Waits::take(&mut slot, "new", |save| &save.id).unwrap();
+    assert_eq!(taken.label, "work");
+    assert!(slot.is_none());
+    assert!(Waits::take(&mut slot, "new", |save| &save.id).is_none());
+}
+
+#[test]
 fn credentials_80x24() {
     let picker = ready(Some("home"));
     let area = Rect::new(0, 0, 80, 24);
