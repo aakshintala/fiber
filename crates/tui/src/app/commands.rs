@@ -43,12 +43,19 @@ pub(crate) struct CommandEntry {
     pub(crate) description: &'static str,
     /// An argument hint, such as `[instructions]`.
     pub(crate) hint: Option<&'static str>,
-    /// A second name typed after `/` that runs the same command, drawn
-    /// on the same list row: `/exit` on the quit row. `None` elsewhere,
-    /// so the alias never doubles the row.
-    pub(crate) alias: Option<&'static str>,
     /// Runs the command on the rest of the draft.
     pub(crate) run: fn(&mut App, &str) -> Option<Effect>,
+}
+
+/// A second name typed after `/` that runs the same command, drawn
+/// on the same list row: `/exit` on the quit row. `None` elsewhere,
+/// so the alias never doubles the row. The `/` list and dispatch both
+/// read it beside the table.
+pub(crate) fn alias_of(name: &str) -> Option<&'static str> {
+    match name {
+        "quit" => Some("exit"),
+        _ => None,
+    }
 }
 
 /// The single command table: the `/` list and dispatch both read it.
@@ -58,175 +65,150 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         name: "home",
         description: "Goes home, focused on the session on screen's row.",
         hint: None,
-        alias: None,
         run: run_home,
     },
     CommandEntry {
         name: "new",
         description: "Goes home with the cursor in the input box, to pick the workspace, worktree, model and thinking level for a new session. The session left keeps running.",
         hint: None,
-        alias: None,
         run: run_new,
     },
     CommandEntry {
         name: "resume",
         description: "Goes home, focused on the first exited row.",
         hint: None,
-        alias: None,
         run: run_resume,
     },
     CommandEntry {
         name: "model",
         description: "Opens the model picker.",
         hint: None,
-        alias: None,
         run: run_model,
     },
     CommandEntry {
         name: "thinking",
         description: "Sets the thinking level, or opens the model picker on it.",
         hint: Some("[<level>]"),
-        alias: None,
         run: run_thinking,
     },
     CommandEntry {
         name: "scoped-models",
         description: "Chooses which models the model picker shows.",
         hint: None,
-        alias: None,
         run: run_scoped_models,
     },
     CommandEntry {
         name: "tools",
         description: "Opens the tools view.",
         hint: None,
-        alias: None,
         run: run_tools,
     },
     CommandEntry {
         name: "context",
         description: "Opens the context breakdown.",
         hint: None,
-        alias: None,
         run: run_context,
     },
     CommandEntry {
         name: "usage",
         description: "Opens the usage view.",
         hint: None,
-        alias: None,
         run: run_usage,
     },
     CommandEntry {
         name: "quota",
         description: "Opens the quota view and fetches every label's quota.",
         hint: None,
-        alias: None,
         run: run_quota,
     },
     CommandEntry {
         name: "panel",
         description: "Shows or hides the panel.",
         hint: None,
-        alias: None,
         run: run_panel,
     },
     CommandEntry {
         name: "rail",
         description: "Shows or hides the rail.",
         hint: None,
-        alias: None,
         run: run_rail,
     },
     CommandEntry {
         name: "rules",
         description: "Opens the standing rules.",
         hint: None,
-        alias: None,
         run: run_rules,
     },
     CommandEntry {
         name: "settings",
         description: "Opens the configuration keys.",
         hint: None,
-        alias: None,
         run: run_settings,
     },
     CommandEntry {
         name: "keys",
         description: "Opens the rebinding screen.",
         hint: None,
-        alias: None,
         run: run_keys,
     },
     CommandEntry {
         name: "skills",
         description: "Opens the skills.",
         hint: None,
-        alias: None,
         run: run_skills,
     },
     CommandEntry {
         name: "handoff",
         description: "Starts a handoff.",
         hint: Some("[instructions]"),
-        alias: None,
         run: run_handoff,
     },
     CommandEntry {
         name: "name",
         description: "Names the session.",
         hint: Some("<text>"),
-        alias: None,
         run: run_name,
     },
     CommandEntry {
         name: "login",
         description: "Logs in.",
         hint: None,
-        alias: None,
         run: run_login,
     },
     CommandEntry {
         name: "reload",
         description: "Reloads configuration, MCP servers and extensions.",
         hint: None,
-        alias: None,
         run: run_reload,
     },
     CommandEntry {
         name: "close",
         description: "Stops the session on screen.",
         hint: None,
-        alias: None,
         run: run_close,
     },
     CommandEntry {
         name: "quit",
         description: "Quits.",
         hint: None,
-        alias: Some("exit"),
         run: run_quit,
     },
     CommandEntry {
         name: "approvals",
         description: "Reopens the waiting approvals and questions.",
         hint: None,
-        alias: None,
         run: run_approvals,
     },
     CommandEntry {
         name: "?",
         description: "Opens the key map.",
         hint: None,
-        alias: None,
         run: run_keymap,
     },
     CommandEntry {
         name: "help",
         description: "Opens the key map.",
         hint: None,
-        alias: None,
         run: run_keymap,
     },
 ];
@@ -487,7 +469,7 @@ impl App {
         // draw goes out as typed. An alias runs its row's command.
         let entry = TABLE
             .iter()
-            .find(|entry| entry.name == name || entry.alias == Some(name))?;
+            .find(|entry| entry.name == name || alias_of(entry.name) == Some(name))?;
         (entry.run)(self, &rest)
     }
 

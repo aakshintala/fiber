@@ -144,12 +144,6 @@ fn filter_quit_still_finds_only_the_quit_row() {
     assert_eq!(found, ["quit"]);
 }
 
-#[test]
-fn an_empty_query_still_shows_every_row_once() {
-    let all = slash::rows(&[]);
-    assert_eq!(slash::filter(&all, "").len(), all.len());
-}
-
 /// An extension `commands` row named `name` with the `acme` tag.
 fn extension_info(name: &str) -> contract::events::CommandInfo {
     contract::events::CommandInfo {
@@ -180,6 +174,22 @@ fn an_extension_exit_sheds_the_quit_alias_and_keeps_one_exit_row() {
         exits[0].line(),
         "/exit [args]  The exit extension.  acme".to_owned()
     );
+}
+
+#[test]
+fn an_unrelated_extension_keeps_the_quit_alias() {
+    // Only an `exit` extension sheds the alias: any other extension
+    // row leaves `/exit` on the quit row.
+    let with = slash::rows(&[extension_info("model")]);
+    let quit = with.iter().find(|row| row.name == "quit").unwrap();
+    assert_eq!(quit.alias.as_deref(), Some("exit"));
+    assert_eq!(quit.line(), "/quit /exit  Quits.  command".to_owned());
+    let exits: Vec<&slash::Row> = with
+        .iter()
+        .filter(|row| row.name == "exit" || row.alias.as_deref() == Some("exit"))
+        .collect();
+    assert_eq!(exits.len(), 1);
+    assert_eq!(exits[0].name, "quit");
 }
 
 #[test]

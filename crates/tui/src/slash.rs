@@ -1,7 +1,7 @@
 //! The `/` list: built-in commands and the session's `commands` answer in
 //! one filtered list (`docs/tui.md`, "Keys" › "Rules", "Slash commands").
 
-use crate::app::commands::TABLE;
+use crate::app::commands::{TABLE, alias_of};
 use contract::events::CommandInfo;
 
 /// How many rows a completion panel shows at most.
@@ -15,10 +15,10 @@ pub(crate) const COMMAND: &str = "command";
 pub(crate) struct Row {
     /// The name typed after `/`.
     pub(crate) name: String,
-    pub(crate) alias: Option<String>,
     /// A second name for the row, drawn after the name: `/exit` on the
     /// quit row. `None` when an extension row named `exit` takes that
     /// name, so only one `/exit` entry shows.
+    pub(crate) alias: Option<String>,
     /// A one-line description.
     pub(crate) description: String,
     /// An argument hint, such as `[instructions]`.
@@ -82,7 +82,9 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
         } else {
             Row {
                 name: entry.name.to_owned(),
-                alias: entry.alias.filter(|_| !exit_taken).map(str::to_owned),
+                alias: alias_of(entry.name)
+                    .filter(|_| !exit_taken)
+                    .map(str::to_owned),
                 description: entry.description.to_owned(),
                 hint: entry.hint.map(str::to_owned),
                 tag: COMMAND.to_owned(),
@@ -124,38 +126,34 @@ pub(crate) fn extensions(commands: &[CommandInfo]) -> Vec<String> {
 /// contains it elsewhere, each group in list order.
 pub(crate) fn filter<'a>(rows: &'a [Row], query: &str) -> Vec<&'a Row> {
     let query = query.to_lowercase();
-    let folded: Vec<(String, Option<String>)> = rows
+    // 0 starts with, 1 contains elsewhere, 2 no match: one pass ranks
+    // each row, then the stable sort keeps list order in each group.
+    let rank = |row: &Row| {
+        let name = row.name.to_lowercase();
+        let alias = row.alias.as_deref().map(str::to_lowercase);
+        let starts = name.starts_with(&query)
+            || alias
+                .as_deref()
+                .is_some_and(|alias| alias.starts_with(&query));
+        let hits =
+            name.contains(&query) || alias.as_deref().is_some_and(|alias| alias.contains(&query));
+        if starts {
+            0
+        } else if hits {
+            1
+        } else {
+            2
+        }
+    };
+    let mut ranked: Vec<(u8, &'a Row)> = rows
         .iter()
-        .map(|row| {
-            (
-                row.name.to_lowercase(),
-                row.alias.as_deref().map(str::to_lowercase),
-            )
+        .filter_map(|row| {
+            let rank = rank(row);
+            (rank < 2).then_some((rank, row))
         })
         .collect();
-    let is_start = |found: &(String, Option<String>)| {
-        found.0.starts_with(&query)
-            || found
-                .1
-                .as_deref()
-                .is_some_and(|alias| alias.starts_with(&query))
-    };
-    let is_hit = |found: &(String, Option<String>)| {
-        found.0.contains(&query)
-            || found
-                .1
-                .as_deref()
-                .is_some_and(|alias| alias.contains(&query))
-    };
-    let starts = rows
-        .iter()
-        .zip(&folded)
-        .filter(|(_, found)| is_start(found));
-    let contains = rows
-        .iter()
-        .zip(&folded)
-        .filter(|(_, found)| !is_start(found) && is_hit(found));
-    starts.chain(contains).map(|(row, _)| row).collect()
+    ranked.sort_by_key(|(rank, _)| *rank);
+    ranked.into_iter().map(|(_, row)| row).collect()
 }
 
 /// The first row shown so that `selected` is in view: rows
