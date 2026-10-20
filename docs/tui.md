@@ -630,14 +630,14 @@ a click on it returns too. The views are:
   sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
   Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
 - The credential picker, `/credential`: the header reads "Credentials" bold,
-  "  /credential" dim and "Esc returns" dim, right-aligned. A blank row
-  follows the header. The provider's labels appear in the answer's order,
+  "  /credential" dim and "Esc returns" dim, right-aligned. The provider's
+  labels follow the header in the answer's order,
   one per row. Only the current label has "  ● current" in `accent` after
   it and starts selected in reverse. With no current label, the first row
-  starts selected. The dim line below reads the provider's name, such as
+  starts selected. The plain line above the bottom footer reads the provider's name, such as
   "fake", or "Reading the labels…" before the answer, or
   "<provider> has no credential labels" for an empty answer. A rejected
-  query shows its message instead. The dim footer is
+  query shows its message instead. The dim footer on the last row is
   "↑↓ move · Enter choose · Ctrl+S this session · Esc close".
   ↑ and ↓ move between rows. Enter or a click chooses a label and saves
   it; Ctrl+S, `session_only`'s key, chooses it for this session only.

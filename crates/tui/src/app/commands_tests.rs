@@ -508,13 +508,11 @@ fn a_skill_named_like_a_built_in_keeps_the_built_in() {
 
 #[test]
 fn undrawn_built_ins_without_an_extension_go_out_as_typed() {
-    for command in ["/credential", "/rewind"] {
-        let mut app = attached();
-        let lines = sent(enter(&mut app, command));
-        assert_eq!(lines.len(), 1, "{command}");
-        assert_eq!(lines[0]["command"], "prompt", "{command}");
-        assert!(app.keymap().is_none(), "{command}");
-    }
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/rewind"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+    assert!(app.keymap().is_none());
 }
 
 #[test]
@@ -524,11 +522,9 @@ fn every_table_row_dispatches_and_undrawn_built_ins_fall_through() {
         type_text(&mut app, &format!("/{}", entry.name));
         assert!(app.built_in().is_some(), "/{}", entry.name);
     }
-    for command in ["/credential", "/rewind"] {
-        let mut app = attached();
-        type_text(&mut app, command);
-        assert!(app.built_in().is_none(), "{command}");
-    }
+    let mut app = attached();
+    type_text(&mut app, "/rewind");
+    assert!(app.built_in().is_none());
 }
 
 #[test]
@@ -547,6 +543,331 @@ fn a_rejected_extension_command_returns_its_draft_with_the_notice() {
     assert!(app.on_line(rejected).is_empty());
     assert_eq!(app.draft(), "/deploy now");
     assert_eq!(app.notice(), Some("No."));
+}
+
+fn credential_app() -> (App, std::sync::Arc<crate::configure_fake::Fake>) {
+    let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]));
+    let mut app = attached();
+    app.set_configure(Some(seam.clone()));
+    app.set_size(80, 24);
+    (app, seam)
+}
+
+fn credential_answer(app: &mut App, id: &Value, current: Option<&str>) -> Vec<String> {
+    let mut result = json!({"provider":"fake", "credentials":["default","home","work"]});
+    if let Some(current) = current {
+        result["credential"] = json!(current);
+    }
+    app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id":id, "result":result}),
+    ))
+}
+
+fn credential_open(app: &mut App) {
+    let queries = sent(enter(app, "/credential"));
+    assert_eq!(queries.len(), 1);
+    assert_eq!(queries[0]["command"], "credentials");
+    assert!(queries[0].get("args").is_none());
+    assert!(credential_answer(app, &queries[0]["id"], Some("home")).is_empty());
+    assert_eq!(app.key_context(), crate::keyset::Context::Picker);
+}
+
+fn credential_accept(app: &mut App, id: &Value, provider: Option<&str>) {
+    let mut payload = json!({"command_id":id});
+    if let Some(provider) = provider {
+        payload["result"] = json!({"provider":provider});
+    }
+    assert!(
+        app.on_line(session_line("command_accepted", payload))
+            .is_empty()
+    );
+}
+
+fn credential_usage(app: &mut App) {
+    app.on_line(session_line("usage_recorded", json!({
+        "generation_id":"g_1", "model":"fake/m", "tokens":{"input":80000,"cache_read":3000,"cache_write":{"5m":1000},"output":5},
+        "input_bytes":1,"cost":null
+    })));
+}
+
+fn credential_notice(app: &App, code: &str, text: &str) -> bool {
+    app.notices().iter().any(|notice| matches!(notice, crate::app::NoticeLine::Notice { code: got, text: message, .. } if got == code && message == text))
+}
+
+#[test]
+fn credential_picker_switches_saves_on_acceptance_and_names_the_admitted_provider() {
+    for provider in ["fake", "other"] {
+        let (mut app, seam) = credential_app();
+        credential_usage(&mut app);
+        credential_open(&mut app);
+        app.on_key(Key::Down, now());
+        let lines = sent(app.on_key(Key::Enter, now()));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["command"], "credential");
+        assert_eq!(lines[0]["args"], json!({"label":"work"}));
+        assert!(credential_notice(
+            &app,
+            "cache_rebuild",
+            "switching rebuilds the cache: about 84,000 tokens"
+        ));
+        assert!(!app.config_view_open());
+        assert!(seam.writes().is_empty());
+        credential_accept(&mut app, &lines[0]["id"], Some(provider));
+        assert_eq!(
+            seam.writes(),
+            vec![(
+                PathBuf::from("/w"),
+                crate::configure::Layer::Global,
+                format!("providers.\"{provider}\".credential"),
+                "work".to_owned()
+            )]
+        );
+    }
+}
+
+#[test]
+fn credential_current_label_or_missing_usage_skips_rebuild_but_still_saves() {
+    for (usage, down) in [(true, false), (false, true)] {
+        let (mut app, seam) = credential_app();
+        if usage {
+            credential_usage(&mut app);
+        }
+        credential_open(&mut app);
+        if down {
+            app.on_key(Key::Down, now());
+        }
+        let lines = sent(app.on_key(Key::Enter, now()));
+        assert_eq!(lines.len(), 1);
+        assert!(!app.notices().iter().any(
+            |n| matches!(n, crate::app::NoticeLine::Notice { code, .. } if code == "cache_rebuild")
+        ));
+        credential_accept(&mut app, &lines[0]["id"], Some("fake"));
+        assert_eq!(seam.writes()[0].3, if down { "work" } else { "home" });
+    }
+}
+
+#[test]
+fn credential_ctrl_s_sends_without_saving() {
+    let (mut app, seam) = credential_app();
+    credential_open(&mut app);
+    app.on_key(Key::Down, now());
+    let lines = sent(app.on_press(crate::stroke::Stroke::parse("ctrl+s").unwrap(), now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["args"], json!({"label":"work"}));
+    credential_accept(&mut app, &lines[0]["id"], Some("fake"));
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn credential_refusals_clear_the_waiting_save() {
+    for code in ["credential_missing", "duplicate_command"] {
+        let (mut app, seam) = credential_app();
+        credential_open(&mut app);
+        let lines = sent(app.on_key(Key::Enter, now()));
+        app.on_line(session_line(
+            "command_rejected",
+            json!({"command_id":lines[0]["id"],"code":code,"message":"refused"}),
+        ));
+        if code == "credential_missing" {
+            assert!(credential_notice(&app, code, "refused"));
+        }
+        credential_accept(&mut app, &lines[0]["id"], Some("fake"));
+        assert!(seam.writes().is_empty());
+    }
+}
+
+#[test]
+fn credential_latest_save_wins_and_a_late_acceptance_after_home_saves_once() {
+    let (mut app, seam) = credential_app();
+    credential_open(&mut app);
+    let first = sent(app.on_key(Key::Enter, now()));
+    credential_open(&mut app);
+    app.on_key(Key::Down, now());
+    let second = sent(app.on_key(Key::Enter, now()));
+    app.go_home();
+    credential_accept(&mut app, &second[0]["id"], Some("other"));
+    credential_accept(&mut app, &first[0]["id"], Some("fake"));
+    credential_accept(&mut app, &second[0]["id"], Some("other"));
+    assert_eq!(
+        seam.writes(),
+        vec![(
+            PathBuf::from("/w"),
+            crate::configure::Layer::Global,
+            "providers.\"other\".credential".to_owned(),
+            "work".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn credential_missing_seam_and_missing_provider_warn_without_saving() {
+    for seam_present in [false, true] {
+        let (mut app, seam) = credential_app();
+        if !seam_present {
+            app.set_configure(None);
+        }
+        credential_open(&mut app);
+        let lines = sent(app.on_key(Key::Enter, now()));
+        assert_eq!(lines.len(), 1);
+        credential_accept(&mut app, &lines[0]["id"], None);
+        assert!(credential_notice(
+            &app,
+            "io_failed",
+            "Saving is not available; the switch is for this session only."
+        ));
+        assert!(seam.writes().is_empty());
+    }
+}
+
+#[test]
+fn credential_disconnected_pick_stays_open_and_shortcut_keeps_draft() {
+    let (mut app, seam) = credential_app();
+    credential_open(&mut app);
+    app.disconnected();
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.config_view_open());
+    assert!(credential_notice(
+        &app,
+        "connection_failed",
+        "The hub is not connected; nothing changed."
+    ));
+    assert!(seam.writes().is_empty());
+    app.close_config_view();
+    assert_eq!(enter(&mut app, "/credential work"), Effect::None);
+    assert_eq!(app.draft(), "/credential work");
+    let mut home = connected();
+    assert_eq!(enter(&mut home, "/credential"), Effect::None);
+    assert!(credential_notice(
+        &home,
+        "session_not_found",
+        "No session on screen."
+    ));
+    assert!(home.draft().is_empty());
+    assert_eq!(enter(&mut home, "/credential work"), Effect::None);
+    assert!(home.draft().is_empty());
+}
+
+#[test]
+fn credential_shortcuts_replace_queries_and_save_the_trimmed_label() {
+    let (mut app, seam) = credential_app();
+    credential_usage(&mut app);
+    let first = sent(enter(&mut app, "/credential work"));
+    let second = sent(enter(&mut app, "/credential  home  "));
+    assert_eq!(first[0]["command"], "credentials");
+    assert!(credential_answer(&mut app, &first[0]["id"], Some("home")).is_empty());
+    let lines = credential_answer(&mut app, &second[0]["id"], Some("work"));
+    assert_eq!(lines.len(), 1);
+    let switch: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(switch["command"], "credential");
+    assert_eq!(switch["args"], json!({"label":"home"}));
+    assert!(credential_notice(
+        &app,
+        "cache_rebuild",
+        "switching rebuilds the cache: about 84,000 tokens"
+    ));
+    credential_accept(&mut app, &switch["id"], Some("fake"));
+    assert_eq!(seam.writes()[0].3, "home");
+}
+
+#[test]
+fn credential_bare_replaces_shortcut_and_unattached_answer_sends_nothing() {
+    let (mut app, seam) = credential_app();
+    let first = sent(enter(&mut app, "/credential work"));
+    let second = sent(enter(&mut app, "/credential"));
+    assert!(credential_answer(&mut app, &first[0]["id"], Some("home")).is_empty());
+    assert_eq!(
+        app.config_view_screen().unwrap().below,
+        ["Reading the labels…"]
+    );
+    assert!(credential_answer(&mut app, &second[0]["id"], Some("home")).is_empty());
+    app.close_config_view();
+    let third = sent(enter(&mut app, "/credential work"));
+    app.go_home();
+    assert!(credential_answer(&mut app, &third[0]["id"], Some("home")).is_empty());
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn credential_rejected_query_restores_draft_and_picker_rejection_shows_message() {
+    let (mut app, seam) = credential_app();
+    let query = sent(enter(&mut app, "/credential work"));
+    app.on_line(session_line(
+        "command_rejected",
+        json!({"command_id":query[0]["id"],"code":"closing","message":"ending"}),
+    ));
+    assert_eq!(app.draft(), "/credential work");
+    assert!(credential_notice(&app, "closing", "ending"));
+    app.draft.clear();
+    let query = sent(enter(&mut app, "/credential"));
+    app.on_line(session_line(
+        "command_rejected",
+        json!({"command_id":query[0]["id"],"code":"closing","message":"ended"}),
+    ));
+    assert_eq!(app.config_view_screen().unwrap().below, ["ended"]);
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn credential_shortcut_without_seam_and_failed_write_show_notices() {
+    for seam_present in [false, true] {
+        let (mut app, seam) = credential_app();
+        if seam_present {
+            *seam.refuse.lock().unwrap() = Some("disk full".to_owned());
+        } else {
+            app.set_configure(None);
+        }
+        let query = sent(enter(&mut app, "/credential work"));
+        let lines = credential_answer(&mut app, &query[0]["id"], Some("home"));
+        assert_eq!(lines.len(), 1);
+        let switch: Value = serde_json::from_str(&lines[0]).unwrap();
+        credential_accept(&mut app, &switch["id"], Some("fake"));
+        let text = if seam_present {
+            "Saving providers.\"fake\".credential failed: disk full"
+        } else {
+            "Saving is not available; the switch is for this session only."
+        };
+        assert!(credential_notice(&app, "io_failed", text));
+    }
+}
+
+#[test]
+fn credential_overlays_and_rebound_session_only_route_to_the_picker() {
+    let (mut app, seam) = credential_app();
+    credential_open(&mut app);
+    app.open_keymap();
+    assert_eq!(app.key_context(), crate::keyset::Context::Overlay);
+    assert_eq!(app.credential_session_only(), Effect::None);
+    assert_eq!(
+        app.on_press(crate::stroke::Stroke::parse("ctrl+s").unwrap(), now()),
+        Effect::None
+    );
+    assert!(app.config_view_open());
+    app.close_keymap();
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    app.on_line(session_line("session_status", json!({"name":"working","workspace":"/w","project":"-w","state":"streaming","since":0,"started":0,"calls":0,"delegates":0,"jobs":0,"clients":1,"model":"fake/m","spend":{"tokens":{"input":0,"output":0,"cache_read":0,"cache_write":{}},"cost":0.0,"subscription_cost":0.0}})));
+    app.quit();
+    assert!(app.quit_open());
+    assert_eq!(app.key_context(), crate::keyset::Context::Overlay);
+    assert_eq!(app.credential_session_only(), Effect::None);
+    assert!(app.config_view_open());
+    app.on_key(Key::Esc, now());
+    assert!(!app.quit_open());
+    assert_eq!(app.key_context(), crate::keyset::Context::Picker);
+    let mut user = serde_json::Map::new();
+    user.insert("session_only".to_owned(), json!("ctrl+x"));
+    app.set_keys(crate::KeysSetup { user });
+    let lines = sent(app.on_press(crate::stroke::Stroke::parse("ctrl+x").unwrap(), now()));
+    assert_eq!(lines.len(), 1);
+    credential_accept(&mut app, &lines[0]["id"], Some("fake"));
+    assert!(seam.writes().is_empty());
 }
 
 #[test]
