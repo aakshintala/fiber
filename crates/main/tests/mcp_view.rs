@@ -20,7 +20,7 @@ mod support;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Child;
 use std::sync::mpsc;
 use std::thread;
@@ -42,9 +42,11 @@ struct Driver {
 }
 
 impl Driver {
-    /// Starts `fiber session` under an empty `PATH` (so no opener can
-    /// start) and subscribes `full`.
-    fn start(setup: support::Setup, id: &str, empty_path: &Path) -> Self {
+    /// Starts `fiber session` with `path` as its `PATH` and subscribes
+    /// `full`. The login test passes an empty directory, so no opener
+    /// can start; the others pass the process's own `PATH`, so the
+    /// fixture servers can run.
+    fn start(setup: support::Setup, id: &str, path: &std::ffi::OsStr) -> Self {
         let workspace = setup.workspace();
         let mut command = setup.fiber(&[
             "session",
@@ -53,7 +55,7 @@ impl Driver {
             "--workspace",
             workspace.to_str().unwrap(),
         ]);
-        command.env("PATH", empty_path);
+        command.env("PATH", path);
         let (mut child, watchdog) = spawn_watched(&mut command);
         let guard = KillGroup(child.id());
         let stdout = child.stdout.take().unwrap();
@@ -231,6 +233,18 @@ fn oauth_and_mcp() -> ProviderServer {
         if req.method == "DELETE" {
             return Response::status(200, "");
         }
+        // The JSON-RPC route needs the login's token: without it the
+        // server answers 401 with the metadata header, exactly as the
+        // probe does, so the session records needs-login and the row
+        // carries the login sentence until the token lands. The fake
+        // records credential values as fingerprints, so the check
+        // compares against the token's fingerprint.
+        if req.header("authorization") != Some(fakes::fingerprint("Bearer at-1")).as_deref() {
+            return Response::status(401, "{}").header(
+                "www-authenticate",
+                &format!("Bearer resource_metadata=\"{base}/prm\""),
+            );
+        }
         let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
         let id = body.get("id").cloned().unwrap_or(Value::Null);
         let answer =
@@ -325,8 +339,6 @@ fn drive_callback(auth_url: &str) {
 #[test]
 fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
     let setup = support::Setup::new();
-    let empty = setup.root.path().join("empty");
-    fs::create_dir_all(&empty).unwrap();
     let dir = fixture_dir(&setup, "fx");
     let remote = oauth_and_mcp();
     let _model = configure(
@@ -340,7 +352,11 @@ fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
             },
         }),
     );
-    let driver = Driver::start(setup, &doors::mint("s_"), &empty);
+    let driver = Driver::start(
+        setup,
+        &doors::mint("s_"),
+        &std::env::var_os("PATH").unwrap(),
+    );
 
     let rows = driver.servers("c_list");
 
@@ -353,6 +369,7 @@ fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
     assert_eq!(down["layer"], "global", "{down:?}");
     assert_eq!(down["state"], "failed", "{down:?}");
     assert!(!down["reason"].as_str().unwrap().is_empty(), "{down:?}");
+    assert_eq!(down["tools"], 0, "{down:?}");
     assert_eq!(down["approved"], true, "{down:?}");
     assert!(down.get("auth_url").is_none(), "{down:?}");
     let remote = Driver::row(&rows, "remote");
@@ -360,10 +377,13 @@ fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
     assert_eq!(remote["state"], "needs-login", "{remote:?}");
     assert_eq!(
         remote["reason"],
-        json!("connection refused Run `fiber mcp login remote` to log in."),
+        json!(
+            "The MCP server `remote` failed to start: The server answered HTTP 401 and needs a login. Run `fiber mcp login remote` to log in."
+        ),
         "{remote:?}"
     );
     assert_eq!(remote["approved"], true, "{remote:?}");
+    assert_eq!(remote["tools"], 0, "{remote:?}");
     assert!(remote.get("auth_url").is_none(), "{remote:?}");
     let up = Driver::row(&rows, "up");
     assert_eq!(up["layer"], "global", "{up:?}");
@@ -378,8 +398,6 @@ fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
 #[test]
 fn reconnect_restarts_the_failed_server() {
     let setup = support::Setup::new();
-    let empty = setup.root.path().join("empty");
-    fs::create_dir_all(&empty).unwrap();
     let dir = fixture_dir(&setup, "fx");
     let marker = setup.root.path().join("marker");
     let wrapper = setup.root.path().join("flaky.sh");
@@ -397,7 +415,11 @@ fn reconnect_restarts_the_failed_server() {
         &setup,
         &json!({"flaky": {"command": "/bin/bash", "args": [wrapper.display().to_string()]}}),
     );
-    let driver = Driver::start(setup, &doors::mint("s_"), &empty);
+    let driver = Driver::start(
+        setup,
+        &doors::mint("s_"),
+        &std::env::var_os("PATH").unwrap(),
+    );
 
     let rows = driver.servers("c_before");
     assert_eq!(Driver::row(&rows, "flaky")["state"], "failed", "{rows:?}");
@@ -424,7 +446,7 @@ fn login_against_a_fake_authorization_server_makes_the_server_ready() {
         &setup,
         &json!({"remote": {"url": format!("{}/mcp", remote.url())}}),
     );
-    let driver = Driver::start(setup, &doors::mint("s_"), &empty);
+    let driver = Driver::start(setup, &doors::mint("s_"), empty.as_os_str());
 
     let rows = driver.servers("c_before");
     let before = Driver::row(&rows, "remote");
@@ -469,5 +491,138 @@ fn login_against_a_fake_authorization_server_makes_the_server_ready() {
         }
     }
     assert!(ready, "the server never became ready after the login");
+    driver.finish();
+}
+
+#[test]
+fn reconnect_of_an_unknown_server_is_invalid_arguments() {
+    let setup = support::Setup::new();
+    let _model = configure(&setup, &json!({}));
+    let driver = Driver::start(
+        setup,
+        &doors::mint("s_"),
+        &std::env::var_os("PATH").unwrap(),
+    );
+
+    let rejected = driver.command("c_nope", "mcp_reconnect", json!({"server": "nope"}));
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected:?}");
+    assert_eq!(
+        rejected["payload"]["code"], "invalid_arguments",
+        "{rejected:?}"
+    );
+    let refused = driver.command("c_login_nope", "mcp_login", json!({"server": "nope"}));
+    assert_eq!(refused["kind"], "command_rejected", "{refused:?}");
+    assert_eq!(
+        refused["payload"]["code"], "invalid_arguments",
+        "{refused:?}"
+    );
+    driver.finish();
+}
+
+#[test]
+fn reconnect_of_an_unapproved_repository_server_gives_the_approve_advice() {
+    let setup = support::Setup::new();
+    let workspace = setup.workspace();
+    let status = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(&workspace)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let dir = fixture_dir(&setup, "fx");
+    let _model = configure(&setup, &json!({}));
+    fs::create_dir_all(workspace.join(".fiber")).unwrap();
+    fs::write(
+        workspace.join(".fiber/config.json"),
+        json!({"mcp": {"servers": {"db": {
+            "command": "/bin/bash",
+            "args": ["srv/run.sh", dir.display().to_string()],
+        }}}})
+        .to_string(),
+    )
+    .unwrap();
+    let driver = Driver::start(
+        setup,
+        &doors::mint("s_"),
+        &std::env::var_os("PATH").unwrap(),
+    );
+
+    let rows = driver.servers("c_list");
+    let db = Driver::row(&rows, "db");
+    assert_eq!(db["layer"], "repository", "{db:?}");
+    assert_eq!(db["approved"], false, "{db:?}");
+
+    let rejected = driver.command("c_reconnect", "mcp_reconnect", json!({"server": "db"}));
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected:?}");
+    assert_eq!(
+        rejected["payload"]["code"], "mcp_server_unapproved",
+        "{rejected:?}"
+    );
+    assert!(
+        rejected["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fiber approve"),
+        "{rejected:?}"
+    );
+    driver.finish();
+}
+
+#[test]
+fn two_quick_reconnects_spawn_the_server_once() {
+    let setup = support::Setup::new();
+    let dir = fixture_dir(&setup, "fx");
+    let marker = setup.root.path().join("marker");
+    let spawns = setup.root.path().join("spawns");
+    let wrapper = setup.root.path().join("flaky.sh");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/bash\nprintf 'spawn\\n' >> \"{}\"\nif [ ! -f \"{}\" ]; then exit 1; fi\nexec \"{}\" \"{}\"\n",
+            spawns.display(),
+            marker.display(),
+            fakes::mcp_fixture().display(),
+            dir.display(),
+        ),
+    )
+    .unwrap();
+    let _model = configure(
+        &setup,
+        &json!({
+            "flaky": {
+                "command": "/bin/bash",
+                "args": [wrapper.display().to_string()],
+                "env": {"PATH": std::env::var_os("PATH").unwrap().to_str().unwrap()},
+            },
+            "up": {"command": fakes::mcp_fixture().display().to_string(), "args": [dir.display().to_string()]},
+        }),
+    );
+    let driver = Driver::start(
+        setup,
+        &doors::mint("s_"),
+        &std::env::var_os("PATH").unwrap(),
+    );
+
+    let rows = driver.servers("c_before");
+    assert_eq!(Driver::row(&rows, "flaky")["state"], "failed", "{rows:?}");
+
+    // The declaration is unchanged; the next start succeeds.
+    fs::write(&marker, "now").unwrap();
+    let first = driver.command("c_one", "mcp_reconnect", json!({"server": "flaky"}));
+    assert_eq!(first["kind"], "command_accepted", "{first:?}");
+    let second = driver.command("c_two", "mcp_reconnect", json!({"server": "flaky"}));
+    assert_eq!(second["kind"], "command_accepted", "{second:?}");
+
+    let rows = driver.servers("c_after");
+    let flaky = Driver::row(&rows, "flaky");
+    assert_eq!(flaky["state"], "ready", "{rows:?}");
+    // The restart touched only the server it named: the other server
+    // never left ready.
+    assert_eq!(Driver::row(&rows, "up")["state"], "ready", "{rows:?}");
+    assert_eq!(
+        fs::read_to_string(&spawns).unwrap().lines().count(),
+        2,
+        "the failed start plus one restart spawn"
+    );
     driver.finish();
 }

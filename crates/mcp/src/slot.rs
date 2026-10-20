@@ -262,6 +262,27 @@ impl Slot {
         matches!(*lock(&self.state), State::Running { .. })
     }
 
+    /// The bare tool names live now: the running server's list, else
+    /// empty. A restart drops the qualified names this set no longer
+    /// holds.
+    pub(crate) fn live_names(&self) -> HashSet<String> {
+        match &*lock(&self.state) {
+            State::Running { live, .. } => live.clone(),
+            State::Down { .. } | State::Dead { .. } | State::NotStarted { .. } => HashSet::new(),
+        }
+    }
+
+    /// The last raw tool list this slot saw, for declaring after a
+    /// restart: the running or reserved list, else empty.
+    pub(crate) fn listed_tools(&self) -> Vec<ListedTool> {
+        match &*lock(&self.state) {
+            State::Running { listed, .. }
+            | State::Down { listed }
+            | State::NotStarted { cached: listed } => listed.tools.clone(),
+            State::Dead { .. } => Vec::new(),
+        }
+    }
+
     /// The running server, starting it first when the slot is not
     /// started, and restarting it when it died with its restart unused.
     /// One attempt runs at a time under the slot's lease: a concurrent

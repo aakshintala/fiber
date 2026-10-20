@@ -1951,9 +1951,141 @@ fn running_names_only_the_servers_up_now() {
     let started = setup.start(vec![up, down, lazy]);
     assert_eq!(started.failed.len(), 1, "{:?}", started.failed);
     assert!(started.servers.running("up"));
+    assert!(started.servers.has_slot("up"));
     assert!(!started.servers.running("down"));
+    // A failed start leaves no slot: only a fresh start adopts one.
+    assert!(!started.servers.has_slot("down"));
     // Declared from its cache and never started: not running.
     assert!(!started.servers.running("lazy"));
     assert!(!started.servers.running("elsewhere"));
     setup.stop(started.servers);
+}
+
+#[test]
+fn restart_serves_the_slot_again_and_reports_what_changed() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let mut up = setup.spec("up");
+    up.startup_timeout = std::time::Duration::from_secs(30);
+    let mut down = setup.spec("down");
+    down.transport = crate::Transport::Stdio(crate::StdioSpec {
+        command: "/no/such/command".to_owned(),
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        secrets: BTreeMap::new(),
+        reader: std::sync::Arc::new(|_| Err(crate::SecretError::Missing)),
+        run: None,
+    });
+    let lazy = lazy_spec(&setup, "lazy", false);
+    let started = setup.start(vec![up, down, lazy]);
+    assert_eq!(started.failed.len(), 1, "{:?}", started.failed);
+    let servers = started.servers;
+    let images: std::sync::Arc<dyn contract::images::Images> = FakeImages::ok();
+    let artifacts = setup.artifacts();
+
+    // A healthy running server restarts to a no-op: its tools stand, with
+    // no records.
+    let restarted = super::restart(&servers, "up", &artifacts, &images).expect("a slot names up");
+    assert!(restarted.records.is_empty(), "{:?}", restarted.records);
+    assert!(restarted.removed.is_empty(), "{:?}", restarted.removed);
+    assert_eq!(restarted.used.len(), 1);
+    assert!(servers.running("up"));
+
+    // A failed start leaves no slot: nothing restarts until the hub
+    // adopts a fresh attempt.
+    assert!(
+        super::restart(&servers, "down", &artifacts, &images).is_none(),
+        "a failed start leaves no slot"
+    );
+    assert!(!servers.running("down"));
+
+    // A cached server starts on its restart: its tools are declared.
+    let restarted =
+        super::restart(&servers, "lazy", &artifacts, &images).expect("a slot names lazy");
+    assert!(restarted.records.is_empty(), "{:?}", restarted.records);
+    assert_eq!(restarted.used.len(), 1);
+    assert!(servers.running("lazy"));
+
+    assert!(super::restart(&servers, "elsewhere", &artifacts, &images).is_none());
+    setup.stop(servers);
+}
+
+#[test]
+fn a_second_restart_mid_start_coalesces_on_the_first_attempt() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let dir = setup.dir.path().to_path_buf();
+    let spawns = dir.join("spawns");
+    setup.write(
+        "flaky.sh",
+        &format!(
+            "#!/bin/bash\nprintf 'spawn\\n' >> \"{}\"\nexec \"{}\" \"$1\"\n",
+            spawns.display(),
+            fakes::mcp_fixture().display(),
+        ),
+    );
+    let mut spec = setup.spec("flaky");
+    spec.transport = super::Transport::Stdio(super::StdioSpec {
+        command: "/bin/bash".into(),
+        args: vec![
+            dir.join("flaky.sh").display().to_string(),
+            dir.display().to_string(),
+        ],
+        env: BTreeMap::new(),
+        secrets: BTreeMap::new(),
+        reader: Arc::new(|_| Err(crate::SecretError::Missing)),
+        run: None,
+    });
+    crate::cache::write(
+        &setup.cache(),
+        "flaky",
+        &spec.key(),
+        &crate::cache::Cached {
+            tools: Vec::new(),
+            prompts: Vec::new(),
+            resources: false,
+        },
+    );
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty(), "{:?}", started.failed);
+    assert!(!setup.spawned(), "a cached server starts nothing");
+    let servers = started.servers;
+    let slot = servers
+        .slot("flaky")
+        .expect("a cached server keeps its slot");
+    assert!(!servers.running("flaky"));
+    let images: Arc<dyn contract::images::Images> = FakeImages::ok();
+    let artifacts = setup.artifacts();
+    let (reserved_tx, reserved) = std::sync::mpsc::channel::<()>();
+    let (go_tx, go) = std::sync::mpsc::channel::<()>();
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    slot.on_after_reserve(Box::new(move || {
+        reserved_tx.send(()).unwrap();
+        go.recv().unwrap();
+    }));
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| super::restart(&servers, "flaky", &artifacts, &images));
+        // The first attempt holds the lease before the second starts,
+        // so the second waits on it instead of spawning beside it.
+        reserved.recv().unwrap();
+        let second = scope.spawn(|| {
+            started_tx.send(()).unwrap();
+            super::restart(&servers, "flaky", &artifacts, &images)
+        });
+        started_rx.recv().unwrap();
+        go_tx.send(()).unwrap();
+        let first = first.join().unwrap().expect("a slot names flaky");
+        let second = second.join().unwrap().expect("a slot names flaky");
+        // A cached start records nothing either way: both calls share
+        // the one outcome, and only one attempt ran.
+        assert!(first.records.is_empty(), "{:?}", first.records);
+        assert!(second.records.is_empty(), "{:?}", second.records);
+        assert_eq!(first.used.len(), 1);
+        assert_eq!(second.used.len(), 1);
+        assert!(servers.running("flaky"));
+    });
+    assert_eq!(
+        std::fs::read_to_string(&spawns).unwrap(),
+        "spawn\n",
+        "one spawn serves both restarts"
+    );
+    setup.stop(servers);
 }
