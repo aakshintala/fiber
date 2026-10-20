@@ -1,6 +1,7 @@
 //! Tests for the notice stack, its rows and overlays.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use super::{NoticeLine, NoticeOverlay, Notices};
 use crate::app::App;
@@ -16,6 +17,19 @@ fn stack(code: &str, texts: &[&str]) -> Notices {
     for text in texts {
         notices.push(code, (*text).to_owned());
     }
+    notices
+}
+
+/// `base` plus `ms` milliseconds: the fake-clock instants sweeps read.
+fn at(base: Instant, ms: u64) -> Instant {
+    base + Duration::from_millis(ms)
+}
+
+/// An event under `code` with `text`, born at the first sweep.
+fn event(code: &str, text: &str, born: Instant) -> Notices {
+    let mut notices = Notices::default();
+    notices.push(code, text.to_owned());
+    notices.sweep(born);
     notices
 }
 
@@ -521,4 +535,349 @@ fn overlay_entries_covers_the_cap_edges_and_the_emptied_list() {
             entries: vec![],
         })
     );
+}
+
+/// Every event code the kind table names.
+const EVENTS: [&str; 28] = [
+    "cache_rebuild",
+    "closing",
+    "command_conflict",
+    "config_invalid",
+    "config_key_ignored",
+    "credential_failed",
+    "credential_missing",
+    "extension_failed",
+    "extension_incompatible",
+    "extension_shadowed",
+    "hook_failed",
+    "instructions_large",
+    "invalid_arguments",
+    "io_failed",
+    "malformed",
+    "model_invalid",
+    "model_unconfigured",
+    "no_model",
+    "repository_code_skipped",
+    "reviewer_selection_failed",
+    "session_held",
+    "session_not_found",
+    "skill_invalid",
+    "skill_shadowed",
+    "skills_large",
+    "stale_request",
+    "tool_definitions_large",
+    "web_search_unavailable",
+];
+
+/// Every condition code the kind table names.
+const CONDITIONS: [&str; 6] = [
+    "connection_failed",
+    "history_loading",
+    "login_url",
+    "models_loading",
+    "stream_closed",
+    "switch_pending",
+];
+
+/// The notice rows' texts, oldest first, without the "+N more" row.
+fn texts(lines: &[NoticeLine]) -> Vec<String> {
+    lines
+        .iter()
+        .filter_map(|line| match line {
+            NoticeLine::Notice { text, .. } => Some(text.clone()),
+            NoticeLine::More(_) => None,
+        })
+        .collect()
+}
+
+/// The notice rows' codes, oldest first.
+fn codes(lines: &[NoticeLine]) -> Vec<String> {
+    lines
+        .iter()
+        .filter_map(|line| match line {
+            NoticeLine::Notice { code, .. } => Some(code.clone()),
+            NoticeLine::More(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_event_fades_ten_seconds_after_its_first_sweep() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = event("io_failed", "x", t0);
+    assert_eq!(ids(&notices.lines()), ["notice 0"]);
+    // Just below the edge the row stands.
+    notices.sweep(at(t0, 9_999));
+    assert_eq!(ids(&notices.lines()), ["notice 0"]);
+    // At exactly ten seconds it is gone: expiry is now minus birth at
+    // least the fade, not past it.
+    notices.sweep(at(t0, 10_000));
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
+fn expiry_counts_from_the_first_sweep_after_the_push() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    notices.push("io_failed", "x".to_owned());
+    // The first sweep births the notice, however late it runs.
+    notices.sweep(at(t0, 60_000));
+    assert_eq!(ids(&notices.lines()), ["notice 0"]);
+    notices.sweep(at(t0, 69_999));
+    assert_eq!(ids(&notices.lines()), ["notice 0"]);
+    notices.sweep(at(t0, 70_000));
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
+fn every_event_fades_and_every_condition_stands() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    for code in EVENTS {
+        notices.push(code, format!("{code} happened"));
+    }
+    for code in CONDITIONS {
+        if code == "stream_closed" {
+            notices.push_identified(code, S_A.to_owned(), "closed".to_owned());
+        } else {
+            notices.push(code, format!("{code} stands"));
+        }
+    }
+    notices.sweep(t0);
+    // Past the fade every event is gone and every condition stands, in
+    // push order: the overlay lists every entry, past the shown cap.
+    notices.sweep(at(t0, 60_000));
+    notices.open_all();
+    let entries = notices.overlay_entries().expect("the open list");
+    assert_eq!(entries.entries.len(), CONDITIONS.len());
+    let stood: Vec<String> = entries.entries.into_iter().map(|(code, _)| code).collect();
+    assert_eq!(
+        stood,
+        CONDITIONS
+            .iter()
+            .rev()
+            .map(|code| (*code).to_owned())
+            .collect::<Vec<_>>()
+    );
+    notices.close();
+    // Conditions never fade on their own, however late the sweep runs.
+    notices.sweep(at(t0, 3_600_000));
+    notices.open_all();
+    assert_eq!(
+        notices
+            .overlay_entries()
+            .expect("the open list")
+            .entries
+            .len(),
+        CONDITIONS.len()
+    );
+}
+
+#[test]
+fn unknown_codes_fade_as_events() {
+    // Hub refusals and session notices carry codes the table does not
+    // name — `busy`, `not_subscribed` and the like: they fade.
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    notices.push("busy", "A turn is running.".to_owned());
+    notices.push("not_subscribed", "Send `subscribe` first.".to_owned());
+    notices.sweep(t0);
+    assert_eq!(texts(&notices.lines()).len(), 2);
+    notices.sweep(at(t0, 10_000));
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
+fn repeat_pushes_dedupe_by_code_and_identity() {
+    // The same code with the same text pushed twice keeps one row.
+    let notices = stack("io_failed", &["same", "same"]);
+    assert_eq!(texts(&notices.lines()), ["same"]);
+    // The same code with another text stacks beside it.
+    let notices = stack("io_failed", &["same", "other"]);
+    assert_eq!(texts(&notices.lines()), ["same", "other"]);
+    // A repeat `stream_closed` for the same session keeps one row, while
+    // another session's stacks beside it.
+    let mut notices = Notices::default();
+    notices.push_identified("stream_closed", S_A.to_owned(), "closed".to_owned());
+    notices.push_identified("stream_closed", S_A.to_owned(), "closed".to_owned());
+    assert_eq!(texts(&notices.lines()), ["closed"]);
+    notices.push_identified(
+        "stream_closed",
+        "s_bbbbbbbbbbbbbbbb".to_owned(),
+        "closed".to_owned(),
+    );
+    assert_eq!(texts(&notices.lines()).len(), 2);
+}
+
+#[test]
+fn identical_switch_pending_choices_stack_and_dismiss_singly() {
+    // Two identical pending choices are two notices worth of state, not one.
+    let mut notices = Notices::default();
+    notices.push("switch_pending", "x applies when this turn ends".to_owned());
+    notices.push("switch_pending", "x applies when this turn ends".to_owned());
+    let ids: Vec<usize> = notices
+        .lines()
+        .iter()
+        .filter_map(|line| match line {
+            NoticeLine::Notice { id, .. } => Some(*id),
+            NoticeLine::More(_) => None,
+        })
+        .collect();
+    assert_eq!(ids.len(), 2);
+    // Dismissing one share leaves the other standing.
+    notices.dismiss(ids[0]);
+    assert_eq!(texts(&notices.lines()), ["x applies when this turn ends"]);
+    notices.dismiss(ids[1]);
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
+fn dismissing_an_absent_id_changes_nothing() {
+    let mut notices = stack("io_failed", &["x"]);
+    notices.open(0);
+    // Dismissing an id that is gone, or never was, keeps the stack and a
+    // single overlay showing another notice.
+    notices.dismiss(99);
+    assert_eq!(texts(&notices.lines()), ["x"]);
+    assert!(notices.overlay().is_some());
+    notices.dismiss(0);
+    assert!(notices.lines().is_empty());
+    assert!(notices.overlay().is_none());
+    notices.dismiss(0);
+    assert!(notices.lines().is_empty());
+    // Clearing an absent code changes nothing either.
+    notices.clear_code("stream_closed", S_A);
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
+fn expired_rows_never_occupy_a_shown_slot() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    // One expired row beside two, three and four live ones: the live rows
+    // show oldest first, and "+N more" counts only live rows past three.
+    for live in [2, 3, 4] {
+        let mut notices = Notices::default();
+        notices.push("io_failed", "old".to_owned());
+        notices.sweep(t0);
+        for n in 0..live {
+            notices.push("io_failed", format!("live {n}"));
+        }
+        notices.sweep(at(t0, 10_000));
+        let kept: Vec<String> = (0..live).map(|n| format!("live {n}")).collect();
+        let shown = texts(&notices.lines());
+        assert_eq!(shown, kept[..shown.len()], "with {live} live rows");
+        let more = notices
+            .lines()
+            .iter()
+            .filter_map(|line| match line {
+                NoticeLine::More(n) => Some(*n),
+                NoticeLine::Notice { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(more, if live > 3 { vec![live - 3] } else { vec![] });
+    }
+}
+
+#[test]
+fn an_empty_sweep_is_a_no_op_with_no_wake() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    notices.sweep(t0);
+    assert!(notices.lines().is_empty());
+    assert_eq!(notices.notices_wake(), None);
+}
+
+#[test]
+fn the_wake_is_the_earliest_unpaused_event_expiry() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    // No event stacked arms nothing.
+    let mut notices = Notices::default();
+    notices.push("stream_closed", "closed".to_owned());
+    notices.sweep(t0);
+    assert_eq!(notices.notices_wake(), None);
+    // An unborn event contributes no wake: births come from sweeps, and
+    // the frame sweeps before it arms.
+    notices.push("io_failed", "x".to_owned());
+    assert_eq!(notices.notices_wake(), None);
+    notices.sweep(t0);
+    assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
+    // The earlier of two staggered expiries wins.
+    notices.push("config_invalid", "y".to_owned());
+    notices.sweep(at(t0, 5_000));
+    assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
+    // A held event contributes no wake until the release.
+    notices.hold();
+    notices.push("malformed", "z".to_owned());
+    notices.sweep(at(t0, 6_000));
+    assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
+    notices.release();
+    notices.sweep(at(t0, 6_000));
+    assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
+    // An open overlay pauses every entry's wake until it closes.
+    notices.open_all();
+    assert_eq!(notices.notices_wake(), None);
+    notices.close();
+    assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
+    // Past the first fade its row is gone, and the wake moves to the
+    // next expiry; the standing condition row shows throughout.
+    notices.sweep(at(t0, 10_000));
+    assert_eq!(texts(&notices.lines()), ["closed", "y", "z"]);
+    assert_eq!(notices.notices_wake(), Some(at(t0, 15_000)));
+}
+
+#[test]
+fn a_held_notice_and_an_overlay_notice_pause_expiry() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    // A notice pushed before the hold expires on time; one pushed during
+    // the hold is retained but waits, hidden until the release.
+    let mut notices = Notices::default();
+    notices.push("io_failed", "before".to_owned());
+    notices.sweep(t0);
+    notices.hold();
+    notices.push("io_failed", "during".to_owned());
+    notices.sweep(at(t0, 30_000));
+    assert!(notices.lines().is_empty());
+    // The release reveals it with its birth intact: born at the sweep
+    // past the fade of the older row, it fades on its own time.
+    notices.release();
+    assert_eq!(texts(&notices.lines()), ["during"]);
+    notices.sweep(at(t0, 39_999));
+    assert_eq!(texts(&notices.lines()), ["during"]);
+    notices.sweep(at(t0, 40_000));
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
+fn an_open_single_notice_pauses_only_its_row() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = stack("io_failed", &["one", "two"]);
+    notices.sweep(t0);
+    notices.open(0);
+    // Past the fade the shown notice stands while the other expires.
+    notices.sweep(at(t0, 30_000));
+    assert_eq!(texts(&notices.lines()), ["one"]);
+    assert_eq!(notices.notices_wake(), None);
+    // Closing the overlay lets the next sweep take it.
+    assert!(notices.close());
+    assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
+    notices.sweep(at(t0, 30_000));
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
+fn clear_code_drops_only_that_notice() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut notices = Notices::default();
+    notices.push_identified("stream_closed", S_A.to_owned(), "closed".to_owned());
+    notices.push_identified(
+        "stream_closed",
+        "s_bbbbbbbbbbbbbbbb".to_owned(),
+        "closed".to_owned(),
+    );
+    notices.sweep(t0);
+    // Clearing one session's notice leaves the other's standing.
+    notices.clear_code("stream_closed", S_A);
+    assert_eq!(codes(&notices.lines()), ["stream_closed"]);
+    notices.clear_code("stream_closed", "s_bbbbbbbbbbbbbbbb");
+    assert!(notices.lines().is_empty());
 }

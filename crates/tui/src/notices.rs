@@ -5,17 +5,110 @@
 //! first, at most three show, then "+N more". A child of `app`, so the calls
 //! the click layer makes sit here beside the stack.
 
+use std::time::{Duration, Instant};
+
 use super::App;
 
 /// How many notices show before "+N more".
 const SHOWN: usize = 3;
+
+/// How long an event notice shows before it fades: gone once it is this
+/// old, so the docs say "about 10 s" while the code uses 10 s exactly.
+#[allow(
+    dead_code,
+    reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+)]
+pub(crate) const FADE: Duration = Duration::from_secs(10);
+
+/// Whether a notice row fades or stays until its cause ends.
+#[allow(
+    dead_code,
+    reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A one-shot report: gone [`FADE`] after it shows.
+    Event,
+    /// A standing state: gone when its cause ends or with ✕.
+    Condition,
+}
+
+/// Every notice code's class: conditions stay until their cause ends,
+/// events fade after [`FADE`]. A code the table does not name — hub
+/// refusals and session notices carrying any code — is an event.
+#[allow(
+    dead_code,
+    reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+)]
+const KINDS: &[(&str, Kind)] = &[
+    ("cache_rebuild", Kind::Event),
+    ("closing", Kind::Event),
+    ("command_conflict", Kind::Event),
+    ("config_invalid", Kind::Event),
+    ("config_key_ignored", Kind::Event),
+    ("connection_failed", Kind::Condition),
+    ("credential_failed", Kind::Event),
+    ("credential_missing", Kind::Event),
+    ("extension_failed", Kind::Event),
+    ("extension_incompatible", Kind::Event),
+    ("extension_shadowed", Kind::Event),
+    ("history_loading", Kind::Condition),
+    ("hook_failed", Kind::Event),
+    ("instructions_large", Kind::Event),
+    ("invalid_arguments", Kind::Event),
+    ("io_failed", Kind::Event),
+    ("login_url", Kind::Condition),
+    ("malformed", Kind::Event),
+    ("model_invalid", Kind::Event),
+    ("model_unconfigured", Kind::Event),
+    ("models_loading", Kind::Condition),
+    ("no_model", Kind::Event),
+    ("repository_code_skipped", Kind::Event),
+    ("reviewer_selection_failed", Kind::Event),
+    ("session_held", Kind::Event),
+    ("session_not_found", Kind::Event),
+    ("skill_invalid", Kind::Event),
+    ("skill_shadowed", Kind::Event),
+    ("skills_large", Kind::Event),
+    ("stale_request", Kind::Event),
+    ("stream_closed", Kind::Condition),
+    ("switch_pending", Kind::Condition),
+    ("tool_definitions_large", Kind::Event),
+    ("web_search_unavailable", Kind::Event),
+];
+
+/// The code's class from [`KINDS`]: unlisted codes are events.
+#[allow(
+    dead_code,
+    reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+)]
+fn kind(code: &str) -> Kind {
+    KINDS
+        .iter()
+        .find(|(name, _)| *name == code)
+        .map(|(_, kind)| *kind)
+        .unwrap_or(Kind::Event)
+}
 
 /// One notice.
 #[derive(Debug)]
 struct Notice {
     id: usize,
     code: String,
+    /// What dedupes repeats while stacked: the session for `stream_closed`,
+    /// one share per sent command for `switch_pending`, else the text.
+    #[allow(
+        dead_code,
+        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+    )]
+    identity: String,
     text: String,
+    /// When the first sweep after the push saw it: expiry counts from here.
+    #[allow(
+        dead_code,
+        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+    )]
+    born: Option<Instant>,
 }
 
 /// What the overlay shows.
@@ -65,16 +158,75 @@ pub(crate) enum NoticeLine {
 }
 
 impl Notices {
-    /// Adds `text` under `code` on top.
+    /// Adds `text` under `code` on top, dropping a same-code same-text
+    /// repeat while it is stacked. A sent `switch_pending` choice is one
+    /// notice worth of state even beside an identical choice, so each
+    /// push stacks its own row.
     pub(crate) fn push(&mut self, code: &str, text: String) {
+        self.push_identified(code, text.clone(), text);
+    }
+
+    /// Adds `text` under `code` with `identity` on top, dropping a
+    /// same-code same-identity repeat while it is stacked: the session id
+    /// for `stream_closed`, the full text otherwise, so a second message
+    /// with another identity stacks beside the first.
+    pub(crate) fn push_identified(&mut self, code: &str, identity: String, text: String) {
         let id = self.next;
         self.next = self.next.saturating_add(1);
         self.stack.push(Notice {
             id,
             code: code.to_owned(),
+            identity,
             text,
+            born: None,
         });
     }
+
+    /// Births unborn notices at `now`, then removes expired events: an
+    /// event is gone once it is at least [`FADE`] old. A notice a drag
+    /// holds, or one visible in the open overlay, never expires until the
+    /// release or close; expiry then applies on the next sweep. Expired
+    /// rows leave before the draw, so none occupies a shown slot. The
+    /// single remover: every other end clears through `dismiss` or
+    /// [`Notices::clear_code`].
+    #[allow(
+        dead_code,
+        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+    )]
+    pub(crate) fn sweep(&mut self, _now: Instant) {}
+
+    /// The earliest live unpaused event expiry: what the frame arms the
+    /// tick with beside the motion and items wakes. A held notice, and a
+    /// notice visible in the open overlay, contributes no wake until its
+    /// release or close, so arming never ticks in a loop on a paused
+    /// expiry. `None` with no unpaused event stacked. Reads post-sweep
+    /// births: the frame sweeps before it arms.
+    #[allow(
+        dead_code,
+        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+    )]
+    pub(crate) fn notices_wake(&self) -> Option<Instant> {
+        None
+    }
+
+    /// Drops the notice under `code` and `identity`, closing a single
+    /// overlay showing it, as [`Notices::dismiss`] does. Clearing an
+    /// absent notice changes nothing, and either order with ✕ ends the same.
+    #[allow(
+        dead_code,
+        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+    )]
+    pub(crate) fn clear_code(&mut self, _code: &str, _identity: &str) {}
+
+    /// Drops every `stream_closed` notice except `session`'s: attaching to
+    /// another session ends no cause, so only other sessions' stale rows
+    /// go. The session's own notice stands until `stream_reopened` ends
+    /// its cause.
+    #[allow(
+        dead_code,
+        reason = "no caller wires the fade yet; the App and loop call sites land with the cause-end changes"
+    )]
+    pub(crate) fn drop_stream_closed_except(&mut self, _session: &str) {}
 
     /// The newest notice's text.
     #[cfg(test)]
