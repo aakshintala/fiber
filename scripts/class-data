@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Regenerates the attach class data pinned by
-# xtask/tests/class_data/9v45-attach-10mib.json from the benchmarks-<sha>
+# Regenerates the attach and session_list class data pinned by
+# xtask/tests/class_data/9v45-attach-10mib.json and
+# xtask/tests/class_data/9v45-session-list.json from the benchmarks-<sha>
 # artifacts of main runs, through the same Actions artifact listing
 # scripts/stored-results uses. It keeps the artifacts whose CPU model is
 # in the named class (docs/performance.md, "The class columns") and writes
@@ -13,11 +14,14 @@
 #
 #   class    fast, middle or slow, as docs/performance.md names them.
 #   row      the benchmark row, as docs/performance.md names it; only
-#            "Terminal to its first frame, attaching" is supported, read
-#            from the terminal_attach_ms metric.
+#            "Terminal to its first frame, attaching" (read from the
+#            terminal_attach_ms metric) and "`session_list`, waiting for
+#            every running session's status" (read from the
+#            session_list_ms metric) are supported.
 #   fixture  the row's fixture, as docs/performance.md names it; only
 #            "10 MiB" (the gated attach fixture, GATED_ATTACH_FIXTURE in
-#            xtask/src/bench/judge.rs) is supported.
+#            xtask/src/bench/judge.rs) and "none" (session_list has no
+#            fixture) are supported.
 #   dir      a directory holding listing.json (the artifact listing as the
 #            API returns it) and one benchmarks-<sha>/head.json per
 #            artifact. With no dir, the script reads the live API.
@@ -26,7 +30,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: scripts/class-data <class: fast|middle|slow> <row: Terminal to its first frame, attaching> <fixture: 10 MiB> [<dir>]" >&2
+  echo "usage: scripts/class-data <class: fast|middle|slow> <row: Terminal to its first frame, attaching | \`session_list\`, waiting for every running session's status> <fixture: 10 MiB|none> [<dir>]" >&2
 }
 
 if [ $# -ne 3 ] && [ $# -ne 4 ]; then
@@ -38,6 +42,10 @@ row=$2
 fixture=$3
 dir=${4:-}
 
+# The session_list slow ceiling covers both slow-class models (7763 and
+# 9V74, both SpeedClass::Slow in xtask/src/bench/judge.rs); the attach
+# row's class filters stay exactly as they were.
+slow_second_model="amd epyc 9v74 80-core processor"
 # The class's CPU model from docs/performance.md, "The class columns",
 # lowercased: the file's cpu strings match case-insensitively.
 case $class in
@@ -50,13 +58,23 @@ case $class in
     ;;
 esac
 
-# The only supported row and fixture: the gated attach row and its metric.
-if [ "$row" != "Terminal to its first frame, attaching" ]; then
-  usage
-  exit 2
-fi
-metric=terminal_attach_ms
-if [ "$fixture" != "10 MiB" ]; then
+# The supported rows and their metrics: attaching reads {fixture, ms}
+# objects filtered by fixture, session_list reads plain-number samples.
+attach_row="Terminal to its first frame, attaching"
+session_row="\`session_list\`, waiting for every running session's status"
+if [ "$row" = "$attach_row" ]; then
+  metric=terminal_attach_ms
+  if [ "$fixture" != "10 MiB" ]; then
+    usage
+    exit 2
+  fi
+elif [ "$row" = "$session_row" ]; then
+  metric=session_list_ms
+  if [ "$fixture" != "none" ]; then
+    usage
+    exit 2
+  fi
+else
   usage
   exit 2
 fi
@@ -72,7 +90,8 @@ trap cleanup EXIT
 # Prints the class line for one artifact: $1 is the artifact name, $2 its
 # head.json. Skips what is not this class's data: a foreign name, a CPU
 # outside the class, or no samples for the row. A head.json that cannot
-# be read is a read failure.
+# be read is a read failure. A session_list_ms sample that is not a plain
+# finite number at or above zero fails the run instead of emitting.
 emit() {
   local name=$1 head=$2
   case $name in
@@ -83,13 +102,27 @@ emit() {
   local short=${full:0:8}
   local cpu
   cpu=$(jq -r '.cpu // "" | ascii_downcase' "$head") || return 1
-  if [ "$cpu" != "$model" ]; then
+  if [ "$metric" = "session_list_ms" ] && [ "$class" = "slow" ]; then
+    if [ "$cpu" != "$model" ] && [ "$cpu" != "$slow_second_model" ]; then
+      return 0
+    fi
+  elif [ "$cpu" != "$model" ]; then
     return 0
   fi
   local samples
-  samples=$(jq -r --arg id "$metric" --arg fixture "$fixture" \
-    '[.metrics[$id] // [] | .[] | select(.fixture == $fixture) | ((.ms * 1000 | round) / 1000 | tostring)] | join(", ")' \
-    "$head") || return 1
+  if [ "$metric" = "session_list_ms" ]; then
+    samples=$(jq -r --arg id "$metric" '
+      (.metrics[$id] // []) as $vals
+      | if ($vals | type) != "array" then error("\($id): not an array")
+        elif ([$vals[] | select(type != "number" or isnan or ((isfinite | not)) or . < 0)] | length) > 0 then error("\($id): not a finite number at or above zero")
+        else [$vals[] | ((. * 1000 | round) / 1000 | tostring)] | join(", ")
+        end' \
+      "$head") || return 1
+  else
+    samples=$(jq -r --arg id "$metric" --arg fixture "$fixture" \
+      '[.metrics[$id] // [] | .[] | select(.fixture == $fixture) | ((.ms * 1000 | round) / 1000 | tostring)] | join(", ")' \
+      "$head") || return 1
+  fi
   if [ -z "$samples" ]; then
     return 0
   fi
