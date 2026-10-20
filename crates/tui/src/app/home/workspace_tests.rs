@@ -285,7 +285,7 @@ fn remote_starts_with_no_workspace_and_cannot_escape() {
     let mut app = remote();
     assert!(picker_open(&app));
     assert!(recents(&app).is_empty());
-    assert_eq!(app.home_workspace(), PathBuf::new());
+    assert_eq!(app.home_workspace(), None);
     assert_eq!(chips(&app)[0], "[no workspace]");
     assert!(app.home_screen().unwrap().chips[0].dim);
     assert!(!app.home_screen().unwrap().picker.unwrap().escapes);
@@ -297,7 +297,7 @@ fn remote_starts_with_no_workspace_and_cannot_escape() {
     assert_eq!(recents(&app), ["/remote/w"]);
     key(&mut app, Key::Down);
     key(&mut app, Key::Enter);
-    assert_eq!(app.home_workspace(), PathBuf::from("/remote/w"));
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/remote/w")));
     assert_eq!(chips(&app)[0], "[w]");
     assert!(!app.home_screen().unwrap().chips[0].dim);
     app.home_click(Spot::Workspace);
@@ -390,7 +390,10 @@ fn remote_sentinel_is_only_a_hub_row_and_uses_hub_git() {
         assert_eq!(recents(&app), ["/sentinel/launch-dir"]);
         key(&mut app, Key::Down);
         key(&mut app, Key::Enter);
-        assert_eq!(app.home_workspace(), PathBuf::from("/sentinel/launch-dir"));
+        assert_eq!(
+            app.home_workspace(),
+            Some(PathBuf::from("/sentinel/launch-dir"))
+        );
         assert_eq!(
             chips(&app).iter().any(|chip| chip.contains("worktree")),
             git
@@ -1161,7 +1164,7 @@ fn remote_with_no_recents_opens_on_the_home_row_and_waits_for_it() {
     key(&mut app, Key::Down);
     assert_eq!(key(&mut app, Key::Enter), Effect::None);
     assert!(!picker_open(&app));
-    assert_eq!(app.home_workspace(), PathBuf::from("/home/me/work"));
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/home/me/work")));
 }
 
 #[test]
@@ -1177,7 +1180,10 @@ fn remote_home_row_tab_descends_into_the_focused_completion() {
     answer(&mut app, &sent[0].0, &["fiber"], "/home/me/work");
     assert_eq!(completions(&app), vec!["fiber".to_owned()]);
     assert_eq!(key(&mut app, Key::Enter), Effect::None);
-    assert_eq!(app.home_workspace(), PathBuf::from("/home/me/work/fiber"));
+    assert_eq!(
+        app.home_workspace(),
+        Some(PathBuf::from("/home/me/work/fiber"))
+    );
 }
 
 #[test]
@@ -1207,7 +1213,7 @@ fn arriving_recents_list_below_the_untouched_home_row() {
     key(&mut app, Key::Down);
     assert_eq!(focused(&app).as_deref(), Some("/remote/w"));
     key(&mut app, Key::Enter);
-    assert_eq!(app.home_workspace(), PathBuf::from("/remote/w"));
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/remote/w")));
 }
 
 #[test]
@@ -1243,4 +1249,98 @@ fn the_local_picker_opens_on_its_recents_alone() {
     open(&mut app);
     assert_eq!(typed_text(&app), None);
     assert_eq!(recents(&app), ["/w"]);
+}
+
+#[test]
+fn empty_values_carry_no_workspace() {
+    // An empty construction path is none, like the remote-home launch.
+    assert_eq!(App::new(None).workspace(), None);
+    assert_eq!(App::new(Some(PathBuf::from(""))).workspace(), None);
+    assert_eq!(
+        App::new(Some(PathBuf::from("/w"))).workspace(),
+        Some(PathBuf::from("/w"))
+    );
+    // A default launch names an empty local directory: also none, with
+    // no workspace key in the start arguments.
+    let mut app = App::new(None);
+    app.set_home(Launch::default());
+    assert_eq!(app.workspace(), None);
+    assert_eq!(app.home_workspace(), None);
+    assert!(
+        !app.start_args()
+            .as_object()
+            .unwrap_or_else(|| panic!("start args are an object"))
+            .contains_key("workspace")
+    );
+    // An unreadable status row carries an empty workspace: it yields
+    // none, so it never becomes a recent or the workspace in use.
+    let mut app = remote();
+    let Line::Session(mut envelope) = live("s_aaaaaaaaaaaaaaaa", "newer", "/remote/new") else {
+        unreachable!("a live row is a session line");
+    };
+    envelope.schema_version = contract::SCHEMA_VERSION + 1;
+    app.on_line(Line::Session(envelope));
+    assert_eq!(app.home_workspace(), None);
+    assert!(recents(&app).is_empty());
+    // An empty choice clears the pick: no workspace is chosen.
+    app.choose_workspace("/remote/w".to_owned());
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/remote/w")));
+    app.choose_workspace(String::new());
+    assert_eq!(app.home_workspace(), None);
+}
+
+#[test]
+fn an_empty_choice_clears_the_pick_and_enter_reopens_the_picker() {
+    let mut app = remote();
+    app.choose_workspace("/remote/w".to_owned());
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/remote/w")));
+    app.choose_workspace(String::new());
+    assert_eq!(app.home_workspace(), None);
+    // Enter on the prompt with no workspace reopens the picker
+    // (`docs/tui.md`, "The workspace picker") instead of starting.
+    key(&mut app, Key::Enter);
+    assert!(picker_open(&app));
+}
+
+/// With no local workspace nothing reads the working directory: the
+/// same remote-home app built with none reports none and draws the
+/// same home frame from two different directories.
+#[test]
+fn no_workspace_never_reads_the_working_directory() {
+    let first = fakes::TempDir::new("fiber-no-workspace-first");
+    let second = fakes::TempDir::new("fiber-no-workspace-second");
+    assert_ne!(first.path(), second.path());
+    let previous = std::env::current_dir().unwrap_or_else(|err| panic!("cwd: {err}"));
+    let mut frames = Vec::new();
+    for dir in [&first, &second] {
+        std::env::set_current_dir(dir.path()).unwrap_or_else(|err| panic!("chdir: {err}"));
+        let mut app = App::new(None);
+        app.set_home(Launch {
+            location: crate::LaunchLocation::Remote {
+                hub: "box".to_owned(),
+            },
+            version: "0.0.1".to_owned(),
+            logo_glyph: "⌇".to_owned(),
+            ..Default::default()
+        });
+        app.set_size(80, 24);
+        // White-box on purpose: the readers below prefer home once it
+        // is set, so only the field catches a construction that
+        // smuggles the working directory in. (`workspace()`,
+        // `home_workspace()` and the start args stay none by the same
+        // empty-means-none mapping `empty_values_carry_no_workspace`
+        // pins, so they assert nothing new here.)
+        assert_eq!(app.workspace, None);
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        frames.push(crate::view::text(&buf));
+    }
+    std::env::set_current_dir(&previous).unwrap_or_else(|err| panic!("restore cwd: {err}"));
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0], frames[1], "the home frame moves with the cwd");
+    assert!(
+        frames[0].contains("[no workspace]"),
+        "the frame is the no-workspace home"
+    );
 }

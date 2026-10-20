@@ -290,8 +290,8 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let skills = conn.gate.skills();
             accept(conn, id, Some(CommandResult::Skills { skills }));
         }
-        Command::Quota => {
-            let (quota, notice_at) = conn.gate.quota();
+        Command::Quota(args) => {
+            let (quota, notice_at) = conn.gate.quota(args.fetch);
             accept(conn, id, Some(CommandResult::Quota { quota, notice_at }));
         }
         Command::Credentials => {

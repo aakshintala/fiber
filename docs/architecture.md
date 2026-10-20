@@ -311,7 +311,15 @@ except `shell`, which it starts on a thread of its own (the "one per running
 tool call" row in "The threads") before it reads on, so a `cancel` on the
 same connection reaches it.
 `job_stop` stops the job at once, and its `job_completed` is logged at the
-next step boundary. Every other command waits for the drain, except `message`, which is answered once it is in the inbox (`docs/tools.md`, "Messaging other sessions").
+next step boundary. Every other command waits for the drain, except `message`, which is answered once it is in the inbox (`docs/tools.md`, "Messaging other sessions"), and `steer` and `steer_drop`.
+The steering queue is a shared object behind a lock, like `log`. The thread
+reading the connection puts a `steer` in the inbox, adds it to the queue,
+writes `steering_queue` and answers it at once, even while a model response
+streams or tool calls run, so
+every attached client shows it while it waits. A `steer_drop` takes the
+message off the queue at once and writes `steering_queue`. At the drain the
+loop applies the steering messages still on the queue and skips a dropped
+one, so a message dropped before the step boundary is never applied.
 
 ### Streaming
 

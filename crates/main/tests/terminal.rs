@@ -2397,3 +2397,370 @@ fn signal_takes_the_normal_exit_path(signal: &'static str, code: i32) {
         "a {signal} signal prints the live session's resume line; terminal:\n{terminal}"
     );
 }
+
+/// Installs a provider `fake` with the models `m` and `n` on
+/// `openai-responses` at the fake server, reading its key from
+/// `FIBER_TEST_FAKE_KEY`, and makes `fake/m` the configured model: `m`
+/// declares the thinking levels low, medium and high, defaulting to
+/// high, so the Session card opens on `fake/m` with `high`. A second
+/// provider `other` carries `om`, whose key comes from a command that
+/// exits at once, so choosing it rejects while the turn runs (`docs/model-routing.md`,
+/// "When a credential is missing or fails"). The hub idles out a second
+/// after its last client leaves, so no hub lingers.
+fn provider_thinking_pair(setup: &support::Setup, server: &ProviderServer) {
+    let source = setup.root.path().join("src");
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+    );
+    write_json(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [
+                {"id": "m", "protocol": "openai-responses",
+                 "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+                 "thinking_levels": ["low", "medium", "high"], "thinking_default": "high"},
+                {"id": "n", "protocol": "openai-responses",
+                 "base_url": format!("{}/v1", server.url()), "context_window": 100000},
+            ],
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let other = setup.root.path().join("src-other");
+    write_json(
+        &other.join("extension.json"),
+        &json!({"name": "other", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"other": [format!("{}/v1", server.url())]}}),
+    );
+    write_json(
+        &other.join("providers/other.json"),
+        &json!({
+            "name": "other",
+            "credential": {"command": ["sh", "-c", "exit 1"]},
+            "models": [{"id": "om", "protocol": "openai-responses",
+                        "base_url": format!("{}/v1", server.url()), "context_window": 100000}],
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(other),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
+    );
+}
+
+/// Whether any grid row holds `needle`.
+fn shows(grid: &support::pty::Grid, needle: &str) -> bool {
+    grid.rows.iter().any(|row| row.contains(needle))
+}
+
+/// The session log's `model_changed` lines for a stall report, so a
+/// picker stall says whether a switch already landed. Reads under
+/// construction are absent, never failures: a missing session dir or
+/// log reads as empty.
+fn session_model_changed(setup: &support::Setup) -> String {
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let mut switches = Vec::new();
+    if let Ok(dirs) = fs::read_dir(&sessions) {
+        for dir in dirs.filter_map(Result::ok) {
+            let log = fs::read_to_string(dir.path().join("events.jsonl")).unwrap_or_default();
+            switches.extend(
+                support::complete_lines(&log)
+                    .into_iter()
+                    .filter(|line| line["kind"] == "model_changed"),
+            );
+        }
+    }
+    format!("session model_changed: {switches:?}")
+}
+
+/// The Session card keeps the old chips through the send: some row still
+/// names `fake/m` with `high`, and no row outside the pending notice
+/// names `gone`. The pending notice names the new choice too, so a row
+/// carrying the notice's code does not count against the card.
+#[track_caller]
+fn assert_card_stale(grid: &support::pty::Grid, gone: &str) {
+    let rows = &grid.rows;
+    assert!(
+        rows.iter().any(|row| row.contains("fake/m")),
+        "the Session card keeps the old model: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("high")),
+        "the Session card keeps the old level: {rows:?}"
+    );
+    for row in rows {
+        if row.contains(gone) {
+            assert!(
+                row.contains("switch_pending"),
+                "the Session card shows the unapplied choice {gone}: {row}"
+            );
+        }
+    }
+}
+
+/// Whether some row outside the pending notice names `reference`
+/// (and, for a level choice, ends with that level): the card applies
+/// the pending choice once the turn ends, while the pending notice
+/// stands as its record. Rows are full-width, so the card's indent
+/// rules out `starts_with`; the pending notice carries its code, which
+/// rules it out instead.
+fn card_applies(grid: &support::pty::Grid, reference: &str, level: Option<&str>) -> bool {
+    grid.rows.iter().any(|row| {
+        row.contains(reference)
+            && !row.contains("switch_pending")
+            && level.is_none_or(|want| row.trim_end().ends_with(want))
+    })
+}
+
+/// The Session card applies the pending choice once the turn ends: a
+/// non-notice row names the new reference, and ends with the new level
+/// when the choice names one.
+#[track_caller]
+fn assert_card_applies(grid: &support::pty::Grid, reference: &str, level: Option<&str>) {
+    assert!(
+        card_applies(grid, reference, level),
+        "the Session card applies the pending choice {reference} {level:?}: {:?}",
+        grid.rows
+    );
+}
+
+/// Interrupts the running turn and waits for the interrupted screen:
+/// the turn never finishes on interrupt, and the loop admits the queued
+/// choice only after this boundary.
+#[track_caller]
+fn interrupt_turn(run: &mut support::pty::Run) {
+    run.write(b"\x1b[27u");
+    run.wait_screen("the interrupted turn", |grid| {
+        grid.alternate_screen && grid.contents.contains("interrupted")
+    });
+}
+
+#[test]
+fn choosing_a_model_mid_turn_notices_that_it_applies_when_the_turn_ends() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([stalled()]).unwrap();
+    provider_thinking_pair(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    // The first frame draws the input line; its title proves the input
+    // reader runs before the prompt goes out.
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
+    run.write(b"say hi\r");
+    // The elapsed count proves `turn_started` folded, which opens the
+    // turn: the choice below sends while it runs.
+    run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));
+    // Ctrl+L opens the picker: the open wait names the picker frame and
+    // the count wait names the answered catalogue, so a stall says
+    // whether the picker never opened or the catalogue never answered,
+    // with the session log saying whether a switch already landed.
+    run.write(b"\x0c");
+    run.wait_screen_reporting(
+        "the open picker",
+        |grid| shows(grid, "Type to search"),
+        || session_model_changed(&setup),
+    );
+    // "n" keeps only `fake/n`: the count names one row of the three
+    // installed models.
+    run.write(b"n");
+    run.wait_screen_reporting(
+        "the filtered list",
+        |grid| shows(grid, "1 of 3 models"),
+        || session_model_changed(&setup),
+    );
+    run.write(b"\r");
+    let sent = run.wait_screen_reporting(
+        "the pending-choice notice",
+        |grid| shows(grid, "fake/n applies when this turn ends"),
+        || session_model_changed(&setup),
+    );
+    // The chips hold the old model through the send; only the notice
+    // names the new one.
+    assert_card_stale(&sent, "fake/n");
+    interrupt_turn(&mut run);
+    // The loop admits the queued choice at the post-interrupt boundary
+    // and applies it: the card names the new model, with no new
+    // notice of its own.
+    let applied = run.wait_screen_reporting(
+        "the applied choice",
+        |grid| card_applies(grid, "fake/n", None),
+        || session_model_changed(&setup),
+    );
+    assert_card_applies(&applied, "fake/n", None);
+    quit_live(run);
+}
+
+#[test]
+fn choosing_a_level_mid_turn_notices_that_it_applies_when_the_turn_ends() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([stalled()]).unwrap();
+    provider_thinking_pair(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
+    run.write(b"say hi\r");
+    run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));
+    run.write(b"\x0c");
+    run.wait_screen_reporting(
+        "the open picker",
+        |grid| shows(grid, "Type to search"),
+        || session_model_changed(&setup),
+    );
+    // "m" keeps the current model and the other provider's model: the
+    // count names two rows of the three installed models.
+    run.write(b"m");
+    run.wait_screen_reporting(
+        "the filtered list",
+        |grid| shows(grid, "2 of 3 models"),
+        || session_model_changed(&setup),
+    );
+    // Left moves the focused row's chip from high to medium; Enter
+    // chooses the model with its touched level.
+    run.write(b"\x1b[D");
+    run.write(b"\r");
+    let sent = run.wait_screen_reporting(
+        "the pending-choice notice",
+        |grid| shows(grid, "thinking medium applies when this turn ends"),
+        || session_model_changed(&setup),
+    );
+    // The chips hold the old level through the send; only the notice
+    // names the new one.
+    assert_card_stale(&sent, "medium");
+    interrupt_turn(&mut run);
+    // The loop admits the queued choice at the post-interrupt boundary
+    // and applies it: the card names the model with the chosen level,
+    // with no new notice of its own.
+    let applied = run.wait_screen_reporting(
+        "the applied choice",
+        |grid| card_applies(grid, "fake/m", Some("medium")),
+        || session_model_changed(&setup),
+    );
+    assert_card_applies(&applied, "fake/m", Some("medium"));
+    quit_live(run);
+}
+
+#[test]
+fn choosing_a_model_while_idle_applies_at_once_with_no_pending_notice() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([support::hello()]).unwrap();
+    provider_thinking_pair(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
+    // An idle warm-up turn proves the hub answers before the picker
+    // opens, so the choice below sends while idle, not mid-turn.
+    let from = run.output().len();
+    run.write(b"say hi\r");
+    run.wait_screen("the reply", |grid| grid.contents.contains("Hel"));
+    run.turn_finished(from);
+    run.write(b"\x0c");
+    run.wait_screen_reporting(
+        "the open picker",
+        |grid| shows(grid, "Type to search"),
+        || session_model_changed(&setup),
+    );
+    run.write(b"n");
+    run.wait_screen_reporting(
+        "the filtered list",
+        |grid| shows(grid, "1 of 3 models"),
+        || session_model_changed(&setup),
+    );
+    run.write(b"\r");
+    // The idle switch applies at once: the card names the new model with
+    // no pending notice on the way there.
+    let switched = run.wait_screen_reporting(
+        "the session on fake/n",
+        |grid| shows(grid, "fake/n") && !shows(grid, "Type to search"),
+        || session_model_changed(&setup),
+    );
+    assert!(
+        !shows(&switched, "applies when this turn ends"),
+        "no pending notice while idle: {:?}",
+        switched.rows
+    );
+    quit_live(run);
+}
+
+#[test]
+fn choosing_an_unreadable_model_mid_turn_replaces_the_pending_notice_with_its_rejection() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([stalled()]).unwrap();
+    provider_thinking_pair(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
+    run.write(b"say hi\r");
+    run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));
+    run.write(b"\x0c");
+    run.wait_screen_reporting(
+        "the open picker",
+        |grid| shows(grid, "Type to search"),
+        || session_model_changed(&setup),
+    );
+    // "om" keeps only `other/om`: the count names one row of the three
+    // installed models.
+    run.write(b"om");
+    run.wait_screen_reporting(
+        "the filtered list",
+        |grid| shows(grid, "1 of 3 models"),
+        || session_model_changed(&setup),
+    );
+    run.write(b"\r");
+    run.wait_screen_reporting(
+        "the pending-choice notice",
+        |grid| shows(grid, "other/om applies when this turn ends"),
+        || session_model_changed(&setup),
+    );
+    // Esc interrupts the running turn; the loop then admits the queued
+    // choice and prepares it, and preparing it runs the key command,
+    // which exits at once, so the session rejects with
+    // `credential_missing`: "nothing is stored in
+    // credentials/other/default, and `sh` failed (exit status: 1)"
+    // (`config::Credentials`, "The one precedence"). The notice row
+    // cuts the long message short, so the wait names the head that fits
+    // on screen. The rejection takes the pending notice's place, and the
+    // card keeps the old chips.
+    run.write(b"\x1b[27u");
+    run.wait_screen("the interrupted turn", |grid| {
+        grid.alternate_screen && grid.contents.contains("interrupted")
+    });
+    let rejected = run.wait_screen_reporting(
+        "the rejection notice",
+        |grid| shows(grid, "nothing is stored in credentials"),
+        || session_model_changed(&setup),
+    );
+    assert!(
+        shows(&rejected, "credential_missing"),
+        "the rejection notice names its code: {:?}",
+        rejected.rows
+    );
+    assert!(
+        !shows(&rejected, "applies when this turn ends"),
+        "the rejection replaces the pending notice: {:?}",
+        rejected.rows
+    );
+    assert_card_stale(&rejected, "other/om");
+    quit_live(run);
+}

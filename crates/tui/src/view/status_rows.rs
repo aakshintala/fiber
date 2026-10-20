@@ -149,7 +149,7 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
             }
             Card::Quota => {
                 if let Some(spans) = super::panel::quota::segment_spans(app) {
-                    push_segment(&mut joined, Segment::plain(spans));
+                    push_segment(&mut joined, Segment::spotted(spans, Spot::Quota));
                 }
             }
             Card::Jobs | Card::Delegates => {}

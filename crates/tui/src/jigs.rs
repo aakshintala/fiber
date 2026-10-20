@@ -1,7 +1,6 @@
 //! The jigs' entry points: draw and hover frames from an events file (`docs/testing.md`, "Jigs").
 
 use std::io;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -96,7 +95,7 @@ impl io::Write for Counter {
 /// line as one session's stream. An unreadable line is an error naming
 /// its number.
 fn fold(events: &str, width: u16, height: u16) -> Result<App, String> {
-    let mut app = App::new(PathBuf::new());
+    let mut app = App::new(None);
     app.set_size(width, height);
     for (at, line) in events.lines().enumerate() {
         if line.trim().is_empty() {
@@ -155,7 +154,7 @@ pub fn measure_open(
     frame_every: usize,
     clock: Arc<dyn Clock>,
 ) -> Result<OpenStages, String> {
-    let mut app = App::new(PathBuf::new());
+    let mut app = App::new(None);
     app.set_size(width, height);
     let mut screen = Screen::new(screen::backend(Counter::default()), width, height)
         .map_err(|error| error.to_string())?;
@@ -303,7 +302,7 @@ pub fn measure_paging(
         .last()
         .unwrap_or(0);
     let mut paging = Paging {
-        app: App::new(PathBuf::new()),
+        app: App::new(None),
         log: Vec::new(),
         area: Rect::new(0, 0, width, height),
         clock: Arc::clone(&clock),

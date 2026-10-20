@@ -1743,16 +1743,16 @@ fn the_file_listing_follows_an_opened_row_outside_the_launch_workspace() {
         json!({"state": "streaming"}),
     ));
     let lines = open_first(&mut app);
-    assert_eq!(app.workspace(), PathBuf::from("/other"));
+    assert_eq!(app.workspace(), Some(PathBuf::from("/other")));
     let ack = lines[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
     accept_summary(&mut app, "s_aaaaaaaaaaaaaaaa", ack);
-    assert_eq!(app.workspace(), PathBuf::from("/other"));
+    assert_eq!(app.workspace(), Some(PathBuf::from("/other")));
 }
 
 #[test]
 fn without_home_the_workspace_is_the_launch_directory() {
     let app = App::new(PathBuf::from("/w"));
-    assert_eq!(app.workspace(), PathBuf::from("/w"));
+    assert_eq!(app.workspace(), Some(PathBuf::from("/w")));
 }
 
 /// Renders home at 80x24 and takes its targets, so keys move among drawn
@@ -2427,10 +2427,10 @@ fn a_click_past_the_picker_list_does_nothing() {
 fn the_file_listing_follows_the_picked_workspace() {
     let mut app = home();
     three_workspaces(&mut app);
-    assert_eq!(app.workspace(), PathBuf::from("/w"));
+    assert_eq!(app.workspace(), Some(PathBuf::from("/w")));
     open_on_recents(&mut app);
     assert_eq!(app.home_click(Spot::Pick(1)), Effect::None);
-    assert_eq!(app.workspace(), PathBuf::from("/other"));
+    assert_eq!(app.workspace(), Some(PathBuf::from("/other")));
 }
 
 /// An app on home inside git: scoped to the launch project.

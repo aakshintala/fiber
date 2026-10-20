@@ -127,12 +127,10 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     use support::group::{GRACE, GROUP_POLL};
 
     const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
-    /// One sighting round's wait for the run's answer.
+    /// One sighting round's wait for the run's answer: the poll pause
+    /// between checks, never a fresh deadline. The whole wait below ends at
+    /// one 10 s wall-clock deadline made before its first check.
     const SIGHT: Duration = Duration::from_millis(200);
-    /// Rounds of waiting for the stalled process to prove it is stuck: 8
-    /// rounds of two bounded waits are about 3 s of wall clock, the hang
-    /// guard for a stall that never appears.
-    const STUCK_ROUNDS: u32 = 8;
 
     /// Waits until the process holding `stall` on its command line has
     /// outlived a bounded wait, returning an early answer at once. A process
@@ -142,7 +140,8 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     /// its own answer.
     #[track_caller]
     fn await_stuck<T: Send>(done: &mpsc::Receiver<T>, stall: &str) -> Option<T> {
-        for _ in 0..STUCK_ROUNDS {
+        let bound = Deadline::after(Duration::from_secs(10));
+        loop {
             if !fakes::matching(stall).unwrap().is_empty() {
                 // Up: still up after a bounded wait means stuck, not
                 // starting; an answer meanwhile ends this at once.
@@ -156,6 +155,9 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
                 if !fakes::matching(stall).unwrap().is_empty() {
                     return None;
                 }
+            }
+            if bound.left().is_zero() {
+                break;
             }
             match Deadline::after(SIGHT).recv(done) {
                 Ok(done) => return Some(done),

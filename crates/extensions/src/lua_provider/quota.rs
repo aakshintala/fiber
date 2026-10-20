@@ -104,6 +104,16 @@ struct Flight {
     started: Instant,
 }
 
+/// One fetch flight to wait on: the flight a force-start found in flight
+/// or started, with that flight's own deadline. Opaque to the caller,
+/// which never names an id or a time: a concurrent replacement flight
+/// ends a wait on one of these at once instead of extending it.
+#[derive(Debug, Clone, Copy)]
+pub struct QuotaFlight {
+    id: u64,
+    deadline: Instant,
+}
+
 /// The per-label quota caches of one provider, sharing one parker: every
 /// flight end bumps it, so a parked reader wakes.
 pub(super) struct Quotas {
@@ -356,9 +366,15 @@ impl LuaProvider {
             cache.flight = Some(Flight { id, started: now });
             id
         };
+        self.start_flight(pair, key.cloned(), id);
+    }
+
+    /// Spawns the fetch thread for flight `id`: calls `quota()`, then
+    /// stores the result when its flight still owns the slot. Both
+    /// triggers share this one spawn.
+    fn start_flight(self: &Arc<Self>, pair: &CredentialPair, key: Option<Secret>, id: u64) {
         let this = Arc::clone(self);
         let pair = pair.clone();
-        let key = key.cloned();
         thread::spawn(move || {
             let fetched = this
                 .fetch_quota(&pair, key.as_ref())
@@ -366,6 +382,80 @@ impl LuaProvider {
                 .map_err(|_| ());
             this.finish_quota(&pair, id, fetched);
         });
+    }
+
+    /// Starts a fetch for `pair` when none is in flight, whatever the
+    /// cache's age, on its own thread, sending the `key` the caller
+    /// passes, and returns the flight to wait on: the shared flight when
+    /// one is already in flight, else the new one with its own deadline.
+    /// Never waits; never returns an error. An overdue flight is expired
+    /// first, so a wait on the returned flight is always bounded. The
+    /// lock is never held across the `quota()` call.
+    pub fn force_start_quota(
+        self: &Arc<Self>,
+        pair: &CredentialPair,
+        key: Option<&Secret>,
+    ) -> QuotaFlight {
+        let (id, started, spawned) = {
+            let mut states = lock(&self.quotas.state);
+            let now = self.extension.clock().now();
+            let cache = states.entry(pair.clone()).or_default();
+            expire_overdue(cache, now, &self.quotas.parker);
+            match &cache.flight {
+                Some(flight) => (flight.id, flight.started, false),
+                None => {
+                    let id = cache.next_id;
+                    cache.next_id = cache.next_id.wrapping_add(1);
+                    cache.flight = Some(Flight { id, started: now });
+                    (id, now, true)
+                }
+            }
+        };
+        if spawned {
+            self.start_flight(pair, key.cloned(), id);
+        }
+        QuotaFlight {
+            id,
+            deadline: started.checked_add(FETCH_TIMEOUT).unwrap_or(started),
+        }
+    }
+
+    /// Waits for the flight `wait` names to end, bounded by that flight's
+    /// own deadline, and reads the cache then. A flight that ended before
+    /// the wait answers at once; a replacement flight ends the wait at
+    /// once too, reported as it stands, so a concurrent new flight never
+    /// extends the original wait. Past the deadline the flight is expired
+    /// and the entry is `unreachable`, as in the shared reader.
+    pub fn wait_quota(self: &Arc<Self>, pair: &CredentialPair, wait: QuotaFlight) -> QuotaEntry {
+        loop {
+            // Read before the state check, so a bump between the check and
+            // the park wakes the park at once instead of being lost.
+            let seen = self.quotas.parker.generation();
+            let clock = self.extension.clock();
+            enum Next {
+                Return(QuotaEntry),
+                Park(Instant),
+            }
+            let next = {
+                let mut states = lock(&self.quotas.state);
+                let now = clock.now();
+                let cache = states.entry(pair.clone()).or_default();
+                expire_overdue(cache, now, &self.quotas.parker);
+                match &cache.flight {
+                    None => Next::Return(entry(cache, now, clock.wall())),
+                    Some(flight) if flight.id != wait.id => {
+                        Next::Return(entry(cache, now, clock.wall()))
+                    }
+                    Some(_) => Next::Park(wait.deadline),
+                }
+            };
+            match next {
+                Next::Return(found) => return found,
+                Next::Park(deadline) => {
+                    self.quotas.parker.park(clock, Some(deadline), seen);
+                }
+            }
+        }
     }
 
     /// Reads the cache at once, starting a fetch when due. The caller must

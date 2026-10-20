@@ -277,8 +277,9 @@ impl App {
     }
 
     /// The workspace in use: the attached session's row workspace on
-    /// home, else the launch directory.
-    pub(crate) fn workspace(&self) -> PathBuf {
+    /// home, else the launch directory, else none on a remote home.
+    /// Never an empty path: every conversion filters empty values out.
+    pub(crate) fn workspace(&self) -> Option<PathBuf> {
         if self.home.is_some() {
             self.home_workspace()
         } else {
@@ -359,11 +360,12 @@ impl App {
     /// Remote panels never start a client-side walk, including while detached.
     fn search_files(&mut self, query: String, fresh: bool) -> Effect {
         if let Some(remote) = self.remote() {
-            let workspace = self.workspace();
-            if !workspace.as_os_str().is_empty()
-                && let Err(error) =
-                    remote.search(&workspace, &query, fresh, self.overlays.generation)
-            {
+            // With no local workspace no hub search runs: there is no
+            // directory to list.
+            let Some(workspace) = self.workspace() else {
+                return Effect::None;
+            };
+            if let Err(error) = remote.search(&workspace, &query, fresh, self.overlays.generation) {
                 self.on_files(self.overlays.generation, Err(error.to_string()));
             }
             Effect::None
@@ -534,6 +536,10 @@ impl App {
             "usage" => {
                 self.draft.clear();
                 self.open_session_view(super::SessionView::Usage)
+            }
+            "quota" => {
+                self.draft.clear();
+                self.quota_view()
             }
             "rules" => self.open_config_view(super::ConfigView::Rules),
             "login" => self.open_config_view(super::ConfigView::Login),

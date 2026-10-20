@@ -1266,7 +1266,9 @@ fn a_long_slash_list_windows_around_the_selection() {
         super::Rows::Slash(rows) => {
             assert_eq!(rows.len(), crate::slash::SHOWN);
             assert_eq!(rows.first().map(|row| row.name.as_str()), Some("model"));
-            assert_eq!(rows.last().map(|row| row.name.as_str()), Some("rail"));
+            // `/quota` sits after `/usage`: the window's last row moves
+            // with the list, its start and selection unchanged.
+            assert_eq!(rows.last().map(|row| row.name.as_str()), Some("panel"));
         }
         super::Rows::Files(_) | super::Rows::Search(_) | super::Rows::Message(_) => {
             panic!("a slash window, not {:?}", completions.rows)
@@ -1554,7 +1556,8 @@ fn remote_search_app(
     let (tx, inputs) = mpsc::channel();
     router.set_feed(tx, crate::link::Credits::new(64));
     let mut app = connected();
-    app.workspace = workspace.into();
+    // An empty workspace is none: no hub search runs for it.
+    app.workspace = (!workspace.is_empty()).then(|| PathBuf::from(workspace));
     app.set_remote(Arc::new(crate::remote::Remote::new(
         Arc::new(crate::configure_fake::Fake::new(vec![])),
         "/client".into(),

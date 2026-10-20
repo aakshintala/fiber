@@ -228,8 +228,9 @@ pub(crate) struct App {
     overlay: overlay::Overlay,
     /// History command ids whose late answers are discarded after reopening.
     abandoned_history: BTreeSet<String>,
-    /// The launch directory `start` names.
-    workspace: PathBuf,
+    /// The launch directory `start` names: none on a remote home, which
+    /// carries no local workspace.
+    workspace: Option<PathBuf>,
     /// Home's state, once `run` sets it; `None` keeps today's screen.
     home: Option<home::Home>,
     draft: Draft,
@@ -333,7 +334,12 @@ pub(crate) struct App {
 
 impl App {
     /// An empty app in `workspace`, sized 80x24 until the loop sets it.
-    pub(crate) fn new(workspace: PathBuf) -> Self {
+    /// `None` means a remote home with no local workspace; an empty path
+    /// maps to none at the boundary, so no empty-path sentinel remains.
+    pub(crate) fn new(workspace: impl Into<Option<PathBuf>>) -> Self {
+        // An empty launch directory is no workspace: the default launch
+        // carries an empty `Local` path, and a remote home carries none.
+        let workspace = workspace.into().filter(|path| !path.as_os_str().is_empty());
         let mut app = Self {
             passes: Vec::new(),
             overlay: overlay::Overlay::None,

@@ -258,13 +258,15 @@ impl App {
     pub(crate) fn home_screen(&self) -> Option<HomeScreen> {
         let home = self.home.as_ref().filter(|_| self.on_home())?;
         // The workspace in use: the picked one, else the launch
-        // directory. Clicking its chip opens the workspace picker.
-        let workspace = self.home_workspace();
-        let segment = workspace
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| workspace.display().to_string());
+        // directory. Clicking its chip opens the workspace picker. With
+        // none the chip reads `[no workspace]`, so no segment shows.
+        let segment = self.home_workspace().map(|workspace| {
+            workspace
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| workspace.display().to_string())
+        });
         // The delete question names the session and everything
         // `--cascade` would add; the frame wraps and scrolls it.
         let (question, question_scroll) = match home.questions.prompt() {
@@ -426,7 +428,7 @@ impl App {
                 let workspace = if dim {
                     "no workspace"
                 } else {
-                    segment.as_str()
+                    segment.as_deref().unwrap_or("")
                 };
                 let mut chips = vec![Chip {
                     dim,
@@ -1039,12 +1041,20 @@ impl App {
             Some(home) => {
                 home.prompted = true;
                 home.blockers = Vec::new();
-                let workspace = home.chooser.chosen().map(str::to_owned).or_else(|| {
-                    home.launch
-                        .location
-                        .workspace()
-                        .map(|workspace| workspace.display().to_string())
-                });
+                // An empty pick or launch directory is none: no `workspace`
+                // key names a remote home, as the hub treats a missing key.
+                let workspace = home
+                    .chooser
+                    .chosen()
+                    .filter(|chosen| !chosen.is_empty())
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        home.launch
+                            .location
+                            .workspace()
+                            .filter(|workspace| !workspace.as_os_str().is_empty())
+                            .map(|workspace| workspace.display().to_string())
+                    });
                 let mut args = json!({});
                 if let (Some(workspace), Some(object)) = (workspace, args.as_object_mut()) {
                     object.insert("workspace".to_owned(), Value::String(workspace));
@@ -1067,7 +1077,18 @@ impl App {
                 }
                 args
             }
-            None => json!({ "workspace": self.workspace.display().to_string() }),
+            None => {
+                let mut args = json!({});
+                if let (Some(workspace), Some(object)) =
+                    (self.workspace.clone(), args.as_object_mut())
+                {
+                    object.insert(
+                        "workspace".to_owned(),
+                        Value::String(workspace.display().to_string()),
+                    );
+                }
+                args
+            }
         }
     }
 }

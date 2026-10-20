@@ -133,7 +133,6 @@ fn ordered_outcomes_and_clock_entries_stay_with_their_call() {
         ("credentials", json!({})),
         ("expect_credentials", json!({})),
         ("exact_credentials", json!(true)),
-        ("attended", json!(false)),
     ] {
         let mut case = session_case();
         case[field] = value;
@@ -141,6 +140,30 @@ fn ordered_outcomes_and_clock_entries_stay_with_their_call() {
             case_error(&case).contains("only valid in a call case"),
             "{case}"
         );
+    }
+}
+
+#[test]
+fn session_case_attended_defaults_to_true_and_parses_booleans() {
+    // No key reads attended, so the cases written before this field stay
+    // with a person attached.
+    let Case::Session(parsed) = parse(&session_case()).expect("session case parses") else {
+        panic!("session case parsed as a call case");
+    };
+    assert!(parsed.attended);
+    for (value, expected) in [(json!(true), true), (json!(false), false)] {
+        let mut case = session_case();
+        case["attended"] = value;
+        let Case::Session(parsed) = parse(&case).expect("boolean attended parses") else {
+            panic!("session case parsed as a call case");
+        };
+        assert_eq!(parsed.attended, expected);
+    }
+    for value in [json!(null), json!(0), json!(1), json!("false")] {
+        let mut malformed = session_case();
+        malformed["attended"] = value;
+        let error = case_error(&malformed);
+        assert!(error.contains("attended"), "{error}");
     }
 }
 
@@ -248,7 +271,7 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
     assert_eq!(parsed.host.exec[0].request["program"], "git");
     assert_eq!(parsed.host.exec[0].request["cwd"], "/workspace");
     assert_eq!(parsed.host.exec[1].request["cwd"], Value::Null);
-    let Ok(extensions::ExecReply {
+    let Ok(extensions::ExecReply::Completed {
         end,
         stdout,
         stderr,
@@ -543,7 +566,7 @@ fn a_signal_exec_reply_parses_to_a_signal_end() {
     assert!(
         matches!(
             parsed.host.exec[0].reply,
-            Ok(extensions::ExecReply {
+            Ok(extensions::ExecReply::Completed {
                 end: extensions::ExecEnd::Signal(9),
                 ..
             })
@@ -560,7 +583,7 @@ fn a_signal_exec_reply_parses_to_a_signal_end() {
     assert!(
         matches!(
             parsed.host.exec[0].reply,
-            Ok(extensions::ExecReply {
+            Ok(extensions::ExecReply::Completed {
                 end: extensions::ExecEnd::Code(7),
                 ..
             })
@@ -597,13 +620,120 @@ fn an_exec_reply_with_neither_code_nor_signal_names_both_fields() {
 }
 
 #[test]
-fn an_exec_reply_with_a_hang_key_names_hang_as_unknown() {
+fn a_hang_reply_parses_to_a_hang_end() {
     let mut value = session_case();
     value["host"] = json!({"exec": [{"request": {"program": "sh"},
         "reply": {"hang": true}}]});
+    let Case::Session(parsed) = parse(&value).expect("hang reply parses") else {
+        panic!("hang reply parsed as a call case");
+    };
+    assert!(
+        matches!(parsed.host.exec[0].reply, Ok(extensions::ExecReply::Hang)),
+        "{:?}",
+        parsed.host.exec[0].reply
+    );
+}
+
+#[test]
+fn a_hang_reply_with_any_other_key_names_hang() {
+    for reply in [
+        json!({"hang": true, "code": 0}),
+        json!({"hang": true, "signal": 9}),
+        json!({"hang": true, "stdout": ""}),
+        json!({"hang": true, "stderr": ""}),
+        json!({"hang": true, "code": 0, "stdout": "", "stderr": ""}),
+    ] {
+        let mut value = session_case();
+        value["host"] = json!({"exec": [{"request": {"program": "sh"},
+            "reply": reply}]});
+        let error = case_error(&value);
+        assert!(error.contains("host.exec[1].reply.hang"), "{error}");
+        assert!(error.contains("takes no other key"), "{error}");
+    }
+}
+
+#[test]
+fn a_hang_reply_that_is_not_true_names_hang() {
+    for hang in [json!(false), json!(0), json!(1), json!("true"), json!(null)] {
+        let mut value = session_case();
+        value["host"] = json!({"exec": [{"request": {"program": "sh"},
+            "reply": {"hang": hang}}]});
+        let error = case_error(&value);
+        assert!(error.contains("host.exec[1].reply.hang"), "{hang}: {error}");
+        assert!(error.contains("expected true"), "{hang}: {error}");
+    }
+}
+
+#[test]
+fn a_clock_hang_must_be_a_positive_whole_number() {
+    for hang in [
+        json!(0),
+        json!(-1),
+        json!(1.5),
+        json!("1"),
+        json!(null),
+        json!(false),
+    ] {
+        let mut value = session_case();
+        value["host"] = json!({"exec": [{"request": {"program": "sh"},
+            "reply": {"hang": true}}]});
+        value["clock"] = json!([{"advance_ms": 1000, "hang": hang}]);
+        let error = case_error(&value);
+        assert!(error.contains("clock[1].hang"), "{hang}: {error}");
+        assert!(error.contains("positive whole number"), "{hang}: {error}");
+    }
+}
+
+#[test]
+fn a_clock_hang_must_name_a_hang_exec_entry() {
+    let hang_case = || {
+        let mut value = session_case();
+        value["host"] = json!({"exec": [
+            {"request": {"program": "sh"}, "reply": {"hang": true}},
+            {"request": {"program": "git"}, "reply": {"code": 0, "stdout": "", "stderr": ""}},
+        ]});
+        value
+    };
+    // At the edge: entry 1 hangs and parses.
+    let mut value = hang_case();
+    value["clock"] = json!([{"advance_ms": 1000, "hang": 1}]);
+    let Case::Session(parsed) = parse(&value).expect("hang 1 names the hang entry") else {
+        panic!("hang clock parsed as a call case");
+    };
+    assert_eq!(parsed.clock[0].hang, Some(1));
+    // Just above the hanging entries: entry 2 ends with a code.
+    // Just above the script: entry 3 does not exist.
+    for hang in [2, 3] {
+        let mut value = hang_case();
+        value["clock"] = json!([{"advance_ms": 1000, "hang": hang}]);
+        let error = case_error(&value);
+        assert!(error.contains("clock[1].hang"), "{hang}: {error}");
+        assert!(error.contains("host.exec"), "{hang}: {error}");
+    }
+}
+
+#[test]
+fn a_clock_hang_in_a_call_case_names_hang() {
+    let call = json!({"call": {"provider": "p", "function": "cost", "arg": {}}, "returns": 0.5});
+    // No host entry to name: the clock validation names hang.
+    let mut value = call.clone();
+    value["clock"] = json!([{"advance_ms": 1, "hang": 1}]);
     let error = case_error(&value);
-    assert!(error.contains("host.exec[1].reply.hang"), "{error}");
-    assert!(error.contains("unknown field"), "{error}");
+    assert!(error.contains("hang"), "{error}");
+    // A hang naming a real hang entry is still refused in a call case.
+    value["host"] = json!({"exec": [{"request": {"program": "sh"},
+        "reply": {"hang": true}}]});
+    let error = case_error(&value);
+    assert!(error.contains("clock.hang"), "{error}");
+    let mut steps = json!({"calls": [
+        {"call": {"provider": "p", "function": "cost", "arg": {}}, "returns": 0.5, "clock": [{"advance_ms": 1, "hang": 1}]},
+    ]});
+    let error = case_error(&steps);
+    assert!(error.contains("hang"), "{error}");
+    steps["host"] = json!({"exec": [{"request": {"program": "sh"},
+        "reply": {"hang": true}}]});
+    let error = case_error(&steps);
+    assert!(error.contains("clock.hang"), "{error}");
 }
 
 #[test]

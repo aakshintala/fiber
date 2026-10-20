@@ -2546,7 +2546,7 @@ fn clicking_a_picker_row_chooses_its_workspace() {
         app.home_screen()
             .is_some_and(|screen| screen.picker.is_none())
     );
-    assert_eq!(app.workspace(), PathBuf::from("/repo0"));
+    assert_eq!(app.workspace(), Some(PathBuf::from("/repo0")));
 }
 
 /// A short home screen with the picker on its last entry: the fit
@@ -2620,7 +2620,8 @@ fn short_home_slash_keeps_its_selection_barred() {
     );
     let row = row_text(&buf, selected, 80);
     assert!(row.contains("scoped-models"), "{shown}");
-    assert!(shown.contains("of 24"), "{shown}");
+    // `/quota` is one more row in the list.
+    assert!(shown.contains("of 25"), "{shown}");
 }
 
 /// A git home at 80x24 with two live rows in the launch project and no
@@ -3386,7 +3387,7 @@ fn clicking_a_recent_while_typing_chooses_it() {
         app.home_screen()
             .is_some_and(|screen| screen.picker.is_none())
     );
-    assert_eq!(app.workspace(), PathBuf::from("/repo0"));
+    assert_eq!(app.workspace(), Some(PathBuf::from("/repo0")));
 }
 
 /// Home drawn and painted without colour, with its targets.

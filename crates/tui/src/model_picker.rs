@@ -214,6 +214,12 @@ pub(crate) struct ModelPicker {
     /// The session-only `model` commands waiting on their session's
     /// answer, by command id: the session and the reference.
     pub(crate) only_pending: HashMap<String, (contract::SessionId, String)>,
+    /// Every sent `model` command's choice, by its id: the reference and
+    /// the level, for the pending notice a send while a turn runs
+    /// pushes. An answer takes its own entry: acceptance discards it,
+    /// and rejection replaces its notice. Entries from dropped sessions
+    /// linger until their answer takes them.
+    pub(crate) sent: HashMap<String, (String, Option<String>)>,
     /// The session-only choice its session accepted: the session and
     /// the reference, drawn while it is the one on screen.
     pub(crate) session_only: Option<(contract::SessionId, String)>,

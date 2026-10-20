@@ -19,7 +19,7 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 
 #[test]
-fn quota_segments_use_short_names_colours_and_no_click_targets() {
+fn quota_segments_use_short_names_colours_and_open_the_view() {
     use crate::app::items::testkit::{commands, hello};
     use serde_json::json;
     let mut app = App::new(PathBuf::from("/w"));
@@ -52,7 +52,8 @@ fn quota_segments_use_short_names_colours_and_no_click_targets() {
         codex.style,
         crate::markdown::style(crate::markdown::Role::Error)
     );
-    assert!(shown[0].spots.is_empty());
+    // The whole segment opens the quota view, which fetches every label.
+    assert_eq!(shown[0].spots, [(0, 29, Spot::Quota)]);
     app.attach(contract::SessionId(SESSION.to_owned()));
     assert!(super::status(&app, 100).is_empty());
 }
