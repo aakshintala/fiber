@@ -457,3 +457,720 @@ fn the_window_over_the_seam_asks_each_side_under_its_session() {
     assert_eq!(total(&screen), joint, "the joint count spans the seam");
     assert_eq!(screen.scroll_bar(10).1, joint);
 }
+
+/// A screen with one turn holding one group of `calls` read calls, each
+/// completed with `lines_each` lines of content and a read `details`.
+/// The group's ledger and the calls in `opened` are opened. Returns the
+/// screen with the scroll freed (following).
+fn read_group(
+    calls: usize,
+    opened: &[bool],
+    lines_each: usize,
+    asking: &[bool],
+) -> (Screen, Target, Vec<Target>) {
+    let mut seq = 0;
+    let mut screen = Screen::new();
+    let mut feed = |screen: &mut Screen, kind: &str, action: Option<&str>, payload: Value| {
+        screen
+            .pages_mut()
+            .apply(&envelope(&mut seq, kind, action, payload));
+    };
+    feed(
+        &mut screen,
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    feed(&mut screen, "step_started", None, json!({}));
+    feed(
+        &mut screen,
+        "assistant_message_started",
+        Some("a_m"),
+        json!({}),
+    );
+    for i in 0..calls {
+        let action = format!("a_c{i}");
+        feed(
+            &mut screen,
+            "tool_call_requested",
+            Some(&action),
+            json!({"name": "read", "arguments": {"path": format!("src/{i}.rs")}}),
+        );
+    }
+    for i in 0..calls {
+        let action = format!("a_c{i}");
+        let text = (1..=lines_each)
+            .map(|n| format!("L{n:04} of call {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        feed(
+            &mut screen,
+            "tool_call_completed",
+            Some(&action),
+            json!({"status": "completed",
+                "content": [{"type": "text", "text": text}],
+                "details": {"start_line": 1}}),
+        );
+        if *asking.get(i).unwrap_or(&false) {
+            feed(
+                &mut screen,
+                "permission_requested",
+                Some(&action),
+                json!({"request_id": format!("r_{i}"), "effects": ["executes"],
+                    "reversible": true, "step": "standing_ask",
+                    "standing_rule": {"scope": "global", "prefix": "npm"}}),
+            );
+        }
+    }
+    feed(
+        &mut screen,
+        "text_completed",
+        Some("a_m"),
+        json!({"text": "done"}),
+    );
+    feed(
+        &mut screen,
+        "assistant_message_completed",
+        Some("a_m"),
+        json!({"outcome": "completed"}),
+    );
+    let rows = screen.pages().rows();
+    let group = rows
+        .iter()
+        .find_map(|(_, target)| {
+            matches!(target, Some(Target::Group(_))).then(|| (*target).unwrap())
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no group rows={:?}",
+                screen
+                    .pages()
+                    .rows()
+                    .iter()
+                    .map(|(l, _)| l.to_string())
+                    .collect::<Vec<_>>()
+            )
+        });
+    screen.open(group);
+    let rows = screen.pages().rows();
+    let mut call_targets = Vec::new();
+    for (_, target) in &rows {
+        if let Some(Target::Call(_)) = target {
+            call_targets.push((*target).unwrap());
+        }
+    }
+    assert_eq!(call_targets.len(), calls, "one row target per call");
+    for (i, target) in call_targets.iter().enumerate() {
+        if *opened.get(i).unwrap_or(&false) {
+            screen.open(*target);
+        }
+    }
+    (screen, group, call_targets)
+}
+
+/// The absolute wrapped rows of page 0's lines, and their targets.
+fn page_rows(screen: &Screen) -> (Vec<usize>, Vec<Option<Target>>) {
+    let (rows, _) = screen.pages().page_text(0).expect("page 0 resident");
+    let mut out = Vec::new();
+    let mut row = 0usize;
+    for (line, target) in &rows {
+        out.push((row, *target));
+        row += crate::view::rows(line.clone(), screen.pages().wrap_width());
+    }
+    let (starts, targets) = out.into_iter().unzip();
+    (starts, targets)
+}
+
+/// The absolute row of page 0's line holding `target`, if it draws.
+fn line_row(screen: &Screen, target: Target) -> Option<usize> {
+    let (starts, targets) = page_rows(screen);
+    starts
+        .into_iter()
+        .zip(targets)
+        .find_map(|(row, drawn)| (drawn == Some(target)).then_some(row))
+}
+
+/// The absolute rows of the opened block of `call`: every line whose
+/// text scopes end in it, in order.
+fn opened_rows(screen: &Screen, call: Target) -> Vec<usize> {
+    let (rows, texts) = screen.pages().page_text(0).expect("page 0 resident");
+    let width = screen.pages().wrap_width();
+    let mut out = Vec::new();
+    let mut row = 0usize;
+    for ((line, _), text) in rows.iter().zip(&texts) {
+        let count = crate::view::rows(line.clone(), width);
+        if text
+            .scopes
+            .iter()
+            .rev()
+            .find(|scope| matches!(scope, Target::Group(_) | Target::Call(_)))
+            == Some(&call)
+        {
+            for r in 0..count {
+                out.push(row + r);
+            }
+        }
+        row += count;
+    }
+    out
+}
+
+#[test]
+fn the_call_holding_the_top_row_pins_and_nothing_else() {
+    let (mut screen, group, calls) = read_group(1, &[true], 30, &[false]);
+    let call = calls[0];
+    let first = opened_rows(&screen, call)
+        .first()
+        .copied()
+        .expect("opened rows");
+    screen.jump(first);
+    screen.settle(5);
+    let pin = screen.pin(5).expect("a pin inside opened content");
+    assert_eq!(pin.target, call, "the innermost scope pins, not {group:?}");
+    assert!(pin.row < first, "the header sits above the top row");
+}
+
+#[test]
+fn a_ledger_row_outside_any_opened_call_pins_the_group() {
+    let (mut screen, group, calls) = read_group(2, &[false, false], 30, &[false, false]);
+    let row = line_row(&screen, calls[1]).expect("the second call row");
+    screen.jump(row);
+    screen.settle(5);
+    let pin = screen.pin(5).expect("a pin on a ledger row");
+    assert_eq!(pin.target, group, "a ledger row pins its group");
+}
+
+#[test]
+fn two_opened_calls_pin_the_one_the_top_row_is_in() {
+    let (mut screen, group, calls) = read_group(2, &[true, true], 30, &[false, false]);
+    let second = opened_rows(&screen, calls[1])
+        .first()
+        .copied()
+        .expect("second opened rows");
+    screen.jump(second);
+    screen.settle(5);
+    assert_eq!(
+        screen.pin(5).map(|pin| pin.target),
+        Some(calls[1]),
+        "scrolled into the second call pins the second"
+    );
+    let first = opened_rows(&screen, calls[0])
+        .first()
+        .copied()
+        .expect("first opened rows");
+    screen.jump(first);
+    screen.settle(5);
+    assert_eq!(
+        screen.pin(5).map(|pin| pin.target),
+        Some(calls[0]),
+        "scrolled into the first call pins the first"
+    );
+    let row = line_row(&screen, calls[1]).expect("the second call row");
+    screen.jump(row);
+    screen.settle(5);
+    assert_eq!(
+        screen.pin(5).map(|pin| pin.target),
+        Some(group),
+        "top on the second call's own row pins the group"
+    );
+}
+
+#[test]
+fn the_pin_edges_follow_the_calls_rows() {
+    let (mut screen, group, calls) = read_group(2, &[true, false], 30, &[false, false]);
+    let call = calls[0];
+    let header = line_row(&screen, call).expect("the call row");
+    screen.jump(header);
+    screen.settle(5);
+    assert_eq!(
+        screen.pin(5).map(|pin| pin.target),
+        Some(group),
+        "top on the call's own row pins no call"
+    );
+    let opened = opened_rows(&screen, call);
+    let (first, last) = (
+        opened.first().copied().expect("a first opened row"),
+        opened.last().copied().expect("a last opened row"),
+    );
+    screen.jump(first);
+    screen.settle(5);
+    assert_eq!(
+        screen.pin(5).map(|pin| pin.target),
+        Some(call),
+        "top on the first opened row pins the call"
+    );
+    screen.jump(last);
+    screen.settle(5);
+    assert_eq!(
+        screen.pin(5).map(|pin| pin.target),
+        Some(call),
+        "top on the last opened row pins the call"
+    );
+    let after = line_row(&screen, calls[1]).expect("the next call row");
+    assert!(after > last, "the next row sits past the opened block");
+    // The top stays exact: no settle clamps it past the bottom here.
+    screen.jump(after);
+    assert_eq!(
+        screen.pin(1).map(|pin| pin.target),
+        Some(group),
+        "top on the row after pins the group"
+    );
+}
+
+#[test]
+fn nothing_pins_while_following() {
+    let (screen, _, _) = read_group(1, &[true], 30, &[false]);
+    assert_eq!(screen.top(), None, "the builder follows");
+    assert_eq!(screen.pin(5), None, "following pins nothing");
+}
+
+#[test]
+fn nothing_pins_when_the_top_row_is_on_a_dropped_page() {
+    let (mut screen, _, _) = read_group(1, &[true], 30, &[false]);
+    let mut seq = 1000;
+    for turn in 0..60 {
+        for (kind, action, payload) in [
+            (
+                "turn_started",
+                None,
+                json!({"input": [{"type": "message", "source": "driver",
+                    "content": [{"type": "text", "text": format!("filler {turn}")}]}]}),
+            ),
+            ("step_started", None, json!({})),
+            (
+                "text_completed",
+                Some(format!("fm{turn}").as_str()),
+                json!({"text": "filler"}),
+            ),
+            (
+                "assistant_message_completed",
+                Some(format!("fm{turn}").as_str()),
+                json!({"outcome": "completed"}),
+            ),
+            ("turn_completed", None, json!({"outcome": "completed"})),
+        ] {
+            screen
+                .pages_mut()
+                .apply(&envelope(&mut seq, kind, action, payload));
+        }
+    }
+    screen.jump(usize::MAX);
+    screen.settle(5);
+    assert!(screen.pages().part(0).is_none(), "the first page dropped");
+    screen.jump(0);
+    assert_eq!(screen.pin(5), None, "a dropped page pins nothing");
+}
+
+#[test]
+fn a_ledger_open_only_for_an_approval_does_not_pin() {
+    let (mut screen, _, calls) = read_group(1, &[false], 5, &[true]);
+    let row = line_row(&screen, calls[0]).expect("the asking call row");
+    // The ledger draws for the asking call while closed: the row after
+    // the call's row is its (empty) opened nothing, so the top inside
+    // the ledger is the call's own row.
+    screen.jump(row.saturating_add(1));
+    screen.settle(5);
+    assert_eq!(screen.pin(5), None, "a closed ledger pins nothing");
+}
+
+#[test]
+fn an_opened_thought_with_no_ledger_does_not_pin() {
+    let mut seq = 0;
+    let mut screen = Screen::new();
+    let mut feed = |screen: &mut Screen, kind: &str, action: Option<&str>, payload: Value| {
+        screen
+            .pages_mut()
+            .apply(&envelope(&mut seq, kind, action, payload));
+    };
+    feed(
+        &mut screen,
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    feed(&mut screen, "step_started", None, json!({}));
+    feed(&mut screen, "reasoning_started", Some("a_t"), json!({}));
+    feed(
+        &mut screen,
+        "reasoning_completed",
+        Some("a_t"),
+        json!({"text": "a long thought that opens"}),
+    );
+    feed(
+        &mut screen,
+        "text_completed",
+        Some("a_m"),
+        json!({"text": "done"}),
+    );
+    feed(
+        &mut screen,
+        "assistant_message_completed",
+        Some("a_m"),
+        json!({"outcome": "completed"}),
+    );
+    let thought = screen
+        .pages()
+        .rows()
+        .into_iter()
+        .find_map(|(_, target)| target)
+        .expect("a thought target");
+    screen.open(thought);
+    let (rows, texts) = screen.pages().page_text(0).expect("page 0 resident");
+    let width = screen.pages().wrap_width();
+    let mut row = 0usize;
+    let mut inside = None;
+    for ((line, _), text) in rows.iter().zip(&texts) {
+        let count = crate::view::rows(line.clone(), width);
+        if text.scopes.contains(&thought) && inside.is_none() {
+            inside = Some(row + 1);
+        }
+        row += count;
+    }
+    let top = inside.expect("opened thought rows");
+    screen.jump(top);
+    screen.settle(5);
+    assert_eq!(screen.pin(5), None, "a thought pins nothing");
+}
+
+#[test]
+fn a_top_row_on_a_call_image_row_pins_the_group() {
+    let mut seq = 0;
+    let mut screen = Screen::new();
+    let mut feed = |screen: &mut Screen, kind: &str, action: Option<&str>, payload: Value| {
+        screen
+            .pages_mut()
+            .apply(&envelope(&mut seq, kind, action, payload));
+    };
+    feed(
+        &mut screen,
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    feed(&mut screen, "step_started", None, json!({}));
+    feed(
+        &mut screen,
+        "assistant_message_started",
+        Some("a_m"),
+        json!({}),
+    );
+    feed(
+        &mut screen,
+        "tool_call_requested",
+        Some("a_c0"),
+        json!({"name": "read", "arguments": {"path": "src/0.rs"}}),
+    );
+    feed(
+        &mut screen,
+        "tool_call_completed",
+        Some("a_c0"),
+        json!({"status": "completed",
+            "content": [
+                {"type": "text", "text": "ok"},
+                {"type": "image", "path": "a.png", "mime_type": "image/png",
+                    "width": 100, "height": 100}],
+            "details": {"start_line": 1}}),
+    );
+    feed(
+        &mut screen,
+        "text_completed",
+        Some("a_m"),
+        json!({"text": "done"}),
+    );
+    feed(
+        &mut screen,
+        "assistant_message_completed",
+        Some("a_m"),
+        json!({"outcome": "completed"}),
+    );
+    feed(
+        &mut screen,
+        "turn_completed",
+        None,
+        json!({"outcome": "completed"}),
+    );
+    let rows = screen.pages().rows();
+    let group = rows
+        .iter()
+        .find_map(|(_, target)| {
+            matches!(target, Some(Target::Group(_))).then(|| (*target).unwrap())
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no group rows={:?}",
+                screen
+                    .pages()
+                    .rows()
+                    .iter()
+                    .map(|(l, _)| l.to_string())
+                    .collect::<Vec<_>>()
+            )
+        });
+    screen.open(group);
+    let call = screen
+        .pages()
+        .rows()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, Some(Target::Call(_))).then(|| target.unwrap()))
+        .expect("a call target");
+    screen.open(call);
+    let (drawn, texts) = screen.pages().page_text(0).expect("page 0 resident");
+    let width = screen.pages().wrap_width();
+    let mut row = 0usize;
+    let mut image_row = None;
+    for ((line, _), text) in drawn.iter().zip(&texts) {
+        let count = crate::view::rows(line.clone(), width);
+        let scopes = &text.scopes;
+        if scopes
+            == &vec![Target::Group(match group {
+                Target::Group(id) => id,
+                Target::Call(_)
+                | Target::CallView(_)
+                | Target::Thought(_)
+                | Target::Login
+                | Target::Note(_)
+                | Target::Image(_)
+                | Target::Orphans(_)
+                | Target::Copy { .. } => unreachable!(),
+            })]
+            && line.to_string().contains("a.png")
+        {
+            image_row = Some(row);
+        }
+        row += count;
+    }
+    let top = image_row.expect("an image row under the call");
+    screen.jump(top);
+    screen.settle(5);
+    assert_eq!(
+        screen.pin(5).map(|pin| pin.target),
+        Some(group),
+        "an image row pins the group, not the call"
+    );
+}
+
+#[test]
+fn the_pin_row_is_the_headers_first_row() {
+    let (mut screen, _, calls) = read_group(1, &[true], 30, &[false]);
+    screen.set_size(80, 24);
+    screen.wrap_at(20);
+    let call = calls[0];
+    let header = line_row(&screen, call).expect("the call row");
+    let first = opened_rows(&screen, call)
+        .first()
+        .copied()
+        .expect("opened rows");
+    assert!(first > header, "a wrapping line sits above the header");
+    screen.jump(first);
+    screen.settle(5);
+    let pin = screen.pin(5).expect("a pin");
+    assert_eq!(pin.target, call);
+    assert_eq!(pin.row, header, "the pin row is the header's first row");
+}
+
+#[test]
+fn settle_keeps_the_top_rows_page() {
+    let (mut screen, _, calls) = read_group(1, &[true], 30, &[false]);
+    let first = opened_rows(&screen, calls[0])
+        .first()
+        .copied()
+        .expect("opened rows");
+    screen.jump(first);
+    screen.settle(5);
+    assert!(screen.pages().part(0).is_some(), "the top row's page stays");
+    assert_eq!(
+        screen.pin(5).map(|pin| pin.target),
+        Some(calls[0]),
+        "the pin survives the settle"
+    );
+}
+
+/// The call's id.
+fn call_id(call: Target) -> usize {
+    if let Target::Call(id) = call {
+        id
+    } else {
+        panic!("a call target, not {call:?}");
+    }
+}
+
+/// The opened call's more row: the focus stop inside an opened call a
+/// reveal can name.
+fn more_row(screen: &Screen, call: Target) -> usize {
+    let want = crate::mouse::TargetId::Line(Target::CallView(call_id(call)));
+    screen
+        .pages()
+        .focus_items()
+        .into_iter()
+        .find(|(_, _, id)| *id == want)
+        .map(|(row, _, _)| row)
+        .expect("the more row is a focus stop")
+}
+
+#[test]
+fn reveal_stops_the_focus_row_under_the_pin() {
+    let (mut screen, _, calls) = read_group(2, &[true, false], 30, &[false, false]);
+    let call = calls[0];
+    let more = more_row(&screen, call);
+    // From below the opened block, revealing the more row scrolls up:
+    // the row would land on row 0, so it lands on row 1 instead.
+    let last = screen.pages().index().total();
+    screen.jump(last);
+    screen.settle(4);
+    assert!(
+        screen.top().is_some_and(|top| top > more),
+        "the more row is above the top"
+    );
+    screen.reveal(more, 4);
+    assert_eq!(
+        screen.top(),
+        Some(more.saturating_sub(1)),
+        "the reveal lands one row above the more row"
+    );
+    assert_eq!(
+        screen.pin(4).map(|pin| pin.target),
+        Some(call),
+        "the pin stays on the call"
+    );
+}
+
+#[test]
+fn reveal_without_a_pin_is_unchanged() {
+    let mut screen = screen(3);
+    let turn = screen
+        .pages()
+        .focus_items()
+        .into_iter()
+        .find(|(_, _, id)| *id == crate::mouse::TargetId::Turn(1))
+        .map(|(row, _, _)| row)
+        .expect("the second turn is a focus stop");
+    let last = screen.pages().index().total();
+    screen.jump(last);
+    screen.settle(10);
+    assert!(
+        screen.top().is_some_and(|top| top > turn),
+        "the turn is above the top"
+    );
+    screen.reveal(turn, 10);
+    assert_eq!(
+        screen.top(),
+        Some(turn),
+        "with no pin the reveal lands on the row"
+    );
+    assert_eq!(screen.pin(10), None, "no pin without an opened call");
+}
+
+#[test]
+fn land_stops_under_the_pin() {
+    let (mut screen, _, calls) = read_group(1, &[true], 30, &[false]);
+    let call = calls[0];
+    let first = opened_rows(&screen, call)
+        .first()
+        .copied()
+        .expect("opened rows");
+    let row = first + 5;
+    screen.land(row);
+    assert_eq!(
+        screen.top(),
+        Some(row - 1),
+        "the landing stops above the row"
+    );
+    assert_eq!(
+        screen.pin(5).map(|pin| pin.target),
+        Some(call),
+        "the pin stays on the call"
+    );
+}
+
+#[test]
+fn land_without_a_pin_jumps_to_the_row() {
+    let mut screen = screen(1);
+    let (drawn, _) = screen.pages().page_text(0).expect("page 0 resident");
+    let width = screen.pages().wrap_width();
+    let mut row = 0usize;
+    let mut reply = None;
+    for (line, _) in &drawn {
+        let count = crate::view::rows(line.clone(), width);
+        if line.to_string().contains("reply 0") {
+            reply = Some(row);
+            break;
+        }
+        row += count;
+    }
+    let reply = reply.expect("a reply row");
+    screen.land(reply + 1);
+    assert_eq!(
+        screen.top(),
+        Some(reply + 1),
+        "with no pin the landing jumps to the row"
+    );
+    assert_eq!(screen.pin(5), None, "no pin without an opened call");
+}
+
+#[test]
+fn landing_on_the_row_below_the_header_clears_the_pin_and_uses_the_true_top() {
+    let (mut screen, group, _) = read_group(1, &[false], 5, &[false]);
+    let header = line_row(&screen, group).expect("the header row");
+    let below = header + 1;
+    screen.land(below);
+    assert_eq!(
+        screen.top(),
+        Some(header),
+        "the landing uses the true top row"
+    );
+    assert_eq!(screen.pin(5), None, "the header on row 0 pins nothing");
+}
+
+#[test]
+fn a_closed_ledger_pins_nothing_on_the_asking_call_row() {
+    // The asking call keeps its row while its ledger is closed, and the
+    // row's own text still names the group: the pin needs the ledger
+    // open, so the key match alone pins nothing (`docs/tui.md`,
+    // "Pinned call").
+    let (mut screen, group, calls) = read_group(1, &[false], 5, &[true]);
+    screen.open(group);
+    let row = line_row(&screen, calls[0]).expect("the asking call row");
+    screen.jump(row);
+    screen.settle(1);
+    assert_eq!(screen.top(), Some(row), "the call row stays on top");
+    assert_eq!(screen.pin(1), None, "a closed ledger pins nothing");
+}
+
+#[test]
+fn an_opened_summary_on_the_top_row_pins_nothing() {
+    // The summary row names no scope of its own: the top row's text sits
+    // outside every section, so nothing pins (`docs/tui.md`,
+    // "Pinned call").
+    let (mut screen, group, _) = read_group(1, &[true], 30, &[false]);
+    let header = line_row(&screen, group).expect("the summary row");
+    screen.jump(header);
+    screen.settle(5);
+    assert_eq!(screen.top(), Some(header), "the summary stays on top");
+    assert_eq!(screen.pin(5), None, "the top row pins nothing");
+}
+
+#[test]
+fn every_pin_sits_above_its_top_row() {
+    // A section's header draws before its body opens its scope, so a
+    // found header is never the top row itself: every pin sits above
+    // the row it pins for (`docs/tui.md`, "Pinned call").
+    for (_, mut screen) in [
+        ("open", read_group(1, &[true], 30, &[false]).0),
+        ("approval", read_group(1, &[false], 5, &[true]).0),
+        ("two", read_group(2, &[true, false], 30, &[false, false]).0),
+    ] {
+        let total = total(&screen);
+        for top in 0..total {
+            screen.jump(top);
+            if let Some(pin) = screen.pin(1) {
+                assert!(
+                    pin.row < top,
+                    "the pin sits above its top row {top}: {pin:?}"
+                );
+            }
+        }
+    }
+}
