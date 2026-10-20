@@ -909,12 +909,12 @@ pub(crate) fn bare_version() -> String {
     version_text(env!("CARGO_PKG_VERSION"), option_env!("FIBER_COMMIT"))
 }
 
-/// The text after `fiber `: the package version, and the commit when one
-/// was recorded. An empty commit is left out, so the line never contains
-/// an empty `()`.
+/// The text after `fiber `: the package version, and the first 7
+/// characters of the commit when one was recorded. An empty commit is
+/// left out, so the line never contains an empty `()`.
 fn version_text(version: &str, commit: Option<&str>) -> String {
     match commit.filter(|commit| !commit.is_empty()) {
-        Some(commit) => format!("{version} ({commit})"),
+        Some(commit) => format!("{version} ({})", commit.get(..7).unwrap_or(commit)),
         None => version.to_owned(),
     }
 }
