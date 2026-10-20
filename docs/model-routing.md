@@ -288,7 +288,8 @@ Measured on October 20, 2026 against `aiplatform.googleapis.com`, mostly with
   as any provider's error body is (`docs/errors.md`).
 - An unknown model, or one the project cannot call, answered 404
   `NOT_FOUND` with "Publisher model `projects/.../models/<id>` was not found";
-  a bad token 401 `UNAUTHENTICATED`; a 429 `RESOURCE_EXHAUSTED` "Resource
+  a garbage token and an expired one the same 401 `UNAUTHENTICATED`, reason
+  `ACCESS_TOKEN_TYPE_UNSUPPORTED`; a 429 `RESOURCE_EXHAUSTED` "Resource
   exhausted. Please try again later." with no `Retry-After` and no
   `RetryInfo`. `gemini-4-argon` answered one call and then refused every
   request with 403 "Request rejected in accordance with our terms of use and
