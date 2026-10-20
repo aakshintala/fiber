@@ -1146,17 +1146,15 @@ fn openai_search_marks_match_the_october_probe() {
 
 #[test]
 fn opencode_go_marks_store_false_where_the_protocol_accepts_it() {
-    // The generated opencode-go file: every openai-responses and
-    // openai-completions model carries compat.store false, since those
-    // protocols read it, while anthropic-messages and
+    // The generated opencode-go file, compiled in: every openai-responses
+    // and openai-completions model carries compat.store false, since
+    // those protocols read it, while anthropic-messages and
     // google-generative-ai models carry no store key their protocol
     // never reads.
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../providers/opencode/providers/opencode-go.json"
+    let file: Value = serde_json::from_str(include_str!(
+        "../../providers/opencode/providers/opencode-go.json"
     ))
     .unwrap();
-    let file: Value = serde_json::from_str(&text).unwrap();
     let models = file["models"].as_array().unwrap();
     assert!(!models.is_empty());
     for model in models {

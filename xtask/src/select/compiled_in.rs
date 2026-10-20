@@ -85,6 +85,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/opencode/providers/opencode-zen.json", "config"),
     ("providers/openrouter/providers/openrouter.json", "config"),
     ("providers/opencode/providers/opencode-go.json", "provider"),
+    ("providers/opencode/providers/opencode-go.json", "xtask"),
     (
         "providers/openrouter/tests/models-from-the-recording.json",
         "main",
