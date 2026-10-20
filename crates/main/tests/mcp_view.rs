@@ -404,6 +404,32 @@ fn list_shows_a_ready_a_failed_and_a_needs_login_server() {
         &std::env::var_os("PATH").unwrap(),
     );
 
+    // The session settles every server before it records their startup
+    // failures together (`loop::mcp_servers_started`), so once both
+    // `mcp_server_failed` lines are observed the `up` row is ready too,
+    // never the `connecting` of a start still in flight: an initial
+    // ready emits no event of its own (`crates/mcp/src/slot.rs` records
+    // `Ready` only on restart), and the failures are written only after
+    // every start reported. A `full` subscribe replays the log, so either
+    // failure may already sit in the startup lines the startup wait read
+    // past; one wait covers both, in either order.
+    let mut seen_down = driver
+        .startup
+        .iter()
+        .any(|line| line["kind"] == "mcp_server_failed" && line["payload"]["server"] == "down");
+    let mut seen_remote = driver.startup.iter().any(remote_not_logged_in);
+    if !(seen_down && seen_remote) {
+        until(
+            &driver.client,
+            "both failing servers to record their first-start failures",
+            |line| {
+                seen_down = seen_down
+                    || (line["kind"] == "mcp_server_failed" && line["payload"]["server"] == "down");
+                seen_remote = seen_remote || remote_not_logged_in(line);
+                seen_down && seen_remote
+            },
+        );
+    }
     let rows = driver.servers("c_list");
 
     let names: Vec<&str> = rows
