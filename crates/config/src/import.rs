@@ -75,10 +75,14 @@ impl ImportSource {
 
     /// Reads the source's MCP servers: `settings.json` `mcpServers` for
     /// Claude Code, `config.toml` `[mcp_servers]` for Codex.
-    fn read_servers(&self, source_home: &Path) -> (Vec<RawServer>, Vec<LeftBehind>) {
+    fn read_servers(
+        &self,
+        source_home: &Path,
+        budget: &mut Budget,
+    ) -> (Vec<RawServer>, Vec<LeftBehind>) {
         match self {
-            Self::ClaudeCode => read_claude_servers(&source_home.join("settings.json")),
-            Self::Codex => read_codex_servers(&source_home.join("config.toml")),
+            Self::ClaudeCode => read_claude_servers(&source_home.join("settings.json"), budget),
+            Self::Codex => read_codex_servers(&source_home.join("config.toml"), budget),
         }
     }
 }
@@ -234,9 +238,18 @@ fn classify(home: &Path, source_home: &Path, source: ImportSource) -> Result<Pla
     let mut left_behind = Vec::new();
     let mut skills = Vec::new();
     let mut commands = Vec::new();
+    // One budget per source: every source file read charges what it
+    // keeps, so the worst case retained is one cap plus one in-flight file.
+    let mut budget = Budget::default();
     if plain(source_home, true)? {
-        read_skills(source_home, &mut skills, &mut left_behind)?;
-        read_flat(source, source_home, &mut commands, &mut left_behind)?;
+        read_skills(source_home, &mut skills, &mut left_behind, &mut budget)?;
+        read_flat(
+            source,
+            source_home,
+            &mut commands,
+            &mut left_behind,
+            &mut budget,
+        )?;
         top_level_left_behind(source, source_home, &mut left_behind)?;
     }
     let mut instructions = Vec::new();
@@ -246,8 +259,9 @@ fn classify(home: &Path, source_home: &Path, source: ImportSource) -> Result<Pla
         home,
         &mut instructions,
         &mut left_behind,
+        &mut budget,
     )?;
-    let (raw_servers, mut server_left) = source.read_servers(source_home);
+    let (raw_servers, mut server_left) = source.read_servers(source_home, &mut budget);
     left_behind.append(&mut server_left);
     let mut servers = Vec::new();
     for raw in raw_servers {
@@ -269,11 +283,10 @@ fn read_skills(
     source_home: &Path,
     skills: &mut Vec<PlannedFile>,
     left_behind: &mut Vec<LeftBehind>,
+    budget: &mut Budget,
 ) -> Result<(), ConfigError> {
     let dir = source_home.join("skills");
-    let mut names = read_dir_names(&dir)?;
-    names.sort();
-    for name in names {
+    for name in read_source_dir(&dir, "skills", left_behind)? {
         let entry = dir.join(&name);
         if !entry.is_dir() {
             left_behind.push(LeftBehind {
@@ -282,15 +295,18 @@ fn read_skills(
             });
             continue;
         }
-        match read_bytes(&entry.join("SKILL.md"))? {
-            Some(bytes) => skills.push(PlannedFile {
+        let item = format!("skills/{name}/SKILL.md");
+        match read_source(&entry.join("SKILL.md"), &item, budget, left_behind)? {
+            SourceFile::Read(bytes) => skills.push(PlannedFile {
                 name: name.clone(),
                 bytes,
             }),
-            None => left_behind.push(LeftBehind {
-                item: format!("skills/{name}/SKILL.md"),
+            SourceFile::Missing => left_behind.push(LeftBehind {
+                item,
                 reason: "holds no SKILL.md".into(),
             }),
+            // An over-cap file already reported itself; nothing more to say.
+            SourceFile::Skipped => {}
         }
     }
     Ok(())
@@ -306,12 +322,11 @@ fn read_flat(
     source_home: &Path,
     commands: &mut Vec<PlannedFile>,
     left_behind: &mut Vec<LeftBehind>,
+    budget: &mut Budget,
 ) -> Result<(), ConfigError> {
     let flat = source.flat_dir();
     let dir = source_home.join(flat);
-    let mut names = read_dir_names(&dir)?;
-    names.sort();
-    for name in names {
+    for name in read_source_dir(&dir, flat, left_behind)? {
         let path = dir.join(&name);
         if !path.is_file() || !name.ends_with(".md") {
             left_behind.push(LeftBehind {
@@ -320,12 +335,18 @@ fn read_flat(
             });
             continue;
         }
-        let Some(bytes) = read_bytes(&path)? else {
-            left_behind.push(LeftBehind {
-                item: format!("{flat}/{name}"),
-                reason: "cannot be read".into(),
-            });
-            continue;
+        let item = format!("{flat}/{name}");
+        let bytes = match read_source(&path, &item, budget, left_behind)? {
+            SourceFile::Read(bytes) => bytes,
+            SourceFile::Missing => {
+                left_behind.push(LeftBehind {
+                    item,
+                    reason: "cannot be read".into(),
+                });
+                continue;
+            }
+            // An over-cap file already reported itself; nothing more to say.
+            SourceFile::Skipped => continue,
         };
         let stem = name.trim_end_matches(".md").to_owned();
         let description = first_line(&bytes);
@@ -390,10 +411,14 @@ fn read_instruction(
     home: &Path,
     instructions: &mut Vec<PlannedFile>,
     left_behind: &mut Vec<LeftBehind>,
+    budget: &mut Budget,
 ) -> Result<(), ConfigError> {
     let name = source.instruction_name();
-    let Some(bytes) = read_bytes(&source_home.join(name))? else {
-        return Ok(());
+    let bytes = match read_source(&source_home.join(name), name, budget, left_behind)? {
+        SourceFile::Read(bytes) => bytes,
+        // Missing reads as no instruction; an over-cap file already
+        // reported itself.
+        SourceFile::Missing | SourceFile::Skipped => return Ok(()),
     };
     match read_bytes(&home.join(name))? {
         None => instructions.push(PlannedFile {
@@ -423,9 +448,7 @@ fn top_level_left_behind(
         ImportSource::ClaudeCode => &["skills", "commands", "CLAUDE.md", "settings.json"],
         ImportSource::Codex => &["skills", "prompts", "config.toml", "AGENTS.md"],
     };
-    let mut names = read_dir_names(source_home)?;
-    names.sort();
-    for name in names {
+    for name in read_source_dir(source_home, source.dir_name(), left_behind)? {
         if mapped.contains(&name.as_str()) {
             continue;
         }
@@ -486,6 +509,127 @@ fn read_dir_names(dir: &Path) -> Result<Vec<String>, ConfigError> {
     Ok(names)
 }
 
+/// A source directory read keeps this many entries: the next one proves
+/// there are more without counting them, so enumeration itself is bounded.
+const MAX_DIR_KEPT: usize = 512;
+/// A source file over this size is left unread: real harness homes hold
+/// KB-scale files, so the cap never bites honest setups.
+const MAX_FILE_BYTES: u64 = 1024 * 1024;
+/// A source's reads stop past this running total: the excess joins
+/// left-behind with reasons, so nothing is silently dropped.
+const MAX_SOURCE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// One source's running byte total: every source file read charges what
+/// it keeps, so the worst case retained is one cap plus one in-flight file.
+#[derive(Default)]
+struct Budget {
+    used: u64,
+}
+
+/// One source file's read: present bytes, a miss, or an over-cap skip the
+/// caller says nothing more about, already reported in left-behind.
+enum SourceFile {
+    Read(Vec<u8>),
+    Missing,
+    Skipped,
+}
+
+/// Reads a source file under both caps: missing reads as `Missing`; a file
+/// over 1 MiB, or one past the source's running 8 MiB total, is left unread
+/// and reported in left-behind under `item`, charging nothing. Read
+/// failures keep their `ConfigError` for the caller, which refuses or
+/// aborts as it does today.
+fn read_source(
+    file: &Path,
+    item: &str,
+    budget: &mut Budget,
+    left_behind: &mut Vec<LeftBehind>,
+) -> Result<SourceFile, ConfigError> {
+    let len = match fs::metadata(file) {
+        Ok(meta) => meta.len(),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(SourceFile::Missing),
+        Err(source) => {
+            return Err(ConfigError::Io {
+                file: file.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if len > MAX_FILE_BYTES {
+        left_behind.push(LeftBehind {
+            item: item.to_owned(),
+            reason: "larger than 1 MiB, left unread".into(),
+        });
+        return Ok(SourceFile::Skipped);
+    }
+    if budget.used.saturating_add(len) > MAX_SOURCE_BYTES {
+        left_behind.push(LeftBehind {
+            item: item.to_owned(),
+            reason: "over the 8 MiB read budget, left unread".into(),
+        });
+        return Ok(SourceFile::Skipped);
+    }
+    match fs::read(file) {
+        Ok(bytes) => {
+            budget.used = budget
+                .used
+                .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+            Ok(SourceFile::Read(bytes))
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(SourceFile::Missing),
+        Err(source) => Err(ConfigError::Io {
+            file: file.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+/// One source directory's entry names, bounded: at most 513 entries are
+/// read, the first 512 kept in sorted order, and a 513th reports `more
+/// than 512 entries, keeping the first 512` under `item`. A missing
+/// directory holds nothing, never an error.
+fn read_source_dir(
+    dir: &Path,
+    item: &str,
+    left_behind: &mut Vec<LeftBehind>,
+) -> Result<Vec<String>, ConfigError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(ConfigError::Io {
+                file: dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let mut names = Vec::new();
+    let mut seen = 0;
+    for entry in entries.take(MAX_DIR_KEPT + 1) {
+        seen += 1;
+        let entry = entry.map_err(|source| ConfigError::Io {
+            file: dir.to_path_buf(),
+            source,
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if crate::home::one_file_name(&name) {
+            names.push(name);
+        }
+    }
+    // A 513th entry proves there are more: the kept 512 stay the report's
+    // first 512 in sorted order, and the rest stay unread, named only by
+    // this entry.
+    names.truncate(MAX_DIR_KEPT);
+    names.sort();
+    if seen > MAX_DIR_KEPT {
+        left_behind.push(LeftBehind {
+            item: item.to_owned(),
+            reason: "more than 512 entries, keeping the first 512".into(),
+        });
+    }
+    Ok(names)
+}
+
 /// One MCP server as the source states it, before validation.
 struct RawServer {
     name: String,
@@ -506,10 +650,15 @@ enum RawValue {
 }
 
 /// Reads Claude Code's `settings.json` `mcpServers` object.
-fn read_claude_servers(file: &Path) -> (Vec<RawServer>, Vec<LeftBehind>) {
+fn read_claude_servers(file: &Path, budget: &mut Budget) -> (Vec<RawServer>, Vec<LeftBehind>) {
     let mut left_behind = Vec::new();
-    let Some(bytes) = (match read_bytes(file) {
-        Ok(bytes) => bytes,
+    let bytes = match read_source(file, "settings.json", budget, &mut left_behind) {
+        Ok(SourceFile::Read(bytes)) => bytes,
+        // Missing reads as no servers; an over-cap file already
+        // reported itself.
+        Ok(SourceFile::Missing) | Ok(SourceFile::Skipped) => {
+            return (Vec::new(), left_behind);
+        }
         Err(e) => {
             left_behind.push(LeftBehind {
                 item: "settings.json".into(),
@@ -517,8 +666,6 @@ fn read_claude_servers(file: &Path) -> (Vec<RawServer>, Vec<LeftBehind>) {
             });
             return (Vec::new(), left_behind);
         }
-    }) else {
-        return (Vec::new(), left_behind);
     };
     let value: Value = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
@@ -766,10 +913,15 @@ fn url_has_userinfo(url: &str) -> bool {
 /// `url` and `required` lines only. Anything outside that subset — other
 /// tables, other keys, multi-line or otherwise unparseable values — is
 /// refused per server to left-behind, never interpreted.
-fn read_codex_servers(file: &Path) -> (Vec<RawServer>, Vec<LeftBehind>) {
+fn read_codex_servers(file: &Path, budget: &mut Budget) -> (Vec<RawServer>, Vec<LeftBehind>) {
     let mut left_behind = Vec::new();
-    let Some(bytes) = (match read_bytes(file) {
-        Ok(bytes) => bytes,
+    let bytes = match read_source(file, "config.toml", budget, &mut left_behind) {
+        Ok(SourceFile::Read(bytes)) => bytes,
+        // Missing reads as no servers; an over-cap file already
+        // reported itself.
+        Ok(SourceFile::Missing) | Ok(SourceFile::Skipped) => {
+            return (Vec::new(), left_behind);
+        }
         Err(e) => {
             left_behind.push(LeftBehind {
                 item: "config.toml".into(),
@@ -777,8 +929,6 @@ fn read_codex_servers(file: &Path) -> (Vec<RawServer>, Vec<LeftBehind>) {
             });
             return (Vec::new(), left_behind);
         }
-    }) else {
-        return (Vec::new(), left_behind);
     };
     let body = match String::from_utf8(bytes) {
         Ok(body) => body,
@@ -2437,3 +2587,7 @@ mod tests {
         assert!(fixture.files_holding("sk-canary-3").is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "import_tests.rs"]
+mod import_tests;
