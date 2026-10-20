@@ -126,13 +126,16 @@ impl App {
     pub(crate) fn on_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
         self.attention_seen();
         if self.keys_screen_open() && !self.quit_open() {
-            if self.notice_overlay().is_none() {
+            // The notice overlay hides the screen: Esc closes the
+            // overlay, Ctrl+C goes through the bindings, and every other
+            // stroke reaches neither the screen nor the draft.
+            let effect = if self.notice_overlay().is_none() {
                 let height = self.keys_height();
                 let outcome = match self.keyboard.screen.as_mut() {
                     Some(screen) => screen.press(&stroke, &self.keyboard.keys, height),
                     None => Outcome::Nothing,
                 };
-                let effect = match outcome {
+                match outcome {
                     Outcome::Nothing => Effect::None,
                     Outcome::Close => {
                         self.keyboard.screen = None;
@@ -142,23 +145,18 @@ impl App {
                     // Ctrl+C goes through the bindings below, clearing
                     // then quitting as on any screen.
                     Outcome::Pass => return self.bindings_press(stroke, now),
-                };
-                self.edited();
-                self.settle();
-                return effect;
-            }
-            // The notice overlay hides the screen: Esc closes the
-            // overlay, Ctrl+C goes through the bindings, and every other
-            // stroke reaches neither the screen nor the draft.
-            if stroke == esc() {
+                }
+            } else if stroke == esc() {
                 self.notices.close();
-                self.edited();
-                self.settle();
+                Effect::None
+            } else if stroke == ctrl_c() {
+                return self.bindings_press(stroke, now);
+            } else {
                 return Effect::None;
-            }
-            if stroke != ctrl_c() {
-                return Effect::None;
-            }
+            };
+            self.edited();
+            self.settle();
+            return effect;
         }
         self.bindings_press(stroke, now)
     }
@@ -190,7 +188,13 @@ impl App {
         match self.keys().resolve(&stroke, self.key_context()) {
             Resolved::Key(key) => self.on_key(key, now),
             Resolved::Edit(edit) => self.on_edit(edit),
-            Resolved::Action(id) => self.on_action(id),
+            // An action settles here: it runs below every overlay with
+            // no Loop entry of its own to settle after it.
+            Resolved::Action(id) => {
+                let effect = self.on_action(id);
+                self.settle();
+                effect
+            }
             Resolved::Nothing => Effect::None,
         }
     }
@@ -223,7 +227,7 @@ impl App {
     }
 
     /// A click on the screen's `spot`: the ✕ closes it, a row selects
-    /// while browsing.
+    /// while browsing. The click entry settles after the dispatch.
     pub(crate) fn keys_screen_click(&mut self, spot: Spot) -> Effect {
         let height = self.keys_height();
         let close = self
@@ -235,7 +239,6 @@ impl App {
             self.keyboard.screen = None;
         }
         self.edited();
-        self.settle();
         Effect::None
     }
 
@@ -335,7 +338,6 @@ impl App {
             self.leave()
         };
         self.edited();
-        self.settle();
         effect
     }
 }
