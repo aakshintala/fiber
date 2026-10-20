@@ -32,6 +32,5 @@ crates/bench/examples/bench/pty_tests.rs	2841	grant	2026-10-20T20:19:18Z	Amoghs-
 crates/bench/examples/bench/idle_tests.rs	2841	grant	2026-10-20T20:19:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/sessions.rs	3a4914d2-b13d-4ee4-a38a-6b30e3bca34e	plan	2026-10-20T21:23:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/start_tests.rs	lane-2437	plan	2026-10-20T21:28:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-crates/loop/tests/review_jig.rs	lane-2908	plan	2026-10-20T21:57:23Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/tests/mcp_view.rs	2904	plan	2026-10-20T22:13:13Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/contract/src/tool.rs	543	grant	2026-10-20T23:42:36Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
