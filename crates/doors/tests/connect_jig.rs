@@ -26,6 +26,7 @@ use std::time::Duration;
 struct Jig {
     stdin: ChildStdin,
     lines: mpsc::Receiver<Value>,
+    stderr: Option<mpsc::Receiver<String>>,
     exited: mpsc::Receiver<ExitStatus>,
     group: u32,
     watchdog: Option<Watchdog>,
@@ -44,6 +45,15 @@ fn example_executable() -> std::path::PathBuf {
 }
 impl Jig {
     fn spawn(home: &Path, args: &[&str]) -> Self {
+        Self::spawn_inner(home, args, false)
+    }
+    /// [`spawn`](Self::spawn) with piped stderr: the fail-fast path's first
+    /// line is what the silent-hub test waits for. Existing callers keep
+    /// inheriting stderr.
+    fn spawn_with_stderr(home: &Path, args: &[&str]) -> Self {
+        Self::spawn_inner(home, args, true)
+    }
+    fn spawn_inner(home: &Path, args: &[&str], capture_stderr: bool) -> Self {
         let executable = example_executable();
         let mut child = Command::new(executable)
             .args(args)
@@ -55,7 +65,11 @@ impl Jig {
             .current_dir(home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(if capture_stderr {
+                Stdio::piped()
+            } else {
+                Stdio::inherit()
+            })
             .process_group(0)
             .spawn()
             .unwrap();
@@ -74,6 +88,20 @@ impl Jig {
                 }
             }
         });
+        // Only the fail-fast path writes stderr, so the piped reader never
+        // fills on success paths; the silent-hub test waits for its first line.
+        let stderr = capture_stderr.then(|| {
+            let pipe = child.stderr.take().unwrap();
+            let (err_tx, stderr) = mpsc::channel();
+            thread::spawn(move || {
+                for line in BufReader::new(pipe).lines() {
+                    if err_tx.send(line.unwrap()).is_err() {
+                        break;
+                    }
+                }
+            });
+            stderr
+        });
         let (exit_tx, exited) = mpsc::channel();
         thread::spawn(move || {
             let _sent = exit_tx.send(child.wait().unwrap());
@@ -81,6 +109,7 @@ impl Jig {
         Self {
             stdin,
             lines,
+            stderr,
             exited,
             group,
             watchdog,
@@ -90,6 +119,15 @@ impl Jig {
     }
     fn send(&mut self, command: Value) {
         writeln!(self.stdin, "{command}").unwrap();
+    }
+    /// The jig's first stderr line: the fail-fast line naming the blocked wait.
+    fn first_stderr(&self) -> String {
+        self.deadline.recv_or_fail(
+            self.stderr
+                .as_ref()
+                .expect("a jig that names its blocked wait spawns with piped stderr"),
+            "the jig's stderr names the blocked wait",
+        )
     }
     fn until(&self, predicate: impl Fn(&Value) -> bool) -> Vec<Value> {
         let mut lines = Vec::new();
@@ -110,6 +148,19 @@ impl Jig {
             .recv_or_fail(&self.exited, "the jig exits when its socket closes");
         self.reaped = true;
         assert!(status.success(), "{status}");
+        assert!(!fakes::kill_group(self.group, "0").unwrap());
+        self.watchdog
+            .take()
+            .unwrap()
+            .stand_down(Duration::from_secs(5));
+    }
+    /// Reaps a jig that must fail, as [`wait`](Self::wait) reaps one that must succeed.
+    fn wait_fails(&mut self) {
+        let status = self
+            .deadline
+            .recv_or_fail(&self.exited, "the jig exits after its stderr line");
+        self.reaped = true;
+        assert!(!status.success(), "a wedged hub is a failure: {status}");
         assert!(!fakes::kill_group(self.group, "0").unwrap());
         self.watchdog
             .take()
@@ -241,12 +292,10 @@ fn a_named_forwarded_hub_uses_the_same_client() {
     hub_journey(true);
 }
 
-/// A listed hub that accepts and then stays silent: the jig fails fast with
-/// a stderr line naming the wait instead of hanging past the hang guard.
-#[test]
-fn a_listed_hub_that_stays_silent_fails_fast_with_a_stderr_line() {
-    let temp = fakes::TempDir::new("fj");
-    let home = temp.path();
+/// A listed `fwd` hub that accepts one connection and then stays silent
+/// until the test releases it: the jig's hello wait, not a closed socket,
+/// is what the tests below bound. Returns the accept signal and the release.
+fn silent_hub(home: &Path) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
     let socket = home.join("silent");
     let listener = UnixListener::bind(&socket).unwrap();
     std::fs::write(
@@ -254,54 +303,32 @@ fn a_listed_hub_that_stays_silent_fails_fast_with_a_stderr_line() {
         json!({"hubs":{"fwd":{"address":format!("unix:{}", socket.display())}}}).to_string(),
     )
     .unwrap();
-    let deadline = Deadline::after(Duration::from_secs(10));
     let (accepted, accepted_rx) = mpsc::channel();
     let (done, done_rx) = mpsc::channel();
     thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         accepted.send(()).unwrap();
-        // Hold the accepted stream silent until the jig goes away: its
-        // hello wait, not a closed socket, is what the test bounds.
         let _stream = stream;
-        let _waited = deadline.recv(&done_rx);
+        let _waited = Deadline::after(Duration::from_secs(10)).recv(&done_rx);
     });
-    let mut child = Command::new(example_executable())
-        .args(["--hub", "fwd"])
-        .env_clear()
-        .envs(fakes::check_run())
-        .env("FIBER_HOME", home)
-        .env("HOME", home)
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .current_dir(home)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let group = child.id();
-    let watchdog = Watchdog::group(group);
-    let stderr = child.stderr.take().unwrap();
-    let (line_tx, lines) = mpsc::channel();
-    thread::spawn(move || {
-        let mut lines = BufReader::new(stderr).lines();
-        if let Some(Ok(line)) = lines.next() {
-            let _sent = line_tx.send(line);
-        }
-    });
-    let (exit_tx, exited) = mpsc::channel();
-    thread::spawn(move || {
-        let _sent = exit_tx.send(child.wait().unwrap());
-    });
-    deadline.recv_or_fail(&accepted_rx, "the silent hub accepts");
-    let line = deadline.recv_or_fail(&lines, "the jig's stderr names the blocked hello wait");
+    (accepted_rx, done)
+}
+
+/// A listed hub that accepts and then stays silent: the jig fails fast with
+/// a stderr line naming the wait instead of hanging past the hang guard.
+#[test]
+fn a_listed_hub_that_stays_silent_fails_fast_with_a_stderr_line() {
+    let temp = fakes::TempDir::new("fj");
+    let home = temp.path();
+    let (accepted_rx, done) = silent_hub(home);
+    let mut jig = Jig::spawn_with_stderr(home, &["--hub", "fwd"]);
+    jig.deadline
+        .recv_or_fail(&accepted_rx, "the silent hub accepts");
+    let line = jig.first_stderr();
     assert!(
         line.contains("hub_hello"),
         "the stderr line names the wait: {line}"
     );
-    let status = deadline.recv_or_fail(&exited, "the jig exits after its stderr line");
-    assert!(!status.success(), "a wedged hub is a failure: {status}");
+    jig.wait_fails();
     done.send(()).unwrap();
-    assert!(!fakes::kill_group(group, "0").unwrap());
-    watchdog.stand_down(Duration::from_secs(5));
 }
