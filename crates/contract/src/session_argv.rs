@@ -32,6 +32,8 @@ pub struct SessionArgv {
     /// Continue the session this rewind names as the session its
     /// `rewound` line points at.
     pub rewound_from: Option<SessionId>,
+    /// The session whose worktree this session continues: its id. Set from `--continues`, beside `--rewound-from`.
+    pub continues: Option<SessionId>,
     /// The parent session: its id.
     pub parent: Option<SessionId>,
     /// The delegate's job id in its parent session.
@@ -54,6 +56,7 @@ impl Default for SessionArgv {
             credential: None,
             worktree: false,
             rewound_from: None,
+            continues: None,
             parent: None,
             delegate_id: None,
             depth: None,
@@ -69,7 +72,7 @@ impl SessionArgv {
     /// travels attached for the same reason. The order is fixed, so a
     /// caller and its test read the same list: `session`, `--id`,
     /// `--workspace`, then `--model`, each `-c`, `--resume`, `--prompt`,
-    /// `--credential`, `--worktree`, `--rewound-from`, `--parent`,
+    /// `--credential`, `--worktree`, `--rewound-from`, `--continues`, `--parent`,
     /// `--delegate-id`, `--depth`, `--login-shell`, each only when set.
     #[must_use]
     pub fn to_argv(&self) -> Vec<OsString> {
@@ -103,6 +106,9 @@ impl SessionArgv {
         }
         if let Some(rewound_from) = &self.rewound_from {
             argv.push(OsString::from(format!("--rewound-from={}", rewound_from.0)));
+        }
+        if let Some(continues) = &self.continues {
+            argv.push(OsString::from(format!("--continues={}", continues.0)));
         }
         if let Some(parent) = &self.parent {
             argv.push(OsString::from(format!("--parent={}", parent.0)));
