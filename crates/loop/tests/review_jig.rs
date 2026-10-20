@@ -11,7 +11,7 @@
 
 mod support;
 
-use std::io::{Cursor, Write};
+use std::io::{BufRead, BufReader, Cursor, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -1824,4 +1824,175 @@ fn a_blocked_call_a_hook_rewrote_replays_with_the_rewritten_arguments() {
         assert!(text.contains("Paris"), "{text}");
         assert!(!text.contains("Nowhere"), "{text}");
     }
+}
+
+/// Quotes `text` for an inline `/bin/sh -c` script: single quotes with
+/// embedded quotes escaped, so temporary paths with spaces or quotes
+/// still reach the wrapper intact.
+fn sh_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// A `review` exchange held before the binary starts: the wrapper has
+/// acked and is blocked reading the hold FIFO, and the exchange's result
+/// arrives on `finished` once the hold is released. Dropping this value
+/// without releasing kills the group through the watchdog.
+struct HeldExchange {
+    /// The hold directory, kept alive while the FIFO is held.
+    _home: fakes::TempDir,
+    /// The FIFO's write side, kept open until the exchange finishes so
+    /// the release line never meets a closed writer.
+    hold: std::fs::File,
+    group: u32,
+    watchdog: Watchdog,
+    finished: mpsc::Receiver<std::io::Result<Output>>,
+}
+
+impl HeldExchange {
+    /// Writes the release line, then requires the replayed exchange to
+    /// finish within [`JIG_DEADLINE`]: the held start above took none of
+    /// the exchange's own bound.
+    fn release_and_finish(mut self) -> Output {
+        self.hold.write_all(b"release\n").unwrap();
+        let output = match Deadline::after(JIG_DEADLINE).recv(&self.finished) {
+            Ok(output) => output.unwrap(),
+            Err(_) => {
+                kill_group(self.group, "KILL").unwrap_or(false);
+                let output = Deadline::after(Duration::from_secs(5))
+                    .recv(&self.finished)
+                    .expect("the review jig died after KILL");
+                panic!(
+                    "the review jig finished in time: {}",
+                    String::from_utf8_lossy(&output.unwrap().stdout)
+                );
+            }
+        };
+        self.watchdog.stand_down(Duration::from_secs(5));
+        output
+    }
+}
+
+/// Spawns the built binary through an inline `/bin/sh -c` wrapper that
+/// writes one ack line to the hold FIFO, blocks reading the hold FIFO,
+/// then execs the binary: no script file is written or executed. The
+/// parent pre-opens the FIFO read-write so neither side's open blocks,
+/// writes `answers` to the wrapper's stdin as [`run_jig`] does, and reads
+/// the ack under [`START_BOUND`] as the signal the child is blocked.
+/// Returns the exchange still held; the test releases it.
+fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> HeldExchange {
+    let home = fakes::TempDir::new("fiber-review-jig-hold");
+    let fifo_path = home.path().join("hold");
+    fakes::fifo(&fifo_path);
+    let hold = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo_path)
+        .unwrap();
+    let fifo = sh_quote(&fifo_path.to_string_lossy());
+    let mut exec = format!(
+        "exec {} {}",
+        sh_quote(&example_path().to_string_lossy()),
+        sh_quote(&dir.to_string_lossy())
+    );
+    for arg in args {
+        exec.push(' ');
+        exec.push_str(&sh_quote(arg));
+    }
+    let script = format!("printf 'ack\\n' >> {fifo}; IFS= read -r release < {fifo}; {exec}");
+    let mut child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let watchdog = Watchdog::group(group);
+    if !answers.is_empty() {
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(answers.as_bytes())
+            .unwrap();
+    }
+    if !keep_open {
+        child.stdin.take();
+    }
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let acked = {
+        let (ack_done, acked) = mpsc::channel();
+        let ack = hold.try_clone().unwrap();
+        thread::spawn(move || {
+            let mut line = String::new();
+            let read = BufReader::new(ack).read_line(&mut line).map(|_| line);
+            ack_done.send(read).unwrap();
+        });
+        acked
+    };
+    match Deadline::after(START_BOUND).recv(&acked) {
+        Ok(Ok(line)) => assert_eq!(line, "ack\n", "the wrapper acks before it blocks"),
+        Ok(Err(err)) => {
+            kill_group(group, "KILL").unwrap_or(false);
+            drop(
+                Deadline::after(Duration::from_secs(5))
+                    .recv(&finished)
+                    .expect("the wrapper died after KILL"),
+            );
+            watchdog.stand_down(Duration::from_secs(5));
+            panic!("the hold FIFO closed before the wrapper acked: {err}");
+        }
+        Err(_) => {
+            kill_group(group, "KILL").unwrap_or(false);
+            drop(
+                Deadline::after(Duration::from_secs(5))
+                    .recv(&finished)
+                    .expect("the wrapper died after KILL"),
+            );
+            watchdog.stand_down(Duration::from_secs(5));
+            panic!("waited {START_BOUND:?} for the wrapper's ack");
+        }
+    }
+    HeldExchange {
+        _home: home,
+        hold,
+        group,
+        watchdog,
+        finished,
+    }
+}
+
+/// A start stalled past the exchange deadline still replays once
+/// released: the held start takes none of the exchange's own bound. The
+/// hold is two bounded receives, never a sleep; the 12 s hold outlasts
+/// [`JIG_DEADLINE`], so a single bound from spawn would kill this
+/// exchange with empty stdout.
+#[test]
+fn stalled_start_keeps_the_exchange_deadline_whole() {
+    let fixture = main_fixture();
+    let held = spawn_held_jig(&fixture.dir, "1\n", false, &[]);
+    // The exchange has not answered while the start is held: a short
+    // bounded receive times out instead of answering.
+    assert!(
+        matches!(
+            Deadline::after(Duration::from_secs(3)).recv(&held.finished),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the held start answers nothing"
+    );
+    // The hold outlasts the exchange deadline with no sleep: a 12 s
+    // bounded receive expires.
+    assert!(
+        matches!(
+            Deadline::after(Duration::from_secs(12)).recv(&held.finished),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the exchange waits out the held start"
+    );
+    let lines = stdout_lines(&held.release_and_finish());
+    assert_eq!(lines.len(), 5);
+    assert!(lines[0].get("stages").is_some());
 }
