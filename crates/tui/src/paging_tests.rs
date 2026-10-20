@@ -4242,7 +4242,7 @@ fn two_wrong_shapes_in_one_slot_report_twice() {
 }
 
 /// The reload command clears the reported set through the slash path:
-/// the same extension failing again reports anew.
+/// the same extension failing again dedupes onto the standing row.
 #[test]
 fn reload_reports_the_same_failure_again() {
     let lines = session(1, true);
@@ -4256,9 +4256,9 @@ fn reload_reports_the_same_failure_again() {
         app.on_key(Key::Char(ch), now());
     }
     let _ = app.on_key(Key::Enter, now());
-    // The same extension failing again reports anew: /reload dropped the
-    // old row with the reported set, so the re-failure's push is the one
-    // row standing (#2843: a repeat push while stacked adds no row).
+    // The same extension failing again adds no row: the re-failure's
+    // push dedupes onto the standing row, which stays until it fades
+    // or ✕ dismisses it.
     app.use_renderer(Rc::new(Fake::failing("alpha")));
     search(&app);
     assert!(app.drawn(&[]));
