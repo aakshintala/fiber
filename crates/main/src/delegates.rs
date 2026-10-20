@@ -689,27 +689,18 @@ fn read_fork_point(
     parent: &SessionId,
     action: Option<&ActionId>,
 ) -> Result<jobs::Forking, Failure> {
-    let path = dir.join("events.jsonl");
+    // The parent's own log through the `log` crate, so the session path
+    // stays there: a reader stops at the last complete line.
     let unreadable = |detail: String| {
         doors::failure(
             ErrorCode::ToolError,
             format!(
                 "Cannot fork from the session log `{}`: {detail}",
-                path.display()
+                dir.display()
             ),
         )
     };
-    let text = std::fs::read_to_string(&path).map_err(|error| unreadable(error.to_string()))?;
-    let mut lines = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let envelope: contract::Envelope = serde_json::from_str(line)
-            .map_err(|_| unreadable("a line does not parse".to_owned()))?;
-        lines.push(envelope);
-    }
+    let lines = log::read(dir).map_err(|error| unreadable(error.to_string()))?;
     // The calling message and its `seq`, from the call's own
     // `tool_call_requested` or from the log's latest message.
     let calling = match action {
