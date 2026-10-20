@@ -71,7 +71,7 @@ pub(crate) struct Layout {
     /// The hidden rail's grip: column 0, while the rail is wanted and
     /// not drawn.
     pub(crate) grip: Option<Rect>,
-    /// The conversation column, its header row included.
+    /// The conversation column, whose first row is conversation.
     pub(crate) column: Rect,
     /// The panel, its first column the draggable edge.
     pub(crate) panel: Option<Rect>,
