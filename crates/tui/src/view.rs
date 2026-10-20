@@ -392,6 +392,23 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
     Some(Position::new(x, y))
 }
 
+/// Draws one conversation row into its rect: the line with its own
+/// background filling the column, and, without colour on a card tint,
+/// the thin-box sides (`docs/tui.md`, "Look").
+fn draw_row(line: Line<'_>, rect: Rect, buf: &mut Buffer) {
+    let fill = Style {
+        bg: line.style.bg,
+        ..Style::default()
+    };
+    paragraph(line).style(fill).render(rect, buf);
+    let turn_tint = fill.bg == Some(Role::Turn.color())
+        || fill.bg == Some(Role::Surface.color())
+        || fill.bg == Some(Role::Handoff.color());
+    if crate::surface::box_fit(rect.width) && turn_tint {
+        crate::surface::draw_sides(buf, rect);
+    }
+}
+
 /// Blanks the hint's reserved row with its card's tint, so no previous
 /// frame's cells show past the hint (`docs/tui.md`, "Links").
 fn blank_row(buf: &mut Buffer, area: Rect, y: u16, style: Style) {
@@ -418,6 +435,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         lines,
         turns,
         spins,
+        pin,
     } = app.shown(top, height);
     // Where this frame's turn targets splice in: after the targets
     // drawn before the conversation, before its line targets.
@@ -537,6 +555,20 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         }
     }
     targets.splice(base..base, turned);
+    // The pinned header over row 0, drawn as the row it stands for:
+    // never in an item transcript, and never while following.
+    if let Some(pin) = pin
+        && !app.item_open()
+        && app.top().is_some()
+        && area.height > 0
+    {
+        let rect = Rect::new(area.x, area.y, area.width, 1);
+        draw_row(pin.line, rect, buf);
+        targets.push(Target {
+            id: TargetId::Line(pin.target),
+            rect,
+        });
+    }
     // The hint's row past the last line, when the scroll freed it
     // there: blank it with the card tint, as in the loop.
     if gap.is_some_and(|gap| gap == y) {

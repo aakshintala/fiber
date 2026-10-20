@@ -643,8 +643,9 @@ impl App {
         };
         let (top, _) = self.scroll();
         let height = self.conversation_height();
-        if !(top..top.saturating_add(height)).contains(&row) {
-            self.screen.jump(row);
+        let behind_pin = self.screen.pin(height).is_some() && row == top;
+        if !(top..top.saturating_add(height)).contains(&row) || behind_pin {
+            self.screen.land(row);
         }
         self.find.revealed();
     }
