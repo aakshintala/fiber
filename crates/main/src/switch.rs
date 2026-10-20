@@ -684,8 +684,6 @@ pub(crate) fn prepare(
         &mut notices,
     )
     .map_err(rejection)?;
-    crate::connect::speaks(resolved.model.protocol, &reference)
-        .map_err(|failure| invalid(failure.message))?;
     // The reviewer's model, before the read: Fiber never reviews with the
     // session's own model.
     let judge = crate::reviewer_reference(&now.config, &resolved).and_then(|typed| {

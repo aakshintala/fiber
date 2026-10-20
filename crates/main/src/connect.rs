@@ -14,33 +14,13 @@ use contract::shapes::Failure;
 use doors::failure;
 use extensions::{CredentialPair, LuaProvider};
 use provider::anthropic_messages::Messages;
+use provider::bedrock_converse::Converse;
 use provider::google_generative_ai::Gemini;
 use provider::openai_completions::Completions;
 use provider::openai_responses::Responses;
 use provider::scripted::{Script, ScriptError, Scripted};
 use provider::{Compat, Endpoint, RequestObservation};
 use serde_json::Value;
-
-/// Whether this Fiber speaks `protocol`, checked before anything is read
-/// for the model `reference`: `bedrock-converse` fails as [`connect`] does.
-pub(crate) fn speaks(protocol: Protocol, reference: &str) -> Result<(), Failure> {
-    match extensions::protocol_refusal(protocol, reference) {
-        Some(message) => Err(failure(ErrorCode::ProtocolUnsupported, message)),
-        None => Ok(()),
-    }
-}
-
-/// The model `reference` speaks a protocol this Fiber does not speak.
-fn unspoken(reference: &str) -> Failure {
-    match extensions::protocol_refusal(Protocol::BedrockConverse, reference) {
-        Some(message) => failure(ErrorCode::ProtocolUnsupported, message),
-        // Unreachable: the shared check refuses `bedrock-converse`.
-        None => failure(
-            ErrorCode::ProtocolUnsupported,
-            format!("The model `{reference}` speaks bedrock-converse."),
-        ),
-    }
-}
 
 /// Where a session runs: the workspace a `scripted` model's path resolves
 /// against, and the clock its pauses wait on (`docs/model-routing.md`, "The
@@ -249,7 +229,15 @@ fn build(
             });
             (Arc::new(gemini), observe)
         }
-        Protocol::BedrockConverse => return Err(unspoken(&model.reference())),
+        // `cache_key_header` is not a flag this protocol reads
+        // (`docs/configuration.md`, "A provider's data").
+        Protocol::BedrockConverse => {
+            let converse = Converse::new(endpoint);
+            let observe = diag.and_then(|diag| {
+                observed(diag, &here.clock, converse.clone(), Converse::call_observed)
+            });
+            (Arc::new(converse), observe)
+        }
         Protocol::Scripted => (scripted(&model.model.id, here)?, None),
     };
     // The quota tail mirrors [`connect`]: the costed provider carries the

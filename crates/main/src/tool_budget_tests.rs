@@ -212,7 +212,8 @@ fn measure(definitions: &[ToolDefinition]) -> Measured {
 }
 
 /// Whether each wire object carries the name it is paired with: `name` at
-/// the top level, or `function.name` in `openai-completions`' shape.
+/// the top level, `function.name` in `openai-completions`' shape, or
+/// `toolSpec.name` in `bedrock-converse`'s.
 fn aligned(names: &[String], objects: &[Map<String, Value>]) -> Result<(), String> {
     if names.len() != objects.len() {
         return Err(format!(
@@ -225,6 +226,7 @@ fn aligned(names: &[String], objects: &[Map<String, Value>]) -> Result<(), Strin
         let wire = object
             .get("name")
             .or_else(|| object.get("function")?.get("name"))
+            .or_else(|| object.get("toolSpec")?.get("name"))
             .and_then(Value::as_str);
         match wire {
             Some(wire) if wire == name => {}
