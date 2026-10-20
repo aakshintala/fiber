@@ -4,6 +4,8 @@
 //! reload's cache rebuild costs. One view is open at a time; while it is,
 //! it takes every key but Ctrl+C.
 
+mod credential;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -43,6 +45,8 @@ pub(crate) enum ConfigView {
     Login,
     /// `/mcp`.
     Mcp,
+    /// `/credential`.
+    Credential,
 }
 
 /// The open view.
@@ -60,6 +64,8 @@ enum Open {
     Login(Login),
     /// `/mcp`.
     Mcp(Mcp),
+    /// `/credential`.
+    Credential(credential::Picker),
     /// A view with no seam to read through, by its title and the
     /// command that opened it.
     Unavailable(&'static str, &'static str),
@@ -73,6 +79,7 @@ impl Open {
             Open::Tools(tools) => tools.rejected(id, message),
             Open::Skills(skills) => skills.rejected(id, message),
             Open::Mcp(mcp) => mcp.rejected(id, message),
+            Open::Credential(picker) => picker.rejected(id, message),
             Open::Settings(_) | Open::Rules(_) | Open::Login(_) | Open::Unavailable(..) => {}
         }
     }
@@ -118,6 +125,8 @@ pub(in crate::app) struct ConfigViews {
     tickets: LoginTicket,
     /// The browser login start the loop has not picked up yet.
     pending_login: Option<LoginStart>,
+    /// The newest credential query and saving switch awaiting answers.
+    credential: credential::Waits,
 }
 
 impl App {
@@ -234,6 +243,17 @@ impl App {
         self.close_session_view();
         self.config_views.open = None;
         let open = match (self.config_views.seam.clone(), view) {
+            (_, ConfigView::Credential) => {
+                let Some((id, line)) = self.send_config_command("credentials", None) else {
+                    return Effect::None;
+                };
+                self.outbox.pending.insert(
+                    id.clone(),
+                    (super::Kind::Command, crate::input::Draft::default()),
+                );
+                self.config_views.open = Some(Open::Credential(credential::Picker::open(id)));
+                return Effect::Send(vec![line]);
+            }
             (Some(seam), ConfigView::Settings) => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
@@ -367,6 +387,11 @@ impl App {
         if self.config_views.open.is_none() || self.quit_open() || *key == Key::CtrlC {
             return None;
         }
+        let height = self.config_view_height();
+        if let Some(Open::Credential(picker)) = &mut self.config_views.open {
+            let pick = picker.key(key, height);
+            return Some(self.credential_pick(pick));
+        }
         let act = match self.config_views.seam.clone() {
             Some(seam) => {
                 let Some(workspace) = self.view_workspace() else {
@@ -380,7 +405,7 @@ impl App {
                     Some(Open::Mcp(mcp)) => mcp.key(key, &ctx),
                     Some(Open::Rules(rules)) => rules.key(key, &ctx),
                     Some(Open::Login(login)) => login.key(key, &ctx),
-                    Some(Open::Unavailable(..)) | None => esc(key),
+                    Some(Open::Credential(_) | Open::Unavailable(..)) | None => esc(key),
                 }
             }
             None => esc(key),
@@ -417,7 +442,7 @@ impl App {
                         login.edit_key(edit);
                         Act::Stay
                     }
-                    Some(Open::Unavailable(..)) | None => Act::Stay,
+                    Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
                 }
             }
             None => Act::Stay,
@@ -427,6 +452,11 @@ impl App {
 
     /// A click on the open view's `spot`.
     pub(in crate::app) fn config_view_click(&mut self, spot: Spot) -> Effect {
+        let height = self.config_view_height();
+        if let Some(Open::Credential(picker)) = &mut self.config_views.open {
+            let pick = picker.click(spot, height);
+            return self.credential_pick(pick);
+        }
         let act = match (self.config_views.seam.clone(), spot) {
             (_, Spot::Close) => Act::Close,
             (Some(seam), Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
@@ -441,7 +471,7 @@ impl App {
                     Some(Open::Mcp(mcp)) => mcp.click(spot, &ctx),
                     Some(Open::Rules(rules)) => rules.click(spot, &ctx),
                     Some(Open::Login(login)) => login.click(spot, &ctx),
-                    Some(Open::Unavailable(..)) | None => Act::Stay,
+                    Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
                 }
             }
             (None, Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
@@ -625,6 +655,7 @@ impl App {
             Open::Tools(tools) => tools.frame(usage),
             Open::Skills(skills) => skills.frame(self.config_view_height()),
             Open::Mcp(mcp) => mcp.frame(usage),
+            Open::Credential(picker) => picker.frame(),
             Open::Rules(rules) => rules.frame(),
             Open::Login(_) => return None,
             Open::Unavailable(title, command) => Frame {
@@ -693,7 +724,13 @@ impl App {
                 Some(Open::Settings(settings)) => settings.reread(&ctx),
                 Some(Open::Rules(rules)) => rules.reread(&ctx),
                 Some(Open::Skills(skills)) => skills.reread(&ctx),
-                Some(Open::Tools(_) | Open::Mcp(_) | Open::Login(_) | Open::Unavailable(..))
+                Some(
+                    Open::Credential(_)
+                    | Open::Tools(_)
+                    | Open::Mcp(_)
+                    | Open::Login(_)
+                    | Open::Unavailable(..),
+                )
                 | None => {}
             }
         }
@@ -706,20 +743,21 @@ impl App {
     /// any line with another view open, does nothing. Returns the lines
     /// the fold sends.
     pub(in crate::app) fn config_views_line(&mut self, envelope: &Envelope) -> Vec<String> {
+        let credential_send = self.credential_line(envelope);
         if !matches!(
             self.config_views.open,
             Some(Open::Tools(_) | Open::Skills(_) | Open::Mcp(_))
         ) {
-            return Vec::new();
+            return credential_send;
         }
         let Some(seam) = self.config_views.seam.clone() else {
-            return Vec::new();
+            return credential_send;
         };
         let Some(workspace) = self.view_workspace() else {
-            return Vec::new();
+            return credential_send;
         };
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
-        let mut send = Vec::new();
+        let mut send = credential_send;
         match envelope.kind.as_str() {
             "command_accepted" => {
                 if let Some(accepted) = super::read!(envelope, CommandAccepted) {
@@ -751,7 +789,8 @@ impl App {
                             }
                         },
                         Some(
-                            Open::Settings(_)
+                            Open::Credential(_)
+                            | Open::Settings(_)
                             | Open::Rules(_)
                             | Open::Login(_)
                             | Open::Unavailable(..),

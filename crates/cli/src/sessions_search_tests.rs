@@ -195,7 +195,7 @@ fn searching(
     in_repository: bool,
     all: bool,
     json: bool,
-) -> (Result<(), contract::shapes::Failure>, String, String) {
+) -> (Result<(), crate::CliError>, String, String) {
     let mut out = Vec::new();
     let mut err = Vec::new();
     let ran = run(
@@ -684,12 +684,11 @@ fn a_failed_stdout_write_is_io_failed() {
         &mut err,
     )
     .unwrap_err();
+    let crate::CliError::Forwarded(failure) = &failure else {
+        panic!("expected a forwarded failure, got {failure:?}");
+    };
     assert_eq!(failure.code, ErrorCode::IoFailed);
-    assert!(
-        failure.message.starts_with("standard output:"),
-        "{}",
-        failure.message
-    );
+    assert_eq!(failure.message, "standard output: closed");
 }
 
 #[test]

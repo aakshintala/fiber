@@ -12,14 +12,15 @@ use contract::shapes::Failure;
 use contract::{CommandId, ErrorCode, HubLine, SessionId};
 use serde_json::Value;
 
+use crate::CliError;
 use crate::approve::{confirmed, say};
-use crate::{failed, project_of, usage, with_dirs, write_line};
+use crate::{project_of, with_dirs, write_line};
 
 /// What the delete prompt asks.
 const DELETE_PROMPT: &str = "delete? [y/N]";
 
 /// The usage failure when there is nobody to ask.
-const DELETE_NOBODY: &str =
+pub(crate) const DELETE_NOBODY: &str =
     "`fiber sessions delete` has no terminal to ask on. Pass `--yes` to delete without asking.";
 
 /// The `id` of the one command `delete` sends.
@@ -43,18 +44,17 @@ fn run(
     selector: &str,
     path: Option<&Path>,
     out: &mut dyn Write,
-) -> Result<PathBuf, Failure> {
+) -> Result<PathBuf, CliError> {
     let (sessions, _) = project_of(home, workspace)?;
     let project = doors::project(workspace);
     let id = log::resolve(&sessions, selector, &|started| {
         doors::project(Path::new(started)) == project
-    })
-    .map_err(|e| failed(e.code(), e))?;
+    })?;
     let target = match path {
         Some(path) => workspace.join(path),
         None => workspace.join(&id.0),
     };
-    log::export(&sessions.join(&id.0), &target).map_err(|e| failed(e.code(), e))?;
+    log::export(&sessions.join(&id.0), &target)?;
     write_line(out, &target.display().to_string())?;
     Ok(target)
 }
@@ -110,16 +110,15 @@ fn delete_run(
     ask: Ask<'_>,
     out: &mut dyn Write,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     if !ask.yes && !ask.terminal {
-        return Err(usage(DELETE_NOBODY));
+        return Err(CliError::DeleteNobody);
     }
     let (sessions, _) = project_of(home, workspace)?;
     let project = doors::project(workspace);
     let id = log::resolve(&sessions, selector, &|started| {
         doors::project(Path::new(started)) == project
-    })
-    .map_err(|e| failed(e.code(), e))?;
+    })?;
     let mut listed = vec![id.clone()];
     if cascade {
         listed.extend(log::dependents(home, &id));
@@ -137,9 +136,9 @@ fn delete_run(
             return Ok(());
         }
     }
-    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
+    let (stream, _) = connect().map_err(CliError::Hub)?;
     let mut read = BufReader::new(stream);
-    send_delete(&mut read, DELETE_ID, &id, cascade)?;
+    delete_value(&mut read, DELETE_ID, &id, cascade)?;
     print_ids(out, &listed)
 }
 
@@ -152,7 +151,19 @@ pub(crate) fn send_delete(
     id: &SessionId,
     cascade: bool,
 ) -> Result<(), Failure> {
-    request(
+    // debt: a later #923 part deletes this wrapper once prune calls `delete_value`.
+    delete_value(read, command_id, id, cascade).map_err(Failure::from)
+}
+
+/// The typed core behind [`send_delete`]: sends `delete` for `id` and
+/// reads until its answer, skipping every other line.
+fn delete_value(
+    read: &mut BufReader<UnixStream>,
+    command_id: &str,
+    id: &SessionId,
+    cascade: bool,
+) -> Result<(), CliError> {
+    request_value(
         read,
         command_id,
         HubCommand::Delete(Delete {
@@ -166,11 +177,8 @@ pub(crate) fn send_delete(
 
 /// Local connections keep their existing message; listed failures keep their code.
 pub(crate) fn hub_failure(error: doors::Error) -> Failure {
-    if let doors::Error::Local(error) = error {
-        failed(ErrorCode::IoFailed, format!("the hub: {error}"))
-    } else {
-        failed(error.code(), error)
-    }
+    // debt: a later #923 part deletes this wrapper once its callers build `CliError::Hub` directly.
+    Failure::from(CliError::Hub(error))
 }
 
 /// The hub's answer to `command_id`, when `line` carries it: the accepted
@@ -178,10 +186,8 @@ pub(crate) fn hub_failure(error: doors::Error) -> Failure {
 /// `None` for any other line. A rejection without a usable code is
 /// `io_failed`; one without a message names the command.
 pub(crate) fn answer_of(line: &HubLine, id: &str, command: &str) -> Option<Result<Value, Failure>> {
-    if line.payload.get("command_id").and_then(Value::as_str) != Some(id) {
-        return None;
-    }
-    matched(line.clone(), id, || command.to_owned())
+    // debt: a later #923 part deletes this wrapper once hub_status returns `CliError`.
+    matched(line.clone(), id, || command.to_owned()).map(|r| r.map_err(Failure::from))
 }
 
 /// The answer body over an owned line: moves an accepted `result` out of
@@ -191,7 +197,7 @@ fn matched(
     mut line: HubLine,
     id: &str,
     command: impl FnOnce() -> String,
-) -> Option<Result<Value, Failure>> {
+) -> Option<Result<Value, CliError>> {
     if line.payload.get("command_id").and_then(Value::as_str) != Some(id) {
         return None;
     }
@@ -208,7 +214,7 @@ fn matched(
                 Some(Value::String(message)) => message,
                 _ => format!("the hub refused `{}`", command()),
             };
-            Some(Err(failed(code, message)))
+            Some(Err(CliError::Rejected { code, message }))
         }
         _ => None,
     }
@@ -232,34 +238,25 @@ fn name_of(bytes: &[u8]) -> String {
 /// skipping every other line: the accepted `result`, `null` when it has
 /// none. An end before the answer is `io_failed`; a rejection is a
 /// failure with its code and message.
-pub(crate) fn request(
+pub(crate) fn request_value(
     read: &mut BufReader<UnixStream>,
     command_id: &str,
     command: HubCommand,
-) -> Result<Value, Failure> {
+) -> Result<Value, CliError> {
     let line = HubCommandLine {
         id: CommandId(command_id.to_owned()),
         command,
     };
-    let bytes = serde_json::to_vec(&line).map_err(|e| {
-        failed(
-            ErrorCode::IoFailed,
-            format!("a command could not be written as JSON: {e}"),
-        )
-    })?;
-    let lost = |e: io::Error| failed(ErrorCode::IoFailed, format!("the hub: {e}"));
+    let bytes = serde_json::to_vec(&line).map_err(CliError::CommandEncode)?;
+    let lost = |e: io::Error| CliError::Hub(doors::Error::Local(e));
     support::framing::write_line(read.get_mut(), &bytes).map_err(lost)?;
     loop {
         let Some(buf) =
             support::framing::read_line(read, support::framing::MAX_LINE).map_err(lost)?
         else {
-            return Err(failed(
-                ErrorCode::IoFailed,
-                format!(
-                    "the hub closed the connection before answering `{}`",
-                    name_of(&bytes)
-                ),
-            ));
+            return Err(CliError::HubClosed {
+                command: name_of(&bytes),
+            });
         };
         let Ok(answer) = serde_json::from_slice::<HubLine>(&buf) else {
             continue;
@@ -270,7 +267,18 @@ pub(crate) fn request(
     }
 }
 
-fn print_ids(out: &mut dyn Write, ids: &[SessionId]) -> Result<(), Failure> {
+/// The `Failure` wrapper over [`request_value`] for the callers outside
+/// the sessions family, which still return `Failure`.
+pub(crate) fn request(
+    read: &mut BufReader<UnixStream>,
+    command_id: &str,
+    command: HubCommand,
+) -> Result<Value, Failure> {
+    // debt: a later #923 part deletes this wrapper once hub_pair, hub_token, hub_refresh and hub_list return `CliError`.
+    request_value(read, command_id, command).map_err(Failure::from)
+}
+
+fn print_ids(out: &mut dyn Write, ids: &[SessionId]) -> Result<(), CliError> {
     for id in ids {
         write_line(out, &id.0)?;
     }

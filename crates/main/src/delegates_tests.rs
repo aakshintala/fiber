@@ -339,11 +339,12 @@ fn launched() -> jobs::Launched {
         session_id: SessionId("s_child".into()),
         job_id: contract::JobId("j_1".into()),
         parent: SessionId("s_parent".into()),
-        model: "fake/m:high".to_owned(),
         prompt: "scan the tree".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
-        resume: false,
-        credential: None,
+        start: jobs::Start::Fresh(jobs::Fresh::Spawn {
+            model: "fake/m:high".to_owned(),
+            credential: None,
+        }),
     }
 }
 
@@ -545,11 +546,9 @@ fn resumed() -> jobs::Launched {
         session_id: SessionId("s_child".into()),
         job_id: contract::JobId("j_1".into()),
         parent: SessionId("s_parent".into()),
-        model: "fake/m:high".to_owned(),
         prompt: "- also check Y".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
-        resume: true,
-        credential: None,
+        start: jobs::Start::Resume,
     }
 }
 
@@ -577,6 +576,84 @@ fn a_resume_builds_the_resume_argv_with_the_message_whole_and_no_model() {
         ]
     );
     assert!(!argv.iter().any(|arg| arg.starts_with("--model")));
+}
+
+#[test]
+fn a_fork_builds_the_fork_argv_with_no_model_or_credential() {
+    let fork = jobs::Launched {
+        start: jobs::Start::Fresh(jobs::Fresh::Fork {
+            from: jobs::Forking {
+                point: contract::shapes::Point {
+                    session_id: SessionId("s_parent".into()),
+                    seq: contract::Seq(41),
+                },
+                model: "fiber:parent-model".to_owned(),
+            },
+        }),
+        prompt: "-go".to_owned(),
+        ..launched()
+    };
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&fork);
+    assert_eq!(command.get_program(), "/bin/fiber");
+    let argv: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // One `--forked-from` and one `--forked-seq` in `to_argv` order,
+    // with the delegate's ids and no `--model`, `-c` or `--credential`:
+    // a fork continues its point on the parent's build.
+    assert_eq!(
+        argv,
+        [
+            "session",
+            "--id=s_child",
+            "--workspace=/w",
+            "--prompt=-go",
+            "--forked-from=s_parent",
+            "--forked-seq=41",
+            "--parent=s_parent",
+            "--delegate-id=j_1",
+            "--depth=1",
+        ]
+    );
+    // Side by side, the same launch as a spawn carries the model, the
+    // credential pair and the label, none of which the fork emits.
+    let spawned = jobs::Launched {
+        start: jobs::Start::Fresh(jobs::Fresh::Spawn {
+            model: "fake/m:high".to_owned(),
+            credential: Some("work".to_owned()),
+        }),
+        prompt: "scan the tree".to_owned(),
+        ..launched()
+    };
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&spawned)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        argv.iter().any(|arg| arg.starts_with("--model")),
+        "{argv:?}"
+    );
+    assert!(argv.iter().any(|arg| arg == "-c"), "{argv:?}");
+    assert!(
+        argv.iter()
+            .any(|arg| arg == "providers.fake.credential=\"work\""),
+        "{argv:?}"
+    );
+    // And the fork argv carries none of those shapes.
+    let fork_argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&fork)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !fork_argv.iter().any(|arg| arg.starts_with("--model")),
+        "{fork_argv:?}"
+    );
+    assert!(!fork_argv.iter().any(|arg| arg == "-c"), "{fork_argv:?}");
+    assert!(
+        !fork_argv.iter().any(|arg| arg.starts_with("--credential")),
+        "{fork_argv:?}"
+    );
 }
 
 #[test]
@@ -1051,7 +1128,10 @@ fn a_repository_layer_role_credential_is_ignored() {
     // The launch then passes no `-c`: the child reads the provider's
     // configured label.
     let mut launch = launched();
-    launch.credential = (resolve.credential)("fast").unwrap();
+    let jobs::Start::Fresh(jobs::Fresh::Spawn { credential, .. }) = &mut launch.start else {
+        panic!("a new launch is a fresh spawn");
+    };
+    *credential = (resolve.credential)("fast").unwrap();
     let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -1072,7 +1152,10 @@ fn the_catalogue_never_prints_a_role_label() {
 #[test]
 fn a_new_launch_with_a_credential_passes_it_as_a_run_override() {
     let mut launch = launched();
-    launch.credential = Some("work".to_owned());
+    let jobs::Start::Fresh(jobs::Fresh::Spawn { credential, .. }) = &mut launch.start else {
+        panic!("a new launch is a fresh spawn");
+    };
+    *credential = Some("work".to_owned());
     let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -1088,7 +1171,10 @@ fn a_new_launch_with_a_credential_passes_it_as_a_run_override() {
 #[test]
 fn a_label_that_parses_as_json_is_still_a_string() {
     let mut launch = launched();
-    launch.credential = Some("123".to_owned());
+    let jobs::Start::Fresh(jobs::Fresh::Spawn { credential, .. }) = &mut launch.start else {
+        panic!("a new launch is a fresh spawn");
+    };
+    *credential = Some("123".to_owned());
     let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -1102,10 +1188,10 @@ fn a_label_that_parses_as_json_is_still_a_string() {
 
 #[test]
 fn a_resume_launch_passes_no_credential_override() {
-    let mut launch = resumed();
-    // A label the resume carries anyway: the recorded session keeps
-    // it, so no `-c` may travel.
-    launch.credential = Some("work".to_owned());
+    // A resume carries no credential: the type makes one
+    // unrepresentable, so the recorded session keeps its label and no
+    // `-c` may travel.
+    let launch = resumed();
     let command = launcher(std::path::Path::new("/bin/fiber"))(&launch);
     let argv: Vec<_> = command
         .get_args()

@@ -22,6 +22,7 @@ use serde_json::{Map, Value, json};
 
 use super::super::Watched;
 use super::{DelegateMessage, LastSeq, Launch, Steer, Steered, Watch};
+use crate::Start;
 use crate::registry::Registry;
 use crate::support::{delegate_finished, delegate_started, ended_ok, exited};
 use crate::timing_tests::{Step, try_step};
@@ -64,7 +65,6 @@ struct Launched {
     session_id: SessionId,
     job_id: JobId,
     parent: SessionId,
-    model: String,
     prompt: String,
     workspace: std::path::PathBuf,
     resume: bool,
@@ -167,10 +167,9 @@ fn resume_rig_with_steer(
             session_id: launched.session_id.clone(),
             job_id: launched.job_id.clone(),
             parent: launched.parent.clone(),
-            model: launched.model.clone(),
             prompt: launched.prompt.clone(),
             workspace: launched.workspace.clone(),
-            resume: launched.resume,
+            resume: matches!(launched.start, Start::Resume),
         });
         match queued.lock().unwrap().pop_front().expect("a launch reply") {
             LaunchReply::Block(marker) => {
@@ -612,8 +611,9 @@ fn a_resume_reports_its_launch_and_queues_both_runs() {
     assert!(output.error.is_none());
     assert_eq!(content(&output), resumed_text(&id.0, &output_path));
     assert!(output.jobs.is_empty());
-    // The launch got the resume: the same session, the message as
-    // prompt, and the recorded model.
+    // The launch got the resume: the same session and the message as
+    // prompt. A resume carries no model: the child continues the
+    // recorded session.
     let launched = rig.launched.lock().unwrap();
     assert_eq!(launched.len(), 1);
     assert!(launched[0].resume);
@@ -621,7 +621,6 @@ fn a_resume_reports_its_launch_and_queues_both_runs() {
     assert_eq!(launched[0].job_id, id);
     assert_eq!(launched[0].parent.0, "s_parent");
     assert_eq!(launched[0].depth, 1);
-    assert_eq!(launched[0].model, "fiber:fake/m");
     assert_eq!(launched[0].prompt, "tell me more");
     assert_eq!(launched[0].workspace.display().to_string(), "/w");
     drop(launched);

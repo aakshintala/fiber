@@ -811,11 +811,16 @@ The label is part of the request settings, so `preamble_built` records it
 records `model_changed`, as a switch does.
 
 A person switches credential with `/credential <label>`, and a driver with the
-`credential` command (`docs/invocation.md`). The switch applies at the next
+`credential` command (`docs/invocation.md`). A credential switch accepted
+while a model switch is queued applies to the queued model's provider.
+The `credentials` query lists that provider's labels and the label it uses now.
+With no label, `/credential` opens the credential picker (`docs/tui.md`,
+"Swapped views"): Enter chooses a label and saves it; Ctrl+S chooses it for
+this session only and saves nothing. The switch applies at the next
 turn boundary and rebuilds the prompt cache, because a vendor holds the cache
 per account or workspace (`docs/prompt-cache.md`, "Switching model"). The
 terminal saves the label to the global `providers."<name>".credential`, unless
-the person marks the switch as this session only. A per-project file can pin a
+the person chooses it with Ctrl+S in the credential picker. A per-project file can pin a
 label for one project. Saving the label never changes another session that
 is already running.
 

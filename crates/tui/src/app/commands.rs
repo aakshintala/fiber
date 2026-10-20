@@ -92,6 +92,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_thinking,
     },
     CommandEntry {
+        name: "credential",
+        description: "Switches the credential label, or opens the credential picker.",
+        hint: Some("[<label>]"),
+        run: run_credential,
+    },
+    CommandEntry {
         name: "scoped-models",
         description: "Chooses which models the model picker shows.",
         hint: None,
@@ -324,6 +330,10 @@ fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_usage(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::Usage))
+}
+
+fn run_credential(app: &mut App, rest: &str) -> Option<Effect> {
+    Some(app.credential_command(rest))
 }
 
 fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {

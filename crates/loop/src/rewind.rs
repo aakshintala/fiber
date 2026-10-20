@@ -12,7 +12,7 @@ use contract::{ActionId, Envelope, Seq, SessionId};
 use serde_json::Value;
 
 use crate::prompt::{fill, message};
-use crate::{Error, Loop, Preamble, Session, variables};
+use crate::{Error, Loop, Preamble, Session, ToolSearchFactory, variables};
 
 pub(crate) mod command;
 pub(crate) mod stop;
@@ -27,6 +27,10 @@ pub struct Rewound {
     pub worktree: Option<Worktree>,
     /// Whether this is a person's rewind or a delegate's fork.
     pub how: Continuation,
+    /// Builds the `tool_search` tool the first request declares when the
+    /// logged preamble deferred tools (`docs/tools.md`, "Tool search"):
+    /// `None` renders logged searches as text.
+    pub factory: Option<ToolSearchFactory>,
 }
 
 /// How a session continues another's history from a point.
@@ -111,6 +115,49 @@ impl Loop {
                 .map(|(_, _, definition)| definition.clone())
                 .collect();
             rewound.preamble = Some(Preamble::logged(&built, tools));
+            // Without a factory no request defers: the logged D is dropped
+            // and the first request renders logged searches as text. With
+            // one and a non-empty logged D, the rewind path builds the
+            // search tool from the logged-D catalogue and registers it
+            // before the first request, so an unchanged tool set sends its
+            // bytes (`docs/tools.md`, "Tool search").
+            if start.factory.is_none() {
+                if let Some(preamble) = rewound.preamble.as_mut() {
+                    preamble.deferred = None;
+                }
+            } else if let Some(deferred) = rewound
+                .preamble
+                .as_ref()
+                .and_then(|preamble| preamble.deferred.clone())
+                .filter(|deferred| !deferred.is_empty())
+            {
+                let (catalogue, sources) =
+                    crate::prompt::catalogue_and_sources(&rewound.tools, &deferred);
+                if let Some(factory) = start.factory.as_ref() {
+                    let search = factory(&catalogue, &sources);
+                    let definition = search.definition();
+                    let name = definition.name.clone();
+                    if !rewound.tools.contains_key(&name) {
+                        rewound.tools.insert(
+                            name.clone(),
+                            ("builtin".to_owned(), search, definition.clone()),
+                        );
+                        // The insert rides the loop until the next build
+                        // drops it, as a build's own insert does.
+                        rewound.inserted_search = Some(name);
+                        // The rewound preamble wires the rebuilt search in
+                        // name order, so the first request declares it as
+                        // built from the logged D.
+                        if let Some(preamble) = rewound.preamble.as_mut() {
+                            // The logged tools arrive in name order, so the
+                            // pushed search sorts into place; no manual
+                            // index to misplace.
+                            preamble.tools.push(definition);
+                            preamble.tools.sort_by(|a, b| a.name.cmp(&b.name));
+                        }
+                    }
+                }
+            }
             rewound.chosen = built.thinking.as_ref().and_then(|level| level.parse().ok());
             rewound.set_trigger();
         }
@@ -189,6 +236,16 @@ impl Preamble {
         Self {
             system_prompt: built.system_prompt.clone(),
             tools,
+            deferred: Some(
+                built
+                    .tools
+                    .iter()
+                    .filter(|tool| tool.deferred)
+                    .map(|tool| tool.name.clone())
+                    .collect(),
+            ),
+            // The logged preamble carries no insert of its own: the rewind
+            // path records the search it builds on the loop when due.
             sent_tools: Some(
                 built
                     .tools

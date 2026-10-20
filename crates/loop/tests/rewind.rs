@@ -183,6 +183,7 @@ fn start_b_with_summary(
             },
         },
         Rewound {
+            factory: None,
             from,
             worktree,
             how: Continuation::Rewind {
@@ -1124,6 +1125,7 @@ fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
             },
         },
         Rewound {
+            factory: None,
             from: Point {
                 session_id: SessionId("s_model00000001".into()),
                 seq: Seq(1),
@@ -3441,6 +3443,7 @@ fn known_hosts_rewind_retains_hosts_before_the_point_and_reviews_later_hosts() {
             },
         },
         Rewound {
+            factory: None,
             from: Point {
                 session_id: SessionId("s_test".into()),
                 seq: at,

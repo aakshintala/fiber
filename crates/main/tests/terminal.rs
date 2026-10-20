@@ -2764,3 +2764,276 @@ fn choosing_an_unreadable_model_mid_turn_replaces_the_pending_notice_with_its_re
     assert_card_stale(&rejected, "other/om");
     quit_live(run);
 }
+
+/// Drives the same switch through the picker or its label shortcut.
+fn credential_journey(pick: Option<&[u8]>) {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello(), text_reply("The credential answer.")]).unwrap();
+    provider(&setup, &server);
+    labels(&setup, "home", &["home", "work"]);
+    let before = snapshot_config(&setup);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    let first = run.output().len();
+    run.write(b"first\r");
+    run.turn_finished(first);
+    assert_eq!(server.requests().len(), 1);
+    assert_fingerprint(&server.requests()[0], "Bearer home-key");
+    let id = only_session(&setup);
+    match pick {
+        Some(key) => {
+            run.write(b"/credential\r");
+            let grid = run.wait_screen("the credential picker on home", |grid| {
+                grid.contents.contains("Credentials")
+                    && grid.rows.iter().any(|row| row.contains("home  ● current"))
+            });
+            assert!(grid.rows.iter().any(|row| row.contains("work")));
+            run.write(b"\x1b[B");
+            run.write(key);
+        }
+        None => run.write(b"/credential work\r"),
+    }
+    run.wait_screen("the cache rebuild notice", |grid| {
+        grid.contents.contains("cache_rebuild")
+    });
+    let second = run.output().len();
+    run.write(b"second\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request"
+    );
+    run.wait_screen("the second answer", |grid| {
+        grid.contents.contains("The credential answer.")
+    });
+    run.turn_finished(second);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_fingerprint(&requests[1], "Bearer work-key");
+    let mut expected = opened_kinds(false);
+    expected.extend(["model_changed", "preamble_built"]);
+    expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
+    assert_eq!(event_kinds(&events), expected);
+    let changed: Vec<_> = events
+        .iter()
+        .filter(|line| line["kind"] == "model_changed")
+        .collect();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0]["payload"]["before"]["credential"], "home");
+    assert_eq!(changed[0]["payload"]["after"]["credential"], "work");
+    assert_eq!(changed[0]["payload"]["source"], "driver");
+    if pick == Some(b"\x13".as_slice()) {
+        assert_config_unchanged(&setup, &before);
+    } else {
+        let config: Value =
+            serde_json::from_slice(&fs::read(setup.home().join("config.json")).unwrap()).unwrap();
+        assert_eq!(config["providers"]["fake"]["credential"], "work");
+    }
+    quit_live(run);
+}
+
+#[test]
+fn credential_picker_switches_and_saves_the_label() {
+    credential_journey(Some(b"\r"));
+}
+
+#[test]
+fn credential_picker_ctrl_s_switches_this_session_only() {
+    credential_journey(Some(b"\x13"));
+}
+
+#[test]
+fn credential_with_a_label_switches_and_saves() {
+    credential_journey(None);
+}
+
+/// Installs both credential-taking providers in one extension.
+fn credential_provider_pair(setup: &support::Setup, server: &ProviderServer) {
+    let source = setup.root.path().join("credential-pair");
+    let url = format!("{}/v1", server.url());
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name":"credential-pair", "version":"v0.0.0", "fiber":"0.0.0", "api":1,
+        "providers":{"fake":[url], "other":[url]}}),
+    );
+    for (name, model) in [("fake", "m"), ("other", "n")] {
+        write_json(
+            &source.join(format!("providers/{name}.json")),
+            &json!({"name":name, "credential":{"env":"FIBER_TEST_FAKE_KEY"},
+            "models":[{"id":model,"protocol":"openai-responses","base_url":url,"context_window":100000}]}),
+        );
+    }
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    for (provider, names) in [("fake", ["home", "work"]), ("other", ["day", "night"])] {
+        for name in names {
+            config::store_credential(
+                &setup.home(),
+                provider,
+                name,
+                &config::Secret::new(format!("{name}-key\n")),
+            )
+            .unwrap();
+        }
+    }
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model":"fake/m", "providers":{"fake":{"credential":"home"},"other":{"credential":"day"}},"hub":{"idle_exit_ms":1000}}),
+    );
+}
+
+#[test]
+fn credential_after_a_queued_model_switch_saves_to_the_queued_provider() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([
+        calls_echo_hi(),
+        hello(),
+        text_reply("The queued credential answer."),
+    ])
+    .unwrap();
+    credential_provider_pair(&setup, &server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision":"ask", "tool":"shell", "prefix":"echo hi"})
+        ),
+    )
+    .unwrap();
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    let first = run.output().len();
+    run.write(b"first\r");
+    run.wait_screen("the pending approval", |grid| {
+        grid.contents.contains("Allow once")
+    });
+    assert_eq!(server.requests().len(), 1);
+    assert_fingerprint(&server.requests()[0], "Bearer home-key");
+    let id = only_session(&setup);
+    // Put the approval aside without answering it so commands reach the draft.
+    run.write(b"\x1b[27u");
+    run.wait_screen("the approval put aside", |grid| {
+        grid.contents.contains("approvals waiting")
+    });
+    run.write(b"/model\r");
+    run.wait_screen("the model picker", |grid| {
+        grid.contents.contains("Type to search")
+    });
+    run.write(b"n");
+    run.wait_screen("the other model", |grid| {
+        grid.contents.contains("1 of 2 models")
+    });
+    run.write(b"\r");
+    // The model is written only after its command is accepted. Its exact
+    // saved value proves admission while the approval still holds the turn.
+    loop {
+        let config: Value =
+            serde_json::from_slice(&fs::read(setup.home().join("config.json")).unwrap()).unwrap();
+        if config["model"] == "other/n" {
+            break;
+        }
+        assert!(
+            !setup.deadline.left().is_zero(),
+            "the model command's acceptance to save other/n"
+        );
+        thread::yield_now();
+    }
+    run.write(b"/credential night\r");
+    // Saving this label proves the credential switch was admitted on other,
+    // before the approval is released, not merely dispatched on the terminal.
+    loop {
+        let config: Value =
+            serde_json::from_slice(&fs::read(setup.home().join("config.json")).unwrap()).unwrap();
+        if config["providers"]["other"]["credential"] == "night" {
+            break;
+        }
+        assert!(
+            !setup.deadline.left().is_zero(),
+            "the credential command's acceptance to save night"
+        );
+        thread::yield_now();
+    }
+    run.write(b"\x1ba");
+    run.wait_screen("the approval reopened", |grid| {
+        grid.contents.contains("Allow once")
+    });
+    run.write(b"\r");
+    run.turn_finished(first);
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the first turn's follow-up"
+    );
+    let second = run.output().len();
+    run.write(b"second\r");
+    assert!(
+        server.await_requests(3, setup.deadline.left()),
+        "the second turn's request"
+    );
+    run.wait_screen("the queued credential answer", |grid| {
+        grid.contents.contains("The queued credential answer.")
+    });
+    run.turn_finished(second);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    assert_fingerprint(&requests[2], "Bearer night-key");
+    let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    assert_eq!(body["model"], "n");
+    let config: Value =
+        serde_json::from_slice(&fs::read(setup.home().join("config.json")).unwrap()).unwrap();
+    assert_eq!(config["providers"]["fake"]["credential"], "home");
+    assert_eq!(config["providers"]["other"]["credential"], "night");
+    let mut expected = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "permission_requested",
+        "permission_resolved",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "model_changed",
+        "model_changed",
+        "preamble_built",
+    ];
+    expected.extend(resumed_turn_kinds());
+    let events = wait_session_events(&setup, &id, &expected);
+    assert_eq!(event_kinds(&events), expected);
+    let changed: Vec<_> = events
+        .iter()
+        .filter(|line| line["kind"] == "model_changed")
+        .collect();
+    assert_eq!(changed.len(), 2);
+    assert_eq!(changed[0]["payload"]["before"]["model"], "fake/m");
+    assert_eq!(changed[0]["payload"]["before"]["credential"], "home");
+    assert_eq!(changed[0]["payload"]["after"]["model"], "other/n");
+    assert_eq!(changed[0]["payload"]["after"]["credential"], "day");
+    assert_eq!(changed[1]["payload"]["before"]["credential"], "day");
+    assert_eq!(changed[1]["payload"]["after"]["credential"], "night");
+    for change in changed {
+        assert_eq!(change["payload"]["source"], "driver");
+    }
+    quit_live(run);
+}

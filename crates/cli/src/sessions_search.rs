@@ -9,15 +9,13 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Weak};
 
-use contract::ErrorCode;
 use contract::clock::Wake;
 use contract::session_search::{Found, Hit, LIMIT, Query, Scan};
-use contract::shapes::Failure;
 use contract::tool::Cancel;
 use serde::Serialize;
 use support::text::one_line;
 
-use crate::{failed, with_dirs, write_line};
+use crate::{CliError, with_dirs, write_line};
 
 /// `fiber sessions search [--all] [--json] <text>` in the current
 /// directory: the shared scan's hits on stdout, its problems on stderr.
@@ -84,7 +82,7 @@ fn run(
     json: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let all_projects = all || !in_repository;
     let scan = log::SessionScan::new(home, workspace, identity);
     let query = Query {
@@ -105,10 +103,9 @@ fn run(
 /// The hits as JSON Lines on `out`: one object per hit, best first, nothing
 /// for zero hits. Strings are the scan's own: no control-character mapping
 /// (`docs/invocation.md`, "Commands and flags").
-fn json_hits(found: &Found, out: &mut dyn Write) -> Result<(), Failure> {
+fn json_hits(found: &Found, out: &mut dyn Write) -> Result<(), CliError> {
     for hit in &found.hits {
-        let line = serde_json::to_string(&row(hit))
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("a search hit: {e}")))?;
+        let line = serde_json::to_string(&row(hit)).map_err(CliError::SearchHit)?;
         write_line(out, &line)?;
     }
     Ok(())
@@ -120,7 +117,7 @@ fn text_hits(
     text: &str,
     all_projects: bool,
     out: &mut dyn Write,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     if found.total == 0 {
         let scope = if all_projects {
             "any project's"
@@ -151,7 +148,7 @@ fn text_hits(
 /// One hit: what and where, the artifact when the hit is in one, and the
 /// snippet. Every interpolated string is one line, so a hit stays on its
 /// lines and no escape sequence reaches the terminal.
-fn block(out: &mut dyn Write, number: usize, hit: &Hit) -> Result<(), Failure> {
+fn block(out: &mut dyn Write, number: usize, hit: &Hit) -> Result<(), CliError> {
     let label = hit.label.as_str();
     write_line(
         out,
@@ -171,7 +168,8 @@ fn block(out: &mut dyn Write, number: usize, hit: &Hit) -> Result<(), Failure> {
             &format!("   artifact {}", one_line(&artifact.display().to_string())),
         )?;
     }
-    write_line(out, &format!("   {}", one_line(&hit.snippet)))
+    write_line(out, &format!("   {}", one_line(&hit.snippet)))?;
+    Ok(())
 }
 
 /// A hit as one `--json` row.

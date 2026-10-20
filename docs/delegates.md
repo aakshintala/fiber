@@ -280,7 +280,8 @@ final message, any questions, usage totals and worktree state. Their keys are
   - It sends the parent's latest preamble before its point, as logged in
     `preamble_built`, so its tool set, system prompt and request settings
     match (`docs/prompt-cache.md`, "The preamble").
-  - Its identity and task go in its first user message, never the system prompt.
+  - Its identity and task go in its first user message as the `fork_task`
+    text, naming the parent session and the depth, never the system prompt.
   - The `seq` is the position just before the assistant message that called
     `delegate_fork`, so no tool call is left without a result.
   - Every provider's cache key is the root session's id, shared by the whole

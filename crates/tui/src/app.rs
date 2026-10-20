@@ -1248,6 +1248,15 @@ impl App {
         self.screen.pages().shown(top, height)
     }
 
+    /// The pinned header, if any: none while an item view covers the
+    /// conversation or while following.
+    pub(crate) fn pinned_row(&self) -> Option<crate::window::Pin> {
+        if self.item_open() {
+            return None;
+        }
+        self.screen.pin(self.conversation_height())
+    }
+
     /// The seq ranges of pages the next frame needs and does not hold.
     pub(crate) fn needs(&self) -> Vec<RangeInclusive<Seq>> {
         if self.pass_open() {
@@ -1563,6 +1572,7 @@ impl App {
         {
             let id = accepted.command_id.0.clone();
             self.model_picker_accepted(&id, &envelope.session_id);
+            self.credential_accepted(&accepted);
         }
         // The open delegate's lines fold into the swapped screen, never
         // touching the attached busy flag; their command answers still

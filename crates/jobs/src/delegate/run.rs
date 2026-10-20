@@ -59,20 +59,48 @@ pub struct Launched {
     pub job_id: JobId,
     /// The parent session.
     pub parent: SessionId,
-    /// `provider/model[:level]`, resolved.
-    pub model: String,
     /// The prompt, on argv.
     pub prompt: String,
     /// The parent's workspace, which the delegate shares.
     pub workspace: PathBuf,
-    /// Whether this launch resumes the delegate: a new run of the same
-    /// job, continuing its own session.
-    pub resume: bool,
-    /// The credential label the child session runs under, as a run
-    /// override: `Some` on a new launch whose role names a stored label,
-    /// `None` on a resume, which continues the recorded session, and on a
-    /// launch without one.
-    pub credential: Option<String>,
+    /// What this launch starts: a fresh child or a resume of the
+    /// delegate's own session. A fresh launch and a resume render
+    /// different argv, so the shape is an enum, never flags that can
+    /// contradict each other.
+    pub start: Start,
+}
+
+/// What a launch starts: a fresh child session or a new run of the same
+/// job, continuing its own session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Start {
+    /// A new child session: a spawn's or a fork's.
+    Fresh(Fresh),
+    /// A new run of the same job, continuing its own session.
+    Resume,
+}
+
+/// A fresh child session: a spawn's, with its credential, or a fork's,
+/// with its point. The credential lives on a spawn only, so a fork
+/// carrying one is unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fresh {
+    /// A spawn: the resolved `provider/model[:level]` the child runs
+    /// under, and the credential label it runs with, as a run
+    /// override: `Some` on a new launch whose role names a stored
+    /// label, `None` on a launch without one.
+    Spawn {
+        /// The resolved reference the child's `--model` names.
+        model: String,
+        /// The credential label, when the role names one.
+        credential: Option<String>,
+    },
+    /// A fork: the resolved point it continues from, with the model
+    /// reference the start records verbatim.
+    Fork {
+        /// The resolved point and its model reference.
+        from: super::Forking,
+    },
 }
 
 /// The first retry waits this long after a refused or dropped watch.

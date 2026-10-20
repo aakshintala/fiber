@@ -1006,3 +1006,126 @@ fn a_refusal_message_draws_on_the_status_row() {
     // shows beside the stop target.
     assert!(rows.iter().any(|row| row.contains("· Co ·")));
 }
+
+#[test]
+fn an_item_views_transcript_draws_no_pin() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home(80, 24);
+    opened(&mut app);
+    app.set_now(clock.now(), wall_ms(&clock));
+    start_delegate(&mut app, 0);
+    open_item(&mut app);
+    app.on_line(delegate_line(
+        "turn_started",
+        0,
+        json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "review it"}]}]}),
+    ));
+    app.on_line(delegate_line("assistant_message_started", 0, json!({})));
+    app.on_line(delegate_line(
+        "tool_call_requested",
+        0,
+        json!({"name": "read", "arguments": {"path": "src/0.rs"}}),
+    ));
+    let detail: Vec<String> = (1..=30).map(|n| format!("L{n:04} of call")).collect();
+    app.on_line(delegate_line(
+        "tool_call_completed",
+        0,
+        json!({"status": "completed",
+            "content": [{"type": "text", "text": detail.join("\n")}]}),
+    ));
+    let group = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| match target {
+            crate::app::Target::Group(_) => Some(target),
+            crate::app::Target::Call(_)
+            | crate::app::Target::CallView(_)
+            | crate::app::Target::Thought(_)
+            | crate::app::Target::Login
+            | crate::app::Target::Note(_)
+            | crate::app::Target::Image(_)
+            | crate::app::Target::Orphans(_)
+            | crate::app::Target::Copy { .. } => None,
+        })
+        .expect("a group target");
+    app.open(group);
+    let call = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| match target {
+            crate::app::Target::Call(_) => Some(target),
+            crate::app::Target::Group(_)
+            | crate::app::Target::CallView(_)
+            | crate::app::Target::Thought(_)
+            | crate::app::Target::Login
+            | crate::app::Target::Note(_)
+            | crate::app::Target::Image(_)
+            | crate::app::Target::Orphans(_)
+            | crate::app::Target::Copy { .. } => None,
+        })
+        .expect("a call target");
+    app.open(call);
+    // The first opened content row at this width.
+    let width = app.pages().wrap_width();
+    let (rows, texts) = app.pages().page_text(0).expect("the resident page");
+    let mut row = 0usize;
+    let mut first = None;
+    for ((line, _), text) in rows.iter().zip(&texts) {
+        if first.is_none() && text.scopes.last() == Some(&call) {
+            first = Some(row);
+        }
+        row += crate::view::rows(line.clone(), width);
+    }
+    let first = first.expect("opened rows");
+    app.jump(first + 2);
+    assert!(app.item_open(), "the transcript stays open");
+    assert!(app.pinned_row().is_none(), "no pin in an item view");
+    let (shown, targets) = rendered(&app, 80, 24);
+    // The transcript's first drawn row is the covered row itself.
+    let _ = crate::view::item::ITEM_HEADER_ROWS;
+    let top = app.top().expect("a scrolled transcript");
+    let (page, _) = app.pages().page_text(0).expect("the resident page");
+    let mut row = 0usize;
+    let mut covered = None;
+    for (line, _) in &page {
+        let height = crate::view::rows(line.clone(), width);
+        if row + height > top && covered.is_none() {
+            covered = Some(line.to_string());
+        }
+        row += height;
+    }
+    let covered = covered.expect("the covered row");
+    // The item's two header rows draw above the conversation area, so
+    // the transcript's first row is the area's own first row.
+    let body_y = app.conversation_area().y;
+    assert_eq!(shown[usize::from(body_y)].trim(), covered.trim());
+    assert!(
+        targets.iter().all(|target| match target.id {
+            crate::mouse::TargetId::Line(_) => target.rect.y != body_y,
+            crate::mouse::TargetId::Badge
+            | crate::mouse::TargetId::NewBelow
+            | crate::mouse::TargetId::Interrupt
+            | crate::mouse::TargetId::Token(_)
+            | crate::mouse::TargetId::Steering(_)
+            | crate::mouse::TargetId::DropSteering(_)
+            | crate::mouse::TargetId::Notice(_)
+            | crate::mouse::TargetId::DismissNotice(_)
+            | crate::mouse::TargetId::CloseOverlay
+            | crate::mouse::TargetId::Home(_)
+            | crate::mouse::TargetId::Offer(_)
+            | crate::mouse::TargetId::Panel(_)
+            | crate::mouse::TargetId::Item(_)
+            | crate::mouse::TargetId::Rail(_)
+            | crate::mouse::TargetId::Form(_)
+            | crate::mouse::TargetId::Turn(_)
+            | crate::mouse::TargetId::Link { .. }
+            | crate::mouse::TargetId::FindCount
+            | crate::mouse::TargetId::FindResult(_)
+            | crate::mouse::TargetId::View(_)
+            | crate::mouse::TargetId::MoreNotices => true,
+        }),
+        "no line target covers the transcript's first row"
+    );
+}
