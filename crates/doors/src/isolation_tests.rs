@@ -137,6 +137,17 @@ fn isolate_now(repo: &Path, home: &Path, id: &str) -> super::Isolation {
 /// An open session in `sessions` whose first line records `workspace`,
 /// holding its lock as a running session would.
 fn held(sessions: &Path, id: &str, workspace: &str) -> Log {
+    held_with_worktree(sessions, id, workspace, None)
+}
+
+/// An open session in `sessions` whose first line records `workspace`
+/// and `worktree`, holding its lock as a running session would.
+fn held_with_worktree(
+    sessions: &Path,
+    id: &str,
+    workspace: &str,
+    worktree: Option<Worktree>,
+) -> Log {
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let log = Log::create(sessions, SessionId(id.into()), Arc::clone(&clock)).unwrap();
     log.append(
@@ -150,7 +161,7 @@ fn held(sessions: &Path, id: &str, workspace: &str) -> Log {
             parent: None,
             forked_from: None,
             rewind: None,
-            worktree: None,
+            worktree,
         }),
         None,
         None,
@@ -999,6 +1010,100 @@ fn another_session_ending_rewound_does_not_keep_it() {
             assert!(!branch_exists(repo.path(), &format!("fiber/{id}")));
         },
     );
+}
+
+#[test]
+fn a_continued_session_keeps_a_clean_worktree_after_it_exits() {
+    fakes::within("a_continued_session_keeps_a_clean_worktree", BUDGET, || {
+        let home = fakes::TempDir::new("doors-end-continues-home");
+        let repo = repo("doors-end-continues");
+        let key = key_of(repo.path());
+        let id = "s_0123456789abcdef";
+        let isolation = isolate_now(repo.path(), home.path(), id);
+        let recorded = isolation.worktree();
+        let path = isolation.path().to_path_buf();
+        let sessions = home.path().join("projects").join(&key).join("sessions");
+        // The creator exits, and its lock is free: `end` takes it
+        // and reads the last line under it.
+        let holder = held(&sessions, id, path.to_str().unwrap());
+        holder.append(&exited(), None, None).unwrap();
+        drop(holder);
+        // The new session ran where the old one did and exited
+        // first: its `session_started` records the same worktree
+        // path, and its lock is free too.
+        let next = held_with_worktree(
+            &sessions,
+            "s_0123456789abcde0",
+            path.to_str().unwrap(),
+            Some(recorded),
+        );
+        next.append(&exited(), None, None).unwrap();
+        drop(next);
+        isolation.end();
+        assert!(exists(&path));
+        assert!(branch_exists(repo.path(), &format!("fiber/{id}")));
+        assert!(!home.path().join("logs").exists(), "no diagnostic line");
+    });
+}
+
+#[test]
+fn a_session_merely_under_the_path_does_not_keep_it() {
+    fakes::within(
+        "a_session_merely_under_the_path_does_not_keep_it",
+        BUDGET,
+        || {
+            let home = fakes::TempDir::new("doors-end-continues-under-home");
+            let repo = repo("doors-end-continues-under");
+            let key = key_of(repo.path());
+            let id = "s_0123456789abcdef";
+            let isolation = isolate_now(repo.path(), home.path(), id);
+            let path = isolation.path().to_path_buf();
+            let sessions = home.path().join("projects").join(&key).join("sessions");
+            let holder = held(&sessions, id, path.to_str().unwrap());
+            holder.append(&exited(), None, None).unwrap();
+            drop(holder);
+            // Another session works under the worktree but records a
+            // different worktree: a workspace comparison would keep.
+            let other = held_with_worktree(
+                &sessions,
+                "s_0123456789abcde0",
+                path.join("sub").to_str().unwrap(),
+                Some(Worktree {
+                    path: "/elsewhere".to_owned(),
+                    branch: "fiber/x".to_owned(),
+                    repository: None,
+                }),
+            );
+            other.append(&exited(), None, None).unwrap();
+            drop(other);
+            isolation.end();
+            assert!(!exists(&path), "the path is gone");
+            assert!(!branch_exists(repo.path(), &format!("fiber/{id}")));
+        },
+    );
+}
+
+#[test]
+fn the_creators_own_row_does_not_keep_it() {
+    fakes::within("the_creators_own_row_does_not_keep_it", BUDGET, || {
+        let home = fakes::TempDir::new("doors-end-continues-own-home");
+        let repo = repo("doors-end-continues-own");
+        let key = key_of(repo.path());
+        let id = "s_0123456789abcdef";
+        let isolation = isolate_now(repo.path(), home.path(), id);
+        let recorded = isolation.worktree();
+        let path = isolation.path().to_path_buf();
+        let sessions = home.path().join("projects").join(&key).join("sessions");
+        // The creator's own `session_started` always records the
+        // worktree it created: without excluding its id, every
+        // `end` would keep.
+        let holder = held_with_worktree(&sessions, id, path.to_str().unwrap(), Some(recorded));
+        holder.append(&exited(), None, None).unwrap();
+        drop(holder);
+        isolation.end();
+        assert!(!exists(&path), "the path is gone");
+        assert!(!branch_exists(repo.path(), &format!("fiber/{id}")));
+    });
 }
 
 #[test]
