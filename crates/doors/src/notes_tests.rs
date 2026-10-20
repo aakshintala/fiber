@@ -356,18 +356,18 @@ fn remote_urls_strip_userinfo_and_keep_scp_form() {
         root.path(),
         "work",
         "origin",
-        "https://user:token@github.com/acme/fiber.git",
+        "https://user:token@example.com/acme/fiber.git",
     );
     git(
         &workspace,
-        &["remote", "add", "admin", "git@github.com:acme/other.git"],
+        &["remote", "add", "admin", "git@example.com:acme/other.git"],
     );
     let found = files_text(&files_evidence(&workspace));
     assert_eq!(
         found,
         [
-            "git remote admin: git@github.com:acme/other.git".to_owned(),
-            "git remote origin: https://github.com/acme/fiber.git".to_owned(),
+            "git remote admin: git@example.com:acme/other.git".to_owned(),
+            "git remote origin: https://example.com/acme/fiber.git".to_owned(),
         ]
     );
     for item in &found {
