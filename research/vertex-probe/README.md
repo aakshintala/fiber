@@ -217,4 +217,13 @@ expiry (`_CREDENTIALS_EXPIRY_WINDOW` in the SDK's
 With no account logged in, `config-helper` exits 1 with "ERROR:
 (gcloud.config.config-helper) You do not currently have an active account
 selected."; a configuration that does not exist adds a `WARNING:` line
-naming its file under the home directory first.
+naming its file under the home directory first. An account that is selected
+but has no credentials (`gcloud config set account` in an empty
+`CLOUDSDK_CONFIG`) exits 1 with "Your current active account [<account>]
+does not have any valid credentials", naming the account. A refresh that
+fails says "There was a problem refreshing your current auth tokens: ...",
+or "... auth tokens for account <account>: ...", and one that needs
+reauthentication "There was a problem reauthenticating while refreshing your
+current auth tokens: ..." (the SDK's `TokenRefreshError` and
+`TokenRefreshReauthError` in `googlecloudsdk/core/credentials/exceptions.py`;
+neither was reached here).
