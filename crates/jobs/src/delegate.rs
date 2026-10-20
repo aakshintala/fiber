@@ -676,3 +676,116 @@ impl DelegateFork {
 #[cfg(test)]
 #[path = "delegate/delegate_tests.rs"]
 mod tests;
+
+/// The rig the delegate tool tests share: a registry on a fake clock
+/// with an inbox tap and a sessions dir, and a launcher that records
+/// its `Launched` and starts a `sleep` child the test finds through its
+/// pidfile, with a refusing watch. `point_calls` counts the point reads
+/// and `seen_actions` records the calling actions: the fork tests'
+/// counters, which the spawn tests leave alone.
+#[cfg(test)]
+pub(crate) mod test_rig {
+    use std::process::Command;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use contract::inbox::Delivery;
+    use fakes::clock::FakeClock;
+    use fakes::{Recorder, TempDir, Watchdog, within};
+
+    use super::run::{Launch, Launched, Watch};
+    use crate::registry::Registry;
+    use contract::jobs::Jobs as _;
+
+    /// How long a test waits on the wall clock before it fails.
+    pub(crate) const DEADLINE: Duration = Duration::from_secs(3);
+
+    pub(crate) struct Rig {
+        pub _dir: TempDir,
+        pub registry: Arc<Registry>,
+        pub clock: Arc<FakeClock>,
+        pub inbox: mpsc::Receiver<Delivery>,
+        pub sessions: std::path::PathBuf,
+        pub launched: mpsc::Receiver<Launched>,
+        pub launch_count: Arc<AtomicUsize>,
+        pub point_calls: Arc<AtomicUsize>,
+        pub seen_actions: Arc<std::sync::Mutex<Vec<Option<contract::ActionId>>>>,
+        pub launch: Launch,
+        pub watch: Watch,
+    }
+
+    pub(crate) fn rig() -> Rig {
+        let dir = TempDir::new("fiber-delegate");
+        let clock = FakeClock::new();
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir(&artifacts).unwrap();
+        let sessions = dir.path().join("sessions");
+        std::fs::create_dir(&sessions).unwrap();
+        let registry = Registry::new(
+            artifacts,
+            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+            Arc::new(Recorder::default()),
+        );
+        let (inbox_tx, inbox_rx) = mpsc::channel();
+        registry.deliver_to(inbox_tx);
+        let (launched_tx, launched_rx) = mpsc::channel();
+        let launch_count = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&launch_count);
+        let pid = dir.path().join("child.pid");
+        let launch: Launch = Arc::new(move |launched: &Launched| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let _sent = launched_tx.send(Launched {
+                depth: launched.depth,
+                session_id: launched.session_id.clone(),
+                job_id: launched.job_id.clone(),
+                parent: launched.parent.clone(),
+                prompt: launched.prompt.clone(),
+                workspace: launched.workspace.clone(),
+                start: launched.start.clone(),
+            });
+            let mut command = Command::new("sh");
+            command.args([
+                "-c",
+                &format!("echo $$ > '{}'; exec sleep 60", pid.display()),
+            ]);
+            command
+        });
+        let watch: Watch = Arc::new(|_, _, _| Err(std::io::Error::other("refused")));
+        Rig {
+            _dir: dir,
+            registry,
+            clock,
+            inbox: inbox_rx,
+            sessions,
+            launched: launched_rx,
+            launch_count,
+            point_calls: Arc::new(AtomicUsize::new(0)),
+            seen_actions: Arc::new(std::sync::Mutex::new(Vec::new())),
+            launch,
+            watch,
+        }
+    }
+
+    /// The `sleep` the rig's launcher started, read from its pidfile:
+    /// armed as its watchdog so a failing test leaves no child behind.
+    #[track_caller]
+    pub(crate) fn child_group(rig: &Rig) -> Watchdog {
+        let pid = rig._dir.path().join("child.pid");
+        let pid: u32 = within("the child writes its pid", DEADLINE, move || {
+            loop {
+                let Ok(text) = std::fs::read_to_string(&pid) else {
+                    std::thread::yield_now();
+                    continue;
+                };
+                let Ok(pid) = text.trim().parse() else {
+                    std::thread::yield_now();
+                    continue;
+                };
+                return pid;
+            }
+        });
+        Watchdog::group(pid)
+    }
+}

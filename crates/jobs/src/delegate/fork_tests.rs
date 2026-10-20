@@ -8,10 +8,8 @@
     reason = "test code"
 )]
 
-use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use contract::inbox::Delivery;
@@ -20,29 +18,11 @@ use contract::shapes::{ContentPart, Failure, Point};
 use contract::tool::{Answered, Ask, Asking, Tool as _};
 use contract::{ActionId, Seq};
 use fakes::Deadline;
-use fakes::clock::FakeClock;
-use fakes::{Recorder, TempDir, Watchdog, within};
+use fakes::Recorder;
 
-use super::super::run::{Fresh, Launch, Launched, Start, Watch};
+use super::super::run::{Fresh, Start};
+use super::super::test_rig::{DEADLINE, Rig, child_group, rig};
 use super::super::{DelegateFork, ForkPoint, Forking};
-use crate::registry::Registry;
-
-/// How long a test waits on the wall clock before it fails.
-const DEADLINE: Duration = Duration::from_secs(3);
-
-struct Rig {
-    _dir: TempDir,
-    registry: Arc<Registry>,
-    clock: Arc<FakeClock>,
-    inbox: mpsc::Receiver<Delivery>,
-    sessions: std::path::PathBuf,
-    launched: mpsc::Receiver<Launched>,
-    launch_count: Arc<AtomicUsize>,
-    point_calls: Arc<AtomicUsize>,
-    seen_actions: Arc<std::sync::Mutex<Vec<Option<ActionId>>>>,
-    launch: Launch,
-    watch: Watch,
-}
 
 fn forking() -> Forking {
     Forking {
@@ -52,81 +32,6 @@ fn forking() -> Forking {
         },
         model: "fiber:fake/m:high".to_owned(),
     }
-}
-
-fn rig() -> Rig {
-    let dir = TempDir::new("fiber-delegate-fork");
-    let clock = FakeClock::new();
-    let artifacts = dir.path().join("artifacts");
-    std::fs::create_dir(&artifacts).unwrap();
-    let sessions = dir.path().join("sessions");
-    std::fs::create_dir(&sessions).unwrap();
-    let registry = Registry::new(
-        artifacts,
-        Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-        Arc::new(Recorder::default()),
-    );
-    let (inbox_tx, inbox_rx) = mpsc::channel();
-    registry.deliver_to(inbox_tx);
-    let (launched_tx, launched_rx) = mpsc::channel();
-    let launch_count = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&launch_count);
-    let point_calls = Arc::new(AtomicUsize::new(0));
-    let seen_actions = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let pid = dir.path().join("child.pid");
-    let launch: Launch = Arc::new(move |launched: &Launched| {
-        counted.fetch_add(1, Ordering::SeqCst);
-        let _sent = launched_tx.send(Launched {
-            depth: launched.depth,
-            session_id: launched.session_id.clone(),
-            job_id: launched.job_id.clone(),
-            parent: launched.parent.clone(),
-            prompt: launched.prompt.clone(),
-            workspace: launched.workspace.clone(),
-            start: launched.start.clone(),
-        });
-        let mut command = Command::new("sh");
-        command.args([
-            "-c",
-            &format!("echo $$ > '{}'; exec sleep 60", pid.display()),
-        ]);
-        command
-    });
-    let watch: Watch = Arc::new(|_, _, _| Err(std::io::Error::other("refused")));
-    Rig {
-        _dir: dir,
-        registry,
-        clock,
-        inbox: inbox_rx,
-        sessions,
-        launched: launched_rx,
-        launch_count,
-        point_calls,
-        seen_actions,
-        launch,
-        watch,
-    }
-}
-
-/// The `sleep` the rig's launcher started, read from its pidfile: armed
-/// as its watchdog so a failing test leaves no child behind.
-#[track_caller]
-fn child_group(rig: &Rig) -> Watchdog {
-    let pid = rig._dir.path().join("child.pid");
-    let pid: u32 = within("the child writes its pid", DEADLINE, move || {
-        loop {
-            let Ok(text) = std::fs::read_to_string(&pid) else {
-                std::thread::yield_now();
-                continue;
-            };
-            let Ok(pid) = text.trim().parse() else {
-                std::thread::yield_now();
-                continue;
-            };
-            return pid;
-        }
-    });
-    Watchdog::group(pid)
 }
 
 fn point_ok(rig: &Rig) -> ForkPoint {
