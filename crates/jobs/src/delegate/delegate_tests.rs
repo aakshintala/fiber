@@ -23,7 +23,7 @@ use fakes::{Recorder, TempDir, Watchdog, within};
 
 use super::DelegateSpawn;
 use super::models::Resolve;
-use super::run::{Launch, Launched, Watch, mint_session_id};
+use super::run::{Fresh, Launch, Launched, Start, Watch, mint_session_id};
 use crate::registry::Registry;
 
 /// How long a test waits on the wall clock before it fails.
@@ -69,8 +69,7 @@ fn rig() -> Rig {
             model: launched.model.clone(),
             prompt: launched.prompt.clone(),
             workspace: launched.workspace.clone(),
-            resume: false,
-            credential: launched.credential.clone(),
+            start: launched.start.clone(),
         });
         let mut command = Command::new("sh");
         command.args([
@@ -1034,7 +1033,10 @@ fn a_role_credential_reaches_the_launcher() {
         .recv(&rig.launched)
         .expect("the launcher ran");
     assert_eq!(launched.model, "fake/m:high");
-    assert_eq!(launched.credential, Some("work".to_owned()));
+    let Start::Fresh(Fresh::Spawn { credential }) = &launched.start else {
+        panic!("a spawn launches fresh");
+    };
+    assert_eq!(*credential, Some("work".to_owned()));
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
 }
@@ -1056,7 +1058,10 @@ fn a_full_reference_launches_with_no_credential() {
         .recv(&rig.launched)
         .expect("the launcher ran");
     assert_eq!(launched.model, "fake/m");
-    assert_eq!(launched.credential, None);
+    let Start::Fresh(Fresh::Spawn { credential }) = &launched.start else {
+        panic!("a spawn launches fresh");
+    };
+    assert_eq!(*credential, None);
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
 }

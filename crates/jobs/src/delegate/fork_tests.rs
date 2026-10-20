@@ -84,8 +84,7 @@ fn rig() -> Rig {
             model: launched.model.clone(),
             prompt: launched.prompt.clone(),
             workspace: launched.workspace.clone(),
-            resume: false,
-            credential: launched.credential.clone(),
+            start: launched.start.clone(),
         });
         let mut command = Command::new("sh");
         command.args([

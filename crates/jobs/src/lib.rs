@@ -12,8 +12,8 @@ mod timing_tests;
 mod tool;
 
 pub use delegate::{
-    DelegateFork, DelegateMessage, DelegateModels, DelegateSpawn, ForkPoint, Forking, LastSeq,
-    Launch, Launched, Resolve, Steer, Steered, Watch, Watched,
+    DelegateFork, DelegateMessage, DelegateModels, DelegateSpawn, ForkPoint, Forking, Fresh,
+    LastSeq, Launch, Launched, Resolve, Start, Steer, Steered, Watch, Watched,
 };
 pub use error::JobsError;
 pub use registry::Registry;

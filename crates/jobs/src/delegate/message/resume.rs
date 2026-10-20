@@ -13,7 +13,7 @@ use std::time::Instant;
 use contract::diag::{Op, Timing};
 
 use super::{Attempt, DelegateMessage, nothing_delivered};
-use crate::delegate::run::{Launched, Runner};
+use crate::delegate::run::{Launched, Runner, Start};
 use crate::error::JobsError;
 use crate::registry::runs::{Resume, Resumed};
 use contract::shapes::ContentPart;
@@ -138,8 +138,7 @@ impl DelegateMessage {
                 model: resumable.delegate.model.clone(),
                 prompt: message.clone(),
                 workspace: PathBuf::from(&resumable.delegate.workspace),
-                resume: true,
-                credential: None,
+                start: Start::Resume,
             };
             let log = resumable.output_path.clone();
             // The stamp covers building the runner and spawning the

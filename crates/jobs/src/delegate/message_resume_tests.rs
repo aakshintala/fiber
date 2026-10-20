@@ -22,6 +22,7 @@ use serde_json::{Map, Value, json};
 
 use super::super::Watched;
 use super::{DelegateMessage, LastSeq, Launch, Steer, Steered, Watch};
+use crate::Start;
 use crate::registry::Registry;
 use crate::support::{delegate_finished, delegate_started, ended_ok, exited};
 use crate::timing_tests::{Step, try_step};
@@ -170,7 +171,7 @@ fn resume_rig_with_steer(
             model: launched.model.clone(),
             prompt: launched.prompt.clone(),
             workspace: launched.workspace.clone(),
-            resume: launched.resume,
+            resume: matches!(launched.start, Start::Resume),
         });
         match queued.lock().unwrap().pop_front().expect("a launch reply") {
             LaunchReply::Block(marker) => {

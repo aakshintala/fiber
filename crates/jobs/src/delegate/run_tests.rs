@@ -33,8 +33,8 @@ use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
 
 use super::{
-    Fold, Launch, Launched, POLL, Runner, Shared, Stat, Watch, Watched, Watcher, cap_due, kill_due,
-    mint_session_id, note_seq, over_len, park_due,
+    Fold, Fresh, Launch, Launched, POLL, Runner, Shared, Start, Stat, Watch, Watched, Watcher,
+    cap_due, kill_due, mint_session_id, note_seq, over_len, park_due,
 };
 use crate::delegate::outcome::Termination;
 use crate::registry::Registry;
@@ -290,8 +290,7 @@ impl Rig {
             model: "fake/m".into(),
             prompt: "hi".into(),
             workspace: self.events.parent().unwrap().to_path_buf(),
-            resume: false,
-            credential: None,
+            start: Start::Fresh(Fresh::Spawn { credential: None }),
         };
         let (child, listing) = runner.spawn(&launch, &launched).unwrap();
         let (_started, finish) = self.registry.open_started(
@@ -2436,8 +2435,7 @@ fn the_fold_starts_from_the_run_boundary() {
         model: "fake/m".into(),
         prompt: "hi".into(),
         workspace: rig.events.parent().unwrap().to_path_buf(),
-        resume: false,
-        credential: None,
+        start: Start::Fresh(Fresh::Spawn { credential: None }),
     };
     let (child, listing) = runner.spawn(&launch, &launched).unwrap();
     let (_started, finish) = rig.registry.open_started(

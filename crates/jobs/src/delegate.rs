@@ -24,7 +24,7 @@ pub use models::{DelegateModels, Resolve};
 pub(crate) mod message;
 
 pub use message::{DelegateMessage, LastSeq, Steer, Steered};
-pub use run::{Launch, Launched, Watch, Watched};
+pub use run::{Fresh, Launch, Launched, Start, Watch, Watched};
 
 use run::Runner;
 
@@ -457,22 +457,26 @@ impl Starter<'_> {
         // point: a spawn resolves its argument and records the resolved
         // reference; a fork writes its point's reference verbatim and
         // its point, carrying no credential.
-        let (model, credential, delegate_model, forked_from) = match origin {
+        let (model, start, delegate_model, forked_from) = match origin {
             Origin::Spawn {
                 resolved,
                 credential,
             } => (
                 resolved.clone(),
-                credential,
+                Start::Fresh(Fresh::Spawn { credential }),
                 format!("fiber:{resolved}"),
                 None,
             ),
-            Origin::Fork { from } => (
-                from.model.clone(),
-                None,
-                from.model.clone(),
-                Some(from.point),
-            ),
+            Origin::Fork { from } => {
+                let point = from.point.clone();
+                let model = from.model.clone();
+                (
+                    model.clone(),
+                    Start::Fresh(Fresh::Fork { from }),
+                    model,
+                    Some(point),
+                )
+            }
         };
         let admitted = self.registry.admit(
             extension.is_some(),
@@ -503,8 +507,7 @@ impl Starter<'_> {
                     model,
                     prompt,
                     workspace: self.workspace.clone(),
-                    resume: false,
-                    credential,
+                    start,
                 };
                 // The stamp covers building the runner, spawning and listing the
                 // child, and recording the job. No clock is read without an
