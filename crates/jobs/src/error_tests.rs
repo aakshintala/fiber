@@ -141,6 +141,19 @@ fn rows() -> Vec<Row> {
             message: "This delegate is at depth 2, the deepest a delegate can be, so it cannot use `delegate_message`; do the work in this session.",
         },
         Row {
+            name: "fork point",
+            error: JobsError::ForkPoint {
+                failure: Failure {
+                    code: ErrorCode::InvalidArguments,
+                    message: "no forkable point".to_owned(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+            },
+            code: ErrorCode::InvalidArguments,
+            message: "Starting the fork failed: no forkable point",
+        },
+        Row {
             name: "no inbox",
             error: JobsError::NoInbox,
             code: ErrorCode::ToolError,
