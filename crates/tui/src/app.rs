@@ -1470,22 +1470,22 @@ impl App {
 
     /// Drops a pending command, returning its draft to an empty box.
     fn fail(&mut self, id: &str) {
-        if let Some(failed) = self.outbox.fail(id) {
-            self.apply_failed(id, failed);
+        if let Some((kind, draft)) = self.outbox.fail(id) {
+            self.apply_failed(id, kind, draft);
         }
     }
 
     /// Applies a popped command's failure: its draft back in an empty
     /// box, `Starting` after a `start`, the queue and the offer after a
     /// `reply`. The only place reaching them for a failure.
-    pub(crate) fn apply_failed(&mut self, id: &str, failed: outbox::Failed) {
+    pub(crate) fn apply_failed(&mut self, id: &str, kind: Kind, draft: Draft) {
         if self.draft.is_empty() {
-            self.draft.put_back(failed.draft);
+            self.draft.put_back(draft);
         }
-        if failed.kind == Kind::Start {
+        if kind == Kind::Start {
             self.phase = Phase::Starting;
         }
-        if failed.kind == Kind::Reply {
+        if kind == Kind::Reply {
             self.queue.restore(id);
             self.offer.restore(id);
         }

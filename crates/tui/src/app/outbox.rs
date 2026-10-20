@@ -73,16 +73,6 @@ pub(crate) struct Kept {
     pub(crate) line: String,
 }
 
-/// A popped pending command: what applying its failure needs, without
-/// reaching the queue, the offer, the phase or the draft.
-#[derive(Debug)]
-pub(crate) struct Failed {
-    /// Which command waited.
-    pub(crate) kind: Kind,
-    /// The draft it carried.
-    pub(crate) draft: Draft,
-}
-
 /// The link, the commands with no answer yet, the lines held until the
 /// hub connects, and the written lines a reconnect sends again.
 /// `pending` holds every command made through the outbox with no answer
@@ -129,10 +119,11 @@ impl Outbox {
         }
     }
 
-    /// Pops a pending command, returning what applying its failure needs.
-    pub(crate) fn fail(&mut self, id: &str) -> Option<Failed> {
-        let (kind, draft) = self.pending.remove(id)?;
-        Some(Failed { kind, draft })
+    /// Pops a pending command, returning the kind and draft applying its
+    /// failure needs, without reaching the queue, the offer, the phase
+    /// or the draft.
+    pub(crate) fn fail(&mut self, id: &str) -> Option<(Kind, Draft)> {
+        self.pending.remove(id)
     }
 
     /// A command's answer: its pending entry closes, and its line is no

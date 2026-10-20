@@ -67,9 +67,9 @@ fn fail_pops_pending_and_returns_its_kind_and_draft() {
     let mut draft = Draft::default();
     draft.set("hi");
     outbox.insert("c_1".to_owned(), Kind::Reply, draft);
-    let failed = outbox.fail("c_1").unwrap();
-    assert_eq!(failed.kind, Kind::Reply);
-    assert_eq!(failed.draft.expand(), "hi");
+    let (kind, draft) = outbox.fail("c_1").unwrap();
+    assert_eq!(kind, Kind::Reply);
+    assert_eq!(draft.expand(), "hi");
     assert!(outbox.pending.is_empty());
     assert!(outbox.fail("c_1").is_none());
 }
@@ -146,8 +146,8 @@ fn a_failure_returns_the_draft_to_an_empty_box() {
     let mut draft = Draft::default();
     draft.set("hi");
     app.outbox.insert("c_1".to_owned(), Kind::Prompt, draft);
-    let failed = app.outbox.fail("c_1").unwrap();
-    app.apply_failed("c_1", failed);
+    let (kind, draft) = app.outbox.fail("c_1").unwrap();
+    app.apply_failed("c_1", kind, draft);
     assert_eq!(app.draft(), "hi");
 }
 
@@ -159,8 +159,8 @@ fn a_failure_drops_its_draft_when_the_box_is_full() {
     draft.set("held");
     app.outbox.insert("c_2".to_owned(), Kind::Prompt, draft);
     type_text(&mut app, "typed");
-    let failed = app.outbox.fail("c_2").unwrap();
-    app.apply_failed("c_2", failed);
+    let (kind, draft) = app.outbox.fail("c_2").unwrap();
+    app.apply_failed("c_2", kind, draft);
     assert_eq!(app.draft(), "typed");
 }
 
@@ -172,8 +172,8 @@ fn a_failure_resets_starting_after_a_start_and_nothing_else() {
     };
     app.outbox
         .insert("c_1".to_owned(), Kind::Start, Draft::default());
-    let failed = app.outbox.fail("c_1").unwrap();
-    app.apply_failed("c_1", failed);
+    let (kind, draft) = app.outbox.fail("c_1").unwrap();
+    app.apply_failed("c_1", kind, draft);
     assert_eq!(app.phase, super::Phase::Starting);
     // Any other kind leaves the phase alone.
     app.phase = super::Phase::Pending {
@@ -181,8 +181,8 @@ fn a_failure_resets_starting_after_a_start_and_nothing_else() {
     };
     app.outbox
         .insert("c_2".to_owned(), Kind::Prompt, Draft::default());
-    let failed = app.outbox.fail("c_2").unwrap();
-    app.apply_failed("c_2", failed);
+    let (kind, draft) = app.outbox.fail("c_2").unwrap();
+    app.apply_failed("c_2", kind, draft);
     assert!(matches!(app.phase, super::Phase::Pending { .. }));
 }
 
@@ -192,11 +192,11 @@ fn a_rejected_reply_restores_its_queue_and_offer() {
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.outbox
         .insert("c_1".to_owned(), Kind::Reply, Draft::default());
-    let failed = app.outbox.fail("c_1").unwrap();
-    assert_eq!(failed.kind, Kind::Reply);
+    let (kind, draft) = app.outbox.fail("c_1").unwrap();
+    assert_eq!(kind, Kind::Reply);
     // Restoring a reply the queue never held is still a no-op away from
     // the failure path: the call itself must not panic.
-    app.apply_failed("c_1", failed);
+    app.apply_failed("c_1", kind, draft);
     assert!(app.outbox.pending.is_empty());
 }
 
