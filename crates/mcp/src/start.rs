@@ -404,6 +404,20 @@ impl Servers {
         self.resources_declared.load(Ordering::SeqCst)
     }
 
+    /// Whether the server `name` runs now: it has a slot in `Running`
+    /// state. A name nothing started, one that failed to start and one
+    /// stopped all read false. The hub's `mcp_servers` answer reads this
+    /// live, so a server that died mid-session reads not-running and its
+    /// row falls back to the failure the log holds (`docs/mcp.md`,
+    /// "Servers, their state and the per-server commands").
+    pub fn running(&self, name: &str) -> bool {
+        self.slots
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|slot| slot.spec().name == name && slot.is_running())
+    }
+
     /// The timing context this start's attempts run under, for a later
     /// load that starts more servers into it. A clone of the context;
     /// reading it starts no guard.

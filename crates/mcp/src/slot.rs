@@ -253,6 +253,15 @@ impl Slot {
         &self.spec
     }
 
+    /// Whether the server runs now: the slot holds a live server. The
+    /// hub's `mcp_servers` answer reads this live, so a server that
+    /// died mid-session reads not-running and its row falls back to the
+    /// failure the log holds (`docs/mcp.md`, "Servers, their state and
+    /// the per-server commands").
+    pub(crate) fn is_running(&self) -> bool {
+        matches!(*lock(&self.state), State::Running { .. })
+    }
+
     /// The running server, starting it first when the slot is not
     /// started, and restarting it when it died with its restart unused.
     /// One attempt runs at a time under the slot's lease: a concurrent

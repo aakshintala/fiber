@@ -1932,3 +1932,28 @@ fn an_unreadable_secret_names_the_file_without_its_value() {
         }
     );
 }
+
+#[test]
+fn running_names_only_the_servers_up_now() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let mut up = setup.spec("up");
+    up.startup_timeout = std::time::Duration::from_secs(30);
+    let mut down = setup.spec("down");
+    down.transport = crate::Transport::Stdio(crate::StdioSpec {
+        command: "/no/such/command".to_owned(),
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        secrets: BTreeMap::new(),
+        reader: std::sync::Arc::new(|_| Err(crate::SecretError::Missing)),
+        run: None,
+    });
+    let lazy = lazy_spec(&setup, "lazy", false);
+    let started = setup.start(vec![up, down, lazy]);
+    assert_eq!(started.failed.len(), 1, "{:?}", started.failed);
+    assert!(started.servers.running("up"));
+    assert!(!started.servers.running("down"));
+    // Declared from its cache and never started: not running.
+    assert!(!started.servers.running("lazy"));
+    assert!(!started.servers.running("elsewhere"));
+    setup.stop(started.servers);
+}
