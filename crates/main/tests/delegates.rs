@@ -3870,3 +3870,291 @@ fn an_extension_command_reaches_host_delegate_in_a_new_and_a_resumed_session() {
     // turn, and no delegate child ran one of its own against the server.
     assert_eq!(server.requests().len(), 1);
 }
+
+/// A `fiber session` answering text on every model call: what a fork
+/// child's one turn reads as.
+fn fork_text(_request: &Request) -> Response {
+    text_reply("forked hello")
+}
+
+/// Starts a fork child of `parent` directly, continuing `from` at `seq`:
+/// the argv `command` builds for a `Fresh(Fork)` launch, with `stdin`.
+fn start_fork_child(
+    setup: &support::Setup,
+    new: &str,
+    from: &str,
+    seq: u64,
+    parent: &str,
+    job: &str,
+    stdin: Stdio,
+) -> (Running, Option<std::process::ChildStdin>) {
+    let seq = seq.to_string();
+    let workspace = setup.workspace().to_str().unwrap().to_owned();
+    Running::spawn_stdin(
+        setup,
+        &[
+            "session",
+            "--id",
+            new,
+            "--workspace",
+            &workspace,
+            "--prompt",
+            "check it",
+            "--forked-from",
+            from,
+            "--forked-seq",
+            &seq,
+            "--parent",
+            parent,
+            "--delegate-id",
+            job,
+            "--depth",
+            "1",
+        ],
+        stdin,
+    )
+}
+
+/// The new session holds no log: a fork that writes `session_started`
+/// first fails this.
+fn assert_no_fork_log(setup: &support::Setup, new: &str) {
+    let log = sessions_in(&setup.home(), &setup.workspace())
+        .join(new)
+        .join("events.jsonl");
+    assert!(
+        !log.is_file(),
+        "a fork that cannot start writes no session log"
+    );
+}
+
+#[test]
+fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(fork_text).unwrap();
+    let child = ProviderServer::start_responding(fork_text).unwrap();
+    providers(&setup, &parent, &child);
+    // The parent the later cases fork from: one turn on `pa/m`, so its
+    // log holds a preamble before its last line. A plain session idles
+    // after its turn, so the test closes it once the turn completes.
+    let parent_id = doors::mint("s_");
+    let mut parent_running = Running::start(
+        &setup,
+        &parent_id,
+        &["--model", "pa/m", "--prompt", "say hello"],
+    );
+    parent_running.wait_line("the parent's turn completes", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let client = parent_running.connect(&setup, &parent_id);
+    subscribe(&client);
+    close_now(&client);
+    let _tail = support::until_close(&client);
+    drop(client);
+    let (parent_status, _, parent_stderr) = parent_running.wait();
+    assert_eq!(parent_status.code(), Some(0), "{parent_stderr}");
+    let parent_lines = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(&parent_id)
+            .join("events.jsonl"),
+    );
+    assert_eq!(parent_lines.first().unwrap()["kind"], "session_started");
+    let first_seq = parent_lines.first().unwrap()["seq"].as_u64().unwrap();
+    assert!(
+        parent_lines
+            .iter()
+            .any(|line| line["kind"] == "preamble_built"),
+        "the parent built its preamble"
+    );
+    // Case (a): `--forked-from` names a missing session.
+    let missing = doors::mint("s_");
+    let new_a = doors::mint("s_");
+    let (failed_a, _) = start_fork_child(
+        &setup,
+        &new_a,
+        &missing,
+        3,
+        &missing,
+        &doors::mint("j_"),
+        Stdio::null(),
+    );
+    let (status, lines, stderr) = failed_a.wait();
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        one(&lines, "fiber_exited")["error"]["code"],
+        "session_not_found",
+        "{lines:?}"
+    );
+    assert_no_fork_log(&setup, &new_a);
+    // Case (b): `--forked-from` names a corrupt log.
+    let corrupt = doors::mint("s_");
+    let corrupt_dir = sessions_in(&setup.home(), &setup.workspace()).join(&corrupt);
+    fs::create_dir_all(&corrupt_dir).unwrap();
+    fs::write(corrupt_dir.join("events.jsonl"), "this is not a log line\n").unwrap();
+    let new_b = doors::mint("s_");
+    let (failed_b, _) = start_fork_child(
+        &setup,
+        &new_b,
+        &corrupt,
+        1,
+        &corrupt,
+        &doors::mint("j_"),
+        Stdio::null(),
+    );
+    let (status, lines, stderr) = failed_b.wait();
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        one(&lines, "fiber_exited")["error"]["code"],
+        "log_corrupt",
+        "{lines:?}"
+    );
+    assert_no_fork_log(&setup, &new_b);
+    // Case (c): the point precedes any `preamble_built`, so there is no
+    // build to fork from.
+    let new_c = doors::mint("s_");
+    let (failed_c, _) = start_fork_child(
+        &setup,
+        &new_c,
+        &parent_id,
+        first_seq,
+        &parent_id,
+        &doors::mint("j_"),
+        Stdio::null(),
+    );
+    let (status, lines, stderr) = failed_c.wait();
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        one(&lines, "fiber_exited")["error"]["code"],
+        "invalid_arguments",
+        "{lines:?}"
+    );
+    assert_no_fork_log(&setup, &new_c);
+}
+
+#[test]
+fn a_fork_child_of_a_worktree_parent_holds_the_shared_lock() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(fork_text).unwrap();
+    let child = ProviderServer::start_responding(fork_text).unwrap();
+    providers(&setup, &parent, &child);
+    // The parent: one turn on `pa/m`, so the fork inherits its build.
+    // A plain session idles after its turn, so the test closes it once
+    // the turn completes.
+    let parent_id = doors::mint("s_");
+    let mut parent_running = Running::start(
+        &setup,
+        &parent_id,
+        &["--model", "pa/m", "--prompt", "say hello"],
+    );
+    parent_running.wait_line("the parent's turn completes", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let client = parent_running.connect(&setup, &parent_id);
+    subscribe(&client);
+    close_now(&client);
+    let _tail = support::until_close(&client);
+    drop(client);
+    let (parent_status, _, parent_stderr) = parent_running.wait();
+    assert_eq!(parent_status.code(), Some(0), "{parent_stderr}");
+    let parent_log = sessions_in(&setup.home(), &setup.workspace())
+        .join(&parent_id)
+        .join("events.jsonl");
+    let parent_lines = read_lines(&parent_log);
+    let last_seq = parent_lines.last().unwrap()["seq"].as_u64().unwrap();
+    // The parent ran in a worktree: its `session_started` names one at
+    // a directory that exists, so the child can share it.
+    let worktree = setup.root.path().join("wt");
+    fs::create_dir(&worktree).unwrap();
+    let text = fs::read_to_string(&parent_log).unwrap();
+    let mut rewritten = String::new();
+    for (index, line) in text.lines().enumerate() {
+        if index == 0 {
+            let mut first: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(first["kind"], "session_started");
+            first["payload"]["worktree"] = json!({
+                "path": worktree.to_str().unwrap(),
+                "branch": "fork-test",
+                "repository": setup.root.path().to_str().unwrap(),
+            });
+            rewritten.push_str(&serde_json::to_string(&first).unwrap());
+        } else {
+            rewritten.push_str(line);
+        }
+        rewritten.push('\n');
+    }
+    fs::write(&parent_log, rewritten).unwrap();
+    // The lock file sits beside the worktree, as `doors` lays it out:
+    // an exclusive take fails while a share is held, and succeeds
+    // once every hold is dropped.
+    let lock = worktree.with_file_name(format!(
+        "{}.lock",
+        worktree.file_name().unwrap().to_str().unwrap()
+    ));
+    let job = doors::mint("j_");
+    let new = doors::mint("s_");
+    // Stdin held open: it is the delegate's lifeline.
+    let (mut running, lifeline) = start_fork_child(
+        &setup,
+        &new,
+        &parent_id,
+        last_seq,
+        &parent_id,
+        &job,
+        Stdio::piped(),
+    );
+    running.wait_line("the fork child starts", |line| {
+        line["kind"] == "fiber_started"
+    });
+    let probe = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    assert!(
+        matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "an exclusive take fails while the child shares the worktree"
+    );
+    drop(probe);
+    // The child names its parent and its point, and no rewind.
+    let started = one(
+        &read_lines(
+            &sessions_in(&setup.home(), &setup.workspace())
+                .join(&new)
+                .join("events.jsonl"),
+        ),
+        "session_started",
+    );
+    assert_eq!(
+        started["parent"],
+        json!({"session_id": parent_id, "delegate_id": job})
+    );
+    assert_eq!(
+        started["forked_from"],
+        json!({"session_id": parent_id, "seq": last_seq})
+    );
+    assert!(started.get("rewind").is_none(), "{started}");
+    assert_eq!(started["worktree"]["path"], worktree.to_str().unwrap());
+    // Its run ended on its own: one turn and out, with no idle wait.
+    running.wait_line("the fork child exits", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    drop(lifeline);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    assert!(
+        lines.iter().any(|line| line["kind"] == "turn_completed"),
+        "the child ran its prompt as one turn: {:?}",
+        lines.iter().map(|line| &line["kind"]).collect::<Vec<_>>()
+    );
+    // The lock releases with the child.
+    let freed = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    assert!(
+        freed.try_lock().is_ok(),
+        "an exclusive take succeeds once the child has exited"
+    );
+}
