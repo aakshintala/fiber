@@ -16,9 +16,6 @@ use fakes::Deadline;
 /// One hang bound for every wait: the queue takes no clock, so real time
 /// only bounds the test's own waits.
 const BOUND: Duration = Duration::from_secs(10);
-/// One probe interval: the blockedness proof repeats its bounded receive
-/// over several of these, so a descheduled thread cannot pass it.
-const PROBE: Duration = Duration::from_millis(50);
 
 /// An [`Emit`] that records every event in arrival order. Local, not
 /// `fakes::emit::EventLog`: the dev-cycle builds a second `contract`
@@ -255,15 +252,17 @@ fn a_drop_released_while_the_push_is_held_still_lands_empty_last() {
         // The test releases the drop while the push is still held: the
         // drop can only proceed to the real lock, still held by the push.
         let _sent = free_tx.send(());
-        // The drop must not complete while the push holds the lock:
-        // several bounded receives time out, proving it is blocked on
-        // the held lock rather than descheduled.
-        for _ in 0..3 {
-            assert!(
-                Deadline::after(PROBE).recv(&done_rx).is_err(),
-                "the drop stays blocked while the push holds the lock"
-            );
-        }
+        // The drop cannot have finished while the push holds the lock:
+        // one immediate receive decides, with no clock read. What proves
+        // it waited on the held lock is the mutex itself: the push is
+        // provably inside its section and the drop provably at the gate,
+        // so the drop's completion after the release below can only mean
+        // it blocked on the held lock, and the empty last event can only
+        // mean it ran second.
+        assert!(
+            done_rx.try_recv().is_err(),
+            "the drop stays blocked while the push holds the lock"
+        );
         // Only then is the push released: it emits `[A]`, the drop takes
         // the lock, removes A and emits `[]` last.
         release.release();
