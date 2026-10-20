@@ -10,10 +10,11 @@ use contract::emit::Emit;
 use contract::events::{DelegateStarted, JobStarted};
 use contract::jobs::JobRecord;
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, DeclaredEffects, Effect};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Point};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
-use contract::{JobId, SessionId};
+use contract::{ActionId, JobId, SessionId};
 use serde_json::{Map, Value, json};
+pub(crate) mod fork;
 pub(crate) mod group;
 pub(crate) mod models;
 pub(crate) mod outcome;
@@ -62,6 +63,62 @@ pub struct DelegateSpawn {
     pub launch: Launch,
     /// Watches the child's socket.
     pub watch: Watch,
+}
+
+/// Starts a Fiber fork: a child `fiber session` that continues a point in
+/// another session's log and exits when its run ends
+/// (`docs/delegates.md`, "Forks"). Like [`DelegateSpawn`], the call
+/// returns as soon as the child has spawned and the job is recorded; the
+/// runner thread owns everything after that. The point the job continues
+/// from arrives through `point`, read after the argument check and before
+/// admission; Part 3 supplies the reader that walks the caller's ancestry.
+///
+/// The fields are wired by `main`: like a spawn's, delegates of `parent`
+/// share `workspace` and log under `sessions`; `bound` is the stop bound
+/// and `cap` the output cap.
+pub struct DelegateFork {
+    /// This session's depth in the delegate tree.
+    pub depth: u32,
+    /// The session's jobs.
+    pub registry: Arc<Registry>,
+    /// The parent session: the child's `--parent`.
+    pub parent: SessionId,
+    /// The parent's workspace, which the fork shares.
+    pub workspace: PathBuf,
+    /// Where forks log: each child's `events.jsonl` lives under
+    /// `<sessions>/<session id>`.
+    pub sessions: PathBuf,
+    /// The session clock.
+    pub clock: Arc<dyn contract::clock::Clock>,
+    /// How long a stop waits before SIGKILL.
+    pub bound: Duration,
+    /// The output cap, in bytes of the fork's `events.jsonl`.
+    pub cap: u64,
+    /// Reads the point the fork continues from, with the calling action
+    /// when the loop runs the call (`Some`) and without it (`None`) on
+    /// any other path.
+    pub point: ForkPoint,
+    /// Builds the child's command.
+    pub launch: Launch,
+    /// Watches the child's socket.
+    pub watch: Watch,
+}
+
+/// Reads the point a fork continues from: the caller's ancestry for the
+/// point (Part 3 supplies the reader; the fork only calls it). The
+/// argument is the calling action, for the root walk, or `None` where no
+/// call runs.
+pub type ForkPoint = Arc<dyn Fn(Option<&ActionId>) -> Result<Forking, Failure> + Send + Sync>;
+
+/// The resolved point a fork continues from, plus the model reference
+/// the start writes verbatim into `DelegateStarted.model`: a fork takes
+/// no model argument, so nothing resolves here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Forking {
+    /// The point in its session's log.
+    pub point: Point,
+    /// The model reference, written verbatim.
+    pub model: String,
 }
 
 pub(crate) const DEPTH_CAP: u32 = 2;
@@ -139,9 +196,9 @@ fn string(arguments: &Map<String, Value>, name: &str) -> String {
     arguments[name].as_str().unwrap_or_default().to_owned()
 }
 
-type ExtensionStart<'a> = (&'a str, &'a mut dyn FnMut(&JobId));
+pub(crate) type ExtensionStart<'a> = (&'a str, &'a mut dyn FnMut(&JobId));
 
-struct Started {
+pub(crate) struct Started {
     job_id: JobId,
     output_path: String,
     started: JobStarted,
@@ -259,7 +316,7 @@ impl DelegateSpawn {
     fn start(
         &self,
         arguments: &Map<String, Value>,
-        mut extension: Option<ExtensionStart<'_>>,
+        extension: Option<ExtensionStart<'_>>,
     ) -> Result<Started, JobsError> {
         if let Some(error) = depth_refusal(self.depth, "delegate_spawn") {
             return Err(error);
@@ -317,6 +374,106 @@ impl DelegateSpawn {
                 return Err(JobsError::CredentialUnavailable { message });
             }
         };
+        self.starter().start(
+            "delegate_spawn",
+            Origin::Spawn {
+                resolved,
+                credential,
+            },
+            description,
+            prompt,
+            timeout,
+            extension,
+        )
+    }
+}
+
+/// What the shared start records: a spawn's resolved model and
+/// credential, or a fork's resolved point and model reference. A spawn
+/// resolves its model argument; a fork carries its point instead, so a
+/// fork never resolves and never carries a credential.
+pub(crate) enum Origin {
+    /// A spawn's resolved `provider/model[:level]` and credential label.
+    Spawn {
+        /// The resolved reference.
+        resolved: String,
+        /// The credential label, when the role names one.
+        credential: Option<String>,
+    },
+    /// A fork's resolved point and model reference.
+    Fork {
+        /// The resolved point and its verbatim model reference.
+        from: Forking,
+    },
+}
+
+/// The fields a delegate start admits, spawns and records with: the
+/// admit-to-record tail both delegate tools share. Built per call from
+/// either tool's wired fields, which name the same registry, parent,
+/// paths, clock, bounds and closures.
+pub(crate) struct Starter<'a> {
+    /// The session's jobs.
+    pub registry: &'a Arc<Registry>,
+    /// The parent session: the child's `--parent`.
+    pub parent: &'a SessionId,
+    /// The parent's workspace, which the child shares.
+    pub workspace: &'a PathBuf,
+    /// Where children log.
+    pub sessions: &'a PathBuf,
+    /// The session clock.
+    pub clock: &'a Arc<dyn contract::clock::Clock>,
+    /// How long a stop waits before SIGKILL.
+    pub bound: Duration,
+    /// The output cap, in bytes of the child's `events.jsonl`.
+    pub cap: u64,
+    /// Builds the child's command.
+    pub launch: &'a Launch,
+    /// Watches the child's socket.
+    pub watch: &'a Watch,
+    /// This session's depth in the delegate tree.
+    pub depth: u32,
+}
+
+impl Starter<'_> {
+    /// Admits, spawns and records one delegate: the cap check, the spawn
+    /// and the record run with `start_gate` held, exactly as
+    /// `DelegateSpawn::start` did before the fork shared it. `tool` is
+    /// the calling tool's name, for the record; `origin` is what the
+    /// child runs as.
+    #[allow(
+        clippy::result_large_err,
+        reason = "every jobs boundary returns the crate's error enum by value"
+    )]
+    pub(crate) fn start(
+        &self,
+        tool: &str,
+        origin: Origin,
+        description: String,
+        prompt: String,
+        timeout: Option<Duration>,
+        mut extension: Option<ExtensionStart<'_>>,
+    ) -> Result<Started, JobsError> {
+        // The launch's model and credential, and the record's model and
+        // point: a spawn resolves its argument and records the resolved
+        // reference; a fork writes its point's reference verbatim and
+        // its point, carrying no credential.
+        let (model, credential, delegate_model, forked_from) = match origin {
+            Origin::Spawn {
+                resolved,
+                credential,
+            } => (
+                resolved.clone(),
+                credential,
+                format!("fiber:{resolved}"),
+                None,
+            ),
+            Origin::Fork { from } => (
+                from.model.clone(),
+                None,
+                from.model.clone(),
+                Some(from.point),
+            ),
+        };
         let admitted = self.registry.admit(
             extension.is_some(),
             #[allow(
@@ -343,7 +500,7 @@ impl DelegateSpawn {
                     session_id: session_id.clone(),
                     job_id: job_id.clone(),
                     parent: self.parent.clone(),
-                    model: resolved.clone(),
+                    model,
                     prompt,
                     workspace: self.workspace.clone(),
                     resume: false,
@@ -360,15 +517,15 @@ impl DelegateSpawn {
                     job_id.clone(),
                     session_id.clone(),
                     PathBuf::from(&output_path),
-                    Arc::clone(&self.clock),
+                    Arc::clone(self.clock),
                     self.bound,
                     self.cap,
-                    Arc::clone(&self.watch),
+                    Arc::clone(self.watch),
                     None,
                     timeout,
                 );
                 let (child, listing) = runner
-                    .spawn(&self.launch, &launched)
+                    .spawn(self.launch, &launched)
                     .map_err(|source| JobsError::SpawnFailed { source })?;
                 let delegate = DelegateStarted {
                     job_id: job_id.clone(),
@@ -376,11 +533,12 @@ impl DelegateSpawn {
                     harness: "fiber".to_owned(),
                     // The resolved reference, with any role resolved: a full
                     // reference argument records the same text as before
-                    // (`docs/events.md`, "`delegate_started`").
-                    model: format!("fiber:{resolved}"),
+                    // (`docs/events.md`, "`delegate_started`"). A fork
+                    // records its point's reference verbatim instead.
+                    model: delegate_model,
                     workspace: self.workspace.to_string_lossy().into_owned(),
                     worktree: None,
-                    forked_from: None,
+                    forked_from,
                 };
                 let (started, finish) = if let Some((extension, _)) = extension {
                     let started = JobStarted {
@@ -402,7 +560,7 @@ impl DelegateSpawn {
                 } else {
                     self.registry.open_started(
                         job_id.clone(),
-                        "delegate_spawn".to_owned(),
+                        tool.to_owned(),
                         description,
                         output_path.clone(),
                         stop,
@@ -433,6 +591,72 @@ impl DelegateSpawn {
             Err(crate::registry::runs::Admit::Full) => Err(JobsError::DelegatesFull),
             Err(crate::registry::runs::Admit::Start(error)) => Err(error),
         }
+    }
+}
+
+impl DelegateSpawn {
+    /// The shared start, built from this tool's wired fields.
+    fn starter(&self) -> Starter<'_> {
+        Starter {
+            registry: &self.registry,
+            parent: &self.parent,
+            workspace: &self.workspace,
+            sessions: &self.sessions,
+            clock: &self.clock,
+            bound: self.bound,
+            cap: self.cap,
+            launch: &self.launch,
+            watch: &self.watch,
+            depth: self.depth,
+        }
+    }
+}
+
+impl DelegateFork {
+    /// The shared start, built from this tool's wired fields.
+    fn starter(&self) -> Starter<'_> {
+        Starter {
+            registry: &self.registry,
+            parent: &self.parent,
+            workspace: &self.workspace,
+            sessions: &self.sessions,
+            clock: &self.clock,
+            bound: self.bound,
+            cap: self.cap,
+            launch: &self.launch,
+            watch: &self.watch,
+            depth: self.depth,
+        }
+    }
+
+    /// Runs the fork from its checked arguments and calling action:
+    /// the depth check, then the argument check, then the point read,
+    /// then the start both tools share.
+    #[allow(
+        clippy::result_large_err,
+        reason = "every jobs boundary returns the crate's error enum by value"
+    )]
+    fn start(
+        &self,
+        arguments: &Map<String, Value>,
+        action: Option<ActionId>,
+    ) -> Result<Started, JobsError> {
+        if let Some(error) = depth_refusal(self.depth, "delegate_fork") {
+            return Err(error);
+        }
+        let (description, prompt, timeout) = check_effects_arguments(arguments)?;
+        // Read after the argument check and before admission: a bad call
+        // never resolves a point, and a point failure starts nothing.
+        let from =
+            (self.point)(action.as_ref()).map_err(|failure| JobsError::ForkPoint { failure })?;
+        self.starter().start(
+            "delegate_fork",
+            Origin::Fork { from },
+            description,
+            prompt,
+            timeout,
+            None,
+        )
     }
 }
 
