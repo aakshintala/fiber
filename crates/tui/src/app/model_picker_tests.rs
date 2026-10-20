@@ -4388,3 +4388,67 @@ fn a_dismiss_leaves_a_newer_other_choice_standing() {
         app.notices()
     );
 }
+
+/// Counts the stacked rows under `code`.
+fn count_code(app: &App, code: &str) -> usize {
+    app.notices()
+        .into_iter()
+        .filter(
+            |line| matches!(line, crate::app::NoticeLine::Notice { code: found, .. } if found == code),
+        )
+        .count()
+}
+
+#[test]
+fn two_identical_pending_choices_stack_and_one_rejection_leaves_one() {
+    let (mut app, _) = choosing_app();
+    busy_mid_turn(&mut app);
+    open(&mut app);
+    let first = sent(app.on_key(Key::Enter, now()));
+    let first_id = first["id"].as_str().expect("an id").to_owned();
+    // The same choice sent again is a second notice worth of state, not
+    // a repeat: two rows, one text.
+    open(&mut app);
+    let second = sent(app.on_key(Key::Enter, now()));
+    let second_id = second["id"].as_str().expect("an id").to_owned();
+    assert_ne!(first_id, second_id);
+    assert_eq!(count_code(&app, "switch_pending"), 2);
+    assert_eq!(
+        app.notice(),
+        Some("acme/m1 · high applies when this turn ends")
+    );
+    // Rejecting the second command voids only its share: the rejection's
+    // own notice lands on top, and the surviving share keeps its text.
+    app.on_line(refused(
+        SESSION,
+        &second_id,
+        "credential_missing",
+        "no key.",
+    ));
+    assert_eq!(count_code(&app, "switch_pending"), 1);
+    assert!(app.notices().into_iter().any(|line| matches!(line,
+        crate::app::NoticeLine::Notice { code, text }
+        if code == "switch_pending" && text == "acme/m1 · high applies when this turn ends")));
+    // Rejecting the first clears the last share.
+    app.on_line(refused(SESSION, &first_id, "credential_missing", "no key."));
+    assert!(!has_code(&app, "switch_pending"));
+}
+
+#[test]
+fn on_models_arrival_clears_models_loading() {
+    let (mut app, _) = choosing_app();
+    app.push_notice(
+        "models_loading",
+        "The model list is not read yet; try again in a moment.".to_owned(),
+    );
+    assert!(has_code(&app, "models_loading"));
+    // The load landed, answered or not: its wait is over.
+    app.on_models(Ok(three()));
+    assert!(!has_code(&app, "models_loading"));
+    app.push_notice(
+        "models_loading",
+        "The model list is not read yet; try again in a moment.".to_owned(),
+    );
+    app.on_models(Err("gone".to_owned()));
+    assert!(!has_code(&app, "models_loading"));
+}

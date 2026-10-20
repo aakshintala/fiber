@@ -975,6 +975,11 @@ impl App {
         self.notices.push(code, text);
     }
 
+    /// Births unborn notices and removes expired events; the frame calls
+    /// it before each draw and again after, and `run_with` calls it
+    /// before the first arm.
+    pub(crate) fn sweep_notices(&mut self, _now: Instant) {}
+
     /// The hub could not be reached, or runs a schema this terminal cannot
     /// read: the notice for the first failure in a run, and a held `start`
     /// fails as if rejected.

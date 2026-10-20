@@ -2829,3 +2829,19 @@ fn a_moved_revision_on_a_dropped_page_counts_the_rescan_once() {
         "the fetch reads the moved page"
     );
 }
+
+/// The search-incomplete notice's identity: the text `find_lost` pushes.
+fn search_text() -> String {
+    "Could not search all of history: connection lost".to_owned()
+}
+
+#[test]
+fn a_completed_rescan_clears_the_search_text() {
+    let (mut app, log, fetch) = dropped_fetch();
+    app.find_lost();
+    assert_eq!(app.notice(), Some(search_text().as_str()));
+    // The refetch answers and the scan reconciles: the cause is over.
+    answer_all(&mut app, &log, vec![fetch]);
+    app.settle_find();
+    assert!(app.notices().is_empty());
+}

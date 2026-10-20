@@ -8,6 +8,7 @@ use super::{
 };
 use crate::app::App;
 use crate::link::Line;
+use contract::clock::Clock;
 use contract::{Envelope, Seq};
 use fakes::Deadline;
 use ratatui::backend::TestBackend;
@@ -2242,4 +2243,107 @@ fn a_disconnect_among_full_batches_ends_the_batch_with_its_own_frame() {
     push_markers(&mut inputs, tail, &mut seq, &mut turn);
     assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
     assert_eq!(flushes.get(), 3);
+}
+
+/// A hub line of `kind` for `session`.
+fn hub_for(kind: &str, session: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: kind.to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"session_id": session})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// The notice rows' codes, oldest first.
+fn notice_codes(app: &App) -> Vec<String> {
+    app.notices()
+        .into_iter()
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { code, .. } => Some(code),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn take_wake_folds_the_notices_wake() {
+    let clock = fakes::clock::FakeClock::new();
+    let t0 = clock.now();
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    // Quiet: no motion, no items, no notices.
+    assert_eq!(app.take_wake(), None);
+    // One event: the wake is its expiry.
+    app.push_notice("io_failed", "x".to_owned());
+    app.sweep_notices(t0);
+    assert_eq!(
+        app.take_wake(),
+        Some(t0 + std::time::Duration::from_secs(10))
+    );
+    // Two staggered events: the earlier expiry wins.
+    app.push_notice("config_invalid", "y".to_owned());
+    app.sweep_notices(t0 + std::time::Duration::from_secs(5));
+    assert_eq!(
+        app.take_wake(),
+        Some(t0 + std::time::Duration::from_secs(10))
+    );
+    // Past the fade the wake is gone with the rows.
+    app.sweep_notices(t0 + std::time::Duration::from_secs(10));
+    assert!(app.notices().is_empty());
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
+fn reopen_clears_only_the_closed_sessions_stream_closed() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    // A close for the open session shows; one for another session is not
+    // this terminal's cause.
+    app.on_line(hub_for("stream_closed", SESSION));
+    assert_eq!(notice_codes(&app), ["stream_closed"]);
+    app.on_line(hub_for("stream_closed", "s_bbbbbbbbbbbbbbbb"));
+    assert_eq!(notice_codes(&app), ["stream_closed"]);
+    // Attaching elsewhere drops only the other session's stale row.
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    assert!(app.notices().is_empty());
+    // A close for the now-open session shows until its reopen ends it.
+    app.on_line(hub_for("stream_closed", "s_bbbbbbbbbbbbbbbb"));
+    assert_eq!(notice_codes(&app), ["stream_closed"]);
+    app.on_line(hub_for("stream_reopened", "s_bbbbbbbbbbbbbbbb"));
+    assert!(app.notices().is_empty());
+    // A stale reopen for a session with no row changes nothing.
+    app.on_line(hub_for("stream_reopened", SESSION));
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn login_url_survives_sweeps_and_falls_to_dismiss() {
+    let clock = fakes::clock::FakeClock::new();
+    let t0 = clock.now();
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.push_notice("login_url", "open the link to log in".to_owned());
+    app.push_notice("io_failed", "x".to_owned());
+    app.sweep_notices(t0);
+    // Past the fade the event is gone and the condition stands: no
+    // terminal-visible signal ends it, only the person's ✕ does.
+    app.sweep_notices(t0 + std::time::Duration::from_secs(30));
+    assert_eq!(notice_codes(&app), ["login_url"]);
+    let id = app
+        .notices()
+        .into_iter()
+        .find_map(|line| match line {
+            crate::app::NoticeLine::Notice { id, .. } => Some(id),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .expect("the login row");
+    app.on_click(crate::mouse::TargetId::DismissNotice(id));
+    assert!(app.notices().is_empty());
 }
