@@ -3732,3 +3732,136 @@ fn has_new_still_marks_while_scrolled_up_after_the_closing_click() {
     );
     let _ = call;
 }
+
+/// An app with a plain reply turn above a group turn holding one read
+/// call with `lines` lines of output, the ledger and the call open.
+/// Returns the app, the group, the call, the call row and the first
+/// opened content row.
+fn pinned_call_with_prior_turn(
+    lines: usize,
+) -> (App, crate::app::Target, crate::app::Target, usize, usize) {
+    use crate::app::Target as AppTarget;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "first"));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "text_completed",
+        serde_json::json!({"text": "before"}),
+        Some("a_p"),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "assistant_message_completed",
+        serde_json::json!({"outcome": "completed"}),
+        Some("a_p"),
+    ));
+    app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "assistant_message_started",
+        serde_json::json!({}),
+        Some("a_m"),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "tool_call_requested",
+        serde_json::json!({"name": "read", "arguments": {"path": "src/0.rs"}}),
+        Some("a_c0"),
+    ));
+    let detail: Vec<String> = (1..=lines).map(|n| format!("L{n:04} of call")).collect();
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "tool_call_completed",
+        serde_json::json!({"status": "completed",
+            "content": [{"type": "text", "text": detail.join("\n")}]}),
+        Some("a_c0"),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "assistant_message_completed",
+        serde_json::json!({"outcome": "completed"}),
+        Some("a_m"),
+    ));
+    app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    let group = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, AppTarget::Group(_)).then_some(target))
+        .expect("a group target");
+    app.open(group);
+    let call = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, AppTarget::Call(_)).then_some(target))
+        .expect("a call target");
+    app.open(call);
+    let (rows, texts) = app.pages().page_text(0).expect("the resident page");
+    let width = app.pages().wrap_width();
+    let mut row = 0usize;
+    let mut header = None;
+    let mut first = None;
+    for ((line, target), text) in rows.iter().zip(&texts) {
+        if *target == Some(call) {
+            header = Some(row);
+        }
+        if first.is_none() && text.scopes.last() == Some(&call) {
+            first = Some(row);
+        }
+        row += crate::view::rows(line.clone(), width);
+    }
+    let header = header.expect("the call row");
+    let first = first.expect("opened rows");
+    assert_eq!(first, header + 1, "the opened content follows the call row");
+    (app, group, call, header, first)
+}
+
+#[test]
+fn a_turn_wholly_above_the_top_draws_no_turn_stop_while_pinned() {
+    use crate::mouse::TargetId;
+    const W: u16 = 60;
+    const H: u16 = 12;
+    // The earlier turn sits wholly above the top row, so its stop would
+    // cover no rows: only a widened bound draws it (`docs/tui.md`,
+    // "Pinned call").
+    let (mut app, _, _, _, first) = pinned_call_with_prior_turn(30);
+    app.jump(first + 2);
+    assert!(app.pinned_row().is_some(), "a pinned call");
+    let (_, targets) = pointed(&mut app, W, H, None);
+    let turns: Vec<Rect> = targets
+        .iter()
+        .filter(|target| matches!(target.id, TargetId::Turn(_)))
+        .map(|target| target.rect)
+        .collect();
+    assert!(!turns.is_empty(), "the turns loop drew a stop");
+    assert!(
+        turns.iter().all(|rect| rect.height > 0),
+        "no zero-height turn stop: {turns:?}"
+    );
+}
+
+#[test]
+fn the_pinned_turn_keeps_its_stop_below_the_top_row() {
+    use crate::mouse::TargetId;
+    const W: u16 = 60;
+    const H: u16 = 12;
+    // The pin covers the top row, not the turn under it: the turn's stop
+    // still spans the rows below, so only a flipped row check drops it
+    // (`docs/tui.md`, "Pinned call").
+    let (mut app, _, _, _, first) = pinned_call(30, true);
+    app.jump(first + 2);
+    assert!(app.pinned_row().is_some(), "a pinned call");
+    let rows = pin_rows(&app);
+    let (_, targets) = pointed(&mut app, W, H, None);
+    let stop = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::Turn(_)))
+        .expect("the pinned turn keeps a stop");
+    assert_eq!(stop.rect.y, rows.y, "the stop starts on the top row");
+    assert!(
+        stop.rect.height > 1,
+        "the stop spans below the top: {:?}",
+        stop.rect
+    );
+}

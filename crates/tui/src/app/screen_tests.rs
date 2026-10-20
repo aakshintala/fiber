@@ -964,3 +964,54 @@ fn landing_on_the_row_below_the_header_clears_the_pin_and_uses_the_true_top() {
     );
     assert_eq!(screen.pin(5), None, "the header on row 0 pins nothing");
 }
+
+#[test]
+fn a_closed_ledger_pins_nothing_on_the_asking_call_row() {
+    // The asking call keeps its row while its ledger is closed, and the
+    // row's own text still names the group: the pin needs the ledger
+    // open, so the key match alone pins nothing (`docs/tui.md`,
+    // "Pinned call").
+    let (mut screen, group, calls) = read_group(1, &[false], 5, &[true]);
+    screen.open(group);
+    let row = line_row(&screen, calls[0]).expect("the asking call row");
+    screen.jump(row);
+    screen.settle(1);
+    assert_eq!(screen.top(), Some(row), "the call row stays on top");
+    assert_eq!(screen.pin(1), None, "a closed ledger pins nothing");
+}
+
+#[test]
+fn an_opened_summary_on_the_top_row_pins_nothing() {
+    // The summary row names no scope of its own: the top row's text sits
+    // outside every section, so nothing pins (`docs/tui.md`,
+    // "Pinned call").
+    let (mut screen, group, _) = read_group(1, &[true], 30, &[false]);
+    let header = line_row(&screen, group).expect("the summary row");
+    screen.jump(header);
+    screen.settle(5);
+    assert_eq!(screen.top(), Some(header), "the summary stays on top");
+    assert_eq!(screen.pin(5), None, "the top row pins nothing");
+}
+
+#[test]
+fn every_pin_sits_above_its_top_row() {
+    // A section's header draws before its body opens its scope, so a
+    // found header is never the top row itself: every pin sits above
+    // the row it pins for (`docs/tui.md`, "Pinned call").
+    for (_, mut screen) in [
+        ("open", read_group(1, &[true], 30, &[false]).0),
+        ("approval", read_group(1, &[false], 5, &[true]).0),
+        ("two", read_group(2, &[true, false], 30, &[false, false]).0),
+    ] {
+        let total = total(&screen);
+        for top in 0..total {
+            screen.jump(top);
+            if let Some(pin) = screen.pin(1) {
+                assert!(
+                    pin.row < top,
+                    "the pin sits above its top row {top}: {pin:?}"
+                );
+            }
+        }
+    }
+}

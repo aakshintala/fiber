@@ -1401,7 +1401,9 @@ impl Pages {
     /// `Call` scope of the top row's own text. A `Group` pins only while
     /// its ledger is open; a `Call` pins exactly while its rows exist.
     /// The header is the first line on the page with the pin's target;
-    /// none when the page is dropped or the header is not on it.
+    /// none when the page is dropped or the header is not on it. A found
+    /// header always sits above the top row: a section's header draws
+    /// before its body ever opens its scope.
     fn pin_on_page(
         &self,
         part: &Part,
@@ -1455,7 +1457,7 @@ impl Pages {
         for (line, _) in rows.iter().take(header_at) {
             row = row.saturating_add(crate::view::rows(line.clone(), self.width));
         }
-        (row < top).then_some(Pin { line, target, row })
+        Some(Pin { line, target, row })
     }
 
     /// Focus stops across the indexed conversation, even on dropped pages.
