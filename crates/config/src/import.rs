@@ -979,17 +979,21 @@ impl TomlReader {
 
 /// Strips a `#` comment outside quotes. `None` when a quote is left open:
 /// the value may continue on the next line, which the subset never reads.
-/// An escape at the last byte skips past the end, which ends the scan
-/// with the quote still open: `None`, exactly as not skipping does, so no
-/// bounds check guards the skip.
+/// A backslash inside a `"` string escapes the next byte, including a
+/// trailing backslash, which ends the scan with the quote still open:
+/// `None`, exactly as escaping nothing does. The scan walks the bytes
+/// with an iterator, so no index arithmetic can stick a mutant in a loop.
 fn strip_comment(line: &str) -> Option<&str> {
     let mut quote = None;
-    let bytes = line.as_bytes();
-    let mut index = 0;
-    while let Some(byte) = bytes.get(index).copied() {
+    let mut escaped = false;
+    for (index, byte) in line.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
         if let Some(open) = quote {
             if byte == b'\\' && open == b'"' {
-                index += 2;
+                escaped = true;
                 continue;
             }
             if byte == open {
@@ -1000,7 +1004,6 @@ fn strip_comment(line: &str) -> Option<&str> {
         } else if byte == b'#' {
             return Some(line.get(..index).unwrap_or(""));
         }
-        index += 1;
     }
     if quote.is_some() {
         return None;
@@ -1100,16 +1103,22 @@ fn parse_basic_string(rest: &str) -> Option<String> {
 /// depth: no string part can hold an unquoted bracket, so a nested
 /// bracket fails the value's parse either way, and every input that
 /// would reach depth greater than zero returns `None` with or without it.
+/// A backslash inside a `"` string escapes the next byte. The scan walks
+/// the bytes with an iterator, so no index arithmetic can stick a mutant
+/// in a loop.
 fn split_top_level(text: &str) -> Option<Vec<&str>> {
     let mut parts = Vec::new();
     let mut quote = None;
+    let mut escaped = false;
     let mut start = 0;
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    while let Some(byte) = bytes.get(index).copied() {
+    for (index, byte) in text.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
         if let Some(open) = quote {
             if byte == b'\\' && open == b'"' {
-                index += 2;
+                escaped = true;
                 continue;
             }
             if byte == open {
@@ -1121,7 +1130,6 @@ fn split_top_level(text: &str) -> Option<Vec<&str>> {
             parts.push(text.get(start..index).unwrap_or("").trim());
             start = index + 1;
         }
-        index += 1;
     }
     if quote.is_some() {
         return None;
@@ -1232,16 +1240,19 @@ fn skill_taken(home: &Path, name: &str, bytes: &[u8], taken: &BTreeSet<String>) 
         .is_none_or(|current| current != bytes)
 }
 
-/// Appends `-2`, `-3` until the name is free.
+/// Appends `-2`, `-3` until the name is free. At most `taken.len()`
+/// candidates can be occupied, so the first `taken.len() + 1` suffixes
+/// hold a free name and the walk is finite: a flipped exit returns a
+/// wrong name instead of hanging. No index arithmetic remains for a
+/// mutant to stick on.
 fn suffixed(taken: &BTreeSet<String>, name: &str) -> String {
-    let mut index = 2;
-    loop {
+    for index in 2..=(taken.len() + 2) {
         let candidate = format!("{name}-{index}");
         if !taken.contains(&candidate) {
             return candidate;
         }
-        index += 1;
     }
+    unreachable!("one of the first taken.len() + 1 suffixes is free");
 }
 
 /// Writes every planned item one file at a time through the locked atomic
@@ -2143,7 +2154,7 @@ mod tests {
         fixture.tmp.write(
             "source/config.toml",
             "[mcp_servers.cooked]\n\
-             command = \"n\\nt\\tr\\rf\\fb\\\\g\\\"q\"\n\
+             command = \"a\\nb\\tc\\rd\\be\\ff\\\\g\\\"h\"\n\
              \n\
              [mcp_servers.lit]\n\
              command = 'tool'\n",
@@ -2155,7 +2166,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             written.pointer("/mcp/servers/cooked").unwrap(),
-            &json!({"command": "n\nt\tr\rf\u{c}b\\g\"q"})
+            &json!({"command": "a\nb\tc\rd\u{8}e\u{c}f\\g\"h"})
         );
         assert_eq!(
             written.pointer("/mcp/servers/lit").unwrap(),
