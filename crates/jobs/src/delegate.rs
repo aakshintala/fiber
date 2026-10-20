@@ -39,6 +39,10 @@ use crate::registry::{Registry, mint_job_id};
 /// The fields are wired by `main`: delegates of `parent` share `workspace`
 /// and log under `sessions`; `bound` is the stop bound and `cap` the
 /// output cap.
+// debt: the wiring fields repeat on `DelegateFork` and both `starter()`
+// builders forward them field by field; move them into one shared `Wiring`
+// struct embedded by each tool; the next edit that adds, removes, or
+// renames any wiring field on either tool.
 pub struct DelegateSpawn {
     /// This session's depth in the delegate tree.
     pub depth: u32,

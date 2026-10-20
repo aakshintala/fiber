@@ -163,6 +163,7 @@ pub(crate) fn session_forked(
         None,
         Some(parent.clone()),
         Some(r#loop::Rewound {
+            factory: None,
             from,
             worktree,
             how: r#loop::Continuation::Fork { parent },
