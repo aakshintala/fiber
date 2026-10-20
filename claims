@@ -31,3 +31,4 @@ crates/loop/src/rewind_tests.rs	368-p5	plan	2026-10-20T18:18:34Z	Amoghs-MacBook-
 crates/main/build.rs	412	plan	2026-10-20T18:18:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/session_argv_tests.rs	543	plan	2026-10-20T18:19:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/cli.rs	412	grant	2026-10-20T18:27:48Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+research/tui-prototype/check/credential.md	box-724	plan	2026-10-20T19:24:44Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
