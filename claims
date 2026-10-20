@@ -16,3 +16,4 @@ crates/tui/src/paging_tests.rs	lane-2843	grant	2026-10-20T12:27:09Z	Amoghs-MacBo
 crates/tui/src/app/home/workspace_tests.rs	lane-2843	grant	2026-10-20T12:27:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2884
 crates/tui/src/app/reconcile_tests.rs	lane-2843	grant	2026-10-20T12:27:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2884
 crates/tui/src/app/reconnect_tests.rs	lane-2843	grant	2026-10-20T12:27:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	2884
+crates/tui/src/view/completions_tests.rs crates/tui/src/home_view_tests.rs crates/tui/src/view/snapshots/tui__view__completions__tests__narrow-slash.snap crates/tui/src/view/snapshots/tui__view__completions__tests__slash.snap crates/tui/src/snapshots/tui__view__home__tests__home_with_the_slash_panel_above_the_box.snap	lane-2841	grant	2026-10-20T13:09:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
