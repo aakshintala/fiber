@@ -161,8 +161,8 @@ fn an_accepted_steer_answers_at_once_and_is_still_delivered() {
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     assert_eq!(
         queued.load(Ordering::SeqCst),
-        0,
-        "the steer's own accept arrives before any probe accept: the reader answers in line order"
+        1,
+        "the steer's own at-once accept is itself the queue proof: the reader queues, emits and only then answers, so on_queued fires once on the steer answer with the probe still unread"
     );
     close_within(opened.session, opened.log);
 }
