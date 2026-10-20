@@ -1280,6 +1280,50 @@ fn a_click_on_a_completed_job_serial_opens_and_subscribes() {
 }
 
 #[test]
+fn enter_on_a_finished_delegate_row_opens_and_subscribes() {
+    use crate::app::panel::Spot as PanelSpot;
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    complete(&mut app, "j_1");
+    let serial = app
+        .serial_of_job(&JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    // Enter on the focused Delegates-card row is the click's twin: it
+    // opens through the same `open_serial` seam.
+    app.focus = Some(crate::mouse::TargetId::Panel(PanelSpot::Delegate(serial)));
+    let out = match app.on_key(Key::Enter, clock.now()) {
+        Effect::Send(lines) => commands(lines),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_) => panic!("opening sends"),
+    };
+    let full = subscribes(&out);
+    assert_eq!(full.len(), 1);
+    assert_eq!(full[0]["args"]["level"], "full");
+    assert!(app.item_open());
+    ack_all(&mut app, &out);
+    // The replayed fold lands on the swapped screen, not the parent's.
+    app.on_line(other_line(
+        DELEGATE_A,
+        "turn_started",
+        json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "deep"}]}]}),
+    ));
+    assert!(shown(&app).iter().any(|row| row.contains("deep")));
+}
+
+#[test]
 fn open_serial_on_a_finished_serial_subscribes() {
     let mut app = home();
     opened(&mut app);
