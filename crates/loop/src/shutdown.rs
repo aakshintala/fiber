@@ -65,6 +65,7 @@ impl Loop {
             | Delivery::Model(..)
             | Delivery::Credential(..)
             | Delivery::Reload(_)
+            | Delivery::McpReconnect(..)
             | Delivery::Name(..)
             | Delivery::Rewind(..)
             | Delivery::Handoff(..)
@@ -219,6 +220,7 @@ impl Loop {
             | Delivery::Rewind(_, _, ack)
             | Delivery::Model(_, ack)
             | Delivery::Reload(ack)
+            | Delivery::McpReconnect(_, ack)
             | Delivery::Name(_, ack)
             | Delivery::Credential(_, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);

@@ -113,6 +113,43 @@ fn approved_url(
     Ok(entry_url.to_owned())
 }
 
+/// `fiber mcp login <server>`'s target: the URL the flow opens, read
+/// once from the merged configuration and checked exactly as the login
+/// checks it: a name nothing declares fails, a stdio server fails (only
+/// a remote server holds a token), and a repository's server fails
+/// unless its current content is approved, with the approval and the URL
+/// read from the same entry (`approved_url`). The hub's `mcp_login`
+/// entry shares this check, so the two cannot diverge (`docs/mcp.md`,
+/// "Servers, their state and the per-server commands").
+pub fn login_target(
+    home: &Path,
+    workspace: &Path,
+    server: &str,
+    between: &dyn Fn(),
+    clock: &Arc<dyn Clock>,
+    overrides: &[String],
+) -> Result<String, CliError> {
+    let (_, project) = project_of(home, workspace)?;
+    let config = Config::load(Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project: project.clone(),
+        overrides: overrides.to_vec(),
+    })
+    .map_err(CliError::from)?;
+    let Some((url, from_repository)) = effective_url(&config, server) else {
+        if is_declared(&config, server) {
+            return Err(stdio(server));
+        }
+        return Err(unknown(server));
+    };
+    if from_repository {
+        approved_url(home, workspace, &project, server, &url, between, clock)
+    } else {
+        Ok(url)
+    }
+}
+
 /// `fiber mcp login <server>`: looks the URL up, refuses an unapproved
 /// repository server, and stores the acquired token by canonical URL,
 /// replacing any existing one.
@@ -131,25 +168,7 @@ pub(crate) fn run_login(
     clock: &Arc<dyn Clock>,
 ) -> Result<(), CliError> {
     let Streams { out: _, err } = streams;
-    let (_, project) = project_of(home, workspace)?;
-    let config = Config::load(Sources {
-        home: home.to_path_buf(),
-        workspace: workspace.to_path_buf(),
-        project: project.clone(),
-        overrides: Vec::new(),
-    })
-    .map_err(CliError::from)?;
-    let Some((url, from_repository)) = effective_url(&config, server) else {
-        if is_declared(&config, server) {
-            return Err(stdio(server));
-        }
-        return Err(unknown(server));
-    };
-    let url = if from_repository {
-        approved_url(home, workspace, &project, server, &url, between, clock)?
-    } else {
-        url
-    };
+    let url = login_target(home, workspace, server, between, clock, &[])?;
     if remote.has_userinfo(&url) {
         return Err(userinfo(server));
     }

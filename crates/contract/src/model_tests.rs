@@ -58,6 +58,7 @@ fn extension_usage_carries_its_line() {
         | crate::inbox::Delivery::Model(..)
         | crate::inbox::Delivery::Credential(..)
         | crate::inbox::Delivery::Reload(_)
+        | crate::inbox::Delivery::McpReconnect(..)
         | crate::inbox::Delivery::Name(..)
         | crate::inbox::Delivery::Rewind(..)
         | crate::inbox::Delivery::Handoff(..)

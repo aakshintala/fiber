@@ -533,6 +533,7 @@ impl Loop {
             | Delivery::Handoff(..)
             | Delivery::Model(..)
             | Delivery::Reload(..)
+            | Delivery::McpReconnect(..)
             | Delivery::Credential(..)
             | Delivery::Reply(..)
             | Delivery::Rewind(..)
@@ -639,6 +640,10 @@ impl Loop {
                 self.take_switch(crate::switch::Asked::Credential(args), ack, true)?;
             }
             Delivery::Reload(ack) => self.take_reload(ack)?,
+            // Restarts only the server it names, as a reload restarts
+            // its servers (`docs/mcp.md`, "Servers, their state and the
+            // per-server commands").
+            Delivery::McpReconnect(args, ack) => self.take_reconnect(args.server, ack)?,
             // The person's name starts no turn, so it is taken after
             // `close` too: written, pinned and acked at this drain.
             Delivery::Name(args, ack) => self.take_name(args, ack)?,
@@ -819,6 +824,17 @@ impl Loop {
                     self.deferred.push_back(Delivery::Credential(args, ack));
                 } else {
                     self.take_switch(crate::switch::Asked::Credential(args), ack, false)?;
+                }
+            }
+            Delivery::McpReconnect(_, ack) => {
+                if self.closing {
+                    reject(ack, ErrorCode::Closing, CLOSING);
+                } else {
+                    reject(
+                        ack,
+                        ErrorCode::Busy,
+                        "A turn is running; reconnect once it ends.",
+                    );
                 }
             }
             Delivery::Reload(ack) => {

@@ -118,8 +118,8 @@ pub use login::{
     LoginCancel, LoginName, LoginStored, LogoutTarget, ReviewerModels, browser_login, login_store,
     login_targets, providers_in, reviewer_models, run_login, run_logout, set_reviewer,
 };
-pub use mcp::{McpDeclaration, mcp_add, mcp_list, mcp_remove};
-pub use mcp_login::{mcp_login, mcp_logout};
+pub use mcp::{DeclaredServer, McpDeclaration, declared_servers, mcp_add, mcp_list, mcp_remove};
+pub use mcp_login::{login_target, mcp_login, mcp_logout};
 pub use model_lists::{ModelLists, ModelListsError, model_lists, roles_of};
 pub use models::{models, refresh_model_lists};
 pub use prune::{PruneArgs, prune};

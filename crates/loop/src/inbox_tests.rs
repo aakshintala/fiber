@@ -800,6 +800,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::Message(_)
             | Delivery::Model(..)
             | Delivery::Reload(..)
+            | Delivery::McpReconnect(..)
             | Delivery::Credential(..)
             | Delivery::Rewind(..)
             | Delivery::Handoff(..)
@@ -1910,4 +1911,33 @@ fn a_refusal_racing_a_reader_drop_publishes_no_notice() {
 #[test]
 fn a_hook_failure_racing_a_reader_drop_publishes_no_notice() {
     raced_hook_outcome(steer_failed("fiber.test/hooks", "boom"));
+}
+
+#[test]
+fn running_admission_rejects_a_reconnect_until_the_turn_ends() {
+    let (mut looped, _log, _watched, home) = started();
+    let watchdog = fakes::Watchdog::matching(&home.path().display().to_string());
+    let (tx, rx) = mpsc::channel();
+    looped
+        .admit_running(
+            Delivery::McpReconnect(
+                contract::commands::McpServerArgs {
+                    server: "db".into(),
+                },
+                Ack(Box::new(move |answer| {
+                    tx.send(answer).unwrap();
+                })),
+            ),
+            &TurnId("t_1".into()),
+        )
+        .unwrap();
+    let Err(rejection) = answered(&rx) else {
+        panic!("a running turn rejects the reconnect");
+    };
+    assert_eq!(rejection.code, ErrorCode::Busy);
+    assert_eq!(
+        rejection.message,
+        "A turn is running; reconnect once it ends."
+    );
+    watchdog.stand_down(Duration::from_secs(3));
 }

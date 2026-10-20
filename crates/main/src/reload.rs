@@ -108,6 +108,14 @@ pub(crate) struct State {
     pub(crate) diag: Arc<log::diag::Diag>,
     pub(crate) names: std::sync::Mutex<Vec<String>>,
     pub(crate) shell_read_only: crate::settings::ShellReadOnly,
+    /// The session's servers, kept for the reconnect entry's in-place
+    /// restart (`docs/mcp.md`, "Servers, their state and the
+    /// per-server commands").
+    pub(crate) servers: Arc<mcp::Servers>,
+    /// Where restarted servers write binary content and processed
+    /// images, as at startup.
+    pub(crate) artifacts: std::path::PathBuf,
+    pub(crate) images: Arc<dyn contract::images::Images>,
 }
 
 impl State {
@@ -138,6 +146,9 @@ impl State {
         Vec<contract::events::McpServerFailed>,
     ) {
         let late = Arc::new(std::sync::Mutex::new(Late::default()));
+        let servers_handle = Arc::clone(&servers.servers);
+        let artifacts = servers.later.artifacts.clone();
+        let images = Arc::clone(&servers.later.images);
         let load = record_load(
             servers.later.into_load(
                 record_declarations(session.declarer(), late.clone()),
@@ -177,6 +188,9 @@ impl State {
             diag,
             names: std::sync::Mutex::new(names),
             shell_read_only,
+            servers: servers_handle,
+            artifacts,
+            images,
         };
         (
             state,

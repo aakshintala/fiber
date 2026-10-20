@@ -188,6 +188,10 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("model {}", args.model)
         }
+        Delivery::McpReconnect(args, ack) => {
+            ack.0(Ok(None));
+            format!("reconnect {}", args.server)
+        }
         Delivery::Reload(ack) => {
             ack.0(Ok(None));
             "reload".to_owned()
@@ -1521,6 +1525,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
                 | Delivery::Reload(..)
+                | Delivery::McpReconnect(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
                 | Delivery::Close(_)
@@ -1563,6 +1568,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
                 | Delivery::Reload(..)
+                | Delivery::McpReconnect(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
                 | Delivery::Close(_)
@@ -1657,6 +1663,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
                 | Delivery::Reload(..)
+                | Delivery::McpReconnect(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
                 | Delivery::Close(_)
@@ -1756,6 +1763,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
                 | Delivery::Reload(..)
+                | Delivery::McpReconnect(..)
                 | Delivery::Credential(..)
                 | Delivery::Reply(..)
                 | Delivery::Close(_)
@@ -1802,6 +1810,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
                 | Delivery::Reload(..)
+                | Delivery::McpReconnect(..)
                 | Delivery::Credential(..)
                 | Delivery::Reply(..)
                 | Delivery::Close(_)

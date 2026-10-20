@@ -484,3 +484,81 @@ fn a_preparer_cancel_rejects_without_applying() {
     );
     assert_eq!(kinds(&w.looped), ["session_started"]);
 }
+
+/// A tool that only names itself: the reconnect merge test registers
+/// and removes it without ever calling it.
+struct NamedTool(&'static str);
+
+impl contract::tool::Tool for NamedTool {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: self.0.into(),
+            description: "reconnect test tool".into(),
+            input_schema: serde_json::Value::Object(serde_json::Map::new()),
+            deferred: false,
+            hosted: None,
+        }
+    }
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        panic!("never called")
+    }
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        panic!("never called")
+    }
+}
+
+#[test]
+fn take_reconnect_without_a_reconnector_rejects_invalid_arguments() {
+    let mut w = world();
+    let (ack, rx) = ack();
+    w.looped.take_reconnect("db".into(), ack).unwrap();
+    assert_eq!(
+        Deadline::after(WAIT).recv(&rx).unwrap().unwrap_err().code,
+        ErrorCode::InvalidArguments
+    );
+    assert_eq!(kinds(&w.looped), ["session_started"]);
+}
+
+#[test]
+fn take_reconnect_merges_the_registry_and_writes_the_records_before_accepting() {
+    let mut w = world();
+    let stale = Arc::new(NamedTool("db__old"));
+    w.looped.tools.insert(
+        "db__old".into(),
+        (
+            "db".into(),
+            Arc::clone(&stale) as Arc<dyn contract::tool::Tool>,
+            stale.definition(),
+        ),
+    );
+    w.looped = w.looped.reconnector(Arc::new(|server| {
+        assert_eq!(server, "db");
+        let fresh = Arc::new(NamedTool("db__list"));
+        Ok(Reconnected {
+            tools: vec![(
+                "db".into(),
+                Arc::clone(&fresh) as Arc<dyn contract::tool::Tool>,
+            )],
+            removed: vec!["db__old".into()],
+            records: vec![contract::tool::ServerRecord::Ready(
+                contract::events::McpServerReady {
+                    server: "db".into(),
+                },
+            )],
+        })
+    }));
+    let (ack, rx) = ack();
+    w.looped.take_reconnect("db".into(), ack).unwrap();
+    assert!(Deadline::after(WAIT).recv(&rx).unwrap().is_ok());
+    assert!(w.looped.tools.contains_key("db__list"));
+    assert!(!w.looped.tools.contains_key("db__old"));
+    assert!(kinds(&w.looped).contains(&"mcp_server_ready".to_owned()));
+}

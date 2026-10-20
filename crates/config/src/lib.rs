@@ -96,6 +96,7 @@ pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};
 use home::{parse, plain, read, read_bytes};
 
 /// Where to read configuration from.
+#[derive(Debug, Clone)]
 pub struct Sources {
     /// Fiber home ([`fiber_home`]).
     pub home: PathBuf,
