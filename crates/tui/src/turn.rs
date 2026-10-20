@@ -418,8 +418,11 @@ impl Turn {
     }
 
     /// `tool_call_completed`; false when the call is not in this turn.
+    /// `session` stamps the call's images with their segment, so one
+    /// path in two segments draws two images.
     pub(crate) fn call_completed(
         &mut self,
+        session: &contract::SessionId,
         action: &str,
         done: &ToolCallCompleted,
         ts: u64,
@@ -453,7 +456,7 @@ impl Turn {
                     call.timing = group::Timing::Took(ts.saturating_sub(started));
                 }
                 call.lines = call.content().lines().count() as u64;
-                call.images = crate::image::parts(&done.content);
+                call.images = crate::image::parts(session, &done.content);
                 true
             }) && group.touched(ts)
         })
@@ -624,7 +627,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
                 .iter()
                 .filter_map(|input| {
                     if let InputItem::Message { content, .. } = input {
-                        Some(images::prompt_of(content))
+                        Some(images::prompt_of(&envelope.session_id, content))
                     } else {
                         None
                     }
@@ -660,7 +663,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
             open(turns).is_some_and(|turn| {
                 turn.steer(
                     text_of(&applied.content),
-                    crate::image::parts(&applied.content),
+                    crate::image::parts(&envelope.session_id, &applied.content),
                     ts,
                 );
                 true
@@ -720,7 +723,7 @@ fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action:
             turns
                 .iter_mut()
                 .rev()
-                .any(|turn| turn.call_completed(action, &done, ts))
+                .any(|turn| turn.call_completed(&envelope.session_id, action, &done, ts))
         }),
         "permission_requested" | "permission_resolved" => {
             let asking = envelope.kind == "permission_requested";
