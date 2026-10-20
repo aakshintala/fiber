@@ -2290,30 +2290,30 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
         steered_kinds,
         [
             "step_started",
-            "steering_applied",
             "steering_queue",
+            "steering_applied",
             "assistant_message_started"
         ],
         "{steered_kinds:?}"
     );
     let after = steered;
     // The drained queue is empty: the admission queue left the window
-    // with the at-once emit, so only the emptied one follows the apply.
+    // with the at-once emit, so the emptied one precedes the apply.
     assert!(
-        after[2]["payload"]["messages"]
+        after[1]["payload"]["messages"]
             .as_array()
             .unwrap()
             .is_empty()
     );
     assert!(
-        serde_json::to_string(&after[1]["payload"]["content"])
+        serde_json::to_string(&after[2]["payload"]["content"])
             .unwrap()
             .contains(MARK),
         "{}",
-        after[1]
+        after[2]
     );
-    assert_eq!(after[1]["payload"]["source"], "driver");
-    assert_eq!(after[1]["payload"]["command_id"], "c_steer");
+    assert_eq!(after[2]["payload"]["source"], "driver");
+    assert_eq!(after[2]["payload"]["command_id"], "c_steer");
     let exited = delegate_lines
         .iter()
         .find(|line| line["kind"] == "fiber_exited")
