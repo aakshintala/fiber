@@ -8,3 +8,4 @@ crates/tui/src/pages_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-701
 crates/tui/src/app/select_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
 crates/tui/src/app_focus_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
 crates/tui/src/turn/answers_tests.rs	lane-2764	plan	2026-10-20T05:57:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/tui/2764-forked-from-history	
+crates/main/tests/opencode_go_store_false.rs	2845	grant	2026-10-20T06:18:19Z	HOST:DIR	2873
