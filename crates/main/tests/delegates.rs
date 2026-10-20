@@ -3998,7 +3998,7 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
     let missing = doors::mint("s_");
     let new_a = doors::mint("s_");
     let (failed_a, _) = start_fork_child(
-        &setup,
+        setup,
         &new_a,
         &missing,
         3,
@@ -4013,7 +4013,7 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
         "session_not_found",
         "{lines:?}"
     );
-    assert_no_fork_log(&setup, &new_a);
+    assert_no_fork_log(setup, &new_a);
     // Case (b): `--forked-from` names a corrupt log.
     let corrupt = doors::mint("s_");
     let corrupt_dir = fork.sessions.join(&corrupt);
@@ -4021,7 +4021,7 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
     fs::write(corrupt_dir.join("events.jsonl"), "this is not a log line\n").unwrap();
     let new_b = doors::mint("s_");
     let (failed_b, _) = start_fork_child(
-        &setup,
+        setup,
         &new_b,
         &corrupt,
         1,
@@ -4036,16 +4036,16 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
         "log_corrupt",
         "{lines:?}"
     );
-    assert_no_fork_log(&setup, &new_b);
+    assert_no_fork_log(setup, &new_b);
     // Case (c): the point precedes any `preamble_built`, so there is no
     // build to fork from.
     let new_c = doors::mint("s_");
     let (failed_c, _) = start_fork_child(
-        &setup,
+        setup,
         &new_c,
-        &parent_id,
+        parent_id,
         first_seq,
-        &parent_id,
+        parent_id,
         &doors::mint("j_"),
         Stdio::null(),
     );
@@ -4056,7 +4056,7 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
         "invalid_arguments",
         "{lines:?}"
     );
-    assert_no_fork_log(&setup, &new_c);
+    assert_no_fork_log(setup, &new_c);
     // Case (d): the point's session directory cannot be listed at all.
     // A self-looping link fails the metadata read with an error other
     // than missing, so the failure is `io_failed`, not
@@ -4066,7 +4066,7 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
     std::os::unix::fs::symlink(&looped_link, &looped_link).unwrap();
     let new_d = doors::mint("s_");
     let (failed_d, _) = start_fork_child(
-        &setup,
+        setup,
         &new_d,
         &looped,
         1,
@@ -4081,14 +4081,14 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
         "io_failed",
         "{lines:?}"
     );
-    assert_no_fork_log(&setup, &new_d);
+    assert_no_fork_log(setup, &new_d);
     // Case (e): a file where the point's session directory belongs is
     // no session either: `session_not_found`, as a missing one.
     let filed = doors::mint("s_");
     fs::write(fork.sessions.join(&filed), "not a session\n").unwrap();
     let new_e = doors::mint("s_");
     let (failed_e, _) = start_fork_child(
-        &setup,
+        setup,
         &new_e,
         &filed,
         1,
@@ -4103,7 +4103,7 @@ fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
         "session_not_found",
         "{lines:?}"
     );
-    assert_no_fork_log(&setup, &new_e);
+    assert_no_fork_log(setup, &new_e);
 }
 
 #[test]
@@ -4147,11 +4147,11 @@ fn a_fork_child_of_a_worktree_parent_holds_the_shared_lock() {
     let new = doors::mint("s_");
     // Stdin held open: it is the delegate's lifeline.
     let (mut running, lifeline) = start_fork_child(
-        &setup,
+        setup,
         &new,
-        &parent_id,
+        parent_id,
         last_seq,
-        &parent_id,
+        parent_id,
         &job,
         Stdio::piped(),
     );
