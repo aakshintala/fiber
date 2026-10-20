@@ -570,3 +570,378 @@ fn macos_samples_parse_to_bytes() {
     let run = pack.pack(&["parse-footprint", &at]);
     assert_eq!(run.code, Some(1), "{}", run.stderr);
 }
+
+/// T6: the fixture end to end and the binary-level reinstall proof. A
+/// fixture release holds the T2-packed archives served over loopback
+/// HTTP: the target archive carries the real `fiber` binary, so
+/// `scripts/install.sh --base-url` installs it and its `release-install`
+/// stages the docs and every top-level archive directory as a first-party
+/// extension, with the full-SHA record. No `git` and no network beyond
+/// the fixture take part.
+///
+/// The version the binaries under test were built as.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The release target `scripts/install.sh` picks on this host.
+fn host_target() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+        ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        (os, arch) => panic!("the fixture serves no release for {os}/{arch}"),
+    }
+}
+
+/// A fixture release served over loopback HTTP, installed with
+/// `scripts/install.sh` and driven with the installed binary, all under
+/// the test's one deadline. The addresses stay on loopback: no `git` and
+/// no network beyond the fixture take part.
+struct Release {
+    setup: support::Setup,
+    server: fakes::ProviderServer,
+}
+
+impl Release {
+    fn root(&self, rel: &str) -> PathBuf {
+        self.setup.root.path().join(rel)
+    }
+
+    /// Writes `data` at `rel` under the root, creating parents as needed.
+    fn write(&self, rel: &str, data: &[u8]) {
+        let at = self.root(rel);
+        if let Some(parent) = at.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&at, data).unwrap();
+    }
+
+    /// Runs `tool` with `args` and each of `env`, in its own process
+    /// group with stdio piped, and waits for it under the deadline.
+    #[track_caller]
+    fn run(&self, tool: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let mut command = Command::new(tool);
+        command
+            .args(args)
+            .current_dir(self.setup.root.path())
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", self.setup.root.path())
+            .env("TMPDIR", self.root("tmp"))
+            .env("FIBER_HOME", self.setup.home())
+            .envs(env.iter().copied())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (child, watchdog) = support::spawn_watched(&mut command);
+        let group = child.id();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match self.setup.deadline.recv(&finished) {
+            Ok(output) => output.unwrap(),
+            Err(_) => support::expired(
+                self.setup.deadline,
+                group,
+                &finished,
+                &format!("{} to exit", tool.display()),
+            ),
+        };
+        watchdog.stand_down(self.setup.deadline.cleanup());
+        Output::from(output)
+    }
+
+    /// The fixture's base URL: the loopback server's address.
+    fn base(&self) -> String {
+        self.server.url()
+    }
+
+    /// Runs `scripts/install.sh --base-url` on the fixture, with
+    /// `FIBER_INSTALL_DIR` set to `dest` and then each of `env`.
+    #[track_caller]
+    fn install(&self, env: &[(&str, &str)]) -> Output {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/install.sh");
+        let dest = self.root("dest").to_string_lossy().into_owned();
+        let mut full = vec![("FIBER_INSTALL_DIR", dest.as_str())];
+        full.extend(env.iter().copied());
+        self.run(&script, &["--base-url", &self.base()], &full)
+    }
+
+    /// Runs the installed `fiber` with `args` and each of `env`.
+    #[track_caller]
+    fn fiber(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let binary = PathBuf::from(env!("CARGO_BIN_EXE_fiber"));
+        self.run(&binary, args, env)
+    }
+
+    /// Packs a fixture release with the T2 script and serves it from
+    /// `release/download/v<version>/`: the target archive carries the
+    /// real `fiber` binary, the docs archive a README, and the extensions
+    /// archive one provider and one extension with manifests at this
+    /// binary's version.
+    #[track_caller]
+    fn serve() -> Self {
+        let setup = support::Setup::new();
+        let mut release = Self {
+            setup,
+            // Replaced with the responder below; every file is read
+            // before the first install runs.
+            server: fakes::ProviderServer::start_responding(|_| {
+                fakes::Response::status(404, "not found")
+            })
+            .unwrap(),
+        };
+        for dir in ["tmp", "tree/bin", "out"] {
+            fs::create_dir_all(release.root(dir)).unwrap();
+        }
+        let manifest = |short: &str, kind: &str| {
+            serde_json::json!({
+                "name": format!("github.com/aakshintala/fiber/{kind}/{short}"),
+                "version": VERSION,
+                "fiber": VERSION,
+                "api": 1,
+            })
+            .to_string()
+        };
+        release.write(
+            "tree/providers/anthropic/extension.json",
+            manifest("anthropic", "providers").as_bytes(),
+        );
+        release.write(
+            "tree/extensions/memory/extension.json",
+            manifest("memory", "extensions").as_bytes(),
+        );
+        release.write("tree/docs/README.md", b"fixture docs");
+        release.write("tree/docs/guide.md", b"guide");
+        fs::copy(
+            PathBuf::from(env!("CARGO_BIN_EXE_fiber")),
+            release.root("tree/bin/fiber"),
+        )
+        .unwrap();
+        fs::set_permissions(
+            release.root("tree/bin/fiber"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        release.write("tree/bin/THIRD-PARTY-NOTICES", b"notices");
+        for args in [
+            vec!["pack-target", "tree/bin", host_target(), "out"],
+            vec!["pack-docs", "tree", "out"],
+            vec!["pack-extensions", "tree", "out"],
+        ] {
+            let run = release.run(&script(), &args, &[]);
+            assert_eq!(run.code, Some(0), "{args:?}: {}", run.stderr);
+        }
+        let mut files = std::collections::HashMap::new();
+        for name in [
+            format!("fiber-{}.tar.gz", host_target()),
+            "fiber-docs.tar.gz".to_owned(),
+            "fiber-extensions.tar.gz".to_owned(),
+        ] {
+            let bytes = fs::read(release.root(&format!("out/{name}"))).unwrap();
+            let sum = fs::read(release.root(&format!("out/{name}.sha256"))).unwrap();
+            files.insert(format!("/download/v{VERSION}/{name}"), bytes);
+            files.insert(format!("/download/v{VERSION}/{name}.sha256"), sum);
+        }
+        // A responder, not routes: routes answer once, and the mismatch
+        // plus reinstall installs request the same paths again.
+        release.server = fakes::ProviderServer::start_responding(move |request| {
+            files
+                .get(request.path.split('?').next().unwrap_or_default())
+                .map(|body| fakes::Response::status(200, body.clone()))
+                .unwrap_or_else(|| fakes::Response::status(404, "not found"))
+        })
+        .unwrap();
+        release
+    }
+}
+
+/// The commit the install record names for `name`, and its `.fiber.json`.
+#[track_caller]
+fn record_commit(home: &Path, name: &str) -> (PathBuf, String) {
+    for entry in fs::read_dir(home.join("extensions")).unwrap() {
+        let record = entry.unwrap().path().join(".fiber.json");
+        let Ok(text) = fs::read_to_string(&record) else {
+            continue;
+        };
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if json.get("name").and_then(serde_json::Value::as_str) == Some(name) {
+            let commit = json
+                .get("source")
+                .and_then(|source| source.get("commit"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_owned();
+            return (record, commit);
+        }
+    }
+    panic!("no install record for {name}")
+}
+
+/// Whether `text` is a full commit SHA: 40 lowercase hex digits, which is
+/// what `Origin::clone_at` checks out.
+fn is_full_sha(text: &str) -> bool {
+    text.len() == 40
+        && text
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// `fiber --version` and the install record agree: the line prints the
+/// version and the record's first 7 characters.
+#[track_caller]
+fn assert_version_agreement(release: &Release, commit: &str) {
+    assert!(is_full_sha(commit), "the install record holds {commit:?}");
+    let version = release.fiber(&["--version"], &[]);
+    assert_eq!(version.code, Some(0), "{}", version.stderr);
+    assert_eq!(
+        version.stdout,
+        format!("fiber {VERSION} ({})\n", &commit[..7]),
+        "--version prints the record's first 7 characters"
+    );
+}
+
+#[test]
+fn install_sh_serves_the_target_and_refuses_a_mismatch() {
+    let release = Release::serve();
+    // The fixture serves no 999.0.0: the mismatch stays failed and
+    // creates nothing.
+    let bad = release.install(&[("FIBER_VERSION", "999.0.0")]);
+    assert_eq!(bad.code, Some(1), "{}", bad.stderr);
+    assert!(
+        bad.stderr.ends_with(&format!(
+            "fiber: fiber-{}.tar.gz could not be downloaded from {}/download/v999.0.0.\n",
+            host_target(),
+            release.base()
+        )),
+        "{}",
+        bad.stderr
+    );
+    assert!(!release.root("dest").exists());
+    assert!(!release.setup.home().join("docs").exists());
+    assert!(!release.setup.home().join("extensions").exists());
+    // The target passes in the same run: the binary installs, and its
+    // release-install stages the docs and every top-level archive
+    // directory as a first-party extension, with the full-SHA record.
+    let good = release.install(&[("FIBER_VERSION", VERSION)]);
+    assert_eq!(good.code, Some(0), "{}", good.stderr);
+    assert_eq!(
+        fs::read_to_string(release.setup.home().join("docs/README.md")).unwrap(),
+        "fixture docs"
+    );
+    let listed = release.fiber(&["extension", "list"], &[]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    let mut commits: Vec<String> = Vec::new();
+    for name in [
+        "github.com/aakshintala/fiber/extensions/memory",
+        "github.com/aakshintala/fiber/providers/anthropic",
+    ] {
+        let line = listed
+            .stdout
+            .lines()
+            .find(|line| line.starts_with(name))
+            .unwrap_or_else(|| panic!("{name} is not listed:\n{}", listed.stdout));
+        let mut fields = line.split_whitespace();
+        assert_eq!(fields.next(), Some(name));
+        assert_eq!(fields.next(), Some(VERSION));
+        commits.push(
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("{line:?} names no commit"))
+                .to_owned(),
+        );
+        assert!(fields.next().is_none(), "{line:?} has trailing fields");
+    }
+    assert!(!listed.stdout.contains("damaged"), "{}", listed.stdout);
+    assert_eq!(commits[0], commits[1], "each record holds the same commit");
+    assert_version_agreement(&release, &commits[0]);
+    // Over another version: stale docs and a stale manifest version come
+    // back to the target on reinstall.
+    fs::write(release.setup.home().join("docs/README.md"), "stale").unwrap();
+    let (record, _) = record_commit(
+        &release.setup.home(),
+        "github.com/aakshintala/fiber/extensions/memory",
+    );
+    let manifest = record.parent().unwrap().join("extension.json");
+    let stale = serde_json::json!({
+        "name": "github.com/aakshintala/fiber/extensions/memory",
+        "version": "9.9.9",
+        "fiber": VERSION,
+        "api": 1,
+    });
+    fs::write(&manifest, stale.to_string()).unwrap();
+    let again = release.install(&[("FIBER_VERSION", VERSION)]);
+    assert_eq!(again.code, Some(0), "{}", again.stderr);
+    assert_eq!(
+        fs::read_to_string(release.setup.home().join("docs/README.md")).unwrap(),
+        "fixture docs"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
+    assert_eq!(
+        json.get("version").and_then(serde_json::Value::as_str),
+        Some(VERSION)
+    );
+}
+
+#[test]
+fn the_recorded_full_sha_reinstalls_and_a_short_commit_is_refused() {
+    let release = Release::serve();
+    let good = release.install(&[("FIBER_VERSION", VERSION)]);
+    assert_eq!(good.code, Some(0), "{}", good.stderr);
+    let home = release.setup.home();
+    let (record, commit) = record_commit(&home, "github.com/aakshintala/fiber/extensions/memory");
+    assert_version_agreement(&release, &commit);
+    // A short record fails loudly before `git` runs, never silently.
+    let mut short =
+        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&record).unwrap()).unwrap();
+    short["source"]["commit"] = serde_json::Value::String("4f2a9c1".to_owned());
+    fs::write(&record, short.to_string()).unwrap();
+    let refused = release.fiber(&["extension", "reinstall", "memory"], &[]);
+    assert_ne!(refused.code, Some(0), "{}", refused.stderr);
+    assert!(
+        refused
+            .stderr
+            .contains("the recorded commit `4f2a9c1` is not a full commit hash"),
+        "{}",
+        refused.stderr
+    );
+    // The recorded full SHA is accepted: a fixture repository holding it
+    // checks out through the reinstall, with no network beyond it.
+    let repos = release.root("repos");
+    let source = repos.join("extensions/memory");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("extension.json"),
+        serde_json::json!({
+            "name": "github.com/aakshintala/fiber/extensions/memory",
+            "version": VERSION,
+            "fiber": VERSION,
+            "api": 1,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fakes::git::git(&repos, &["init", "--quiet"]);
+    fakes::git::git(&repos, &["add", "."]);
+    fakes::git::git(&repos, &["commit", "--quiet", "-m", "release"]);
+    let head = fakes::git::git(&repos, &["rev-parse", "HEAD"]);
+    assert!(is_full_sha(&head));
+    let mut full =
+        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&record).unwrap()).unwrap();
+    full["source"]["commit"] = serde_json::Value::String(head.clone());
+    fs::write(&record, full.to_string()).unwrap();
+    let key = format!("url.file://{}/.insteadOf", repos.display());
+    let reinstalled = release.fiber(
+        &["extension", "reinstall", "memory"],
+        &[
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_0", key.as_str()),
+            ("GIT_CONFIG_VALUE_0", "https://github.com/aakshintala/fiber"),
+            ("GIT_CONFIG_KEY_1", "protocol.file.allow"),
+            ("GIT_CONFIG_VALUE_1", "always"),
+        ],
+    );
+    assert_eq!(reinstalled.code, Some(0), "{}", reinstalled.stderr);
+    let (_, commit) = record_commit(&home, "github.com/aakshintala/fiber/extensions/memory");
+    assert_eq!(commit, head);
+}
