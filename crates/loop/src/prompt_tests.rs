@@ -658,6 +658,27 @@ fn build_with_factory_defers_a_deferred_tool_and_adds_the_search() {
 }
 
 #[test]
+fn build_merges_the_search_ahead_of_later_registered_names() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let tools = tools_map(vec![
+        registered("alpha", "fx", true, Some("Alpha guide.")),
+        registered("zebra", "fy", false, Some("Zebra guide.")),
+    ]);
+    let (_, definitions, event, built) =
+        run_build(&build_inputs(), &tools, true, Some(&factory), Vec::new());
+    built.expect("a search is due");
+    assert_eq!(sent_names(&event), ["alpha", "tool_search", "zebra"]);
+    assert_eq!(
+        definitions
+            .iter()
+            .map(|definition| definition.name.clone())
+            .collect::<Vec<_>>(),
+        ["alpha", "tool_search", "zebra"]
+    );
+}
+
+#[test]
 fn build_without_a_factory_defers_nothing() {
     let tools = tools_map(vec![registered("alpha", "fx", true, Some("Alpha guide."))]);
     let (system, definitions, event, built) =

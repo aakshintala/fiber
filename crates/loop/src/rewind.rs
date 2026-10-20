@@ -131,22 +131,8 @@ impl Loop {
                 .and_then(|preamble| preamble.deferred.clone())
                 .filter(|deferred| !deferred.is_empty())
             {
-                let catalogue: Vec<ToolDefinition> = deferred
-                    .iter()
-                    .filter_map(|name| {
-                        rewound
-                            .tools
-                            .get(name)
-                            .map(|(_, _, definition)| definition.clone())
-                    })
-                    .collect();
-                let mut sources: Vec<String> = deferred
-                    .iter()
-                    .filter_map(|name| rewound.tools.get(name).map(|(by, _, _)| by.clone()))
-                    .filter(|by| by != "builtin")
-                    .collect();
-                sources.sort();
-                sources.dedup();
+                let (catalogue, sources) =
+                    crate::prompt::catalogue_and_sources(&rewound.tools, &deferred);
                 if let Some(factory) = start.factory.as_ref() {
                     let search = factory(&catalogue, &sources);
                     let definition = search.definition();
@@ -156,17 +142,18 @@ impl Loop {
                             name.clone(),
                             ("builtin".to_owned(), search, definition.clone()),
                         );
-                        // The rewound preamble wires the registered search
-                        // with the registry, in name order, so the first
-                        // request declares it as built from the logged D.
+                        // The insert rides the loop until the next build
+                        // drops it, as a build's own insert does.
+                        rewound.inserted_search = Some(name);
+                        // The rewound preamble wires the rebuilt search in
+                        // name order, so the first request declares it as
+                        // built from the logged D.
                         if let Some(preamble) = rewound.preamble.as_mut() {
-                            preamble.search = Some(name);
-                            let at = preamble
-                                .tools
-                                .iter()
-                                .position(|tool| tool.name > definition.name)
-                                .unwrap_or(preamble.tools.len());
-                            preamble.tools.insert(at, definition);
+                            // The logged tools arrive in name order, so the
+                            // pushed search sorts into place; no manual
+                            // index to misplace.
+                            preamble.tools.push(definition);
+                            preamble.tools.sort_by(|a, b| a.name.cmp(&b.name));
                         }
                     }
                 }
@@ -257,9 +244,8 @@ impl Preamble {
                     .map(|tool| tool.name.clone())
                     .collect(),
             ),
-            // A rewound session never inherits an insert: the rewind path
-            // builds the search tool from the logged D when due.
-            search: None,
+            // The logged preamble carries no insert of its own: the rewind
+            // path records the search it builds on the loop when due.
             sent_tools: Some(
                 built
                     .tools

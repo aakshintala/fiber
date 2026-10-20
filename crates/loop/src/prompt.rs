@@ -355,6 +355,28 @@ pub(crate) type Built = (
     )>,
 );
 
+/// The catalogue and sources a search factory builds from (`docs/tools.md`,
+/// "Tool search"): the `deferred` definitions in registry order, and the
+/// sorted, de-duplicated `registered_by` of the deferred tools, leaving out
+/// `builtin`.
+pub(crate) fn catalogue_and_sources(
+    tools: &std::collections::BTreeMap<String, crate::calls::Registered>,
+    deferred: &std::collections::BTreeSet<String>,
+) -> (Vec<contract::provider::ToolDefinition>, Vec<String>) {
+    let catalogue: Vec<contract::provider::ToolDefinition> = deferred
+        .iter()
+        .filter_map(|name| tools.get(name).map(|(_, _, definition)| definition.clone()))
+        .collect();
+    let mut sources: Vec<String> = deferred
+        .iter()
+        .filter_map(|name| tools.get(name).map(|(by, _, _)| by.clone()))
+        .filter(|by| by != "builtin")
+        .collect();
+    sources.sort();
+    sources.dedup();
+    (catalogue, sources)
+}
+
 /// One preamble build: the system prompt text, the tool definitions in
 /// name order for requests, and the `preamble_built` payload
 /// (`docs/prompt-cache.md`, "The preamble" and `docs/events.md`,
@@ -401,19 +423,12 @@ pub(crate) fn build(
     // the deferred definitions in registry order, and the sorted,
     // de-duplicated `registered_by` of the deferred tools, leaving out
     // `builtin`.
-    let catalogue: Vec<contract::provider::ToolDefinition> = tools
+    let deferred: std::collections::BTreeSet<String> = effective
         .iter()
-        .filter(|(name, _)| effective.get(name.as_str()).copied().unwrap_or(false))
-        .map(|(_, (_, _, definition))| definition.clone())
+        .filter(|(_, deferred)| **deferred)
+        .map(|(name, _)| (*name).to_owned())
         .collect();
-    let mut sources: Vec<String> = tools
-        .iter()
-        .filter(|(name, _)| effective.get(name.as_str()).copied().unwrap_or(false))
-        .map(|(_, (by, _, _))| by.clone())
-        .filter(|by| by != "builtin")
-        .collect();
-    sources.sort();
-    sources.dedup();
+    let (catalogue, sources) = catalogue_and_sources(tools, &deferred);
     let mut built: Option<(
         std::sync::Arc<dyn contract::tool::Tool>,
         contract::provider::ToolDefinition,
@@ -465,19 +480,15 @@ pub(crate) fn build(
         })
         .collect();
     if let Some(definition) = search_definition {
-        let at = ordered
-            .iter()
-            .position(|(name, _, _, _)| name > &definition.name)
-            .unwrap_or(ordered.len());
-        ordered.insert(
-            at,
-            (
-                definition.name.clone(),
-                "builtin".to_owned(),
-                definition,
-                false,
-            ),
-        );
+        // The registry arrives in name order, so the pushed search sorts
+        // into place; no manual index to misplace.
+        ordered.push((
+            definition.name.clone(),
+            "builtin".to_owned(),
+            definition,
+            false,
+        ));
+        ordered.sort_by(|a, b| a.0.cmp(&b.0));
     }
     let infos: Vec<(String, Option<String>, bool)> = ordered
         .iter()

@@ -353,6 +353,11 @@ pub struct Loop {
     /// Builds the `tool_search` tool when the model defers; `None` defers
     /// nothing (`docs/tools.md`, "Tool search").
     tool_search: Option<ToolSearchFactory>,
+    /// The factory-inserted search tool's name, while the registry holds
+    /// it: the next build drops it before rebuilding, so a rebuild never
+    /// takes its own insert for a name the general rule already holds
+    /// (`docs/tools.md`, "Tool search").
+    inserted_search: Option<String>,
     /// Publishes `/tools` rows; `None` publishes nothing.
     tool_rows: Option<ToolRows>,
     /// The admission the door and the loop share: once it closes, no session
@@ -378,10 +383,6 @@ struct Preamble {
     /// without deferral, `Some(D)` otherwise, with D empty when nothing
     /// defers (`docs/tools.md`, "Tool search").
     deferred: Option<BTreeSet<String>>,
-    /// The previous build's factory-inserted search tool, by name: the next
-    /// build drops it before rebuilding, so a rebuild never takes its own
-    /// insert for a name the general rule already holds.
-    search: Option<String>,
     /// The tools as the parent session sent them: a rewound session's
     /// first request sends these verbatim, so it matches its parent's
     /// bytes (`docs/events.md`, "Rewind"). `None` sends what `tools`
@@ -657,6 +658,7 @@ impl Loop {
             chosen,
             inbox_wake: None,
             tool_search: None,
+            inserted_search: None,
             tool_rows: None,
             admission: None,
             message_waiting: false,

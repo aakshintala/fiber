@@ -984,9 +984,8 @@ impl Loop {
             }
         }
         self.write_carried(state, turn)?;
-        let loaded_before = self.loaded_names();
         self.write(&Event::ToolCallCompleted(completed.clone()), turn, Some(id))?;
-        self.publish_completion_rows(completed, &loaded_before);
+        self.publish_completion_rows(completed);
         // The session's own edits and subdirectory files: a call that ran
         // re-reads each declared path that is a tracked instruction file,
         // and queues each new subdirectory file for the next step start.

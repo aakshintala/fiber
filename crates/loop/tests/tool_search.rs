@@ -39,8 +39,7 @@ use log::{Log, Watcher};
 use serde_json::{Map, Value, json};
 
 use support::{
-    DEADLINE, assert_kinds, calls_reply, completed, delivery, kinds, model, of_kind, read_until,
-    text_all,
+    DEADLINE, assert_kinds, calls_reply, completed, delivery, model, of_kind, read_until, text_all,
 };
 
 /// The tests' wall-clock bound for a wait that names what it waits for.
@@ -277,7 +276,16 @@ impl Rows {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(seen, _)| seen == name)
+            .filter(|(seen, info)| seen == name && info.is_some())
+            .count()
+    }
+
+    fn removed(&self, name: &str) -> usize {
+        self.declare
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(seen, info)| seen == name && info.is_none())
             .count()
     }
 
@@ -1298,6 +1306,26 @@ fn rows_follow_declared_states_and_search_loads_only_deferred_names() {
     }
     assert_eq!(rows.states("c").len(), 2);
     assert_eq!(rows.states("tool_search").len(), 2);
+    // The factory-inserted search declares as builtin, not as an
+    // extension row.
+    let search_info = rows
+        .declare
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(seen, _)| seen == "tool_search")
+        .and_then(|(_, info)| info.clone());
+    assert!(
+        matches!(
+            search_info,
+            Some(contract::events::ToolInfo {
+                source: contract::events::ToolSource::Builtin,
+                ..
+            })
+        ),
+        "the search row declares a builtin source: {search_info:?}"
+    );
     assert_eq!(
         rows.states("a"),
         vec![
@@ -1420,8 +1448,29 @@ fn a_resumed_session_renders_only_names_it_still_defers() {
     )]);
     assert_eq!(harness.turn("again"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    let kinds = kinds(&lines);
-    assert_eq!(kinds[0], "preamble_built");
+    assert_kinds(
+        &lines,
+        &[&[
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]],
+    );
     assert_eq!(deferred_names(&lines), ["a"]);
     assert_eq!(declared_names(&lines), ["a", "tool_search"]);
     let done = completed(&lines);
@@ -1600,6 +1649,233 @@ fn a_rewound_session_matches_the_parent_request_bytes() {
 }
 
 #[test]
+fn a_rewound_session_orders_the_rebuilt_search_and_reports_its_inputs() {
+    use contract::Seq;
+    use contract::shapes::Point;
+
+    fn full_zebra() -> CatalogTool {
+        CatalogTool {
+            name: "zebra",
+            deferred: false,
+            output: Output {
+                content: vec![ContentPart::Text {
+                    text: "zebra output.".into(),
+                }],
+                ..Output::default()
+            },
+        }
+    }
+
+    let search = Arc::new(SearchScript {
+        outputs: Mutex::new(vec![SearchTool::output(&["a"])].into()),
+        ..SearchScript::default()
+    });
+    let mut harness = Harness::start(
+        vec![
+            calls_reply("", &[("tool_search", search_arguments("a"))]),
+            Scripted::text("Done."),
+            Scripted::text("Again."),
+        ],
+        vec![
+            ("fx".to_owned(), Arc::new(CatalogTool::deferred("a"))),
+            ("fy".to_owned(), Arc::new(full_zebra())),
+        ],
+        Arc::clone(&search),
+        false,
+        None,
+    );
+    assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
+    let first_lines = harness.lines();
+    assert_kinds(
+        &first_lines,
+        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    );
+    // A registered name sorting after the search name: the build merges
+    // the search ahead of it.
+    assert_eq!(deferred_names(&first_lines), ["a"]);
+    assert_eq!(declared_names(&first_lines), ["a", "tool_search", "zebra"]);
+    assert_eq!(harness.turn("two"), Some(TurnOutcome::Completed));
+    let a_lines = harness.lines();
+    assert_kinds(
+        &a_lines,
+        &[&[
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]],
+    );
+    let a_requests = harness.requests();
+    assert_eq!(a_requests.len(), 3);
+    // Turn 2's input is the last input of its first request: everything
+    // before it is the history the rewind keeps.
+    let a_second = &a_requests[2];
+    let kept = a_second.conversation.len() - 1;
+
+    let at = a_lines
+        .iter()
+        .filter(|line| line.kind == "turn_started")
+        .map(|line| line.seq.unwrap().0)
+        .next()
+        .unwrap()
+        - 1;
+    let note = r#loop::rewind_note(&harness.dir, Seq(at)).unwrap();
+
+    // B rewinds to turn 2's start with the same registry: its first
+    // request sends the parent's tools byte for byte, and the factory
+    // sees the logged-D catalogue and sources.
+    let home = harness.dir.parent().unwrap().to_path_buf();
+    let clock = Arc::clone(&harness.clock);
+    let log = Arc::new(Log::create(&home, SessionId("s_rewound".into()), clock.clone()).unwrap());
+    let dir = log.dir().to_path_buf();
+    let b_search = Arc::new(SearchScript {
+        outputs: Mutex::new(vec![SearchTool::output(&["a"])].into()),
+        ..SearchScript::default()
+    });
+    let b_scripted = Arc::new(ScriptedProvider::new(vec![
+        calls_reply("", &[("tool_search", search_arguments("a"))]),
+        Scripted::text("B done."),
+    ]));
+    let (tx, rx) = mpsc::channel();
+    let prompt_clock: Arc<dyn contract::clock::Clock> = clock;
+    let mut prompt = r#loop::PromptInputs::new(
+        home.clone(),
+        "/bin/sh".into(),
+        dir.join("events.jsonl").display().to_string(),
+        prompt_clock,
+        fakes::CONTEXT_WINDOW,
+    );
+    prompt.credential = Some("work".into());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_factory = Arc::clone(&seen);
+    let b_search_tool = Arc::clone(&b_search);
+    let factory: r#loop::ToolSearchFactory = Arc::new(move |catalogue, sources| {
+        seen_factory.lock().unwrap().push((
+            catalogue
+                .iter()
+                .map(|definition| definition.name.clone())
+                .collect::<Vec<_>>(),
+            sources.to_vec(),
+        ));
+        Arc::new(SearchTool {
+            script: Arc::clone(&b_search_tool),
+            executes: false,
+        }) as Arc<dyn Tool>
+    });
+    let b_log = Arc::clone(&log);
+    let mut b = r#loop::Loop::rewound(
+        r#loop::Session {
+            log,
+            provider: Arc::new(Deferring {
+                inner: b_scripted.clone(),
+            }) as Arc<dyn Provider>,
+            model: r#loop::Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: vec![
+                (
+                    "fx".to_owned(),
+                    Arc::new(CatalogTool::deferred("a")) as Arc<dyn Tool>,
+                ),
+                ("fy".to_owned(), Arc::new(full_zebra()) as Arc<dyn Tool>),
+            ],
+            permissions: r#loop::Permissions {
+                workspace: harness.workspace.display().to_string(),
+                credentials: harness.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: Arc::clone(&harness.rules) as _,
+            },
+        },
+        r#loop::Rewound {
+            factory: Some(factory),
+            from: Point {
+                session_id: SessionId("s_test".into()),
+                seq: Seq(at),
+            },
+            worktree: None,
+            how: r#loop::Continuation::Rewind {
+                note,
+                summary: None,
+                name: r#loop::latest_name(&harness.dir),
+            },
+        },
+    )
+    .unwrap();
+    tx.send(delivery("three")).unwrap();
+    let watcher = b_log.watch();
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = b.turn().unwrap();
+        done.send((b, outcome)).unwrap();
+    });
+    let (_b, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended in time");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let (_, b_lines) = read_until(watcher, "a turn_completed line", |line| {
+        line.kind == "turn_completed"
+    });
+    assert_kinds(
+        &b_lines,
+        &[&[
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]],
+    );
+
+    let b_requests = b_scripted.requests();
+    assert_eq!(b_requests.len(), 2);
+    let first = &b_requests[0];
+    // The first request matches the parent's turn-2 request up to its new
+    // input: the rebuilt search merges into the same position, so the
+    // declared tools match byte for byte.
+    assert_eq!(first.system_prompt, a_second.system_prompt);
+    assert_eq!(first.tools, a_second.tools);
+    assert_eq!(&first.conversation[..kept], &a_second.conversation[..kept]);
+    assert!(matches!(
+        &first.conversation[3],
+        Input::ToolSearchResult { loaded, .. } if loaded == &vec!["a".to_owned()]
+    ));
+    // The factory saw the logged-D catalogue and sources: the deferred
+    // definition, and every deferred source but builtin.
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].0, ["a"]);
+    assert_eq!(seen[0].1, ["fx"]);
+    // The registry holds the search tool the factory built from the
+    // logged D: the rewound turn's search call completes loaded.
+    assert_eq!(b_search.ran.lock().unwrap().len(), 1);
+    let b_done = completed(&b_lines);
+    assert_eq!(b_done.len(), 1);
+    assert_eq!(b_done[0].payload["loaded"], json!(["a"]));
+}
+
+#[test]
 fn a_switch_off_and_back_renders_each_way() {
     use contract::commands::ModelArgs;
 
@@ -1679,10 +1955,28 @@ fn a_switch_off_and_back_renders_each_way() {
     harness.inbox.send(model(PLAIN, None)).unwrap();
     assert_eq!(harness.turn("again"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    let kinds = kinds(&lines);
-    assert!(kinds.contains(&"model_changed"));
+    assert_kinds(
+        &lines,
+        &[&[
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]],
+    );
     assert_eq!(deferred_names(&lines), Vec::<String>::new());
     assert_eq!(declared_names(&lines), ["a"]);
+    // The rebuild dropped the search it no longer declares: one removal
+    // published, and no second declare.
+    assert_eq!(harness.rows.removed("tool_search"), 1);
+    assert_eq!(harness.rows.declared("tool_search"), 1);
     let off = &plain_scripted.requests()[0];
     assert!(
         off.conversation.iter().any(|input| matches!(
@@ -1697,8 +1991,27 @@ fn a_switch_off_and_back_renders_each_way() {
     harness.inbox.send(model(DEFERRING, None)).unwrap();
     assert_eq!(harness.turn("home"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
+    assert_kinds(
+        &lines,
+        &[&[
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]],
+    );
     assert_eq!(deferred_names(&lines), ["a"]);
     assert_eq!(declared_names(&lines), ["a", "tool_search"]);
+    // Back on, the search declares again; the earlier removal stands.
+    assert_eq!(harness.rows.declared("tool_search"), 2);
+    assert_eq!(harness.rows.removed("tool_search"), 1);
     let on_requests = harness.requests();
     let on = on_requests.last().unwrap();
     assert!(matches!(
@@ -1751,7 +2064,25 @@ fn a_cancelled_search_loads_nothing_and_renders_the_cancel_line() {
     assert_eq!(outcome, Some(TurnOutcome::Interrupted));
     harness.looped = Some(looped);
     let lines = harness.lines();
-    assert!(kinds(&lines).contains(&"tool_call_completed"));
+    assert_kinds(
+        &lines,
+        &[&[
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+        ]],
+    );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "cancelled");
@@ -1762,6 +2093,21 @@ fn a_cancelled_search_loads_nothing_and_renders_the_cancel_line() {
     assert_eq!(harness.requests().len(), 1);
     // The next request carries the cancel line as a plain result.
     assert_eq!(harness.turn("again"), Some(TurnOutcome::Completed));
+    let lines = harness.lines();
+    assert_kinds(
+        &lines,
+        &[&[
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]],
+    );
     let requests = harness.requests();
     let next = &requests[1].conversation;
     assert!(

@@ -205,13 +205,12 @@ impl Loop {
         self.set_trigger();
         // Drops the previous build's factory-inserted search tool, if any:
         // the new build reinserts it when due, so a rebuild never takes its
-        // own insert for a name the general rule already holds.
-        if let Some(previous) = self
-            .preamble
-            .as_ref()
-            .and_then(|preamble| preamble.search.clone())
-        {
-            self.tools.remove(&previous);
+        // own insert for a name the general rule already holds. The name
+        // rides the loop, not the preamble, so a switch that discards the
+        // preamble still drops it.
+        let dropped = self.inserted_search.take();
+        if let Some(previous) = &dropped {
+            self.tools.remove(previous);
         }
         let (system_prompt, tools, mut event, built) = prompt::build(
             &self.prompt,
@@ -253,6 +252,8 @@ impl Loop {
                 .insert(name.clone(), ("builtin".to_owned(), tool, definition));
             search = Some(name);
         }
+        // The insert rides the loop until the next build drops it.
+        self.inserted_search = search;
         self.preamble = Some(Preamble {
             system_prompt,
             tools,
@@ -262,9 +263,8 @@ impl Loop {
             cache_lifetime: event.cache_lifetime,
             thinking: self.prompt.thinking,
             deferred,
-            search,
         });
-        self.publish_preamble_rows();
+        self.publish_preamble_rows(dropped.as_deref());
         // The scope ends with the installation, before the opening: the
         // opening and its notices are session content, not the build.
         drop(_timer);
@@ -343,11 +343,16 @@ impl Loop {
 
     /// Publishes every declared tool's row through `ToolRows`, when set:
     /// each tool's effective state, deferred or in full (`docs/tools.md`,
-    /// "Seeing the tools"). With no setter the publication is skipped.
-    fn publish_preamble_rows(&self) {
+    /// "Seeing the tools"). A dropped search the rebuild did not declare
+    /// again publishes its removal first, so `/tools` lists every declared
+    /// tool and nothing else. With no setter the publication is skipped.
+    fn publish_preamble_rows(&self, dropped: Option<&str>) {
         let Some(rows) = self.tool_rows.as_ref() else {
             return;
         };
+        if let Some(name) = dropped.filter(|name| !self.tools.contains_key(*name)) {
+            (rows.declare)(name, None);
+        }
         let deferred = self
             .preamble
             .as_ref()
@@ -381,16 +386,11 @@ impl Loop {
         }
     }
 
-    /// Publishes `Loaded` for the names a completed search loaded, when the
-    /// request defers them: only names in D move (`docs/tools.md`,
-    /// "Tool search"). `before` is the loaded set before the completion
-    /// rendered, so only names the set gained publish. With no deferral or
-    /// no setter nothing publishes.
-    pub(crate) fn publish_completion_rows(
-        &self,
-        completed: &ToolCallCompleted,
-        before: &BTreeSet<String>,
-    ) {
+    /// Publishes `Loaded` for every name a completed search loaded that the
+    /// request defers (`docs/tools.md`, "Tool search"): publishing a name
+    /// that already shows `Loaded` is a no-op. With no deferral or no
+    /// setter nothing publishes.
+    pub(crate) fn publish_completion_rows(&self, completed: &ToolCallCompleted) {
         let Some(rows) = self.tool_rows.as_ref() else {
             return;
         };
@@ -405,7 +405,7 @@ impl Loop {
             return;
         };
         for name in loaded {
-            if deferred.contains(name) && !before.contains(name) {
+            if deferred.contains(name) {
                 (rows.state)(name, ToolState::Loaded);
             }
         }
