@@ -136,6 +136,23 @@ pub(crate) fn write_log(
     fs::write(dir.join("events.jsonl"), text).unwrap();
 }
 
+/// Writes `id`'s log with a `session_started` recording `workspace`
+/// and a worktree at `worktree`, as a session running in a worktree
+/// writes its first line.
+pub(crate) fn write_log_with_worktree(home: &Path, id: &str, workspace: &str, worktree: &str) {
+    let dir = home.join("projects").join("-w").join("sessions").join(id);
+    fs::create_dir_all(&dir).unwrap();
+    let payload = json!({
+        "workspace": workspace,
+        "worktree": {"path": worktree, "branch": format!("fiber/{id}")},
+    });
+    let line = json!({
+        "kind": "session_started", "session_id": id, "ts": 1, "schema_version": 1,
+        "payload": payload,
+    });
+    fs::write(dir.join("events.jsonl"), format!("{line}\n")).unwrap();
+}
+
 /// The `session_started` line [`write_log`] starts each fixture log with.
 pub(crate) fn started_line(id: &str, workspace: &str, parent: Option<&str>) -> String {
     let mut payload = json!({"workspace": workspace});

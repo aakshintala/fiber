@@ -110,6 +110,7 @@ fn started_before(
                 &[],
                 worktree,
                 content.as_ref(),
+                None,
             );
             done_tx.send(outcome).unwrap_or(());
         })
@@ -117,6 +118,72 @@ fn started_before(
     Deadline::after(deadline)
         .recv(&done_rx)
         .expect("start answers before its deadline")
+}
+
+/// Runs `start` with `continues` on a thread: calling code that blocks
+/// is a wait, so the test receives its result with a wall-clock
+/// deadline.
+#[track_caller]
+fn started_with_continues(hub: Hub, workspace: String, continues: Option<SessionId>) -> Outcome {
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-start".to_owned())
+        .spawn(move || {
+            let outcome = run(
+                &hub,
+                &CommandId("c_start".to_owned()),
+                &workspace,
+                None,
+                &[],
+                false,
+                None,
+                continues.as_ref(),
+            );
+            done_tx.send(outcome).unwrap_or(());
+        })
+        .unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("start answers before its deadline")
+}
+
+/// The old session the `continues` tests name.
+const OLD: &str = "s_aaaaaaaaaaaaaaaa";
+
+#[test]
+fn an_accepted_continues_reaches_the_starter() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let workspace = temp.workspace();
+    crate::testkit::write_log_with_worktree(&temp.dir, OLD, &workspace, &workspace);
+    let outcome = started_with_continues(hub, workspace, Some(SessionId(OLD.to_owned())));
+    let Outcome::Accepted { session_id, .. } = outcome else {
+        panic!("a known worktree session is continued");
+    };
+    assert!(is_hex_id(&session_id.0));
+    assert_eq!(
+        starter.started_continues(),
+        [Some(SessionId(OLD.to_owned()))]
+    );
+}
+
+#[test]
+fn a_bad_workspace_answers_before_continues_is_checked() {
+    let temp = Temp::new();
+    let starter = FakeStarter::hang(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let outcome = started_with_continues(
+        hub,
+        "relative/path".to_owned(),
+        Some(SessionId(OLD.to_owned())),
+    );
+    let Outcome::Rejected(refused) = outcome else {
+        panic!("a relative workspace is rejected");
+    };
+    assert_eq!(refused.code, ErrorCode::InvalidArguments);
+    assert_eq!(refused.message, "The workspace is not an absolute path.");
+    assert!(starter.started_continues().is_empty());
 }
 
 #[test]
@@ -236,6 +303,7 @@ impl crate::Starter for FailStarter {
         _model: Option<&str>,
         _overrides: &[&str],
         _worktree: bool,
+        _continues: Option<&SessionId>,
     ) -> io::Result<Box<dyn crate::Started>> {
         Err(io::Error::other(self.message.clone()))
     }
@@ -410,6 +478,7 @@ fn held(temp: &Temp, starter: FakeStarter, content: &Value) -> (Arc<Hub>, Box<He
                 &[],
                 false,
                 Some(&content),
+                None,
             );
             done_tx.send(outcome).unwrap_or(());
         })

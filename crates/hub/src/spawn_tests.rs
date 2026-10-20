@@ -359,6 +359,7 @@ fn start_runs_the_recorded_path() {
         None,
         &[],
         false,
+        None,
     )
     .unwrap();
     assert_eq!(exit_of(started).message, "recorded start");
@@ -481,6 +482,7 @@ fn start_runs_with_the_published_environment_and_the_flag() {
         None,
         &[],
         false,
+        None,
     )
     .unwrap();
     assert_eq!(exit_of(started).message, "recorded");
@@ -582,6 +584,7 @@ fn an_inherited_environment_runs_without_the_flag() {
         None,
         &[],
         false,
+        None,
     )
     .unwrap();
     assert_eq!(exit_of(started).message, "recorded");

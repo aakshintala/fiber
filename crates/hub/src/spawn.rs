@@ -46,6 +46,7 @@ impl Starter for SpawnStarter {
         model: Option<&str>,
         overrides: &[&str],
         worktree: bool,
+        _continues: Option<&SessionId>,
     ) -> std::io::Result<Box<dyn Started>> {
         let environment = self.environments.get();
         let mut command = start_command(

@@ -66,6 +66,9 @@ pub(crate) struct FakeStarter {
     rewound: Arc<Mutex<Vec<(SessionId, PathBuf, SessionId)>>>,
     /// Each `start` call's worktree flag, in order.
     started_worktrees: Arc<Mutex<Vec<bool>>>,
+    /// Each `start` call's continued session, in order, beside
+    /// [`FakeStarter::started_worktrees`].
+    started_continues: Arc<Mutex<Vec<Option<SessionId>>>>,
     /// The connections the fake sessions accepted and still serve.
     serving: Arc<Serving>,
     /// How many more `resume` calls exit `session_held` without binding,
@@ -185,6 +188,7 @@ impl FakeStarter {
             asked: Arc::new(Mutex::new(Vec::new())),
             rewound: Arc::new(Mutex::new(Vec::new())),
             started_worktrees: Arc::new(Mutex::new(Vec::new())),
+            started_continues: Arc::new(Mutex::new(Vec::new())),
             serving: Arc::new(Serving::default()),
             held: Arc::new(Mutex::new(0)),
         }
@@ -238,6 +242,12 @@ impl FakeStarter {
     /// Each `start` call's worktree flag, in order.
     pub(crate) fn started_worktrees(&self) -> Vec<bool> {
         lock(&self.started_worktrees).clone()
+    }
+
+    /// Each `start` call's continued session, in order: `None` for a
+    /// fresh session.
+    pub(crate) fn started_continues(&self) -> Vec<Option<SessionId>> {
+        lock(&self.started_continues).clone()
     }
 
     /// Each `rewind` call's new session, workspace and old session, in order.
@@ -305,8 +315,10 @@ impl Starter for FakeStarter {
         _model: Option<&str>,
         _overrides: &[&str],
         worktree: bool,
+        continues: Option<&SessionId>,
     ) -> std::io::Result<Box<dyn Started>> {
         lock(&self.started_worktrees).push(worktree);
+        lock(&self.started_continues).push(continues.cloned());
         self.launch(id)
     }
 

@@ -394,6 +394,21 @@ fn start_rejects_bad_args_without_starting_a_session() {
             json!({"workspace": workspace, "worktree": Value::Null}),
         ),
         command("c_8", "status", json!({"level": "full"})),
+        command(
+            "c_9",
+            "start",
+            json!({"workspace": workspace, "continues": 1}),
+        ),
+        command(
+            "c_10",
+            "start",
+            json!({"workspace": workspace, "continues": Value::Null}),
+        ),
+        command(
+            "c_11",
+            "start",
+            json!({"workspace": workspace, "continues": {"id": "s_aaaaaaaaaaaaaaaa"}}),
+        ),
     ];
     for line in &bad {
         client.send(line);
@@ -483,6 +498,239 @@ fn start_without_worktree_starts_in_place() {
     assert_eq!(starter.started_worktrees(), [false]);
 }
 
+/// The old session the `continues` tests name.
+const OLD: &str = "s_aaaaaaaaaaaaaaaa";
+
+/// A worktree directory with the old session's log recording it: the
+/// `continues` fixture. Returns the worktree path the new `start` names
+/// as its workspace.
+fn continues_setup(temp: &Temp) -> String {
+    let worktree = temp.dir.join("wt");
+    fs::create_dir_all(&worktree).unwrap();
+    let worktree = worktree.to_string_lossy().into_owned();
+    crate::testkit::write_log_with_worktree(&temp.dir, OLD, &worktree, &worktree);
+    worktree
+}
+
+/// Rejects the `start` naming `args` with `code`: every refusal leaves
+/// the starter uncalled.
+fn refused_start(temp: &Temp, args: Value, code: &str) {
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_1", "start", args));
+    let (refused, echoed, _) = rejected(&client.next("the rejection"));
+    assert_eq!(refused, code);
+    assert_eq!(echoed.as_deref(), Some("c_1"));
+    assert!(starter.received().is_empty());
+    assert!(starter.started_worktrees().is_empty());
+    assert!(starter.started_continues().is_empty());
+}
+
+#[test]
+fn start_with_continues_and_worktree_true_is_invalid_arguments() {
+    let temp = Temp::new();
+    let worktree = continues_setup(&temp);
+    refused_start(
+        &temp,
+        json!({"workspace": worktree, "worktree": true, "continues": OLD}),
+        "invalid_arguments",
+    );
+}
+
+#[test]
+fn start_with_continues_naming_no_session_is_session_not_found() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    refused_start(
+        &temp,
+        json!({"workspace": workspace, "continues": OLD}),
+        "session_not_found",
+    );
+}
+
+#[test]
+fn start_with_continues_and_a_gone_log_is_session_not_found() {
+    let temp = Temp::new();
+    // The session directory without its log: pruned away.
+    fs::create_dir_all(temp.dir.join("projects/-w/sessions").join(OLD)).unwrap();
+    let workspace = temp.workspace();
+    refused_start(
+        &temp,
+        json!({"workspace": workspace, "continues": OLD}),
+        "session_not_found",
+    );
+}
+
+#[test]
+fn start_with_continues_and_a_corrupt_first_line_is_log_corrupt() {
+    for first in [
+        "not json\n".to_owned(),
+        json!({"kind": "fiber_started", "payload": {"workspace": "/w"}}).to_string() + "\n",
+        json!({"kind": "session_started", "payload": {}}).to_string() + "\n",
+        json!({"kind": "session_started", "payload": {"workspace": 7}}).to_string() + "\n",
+        // No newline: the first line is still being written.
+        "{\"kind\":\"session_started\"".to_owned(),
+    ] {
+        let temp = Temp::new();
+        let dir = temp.dir.join("projects/-w/sessions").join(OLD);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("events.jsonl"), first.as_bytes()).unwrap();
+        let workspace = temp.workspace();
+        let code = if first.ends_with('\n') {
+            "log_corrupt"
+        } else {
+            "session_not_found"
+        };
+        let starter = FakeStarter::bind_and_hold(&temp.dir);
+        let hub = temp.hub(starter.clone());
+        let mut client = Client::connect(&hub);
+        client.hello();
+        client.send(&command(
+            "c_1",
+            "start",
+            json!({"workspace": workspace, "continues": OLD}),
+        ));
+        let (refused, _, _) = rejected(&client.next("the rejection"));
+        assert_eq!(refused, code, "{first}");
+        assert!(starter.started_continues().is_empty(), "{first}");
+    }
+}
+
+#[test]
+fn start_with_continues_and_an_unreadable_log_is_log_corrupt() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp = Temp::new();
+    let worktree = continues_setup(&temp);
+    let log = temp
+        .dir
+        .join("projects/-w/sessions")
+        .join(OLD)
+        .join("events.jsonl");
+    fs::set_permissions(&log, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&log).is_ok() {
+        panic!("running as root: root bypasses file modes, so the read cannot fail here");
+    }
+    refused_start(
+        &temp,
+        json!({"workspace": worktree, "continues": OLD}),
+        "log_corrupt",
+    );
+    fs::set_permissions(&log, fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+#[test]
+fn start_with_continues_naming_a_session_with_no_worktree_is_invalid_arguments() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    crate::testkit::write_log(&temp.dir, OLD, &workspace, None, &[]);
+    refused_start(
+        &temp,
+        json!({"workspace": workspace, "continues": OLD}),
+        "invalid_arguments",
+    );
+}
+
+#[test]
+fn start_with_continues_naming_another_worktree_is_invalid_arguments() {
+    let temp = Temp::new();
+    let worktree = continues_setup(&temp);
+    let elsewhere = temp.dir.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    let elsewhere = elsewhere.to_string_lossy().into_owned();
+    crate::testkit::write_log_with_worktree(&temp.dir, OLD, &elsewhere, &elsewhere);
+    refused_start(
+        &temp,
+        json!({"workspace": worktree, "continues": OLD}),
+        "invalid_arguments",
+    );
+}
+
+#[test]
+fn start_with_continues_accepts_an_alias_of_the_same_directory() {
+    for alias in ["slash", "link"] {
+        let temp = Temp::new();
+        let worktree = continues_setup(&temp);
+        let workspace = match alias {
+            "slash" => format!("{worktree}/"),
+            _ => {
+                let link = temp.dir.join("link");
+                std::os::unix::fs::symlink(&worktree, &link).unwrap();
+                link.to_string_lossy().into_owned()
+            }
+        };
+        let starter = FakeStarter::bind_and_hold(&temp.dir);
+        let hub = temp.hub(starter.clone());
+        let mut client = Client::connect(&hub);
+        client.hello();
+        client.send(&command(
+            "c_1",
+            "start",
+            json!({"workspace": workspace, "continues": OLD}),
+        ));
+        let (id, result) = accepted(&client.next("the acknowledgement"));
+        assert_eq!(id, "c_1", "{alias}");
+        assert!(result.get("session_id").is_some(), "{alias}");
+        assert_eq!(
+            starter.started_continues(),
+            [Some(contract::SessionId(OLD.to_owned()))],
+            "{alias}"
+        );
+    }
+}
+
+#[test]
+fn start_with_continues_accepts_while_the_old_session_runs() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let worktree = continues_setup(&temp);
+    let _old = crate::fake::FakeSession::bind(&temp.dir, OLD);
+    client.send(&command(
+        "c_1",
+        "start",
+        json!({"workspace": worktree, "continues": OLD}),
+    ));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    let session = result.get("session_id").unwrap().as_str().unwrap();
+    assert!(session.starts_with("s_"));
+    assert_ne!(session, OLD);
+    assert_eq!(starter.started_worktrees(), [false]);
+    assert_eq!(
+        starter.started_continues(),
+        [Some(contract::SessionId(OLD.to_owned()))]
+    );
+}
+
+#[test]
+fn start_with_continues_accepts_after_the_old_session_exited() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    // The old session's log only: its process is gone.
+    let worktree = continues_setup(&temp);
+    client.send(&command(
+        "c_1",
+        "start",
+        json!({"workspace": worktree, "continues": OLD}),
+    ));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    assert!(result.get("session_id").is_some());
+    assert_eq!(starter.started_worktrees(), [false]);
+    assert_eq!(
+        starter.started_continues(),
+        [Some(contract::SessionId(OLD.to_owned()))]
+    );
+}
+
 /// A starter that records each `start`'s overrides and binds through
 /// [`FakeStarter`].
 struct Recording {
@@ -507,9 +755,11 @@ impl Starter for Recording {
         model: Option<&str>,
         overrides: &[&str],
         worktree: bool,
+        continues: Option<&SessionId>,
     ) -> std::io::Result<Box<dyn Started>> {
         lock(&self.seen).push(overrides.iter().map(|text| text.to_string()).collect());
-        self.inner.start(id, workspace, model, &[], worktree)
+        self.inner
+            .start(id, workspace, model, &[], worktree, continues)
     }
 
     fn resume(
