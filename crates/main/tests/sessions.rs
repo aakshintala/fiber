@@ -381,21 +381,21 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
     // subscribed connection arrives without any scan: poll until the held
     // live session appears. The unreleased hold keeps its turn from
     // finishing, so its row says `streaming` on every run.
-    let poll_listed = || loop {
+    let poll_listed = |wanted: &str| loop {
         let stdout = fiber_in(&setup, &setup.workspace(), &["sessions", "--json"]);
-        if listed_ids(&stdout).contains(&live) {
+        if stdout.contains(&format!("\"id\":\"{live}\",\"state\":\"{wanted}\"")) {
             assert!(
                 !setup.deadline.left().is_zero(),
-                "waited until the deadline for the hub to list the live session"
+                "waited until the deadline for the hub to list the live session as {wanted}: {stdout}"
             );
             break stdout;
         }
         assert!(
             !setup.deadline.left().is_zero(),
-            "waited until the deadline for the hub to list the live session"
+            "waited until the deadline for the hub to list the live session as {wanted}: {stdout}"
         );
     };
-    let held = poll_listed();
+    let held = poll_listed("streaming");
     assert!(
         held.contains(&format!("\"id\":\"{live}\",\"state\":\"streaming\"")),
         "{held}"
@@ -407,7 +407,10 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
             && line["session_id"] == live.as_str()
             && line["payload"]["state"] == "idle"
     });
-    let stdout = fiber_in(&setup, &setup.workspace(), &["sessions", "--json"]);
+    // The listing lags the relayed status: the subscribe relay and the
+    // feed fold read the session on separate sockets with no ordering
+    // edge between them, so poll until the live row itself says `idle`.
+    let stdout = poll_listed("idle");
     assert_eq!(listed_ids(&stdout), [live.clone(), exited]);
     let first: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
     assert_eq!(first["state"], "idle", "{stdout}");
