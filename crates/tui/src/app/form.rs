@@ -4,7 +4,7 @@
 use contract::Envelope;
 use contract::events::{CommandAccepted, CommandRejected};
 
-use super::{App, Effect, Kind, Link, mint, read, session_command};
+use super::{App, Effect, Kind, mint, read, session_command};
 use crate::approvals::form::Spot;
 use crate::approvals::{PanelKey, Queue};
 use crate::input::Draft;
@@ -36,7 +36,7 @@ impl App {
     /// Sends the `reply` line `make` builds for the shown request under a
     /// new command id, pending until the hub answers it.
     fn reply(&mut self, make: fn(&mut Queue, &str) -> Option<String>) -> Effect {
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return Effect::None;
         }
         let id = mint();

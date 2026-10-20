@@ -107,7 +107,7 @@ impl App {
     /// The link is not up yet when this runs: a second `hub_hello` on a
     /// live connection reopens nothing.
     pub(super) fn reconnected(&mut self) -> Vec<String> {
-        let again = self.reconnect.was_up && self.outbox.link != Link::Up;
+        let again = self.reconnect.was_up && !self.outbox.is_up();
         self.hub_reached();
         self.reconnect.was_up = true;
         if !again {

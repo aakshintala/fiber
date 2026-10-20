@@ -8,7 +8,7 @@ use contract::events::SessionState;
 use contract::{Envelope, RequestId, SessionId};
 use serde_json::{Map, Value, json};
 
-use super::{App, Effect, Link, Phase, mint};
+use super::{App, Effect, Phase, mint};
 use crate::focus::Area;
 use crate::home::{Left, Row, State};
 use crate::keys::{Event, Key, default_event};
@@ -451,7 +451,7 @@ impl App {
             // dropped link keeps a card's focus: Enter is inert there
             // until reconnect.
             if matches!(spot, Spot::Card(_))
-                && (self.outbox.link != Link::Up || matches!(self.phase, Phase::Pending { .. }))
+                && (!self.outbox.is_up() || matches!(self.phase, Phase::Pending { .. }))
             {
                 return Some(Effect::None);
             }
@@ -692,7 +692,7 @@ impl App {
     /// agrees (`docs/tui.md`, "The rail"). Nothing goes out with the link
     /// not up or for a card that is not crashed.
     fn dismiss_card(&mut self, key: u64) -> Effect {
-        if self.outbox.link != Link::Up {
+        if !self.outbox.is_up() {
             return Effect::None;
         }
         let Some(session) = self
@@ -737,7 +737,7 @@ impl App {
     /// drops rail focus: the rail shows the new session on screen.
     fn switch_to(&mut self, key: u64) -> Effect {
         self.clear_rail_focus();
-        if self.outbox.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
+        if !self.outbox.is_up() || matches!(self.phase, Phase::Pending { .. }) {
             return Effect::None;
         }
         let Some(row) = self

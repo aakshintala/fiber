@@ -1614,7 +1614,7 @@ impl App {
                 }
             }
             "reloaded" => {
-                if self.outbox.link == Link::Up {
+                if self.outbox.is_up() {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
             }
