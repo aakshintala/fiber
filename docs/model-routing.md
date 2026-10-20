@@ -114,9 +114,18 @@ models only, each under a geography's inference profile, such as
 AWS Bedrock's `credential()` returns a Bedrock API key, sent as
 `authorization: Bearer`, or AWS credentials, with which its `sign()` signs each
 request with SigV4 in place of that header. The session's credential label
-names the AWS profile. Under any label but `default` it runs `aws configure
+is the AWS profile name. Under any label but `default` it runs `aws configure
 export-credentials --profile <label> --format process`, so a profile, SSO or an
-assumed role works without an AWS SDK. Under `default` it takes the first of:
+assumed role works without an AWS SDK. A person picks the profile as any
+label is picked ("Which credential a session uses"), such as in the global
+file:
+
+```json
+{ "providers": { "bedrock": { "credential": "my-profile" } } }
+```
+
+and switches it mid-session with `/credential <profile>`, which gets that
+profile's own credentials. Under `default` it takes the first of:
 a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`; AWS keys in
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with `AWS_SESSION_TOKEN`
 when set; and the AWS CLI's own default chain, which reads `AWS_PROFILE`.

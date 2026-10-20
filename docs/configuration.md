@@ -265,7 +265,8 @@ its models' base URL names, read from `AWS_REGION` when it is unset
 (`docs/model-routing.md`, "A per-account host"). Its credential is not a key
 source. Its `credential()` reads `AWS_BEARER_TOKEN_BEDROCK`, AWS keys from the
 environment, or what `aws configure export-credentials` prints, and the
-credential label, `providers."bedrock".credential`, names the AWS profile
+credential label is the AWS profile name: `providers."bedrock".credential`
+set to `my-profile` reads that profile, and `/credential` switches it
 (`docs/model-routing.md`, "Protocols and providers").
 
 ## Secrets
