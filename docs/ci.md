@@ -416,7 +416,9 @@ What the artifacts are, how a release is triggered and how it is signed is
 ## The user docs site
 
 A workflow publishes `docs/user/` to GitHub Pages on every merge to `main`.
-The site's address is `https://aakshintala.github.io/fiber/`.
+The site's address is `https://aakshintala.com/fiber/`: GitHub serves the
+repository's Pages under the account's custom domain. The front page is a
+product page; the user guide sits beside it.
 The site carries the rest of `docs/` too, for readers who follow a link into
 an area doc. Nothing else hosts Fiber's documentation. The command reference
 in `docs/user/` is generated from the same command definitions as `fiber help`

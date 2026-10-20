@@ -3279,7 +3279,7 @@ fn synopses_come_from_command_tables_only() {
 #[test]
 fn doc_synopses_are_the_commands_section() {
     let synopses = doc_synopses();
-    assert_eq!(synopses.len(), 43);
+    assert_eq!(synopses.len(), 44);
     assert_eq!(synopses[0], "fiber [--model <model>] [-c <key>=<value>]...");
     assert_eq!(
         synopses[1],
@@ -3743,5 +3743,5 @@ fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
         "these doc synopses are not in the menu: {missing:?}"
     );
     unbuilt.sort();
-    assert_eq!(unbuilt, ["mcp serve", "update"]);
+    assert_eq!(unbuilt, ["mcp serve", "setup", "update"]);
 }
