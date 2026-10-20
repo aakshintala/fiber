@@ -1,13 +1,19 @@
 //! Tests for the page index: the cut rule, seq ranges and the window.
 
-use contract::{ActionId, Seq};
+use contract::{ActionId, Seq, SessionId};
 
 use super::{Cut, Index, PAGE_LINES, Page};
+
+/// The session every line here folds under: one segment, so no page
+/// spans a continuation point.
+fn session() -> SessionId {
+    SessionId("s_aaaaaaaaaaaaaaaa".to_owned())
+}
 
 /// Pushes one line, shown on a card or not.
 fn push(index: &mut Index, seq: u64, kind: &str, action: Option<&str>, shown: bool) -> Cut {
     let action = action.map(|id| ActionId(id.to_owned()));
-    index.push(Seq(seq), kind, action.as_ref(), shown)
+    index.push(&session(), Seq(seq), kind, action.as_ref(), shown)
 }
 
 /// Feeds `kinds` with consecutive seqs from `seq`, each with `action` and
@@ -35,6 +41,7 @@ fn filler(index: &mut Index, seq: &mut u64, count: usize) {
 /// A page from `first` to `last` holding `lines`, no rows counted.
 fn page(first: u64, last: u64, lines: usize) -> Page {
     Page {
+        session: session(),
         first_seq: Seq(first),
         last_seq: Seq(last),
         lines,
@@ -431,10 +438,10 @@ fn the_page_holding_a_seq_is_found() {
     filler(&mut index, &mut seq, PAGE_LINES);
     feed(&mut index, &mut seq, &[("turn_started", None)]);
     let boundary = PAGE_LINES as u64;
-    assert_eq!(index.page_of(Seq(0)), Some(0));
-    assert_eq!(index.page_of(Seq(boundary - 1)), Some(0));
-    assert_eq!(index.page_of(Seq(boundary)), Some(1));
-    assert_eq!(index.page_of(Seq(boundary + 1)), None);
+    assert_eq!(index.page_of(&session(), Seq(0)), Some(0));
+    assert_eq!(index.page_of(&session(), Seq(boundary - 1)), Some(0));
+    assert_eq!(index.page_of(&session(), Seq(boundary)), Some(1));
+    assert_eq!(index.page_of(&session(), Seq(boundary + 1)), None);
 }
 
 /// An index of pages with these row counts.
@@ -517,17 +524,17 @@ fn nothing_pends_on_a_fresh_index() {
 fn page_of_holds_only_lines_on_a_page() {
     // The fresh index's open page holds no lines: nothing is on it.
     let empty = Index::default();
-    assert_eq!(empty.page_of(Seq(0)), None);
-    assert_eq!(empty.page_of(Seq(9)), None);
+    assert_eq!(empty.page_of(&session(), Seq(0)), None);
+    assert_eq!(empty.page_of(&session(), Seq(9)), None);
     // Both sides of a cut between two pages holding lines.
     let mut index = Index::default();
     let mut seq = 0;
     filler(&mut index, &mut seq, PAGE_LINES);
     feed(&mut index, &mut seq, &[("turn_started", None)]);
     let edge = PAGE_LINES as u64;
-    assert_eq!(index.page_of(Seq(edge - 1)), Some(0));
-    assert_eq!(index.page_of(Seq(edge)), Some(1));
-    assert_eq!(index.page_of(Seq(edge + 1)), None);
+    assert_eq!(index.page_of(&session(), Seq(edge - 1)), Some(0));
+    assert_eq!(index.page_of(&session(), Seq(edge)), Some(1));
+    assert_eq!(index.page_of(&session(), Seq(edge + 1)), None);
 }
 
 #[test]
@@ -816,4 +823,200 @@ fn prefixes_saturate_rather_than_subtract() {
     // Out of range in both directions.
     assert_eq!(index.locate(8), None);
     assert_eq!(index.start(99), 8);
+}
+
+/// The ancestor's session: a second segment numbering from zero, like a
+/// real chain.
+fn ancestor() -> SessionId {
+    SessionId("s_bbbbbbbbbbbbbbbb".to_owned())
+}
+
+/// One page-cutting chunk of `session` lines from `seq`: fillers, then a
+/// `turn_started` that cuts the next page.
+fn chunk(index: &mut Index, session: &SessionId, seq: &mut u64) {
+    for _ in 0..PAGE_LINES {
+        index.push(session, Seq(*seq), "usage_recorded", None, true);
+        *seq += 1;
+    }
+    index.push(session, Seq(*seq), "turn_started", None, true);
+    *seq += 1;
+}
+
+/// Every line on every page resolves to its own page under its session:
+/// the lookup searches only the named session's runs.
+fn check_runs(index: &Index) {
+    for (at, page) in index.pages().iter().enumerate() {
+        if page.lines == 0 {
+            continue;
+        }
+        let mut seq = page.first_seq.0;
+        while seq <= page.last_seq.0 {
+            assert_eq!(
+                index.page_of(&page.session, Seq(seq)),
+                Some(at),
+                "session {} seq {seq}",
+                page.session.0
+            );
+            seq += 1;
+        }
+    }
+}
+
+/// `page_of` searches only the named session's runs: both segments number
+/// from zero, so a bare `seq` match would land on the wrong run. The
+/// ancestor runs twice, so the lookup must walk every matching run, not
+/// just the first.
+#[test]
+fn page_of_searches_only_the_named_sessions_run() {
+    let mut index = Index::default();
+    let mut aseq = 0u64;
+    chunk(&mut index, &ancestor(), &mut aseq);
+    chunk(&mut index, &ancestor(), &mut aseq);
+    let mut oseq = 0u64;
+    chunk(&mut index, &session(), &mut oseq);
+    chunk(&mut index, &session(), &mut oseq);
+    chunk(&mut index, &ancestor(), &mut aseq);
+    check_runs(&index);
+    // The two segments share their seqs, yet resolve apart.
+    let seam = index
+        .pages()
+        .iter()
+        .position(|page| page.session == session())
+        .expect("the own run");
+    assert!(seam > 0, "the ancestor runs first");
+    assert_eq!(index.page_of(&ancestor(), Seq(0)), Some(0));
+    assert_eq!(index.page_of(&session(), Seq(0)), Some(seam));
+    // The ancestor's later run sits past the own run.
+    let later = index
+        .page_of(&ancestor(), Seq(aseq.saturating_sub(1)))
+        .expect("the ancestor's last seq");
+    assert!(later > seam, "the second ancestor run follows the own run");
+    // Unknown sessions and seqs past every page miss.
+    assert_eq!(
+        index.page_of(&SessionId("s_cccccccccccccccc".to_owned()), Seq(0)),
+        None
+    );
+    assert_eq!(index.page_of(&ancestor(), Seq(aseq)), None);
+    assert_eq!(index.page_of(&session(), Seq(oseq)), None);
+}
+
+/// `prepend_from` carries the runs with the pages and shifts the fold's
+/// own runs by the carried count, so both sides still resolve. Carrying
+/// nothing, or carrying from an index that recorded no run, keeps the
+/// index as it was.
+#[test]
+fn prepend_from_shifts_the_runs_it_keeps() {
+    let mut other = Index::default();
+    let mut aseq = 0u64;
+    chunk(&mut other, &ancestor(), &mut aseq);
+    chunk(&mut other, &ancestor(), &mut aseq);
+    let mut index = Index::default();
+    let mut oseq = 0u64;
+    chunk(&mut index, &session(), &mut oseq);
+    chunk(&mut index, &session(), &mut oseq);
+    let own_pages = index.pages().len();
+    let carried = other.pages().len();
+    index.prepend_from(&other, carried);
+    assert_eq!(index.pages().len(), carried + own_pages);
+    check_runs(&index);
+    let seam = index
+        .pages()
+        .iter()
+        .position(|page| page.session == session())
+        .expect("the own run");
+    assert_eq!(seam, carried, "the carried runs land ahead of the fold's");
+    assert_eq!(index.page_of(&ancestor(), Seq(0)), Some(0));
+    assert_eq!(index.page_of(&session(), Seq(0)), Some(carried));
+    // Carrying nothing, or carrying from an index with no run, is a no-op.
+    let len = index.pages().len();
+    index.prepend_from(&other, 0);
+    assert_eq!(index.pages().len(), len);
+    index.prepend_from(&Index::default(), 1);
+    assert_eq!(index.pages().len(), len);
+    check_runs(&index);
+}
+
+/// An empty open page takes only a changed session: carrying the
+/// ancestor runs lands them ahead of the fold's empty open page, and
+/// the next own line starts its run there without a cut. Kills the
+/// `!=` to `==` mutant, which would leave the own line on the
+/// ancestor's run. This is the land path: a fresh fold's open page is
+/// empty with runs already carried.
+#[test]
+fn an_empty_open_page_takes_only_a_changed_session() {
+    let mut other = Index::default();
+    let mut aseq = 0u64;
+    chunk(&mut other, &ancestor(), &mut aseq);
+    let carried = other.pages().len();
+    let mut index = Index::default();
+    index.prepend_from(&other, carried);
+    assert_eq!(
+        index.pages().len(),
+        carried + 1,
+        "the carried runs land ahead of the empty open page"
+    );
+    let cut = index.push(&session(), Seq(0), "usage_recorded", None, true);
+    assert_eq!(cut, Cut::None, "nothing folded yet, so nothing cuts");
+    assert_eq!(
+        index.pages().last().map(|page| page.session.clone()),
+        Some(session()),
+        "the empty open page takes the pushed session"
+    );
+    assert_eq!(
+        index.page_of(&session(), Seq(0)),
+        Some(carried),
+        "the own run starts past the carried runs"
+    );
+}
+
+/// A page holding no lines holds no seq: its range may still name it,
+/// but nothing is on it. Kills the `>` to `>=` mutant on the
+/// `page.lines > 0` guard, which would seat a seq on an empty page.
+#[test]
+fn page_of_skips_a_page_holding_no_lines() {
+    let mut index = Index::default();
+    push(&mut index, 0, "usage_recorded", None, true);
+    // A page covering 1..=5 that holds no lines: its range still names
+    // it, but no line folded there.
+    index.pages.push(Page {
+        session: session(),
+        first_seq: Seq(1),
+        last_seq: Seq(5),
+        lines: 0,
+        rows: 0,
+    });
+    index.revisions.push(0);
+    assert_eq!(index.page_of(&session(), Seq(0)), Some(0));
+    assert_eq!(
+        index.page_of(&session(), Seq(3)),
+        None,
+        "no line folded on the empty page"
+    );
+}
+
+/// `prepend_from` stops before the run starting at the boundary: a run
+/// whose first page is `len` stays with the fold. Kills the `<` to
+/// `<=` mutant on the `segment.first < len` take, which would carry a
+/// run with no carried page in it.
+#[test]
+fn prepend_from_stops_before_the_run_at_the_boundary() {
+    let mut other = Index::default();
+    let mut aseq = 0u64;
+    chunk(&mut other, &ancestor(), &mut aseq);
+    let mut bseq = 0u64;
+    chunk(&mut other, &session(), &mut bseq);
+    assert_eq!(other.pages().len(), 4, "two pages per chunk");
+    let mut index = Index::default();
+    let mut oseq = 0u64;
+    chunk(&mut index, &session(), &mut oseq);
+    let own_pages = index.pages().len();
+    // `len` is the own run's first page: exactly the second run's start.
+    index.prepend_from(&other, 2);
+    assert_eq!(index.pages().len(), 2 + own_pages);
+    assert_eq!(
+        index.segments.len(),
+        2,
+        "only the ancestor run carries; the run starting at the boundary stays"
+    );
+    check_runs(&index);
 }

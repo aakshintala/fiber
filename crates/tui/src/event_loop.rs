@@ -849,27 +849,30 @@ impl<B: Backend> Loop<B> {
     /// hold (`docs/tui.md`, "History and paging"). With no hub there is
     /// nothing to ask, and the pages draw blank.
     fn page_in(&mut self, rx: &Receiver<Input>) {
-        while let Some(range) = self.app.needs().into_iter().next() {
-            let Some(session) = self.app.paging_session().cloned() else {
+        while let Some((session, range)) = self.app.needs().into_iter().next() {
+            if self.app.paging_session().is_none() {
                 return;
-            };
+            }
             if !self.hub.has_stream() {
                 return;
             }
+            // Each range loads under its own segment's session: ancestor
+            // and descendant logs both start at `Seq(0)`, so a bare range
+            // names no page on its own.
             match self
                 .hub
                 .fetch(rx, &session, &range, &mut self.app, &self.tick)
             {
                 Ok(lines) => {
-                    self.app.load(lines);
+                    self.app.load(&session, lines);
                     // An answer that folded nothing into the page would
                     // leave it needed, and the frame asking forever.
-                    if self.app.needs().first() == Some(&range) {
+                    if self.app.needs().first() == Some(&(session.clone(), range.clone())) {
                         self.app
-                            .load_failed(&range, "the answer held none of its lines");
+                            .load_failed(&session, &range, "the answer held none of its lines");
                     }
                 }
-                Err(message) => self.app.load_failed(&range, &message),
+                Err(message) => self.app.load_failed(&session, &range, &message),
             }
         }
     }

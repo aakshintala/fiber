@@ -101,6 +101,7 @@ fn answers_takes_only_the_fetchs_reply_from_the_attached_session() {
     app.find.fetch = Some(super::Fetch {
         id: "c_1".to_owned(),
         page: 0,
+        session: contract::SessionId(SESSION.to_owned()),
         generation: 0,
         width: 40,
         revision: 0,
@@ -461,6 +462,7 @@ fn fetch() -> super::Fetch {
     super::Fetch {
         id: "c_1".to_owned(),
         page: 0,
+        session: contract::SessionId(SESSION.to_owned()),
         generation: 0,
         width: 40,
         revision: 0,

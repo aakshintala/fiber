@@ -32,7 +32,7 @@ impl Setup {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
-            root: fakes::TempDir::new("fiber-ext-step"),
+            root: fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-ext-step"),
         };
         fs::create_dir_all(setup.home()).unwrap();
         setup.source("one\n", "v1.0.0");

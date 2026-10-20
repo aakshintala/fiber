@@ -46,7 +46,7 @@ impl Setup {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
-            root: fakes::TempDir::new("fiber-export"),
+            root: fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-export"),
         };
         fs::create_dir_all(setup.home()).unwrap();
         fs::create_dir_all(setup.workspace()).unwrap();

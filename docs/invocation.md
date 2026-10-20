@@ -140,6 +140,7 @@ credential a session uses"). A new session takes its label from
 | Command | What it does |
 |---|---|
 | `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). `upgrade` runs the same command. A repository's extensions are not updated: each changes only through a new offer. |
+| `setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code \| codex>]... [--completions <shell> \| --no-completions] [--hub \| --no-hub]` | Asks the questions a new install needs, and applies each answer with the command that already does it (below). `install.sh` runs it last; a person runs it again at any time. |
 | `approve [--yes]` | Run in a repository: shows every extension, hook and MCP server the repository declares, as one offer would, and approves them for this person (`docs/extensions.md`, "Code a repository ships"). `--yes` approves without asking, for a script or a machine image. It prints each approval on stderr. |
 | `login [<name>] [--as <label>] [--device]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"), or a secret an installed extension declares (`docs/configuration.md`, "Secrets"). Without `--as`, a provider's label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. `--as` applies only to a provider. `--device` applies only to a provider that logs in by browser, and logs in with a device code instead of the browser. A name that is neither an installed provider nor a declared secret is a usage error that lists both. With no name, a terminal offers the installed providers and the declared secrets; without a terminal, it is a usage error. |
 | `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
@@ -167,6 +168,35 @@ age (`docs/state.md`, "What each part holds"). When `docs/` is missing from
 Fiber home, it says `` user guide not installed: run `fiber update` ``
 (`docs/releasing.md`). It never touches the network, so it does not check that
 a key is valid.
+
+**Setting up.** `fiber setup` asks, in this order, and each answer runs the
+command that already does that job:
+
+1. which providers to sign in to: the installed providers that log in, with
+   any that already have a stored credential marked and not selected. Each
+   one picked runs that provider's login, as `fiber login <name>` does,
+   reviewer pick included (`docs/model-routing.md`, "Logging in").
+2. whether to import Claude Code's or Codex's configuration, offered for each
+   source whose directory exists and has no completed receipt. Yes runs
+   `fiber import` for it (`docs/configuration.md`, "Importing").
+3. the default `model` and `thinking`, from the signed-in providers' models,
+   with the current global values preselected. The answer is written to the
+   global `config.json`; skipping leaves it unset.
+4. whether to install completions for the shell `$SHELL` names. Yes appends
+   one line that runs `fiber completion <shell>` to that shell's startup
+   file (`~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`), unless
+   the line is already there.
+5. whether to register the hub as a login service, default no. Yes runs
+   `fiber hub install` without `--port`; a hub already registered is named,
+   not asked.
+
+Each question has a flag. A flag answers its question and the rest are still
+asked. Without a terminal nothing is asked: setup does what the flags say,
+skips every question without one, and prints each skipped step with the
+command that does it later. It never picks a model nobody chose. Running
+`fiber setup` again asks the same questions with the current answers
+preselected; a step already done is shown as done, and changing it runs its
+command again.
 
 **Extensions.** `fiber extension` manages extensions (`docs/extensions.md`,
 "Installing").
