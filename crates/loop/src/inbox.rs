@@ -233,16 +233,24 @@ impl Loop {
             // ahead of whatever is already waiting. This holds after any
             // outcome, not only `interrupted`. While `closing` nothing
             // starts, so steers still queued are not run.
-            // The queue moved into `turn_started`: the take below emits
-            // it when one moved. Only steers are listed on
-            // `steering_queue`. The queue already holds every payload in
-            // arrival order; holders whose entry left are skipped, as the
-            // apply skips them.
-            let rest: Vec<Queued> = self
-                .take_queued()
+            // The claim is one section, as the apply claims it: the
+            // staged entries leave the queue and the queue emits as the
+            // section left it before anything selects holders. Only the
+            // snapshot's holders start: a drop before the claim leaves
+            // the holder with no entry, and the holder is skipped, so a
+            // message dropped before the step boundary is never applied.
+            // Only steers are listed on `steering_queue`.
+            let emit = TurnEmit {
+                log: &self.log,
+                turn: None,
+            };
+            let taken = self.steering.take_staged(&emit);
+            let queued = self.take_queued();
+            let steering = &self.steering;
+            let rest: Vec<Queued> = queued
                 .into_iter()
                 .filter(|piece| match piece {
-                    Queued::Steer(message, _) => self.holder_live(message),
+                    Queued::Steer(message, _) => holder_kept(&taken, steering, message),
                     Queued::Job(..)
                     | Queued::Notice(..)
                     | Queued::Line(_)
@@ -252,11 +260,6 @@ impl Loop {
                 .collect();
             let kept = rest.len();
             input.pieces.extend(rest);
-            let emit = TurnEmit {
-                log: &self.log,
-                turn: None,
-            };
-            let _ = self.steering.take_staged(&emit);
             if kept > 0 || held {
                 if let Some(hooks) = self.hooks.clone() {
                     self.drain_state(&hooks, None)?;
@@ -471,21 +474,9 @@ impl Loop {
             turn: Some(turn.clone()),
         };
         let taken = self.steering.take_staged(&emit);
-        // Never-admitted holders are forged kept steers the loop takes
-        // as it always did. A holder matches only its own origin's entry:
-        // a session message's command id comes from another session and
-        // is not globally unique, so a same-id session entry never rescues
-        // a dropped steer.
         let steering = &self.steering;
         self.queued.retain(|piece| match piece {
-            Queued::Steer(message, _) => match &message.sender.command_id {
-                None => true,
-                Some(id) => {
-                    taken.iter().any(|entry| {
-                        entry.id == *id && entry.sender.origin == message.sender.origin
-                    }) || !steering.is_admitted(id)
-                }
-            },
+            Queued::Steer(message, _) => holder_kept(&taken, steering, message),
             Queued::Job(..)
             | Queued::Notice(..)
             | Queued::Line(_)
@@ -995,21 +986,25 @@ pub(crate) fn queued_piece(entry: steering::Entry) -> Queued {
     )
 }
 
-impl Loop {
-    /// Whether a queued steer holder still applies: unkeyed holders always
-    /// do; a keyed one while its own origin's entry is still staged. A
-    /// never-admitted id is a forged kept steer, which the loop takes as
-    /// it always did.
-    fn holder_live(&self, message: &Message) -> bool {
-        match &message.sender.command_id {
-            None => true,
-            Some(id) => {
-                self.steering.is_staged(id, &message.sender.origin)
-                    || !self.steering.is_admitted(id)
-            }
+/// Whether a queued steer holder still applies under the claimed `taken`
+/// snapshot: a holder whose own origin's entry was claimed, or a
+/// never-admitted id, which is a forged kept steer the loop takes as it
+/// always did. A holder matches only its own origin's entry: a session
+/// message's command id comes from another session and is not globally
+/// unique, so a same-id session entry never rescues a dropped steer.
+fn holder_kept(taken: &[steering::Entry], steering: &steering::Queue, message: &Message) -> bool {
+    match &message.sender.command_id {
+        None => true,
+        Some(id) => {
+            taken
+                .iter()
+                .any(|entry| entry.id == *id && entry.sender.origin == message.sender.origin)
+                || !steering.is_admitted(id)
         }
     }
+}
 
+impl Loop {
     /// Removes the shared-queue entry `id` names, emitting the queue as the
     /// section left it: `turn` names the drain or boundary that
     /// reconciled. Reports whether one was removed.

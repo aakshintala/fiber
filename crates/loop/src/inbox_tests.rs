@@ -1734,3 +1734,81 @@ fn a_same_id_session_message_never_rescues_a_dropped_steer() {
         "the dropped steer never logs, got {text:?}"
     );
 }
+
+/// Whether the started turn carries the steer `id` names.
+fn turn_holds(input: &Option<TurnInput>, id: &str) -> bool {
+    input.as_ref().is_some_and(|input| {
+        input.pieces.iter().any(|piece| match piece {
+            crate::jobs::Queued::Steer(message, _) => {
+                message.sender.command_id.as_ref() == Some(&SteerId(id.into()))
+            }
+            crate::jobs::Queued::Job(..)
+            | crate::jobs::Queued::Notice(..)
+            | crate::jobs::Queued::Line(_)
+            | crate::jobs::Queued::Handoff(..)
+            | crate::jobs::Queued::Pending(..) => false,
+        })
+    })
+}
+
+#[test]
+fn a_drop_before_the_claim_never_starts_the_next_turn() {
+    let queue = Arc::new(SteerQueue::new());
+    let (mut looped, log, _watched, _home) = started_with_steering(Arc::clone(&queue));
+    // A staged steer kept across the turn ending: its holder waits in
+    // `queued` for the next turn's start.
+    steer_pushed(&queue, &log, "c_1", "kept");
+    let turn = TurnId("t_test".into());
+    looped
+        .admit_running(
+            Delivery::Steer(steer_message("kept", "c_1"), steer_ignore()),
+            &turn,
+        )
+        .unwrap();
+    assert_eq!(looped.queued.len(), 1, "one holder waits");
+    // The first acquisition pauses the next turn's start inside its
+    // section. The re-arm lands while it is still blocked there, so the
+    // second pause catches its very next acquisition: with the old
+    // check-then-claim order that is the claim itself, after the check
+    // already passed; with the ruled claim-then-filter order the claim
+    // already resolved and the pause is the turn's forget.
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (free_tx, free_rx) = mpsc::channel();
+    queue.hold_entry_for_test(contract::steering::EntryGate {
+        entered: entered_tx,
+        release: free_rx,
+    });
+    let (removed, started) = std::thread::scope(|scope| {
+        let waiter = scope.spawn(|| looped.wait_for_turn());
+        Deadline::after(DEADLINE)
+            .recv(&entered_rx)
+            .expect("the start reaches its first acquisition");
+        let (entered2_tx, entered2_rx) = mpsc::channel();
+        let (free2_tx, free2_rx) = mpsc::channel();
+        queue.hold_entry_for_test(contract::steering::EntryGate {
+            entered: entered2_tx,
+            release: free2_rx,
+        });
+        let _sent = free_tx.send(());
+        Deadline::after(DEADLINE)
+            .recv(&entered2_rx)
+            .expect("the start reaches its next acquisition");
+        // The reader drops before the step boundary and is acknowledged.
+        let removed = queue.remove(&SteerId("c_1".into()), &*log);
+        let _sent = free2_tx.send(());
+        let started = waiter.join().expect("the start ends");
+        (removed, started)
+    });
+    let started = started.expect("the start ends cleanly");
+    if removed {
+        assert!(
+            !turn_holds(&started, "c_1"),
+            "a drop the reader acknowledged never starts the next turn"
+        );
+    } else {
+        assert!(
+            turn_holds(&started, "c_1"),
+            "a drop that lost to the claim leaves the claimed steer"
+        );
+    }
+}
