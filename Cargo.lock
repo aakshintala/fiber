@@ -2260,6 +2260,7 @@ dependencies = [
  "contract",
  "fakes",
  "net",
+ "ring",
  "serde_json",
  "support",
  "thiserror 2.0.21",

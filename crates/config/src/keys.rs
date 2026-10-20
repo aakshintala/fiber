@@ -283,6 +283,7 @@ pub(crate) const KEYS: &[Key] = &[
     key("cache.lifetime", OneOf(LIFETIMES), YES, Some("\"1h\"")),
     key("cache.warm_idle", Bool, YES, Some("false")),
     key("cache.warm_cap", CountBelow(12), YES, Some("2")),
+    key("cache.diagnostics", Bool, YES, Some("false")),
     key("thinking", OneOf(LEVELS), YES, None),
     key("models.*.handoff.enabled", Bool, YES, None),
     key("models.*.handoff.tokens", Count, YES, None),
