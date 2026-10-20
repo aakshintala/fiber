@@ -63,8 +63,9 @@ fn hub_session(
         ));
     }
     let mut start = || start_hub(binary.unwrap_or_default());
-    let (stream, hello) = if target.is_listed() {
-        connect_listed(&home, target)?
+    let (stream, hello) = if let doors::hub::Target::Listed { name, .. } = &target {
+        let hub = name.clone();
+        connect_listed(&home, target, &hub)?
     } else {
         doors::hub::connect_target(&home, &target, &mut start, clock).map_err(io::Error::other)?
     };
@@ -74,10 +75,6 @@ fn hub_session(
     relay(Ok(stream), io::stdin(), &mut stdout)
 }
 
-/// The process clock behind a listed hub's bounded connect: the wait runs
-/// on a thread, so the clock must live for the thread's whole life.
-static LISTED_CLOCK: fakes::clock::SystemClock = fakes::clock::SystemClock;
-
 /// Connects to a listed hub, which answers `hub_hello` at once: the whole
 /// connect waits at most [`doors::hub::CONNECT_DEADLINE`], then fails with
 /// a stderr line naming the hub instead of hanging silent. A listed hub is
@@ -86,11 +83,9 @@ static LISTED_CLOCK: fakes::clock::SystemClock = fakes::clock::SystemClock;
 fn connect_listed(
     home: &std::path::Path,
     target: doors::hub::Target,
+    hub: &str,
 ) -> io::Result<doors::hub::Hub> {
-    let hub = match &target {
-        doors::hub::Target::Listed { name, .. } => name.clone(),
-        doors::hub::Target::Local => "local".to_owned(),
-    };
+    let hub = hub.to_owned();
     let home = home.to_path_buf();
     let (done, waiting) = std::sync::mpsc::channel();
     thread::Builder::new()
@@ -101,7 +96,7 @@ fn connect_listed(
                 &home,
                 &target,
                 &mut start,
-                &LISTED_CLOCK,
+                &fakes::clock::SystemClock,
             ));
         })
         .map_err(io::Error::other)?;
