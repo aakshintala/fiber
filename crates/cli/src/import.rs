@@ -73,6 +73,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::time::Duration;
 
     use fakes::TempDir;
     use fakes::clock::FakeClock;
@@ -234,5 +235,68 @@ mod tests {
         let (result, _) = fixture.run(ImportSource::ClaudeCode);
         result.unwrap();
         assert!(fixture.home().join("skills/review/SKILL.md").exists());
+    }
+
+    /// The child's marker: set, the test runs the entry and exits with
+    /// its code, so the parent proves what `import` returns.
+    const CHILD: &str = "FIBER_CLI_IMPORT_CHILD";
+
+    /// How long the re-run child may run before the test kills it and
+    /// fails: the import reads local files only.
+    const CHILD_WITHIN: Duration = Duration::from_secs(10);
+
+    fn child_name() -> String {
+        module_path!().split_once("::").unwrap().1.to_owned()
+    }
+
+    #[test]
+    fn import_exits_zero_and_lands_the_source() {
+        // Runs in a child with `HOME` holding the source and `FIBER_HOME`
+        // fresh, so the exit code is `import`'s own.
+        if std::env::var_os(CHILD).is_some() {
+            let clock = FakeClock::new();
+            std::process::exit(import(ImportSource::ClaudeCode, clock.as_ref()));
+        }
+        let fixture = Fixture::new();
+        let source = fixture.source(ImportSource::ClaudeCode);
+        fs::create_dir_all(source.join("skills/review")).unwrap();
+        fs::write(
+            source.join("skills/review/SKILL.md"),
+            "---\nname: review\ndescription: Reviews.\n---\n\nBody.\n",
+        )
+        .unwrap();
+        let output = fakes::rerun_prepared(
+            &format!("{}::import_exits_zero_and_lands_the_source", child_name()),
+            &[(CHILD, "1")],
+            CHILD_WITHIN,
+            |command| {
+                command
+                    .env("HOME", fixture.tmp.path())
+                    .env("FIBER_HOME", fixture.home());
+            },
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(fixture.home().join("skills/review/SKILL.md").exists());
+    }
+
+    #[test]
+    fn import_without_a_home_dir_exits_nonzero() {
+        // Runs in a child with no `HOME`, so the source home cannot be
+        // found and `run` fails: a `run` that returns `Ok` anyway, or an
+        // `import` that returns 0, fails this test.
+        if std::env::var_os(CHILD).is_some() {
+            let clock = FakeClock::new();
+            std::process::exit(import(ImportSource::Codex, clock.as_ref()));
+        }
+        let fixture = Fixture::new();
+        let output = fakes::rerun_prepared(
+            &format!("{}::import_without_a_home_dir_exits_nonzero", child_name()),
+            &[(CHILD, "1")],
+            CHILD_WITHIN,
+            |command| {
+                command.env("FIBER_HOME", fixture.home()).env_remove("HOME");
+            },
+        );
+        assert_ne!(output.status.code(), Some(0), "{output:?}");
     }
 }

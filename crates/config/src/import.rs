@@ -994,13 +994,16 @@ impl TomlReader {
 
 /// Strips a `#` comment outside quotes. `None` when a quote is left open:
 /// the value may continue on the next line, which the subset never reads.
+/// An escape at the last byte skips past the end, which ends the scan
+/// with the quote still open: `None`, exactly as not skipping does, so no
+/// bounds check guards the skip.
 fn strip_comment(line: &str) -> Option<&str> {
     let mut quote = None;
     let bytes = line.as_bytes();
     let mut index = 0;
     while let Some(byte) = bytes.get(index).copied() {
         if let Some(open) = quote {
-            if byte == b'\\' && open == b'"' && index + 1 < bytes.len() {
+            if byte == b'\\' && open == b'"' {
                 index += 2;
                 continue;
             }
@@ -1107,12 +1110,13 @@ fn parse_basic_string(rest: &str) -> Option<String> {
     }
 }
 
-/// Splits one comma-separated list at top level, outside quotes and
-/// nesting: `None` when a quote is left open or brackets nest, which a
-/// scalar line never holds.
+/// Splits one comma-separated list at top level, outside quotes: `None`
+/// when a quote is left open. Only quotes are tracked, never bracket
+/// depth: no string part can hold an unquoted bracket, so a nested
+/// bracket fails the value's parse either way, and every input that
+/// would reach depth greater than zero returns `None` with or without it.
 fn split_top_level(text: &str) -> Option<Vec<&str>> {
     let mut parts = Vec::new();
-    let mut depth: usize = 0;
     let mut quote = None;
     let mut start = 0;
     let bytes = text.as_bytes();
@@ -1128,11 +1132,7 @@ fn split_top_level(text: &str) -> Option<Vec<&str>> {
             }
         } else if byte == b'"' || byte == b'\'' {
             quote = Some(byte);
-        } else if byte == b'[' || byte == b'{' {
-            depth += 1;
-        } else if byte == b']' || byte == b'}' {
-            depth = depth.saturating_sub(1);
-        } else if byte == b',' && depth == 0 {
+        } else if byte == b',' {
             parts.push(text.get(start..index).unwrap_or("").trim());
             start = index + 1;
         }
@@ -2086,12 +2086,184 @@ mod tests {
     }
 
     #[test]
+    fn escaped_quotes_survive_comment_stripping() {
+        // The escaped quote keeps the string open past the `#`: without
+        // the skip the quote closes early and the server is refused. The
+        // second value opens with an escape, so stepping back instead of
+        // over the backslash unopens the string and swallows the comment.
+        let fixture = Fixture::new();
+        fixture.tmp.write(
+            "source/config.toml",
+            "[mcp_servers.esc]\n\
+             command = \"a\\\"b\" # a comment\n\
+             \n\
+             [mcp_servers.lead]\n\
+             command = \"\\n\" # a comment\n",
+        );
+        let report = fixture.run(ImportSource::Codex).unwrap();
+        assert_eq!(report.imported.mcp_servers, ["esc", "lead"]);
+        let written: Value =
+            serde_json::from_str(&fs::read_to_string(fixture.home().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            written.pointer("/mcp/servers/esc").unwrap(),
+            &json!({"command": "a\"b"})
+        );
+        assert_eq!(
+            written.pointer("/mcp/servers/lead").unwrap(),
+            &json!({"command": "\n"})
+        );
+    }
+
+    #[test]
+    fn escape_sequences_parse_to_their_characters() {
+        // One value holding every escape `parse_basic_string` handles, so
+        // deleting any arm refuses the server instead of importing it.
+        let fixture = Fixture::new();
+        fixture.tmp.write(
+            "source/config.toml",
+            "[mcp_servers.cooked]\n\
+             command = \"n\\nt\\tr\\rf\\fb\\\\g\\\"q\"\n\
+             \n\
+             [mcp_servers.lit]\n\
+             command = 'tool'\n",
+        );
+        let report = fixture.run(ImportSource::Codex).unwrap();
+        assert_eq!(report.imported.mcp_servers, ["cooked", "lit"]);
+        let written: Value =
+            serde_json::from_str(&fs::read_to_string(fixture.home().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            written.pointer("/mcp/servers/cooked").unwrap(),
+            &json!({"command": "n\nt\tr\rf\u{c}b\\g\"q"})
+        );
+        assert_eq!(
+            written.pointer("/mcp/servers/lit").unwrap(),
+            &json!({"command": "tool"})
+        );
+    }
+
+    #[test]
+    fn commas_and_escapes_inside_quotes_do_not_split() {
+        // A comma inside quotes is one item, and a leading escaped quote
+        // does not close the string: either misread refuses the server.
+        let fixture = Fixture::new();
+        fixture.tmp.write(
+            "source/config.toml",
+            "[mcp_servers.comma]\n\
+             command = \"x\"\n\
+             args = [\"a,b\", \"c\"]\n\
+             \n\
+             [mcp_servers.lead]\n\
+             command = \"x\"\n\
+             args = [\"\\\"a\", \"b\"]\n",
+        );
+        let report = fixture.run(ImportSource::Codex).unwrap();
+        assert_eq!(report.imported.mcp_servers, ["comma", "lead"]);
+        let written: Value =
+            serde_json::from_str(&fs::read_to_string(fixture.home().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            written.pointer("/mcp/servers/comma").unwrap(),
+            &json!({"command": "x", "args": ["a,b", "c"]})
+        );
+        assert_eq!(
+            written.pointer("/mcp/servers/lead").unwrap(),
+            &json!({"command": "x", "args": ["\"a", "b"]})
+        );
+    }
+
+    #[test]
     fn codex_direct_table_keys_are_not_servers() {
         let fixture = Fixture::new();
         fixture.write_source("config.toml", "[mcp_servers]\norphan = 1\n");
         let report = fixture.run(ImportSource::Codex).unwrap();
         assert!(report.imported.mcp_servers.is_empty());
         assert!(!reason_for(&report, "config.toml [mcp_servers]").is_empty());
+    }
+
+    #[test]
+    fn bare_keys_hold_letters_digits_and_two_marks() {
+        assert!(is_bare_key("command"));
+        assert!(is_bare_key("a-b_c9"));
+        assert!(is_bare_key("_"));
+        assert!(!is_bare_key(""));
+        assert!(!is_bare_key("a b"));
+        assert!(!is_bare_key("a.b"));
+    }
+
+    #[test]
+    fn a_file_is_not_a_directory_listing() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.source()).unwrap();
+        fs::write(fixture.source().join("commands"), "not a dir\n").unwrap();
+        assert!(read_dir_names(&fixture.source().join("commands")).is_err());
+    }
+
+    #[test]
+    fn a_command_directory_named_like_a_file_is_left_behind() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.source().join("commands/dirmd.md")).unwrap();
+        let report = fixture.run(ImportSource::ClaudeCode).unwrap();
+        assert!(report.imported.commands.is_empty());
+        assert_eq!(
+            reason_for(&report, "commands/dirmd.md"),
+            "is not a command file"
+        );
+    }
+
+    #[test]
+    fn an_occupied_skill_directory_is_taken() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.home().join("skills/review")).unwrap();
+        fs::write(fixture.home().join("skills/review/SKILL.md"), "other\n").unwrap();
+        let taken: BTreeSet<String> = ["review".to_owned()].into_iter().collect();
+        assert!(skill_taken(&fixture.home(), "review", b"new\n", &taken));
+        assert!(!skill_taken(&fixture.home(), "review", b"other\n", &taken));
+        assert!(!skill_taken(&fixture.home(), "fresh", b"new\n", &taken));
+    }
+
+    #[test]
+    fn allocate_names_suffixes_a_colliding_server() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.home()).unwrap();
+        fixture.tmp.write(
+            "home/config.json",
+            &json!({"mcp": {"servers": {"notes": {"command": "other"}}}}).to_string(),
+        );
+        let mut servers = vec![PlannedServer {
+            name: "notes".to_owned(),
+            value: json!({"command": "a"}),
+        }];
+        allocate_names(&fixture.home(), &mut [], &mut [], &mut servers).unwrap();
+        assert_eq!(servers[0].name, "notes-2");
+    }
+
+    #[test]
+    fn write_servers_suffixes_a_changed_entry() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.home()).unwrap();
+        fixture.tmp.write(
+            "home/config.json",
+            &json!({"mcp": {"servers": {"notes": {"command": "other"}}}}).to_string(),
+        );
+        let mut servers = vec![PlannedServer {
+            name: "notes".to_owned(),
+            value: json!({"command": "a"}),
+        }];
+        write_servers(&fixture.home(), &mut servers).unwrap();
+        assert_eq!(servers[0].name, "notes-2");
+        let written: Value =
+            serde_json::from_str(&fs::read_to_string(fixture.home().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            written.pointer("/mcp/servers/notes").unwrap(),
+            &json!({"command": "other"})
+        );
+        assert_eq!(
+            written.pointer("/mcp/servers/notes-2").unwrap(),
+            &json!({"command": "a"})
+        );
     }
 
     #[test]
