@@ -2854,3 +2854,26 @@ fn a_completed_rescan_clears_the_search_text() {
     app.settle_find();
     assert!(app.notices().is_empty());
 }
+
+#[test]
+fn unscanned_positions_keep_the_search_text_with_no_fetch() {
+    let (mut app, _, _) = dropped_fetch();
+    // The link going down clears the fetch but leaves dropped pages
+    // unscanned, and the pump stays quiet while it is down: exactly
+    // one completion side holds.
+    app.disconnected();
+    assert!(!app.find.fetching(), "no fetch on the wire");
+    assert!(
+        app.find.cursor() < app.pages().page_count(),
+        "dropped pages still unscanned"
+    );
+    assert_eq!(app.notice(), Some(search_text().as_str()));
+    app.settle_find();
+    // Pins the && in the rescan-complete clear: || would clear on the
+    // no-fetch side alone.
+    assert_eq!(
+        app.notice(),
+        Some(search_text().as_str()),
+        "unscanned positions keep the text with no fetch"
+    );
+}
