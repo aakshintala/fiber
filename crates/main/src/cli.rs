@@ -729,9 +729,40 @@ pub(crate) struct SessionArgs {
         value_name = "session_id",
         value_parser = parse_session_id,
         hide = true,
-        conflicts_with_all = ["resume", "prompt", "model", "overrides", "worktree", "parent", "delegate_id"]
+        conflicts_with_all = ["resume", "prompt", "model", "overrides", "worktree", "parent", "delegate_id", "forked_from", "forked_seq"]
     )]
     pub(crate) rewound_from: Option<String>,
+
+    /// Continue the session this fork names from its point: hidden and
+    /// free to change, passed by the parent that starts a fork's new
+    /// session. Requires its sequence, the parent, the delegate job and
+    /// the prompt, and conflicts with every other way to start.
+    #[arg(
+        long = "forked-from",
+        value_name = "session_id",
+        value_parser = parse_session_id,
+        hide = true,
+        requires = "forked_seq",
+        requires = "parent",
+        requires = "delegate_id",
+        requires = "prompt",
+        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from"]
+    )]
+    pub(crate) forked_from: Option<String>,
+
+    /// The point in the forked session, as a `seq`: hidden and free to
+    /// change, alongside `--forked-from`.
+    #[arg(
+        long = "forked-seq",
+        value_name = "seq",
+        hide = true,
+        requires = "forked_from",
+        requires = "parent",
+        requires = "delegate_id",
+        requires = "prompt",
+        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from"]
+    )]
+    pub(crate) forked_seq: Option<u64>,
 
     /// The parent session: its id. A Fiber delegate records it and its job
     /// id on `session_started` (`docs/delegates.md`, "Events").
@@ -777,6 +808,8 @@ impl From<&SessionArgs> for contract::session_argv::SessionArgv {
             credential: args.credential.clone(),
             worktree: args.worktree,
             rewound_from: args.rewound_from.clone().map(contract::SessionId),
+            forked_from: args.forked_from.clone().map(contract::SessionId),
+            forked_seq: args.forked_seq,
             parent: args.parent.clone().map(contract::SessionId),
             delegate_id: args.delegate_id.clone().map(contract::JobId),
             depth: args.depth,
