@@ -14,12 +14,12 @@ use contract::clock::Clock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::Source;
 use crate::error::ConfigError;
 use crate::home::{plain, read, read_bytes};
 use crate::keys;
 use crate::layout::global_config_file;
 use crate::write::atomic::{locked, write_atomic};
+use crate::{Source, valid_server_name};
 use crate::{get_global, valid_env_key};
 
 /// Which harness to import from.
@@ -492,13 +492,17 @@ struct RawServer {
     fields: BTreeMap<String, RawValue>,
 }
 
-/// One source field's value.
+/// One source field's value. `Unsupported` is a value outside the narrow
+/// subset (a number, `null`, a nested table): it is never interpreted, and
+/// the server holding it is refused. It is a variant rather than a string
+/// so a legitimate value cannot spell it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RawValue {
     Text(String),
     Flag(bool),
     List(Vec<String>),
     Table(BTreeMap<String, String>),
+    Unsupported,
 }
 
 /// Reads Claude Code's `settings.json` `mcpServers` object.
@@ -570,13 +574,7 @@ fn read_claude_servers(file: &Path) -> (Vec<RawServer>, Vec<LeftBehind>) {
                     server.fields.insert(key.clone(), field);
                 }
                 None => {
-                    server.fields.insert(
-                        key.clone(),
-                        RawValue::Table(BTreeMap::from([(
-                            String::new(),
-                            "unrepresentable".to_owned(),
-                        )])),
-                    );
+                    server.fields.insert(key.clone(), RawValue::Unsupported);
                 }
             }
         }
@@ -643,7 +641,7 @@ fn classify_server(
             refuse("has an empty `command`".into());
             return;
         }
-        Some(RawValue::Flag(_) | RawValue::List(_) | RawValue::Table(_)) => {
+        Some(_) => {
             refuse("`command` is not a string".into());
             return;
         }
@@ -657,7 +655,7 @@ fn classify_server(
             }
             Some(url.clone())
         }
-        Some(RawValue::Flag(_) | RawValue::List(_) | RawValue::Table(_)) => {
+        Some(_) => {
             refuse("`url` is not a string".into());
             return;
         }
@@ -695,10 +693,6 @@ fn classify_server(
             Some(RawValue::Table(table)) => {
                 let mut env = Map::new();
                 for (key, text) in table {
-                    if text == "unrepresentable" {
-                        refuse(format!("`env` holds a secret value for `{key}`"));
-                        return;
-                    }
                     if !valid_env_key(key) {
                         refuse(format!("`env` key `{key}` is not a variable name"));
                         return;
@@ -726,7 +720,7 @@ fn classify_server(
             }
             // `false` is the default: without it the entry reads the same.
             RawValue::Flag(false) => {}
-            RawValue::Text(_) | RawValue::List(_) | RawValue::Table(_) => {
+            RawValue::Text(_) | RawValue::List(_) | RawValue::Table(_) | RawValue::Unsupported => {
                 refuse("`required` is not true or false".into());
                 return;
             }
@@ -736,15 +730,6 @@ fn classify_server(
         name: raw.name,
         value: Value::Object(entry),
     });
-}
-
-/// Whether `name` is a server name Fiber writes: non-empty, with none of
-/// the bytes `fiber mcp add` refuses.
-fn valid_server_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.bytes().any(|byte| {
-            byte == b'"' || byte == b'/' || byte.is_ascii_whitespace() || byte.is_ascii_control()
-        })
 }
 
 /// Whether an `env` key names a secret: any `_`-separated word of it is a
@@ -1982,6 +1967,41 @@ mod tests {
         let tokened = reason_for(&report, "server tokened");
         assert!(tokened.contains("API_TOKEN"));
         assert!(!tokened.contains("sk-canary-9"));
+    }
+
+    #[test]
+    fn the_word_unrepresentable_imports_but_outside_values_do_not() {
+        let servers = json!({
+            "worded": {"command": "a", "env": {"NOTE": "unrepresentable"}},
+            "numbered_env": {"command": "a", "env": {"PORT": 1}},
+            "numbered_command": {"command": 3},
+        });
+        let fixture = Fixture::new();
+        fixture.tmp.write(
+            "source/settings.json",
+            &json!({"mcpServers": servers}).to_string(),
+        );
+        let report = fixture.run(ImportSource::ClaudeCode).unwrap();
+        // The literal word is a value like any other: it lands with its
+        // spelling intact.
+        assert_eq!(report.imported.mcp_servers, ["worded"]);
+        assert!(reason_for(&report, "server worded").is_empty());
+        let written: Value =
+            serde_json::from_str(&fs::read_to_string(fixture.home().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            written.pointer("/mcp/servers/worded/env/NOTE").unwrap(),
+            &json!("unrepresentable")
+        );
+        // Values outside the subset are refused, never interpreted.
+        assert_eq!(
+            reason_for(&report, "server numbered_env"),
+            "`env` is not an object of strings"
+        );
+        assert_eq!(
+            reason_for(&report, "server numbered_command"),
+            "`command` is not a string"
+        );
     }
 
     #[test]

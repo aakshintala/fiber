@@ -15,10 +15,10 @@
 mod support;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::{Value, json};
-use support::{Output, Setup, run_to_exit};
+use support::{Output, Setup, files_holding, run_to_exit};
 
 /// Runs `fiber import` with `args` to exit, reaping its process group on
 /// the test's deadline.
@@ -82,32 +82,6 @@ fn codex_home(root: &Path) {
          url = \"https://beta.example.com/mcp\"\n",
     );
     write(root, ".codex/auth.json", "{\"token\": \"x\"}\n");
-}
-
-/// Every file under `dir` holding `needle`.
-fn files_holding(dir: &Path, needle: &str) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    collect_holding(dir, needle, &mut found);
-    found.sort();
-    found
-}
-
-fn collect_holding(dir: &Path, needle: &str, found: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && !path.is_symlink() {
-            collect_holding(&path, needle, found);
-        } else if path.is_file()
-            && fs::read(&path)
-                .map(|bytes| String::from_utf8_lossy(&bytes).contains(needle))
-                .unwrap_or(false)
-        {
-            found.push(path);
-        }
-    }
 }
 
 fn receipt(home: &Path, name: &str) -> Value {
@@ -221,7 +195,7 @@ fn secret_values_reach_neither_files_nor_output() {
         "stderr: {}",
         run.stderr
     );
-    assert!(files_holding(&setup.home(), "sk-canary-4").is_empty());
+    assert!(files_holding(&[setup.home()], b"sk-canary-4").is_empty());
 }
 
 #[test]

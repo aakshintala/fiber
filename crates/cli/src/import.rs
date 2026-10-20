@@ -249,41 +249,12 @@ mod tests {
         module_path!().split_once("::").unwrap().1.to_owned()
     }
 
-    #[test]
-    fn import_exits_zero_and_lands_the_source() {
-        // Runs in a child with `HOME` holding the source and `FIBER_HOME`
-        // fresh, so the exit code is `import`'s own.
-        if std::env::var_os(CHILD).is_some() {
-            let clock = FakeClock::new();
-            std::process::exit(import(ImportSource::ClaudeCode, clock.as_ref()));
-        }
-        let fixture = Fixture::new();
-        let source = fixture.source(ImportSource::ClaudeCode);
-        fs::create_dir_all(source.join("skills/review")).unwrap();
-        fs::write(
-            source.join("skills/review/SKILL.md"),
-            "---\nname: review\ndescription: Reviews.\n---\n\nBody.\n",
-        )
-        .unwrap();
-        let output = fakes::rerun_prepared(
-            &format!("{}::import_exits_zero_and_lands_the_source", child_name()),
-            &[(CHILD, "1")],
-            CHILD_WITHIN,
-            |command| {
-                command
-                    .env("HOME", fixture.tmp.path())
-                    .env("FIBER_HOME", fixture.home());
-            },
-        );
-        assert_eq!(output.status.code(), Some(0), "{output:?}");
-        assert!(fixture.home().join("skills/review/SKILL.md").exists());
-    }
-
+    /// The only child-process test here: the success path's exit code,
+    /// output and landed files are pinned by `tests/import.rs`. What only
+    /// a child proves is the branch `run_import` never sees: no `HOME`
+    /// in the environment.
     #[test]
     fn import_without_a_home_dir_exits_nonzero() {
-        // Runs in a child with no `HOME`, so the source home cannot be
-        // found and `run` fails: a `run` that returns `Ok` anyway, or an
-        // `import` that returns 0, fails this test.
         if std::env::var_os(CHILD).is_some() {
             let clock = FakeClock::new();
             std::process::exit(import(ImportSource::Codex, clock.as_ref()));

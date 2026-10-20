@@ -75,7 +75,7 @@ pub use rules::{RuleLine, RulesFiles, RulesListing, RulesScope, list_rules, remo
 pub use secret::{
     CredentialSource, credential_labels, delete_credential, delete_credential_held, delete_secret,
     mcp_secret_name_ok, read_credential, read_secret, store_credential, store_secret,
-    valid_env_key,
+    valid_env_key, valid_server_name,
 };
 pub use settings::{NotesFile, ReviewerNotes, SettingInfo, SettingValue, reviewer_notes};
 pub use startup_check::{

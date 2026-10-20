@@ -451,6 +451,39 @@ pub(crate) fn write_json(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
+/// Every regular file under `roots` holding `needle`, sorted: the
+/// secret-output invariant's probe (`import.rs`, `mcp_commands.rs`). A
+/// root that cannot be read holds nothing, and symlinked directories are
+/// not descended into, so a linked tree cannot loop the walk.
+pub(crate) fn files_holding(roots: &[PathBuf], needle: &[u8]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut dirs: Vec<PathBuf> = roots.to_vec();
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if !path.is_symlink() {
+                    dirs.push(path);
+                }
+            } else if path.is_file()
+                && fs::read(&path)
+                    .map(|bytes| {
+                        needle.is_empty()
+                            || bytes.windows(needle.len()).any(|window| window == needle)
+                    })
+                    .unwrap_or(false)
+            {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 /// A hub the test started: killed on drop unless forgotten after a clean wait.
 pub(crate) struct HubProc {
     pub(crate) child: Child,
