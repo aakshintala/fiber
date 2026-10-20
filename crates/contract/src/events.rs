@@ -38,6 +38,9 @@ pub use host::{
     ReloadFailure, Reloaded, ReloadedServers, ServerFailure, SkillInfo, ToolInfo, ToolSource,
     ToolState, Ui,
 };
+/// The import answer's names and reasons, re-exported beside the other
+/// acknowledgement payloads.
+pub use host::{ImportedNames, LeftBehindEntry};
 pub use offer::{
     OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered, RepositoryCodeResolved,
 };
