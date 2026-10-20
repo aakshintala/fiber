@@ -1470,3 +1470,26 @@ fn the_fetch_answer_redraws_the_view_and_clears_fetching() {
     assert!(shown.contains("codex · default"), "{shown}");
     assert!(shown.contains("62%"), "{shown}");
 }
+
+#[test]
+fn the_quota_view_renders_reset_times_against_the_injected_wall_clock() {
+    const WALL_MS: u64 = 1_700_000_000_000;
+    let mut app = attached(80, 24);
+    app.link = crate::app::Link::Up;
+    app.set_now(now(), WALL_MS);
+    let lines = sent(slash_quota(&mut app));
+    let id = lines[0]["id"].as_str().unwrap().to_owned();
+    app.on_line(session_line(
+        SESSION,
+        "command_accepted",
+        None,
+        json!({"command_id": id,
+            "result": {"quota": [
+                {"provider": "codex", "credential": "default",
+                    "windows": [{"name": "weekly", "percent_used": 38.0,
+                        "resets_at": WALL_MS + 192 * 60_000}]},
+            ], "notice_at": 80.0}}),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("resets in 3h12m"), "{shown}");
+}
