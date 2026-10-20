@@ -881,3 +881,85 @@ fn clear_code_drops_only_that_notice() {
     notices.clear_code("stream_closed", "s_bbbbbbbbbbbbbbbb");
     assert!(notices.lines().is_empty());
 }
+
+const ERRORS: &str = include_str!("../../../docs/errors.md");
+const TUI: &str = include_str!("../../../docs/tui.md");
+
+/// Every notice class the docs state: the Registry "Notice" column and
+/// the second table's "Class" column of `docs/errors.md`, with the
+/// `docs/tui.md` "Notices" per-code list. Sources stating a code twice
+/// must agree.
+fn doc_classes() -> std::collections::BTreeMap<&'static str, &'static str> {
+    let mut classes = std::collections::BTreeMap::new();
+    let mut take = |code: &'static str, class: &'static str| {
+        let class = class.trim();
+        assert!(
+            class == "event" || class == "condition",
+            "{code} classes as {class}"
+        );
+        assert!(
+            classes.insert(code, class).is_none_or(|held| held == class),
+            "{code} classes differ across the docs"
+        );
+    };
+    let registry = ERRORS
+        .split("## Registry")
+        .nth(1)
+        .unwrap()
+        .split("Notices, for a failure")
+        .next()
+        .unwrap();
+    for row in registry.lines().filter(|line| line.starts_with("| `")) {
+        let cells: Vec<&str> = row.split('|').collect();
+        let code = cells[1].trim().trim_matches('`');
+        let class = cells.get(4).map(|cell| cell.trim()).unwrap_or("—");
+        if class != "—" {
+            take(code, class);
+        }
+    }
+    let second = ERRORS
+        .split("Notices, for a failure")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    for row in second.lines().filter(|line| line.starts_with("| `")) {
+        let cells: Vec<&str> = row.split('|').collect();
+        take(cells[1].trim().trim_matches('`'), cells[2].trim());
+    }
+    let notices = TUI
+        .split("### Notices")
+        .nth(1)
+        .unwrap()
+        .split("\n### ")
+        .next()
+        .unwrap();
+    for row in notices.lines().filter(|line| line.starts_with("| `")) {
+        let cells: Vec<&str> = row.split('|').collect();
+        take(cells[1].trim().trim_matches('`'), cells[2].trim());
+    }
+    classes
+}
+
+/// Every code `kind` covers, mapped to its production class name.
+fn kind_table() -> std::collections::BTreeMap<&'static str, &'static str> {
+    super::KINDS
+        .iter()
+        .map(|(code, kind)| {
+            (
+                *code,
+                match kind {
+                    super::Kind::Event => "event",
+                    super::Kind::Condition => "condition",
+                },
+            )
+        })
+        .collect()
+}
+
+/// The docs class every notice code as the code table does.
+#[test]
+fn the_docs_class_every_notice_code_as_the_code_table_does() {
+    assert_eq!(doc_classes(), kind_table());
+}
