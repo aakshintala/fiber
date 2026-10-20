@@ -2058,6 +2058,55 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
 }
 
 #[test]
+fn openai_responses_cache_write_is_recorded_and_priced_from_the_write() {
+    let setup = Setup::new_with_started_deadline();
+    // The probe's warming block: 2,347 input tokens with 2,344 written.
+    let events = vec![
+        json!({"type": "response.output_text.delta", "delta": "Hel"}),
+        json!({"type": "response.output_text.delta", "delta": "lo."}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message",
+            "content": [{"type": "output_text", "text": "Hello."}]}}),
+    ];
+    let warming = json!({"input_tokens": 2347, "input_tokens_details":
+        {"cache_write_tokens": 2344, "cached_tokens": 0},
+        "output_tokens": 3});
+    let server = ProviderServer::start([fakes::wire::stream_with_usage(&events, warming)]).unwrap();
+    install(
+        &setup,
+        &setup.package("openai", "https://api.openai.com", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "openai/gpt-6-luna", "hi"],
+        &[("OPENAI_API_KEY", "sk-test-openai")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/responses");
+    let recorded: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["payload"]["tokens"]["input"], 3);
+    // The loop runs an hour-lifetime cache, so the write keys `1h`.
+    assert_eq!(
+        recorded[0]["payload"]["tokens"]["cache_write"],
+        json!({"1h": 2344})
+    );
+    // gpt-6-luna declares its cache-write price, so the warming block
+    // prices from the write: input, read and write at its base tier.
+    let want = (0.1 * 3.0 + 0.01 * 0.0 + 0.125 * 2344.0 + 0.5 * 3.0) / 1_000_000.0;
+    assert_eq!(recorded[0]["payload"]["cost"], json!(want));
+}
+
+#[test]
 fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([

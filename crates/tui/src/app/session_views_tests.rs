@@ -1258,6 +1258,42 @@ fn clicking_a_row_tail_only_selects_the_row() {
 }
 
 #[test]
+fn a_non_row_click_in_a_usage_quota_or_context_view_selects_nothing() {
+    for view in [SessionView::Usage, SessionView::Quota, SessionView::Context] {
+        let mut app = attached(80, 24);
+        app.link = crate::app::Link::Up;
+        app.on_line(usage_line(SESSION, "g1", "model/m", None));
+        app.on_line(context_preamble());
+        app.on_line(context_status(50, 100));
+        if view == SessionView::Quota {
+            let lines = sent(slash_quota(&mut app));
+            let id = lines[0]["id"].as_str().unwrap().to_owned();
+            app.on_line(session_line(
+                SESSION,
+                "command_accepted",
+                None,
+                json!({"command_id": id,
+                    "result": {"quota": [
+                        {"provider": "codex", "credential": "default",
+                            "windows": [{"name": "weekly", "percent_used": 38.0}]},
+                    ], "notice_at": 80.0}}),
+            ));
+        }
+        assert_eq!(app.open_session_view(view), Effect::None);
+        app.on_click(TargetId::View(ViewSpot::Row(1)));
+        let selected = app.session_view_screen(80).unwrap().list.selected();
+        assert_eq!(selected, 1);
+        // A click that names no row selects nothing: only a row click moves.
+        assert_eq!(
+            app.on_click(TargetId::View(ViewSpot::Item(7))),
+            Effect::None
+        );
+        assert!(app.session_view_open());
+        assert_eq!(app.session_view_screen(80).unwrap().list.selected(), 1);
+    }
+}
+
+#[test]
 fn esc_and_the_cross_close_the_lists() {
     for view in [SessionView::Delegates, SessionView::Jobs] {
         let mut app = attached(80, 24);
@@ -1352,4 +1388,108 @@ fn a_list_press_and_release_on_different_serials_opens_nothing() {
         None
     );
     assert!(!app.item_open());
+}
+
+fn slash_quota(app: &mut App) -> Effect {
+    app.on_edit(Edit::Paste("/quota".to_owned()));
+    app.on_key(Key::Enter, now())
+}
+
+/// The command lines an effect sends, parsed.
+fn sent(effect: Effect) -> Vec<Value> {
+    match effect {
+        Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_default())
+            .collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => Vec::new(),
+    }
+}
+
+#[test]
+fn slash_quota_opens_the_view_and_fetches_with_fetch_true() {
+    let mut app = attached(80, 24);
+    app.link = crate::app::Link::Up;
+    let lines = sent(slash_quota(&mut app));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "quota");
+    assert_eq!(lines[0]["args"], json!({"fetch": true}));
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert!(app.session_view_open());
+    assert!(app.input().is_empty());
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("Quota"));
+    assert!(shown.contains("fetching"));
+    // A second opening shares the in-flight fetch: the view reopens with
+    // no new line.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.session_view_open());
+    assert!(sent(slash_quota(&mut app)).is_empty());
+    assert!(app.session_view_open());
+    assert!(screen(&app, 80, 24).0.contains("fetching"));
+}
+
+#[test]
+fn slash_quota_without_a_session_shows_a_notice_and_sends_nothing() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(80, 24);
+    assert!(sent(slash_quota(&mut app)).is_empty());
+    assert!(!app.session_view_open());
+    assert!(screen(&app, 80, 24).0.contains("No session on screen."));
+    assert_eq!(app.notices.newest(), Some("No session on screen."));
+}
+
+#[test]
+fn the_fetch_answer_redraws_the_view_and_clears_fetching() {
+    let mut app = attached(80, 24);
+    app.link = crate::app::Link::Up;
+    let lines = sent(slash_quota(&mut app));
+    let id = lines[0]["id"].as_str().unwrap().to_owned();
+    app.on_line(session_line(
+        SESSION,
+        "command_accepted",
+        None,
+        json!({"command_id": id,
+            "result": {"quota": [
+                {"provider": "codex", "credential": "default",
+                    "windows": [{"name": "weekly", "percent_used": 38.0}]},
+            ], "notice_at": 80.0}}),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(!shown.contains("fetching"), "{shown}");
+    assert!(shown.contains("codex · default"), "{shown}");
+    assert!(shown.contains("62%"), "{shown}");
+}
+
+#[test]
+fn the_quota_view_renders_reset_times_against_the_injected_wall_clock() {
+    const WALL_MS: u64 = 1_700_000_000_000;
+    let mut app = attached(80, 24);
+    app.link = crate::app::Link::Up;
+    app.set_now(now(), WALL_MS);
+    let lines = sent(slash_quota(&mut app));
+    let id = lines[0]["id"].as_str().unwrap().to_owned();
+    app.on_line(session_line(
+        SESSION,
+        "command_accepted",
+        None,
+        json!({"command_id": id,
+            "result": {"quota": [
+                {"provider": "codex", "credential": "default",
+                    "windows": [{"name": "weekly", "percent_used": 38.0,
+                        "resets_at": WALL_MS + 192 * 60_000}]},
+            ], "notice_at": 80.0}}),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("resets in 3h12m"), "{shown}");
 }

@@ -203,6 +203,16 @@ impl App {
             id.clone(),
             (super::Kind::Command, crate::input::Draft::default()),
         );
+        // The send stashes its choice for the answer. A send while a
+        // turn runs also says so up front: the chips hold the old model
+        // and level until the session accepts it, so the notice says the
+        // choice applies when the turn ends.
+        self.model_picker
+            .sent
+            .insert(id.clone(), (choice.reference.clone(), choice.level.clone()));
+        if self.turn_running() {
+            self.push_pending_notice(&choice);
+        }
         let writes = saves(&choice);
         if choice.session_only {
             // A session-only choice saves nothing: its session's accept
@@ -344,6 +354,71 @@ impl App {
         }
     }
 
+    /// Whether a turn runs on screen: attached and busy, or a folded
+    /// pass holding a busy turn. Only then does a sent choice wait for
+    /// the turn's end, and only then does the send push its notice.
+    fn turn_running(&self) -> bool {
+        if let super::Phase::Attached { busy, .. } = &self.phase
+            && *busy
+        {
+            return true;
+        }
+        matches!(
+            &self.overlay,
+            super::Overlay::Folding {
+                busy: Some(true),
+                ..
+            }
+        )
+    }
+
+    /// The pending notice's text for a choice: the level alone when only
+    /// a level rides along for the model on screen, else the model with
+    /// its level, else the model. Each says it applies when the turn
+    /// ends, since the chips hold the old model and level until the
+    /// session accepts it.
+    fn pending_text(&self, reference: &str, level: Option<&str>) -> String {
+        const END: &str = "applies when this turn ends";
+        if let Some(level) = level
+            && self.panel_state.model() == Some(reference)
+        {
+            return format!("thinking {level} {END}");
+        }
+        if let Some(level) = level {
+            return format!("{reference} · {level} {END}");
+        }
+        format!("{reference} {END}")
+    }
+
+    /// Pushes the pending notice for a choice sent while a turn runs.
+    fn push_pending_notice(&mut self, choice: &Choice) {
+        let text = self.pending_text(&choice.reference, choice.level.as_deref());
+        self.push_notice("switch_pending", text);
+    }
+
+    /// Dismisses the newest `switch_pending` notice when its text is
+    /// exactly the stashed choice's wording: the rejection voids that
+    /// claim, but another choice's notice stands.
+    fn dismiss_pending_notice(&mut self, reference: &str, level: Option<&str>) {
+        let text = self.pending_text(reference, level);
+        let newest = self
+            .notices
+            .lines()
+            .into_iter()
+            .rev()
+            .find_map(|line| match line {
+                super::NoticeLine::Notice {
+                    id,
+                    code,
+                    text: shown,
+                } if code == "switch_pending" && shown == text => Some(id),
+                super::NoticeLine::Notice { .. } | super::NoticeLine::More(_) => None,
+            });
+        if let Some(id) = newest {
+            self.notices.dismiss(id);
+        }
+    }
+
     /// The session accepted the `model` command `id` from `session`: a
     /// session-only wait names its row, but only from its own session:
     /// a late accept after a switch, or another session's, is ignored.
@@ -354,6 +429,9 @@ impl App {
         id: &str,
         session: &contract::SessionId,
     ) {
+        // The send's stash drains: the choice applied, so no later
+        // answer replaces anything for it.
+        self.model_picker.sent.remove(id);
         if let Some((waiting, reference)) = self.model_picker.only_pending.remove(id) {
             if waiting == *session {
                 self.model_picker.session_only = Some((waiting, reference));
@@ -424,10 +502,21 @@ impl App {
 
     /// The session or the hub refused the `model` command `id`: its
     /// waiting writes are dropped, so a later acceptance for it writes
-    /// nothing, and its session-only wait is dropped with them.
-    pub(in crate::app) fn model_picker_rejected(&mut self, id: &str) {
-        self.model_picker.awaiting.remove(id);
-        self.model_picker.only_pending.remove(id);
+    /// nothing, and its session-only wait is dropped with them. A
+    /// stashed choice's pending notice goes with it: a rejection
+    /// replaces it, and a choice from a dropped session takes its
+    /// already dead claim with it. Returns whether the refusal still
+    /// reports: a stashed choice with no waiting writes belonged to a
+    /// dropped session, so it stays silent.
+    pub(in crate::app) fn model_picker_rejected(&mut self, id: &str) -> bool {
+        let writes = self.model_picker.awaiting.remove(id).is_some()
+            || self.model_picker.only_pending.remove(id).is_some();
+        let Some((reference, level)) = self.model_picker.sent.remove(id) else {
+            // Never a `model` send: the generic path reports.
+            return true;
+        };
+        self.dismiss_pending_notice(&reference, level.as_deref());
+        writes
     }
 
     /// Drops a left session's session-only wait and mark, so a late

@@ -57,6 +57,7 @@ mod paging_session;
 mod paste_image;
 #[cfg(test)]
 mod pty_watch;
+mod quota_view;
 mod rebind;
 mod remote;
 #[cfg(test)]

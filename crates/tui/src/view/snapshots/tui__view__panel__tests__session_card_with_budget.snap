@@ -2,7 +2,7 @@
 source: crates/tui/src/view/panel_tests.rs
 expression: "screen(&app, 160, 40)"
 ---
-  fiber +        $1.51
+  fiber +  $1.51 · 0 ✓
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ 1 ✓ READY         0s                                                                                                           /Users/you/work/fiber     auto
 ▌ work                                                                                                                           test/model                high
