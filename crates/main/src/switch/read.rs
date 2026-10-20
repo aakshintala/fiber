@@ -45,6 +45,10 @@ pub(crate) struct Reads {
     /// outside the unit tests.
     #[cfg(test)]
     spawn_pause: Mutex<Option<SpawnPause>>,
+    /// The next `run`'s pause after its value arrived and before it
+    /// answers, armed by a test. Absent outside the unit tests.
+    #[cfg(test)]
+    answered_pause: Mutex<Option<SpawnPause>>,
     /// The next spawn's pause before it reaps a late child, armed by a
     /// test. Absent outside the unit tests.
     #[cfg(test)]
@@ -246,7 +250,10 @@ impl Reads {
     /// Runs `read` on a thread of its own and waits for its value. Once
     /// shutdown has cancelled the reads, it answers `closing` at once
     /// without starting the thread, and a wait already running ends with
-    /// `closing`: the read's late value is dropped with its channel.
+    /// `closing`: the read's late value is dropped with its channel. A
+    /// cancel that lands after the value arrived still cancels the wait,
+    /// as `command` does after it reaps its child: the caller must not
+    /// proceed as if no shutdown had started.
     pub(crate) fn run<T: Send + 'static>(
         &self,
         purpose: &str,
@@ -277,7 +284,16 @@ impl Reads {
                 format!("a thread for the {purpose}: {error}"),
             )),
         };
-        self.lock().waiting.remove(&id);
+        let mut state = self.lock();
+        state.waiting.remove(&id);
+        drop(state);
+        // Held only when a test armed a pause, so the test lands its
+        // cancel between the answer and this check on every run.
+        #[cfg(test)]
+        self.pause_after_answered();
+        if got.is_ok() && self.lock().cancelled {
+            return Err(closing());
+        }
         got
     }
 
@@ -835,6 +851,36 @@ impl Reads {
     fn pause_before_spawn(&self) {
         let point = self
             .spawn_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause after the next `run`'s value arrived and before it
+    /// answers: the run sends on `entered` once it holds its value and
+    /// blocks until `release` arrives. The pause is one-shot.
+    #[cfg(test)]
+    pub(crate) fn pause_at_answered(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self
+            .answered_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the run holds its value and blocks until the test
+    /// releases it. Runs free unless a test armed a pause meanwhile.
+    #[cfg(test)]
+    fn pause_after_answered(&self) {
+        let point = self
+            .answered_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
