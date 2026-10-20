@@ -472,12 +472,19 @@ impl Loop {
         };
         let taken = self.steering.take_staged(&emit);
         // Never-admitted holders are forged kept steers the loop takes
-        // as it always did.
+        // as it always did. A holder matches only its own origin's entry:
+        // a session message's command id comes from another session and
+        // is not globally unique, so a same-id session entry never rescues
+        // a dropped steer.
         let steering = &self.steering;
         self.queued.retain(|piece| match piece {
             Queued::Steer(message, _) => match &message.sender.command_id {
                 None => true,
-                Some(id) => taken.iter().any(|entry| entry.id == *id) || !steering.is_admitted(id),
+                Some(id) => {
+                    taken.iter().any(|entry| {
+                        entry.id == *id && entry.sender.origin == message.sender.origin
+                    }) || !steering.is_admitted(id)
+                }
             },
             Queued::Job(..)
             | Queued::Notice(..)
@@ -990,12 +997,16 @@ pub(crate) fn queued_piece(entry: steering::Entry) -> Queued {
 
 impl Loop {
     /// Whether a queued steer holder still applies: unkeyed holders always
-    /// do; a keyed one while its entry is still staged. A never-admitted id
-    /// is a forged kept steer, which the loop takes as it always did.
+    /// do; a keyed one while its own origin's entry is still staged. A
+    /// never-admitted id is a forged kept steer, which the loop takes as
+    /// it always did.
     fn holder_live(&self, message: &Message) -> bool {
         match &message.sender.command_id {
             None => true,
-            Some(id) => self.steering.is_staged(id) || !self.steering.is_admitted(id),
+            Some(id) => {
+                self.steering.is_staged(id, &message.sender.origin)
+                    || !self.steering.is_admitted(id)
+            }
         }
     }
 

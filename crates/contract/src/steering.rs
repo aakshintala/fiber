@@ -208,14 +208,15 @@ impl Queue {
         true
     }
 
-    /// Whether `id` names a staged entry: hook-passed and still queued.
-    /// One lock, no emit: the apply checks each holder against it, so a
-    /// drop between the drain and the apply skips the holder.
-    pub fn is_staged(&self, id: &CommandId) -> bool {
-        self.acquire()
-            .entries
-            .iter()
-            .any(|entry| entry.id == *id && entry.staged.is_some())
+    /// Whether `id` names a staged entry from `origin`: hook-passed and
+    /// still queued. One lock, no emit: the apply checks each holder
+    /// against it, so a drop between the drain and the apply skips the
+    /// holder. The origin joins the id because a session message's
+    /// command id comes from another session and is not globally unique.
+    pub fn is_staged(&self, id: &CommandId, origin: &Origin) -> bool {
+        self.acquire().entries.iter().any(|entry| {
+            entry.id == *id && entry.sender.origin == *origin && entry.staged.is_some()
+        })
     }
 
     /// Whether the reader or the loop's legacy path already answered `id`.
@@ -298,7 +299,9 @@ impl Queue {
     /// forgets their ids. The caller logs what it returns with the lock
     /// released. Unstaged entries stay for their delivery's hook pass;
     /// the emit still lists them, so it never claims an empty queue that
-    /// is not.
+    /// is not. Session entries were never admitted, so only non-session
+    /// entries forget: a same-id session entry never clears a steer id
+    /// another session reused.
     pub fn take_staged(&self, emit: &dyn Emit) -> Vec<Entry> {
         let mut inner = self.acquire();
         let drained = std::mem::take(&mut inner.entries);
@@ -306,7 +309,9 @@ impl Queue {
         let mut kept = VecDeque::new();
         for entry in drained {
             if entry.staged.is_some() {
-                inner.admitted.remove(&entry.id);
+                if !is_session(&entry) {
+                    inner.admitted.remove(&entry.id);
+                }
                 taken.push(entry);
             } else {
                 kept.push_back(entry);

@@ -1691,3 +1691,46 @@ fn a_steer_dropped_after_staging_skips_the_apply() {
     assert_eq!(steer_rows(&mut watched, 1), [Vec::<String>::new()]);
     assert!(!saved_kinds(&home).contains(&"steering_applied".to_owned()));
 }
+
+#[test]
+fn a_same_id_session_message_never_rescues_a_dropped_steer() {
+    let queue = Arc::new(SteerQueue::new());
+    let (mut looped, log, _watched, home) = started_with_steering(Arc::clone(&queue));
+    let turn = TurnId("t_test".into());
+    steer_pushed(&queue, &log, "c_1", "dropped");
+    looped
+        .admit_running(
+            Delivery::Steer(steer_message("dropped", "c_1"), steer_ignore()),
+            &turn,
+        )
+        .unwrap();
+    // Another session's message reuses the same command id, which is not
+    // globally unique: its staged entry must not rescue the dropped steer.
+    looped
+        .admit_message_running(
+            super::session_message::for_test("s_other", None, "c_1", "session says hi"),
+            &turn,
+        )
+        .unwrap();
+    assert_eq!(looped.queued.len(), 2, "steer and message holders");
+    assert!(queue.remove(&SteerId("c_1".into()), &*log));
+    looped.apply_steering(&turn).unwrap();
+    let applied: Vec<_> = log::read(&home.path().join("s_test"))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|line| line.kind == "steering_applied")
+        .collect();
+    assert_eq!(applied.len(), 1, "only the session message applies");
+    let text = applied[0].payload["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        text.contains("session says hi"),
+        "the survivor is the session message, got {text:?}"
+    );
+    assert!(
+        !text.contains("dropped"),
+        "the dropped steer never logs, got {text:?}"
+    );
+}
