@@ -5830,6 +5830,29 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
     let opened = Opened::open(vec![]);
     let work = Temp::new();
     let workspace = work.0.clone();
+    // A git workspace whose remote URL carries userinfo, with one CI file.
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    git(&["init", "--quiet"]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://user:token@github.com/acme/fiber.git",
+    ]);
+    fs::write(
+        workspace.join(".gitlab-ci.yml"),
+        "job:\n  script: make lint\n",
+    )
+    .unwrap();
     // One seeded session in this session's project records the workspace
     // and holds one escalation answered allow.
     let seed = opened
@@ -5885,8 +5908,32 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                     assert_eq!(ask.args.topic, contract::notes::Topic::RoutineActions);
                     assert_eq!(ask.args.answer.as_deref(), Some("I merge my own PRs"));
                     assert!(ask.args.earlier.is_empty());
-                    assert_eq!(ask.evidence.len(), 1);
+                    assert_eq!(ask.evidence.len(), 3);
                     match &ask.evidence[0] {
+                        contract::notes::Evidence::Files { text } => {
+                            assert_eq!(
+                                text,
+                                "git remote origin: https://github.com/acme/fiber.git"
+                            );
+                        }
+                        contract::notes::Evidence::Session(_)
+                        | contract::notes::Evidence::Answer { .. } => {
+                            panic!("the remote item arrives first")
+                        }
+                    }
+                    match &ask.evidence[1] {
+                        contract::notes::Evidence::Files { text } => {
+                            assert!(
+                                text.starts_with("CI configuration .gitlab-ci.yml:"),
+                                "{text}"
+                            );
+                        }
+                        contract::notes::Evidence::Session(_)
+                        | contract::notes::Evidence::Answer { .. } => {
+                            panic!("the CI item arrives second")
+                        }
+                    }
+                    match &ask.evidence[2] {
                         contract::notes::Evidence::Session(tally) => {
                             assert_eq!(tally.prefix(), "gh pr merge");
                             assert_eq!(tally.count(), 1);

@@ -326,3 +326,315 @@ fn sixty_five_prefixes_trim_to_sixty_four_in_order() {
     assert_eq!(found.first().unwrap().0, "p00");
     assert_eq!(found.last().unwrap().0, "p63");
 }
+
+fn write_file(path: &Path, text: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+}
+
+fn files_text(evidence: &[Evidence]) -> Vec<String> {
+    evidence
+        .iter()
+        .filter_map(|item| match item {
+            Evidence::Files { text } => Some(text.clone()),
+            Evidence::Session(_) | Evidence::Answer { .. } => None,
+        })
+        .collect()
+}
+
+/// A launch directory that is a git repository with one remote.
+fn remote_repo(root: &Path, name: &str, remote: &str, url: &str) -> PathBuf {
+    let workspace = repo(root, name);
+    git(&workspace, &["remote", "add", remote, url]);
+    workspace
+}
+
+#[test]
+fn remote_urls_strip_userinfo_and_keep_scp_form() {
+    let root = fakes::TempDir::new("doors-notes-remote");
+    let workspace = remote_repo(
+        root.path(),
+        "work",
+        "origin",
+        "https://user:token@github.com/acme/fiber.git",
+    );
+    git(
+        &workspace,
+        &["remote", "add", "admin", "git@github.com:acme/other.git"],
+    );
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(
+        found,
+        [
+            "git remote admin: git@github.com:acme/other.git".to_owned(),
+            "git remote origin: https://github.com/acme/fiber.git".to_owned(),
+        ]
+    );
+    for item in &found {
+        assert!(!item.contains("user"), "no userinfo: {item}");
+        assert!(!item.contains("token"), "no token: {item}");
+    }
+}
+
+#[test]
+fn an_unreadable_git_dir_gives_no_remote_item_with_ci_still_present() {
+    let root = fakes::TempDir::new("doors-notes-r36");
+    let workspace = repo(root.path(), "work");
+    write_file(
+        &workspace.join(".gitlab-ci.yml"),
+        "job:\n  script: make lint\n",
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(workspace.join(".git"), fs::Permissions::from_mode(0o000)).unwrap();
+        let found = files_text(&files_evidence(&workspace));
+        fs::set_permissions(workspace.join(".git"), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            found.iter().all(|item| !item.starts_with("git remote")),
+            "no remote item: {found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|item| item.starts_with("CI configuration")),
+            "the CI item still shows: {found:?}"
+        );
+    }
+}
+
+#[test]
+fn a_non_zero_remote_listing_gives_no_remote_item() {
+    let root = fakes::TempDir::new("doors-notes-remote-fail");
+    let plain = root.path().join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    assert_eq!(super::remote_urls(&plain), Vec::new());
+}
+
+#[test]
+fn an_npmrc_gives_only_its_stripped_registry_lines() {
+    let root = fakes::TempDir::new("doors-notes-npmrc");
+    let workspace = root.path().join("work");
+    write_file(
+        &workspace.join(".npmrc"),
+        "registry=https://user:pass@registry.example.com/npm/\n\
+         @acme:registry=https://npm.example.com/\n\
+         //registry.example.com/:_authToken=SECRET-TOKEN\n",
+    );
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(
+        found,
+        [
+            "registry .npmrc: https://registry.example.com/npm/".to_owned(),
+            "registry .npmrc: https://npm.example.com/".to_owned(),
+        ]
+    );
+    for item in &found {
+        assert!(!item.contains("SECRET-TOKEN"), "no token line: {item}");
+    }
+}
+
+#[test]
+fn all_registry_files_give_only_their_registry_lines() {
+    let root = fakes::TempDir::new("doors-notes-registries");
+    let workspace = root.path().join("work");
+    write_file(
+        &workspace.join(".yarnrc.yml"),
+        "npmRegistryServer: \"https://yarn:user@example.com/npm\"\n\
+         otherKey: secret\n",
+    );
+    write_file(
+        &workspace.join(".cargo/config.toml"),
+        "[registries.acme]\n\
+         index = \"https://cargo:secret@example.com/index\"\n\
+         other = \"secret\"\n\
+         [profile]\n\
+         opt-level = 3\n",
+    );
+    write_file(
+        &workspace.join("pip.conf"),
+        "[global]\n\
+         index-url = https://pip:secret@example.com/simple\n\
+         extra-index-url = https://user:pass@extra.example.com/simple\n\
+         trusted-host = example.com\n",
+    );
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(
+        found,
+        [
+            "registry .yarnrc.yml: https://example.com/npm".to_owned(),
+            "registry .cargo/config.toml: https://example.com/index".to_owned(),
+            "registry pip.conf: https://example.com/simple".to_owned(),
+            "registry pip.conf: https://extra.example.com/simple".to_owned(),
+        ]
+    );
+    for item in &found {
+        assert!(!item.contains("secret"), "no secret: {item}");
+        assert!(!item.contains("user"), "no userinfo: {item}");
+    }
+}
+
+#[test]
+fn a_ci_file_strips_userinfo_from_its_urls() {
+    let root = fakes::TempDir::new("doors-notes-ci-url");
+    let workspace = root.path().join("work");
+    write_file(
+        &workspace.join(".gitlab-ci.yml"),
+        "job:\n  script: curl https://bot:secret@ci.example.com/script.sh\n",
+    );
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(found.len(), 1);
+    assert!(
+        found[0].contains("https://ci.example.com/script.sh"),
+        "{}",
+        found[0]
+    );
+    assert!(!found[0].contains("bot:secret"), "{}", found[0]);
+}
+
+fn ci_home(root: &Path, count: usize) -> PathBuf {
+    let workspace = root.join("work");
+    for index in 0..count {
+        write_file(
+            &workspace
+                .join(".github/workflows")
+                .join(format!("job{index:02}.yml")),
+            &format!("name: job{index:02}\n"),
+        );
+    }
+    workspace
+}
+
+#[test]
+fn seven_ci_files_are_all_kept() {
+    let root = fakes::TempDir::new("doors-notes-ci7");
+    let workspace = ci_home(root.path(), 7);
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(found.len(), 7);
+    assert!(found[0].contains("job00.yml"), "{}", found[0]);
+    assert!(found[6].contains("job06.yml"), "{}", found[6]);
+}
+
+#[test]
+fn eight_ci_files_are_all_kept() {
+    let root = fakes::TempDir::new("doors-notes-ci8");
+    let workspace = ci_home(root.path(), 8);
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(found.len(), 8);
+    assert!(found[0].contains("job00.yml"), "{}", found[0]);
+    assert!(found[7].contains("job07.yml"), "{}", found[7]);
+}
+
+#[test]
+fn nine_ci_files_trim_to_eight_in_path_order() {
+    let root = fakes::TempDir::new("doors-notes-ci9");
+    let workspace = ci_home(root.path(), 9);
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(found.len(), 8);
+    assert!(found[0].contains("job00.yml"), "{}", found[0]);
+    assert!(found[7].contains("job07.yml"), "{}", found[7]);
+    assert!(
+        found.iter().all(|item| !item.contains("job08")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn links_outside_the_workspace_give_no_item_but_an_inner_link_reads() {
+    let root = fakes::TempDir::new("doors-notes-links");
+    let workspace = root.path().join("work");
+    let outside = root.path().join("outside");
+    write_file(&outside.join(".gitlab-ci.yml"), "name: outside\n");
+    write_file(
+        &outside.join(".npmrc"),
+        "registry=https://outside.example.com/\n",
+    );
+    fs::create_dir_all(outside.join("flows")).unwrap();
+    write_file(&outside.join("flows/evil.yml"), "name: evil\n");
+    write_file(&workspace.join("inner.yml"), "name: inner\n");
+    fs::create_dir_all(workspace.join(".github")).unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            outside.join(".gitlab-ci.yml"),
+            workspace.join(".gitlab-ci.yml"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.join(".npmrc"), workspace.join(".npmrc")).unwrap();
+        std::os::unix::fs::symlink(outside.join("flows"), workspace.join(".github/workflows"))
+            .unwrap();
+        std::os::unix::fs::symlink(
+            workspace.join("inner.yml"),
+            workspace.join("azure-pipelines.yml"),
+        )
+        .unwrap();
+        let found = files_text(&files_evidence(&workspace));
+        assert!(
+            !found.iter().any(|item| item.contains("outside")),
+            "{found:?}"
+        );
+        assert!(!found.iter().any(|item| item.contains("evil")), "{found:?}");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains("inner"), "{}", found[0]);
+    }
+}
+
+#[test]
+fn a_directory_and_a_fifo_where_ci_files_belong_give_no_item() {
+    let root = fakes::TempDir::new("doors-notes-nonregular");
+    let workspace = root.path().join("work");
+    // A FIFO opened for reading would block, so a passing test proves
+    // non-regular paths are never opened.
+    fs::create_dir_all(workspace.join(".gitlab-ci.yml")).unwrap();
+    let fifo = workspace.join("azure-pipelines.yml");
+    fs::create_dir_all(workspace.as_path()).unwrap();
+    let status = Command::new("mkfifo")
+        .arg(&fifo)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let found = files_text(&files_evidence(&workspace));
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn item_text_cuts_to_4096_bytes_at_a_character_boundary() {
+    assert_eq!(super::cut_text(&"a".repeat(4095)).len(), 4095);
+    assert_eq!(super::cut_text(&"a".repeat(4096)).len(), 4096);
+    assert_eq!(super::cut_text(&"a".repeat(4097)).len(), 4096);
+    // A cut landing inside `é` (two bytes) ends before it.
+    let text = "a".repeat(4095) + "é";
+    assert_eq!(super::cut_text(&text).len(), 4095);
+    let text = "a".repeat(4096) + "é";
+    assert_eq!(super::cut_text(&text).len(), 4096);
+}
+
+#[test]
+fn a_long_ci_file_cuts_its_item_to_4096_bytes() {
+    let root = fakes::TempDir::new("doors-notes-long");
+    let workspace = root.path().join("work");
+    write_file(&workspace.join(".gitlab-ci.yml"), &"x".repeat(6000));
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].len(), 4096);
+}
+
+#[test]
+fn outside_git_ci_and_registry_show_with_no_remote_item() {
+    let root = fakes::TempDir::new("doors-notes-norepo");
+    let workspace = root.path().join("work");
+    write_file(&workspace.join(".gitlab-ci.yml"), "name: plain\n");
+    write_file(
+        &workspace.join(".npmrc"),
+        "registry=https://plain.example.com/\n",
+    );
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(
+        found,
+        [
+            "CI configuration .gitlab-ci.yml:\nname: plain\n".to_owned(),
+            "registry .npmrc: https://plain.example.com/".to_owned(),
+        ]
+    );
+}

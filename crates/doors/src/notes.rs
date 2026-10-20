@@ -3,12 +3,13 @@
 //! loop's inbox, so this reader reads on.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
 use contract::inbox::{Ack, Delivery};
-use contract::notes::{Evidence, NotesAsk, ProposeNotesArgs, SessionTally};
+use contract::notes::{Evidence, NotesAsk, ProposeNotesArgs, SessionTally, strip_userinfo};
 use contract::{CommandId, ErrorCode};
 
 use crate::client::Conn;
@@ -18,6 +19,12 @@ const COMMAND: &str = "propose_notes";
 
 /// At most one session item per prefix.
 const SESSION_CAP: usize = 64;
+
+/// Files item texts cut here.
+const TEXT_CUT: usize = 4096;
+
+/// At most this many CI configuration files.
+const CI_CAP: usize = 8;
 
 /// Takes `propose_notes`: reads the wired workspace, answering
 /// `unknown_command` when none is wired, then gathers on a thread of its
@@ -63,10 +70,299 @@ pub(crate) fn run(conn: &mut Conn, id: CommandId, args: ProposeNotesArgs) {
     }
 }
 
-/// Gathers `propose_notes` evidence for one topic: the session counts.
-/// The loop appends the person's answer last.
+/// Gathers `propose_notes` evidence for one topic: the project's files,
+/// then the session counts. The loop appends the person's answer last.
+/// Every gather reads afresh; nothing is cached across topics.
 pub(crate) fn gather(home: &Path, dir: &Path, workspace: &Path) -> Vec<Evidence> {
-    session_evidence(home, dir, workspace)
+    let mut evidence = files_evidence(workspace);
+    evidence.extend(session_evidence(home, dir, workspace));
+    evidence
+}
+
+/// The project's files evidence: its git remotes, its CI configuration
+/// and its package registries, in that order (`docs/permissions.md`,
+/// "Setting up the notes"). Every item is `strip_userinfo` of what was
+/// read, cut to [`TEXT_CUT`] bytes at a character boundary. Outside a
+/// repository the remotes are skipped and the rest still shows.
+pub(crate) fn files_evidence(workspace: &Path) -> Vec<Evidence> {
+    let root = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let mut texts = remote_texts(workspace);
+    texts.extend(ci_texts(workspace, &root));
+    texts.extend(registry_texts(workspace, &root));
+    texts
+        .into_iter()
+        .map(|text| Evidence::Files { text })
+        .collect()
+}
+
+/// One item per remote's fetch URL, sorted by remote name. A workspace
+/// outside a repository, a `git` that cannot start, a non-zero exit and
+/// unreadable output all give no item and no error.
+fn remote_texts(workspace: &Path) -> Vec<String> {
+    if !crate::resolve_project(workspace).in_repository {
+        return Vec::new();
+    }
+    let mut remotes = remote_urls(workspace);
+    remotes.sort();
+    remotes
+        .into_iter()
+        .map(|(name, url)| cut(&format!("git remote {name}: {}", strip_userinfo(&url))))
+        .collect()
+}
+
+fn remote_urls(workspace: &Path) -> Vec<(String, String)> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace)
+        .args(["remote", "-v"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let Ok(text) = String::from_utf8(output.stdout) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let name = parts.next()?;
+            let url = parts.next()?;
+            if parts.next() != Some("(fetch)") {
+                return None;
+            }
+            Some((name.to_owned(), url.to_owned()))
+        })
+        .collect()
+}
+
+/// The CI configuration files under the workspace, sorted by path, at
+/// most [`CI_CAP`]: each item `CI configuration <path>:` then its text.
+fn ci_texts(workspace: &Path, root: &Path) -> Vec<String> {
+    let mut paths: Vec<PathBuf> = [
+        ".gitlab-ci.yml",
+        ".circleci/config.yml",
+        "azure-pipelines.yml",
+        ".buildkite/pipeline.yml",
+        "Jenkinsfile",
+    ]
+    .into_iter()
+    .map(|rel| workspace.join(rel))
+    .collect();
+    if let Ok(entries) = std::fs::read_dir(workspace.join(".github/workflows")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "yml" || extension == "yaml")
+            {
+                paths.push(path);
+            }
+        }
+    }
+    let mut read: Vec<(PathBuf, String)> = paths
+        .iter()
+        .filter_map(|path| read_confined(root, path).map(|text| (path.clone(), text)))
+        .collect();
+    read.sort();
+    read.truncate(CI_CAP);
+    read.into_iter()
+        .filter_map(|(path, text)| {
+            let rel = path.strip_prefix(workspace).ok()?;
+            Some(cut(&format!(
+                "CI configuration {}:\n{}",
+                rel.display(),
+                strip_userinfo(&text)
+            )))
+        })
+        .collect()
+}
+
+/// Only the registry lines of the registry files under the workspace:
+/// never another line, so token lines stay out.
+fn registry_texts(workspace: &Path, root: &Path) -> Vec<String> {
+    let mut texts = Vec::new();
+    push_registries(&mut texts, workspace, root, ".npmrc", npmrc_lines);
+    push_registries(&mut texts, workspace, root, ".yarnrc.yml", yarn_lines);
+    push_registries(
+        &mut texts,
+        workspace,
+        root,
+        ".cargo/config.toml",
+        cargo_lines,
+    );
+    push_registries(&mut texts, workspace, root, "pip.conf", pip_lines);
+    texts
+}
+
+fn push_registries(
+    texts: &mut Vec<String>,
+    workspace: &Path,
+    root: &Path,
+    rel: &str,
+    lines: fn(&str) -> Vec<String>,
+) {
+    let path = workspace.join(rel);
+    let Some(content) = read_confined(root, &path) else {
+        return;
+    };
+    texts.extend(
+        lines(&content)
+            .into_iter()
+            .map(|line| cut(&format!("registry {rel}: {}", strip_userinfo(&line)))),
+    );
+}
+
+/// The `registry=` and `@scope:registry=` values of an `.npmrc`.
+fn npmrc_lines(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            let key = key.trim();
+            let value = value.trim();
+            if value.is_empty() {
+                return None;
+            }
+            if key == "registry" || (key.starts_with('@') && key.ends_with(":registry")) {
+                Some(value.to_owned())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The `npmRegistryServer:` value of a `.yarnrc.yml`.
+fn yarn_lines(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (key, value) = line.split_once(':')?;
+            if key.trim() != "npmRegistryServer" {
+                return None;
+            }
+            let value = value.trim().trim_matches('"').trim_matches('\'').trim();
+            if value.is_empty() {
+                return None;
+            }
+            Some(value.to_owned())
+        })
+        .collect()
+}
+
+/// The `index =` and `registry =` values under `[registries.*]` and
+/// `[registry]` of a cargo config.
+fn cargo_lines(content: &str) -> Vec<String> {
+    let mut kept = Vec::new();
+    let mut in_registries = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            let section = line
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .trim()
+                .trim_matches('"');
+            in_registries = section == "registry" || section.starts_with("registries.");
+            continue;
+        }
+        if !in_registries {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key != "index" && key != "registry" {
+            continue;
+        }
+        let value = value.trim().trim_matches('"').trim_matches('\'').trim();
+        if !value.is_empty() {
+            kept.push(value.to_owned());
+        }
+    }
+    kept
+}
+
+/// The `index-url` and `extra-index-url` values of a `pip.conf`.
+fn pip_lines(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty()
+                || line.starts_with('#')
+                || line.starts_with(';')
+                || line.starts_with('[')
+            {
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            let key = key.trim();
+            if key != "index-url" && key != "extra-index-url" {
+                return None;
+            }
+            let value = value.trim();
+            if value.is_empty() {
+                return None;
+            }
+            Some(value.to_owned())
+        })
+        .collect()
+}
+
+/// The file's text when its canonical path is a regular file under the
+/// canonical workspace. A symlink resolving outside, a directory, a FIFO
+/// and anything else give nothing, and nothing is opened before the
+/// check, so a FIFO is never blocked on.
+fn read_confined(root: &Path, path: &Path) -> Option<String> {
+    let canonical = std::fs::canonicalize(path).ok()?;
+    if !canonical.starts_with(root) {
+        return None;
+    }
+    if !std::fs::metadata(&canonical).is_ok_and(|meta| meta.is_file()) {
+        return None;
+    }
+    std::fs::read(&canonical)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+}
+
+/// The text cut to [`TEXT_CUT`] bytes at a character boundary.
+fn cut_text(text: &str) -> &str {
+    if text.len() <= TEXT_CUT {
+        return text;
+    }
+    let mut end = TEXT_CUT;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// The owned form, for cutting a built item.
+fn cut(text: &str) -> String {
+    cut_text(text).to_owned()
 }
 
 /// One item per counted prefix: `<count> escalations answered allow for
