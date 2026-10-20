@@ -145,6 +145,42 @@ fn forked_from_is_read() {
 }
 
 #[test]
+fn worktree_path_is_read() {
+    let home = fakes::TempDir::new("log-scan-worktree");
+    let home = home.path();
+    session(
+        home,
+        "-a",
+        "s_0000000000000001",
+        &json!({"kind": "session_started", "seq": 0, "payload": {
+            "workspace": "/wt-1",
+            "worktree": {"path": "/wt-1", "branch": "fiber/s", "repository": "/r"},
+        }})
+        .to_string(),
+    );
+    session(home, "-a", "s_0000000000000002", &started(Some("/w"), None));
+    let found = started_sessions(home);
+    assert_eq!(found[0].worktree.as_deref(), Some("/wt-1"));
+    assert_eq!(found[1].worktree, None);
+    let view = started_first(&home.join("projects/-a/sessions/s_0000000000000001")).unwrap();
+    assert_eq!(view.worktree.as_deref(), Some("/wt-1"));
+}
+
+#[test]
+fn worktree_path_is_none_unless_an_object_with_a_string_path() {
+    for payload in [
+        json!({"workspace": "/w"}),
+        json!({"workspace": "/w", "worktree": "/wt-1"}),
+        json!({"workspace": "/w", "worktree": {"branch": "fiber/s"}}),
+        json!({"workspace": "/w", "worktree": {"path": 7}}),
+    ] {
+        let first = json!({"kind": "session_started", "payload": payload}).to_string();
+        let view = SessionStarted::parse(first.as_bytes()).expect("a session_started");
+        assert!(view.worktree.is_none(), "{payload}");
+    }
+}
+
+#[test]
 fn a_missing_projects_gives_an_empty_list() {
     let home = fakes::TempDir::new("log-scan-none");
     assert!(started_sessions(home.path()).is_empty());

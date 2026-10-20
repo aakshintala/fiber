@@ -20,6 +20,8 @@ pub struct Started {
     pub dir: PathBuf,
     /// `payload.workspace` when it is a string.
     pub workspace: Option<String>,
+    /// `payload.worktree.path` when it is a string.
+    pub worktree: Option<String>,
     /// `payload.forked_from.session_id` when it is a string.
     pub forked_from: Option<SessionId>,
 }
@@ -50,6 +52,7 @@ pub fn started_sessions_in(sessions: &Path) -> Vec<Started> {
             id,
             dir,
             workspace: view.workspace,
+            worktree: view.worktree,
             forked_from,
         });
     }
@@ -83,6 +86,9 @@ pub struct SessionStarted {
     /// `payload.worktree.repository` when its worktree is an object
     /// naming one as a string.
     pub repository: Option<String>,
+    /// `payload.worktree.path` when its worktree is an object naming
+    /// one as a string.
+    pub worktree: Option<String>,
     /// Whether `payload.parent` is present and not null: a delegate's.
     /// A parent of any other shape counts, so a malformed one is never
     /// resumed.
@@ -103,6 +109,11 @@ impl SessionStarted {
             repository: payload
                 .get("worktree")
                 .and_then(|worktree| worktree.get("repository"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            worktree: payload
+                .get("worktree")
+                .and_then(|worktree| worktree.get("path"))
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             delegate: payload
