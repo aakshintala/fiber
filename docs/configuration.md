@@ -395,7 +395,8 @@ Fiber writes configuration in these places:
 - ⌥R, `/rail`, or dragging the rail below its floor saves the global
   `tui.rail.shown` (`docs/tui.md`, "The rail")
 - `/credential` saves the global `providers."<name>".credential`, unless the
-  switch is marked as this session only, and `fiber login`, or the terminal's
+  label is chosen with Ctrl+S in the credential picker (`docs/tui.md`,
+  "Swapped views"), and `fiber login`, or the terminal's
   `/login`, writes it when it stores a provider's first label
   (`docs/model-routing.md`, "Credentials")
 - `/scoped-models` saves the global `scoped_models`, and the `/keys` screen

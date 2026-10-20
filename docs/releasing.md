@@ -88,10 +88,10 @@ includes the built-in skills, `docs/skills/<name>/SKILL.md`
 Nothing in the binary embeds documentation.
 
 The release also carries `fiber-extensions.tar.gz` and its checksum file:
-every first-party extension at the release tag, the eleven directories under
-`providers/`, the two harnesses, `extensions/claude` and
-`extensions/cursor-agent`, and `extensions/hooks` and `extensions/memory`. It is the same for every target. Nothing
+every first-party extension at the release tag: every directory under
+`providers/` and `extensions/` at the release tag. It is the same for every target. Nothing
 in the binary embeds an extension (`docs/extensions.md`, "A fresh install").
+The run fails when the packed set is empty or two top-level names collide.
 At its top level the archive has one directory per extension, named as it is
 installed under `extensions/` in Fiber home (`docs/extensions.md`, "Names"),
 with no install record. The docs archive holds the contents of `docs/` at its

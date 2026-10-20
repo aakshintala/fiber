@@ -774,8 +774,21 @@ pub(crate) fn inner_action(event: &Event, action: Option<&ActionId>, carry: &mut
     action.is_some_and(|action| carry.is_inner(action))
 }
 
-/// The tool result `completed` renders for `action`.
+/// The tool result `completed` renders for `action`: a completed search
+/// carrying a non-empty `loaded` renders natively as a `ToolSearchResult`
+/// (`docs/tools.md`, "Tool search"). Every other completion, a failed,
+/// denied or cancelled call, a withheld result, or an empty load, renders
+/// as an ordinary `ToolResult` from its content.
 fn result_of(action: &ActionId, completed: &ToolCallCompleted) -> Input {
+    if completed.status == CallStatus::Completed
+        && let Some(loaded) = completed.loaded.as_ref()
+        && !loaded.is_empty()
+    {
+        return Input::ToolSearchResult {
+            action_id: action.clone(),
+            loaded: loaded.clone(),
+        };
+    }
     Input::ToolResult {
         action_id: action.clone(),
         text: text(&completed.content),

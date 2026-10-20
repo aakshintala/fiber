@@ -556,23 +556,39 @@ pub(crate) fn launcher(fiber: &Path) -> jobs::Launch {
 }
 
 fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
-    // A role naming a credential label runs the child under it: the
-    // label travels as a run override, so the child's `preamble_built`
-    // records it. The value is a JSON string, so a label that parses
-    // as JSON still arrives as a string. Nothing for no label, and
-    // nothing on a resume, which continues the recorded session.
-    let overrides = match launched.credential.as_deref() {
-        Some(label) if !launched.resume => {
-            let provider = launched.model.split('/').next().unwrap_or_default();
-            let key = config::path::display(&[
-                "providers".to_owned(),
-                provider.to_owned(),
-                "credential".to_owned(),
-            ]);
-            let value = serde_json::Value::String(label.to_owned());
-            vec![format!("{key}={value}")]
+    // What the child runs as: a spawn carries its resolved model and an
+    // optional credential override, a fork carries its point and neither
+    // a model nor a credential, and a resume carries neither, continuing
+    // the recorded session.
+    let (model, overrides, resume, forked_from, forked_seq) = match &launched.start {
+        jobs::Start::Fresh(jobs::Fresh::Spawn { model, credential }) => {
+            // A role naming a credential label runs the child under it: the
+            // label travels as a run override, so the child's `preamble_built`
+            // records it. The value is a JSON string, so a label that parses
+            // as JSON still arrives as a string.
+            let overrides = match credential.as_deref() {
+                Some(label) => {
+                    let provider = model.split('/').next().unwrap_or_default();
+                    let key = config::path::display(&[
+                        "providers".to_owned(),
+                        provider.to_owned(),
+                        "credential".to_owned(),
+                    ]);
+                    let value = serde_json::Value::String(label.to_owned());
+                    vec![format!("{key}={value}")]
+                }
+                None => Vec::new(),
+            };
+            (Some(model.clone()), overrides, false, None, None)
         }
-        _ => Vec::new(),
+        jobs::Start::Fresh(jobs::Fresh::Fork { from }) => (
+            None,
+            Vec::new(),
+            false,
+            Some(from.point.session_id.clone()),
+            Some(from.point.seq.0),
+        ),
+        jobs::Start::Resume => (None, Vec::new(), true, None, None),
     };
     // A delegate carries its parent's environment, so it carries the
     // parent's source too (`docs/invocation.md`, "A session's
@@ -580,14 +596,16 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
     let args = contract::session_argv::SessionArgv {
         id: launched.session_id.clone(),
         workspace: launched.workspace.clone(),
-        model: (!launched.resume).then(|| launched.model.clone()),
+        model,
         overrides,
         prompt: Some(launched.prompt.clone()),
-        resume: launched.resume,
+        resume,
         credential: None,
         worktree: false,
         rewound_from: None,
         continues: None,
+        forked_from,
+        forked_seq,
         parent: Some(launched.parent.clone()),
         delegate_id: Some(launched.job_id.clone()),
         depth: Some(launched.depth),

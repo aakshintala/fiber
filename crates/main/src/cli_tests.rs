@@ -775,6 +775,8 @@ fn parses_argv_into_its_invocation() {
                     worktree: true,
                     rewound_from: None,
                     continues: None,
+                    forked_from: None,
+                    forked_seq: None,
                     parent: None,
                     delegate_id: None,
                     depth: None,
@@ -808,6 +810,8 @@ fn parses_argv_into_its_invocation() {
                     worktree: false,
                     rewound_from: None,
                     continues: None,
+                    forked_from: None,
+                    forked_seq: None,
                     parent: None,
                     delegate_id: None,
                     depth: None,
@@ -837,6 +841,8 @@ fn parses_argv_into_its_invocation() {
                     worktree: false,
                     rewound_from: None,
                     continues: None,
+                    forked_from: None,
+                    forked_seq: None,
                     parent: None,
                     delegate_id: None,
                     depth: None,
@@ -867,6 +873,8 @@ fn parses_argv_into_its_invocation() {
                     worktree: false,
                     rewound_from: None,
                     continues: None,
+                    forked_from: None,
+                    forked_seq: None,
                     parent: None,
                     delegate_id: None,
                     depth: None,
@@ -902,6 +910,8 @@ fn parses_argv_into_its_invocation() {
                     worktree: false,
                     rewound_from: None,
                     continues: None,
+                    forked_from: None,
+                    forked_seq: None,
                     parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                     delegate_id: Some("j_0123456789abcdef".to_owned()),
                     depth: None,
@@ -939,6 +949,8 @@ fn parses_argv_into_its_invocation() {
                     worktree: false,
                     rewound_from: None,
                     continues: None,
+                    forked_from: None,
+                    forked_seq: None,
                     parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                     delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
                     depth: None,
@@ -970,6 +982,8 @@ fn parses_argv_into_its_invocation() {
                     worktree: false,
                     rewound_from: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                     continues: None,
+                    forked_from: None,
+                    forked_seq: None,
                     parent: None,
                     delegate_id: None,
                     depth: None,
@@ -1000,6 +1014,8 @@ fn parses_argv_into_its_invocation() {
                     worktree: false,
                     rewound_from: None,
                     continues: None,
+                    forked_from: None,
+                    forked_seq: None,
                     parent: None,
                     delegate_id: None,
                     depth: None,
@@ -2744,6 +2760,97 @@ fn session_rewound_from_conflicts_with_a_fresh_start() {
 }
 
 #[test]
+fn session_forked_from_conflicts_with_a_fresh_start() {
+    for extra in [
+        vec!["--resume"],
+        vec!["--model", "fake/m"],
+        vec!["-c", "retry.attempts=2"],
+        vec!["--worktree"],
+        vec!["--rewound-from", "s_bbbbbbbbbbbbbbbb"],
+    ] {
+        let mut argv = vec![
+            "fiber",
+            "session",
+            "--id",
+            "s_0123456789abcdef",
+            "--workspace",
+            "/w",
+            "--forked-from",
+            "s_aaaaaaaaaaaaaaaa",
+            "--forked-seq",
+            "41",
+            "--prompt",
+            "hi",
+            "--parent",
+            "s_aaaaaaaaaaaaaaaa",
+            "--delegate-id",
+            "j_bbbbbbbbbbbbbbbb",
+        ];
+        argv.extend(extra);
+        let (_, said) = usage(&argv);
+        assert!(
+            said.contains("--forked-from") || said.contains("--forked-seq"),
+            "{said}"
+        );
+    }
+    // The conflict reads both ways: `--rewound-from` with `--forked-seq`
+    // fails whichever flag the parser meets first.
+    let (_, said) = usage(&[
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--rewound-from",
+        "s_aaaaaaaaaaaaaaaa",
+        "--forked-seq",
+        "41",
+    ]);
+    assert!(
+        said.contains("--rewound-from") || said.contains("--forked-seq"),
+        "{said}"
+    );
+}
+
+#[test]
+fn session_forked_flags_require_each_other_parent_delegate_id_and_prompt() {
+    // One missing requirement per case, so a dropped `requires` on any
+    // one of them fails exactly its case.
+    let full = [
+        ("--forked-from", "s_aaaaaaaaaaaaaaaa"),
+        ("--forked-seq", "41"),
+        ("--prompt", "hi"),
+        ("--parent", "s_aaaaaaaaaaaaaaaa"),
+        ("--delegate-id", "j_bbbbbbbbbbbbbbbb"),
+    ];
+    for skip in [
+        "--forked-from",
+        "--forked-seq",
+        "--prompt",
+        "--parent",
+        "--delegate-id",
+    ] {
+        let mut argv = vec![
+            "fiber",
+            "session",
+            "--id",
+            "s_0123456789abcdef",
+            "--workspace",
+            "/w",
+        ];
+        for (flag, value) in &full {
+            if *flag != skip {
+                argv.push(flag);
+                argv.push(value);
+            }
+        }
+        let (_, said) = usage(&argv);
+        assert!(said.contains(skip), "missing {skip}: {said}");
+    }
+}
+
+#[test]
 fn ask_credential_without_resume_is_a_usage_error() {
     let message = sentence(&["fiber", "ask", "--credential", "home", "hi"]);
     assert!(
@@ -3250,7 +3357,7 @@ fn round_tripped(args: &SessionArgs) -> SessionArgs {
     got
 }
 
-/// Every field of two sessions is equal: the round-trip keeps all 14.
+/// Every field of two sessions is equal: the round-trip keeps all 16.
 #[track_caller]
 fn assert_same_session(got: &SessionArgs, want: &SessionArgs) {
     assert_eq!(got.id, want.id, "id");
@@ -3263,6 +3370,8 @@ fn assert_same_session(got: &SessionArgs, want: &SessionArgs) {
     assert_eq!(got.worktree, want.worktree, "worktree");
     assert_eq!(got.rewound_from, want.rewound_from, "rewound_from");
     assert_eq!(got.continues, want.continues, "continues");
+    assert_eq!(got.forked_from, want.forked_from, "forked_from");
+    assert_eq!(got.forked_seq, want.forked_seq, "forked_seq");
     assert_eq!(got.parent, want.parent, "parent");
     assert_eq!(got.delegate_id, want.delegate_id, "delegate_id");
     assert_eq!(got.depth, want.depth, "depth");
@@ -3281,6 +3390,8 @@ fn minimal_session() -> SessionArgs {
         worktree: false,
         rewound_from: None,
         continues: None,
+        forked_from: None,
+        forked_seq: None,
         parent: None,
         delegate_id: None,
         depth: None,
@@ -3314,6 +3425,8 @@ fn session_argv_round_trips_a_new_launch_with_overrides() {
         worktree: false,
         rewound_from: None,
         continues: None,
+        forked_from: None,
+        forked_seq: None,
         parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
         delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
         depth: Some(2),
@@ -3404,6 +3517,30 @@ fn session_continues_conflicts_with_the_other_continuations() {
             "--delegate-id",
             "j_bbbbbbbbbbbbbbbb",
         ],
+        vec![
+            "--forked-from",
+            "s_bbbbbbbbbbbbbbbb",
+            "--forked-seq",
+            "41",
+            "--prompt",
+            "hi",
+            "--parent",
+            "s_bbbbbbbbbbbbbbbb",
+            "--delegate-id",
+            "j_bbbbbbbbbbbbbbbb",
+        ],
+        vec![
+            "--forked-seq",
+            "41",
+            "--forked-from",
+            "s_bbbbbbbbbbbbbbbb",
+            "--prompt",
+            "hi",
+            "--parent",
+            "s_bbbbbbbbbbbbbbbb",
+            "--delegate-id",
+            "j_bbbbbbbbbbbbbbbb",
+        ],
     ] {
         let mut argv = vec![
             "fiber",
@@ -3419,6 +3556,32 @@ fn session_continues_conflicts_with_the_other_continuations() {
         let (_, said) = usage(&argv);
         assert!(said.contains("--continues"), "{said}");
     }
+    // The conflict reads both ways: `--forked-from` with `--continues`
+    // fails whichever flag the parser meets first.
+    let mut argv = vec![
+        "fiber",
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        "/w",
+        "--forked-from",
+        "s_aaaaaaaaaaaaaaaa",
+        "--forked-seq",
+        "41",
+        "--prompt",
+        "hi",
+        "--parent",
+        "s_aaaaaaaaaaaaaaaa",
+        "--delegate-id",
+        "j_bbbbbbbbbbbbbbbb",
+    ];
+    argv.extend(["--continues", "s_bbbbbbbbbbbbbbbb"]);
+    let (_, said) = usage(&argv);
+    assert!(
+        said.contains("--forked-from") || said.contains("--continues"),
+        "{said}"
+    );
 }
 
 #[test]
@@ -3472,6 +3635,33 @@ fn session_argv_round_trips_a_rewind() {
         .collect();
     assert!(
         rendered.contains(&"--rewound-from=s_aaaaaaaaaaaaaaaa".to_owned()),
+        "{rendered:?}"
+    );
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_argv_round_trips_a_fork() {
+    let args = SessionArgs {
+        forked_from: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+        forked_seq: Some(41),
+        prompt: Some("-go".to_owned()),
+        parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+        delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
+        depth: Some(1),
+        ..minimal_session()
+    };
+    let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
+    let rendered: Vec<String> = argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        rendered.contains(&"--forked-from=s_aaaaaaaaaaaaaaaa".to_owned()),
+        "{rendered:?}"
+    );
+    assert!(
+        rendered.contains(&"--forked-seq=41".to_owned()),
         "{rendered:?}"
     );
     assert_same_session(&round_tripped(&args), &args);

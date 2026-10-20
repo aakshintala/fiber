@@ -212,6 +212,16 @@ pub(crate) type TurnRanges = Vec<(usize, Range<usize>)>;
 pub(crate) type CallPaths = Vec<(Target, String)>;
 type DrawData = (Vec<Row>, Vec<RowText>, FocusItems, TurnRanges);
 
+/// The row pinned to the conversation's top row: the header's line as
+/// the shown pass drew it, its target and its first wrapped row in the
+/// whole conversation (`docs/tui.md`, "Tool groups and the ledger").
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Pin {
+    pub(crate) line: Line<'static>,
+    pub(crate) target: Target,
+    pub(crate) row: usize,
+}
+
 /// The lines shown from a row on: the first shown page's first row, each
 /// line with its rows and click target, and the turn ranges in those lines.
 /// A page not loaded is one blank line of its rows.
@@ -223,6 +233,8 @@ pub(crate) struct Shown {
     /// The spinning marks drawn, each a line's index and its cell's
     /// column (`docs/tui.md`, "The working line").
     pub(crate) spins: Vec<SpinMark>,
+    /// The pinned header, when the top row sits inside opened content.
+    pub(crate) pin: Option<Pin>,
 }
 
 /// A spinning mark: a line's index in [`Shown::lines`] and its cell's
@@ -1333,6 +1345,8 @@ impl Pages {
         let mut lines = Vec::new();
         let mut turns = Vec::new();
         let mut spins = Vec::new();
+        let mut pin: Option<Pin> = None;
+        let mut pin_done = false;
         let mut start = 0usize;
         for (at, page) in self.index.pages().iter().enumerate() {
             if start >= end {
@@ -1341,9 +1355,18 @@ impl Pages {
             let next = start.saturating_add(page.rows);
             if next > top {
                 first.get_or_insert(start);
+                // The first page drawing a visible row holds the top
+                // row: every page before it ends at or before `top`,
+                // and every later one starts past it. The pin is read
+                // once, from that page alone.
+                let top_page = !pin_done;
+                pin_done = true;
                 match self.part(at) {
                     Some(part) => {
                         let (rows, texts, _, page_turns) = self.draw_data(at, part, Draw::Shown);
+                        if top_page {
+                            pin = self.pin_on_page(part, &rows, &texts, start, top);
+                        }
                         let base = lines.len();
                         for (at, text) in texts.iter().enumerate() {
                             if let Some(col) = text.spin {
@@ -1370,7 +1393,71 @@ impl Pages {
             lines,
             turns,
             spins,
+            pin,
         }
+    }
+
+    /// The pin for the top row on page `part`: the innermost `Group` or
+    /// `Call` scope of the top row's own text. A `Group` pins only while
+    /// its ledger is open; a `Call` pins exactly while its rows exist.
+    /// The header is the first line on the page with the pin's target;
+    /// none when the page is dropped or the header is not on it. A found
+    /// header always sits above the top row: a section's header draws
+    /// before its body ever opens its scope.
+    fn pin_on_page(
+        &self,
+        part: &Part,
+        rows: &[Row],
+        texts: &[RowText],
+        page_start: usize,
+        top: usize,
+    ) -> Option<Pin> {
+        let mut offset = top.saturating_sub(page_start);
+        let mut line_at = None;
+        for (at, (line, _)) in rows.iter().enumerate() {
+            let count = crate::view::rows(line.clone(), self.width);
+            if offset < count {
+                line_at = Some(at);
+                break;
+            }
+            offset = offset.saturating_sub(count);
+        }
+        let at = line_at?;
+        let scopes = texts.get(at)?.scopes.as_slice();
+        let target = scopes
+            .iter()
+            .rev()
+            .find(|target| {
+                matches!(
+                    target,
+                    crate::app::Target::Group(_) | crate::app::Target::Call(_)
+                )
+            })
+            .copied()?;
+        if let crate::app::Target::Group(id) = target {
+            let open = part
+                .turns
+                .iter()
+                .flat_map(crate::turn::Turn::groups)
+                .filter_map(|group| group.key.as_deref().map(|key| (key, group.open)))
+                .any(|(key, open)| crate::turn::target_id(key) == id && open);
+            if !open {
+                return None;
+            }
+        }
+        let mut header = None;
+        for (at, (line, line_target)) in rows.iter().enumerate() {
+            if *line_target == Some(target) {
+                header = Some((at, line.clone()));
+                break;
+            }
+        }
+        let (header_at, line) = header?;
+        let mut row = page_start;
+        for (line, _) in rows.iter().take(header_at) {
+            row = row.saturating_add(crate::view::rows(line.clone(), self.width));
+        }
+        Some(Pin { line, target, row })
     }
 
     /// Focus stops across the indexed conversation, even on dropped pages.

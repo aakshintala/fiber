@@ -395,6 +395,50 @@ pub enum CliError {
         /// How many deletions were attempted.
         total: usize,
     },
+    /// A session lookup, resolution or export failed.
+    #[error(transparent)]
+    Log(#[from] log::Error),
+    /// Reaching the hub failed: a local failure names the hub, any
+    /// other failure keeps the doors text.
+    #[error("{}", crate::error::hub_message(.0))]
+    Hub(#[from] doors::Error),
+    /// The hub closed the connection before answering the command.
+    #[error("the hub closed the connection before answering `{command}`")]
+    HubClosed {
+        /// The command the hub never answered.
+        command: String,
+    },
+    /// The hub refused the command, with the wire code and message.
+    #[error("{message}")]
+    Rejected {
+        /// The wire code, or the fallback when it has none usable.
+        code: ErrorCode,
+        /// The wire message, or the refusal sentence naming the command.
+        message: String,
+    },
+    /// A hub command could not be written as JSON.
+    #[error("a command could not be written as JSON: {0}")]
+    CommandEncode(#[source] serde_json::Error),
+    /// The hub's answer to `sessions` did not parse.
+    #[error("the hub's answer to `sessions`: {0}")]
+    SessionsAnswer(#[source] serde_json::Error),
+    /// A session row could not be encoded as JSON.
+    #[error("a session row: {0}")]
+    SessionRow(#[source] serde_json::Error),
+    /// A search hit could not be encoded as JSON.
+    #[error("a search hit: {0}")]
+    SearchHit(#[source] serde_json::Error),
+    /// A delete with nobody to ask.
+    #[error("{}", crate::sessions::DELETE_NOBODY)]
+    DeleteNobody,
+    /// No session on the hub answers the selector.
+    #[error("no session matches \"{selector}\" on hub `{hub}`")]
+    SessionNotFoundOnHub {
+        /// The selector that matched nothing.
+        selector: String,
+        /// The hub asked.
+        hub: String,
+    },
 }
 
 /// Why a store refused before anything was read or written: a usage
@@ -516,6 +560,16 @@ fn store_refused_message(refusal: &Refusal, hint: bool) -> String {
     }
 }
 
+/// The `Hub` sentence: a local failure names the hub, any other failure
+/// keeps the doors text.
+fn hub_message(error: &doors::Error) -> String {
+    if let doors::Error::Local(io) = error {
+        format!("the hub: {io}")
+    } else {
+        error.to_string()
+    }
+}
+
 impl CliError {
     /// The stable code a caller switches on.
     pub fn code(&self) -> ErrorCode {
@@ -525,6 +579,16 @@ impl CliError {
             Self::Extensions(error) => error.code(),
             Self::Forwarded(failure) => failure.code.clone(),
             Self::PruneFailed { code, .. } => code.clone(),
+            Self::Log(error) => error.code(),
+            Self::Hub(error) => error.code(),
+            Self::Rejected { code, .. } => code.clone(),
+            Self::HubClosed { .. }
+            | Self::CommandEncode(_)
+            | Self::SessionsAnswer(_)
+            | Self::SessionRow(_)
+            | Self::SearchHit(_) => ErrorCode::IoFailed,
+            Self::DeleteNobody => ErrorCode::Usage,
+            Self::SessionNotFoundOnHub { .. } => ErrorCode::SessionNotFound,
             Self::Terminal(_)
             | Self::StandardError(_)
             | Self::StandardInput(_)
@@ -648,6 +712,16 @@ impl From<CliError> for Failure {
             | CliError::NobodyToAsk { .. }
             | CliError::OlderThanUnreadable
             | CliError::PruneFailed { .. }
+            | CliError::Log(_)
+            | CliError::Hub(_)
+            | CliError::HubClosed { .. }
+            | CliError::Rejected { .. }
+            | CliError::CommandEncode(_)
+            | CliError::SessionsAnswer(_)
+            | CliError::SessionRow(_)
+            | CliError::SearchHit(_)
+            | CliError::DeleteNobody
+            | CliError::SessionNotFoundOnHub { .. }
             | CliError::ApproveFailed { .. }
             | CliError::ReleaseVersionMismatch { .. }
             | CliError::ReleaseNoCommit

@@ -16,10 +16,12 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use contract::shapes::Failure;
 use contract::{ErrorCode, HubLine};
 use serde_json::{Map, Value, json};
 
 use super::{list, resolve_listed, run};
+use crate::CliError;
 use fakes::Deadline;
 
 /// One named deadline per wait on the fake hub.
@@ -140,7 +142,7 @@ fn listing(
     all: bool,
     json: bool,
     answers: &[Value],
-) -> (Result<(), contract::shapes::Failure>, String, Value) {
+) -> (Result<(), CliError>, String, Value) {
     let project = project.clone();
     let answers = answers.to_owned();
     let (tx, rx) = mpsc::channel();
@@ -231,9 +233,19 @@ fn a_rejection_is_a_failure_with_its_code_and_message() {
         )],
     );
     let failure = ran.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::InvalidArguments);
-    assert_eq!(failure.message, "no");
-    assert_eq!(doors::exit_code(&failure), 1);
+    assert!(
+        matches!(
+            &failure,
+            CliError::Rejected {
+                code: ErrorCode::InvalidArguments,
+                ..
+            }
+        ),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::InvalidArguments);
+    assert_eq!(failure.to_string(), "no");
+    assert_eq!(doors::exit_code(&Failure::from(failure)), 1);
     assert!(out.is_empty());
 }
 
@@ -241,11 +253,15 @@ fn a_rejection_is_a_failure_with_its_code_and_message() {
 fn an_end_before_the_answer_is_io_failed() {
     let (ran, _, _) = listing(&project_at("/w", false), false, false, &[]);
     let failure = ran.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::IoFailed);
     assert!(
-        failure.message.contains("`sessions`"),
+        matches!(&failure, CliError::HubClosed { command } if command == "sessions"),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
+    assert!(
+        failure.to_string().contains("`sessions`"),
         "{}",
-        failure.message
+        failure.to_string()
     );
 }
 
@@ -498,13 +514,7 @@ fn list_exits_zero_on_success_and_fail_code_on_hub_failure() {
 /// `sessions` command: the outcome and the command the hub read, the
 /// outcome received under the hub deadline.
 #[track_caller]
-fn resolving(
-    selector: &str,
-    result: Value,
-) -> (
-    Result<contract::SessionId, contract::shapes::Failure>,
-    Value,
-) {
+fn resolving(selector: &str, result: Value) -> (Result<contract::SessionId, CliError>, Value) {
     let selector = selector.to_owned();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -554,9 +564,17 @@ fn a_prefix_matching_two_rows_is_a_usage_error_naming_both_sorted() {
     ] {
         let (resolved, _) = resolving("s_", result);
         let failure = resolved.unwrap_err();
-        assert_eq!(failure.code, ErrorCode::Usage);
+        assert!(
+            matches!(
+                &failure,
+                CliError::Log(log::Error::Ambiguous { matches, .. })
+                    if matches == &["s_a".to_owned(), "s_b".to_owned()]
+            ),
+            "{failure:?}"
+        );
+        assert_eq!(failure.code(), ErrorCode::Usage);
         assert_eq!(
-            failure.message,
+            failure.to_string(),
             "\"s_\" matches more than one session: s_a, s_b"
         );
     }
@@ -566,9 +584,17 @@ fn a_prefix_matching_two_rows_is_a_usage_error_naming_both_sorted() {
 fn no_match_is_session_not_found_naming_the_hub() {
     let (resolved, _) = resolving("s_nope", empty());
     let failure = resolved.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::SessionNotFound);
+    assert!(
+        matches!(
+            &failure,
+            CliError::SessionNotFoundOnHub { selector, hub }
+                if selector == "s_nope" && hub == "box"
+        ),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::SessionNotFound);
     assert_eq!(
-        failure.message,
+        failure.to_string(),
         "no session matches \"s_nope\" on hub `box`"
     );
 }
@@ -579,8 +605,16 @@ fn an_empty_selector_matches_nothing_without_connecting() {
         panic!("an empty selector must not connect")
     };
     let failure = resolve_listed("", "box", &mut connect).unwrap_err();
-    assert_eq!(failure.code, ErrorCode::SessionNotFound);
-    assert_eq!(failure.message, "no session matches \"\" on hub `box`");
+    assert!(
+        matches!(
+            &failure,
+            CliError::SessionNotFoundOnHub { selector, hub }
+                if selector.is_empty() && hub == "box"
+        ),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::SessionNotFound);
+    assert_eq!(failure.to_string(), "no session matches \"\" on hub `box`");
 }
 
 #[test]
@@ -594,11 +628,21 @@ fn a_rejection_and_an_early_end_are_hub_failures() {
         let resolved = resolve_listed("s_1", "box", &mut || hub.connect());
         tx.send(resolved).unwrap_or(());
     });
-    let resolved: Result<contract::SessionId, contract::shapes::Failure> =
+    let resolved: Result<contract::SessionId, CliError> =
         Deadline::after(HUB_DEADLINE).recv(&rx).unwrap();
     let failure = resolved.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::InvalidArguments);
-    assert_eq!(failure.message, "no");
+    assert!(
+        matches!(
+            &failure,
+            CliError::Rejected {
+                code: ErrorCode::InvalidArguments,
+                ..
+            }
+        ),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::InvalidArguments);
+    assert_eq!(failure.to_string(), "no");
 
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -606,19 +650,52 @@ fn a_rejection_and_an_early_end_are_hub_failures() {
         let resolved = resolve_listed("s_1", "box", &mut || hub.connect());
         tx.send(resolved).unwrap_or(());
     });
-    let resolved: Result<contract::SessionId, contract::shapes::Failure> =
+    let resolved: Result<contract::SessionId, CliError> =
         Deadline::after(HUB_DEADLINE).recv(&rx).unwrap();
     let failure = resolved.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::IoFailed);
     assert!(
-        failure.message.contains("`sessions`"),
+        matches!(&failure, CliError::HubClosed { command } if command == "sessions"),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
+    assert!(
+        failure.to_string().contains("`sessions`"),
         "{}",
-        failure.message
+        failure.to_string()
     );
 
     let failure = resolve_listed("s_1", "box", &mut || {
         Err(doors::Error::Local(io::Error::other("hub down")))
     })
     .unwrap_err();
-    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(
+        matches!(&failure, CliError::Hub(doors::Error::Local(_))),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
+    assert_eq!(failure.to_string(), "the hub: hub down");
+}
+
+#[test]
+fn a_wrong_shaped_result_is_a_sessions_answer_error() {
+    let (ran, _, _) = listing(
+        &project_at("/w", false),
+        false,
+        false,
+        &[accepted(json!(7))],
+    );
+    let failure = ran.unwrap_err();
+    assert!(
+        matches!(&failure, CliError::SessionsAnswer(_)),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
+
+    let (resolved, _) = resolving("s_1", json!(7));
+    let failure = resolved.unwrap_err();
+    assert!(
+        matches!(&failure, CliError::SessionsAnswer(_)),
+        "{failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::IoFailed);
 }
