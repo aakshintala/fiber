@@ -1528,7 +1528,7 @@ search box and the draft shows without a cursor.
 | Send a prompt, or a steering message during a turn | `send` | Enter | |
 | Insert a line break | `line_break` | Shift+Enter | Ctrl+J |
 | Close what is on top; interrupt the turn when nothing is open | `close_or_interrupt` | Esc | click the overlay's ✕ or outside it; click "Esc to interrupt" |
-| Clear the draft, then quit | `clear_then_quit` | Ctrl+C, twice within about a second on an empty box | `/quit` |
+| Clear the draft, then quit | `clear_then_quit` | Ctrl+C, twice within about a second on an empty box | `/quit, /exit` |
 | Go home | `go_home` | ⌥0 | `/home` |
 | Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
@@ -1711,7 +1711,7 @@ later release still applies.
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/close` | Stops the session on screen ("Quit"). |
-| `/quit` | Quits ("Quit"). |
+| `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
 | `/?`, `/help` | Opens the key map. |
 
@@ -1796,7 +1796,7 @@ widening it. Esc goes back to the provider list.
 - **Ctrl+C clears, then quits.** It clears a draft in the input box. With the
   box empty, it says "Press Ctrl+C again to quit", and a second press within
   about a second quits. It never interrupts a turn on its own; Esc does that.
-- **Quit** is a second Ctrl+C, or `/quit`. With no session working, meaning
+- **Quit** is a second Ctrl+C, or `/quit`, `/exit`. With no session working, meaning
   no turn, job or delegate running, the terminal exits without asking. With
   some working, it asks in an overlay ("Look", "Overlays"): the title
   "Quit", "2 sessions working" dim, then three choices, "Enter" to leave them
