@@ -1,7 +1,9 @@
 //! Tests for the `/exit` alias of `/quit` (see #2832): dispatch, the
 //! list row, the filter and the drawn line.
 
-use super::commands_testkit::{attached, connected, enter, now, paste_image, sent, type_text};
+use super::commands_testkit::{
+    answer_rows, attached, connected, enter, now, paste_image, sent, shown, type_text,
+};
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::slash;
@@ -146,4 +148,71 @@ fn filter_quit_still_finds_only_the_quit_row() {
 fn an_empty_query_still_shows_every_row_once() {
     let all = slash::rows(&[]);
     assert_eq!(slash::filter(&all, "").len(), all.len());
+}
+
+/// An extension `commands` row named `name` with the `acme` tag.
+fn extension_info(name: &str) -> contract::events::CommandInfo {
+    contract::events::CommandInfo {
+        name: name.to_owned(),
+        description: format!("The {name} extension."),
+        argument_hint: Some("[args]".to_owned()),
+        tag: "acme".to_owned(),
+        extension: true,
+    }
+}
+
+#[test]
+fn an_extension_exit_sheds_the_quit_alias_and_keeps_one_exit_row() {
+    let plain = slash::rows(&[]);
+    let quit = plain.iter().find(|row| row.name == "quit").unwrap();
+    assert_eq!(quit.alias.as_deref(), Some("exit"));
+    let with = slash::rows(&[extension_info("exit")]);
+    assert_eq!(with.len(), plain.len() + 1);
+    let quit = with.iter().find(|row| row.name == "quit").unwrap();
+    assert_eq!(quit.alias, None);
+    assert_eq!(quit.line(), "/quit  Quits.  command".to_owned());
+    let exits: Vec<&slash::Row> = with
+        .iter()
+        .filter(|row| row.name == "exit" || row.alias.as_deref() == Some("exit"))
+        .collect();
+    assert_eq!(exits.len(), 1);
+    assert_eq!(
+        exits[0].line(),
+        "/exit [args]  The exit extension.  acme".to_owned()
+    );
+}
+
+#[test]
+fn an_extension_exit_wins_dispatch_and_filter() {
+    let mut app = attached();
+    let rows = serde_json::json!([{"name": "exit", "description": "The exit extension.",
+        "argument_hint": "[args]", "tag": "acme", "extension": true}]);
+    answer_rows(&mut app, rows);
+    type_text(&mut app, "/exit");
+    let shown = shown(&app);
+    assert_eq!(
+        shown.iter().find(|line| line.contains("/exit")).cloned(),
+        Some("/exit [args]  The exit extension.  acme".to_owned()),
+        "{shown:?}"
+    );
+    assert!(
+        shown
+            .iter()
+            .all(|line| *line != "/quit /exit  Quits.  command"),
+        "{shown:?}"
+    );
+    let found: Vec<String> = slash::filter(&slash::rows(&[extension_info("exit")]), "exit")
+        .iter()
+        .map(|row| row.name.clone())
+        .collect();
+    assert_eq!(found, ["exit"]);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "command");
+    assert_eq!(lines[0]["args"], json!({"name": "exit"}));
+    type_text(&mut app, "/exit now");
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "command");
+    assert_eq!(lines[0]["args"], json!({"name": "exit", "text": "now"}));
 }

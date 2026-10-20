@@ -349,6 +349,34 @@ fn a_builtin_name_without_replaces_unloads_with_a_notice_naming_it() {
 }
 
 #[test]
+fn an_exit_name_without_replaces_unloads_with_a_notice_naming_it() {
+    let root = fakes::TempDir::new("fiber-commands-exit-replaces");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let (_h, dir) = write_ext(root.path(), "a", &command("exit", "E"));
+    let all = sources(
+        &home,
+        &[(
+            "fiber.test/a",
+            &dir,
+            vec![("exit".into(), "E".into())],
+            vec![],
+        )],
+    );
+    let built = SessionCommands::build(&all, &config_with(&home, &[]));
+    assert!(built.list().is_empty());
+    assert!(built.unloaded().contains("fiber.test/a"));
+    let notices = built.notices();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert!(
+        notices[0].message.contains("`exit`"),
+        "{}",
+        notices[0].message
+    );
+}
+
+#[test]
 fn a_builtin_name_with_replaces_is_listed() {
     let root = fakes::TempDir::new("fiber-commands-replaced");
     let home = root.path().join("home");
