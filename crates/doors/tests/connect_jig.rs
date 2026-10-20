@@ -32,15 +32,19 @@ struct Jig {
     deadline: Deadline,
     reaped: bool,
 }
+/// The built `connect` example beside the test binary: the jig the tests drive.
+fn example_executable() -> std::path::PathBuf {
+    std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples/connect")
+}
 impl Jig {
     fn spawn(home: &Path, args: &[&str]) -> Self {
-        let executable = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("examples/connect");
+        let executable = example_executable();
         let mut child = Command::new(executable)
             .args(args)
             .env_clear()
@@ -235,4 +239,69 @@ fn hub_mode_prints_hello_then_relays_typed_lines() {
 #[test]
 fn a_named_forwarded_hub_uses_the_same_client() {
     hub_journey(true);
+}
+
+/// A listed hub that accepts and then stays silent: the jig fails fast with
+/// a stderr line naming the wait instead of hanging past the hang guard.
+#[test]
+fn a_listed_hub_that_stays_silent_fails_fast_with_a_stderr_line() {
+    let temp = fakes::TempDir::new("fj");
+    let home = temp.path();
+    let socket = home.join("silent");
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::fs::write(
+        home.join("config.json"),
+        json!({"hubs":{"fwd":{"address":format!("unix:{}", socket.display())}}}).to_string(),
+    )
+    .unwrap();
+    let deadline = Deadline::after(Duration::from_secs(10));
+    let (accepted, accepted_rx) = mpsc::channel();
+    let (done, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        accepted.send(()).unwrap();
+        // Hold the accepted stream silent until the jig goes away: its
+        // hello wait, not a closed socket, is what the test bounds.
+        let _stream = stream;
+        let _waited = deadline.recv(&done_rx);
+    });
+    let mut child = Command::new(example_executable())
+        .args(["--hub", "fwd"])
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("FIBER_HOME", home)
+        .env("HOME", home)
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .current_dir(home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let watchdog = Watchdog::group(group);
+    let stderr = child.stderr.take().unwrap();
+    let (line_tx, lines) = mpsc::channel();
+    thread::spawn(move || {
+        let mut lines = BufReader::new(stderr).lines();
+        if let Some(Ok(line)) = lines.next() {
+            let _sent = line_tx.send(line);
+        }
+    });
+    let (exit_tx, exited) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = exit_tx.send(child.wait().unwrap());
+    });
+    deadline.recv_or_fail(&accepted_rx, "the silent hub accepts");
+    let line = deadline.recv_or_fail(&lines, "the jig's stderr names the blocked hello wait");
+    assert!(
+        line.contains("hub_hello"),
+        "the stderr line names the wait: {line}"
+    );
+    let status = deadline.recv_or_fail(&exited, "the jig exits after its stderr line");
+    assert!(!status.success(), "a wedged hub is a failure: {status}");
+    done.send(()).unwrap();
+    assert!(!fakes::kill_group(group, "0").unwrap());
+    watchdog.stand_down(Duration::from_secs(5));
 }
