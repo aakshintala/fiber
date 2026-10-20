@@ -377,12 +377,6 @@ impl BufRead for Unread {
     fn consume(&mut self, _: usize) {}
 }
 
-/// Input `delete_run` confirms from: answer bytes, or nothing readable.
-enum Input {
-    Bytes(Vec<u8>),
-    Unread,
-}
-
 /// Runs `delete_run` for `selector` against a fake hub answering `answers`,
 /// on a worker thread (edge: `thread::spawn`): its stdout, its stderr, its
 /// outcome, how often it connected, and the command the hub read when it
@@ -394,7 +388,7 @@ fn run_delete(
     cascade: bool,
     yes: bool,
     terminal: bool,
-    input: Input,
+    input: impl BufRead + Send + 'static,
 ) -> (String, String, Result<(), CliError>, usize, Option<Value>) {
     let home = setup.home();
     let workspace = setup.workspace();
@@ -403,16 +397,13 @@ fn run_delete(
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut hub = FakeHub::new(&answers);
-        let mut input: Box<dyn BufRead> = match input {
-            Input::Bytes(bytes) => Box::new(io::Cursor::new(bytes)),
-            Input::Unread => Box::new(Unread),
-        };
+        let mut input = input;
         let mut out = Vec::new();
         let mut err = Vec::new();
         let ask = Ask {
             yes,
             terminal,
-            input: &mut *input,
+            input: &mut input,
             err: &mut err,
         };
         let got = delete_run(
@@ -502,7 +493,7 @@ fn yes_sends_one_delete_for_the_full_id_and_prints_it() {
         false,
         true,
         false,
-        Input::Unread,
+        Unread,
     );
     got.unwrap();
     assert_eq!(
@@ -519,15 +510,7 @@ fn cascade_sends_cascade_and_lists_the_dependents() {
     let setup = Setup::new();
     setup.started(ROOT, None);
     setup.started(FORK, Some(ROOT));
-    let (out, _, got, _, sent) = run_delete(
-        &setup,
-        &[accepted()],
-        ROOT,
-        true,
-        true,
-        false,
-        Input::Unread,
-    );
+    let (out, _, got, _, sent) = run_delete(&setup, &[accepted()], ROOT, true, true, false, Unread);
     got.unwrap();
     assert_eq!(
         sent.unwrap(),
@@ -548,7 +531,7 @@ fn a_terminal_lists_then_asks_and_yes_deletes() {
         true,
         false,
         true,
-        Input::Bytes(b"y\n".to_vec()),
+        io::Cursor::new(b"y\n".to_vec()),
     );
     got.unwrap();
     // The list before the question, then each id sent once accepted.
@@ -569,7 +552,7 @@ fn without_cascade_the_list_is_only_the_session() {
         false,
         false,
         true,
-        Input::Bytes(b"n\n".to_vec()),
+        io::Cursor::new(b"n\n".to_vec()),
     );
     got.unwrap();
     assert_eq!(out, format!("{ROOT}\n"));
@@ -586,7 +569,7 @@ fn a_declined_answer_sends_nothing() {
         false,
         false,
         true,
-        Input::Bytes(b"n\n".to_vec()),
+        io::Cursor::new(b"n\n".to_vec()),
     );
     got.unwrap();
     assert!(err.ends_with("nothing deleted\n"), "{err}");
@@ -597,15 +580,8 @@ fn a_declined_answer_sends_nothing() {
 fn no_terminal_without_yes_is_usage_and_neither_reads_nor_connects() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    let (out, _, got, connects, _) = run_delete(
-        &setup,
-        &[accepted()],
-        ROOT,
-        false,
-        false,
-        false,
-        Input::Unread,
-    );
+    let (out, _, got, connects, _) =
+        run_delete(&setup, &[accepted()], ROOT, false, false, false, Unread);
     let error = got.unwrap_err();
     assert!(matches!(&error, CliError::DeleteNobody), "{error:?}");
     assert_eq!(error.code(), ErrorCode::Usage);
@@ -621,8 +597,7 @@ fn a_rejection_is_a_failure_with_its_code_and_message() {
     let rejected = json!({"kind": "command_rejected", "ts": 1, "schema_version": 1, "payload": {
         "command_id": "c_delete", "code": "session_has_dependents", "message": "It has forks.",
     }});
-    let (out, _, got, _, _) =
-        run_delete(&setup, &[rejected], ROOT, false, true, false, Input::Unread);
+    let (out, _, got, _, _) = run_delete(&setup, &[rejected], ROOT, false, true, false, Unread);
     let error = got.unwrap_err();
     assert!(
         matches!(
@@ -643,7 +618,7 @@ fn a_rejection_is_a_failure_with_its_code_and_message() {
 fn the_hub_closing_before_answering_is_io_failed() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    let (out, _, got, _, _) = run_delete(&setup, &[], ROOT, false, true, false, Input::Unread);
+    let (out, _, got, _, _) = run_delete(&setup, &[], ROOT, false, true, false, Unread);
     let error = got.unwrap_err();
     assert!(
         matches!(&error, CliError::HubClosed { command } if command == "delete"),
@@ -664,8 +639,7 @@ fn a_rejection_without_a_message_through_delete_names_delete() {
     let rejected = json!({"kind": "command_rejected", "ts": 1, "schema_version": 1, "payload": {
         "command_id": "c_delete", "code": "busy",
     }});
-    let (_, _, got, _, _) =
-        run_delete(&setup, &[rejected], ROOT, false, true, false, Input::Unread);
+    let (_, _, got, _, _) = run_delete(&setup, &[rejected], ROOT, false, true, false, Unread);
     let error = got.unwrap_err();
     assert!(
         matches!(
@@ -693,8 +667,7 @@ fn a_delete_rejection_without_a_usable_code_is_io_failed() {
             "command_id": "c_delete", "code": 7, "message": "m",
         }}),
     ] {
-        let (_, _, got, _, _) =
-            run_delete(&setup, &[payload], ROOT, false, true, false, Input::Unread);
+        let (_, _, got, _, _) = run_delete(&setup, &[payload], ROOT, false, true, false, Unread);
         let error = got.unwrap_err();
         assert!(
             matches!(
@@ -715,15 +688,8 @@ fn a_delete_rejection_without_a_usable_code_is_io_failed() {
 fn an_unknown_selector_is_not_found_and_never_connects() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    let (_, _, got, connects, _) = run_delete(
-        &setup,
-        &[accepted()],
-        "s_zz",
-        false,
-        true,
-        false,
-        Input::Unread,
-    );
+    let (_, _, got, connects, _) =
+        run_delete(&setup, &[accepted()], "s_zz", false, true, false, Unread);
     let error = got.unwrap_err();
     assert!(
         matches!(&error, CliError::Log(log::Error::NotFound(_))),
