@@ -121,6 +121,9 @@ pub(crate) struct Gate {
     close_now: OnceLock<Arc<dyn Fn() + Send + Sync>>,
     /// The tool a driver `shell` runs. None leaves `shell` unknown.
     driver_shell: OnceLock<Arc<dyn Tool>>,
+    /// The workspace a driver `propose_notes` gathers evidence under.
+    /// None leaves `propose_notes` unknown.
+    notes_workspace: OnceLock<PathBuf>,
     /// The session's jobs, which `job_stop` and `background` reach. None
     /// leaves both with nothing to act on.
     jobs: OnceLock<Arc<dyn contract::jobs::Jobs>>,
@@ -147,6 +150,9 @@ pub(crate) struct Gate {
     /// Fiber home: what the sender-name lookup reads (`docs/tools.md`,
     /// "Messaging other sessions").
     pub(crate) home: PathBuf,
+    /// The session's directory: what `propose_notes` reads its project
+    /// key from, copied before its thread starts.
+    pub(crate) dir: PathBuf,
     /// The admission the door shares with the loop: once it closes, no
     /// session message enters the inbox (`docs/tools.md`, "Messaging
     /// other sessions").
@@ -351,6 +357,14 @@ impl Session {
     pub fn shell(&self, tool: Arc<dyn Tool>) {
         let stored = self.gate.driver_shell.set(tool);
         debug_assert!(stored.is_ok(), "driver_shell is wired once");
+    }
+
+    /// The workspace a driver `propose_notes` gathers evidence under
+    /// (`docs/invocation.md`, "What each command does"). With none set,
+    /// `propose_notes` stays an unknown command.
+    pub fn notes_workspace(&self, workspace: PathBuf) {
+        let stored = self.gate.notes_workspace.set(workspace);
+        debug_assert!(stored.is_ok(), "notes_workspace is wired once");
     }
 
     /// Replaces the session's listings and extension handles on reload.
@@ -745,6 +759,10 @@ impl Gate {
         self.driver_shell.get().cloned()
     }
 
+    pub(crate) fn notes_workspace(&self) -> Option<PathBuf> {
+        self.notes_workspace.get().cloned()
+    }
+
     /// What a `close` with `now` starts, cloned out of the slot so the
     /// shutdown runs with no gate lock held.
     pub(crate) fn close_now(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
@@ -832,6 +850,7 @@ fn open_in(
         cancel: OnceLock::new(),
         close_now: OnceLock::new(),
         driver_shell: OnceLock::new(),
+        notes_workspace: OnceLock::new(),
         jobs: OnceLock::new(),
         repository: OnceLock::new(),
         hooks: Mutex::new(None),
@@ -841,6 +860,7 @@ fn open_in(
         history: OnceLock::new(),
         prompts: crate::prompt_history::Pending::new(),
         home: home.to_owned(),
+        dir: dir.to_owned(),
         admission: Arc::new(support::admission::Admission::default()),
         shells: Shells::new(),
         #[cfg(test)]
