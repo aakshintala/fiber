@@ -2082,6 +2082,134 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "research/retry-signals/raw/openrouter.wrong-path.json",
         "provider",
     ),
+    (
+        "research/vertex-probe/raw/claude-bad-location.json",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/claude-bad-token.json",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/claude-data-sharing.json",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/claude-unknown-model.json",
+        "provider",
+    ),
+    ("research/vertex-probe/raw/gemini-429.json", "provider"),
+    (
+        "research/vertex-probe/raw/gemini-api-key-header.json",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-bad-request.json",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-imgparts-call.sse",
+        "provider",
+    ),
+    ("research/vertex-probe/raw/gemini-imgparts.sse", "provider"),
+    (
+        "research/vertex-probe/raw/gemini-models-gemini-3-flash-preview.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-models-gemini-3.1-flash-lite.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-models-gemini-3.1-pro-preview-customtools.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-models-gemini-3.1-pro-preview.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-models-gemini-3.5-flash-lite.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-models-gemini-3.5-flash.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-models-gemini-3.7-flash.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-models-gemini-3.8-flash.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-models-gemini-4-argon.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-replay-id-long65.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-replay-id-mismatch.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-replay-id-odd.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-replay-signed.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-search-cut.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-search-no-flag.sse",
+        "provider",
+    ),
+    ("research/vertex-probe/raw/gemini-search.sse", "provider"),
+    (
+        "research/vertex-probe/raw/gemini-sysrole-model.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-sysrole-none.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-sysrole-user.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini-thinking-replay.sse",
+        "provider",
+    ),
+    ("research/vertex-probe/raw/gemini-thinking.sse", "provider"),
+    ("research/vertex-probe/raw/gemini-tool.sse", "provider"),
+    (
+        "research/vertex-probe/raw/gemini-unknown-model.json",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini2-image-user-part.sse",
+        "provider",
+    ),
+    (
+        "research/vertex-probe/raw/gemini2-imgparts-call.sse",
+        "provider",
+    ),
+    ("research/vertex-probe/raw/gemini2-imgparts.sse", "provider"),
+    ("research/vertex-probe/raw/gemini2-regional.sse", "provider"),
+    (
+        "research/vertex-probe/raw/gemini2-replay-id.sse",
+        "provider",
+    ),
+    ("research/vertex-probe/raw/gemini2-tool.sse", "provider"),
     ("providers/opencode/providers/opencode-go.lua", "main"),
     (
         "providers/opencode/tests/quota-recorded-usage-returns-three-windows.json",
