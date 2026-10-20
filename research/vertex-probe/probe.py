@@ -1,7 +1,8 @@
 """Google Vertex, probed: Claude through `streamRawPredict` and Gemini
 through `streamGenerateContent`, their error shapes, and global against
 regional locations. Standard library only; run with
-`python3 -I probe.py <case>...`, or `python3 -I probe.py rescrub`.
+`python3 -I -B probe.py <case>...`, or `python3 -I -B probe.py rescrub`;
+`-B` writes no `__pycache__` into the repository.
 
 The access token comes from `gcloud auth print-access-token`, as the
 `vertex` package's `credential()` reads it, and is never printed or saved.

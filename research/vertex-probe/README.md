@@ -9,7 +9,7 @@ hosts named below, with one Google Cloud project billed per token, written
 
 ## Method
 
-`PROBE_PROJECT=<project> python3 -I probe.py <case>...` sends each request
+`PROBE_PROJECT=<project> python3 -I -B probe.py <case>...` sends each request
 itself (standard library only) with the token `gcloud auth print-access-token`
 prints, and saves:
 
