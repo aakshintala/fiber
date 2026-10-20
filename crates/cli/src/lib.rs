@@ -76,6 +76,10 @@ mod model_lists;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod models;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod prune;
 #[allow(
     clippy::result_large_err,
