@@ -629,6 +629,20 @@ a click on it returns too. The views are:
   matches nothing shows one line, "No models match" dim, and no provider
   sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
   Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
+- The credential picker, `/credential`: the header reads "Credentials" bold,
+  "  /credential" dim and "Esc returns" dim, right-aligned. A blank row
+  follows the header. The provider's labels appear in the answer's order,
+  one per row. Only the current label has "  ● current" in `accent` after
+  it and starts selected in reverse. With no current label, the first row
+  starts selected. The dim line below reads the provider's name, such as
+  "fake", or "Reading the labels…" before the answer, or
+  "<provider> has no credential labels" for an empty answer. A rejected
+  query shows its message instead. The dim footer is
+  "↑↓ move · Enter choose · Ctrl+S this session · Esc close".
+  ↑ and ↓ move between rows. Enter or a click chooses a label and saves
+  it; Ctrl+S, `session_only`'s key, chooses it for this session only.
+  Esc closes. Typing does nothing: there is no filter. Choosing from an
+  empty list does nothing. A session-only choice adds no extra row.
 - **The usage view,** `/usage`: the session's `usage` (`docs/events.md`) broken
   down by turn, by model and by delegate, each with tokens by kind, cost billed
   and cost on subscription, and the budget left when `budget.usd` is set.
@@ -1438,7 +1452,7 @@ what it started keeps running.
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
 - **Every action has a key.** Every action also has a mouse target or a slash
   command, except editing the draft in the input box and search, and choosing
-  in the model picker for this session only. A mouse target is drawn only where one fits naturally, never as a
+  in the model picker or the credential picker for this session only. A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -1613,7 +1627,7 @@ of them when a key arrives:
   an approval or question, an offer, or the Ctrl+R panel; or the `/`
   or `@` completion panel while focus is not in the conversation. An overlay's
   own keys, such as an approval's ↑ and ↓, are not bindings.
-- Picker: the model picker is open. Only its own keys and the global actions
+- Picker: the model picker or the credential picker is open. Only its own keys and the global actions
   act.
 - Search: conversation search is open.
 - Conversation: focus is in the conversation.
@@ -1709,7 +1723,7 @@ later release still applies.
 | `/resume` | Goes home, focused on the first exited row. |
 | `/model` | Opens the model picker. |
 | `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. Sent while a turn runs, the choice applies when the turn ends. The notice appears when the choice is sent; if the session rejects the choice, the rejection's notice replaces it. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
-| `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
+| `/credential [<label>]` | With no label, opens the credential picker ("Swapped views"): Enter switches to the chosen label and saves it as the provider's `credential`, Ctrl+S switches for this session only and saves nothing. With a label, switches to it and saves it. The label is saved under the provider the session accepted the switch on. The terminal first says the switch rebuilds the cache, with its size (`docs/model-routing.md`, "Which credential a session uses"). |
 | `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. Each row carries its mark between the gutter and the id: `[x]` marked, `[ ]` not, bold on the focused row and dim when unmarked. The count row reads ` {m} of {n} marked ` unfiltered and ` {v} of {n} models · {m} marked ` filtered, with no show-all toggle and no refresh button. The row below each model is its thinking row, dim with nothing to choose. Ctrl+S saves and closes. The footer is "↑↓ move · Enter toggle · Ctrl+S save · Esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/tools` | Opens the tools view. |
 | `/mcp` | Opens the MCP servers view. |
