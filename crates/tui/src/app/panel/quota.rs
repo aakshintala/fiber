@@ -115,7 +115,7 @@ impl App {
         if !cards(self.panel_cards(), &[]).contains(&Card::Quota) {
             return None;
         }
-        if self.link != Link::Up {
+        if self.outbox.link != Link::Up {
             return None;
         }
         if self.attached_row().is_some_and(|row| row.left.is_some()) {
@@ -152,7 +152,7 @@ impl App {
     /// the conversation's pending commands: the answer folds into the
     /// panel card's rows by its id.
     fn quota_fetch(&mut self) -> Option<String> {
-        if self.link != Link::Up {
+        if self.outbox.link != Link::Up {
             return None;
         }
         if self.attached_row().is_some_and(|row| row.left.is_some()) {

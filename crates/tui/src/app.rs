@@ -4,7 +4,6 @@
 //! repository ships").
 
 use std::collections::{BTreeSet, HashMap};
-use std::hash::{BuildHasher, RandomState};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -17,7 +16,7 @@ use contract::events::{
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::ext::{Handle, Renderer};
@@ -62,6 +61,7 @@ pub(crate) mod model_picker;
 mod mouse;
 mod moving;
 mod offer;
+mod outbox;
 mod overlay;
 pub(crate) mod panel;
 mod paste;
@@ -77,6 +77,7 @@ use screen::Screen;
 
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
+pub(crate) use outbox::{Kind, Link, Phase, mint, session_command};
 pub(crate) use session_views::SessionView;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
@@ -93,25 +94,6 @@ pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// What the quit hint says.
 pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
-
-/// What the terminal is attached to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Phase {
-    /// No session yet.
-    Starting,
-    /// `start` sent, or held until the hub connects; waiting for its answer.
-    Pending {
-        /// The `start` command's id.
-        command_id: String,
-    },
-    /// Attached to a session.
-    Attached {
-        /// The session.
-        session: SessionId,
-        /// Whether a turn is running.
-        busy: bool,
-    },
-}
 
 /// What a key does.
 #[derive(Debug, PartialEq, Eq)]
@@ -158,34 +140,6 @@ pub(crate) enum Effect {
     ReadImage(u64),
     /// Open this file in the editor (`docs/tui.md`, "Swapped views").
     OpenFile(PathBuf),
-}
-
-/// Which command the terminal sent and waits on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Start,
-    Prompt,
-    Steer,
-    Cancel,
-    Reply,
-    SteerDrop,
-    Shell,
-    /// A built-in command such as `handoff`, `reload` or `close`.
-    Command,
-}
-
-/// The hub connection, as the terminal sees it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Link {
-    /// Not connected yet: an Enter is held until `hub_hello`.
-    Waiting,
-    /// The hub spoke a `hub_hello` this terminal reads.
-    Up,
-    /// The hub could not be reached or hung up; the terminal retries with
-    /// backoff (`docs/tui.md`, "A dropped connection").
-    Down,
-    /// The hub runs a schema this terminal cannot read: never retried.
-    Refused,
 }
 
 /// What clicking a line, or Enter on it, opens, keyed by an id that stays
@@ -236,14 +190,13 @@ pub(crate) struct App {
     /// The one clipboard image read at a time, and its ticket.
     paste: paste::Paste,
     phase: Phase,
-    link: Link,
+    /// The commands waiting for their answer, with the link they go out
+    /// on, the lines held until the hub connects, and the written lines
+    /// a reconnect sends again.
+    pub(crate) outbox: outbox::Outbox,
     /// The attached session's image fetches and queued viewer opens
     /// (`docs/tui.md`, "Images").
     images: images::Images,
-    /// Lines held until the hub connects: the `start` of an early Enter.
-    held: Vec<String>,
-    /// Commands waiting for their answer: kind and the draft they carried.
-    pending: HashMap<String, (Kind, Draft)>,
     /// The notices floating over the conversation.
     notices: Notices,
     /// The conversation's size, scroll and pages (`docs/tui.md`, "History
@@ -348,10 +301,8 @@ impl App {
             draft: Draft::default(),
             paste: paste::Paste::default(),
             phase: Phase::Starting,
-            link: Link::Waiting,
+            outbox: outbox::Outbox::default(),
             images: images::Images::default(),
-            held: Vec::new(),
-            pending: HashMap::new(),
             notices: Notices::default(),
             screen: Screen::new(),
             handle: Handle::default(),
@@ -542,12 +493,11 @@ impl App {
     }
 
     /// Folds one line from the hub, returning command lines to send. An
-    /// answer first releases the line kept for resending.
+    /// answer releases the line kept for resending as it folds.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
         if self.pass_line(&line) {
             return Vec::new();
         }
-        self.answered_line(&line);
         let mut lines = match self.home_line(&line) {
             Some(consumed) => consumed,
             None => match line {
@@ -1028,11 +978,11 @@ impl App {
     /// read: the notice for the first failure in a run, and a held `start`
     /// fails as if rejected.
     pub(crate) fn connect_failed(&mut self, notice: String) {
-        self.link = Link::Down;
+        self.outbox.link = Link::Down;
         if self.notice_due() {
             self.notices.push("connection_failed", notice);
         }
-        self.held.clear();
+        self.outbox.held.clear();
         if let Phase::Pending { command_id } = &self.phase {
             let id = command_id.clone();
             self.fail(&id);
@@ -1047,8 +997,8 @@ impl App {
         self.passes.clear();
         self.abandoned_history.clear();
         self.end_overlay();
-        if self.link == Link::Up {
-            self.link = Link::Down;
+        if self.outbox.link == Link::Up {
+            self.outbox.link = Link::Down;
             self.notices
                 .push("connection_failed", "Connection lost.".to_owned());
         }
@@ -1079,7 +1029,7 @@ impl App {
                 .ok()
                 .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
             {
-                if self.is_kept(&id) {
+                if self.outbox.is_kept(&id) {
                     continue;
                 }
                 self.fail(&id);
@@ -1091,7 +1041,7 @@ impl App {
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the
     /// connection has not ended since.
     pub(crate) fn connected(&self) -> bool {
-        self.link == Link::Up
+        self.outbox.link == Link::Up
     }
 
     /// The attached session, if any.
@@ -1393,9 +1343,9 @@ impl App {
         let command_id = hub_string(&hub.payload, "command_id");
         match hub.kind.as_str() {
             "hub_hello" if hub.schema_version == contract::SCHEMA_VERSION => {
-                let mut lines = std::mem::take(&mut self.held);
+                let mut lines = std::mem::take(&mut self.outbox.held);
                 lines.extend(self.reconnected());
-                self.link = Link::Up;
+                self.outbox.link = Link::Up;
                 lines
             }
             "hub_hello" => {
@@ -1406,7 +1356,7 @@ impl App {
                     hub.schema_version,
                     contract::SCHEMA_VERSION
                 ));
-                self.link = Link::Refused;
+                self.outbox.link = Link::Refused;
                 Vec::new()
             }
             "command_accepted" => {
@@ -1427,7 +1377,7 @@ impl App {
                     .and_then(|result| result.get("session_id"))
                     .and_then(Value::as_str)
                     .map(|id| SessionId(id.to_owned()));
-                match (self.pending.remove(&id), session) {
+                match (self.outbox.answered(&id), session) {
                     (Some((Kind::Start, draft)), Some(session)) => {
                         self.model_picker.start_model = None;
                         self.started(session, draft)
@@ -1494,11 +1444,11 @@ impl App {
         // A refused `model` command drops the writes its acceptance
         // would have made.
         self.model_picker_rejected(id);
-        match self.pending.get(id) {
+        match self.outbox.pending.get(id) {
             None => {}
             // Another client may have dropped or amended the row first.
             Some((Kind::Cancel | Kind::SteerDrop, _)) => {
-                self.pending.remove(id);
+                self.outbox.pending.remove(id);
             }
             Some((
                 Kind::Start
@@ -1513,20 +1463,28 @@ impl App {
                 self.fail(id);
             }
         }
+        // A refusal settles the command: its kept line goes out no more.
+        self.outbox.answered(id);
     }
 
     /// Drops a pending command, returning its draft to an empty box.
     fn fail(&mut self, id: &str) {
-        let Some((kind, draft)) = self.pending.remove(id) else {
-            return;
-        };
-        if self.draft.is_empty() {
-            self.draft.put_back(draft);
+        if let Some(failed) = self.outbox.fail(id) {
+            self.apply_failed(id, failed);
         }
-        if kind == Kind::Start {
+    }
+
+    /// Applies a popped command's failure: its draft back in an empty
+    /// box, `Starting` after a `start`, the queue and the offer after a
+    /// `reply`. The only place reaching them for a failure.
+    pub(crate) fn apply_failed(&mut self, id: &str, failed: outbox::Failed) {
+        if self.draft.is_empty() {
+            self.draft.put_back(failed.draft);
+        }
+        if failed.kind == Kind::Start {
             self.phase = Phase::Starting;
         }
-        if kind == Kind::Reply {
+        if failed.kind == Kind::Reply {
             self.queue.restore(id);
             self.offer.restore(id);
         }
@@ -1558,7 +1516,7 @@ impl App {
             match envelope.kind.as_str() {
                 "command_accepted" => {
                     if let Some(accepted) = read!(envelope, CommandAccepted) {
-                        self.pending.remove(&accepted.command_id.0);
+                        self.outbox.answered(&accepted.command_id.0);
                     }
                 }
                 "command_rejected" => {
@@ -1584,7 +1542,7 @@ impl App {
                         // No `commands_answered`: a `commands` answer from
                         // another session is ignored, and a resent command
                         // needs only its pending entry closed.
-                        self.pending.remove(&accepted.command_id.0);
+                        self.outbox.answered(&accepted.command_id.0);
                     }
                 }
                 "command_rejected" => {
@@ -1628,7 +1586,7 @@ impl App {
         match envelope.kind.as_str() {
             "command_accepted" => {
                 if let Some(accepted) = read!(envelope, CommandAccepted) {
-                    let sent = self.pending.remove(&accepted.command_id.0);
+                    let sent = self.outbox.answered(&accepted.command_id.0);
                     self.commands_answered(&accepted);
                     changed |= self.offer.file_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
@@ -1655,7 +1613,7 @@ impl App {
                 }
             }
             "reloaded" => {
-                if self.link == Link::Up {
+                if self.outbox.link == Link::Up {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
             }
@@ -1708,28 +1666,6 @@ impl App {
         self.screen.page(up, height);
         self.settle();
     }
-}
-
-/// A new command id from random bytes, as `doors::mint` makes one: `c_`
-/// and 16 hex digits. `tui` keeps its own copy because it may not depend on
-/// `doors`. `RandomState` seeds its keys from the operating system's
-/// randomness.
-pub(crate) fn mint() -> String {
-    format!("c_{:016x}", RandomState::new().hash_one(()))
-}
-
-/// A command for a session: `session_id` beside `id`, `command` and `args`.
-pub(crate) fn session_command(
-    id: &str,
-    command: &str,
-    session: &SessionId,
-    args: Option<Value>,
-) -> Value {
-    let mut line = json!({"id": id, "command": command, "session_id": session.0});
-    if let (Some(args), Some(object)) = (args, line.as_object_mut()) {
-        object.insert("args".to_owned(), args);
-    }
-    line
 }
 
 /// The text parts of a message, joined.

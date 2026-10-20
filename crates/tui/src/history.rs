@@ -374,7 +374,7 @@ impl App {
     /// The next page while the search panel is open, one at a time until
     /// the history ends.
     fn more(&mut self) -> Effect {
-        let up = self.link == Link::Up;
+        let up = self.outbox.link == Link::Up;
         let line = self
             .history
             .search
@@ -426,7 +426,7 @@ impl App {
     /// asked for and the recall waits for it. With no more pages nothing
     /// changes.
     fn older(&mut self) -> Effect {
-        let up = self.link == Link::Up;
+        let up = self.outbox.link == Link::Up;
         let mut lines = Vec::new();
         if !self.history.started {
             lines.extend(self.history.fetch(up));

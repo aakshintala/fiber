@@ -867,6 +867,18 @@ pub(super) fn dropped_fetch() -> (App, Vec<contract::Envelope>, String) {
 }
 
 #[test]
+fn an_answered_fetch_drops_its_kept_line() {
+    let (mut app, log, fetch) = dropped_fetch();
+    let (id, from, to) = command(&fetch);
+    // The loop writes the fetch: a reconnect would send it again.
+    app.outbox.wrote(&fetch);
+    assert!(app.outbox.is_kept(&id));
+    app.on_line(hub_answer(&id, &log, from, to));
+    assert!(!app.outbox.is_kept(&id));
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
 fn a_new_query_drops_the_stale_answer() {
     let (mut app, log, fetch) = dropped_fetch();
     let (id, _, _) = command(&fetch);

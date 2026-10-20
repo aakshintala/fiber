@@ -1283,7 +1283,8 @@ fn replayed_shell_lines_fold_into_the_second_pages() {
     let shell_id = "c_shell000000000001";
     let mut draft = Draft::default();
     draft.set("!!echo hi");
-    app.pending
+    app.outbox
+        .pending
         .insert(shell_id.to_owned(), (Kind::Shell, draft));
     app.on_line(Line::Session(contract::Envelope {
         kind: "command_accepted".to_owned(),

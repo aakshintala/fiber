@@ -834,7 +834,7 @@ impl App {
             self.draft.clear();
             return None;
         };
-        (self.link == Link::Up).then(|| (session.clone(), *busy))
+        (self.outbox.link == Link::Up).then(|| (session.clone(), *busy))
     }
 
     /// Sends `command` to the attached session. A rejection returns the
@@ -846,7 +846,7 @@ impl App {
         let id = mint();
         let line = session_command(&id, command, &session, args).to_string();
         let draft = std::mem::take(&mut self.draft);
-        self.pending.insert(id, (Kind::Command, draft));
+        self.outbox.insert(id, Kind::Command, draft);
         Effect::Send(vec![line])
     }
 
@@ -860,7 +860,7 @@ impl App {
         let lines =
             vec![session_command(&id, "close", &session, Some(json!({"now": true}))).to_string()];
         // Home has a fresh draft: a rejected `close` gives only its notice.
-        self.pending.insert(id, (Kind::Command, Draft::default()));
+        self.outbox.insert(id, Kind::Command, Draft::default());
         self.go_home();
         Effect::Send(lines)
     }
@@ -955,7 +955,7 @@ impl App {
         }
         // A command sent after the connection is lost goes nowhere, so the
         // draft stays. An empty draft stays too, unless it holds an image.
-        if matches!(self.link, Link::Down | Link::Refused) {
+        if matches!(self.outbox.link, Link::Down | Link::Refused) {
             return Effect::None;
         }
         if !has_image && text.trim().is_empty() {
@@ -1009,15 +1009,10 @@ impl App {
             };
         }
         let draft = std::mem::take(&mut self.draft);
-        self.pending.insert(id, (kind, draft));
         let line = line.to_string();
-        if self.link == Link::Up {
-            Effect::Send(vec![line])
-        } else {
-            // An Enter before the hub connects is held, not lost: `start`
-            // goes out once the hub speaks `hub_hello`.
-            self.held.push(line);
-            Effect::None
+        match self.outbox.send(id, kind, draft, line) {
+            Some(line) => Effect::Send(vec![line]),
+            None => Effect::None,
         }
     }
 
@@ -1028,7 +1023,7 @@ impl App {
         let id = mint();
         let args = content_arg(&draft);
         let line = session_command(&id, "prompt", session, Some(args)).to_string();
-        self.pending.insert(id, (Kind::Prompt, draft));
+        self.outbox.insert(id, Kind::Prompt, draft);
         line
     }
 
@@ -1045,7 +1040,7 @@ impl App {
         };
         let id = mint();
         let line = session_command(&id, "cancel", &session, None).to_string();
-        self.pending.insert(id, (Kind::Cancel, Draft::default()));
+        self.outbox.insert(id, Kind::Cancel, Draft::default());
         Effect::Send(vec![line])
     }
 
