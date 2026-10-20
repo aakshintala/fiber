@@ -140,6 +140,10 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "provider",
     ),
     (
+        "research/bedrock-converse-probe/raw/plain.eventstream",
+        "main",
+    ),
+    (
         "research/bedrock-converse-probe/raw/reasoning-oss-low.eventstream",
         "provider",
     ),

@@ -3,8 +3,9 @@
 //! own `FIBER_HOME`, holding the package copied with its endpoint rewritten to
 //! the fake server, and a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`. The
 //! package's `credential()` reads the key through `sh`, its `sign()` leaves
-//! it as the bearer token, and the fake server answers with the probe's
-//! recorded event stream (`research/bedrock-invoke-probe`).
+//! it as the bearer token, and the fake server answers with a probe's
+//! recorded event stream (`research/bedrock-invoke-probe`,
+//! `research/bedrock-converse-probe`).
 
 #![allow(
     clippy::unwrap_used,
@@ -22,8 +23,12 @@ use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::Value;
 use support::{Run, Setup, is_status, run_to_exit};
 
-/// The probe's recorded reply to "Say hello in five words.".
+/// The Invoke probe's recorded reply to "Say hello in five words.".
 const PLAIN: &[u8] = include_bytes!("../../../research/bedrock-invoke-probe/raw/plain.eventstream");
+
+/// The Converse probe's recorded reply from Ministral 3 8B to the same.
+const CONVERSE_PLAIN: &[u8] =
+    include_bytes!("../../../research/bedrock-converse-probe/raw/plain.eventstream");
 
 /// The package's endpoint, which the copy points at the fake server.
 const ENDPOINT: &str = "https://bedrock-runtime.{region}.amazonaws.com";
@@ -59,26 +64,33 @@ fn run(setup: &Setup, args: &[&str], env: &[(&str, &str)]) -> Run {
     ))
 }
 
-#[test]
-fn a_bedrock_api_key_completes_a_turn_on_the_invoke_api() {
-    let setup = Setup::new();
+/// The fake server answering once with `body` as Bedrock frames it, and the
+/// installed package's region: the server's host, read from `AWS_REGION`.
+fn bedrock(setup: &Setup, body: &[u8]) -> (ProviderServer, String) {
     let server = ProviderServer::start([Response {
         status: 200,
         headers: vec![(
             "content-type".to_owned(),
             "application/vnd.amazon.eventstream".to_owned(),
         )],
-        body: PLAIN.to_vec(),
+        body: body.to_vec(),
         drop_connection: false,
         stall: false,
     }])
     .unwrap();
     let to = setup.root.path().join("pkg-bedrock");
     support::package::copy_package("bedrock", &to, ENDPOINT, "http://{region}");
-    let installed = run(&setup, &["extension", "install", to.to_str().unwrap()], &[]);
+    let installed = run(setup, &["extension", "install", to.to_str().unwrap()], &[]);
     assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
     // The region setting is the per-account host, read from `AWS_REGION`.
     let host = server.url().strip_prefix("http://").unwrap().to_owned();
+    (server, host)
+}
+
+#[test]
+fn a_bedrock_api_key_completes_a_turn_on_the_invoke_api() {
+    let setup = Setup::new();
+    let (server, host) = bedrock(&setup, PLAIN);
 
     let run = run(
         &setup,
@@ -158,4 +170,96 @@ fn a_bedrock_api_key_completes_a_turn_on_the_invoke_api() {
     assert_eq!(body["anthropic_version"], "bedrock-2023-05-31");
     assert!(body.get("model").is_none(), "{body}");
     assert!(body.get("stream").is_none(), "{body}");
+}
+
+#[test]
+fn a_bedrock_api_key_completes_a_turn_on_the_converse_api() {
+    let setup = Setup::new();
+    let (server, host) = bedrock(&setup, CONVERSE_PLAIN);
+
+    let run = run(
+        &setup,
+        &[
+            "ask",
+            "--model",
+            "bedrock/mistral.ministral-3-8b-instruct",
+            "hi",
+        ],
+        &[
+            ("AWS_BEARER_TOKEN_BEDROCK", "bedrock-test-key"),
+            ("AWS_REGION", &host),
+        ],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "extension_exec",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    // `credential()` reading the environment is logged, but never the key.
+    assert_eq!(run.first("extension_exec")["payload"]["program"], "/bin/sh");
+    assert!(
+        run.lines
+            .iter()
+            .all(|line| !line.to_string().contains("bedrock-test-key")),
+        "the key reached the session log"
+    );
+    assert_eq!(
+        run.first("text_completed")["payload"]["text"],
+        "Hello! How\u{2019}s it goin\u{2019} now?"
+    );
+    let usage = &run.first("usage_recorded")["payload"];
+    assert_eq!(usage["tokens"]["input"], 15);
+    assert_eq!(usage["tokens"]["output"], 11);
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let sent = &requests[0];
+    assert_eq!(
+        sent.path,
+        "/model/mistral.ministral-3-8b-instruct/converse-stream"
+    );
+    assert_eq!(
+        sent.header("authorization"),
+        Some(fingerprint("Bearer bedrock-test-key").as_str())
+    );
+    assert_eq!(
+        sent.header("accept"),
+        Some("application/vnd.amazon.eventstream")
+    );
+    assert_eq!(sent.header("x-amz-date"), None);
+    let body: Value = serde_json::from_slice(&sent.body).unwrap();
+    // The package's data for the model: its output limit, no cache marker,
+    // and Fiber's tools as `toolSpec`s with no `strict`.
+    assert_eq!(
+        body["inferenceConfig"],
+        serde_json::json!({"maxTokens": 4096})
+    );
+    assert!(!body.to_string().contains("cachePoint"), "{body}");
+    let tools = body["toolConfig"]["tools"].as_array().unwrap();
+    assert!(!tools.is_empty(), "{body}");
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool["toolSpec"]["name"].is_string()
+                && tool["toolSpec"].get("strict").is_none()),
+        "{body}"
+    );
+    assert_eq!(body["messages"][0]["role"], "user");
 }
