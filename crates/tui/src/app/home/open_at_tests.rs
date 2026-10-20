@@ -391,23 +391,19 @@ fn a_history_answer_after_the_last_draw_still_raises_full() {
     assert_eq!(sent.len(), 1, "the ack releases commands, got {sent:?}");
     assert_eq!(sent[0]["command"], "commands");
     assert!(app.tail_due().is_some(), "the tail read starts");
-    // The tail's window: one answer from the log's start fills it.
-    while let Some(args) = app.tail_next() {
-        assert_eq!(
-            args,
-            json!({}),
-            "the first window reads the tail, got {args:?}"
-        );
-        app.tail_lines(tail_log());
-    }
-    app.install_tail();
+    // The tail's window: the read is requested but unanswered.
+    assert_eq!(
+        app.tail_next(),
+        Some(json!({})),
+        "the first window reads the tail"
+    );
     drawn(&mut app);
     // The tail's `history` answer arrives after the last draw, with
-    // no further input: a late answer the installed preview drops.
+    // no further input: installing it still raises `full`.
     app.tail_lines(tail_log());
     assert_eq!(app.notice(), None);
-    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
-        .unwrap_or_else(|err| panic!("{err}"));
+    app.install_tail();
+    let raise = raise_line(&mut app);
     assert_eq!(raise["command"], "subscribe");
     assert_eq!(raise["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(raise["args"], json!({"level": "full"}));

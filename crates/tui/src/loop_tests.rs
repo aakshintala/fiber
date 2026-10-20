@@ -1383,6 +1383,41 @@ fn stall_report_names_finished_helpers() {
     );
 }
 
+/// Pumps folds until `stop` arrives: each fold signal renews the
+/// no-progress window and sends one release, so a slow machine folds
+/// every chunk within the window; `stop`'s arrival ends the pump, so the
+/// window never covers a held answer. A stop that lands as the window
+/// expires still ends the pump through the recheck. `waiting` signals
+/// each entry into the windowed wait, so a test parks only once the
+/// pump waits. `idle` names the wait in the error when neither a fold
+/// nor the stop arrives.
+fn pump_until_stop<T>(
+    window: Duration,
+    reached: &mpsc::Receiver<()>,
+    release: &mpsc::Sender<()>,
+    stop: &mpsc::Receiver<T>,
+    waiting: &mpsc::Sender<()>,
+    idle: &str,
+) -> Result<T, String> {
+    loop {
+        if let Ok(stop) = stop.try_recv() {
+            return Ok(stop);
+        }
+        waiting.send(()).unwrap_or(());
+        // One fresh window per signal through the shared deadline
+        // type: each fold renews the no-progress bound.
+        match Deadline::after(window).recv(reached) {
+            Ok(()) => {
+                release.send(()).unwrap_or(());
+            }
+            Err(_) => match stop.try_recv() {
+                Ok(stop) => return Ok(stop),
+                Err(_) => return Err(format!("{idle} for {window:?}")),
+            },
+        }
+    }
+}
+
 /// Drains the run thread chunk by chunk: each fold signal renews the
 /// no-progress window and sends one release, so a slow machine folds
 /// every chunk within the window while the whole log takes what it
@@ -1393,19 +1428,8 @@ fn drain_by_chunk<T>(
     release: &mpsc::Sender<()>,
     finished: &mpsc::Receiver<T>,
 ) -> Result<T, String> {
-    loop {
-        // One fresh window per signal through the shared deadline
-        // type: each fold renews the no-progress bound.
-        match Deadline::after(window).recv(reached) {
-            Ok(()) => {
-                release.send(()).unwrap_or(());
-            }
-            Err(_) => match finished.try_recv() {
-                Ok(done) => return Ok(done),
-                Err(_) => return Err(format!("no fold for {window:?}")),
-            },
-        }
-    }
+    let (waiting_tx, _waiting) = mpsc::channel();
+    pump_until_stop(window, reached, release, finished, &waiting_tx, "no fold")
 }
 
 /// Pumps folds until the hub parks at `history`: each fold signal
@@ -1419,25 +1443,16 @@ fn pump_until_parked(
     reached: &mpsc::Receiver<()>,
     release: &mpsc::Sender<()>,
     parked: &mpsc::Receiver<()>,
+    waiting: &mpsc::Sender<()>,
 ) -> Result<(), String> {
-    loop {
-        if parked.try_recv().is_ok() {
-            return Ok(());
-        }
-        // One fresh window per signal through the shared deadline
-        // type: each fold renews the no-progress bound.
-        match Deadline::after(window).recv(reached) {
-            Ok(()) => {
-                release.send(()).unwrap_or(());
-            }
-            Err(_) => {
-                if parked.try_recv().is_ok() {
-                    return Ok(());
-                }
-                return Err(format!("no fold nor park for {window:?}"));
-            }
-        }
-    }
+    pump_until_stop(
+        window,
+        reached,
+        release,
+        parked,
+        waiting,
+        "no fold nor park",
+    )
 }
 
 /// Unpacks a waited run thread return: the value, or a panic naming the
@@ -1485,38 +1500,10 @@ fn the_park_ends_the_pump_without_a_fold() {
         .send(())
         .unwrap_or_else(|err| panic!("park: {err}"));
     drop(parked_tx);
-    pump_until_parked(DRAIN, &reached, &release_tx, &parked).unwrap_or_else(|err| panic!("{err}"));
-    assert!(release.try_recv().is_err(), "no fold was released");
-}
-
-#[test]
-fn a_fold_before_the_park_is_released_then_the_pump_ends() {
-    let (reached_tx, reached) = mpsc::channel();
-    let (release_tx, release) = mpsc::channel();
-    let (parked_tx, parked) = mpsc::channel();
-    let (done_tx, done) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("pump-park".to_owned())
-        .spawn(move || {
-            let pumped = pump_until_parked(DRAIN, &reached, &release_tx, &parked);
-            done_tx.send(pumped).unwrap_or(());
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // A fold, as the loop waits in its answer: the pump releases it.
-    reached_tx
-        .send(())
-        .unwrap_or_else(|err| panic!("fold: {err}"));
-    Deadline::after(DRAIN).recv_or_fail(&release, "the pump to release the fold");
-    // The park with its ping, as the hub sends them: the pump ends.
-    parked_tx
-        .send(())
-        .unwrap_or_else(|err| panic!("park: {err}"));
-    reached_tx
-        .send(())
-        .unwrap_or_else(|err| panic!("ping: {err}"));
-    Deadline::after(DRAIN)
-        .recv_or_fail(&done, "the pump to end at the park")
+    let (waiting_tx, _waiting) = mpsc::channel();
+    pump_until_parked(DRAIN, &reached, &release_tx, &parked, &waiting_tx)
         .unwrap_or_else(|err| panic!("{err}"));
+    assert!(release.try_recv().is_err(), "no fold was released");
 }
 
 #[test]
@@ -1524,22 +1511,34 @@ fn a_park_without_a_ping_ends_the_pump_at_the_window() {
     let (reached_tx, reached) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
     let (parked_tx, parked) = mpsc::channel();
+    let (waiting_tx, waiting) = mpsc::channel();
     let (done_tx, done) = mpsc::channel();
     std::thread::Builder::new()
         .name("pump-park-late".to_owned())
         .spawn(move || {
-            let pumped =
-                pump_until_parked(Duration::from_millis(300), &reached, &release_tx, &parked);
+            let pumped = pump_until_parked(
+                Duration::from_millis(300),
+                &reached,
+                &release_tx,
+                &parked,
+                &waiting_tx,
+            );
             done_tx.send(pumped).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The pump waits before the first fold: the wait signal proves it
+    // entered its windowed wait.
+    Deadline::after(DRAIN).recv_or_fail(&waiting, "the pump to wait");
     // A fold, as the loop waits in its answer: the pump releases it.
     reached_tx
         .send(())
         .unwrap_or_else(|err| panic!("fold: {err}"));
     Deadline::after(DRAIN).recv_or_fail(&release, "the pump to release the fold");
-    // The park with no ping: no wakeup follows, so the window expires
-    // and the recheck ends the pump.
+    // The pump waits again past its recheck point: the second wait
+    // signal proves the top recheck already ran with no park, so the
+    // park below lands while the pump waits and only the window's
+    // expiry ends it, through the recheck.
+    Deadline::after(DRAIN).recv_or_fail(&waiting, "the pump to wait again");
     parked_tx
         .send(())
         .unwrap_or_else(|err| panic!("park: {err}"));
@@ -1550,10 +1549,31 @@ fn a_park_without_a_ping_ends_the_pump_at_the_window() {
 
 #[test]
 fn no_fold_and_no_park_fails_the_pump_window() {
-    let (_reached_tx, reached) = mpsc::channel();
+    let (reached_tx, reached) = mpsc::channel();
     let (release_tx, _release) = mpsc::channel();
-    let (_parked_tx, parked) = mpsc::channel();
-    let err = match pump_until_parked(Duration::from_millis(50), &reached, &release_tx, &parked) {
+    let (parked_tx, parked) = mpsc::channel();
+    let (waiting_tx, _waiting) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("pump-park-fail".to_owned())
+        .spawn(move || {
+            let pumped = pump_until_parked(
+                Duration::from_millis(50),
+                &reached,
+                &release_tx,
+                &parked,
+                &waiting_tx,
+            );
+            done_tx.send(pumped).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // No fold and no park will ever arrive: both senders hang up, so
+    // the pump fails on the hangup without outlasting any window.
+    drop(reached_tx);
+    drop(parked_tx);
+    let err = match Deadline::after(DRAIN)
+        .recv_or_fail(&done, "the pump to fail with no fold and no park")
+    {
         Ok(()) => panic!("the pump ended with no fold and no park"),
         Err(err) => err,
     };
@@ -1790,6 +1810,9 @@ fn resume_open_replays_the_log_to_the_tail() {
     // Dropping the sender on panic releases the hub the same way.
     let (history_parked_tx, history_parked) = mpsc::channel();
     let (history_release_tx, history_release) = mpsc::channel();
+    // The pump's wait signal, unread here: the park ends the pump, so
+    // the test needs no proof it waited.
+    let (pump_waiting_tx, _pump_waiting) = mpsc::channel();
     // The hub signals when it finishes its writes, so the test waits on
     // the hub's answer instead of the drain window alone.
     let (hub_done_tx, hub_done) = mpsc::channel();
@@ -1929,7 +1952,13 @@ fn resume_open_replays_the_log_to_the_tail() {
     // Panicking drops the history release sender, which releases the
     // held hub thread too.
     unpack_wait(
-        pump_until_parked(DRAIN, &fold_reached, &fold_release_tx, &history_parked),
+        pump_until_parked(
+            DRAIN,
+            &fold_reached,
+            &fold_release_tx,
+            &history_parked,
+            &pump_waiting_tx,
+        ),
         format!("the loop neither folded nor parked at history for {DRAIN:?}"),
         &finished,
         &hub_progress,
