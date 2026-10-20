@@ -225,7 +225,6 @@ fn rearming_moves_the_deadline() {
     let (tx, rx) = mpsc::channel();
     let _finished = run(&ticker, clock.clone(), tx);
     ticker.arm(Some(first));
-    parked(&clock, first);
     let mark = clock
         .mark_parked(first, DEADLINE)
         .expect("ticker did not park at the first deadline");
