@@ -833,3 +833,139 @@ fn settle_keeps_the_top_rows_page() {
         "the pin survives the settle"
     );
 }
+
+/// The call's id.
+fn call_id(call: Target) -> usize {
+    if let Target::Call(id) = call {
+        id
+    } else {
+        panic!("a call target, not {call:?}");
+    }
+}
+
+/// The opened call's more row: the focus stop inside an opened call a
+/// reveal can name.
+fn more_row(screen: &Screen, call: Target) -> usize {
+    let want = crate::mouse::TargetId::Line(Target::CallView(call_id(call)));
+    screen
+        .pages()
+        .focus_items()
+        .into_iter()
+        .find(|(_, _, id)| *id == want)
+        .map(|(row, _, _)| row)
+        .expect("the more row is a focus stop")
+}
+
+#[test]
+fn reveal_onto_a_row_inside_an_opened_call_lands_it_under_the_pin() {
+    let (mut screen, _, calls) = read_group(2, &[true, false], 30, &[false, false]);
+    let call = calls[0];
+    let more = more_row(&screen, call);
+    // From below the opened block, revealing the more row scrolls up:
+    // the row would land on row 0, so it lands on row 1 instead.
+    let last = screen.pages().index().total();
+    screen.jump(last);
+    screen.settle(4);
+    assert!(
+        screen.top().is_some_and(|top| top > more),
+        "the more row is above the top"
+    );
+    screen.reveal(more, 4);
+    assert_eq!(
+        screen.top(),
+        Some(more.saturating_sub(1)),
+        "the reveal lands one row above the more row"
+    );
+    assert_eq!(
+        screen.pin(4).map(|pin| pin.target),
+        Some(call),
+        "the pin stays on the call"
+    );
+}
+
+#[test]
+fn reveal_without_a_pin_lands_on_the_row() {
+    let mut screen = screen(3);
+    let turn = screen
+        .pages()
+        .focus_items()
+        .into_iter()
+        .find(|(_, _, id)| *id == crate::mouse::TargetId::Turn(1))
+        .map(|(row, _, _)| row)
+        .expect("the second turn is a focus stop");
+    let last = screen.pages().index().total();
+    screen.jump(last);
+    screen.settle(10);
+    assert!(
+        screen.top().is_some_and(|top| top > turn),
+        "the turn is above the top"
+    );
+    screen.reveal(turn, 10);
+    assert_eq!(
+        screen.top(),
+        Some(turn),
+        "with no pin the reveal lands on the row"
+    );
+    assert_eq!(screen.pin(10), None, "no pin without an opened call");
+}
+
+#[test]
+fn land_stops_one_row_above_under_a_pin() {
+    let (mut screen, _, calls) = read_group(1, &[true], 30, &[false]);
+    let call = calls[0];
+    let first = opened_rows(&screen, call)
+        .first()
+        .copied()
+        .expect("opened rows");
+    let row = first + 5;
+    screen.land(row);
+    assert_eq!(
+        screen.top(),
+        Some(row - 1),
+        "the landing stops above the row"
+    );
+    assert_eq!(
+        screen.pin(5).map(|pin| pin.target),
+        Some(call),
+        "the pin stays on the call"
+    );
+}
+
+#[test]
+fn land_without_a_pin_jumps_to_the_row() {
+    let mut screen = screen(1);
+    let (drawn, _) = screen.pages().page_text(0).expect("page 0 resident");
+    let width = screen.pages().wrap_width();
+    let mut row = 0usize;
+    let mut reply = None;
+    for (line, _) in &drawn {
+        let count = crate::view::rows(line.clone(), width);
+        if line.to_string().contains("reply 0") {
+            reply = Some(row);
+            break;
+        }
+        row += count;
+    }
+    let reply = reply.expect("a reply row");
+    screen.land(reply + 1);
+    assert_eq!(
+        screen.top(),
+        Some(reply + 1),
+        "with no pin the landing jumps to the row"
+    );
+    assert_eq!(screen.pin(5), None, "no pin without an opened call");
+}
+
+#[test]
+fn landing_on_the_row_below_the_header_clears_the_pin() {
+    let (mut screen, group, _) = read_group(1, &[false], 5, &[false]);
+    let header = line_row(&screen, group).expect("the header row");
+    let below = header + 1;
+    screen.land(below);
+    assert_eq!(
+        screen.top(),
+        Some(header),
+        "the landing uses the true top row"
+    );
+    assert_eq!(screen.pin(5), None, "the header on row 0 pins nothing");
+}

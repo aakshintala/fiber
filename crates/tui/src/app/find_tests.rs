@@ -2829,3 +2829,254 @@ fn a_moved_revision_on_a_dropped_page_counts_the_rescan_once() {
         "the fetch reads the moved page"
     );
 }
+
+/// An app with one group holding one read call with `lines` detail lines,
+/// the `needles` of them holding "needle {n}", then `tail` filler reply
+/// lines: the ledger and the call stay open. Returns the app, the logged
+/// lines the fake hub answers from, the call, the first opened content
+/// row and the needle rows.
+fn pinned_search_app(
+    lines: usize,
+    needles: &[usize],
+    tail: usize,
+) -> (
+    App,
+    Vec<contract::Envelope>,
+    crate::app::Target,
+    usize,
+    Vec<usize>,
+) {
+    let mut app = attached(60, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "assistant_message_started",
+        json!({}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "tool_call_requested",
+        json!({"name": "read", "arguments": {"path": "src/0.rs"}}),
+        Some("a_c0"),
+    ));
+    let detail: Vec<String> = (1..=lines)
+        .map(|n| {
+            if needles.contains(&n) {
+                format!("L{n:04} needle {n} of call")
+            } else {
+                format!("L{n:04} of call")
+            }
+        })
+        .collect();
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "tool_call_completed",
+        json!({"status": "completed",
+            "content": [{"type": "text", "text": detail.join("\n")}]}),
+        Some("a_c0"),
+    ));
+    let filler: Vec<String> = (1..=tail).map(|n| format!("tail {n}")).collect();
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "assistant_message_delta",
+        json!({"text": filler.join("\n")}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": filler.join("\n")}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "assistant_message_completed",
+        json!({"outcome": "completed"}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    let group = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, crate::app::Target::Group(_)).then_some(target))
+        .expect("a group target");
+    app.open(group);
+    let call = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, crate::app::Target::Call(_)).then_some(target))
+        .expect("a call target");
+    app.open(call);
+    let (rows, texts) = app.pages().page_text(0).expect("the resident page");
+    let width = app.pages().wrap_width();
+    let mut row = 0usize;
+    let mut first = None;
+    let mut matches = Vec::new();
+    let mut call_row = None;
+    for ((line, target), text) in rows.iter().zip(&texts) {
+        if *target == Some(call) && call_row.is_none() {
+            call_row = Some(row);
+        }
+        if first.is_none() && text.scopes.last() == Some(&call) {
+            first = Some(row);
+        }
+        if line.to_string().contains("needle") {
+            matches.push(row);
+        }
+        row += crate::view::rows(line.clone(), width);
+    }
+    let header = call_row.expect("the call row");
+    assert_eq!(
+        first,
+        Some(header + 1),
+        "the opened content follows the call row"
+    );
+    (app, log, call, first.expect("opened rows"), matches)
+}
+
+#[test]
+fn the_current_match_lands_under_the_pin() {
+    let (mut app, log, call, first, needles) = pinned_search_app(30, &[5, 15], 12);
+    assert_eq!(needles.len(), 2, "two needle rows");
+    // The top sits inside the opened output, so the call pins it.
+    app.jump(first + 2);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the call pins the top row"
+    );
+    search_all(&mut app, &log, "needle");
+    // The first match already shows, so nothing scrolls; next-match
+    // moves to the second, hidden one, landing it under the pin.
+    assert_eq!(
+        app.top(),
+        Some(first + 2),
+        "the visible first match does not scroll"
+    );
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        app.top(),
+        Some(needles[1] - 1),
+        "next-match lands under the pin"
+    );
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the pin stays on the call"
+    );
+}
+
+#[test]
+fn a_match_on_the_pinned_top_row_re_lands_under_the_pin() {
+    let (mut app, log, call, _, needles) = pinned_search_app(30, &[5], 12);
+    assert_eq!(needles.len(), 1, "one needle row");
+    // The top sits on the match, pinned over by the call.
+    app.jump(needles[0]);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the call pins the match row"
+    );
+    search_all(&mut app, &log, "needle");
+    assert_eq!(
+        app.top(),
+        Some(needles[0] - 1),
+        "the match moves under the pin"
+    );
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the pin stays on the call"
+    );
+}
+
+#[test]
+fn a_match_with_no_pin_lands_on_the_top_row() {
+    let mut app = attached(60, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    let filler: Vec<String> = (1..=4).map(|n| format!("filler {n}")).collect();
+    for line in filler {
+        app.on_line(numbered(
+            &mut log,
+            &mut seq,
+            "text_completed",
+            json!({"text": line}),
+            Some("a_m"),
+        ));
+    }
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "a needle in the open"}),
+        Some("a_m"),
+    ));
+    let tail: Vec<String> = (1..=12).map(|n| format!("tail {n}")).collect();
+    for line in tail {
+        app.on_line(numbered(
+            &mut log,
+            &mut seq,
+            "text_completed",
+            json!({"text": line}),
+            Some("a_m"),
+        ));
+    }
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    app.jump(0);
+    search_all(&mut app, &log, "needle");
+    let (rows, _) = app.pages().page_text(0).expect("the resident page");
+    let width = app.pages().wrap_width();
+    let mut row = 0usize;
+    let mut at = None;
+    for (line, _) in &rows {
+        if line.to_string().contains("needle") {
+            at = Some(row);
+            break;
+        }
+        row += crate::view::rows(line.clone(), width);
+    }
+    let at = at.expect("a needle row");
+    assert_eq!(
+        app.top(),
+        Some(at),
+        "with no pin the match lands on the top row"
+    );
+    assert_eq!(app.pinned_row(), None, "nothing pins");
+}

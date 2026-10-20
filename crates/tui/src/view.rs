@@ -450,6 +450,11 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
     // laid out with the gap in the loop below. The turns loop after it
     // reads them.
     let mut layout: Vec<(u16, u16)> = Vec::with_capacity(lines.len());
+    // The pinned header covers the top row's own line: that line keeps
+    // no hit, so the pin is the click and focus target on row 0 and the
+    // covered row steps or reveals out from under it (`docs/tui.md`,
+    // "Pinned call").
+    let pinned = pin.is_some() && !app.item_open() && app.top().is_some() && area.height > 0;
     // A line wholly above `top` or below `end` shows no rows.
     for (at, (line, rows, open)) in lines.into_iter().enumerate() {
         let next = start.saturating_add(rows);
@@ -517,7 +522,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
                 width: cols.end.saturating_sub(cols.start),
                 ..rect
             });
-            if height > 0 {
+            if height > 0 && !(pinned && y == area.y) {
                 targets.push(Target {
                     id: TargetId::Line(open),
                     rect: Rect { height, ..cells },
@@ -546,7 +551,7 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         }
         if let Some(rect) = rect {
             let height = rect.height.min(last.saturating_sub(rect.y));
-            if height > 0 {
+            if height > 0 && !(pinned && y == area.y) {
                 turned.push(Target {
                     id: TargetId::Turn(at),
                     rect: Rect { height, ..rect },

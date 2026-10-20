@@ -2902,3 +2902,110 @@ fn the_badge_warning_sign_is_split_from_the_rest_of_the_badge() {
         ]
     );
 }
+
+/// An app with one group holding one read call with `lines` lines of
+/// output, the ledger and the call open. Returns the app, the call, its
+/// row and the first opened content row.
+fn pinned_call(lines: usize) -> (App, crate::app::Target, usize, usize) {
+    use crate::app::Target as AppTarget;
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "assistant_message_started",
+        serde_json::json!({}),
+        Some("a_m"),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "tool_call_requested",
+        serde_json::json!({"name": "read", "arguments": {"path": "src/0.rs"}}),
+        Some("a_c0"),
+    ));
+    let detail: Vec<String> = (1..=lines).map(|n| format!("L{n:04} of call")).collect();
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "tool_call_completed",
+        serde_json::json!({"status": "completed",
+            "content": [{"type": "text", "text": detail.join("\n")}]}),
+        Some("a_c0"),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "assistant_message_completed",
+        serde_json::json!({"outcome": "completed"}),
+        Some("a_m"),
+    ));
+    app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    let group = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, AppTarget::Group(_)).then_some(target))
+        .expect("a group target");
+    app.open(group);
+    let call = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, AppTarget::Call(_)).then_some(target))
+        .expect("a call target");
+    app.open(call);
+    let (rows, texts) = app.pages().page_text(0).expect("the resident page");
+    let width = app.pages().wrap_width();
+    let mut row = 0usize;
+    let mut header = None;
+    let mut first = None;
+    for ((line, target), text) in rows.iter().zip(&texts) {
+        if *target == Some(call) {
+            header = Some(row);
+        }
+        if first.is_none() && text.scopes.last() == Some(&call) {
+            first = Some(row);
+        }
+        row += crate::view::rows(line.clone(), width);
+    }
+    let header = header.expect("the call row");
+    let first = first.expect("opened rows");
+    assert_eq!(first, header + 1, "the opened content follows the call row");
+    (app, call, header, first)
+}
+
+#[test]
+fn the_pin_draws_the_call_row_over_row_zero() {
+    let (mut app, _, _, first) = pinned_call(30);
+    // Two rows into the opened output, the call pins row 0: the top
+    // row's own text sits below it.
+    app.jump(first + 2);
+    let shown: Vec<String> = sized(&mut app, WIDTH, HEIGHT)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        shown[0].contains("src/0.rs"),
+        "row 0 holds the call's row: {shown:?}"
+    );
+    assert!(
+        shown[1].contains("L0004 of call"),
+        "the pin covers the top row, so the next row is below it: {shown:?}"
+    );
+}
+
+#[test]
+fn the_moment_the_call_row_scrolls_off_the_top_row_zero_keeps_it() {
+    let (mut app, _, _, first) = pinned_call(30);
+    // On the first opened row, the call's row has just scrolled off, and
+    // the pin keeps it on row 0.
+    app.jump(first);
+    let shown: Vec<String> = sized(&mut app, WIDTH, HEIGHT)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        shown[0].contains("src/0.rs"),
+        "row 0 keeps the call's row: {shown:?}"
+    );
+    assert!(
+        shown[1].contains("L0002 of call"),
+        "the pin covers the top row, so the next row is below it: {shown:?}"
+    );
+}

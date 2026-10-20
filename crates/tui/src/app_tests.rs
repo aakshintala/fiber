@@ -1912,3 +1912,137 @@ fn until_waited_needs_the_sessions_own_until_pass() {
         .push((session.clone(), Pass::Until(contract::Seq(7))));
     assert!(app.until_waited(&session), "its own boundary waits");
 }
+
+/// An app with one group holding one read call with `lines` lines of
+/// output, the ledger and the call open, the top `past` rows into the
+/// opened content. Returns the app, the call, its row and the group.
+fn pinned_call(lines: usize, past: usize) -> (App, crate::app::Target, usize, crate::app::Target) {
+    use crate::app::Target as AppTarget;
+    let mut app = self::app();
+    connect(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.set_size(60, 12);
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "assistant_message_started",
+        serde_json::json!({}),
+        Some("a_m"),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "tool_call_requested",
+        serde_json::json!({"name": "read", "arguments": {"path": "src/0.rs"}}),
+        Some("a_c0"),
+    ));
+    let detail: Vec<String> = (1..=lines).map(|n| format!("L{n:04} of call")).collect();
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "tool_call_completed",
+        serde_json::json!({"status": "completed",
+            "content": [{"type": "text", "text": detail.join("\n\n")}]}),
+        Some("a_c0"),
+    ));
+    let tail: Vec<String> = (1..=12).map(|n| format!("tail {n}")).collect();
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "assistant_message_delta",
+        serde_json::json!({"text": tail.join("\n\n")}),
+        Some("a_m"),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "assistant_message_completed",
+        serde_json::json!({"outcome": "completed"}),
+        Some("a_m"),
+    ));
+    app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
+    let group = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, AppTarget::Group(_)).then_some(target))
+        .expect("a group target");
+    app.open(group);
+    let call = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, AppTarget::Call(_)).then_some(target))
+        .expect("a call target");
+    app.open(call);
+    let (rows, texts) = app.pages().page_text(0).expect("the resident page");
+    let width = app.pages().wrap_width();
+    let mut row = 0usize;
+    let mut header = None;
+    for ((line, target), text) in rows.iter().zip(&texts) {
+        if *target == Some(call) {
+            header = Some(row);
+            break;
+        }
+        let _ = (line, text);
+        row += crate::view::rows(line.clone(), width);
+    }
+    let header = header.expect("the call row");
+    app.jump(header + 1 + past);
+    (app, call, header, group)
+}
+
+/// The mouse targets of `app` drawn at 60x12.
+fn pointed(app: &mut App) -> Vec<crate::mouse::Target> {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    app.set_size(60, 12);
+    let area = Rect::new(0, 0, 60, 12);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None)
+}
+
+#[test]
+fn a_click_on_the_pin_closes_the_call_and_lands_its_row_on_top() {
+    use crate::mouse::TargetId;
+    let (mut app, call, header, group) = pinned_call(30, 2);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the call pins the top row"
+    );
+    // The pin is the target at (0, 0).
+    let targets = pointed(&mut app);
+    let at_origin: Vec<TargetId> = targets
+        .iter()
+        .filter(|target| {
+            let rect = target.rect;
+            rect.x == 0 && rect.y == 0
+        })
+        .map(|target| target.id)
+        .collect();
+    assert!(
+        at_origin.contains(&TargetId::Line(call)),
+        "the pin is at (0, 0): {at_origin:?}"
+    );
+    // Clicking it closes the call and lands the closed row on top.
+    assert_eq!(app.on_click(TargetId::Line(call)), Effect::None);
+    assert!(
+        !app.targets()
+            .iter()
+            .any(|(_, target)| { matches!(target, crate::app::Target::CallView(_)) }),
+        "the call closed"
+    );
+    assert_eq!(app.top(), Some(header), "the closed row is on top");
+    // The ledger still pins the closed row, so a second click on (0, 0)
+    // is a click on the group line today: it closes the ledger.
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(group),
+        "the group pins the closed row"
+    );
+    let targets = pointed(&mut app);
+    assert!(
+        targets.iter().any(|target| target.rect.x == 0
+            && target.rect.y == 0
+            && target.id == TargetId::Line(group)),
+        "the group pin is at (0, 0)"
+    );
+    assert_eq!(app.on_click(TargetId::Line(group)), Effect::None);
+    assert_eq!(app.pinned_row(), None, "the ledger closed, so nothing pins");
+}
