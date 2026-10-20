@@ -4,7 +4,7 @@ Run `fiber` to open the terminal. It opens on home: the session list, the input 
 
 Pick the model first if you have one in mind: the model chip opens the model picker. `fiber models` lists the installed providers' models from the command line, with the configured default marked.
 
-Type the task as one prompt and press Enter. Small and concrete wins the first time: ask for a summary of the repository, or for one small change with its tests.
+Small and concrete wins the first time: ask for a summary of the repository, or for one small change with its tests.
 
 ## One-shot runs
 
