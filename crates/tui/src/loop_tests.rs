@@ -626,21 +626,21 @@ fn the_paging_report_times_the_resize_and_absent_search() {
 /// fake-clock advance and no real-clock read.
 struct ScriptClock {
     script: Vec<std::time::Instant>,
-    at: AtomicU64,
+    at: std::sync::atomic::AtomicUsize,
 }
 
 impl ScriptClock {
     fn clock(script: Vec<std::time::Instant>) -> Arc<Self> {
         Arc::new(Self {
             script,
-            at: AtomicU64::new(0),
+            at: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 }
 
 impl contract::clock::Clock for ScriptClock {
     fn now(&self) -> std::time::Instant {
-        let at = self.at.fetch_add(1, Ordering::SeqCst) as usize;
+        let at = self.at.fetch_add(1, Ordering::SeqCst);
         self.script[at.min(self.script.len() - 1)]
     }
 

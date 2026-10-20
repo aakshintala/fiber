@@ -30,7 +30,9 @@ use notices::Notices;
 use overlay::Overlay;
 use steering::Steering;
 
-pub(crate) use notices::{FADE, NoticeLine};
+#[cfg(test)]
+pub(crate) use notices::FADE;
+pub(crate) use notices::NoticeLine;
 
 #[path = "notices.rs"]
 mod notices;
@@ -983,10 +985,6 @@ impl App {
     /// Births unborn notices and removes expired events; the frame calls
     /// it before each draw and again after, and `run_with` calls it
     /// before the first arm.
-    #[allow(
-        dead_code,
-        reason = "the frame and startup sweeps land with the loop wiring"
-    )]
     pub(crate) fn sweep_notices(&mut self, now: Instant) {
         self.notices.sweep(now);
     }

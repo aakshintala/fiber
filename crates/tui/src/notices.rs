@@ -193,10 +193,6 @@ impl Notices {
     /// rows leave before the draw, so none occupies a shown slot. The
     /// single remover: every other end clears through `dismiss` or
     /// [`Notices::clear_code`].
-    #[allow(
-        dead_code,
-        reason = "the frame and startup sweeps land with the loop wiring"
-    )]
     pub(crate) fn sweep(&mut self, now: Instant) {
         for notice in &mut self.stack {
             if notice.born.is_none() {
