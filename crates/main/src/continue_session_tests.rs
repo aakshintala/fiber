@@ -134,6 +134,67 @@ fn removed_worktree_after_share_refuses_not_found_with_no_new_log() {
 }
 
 #[test]
+fn share_failure_with_worktree_and_parent_gone_is_not_found() {
+    // The worktree nested one deeper, so its parent can go with it
+    // while the sessions directory stands.
+    let home = fakes::TempDir::new("main-continues-share-gone");
+    let workspace = home.path().join("par").join("wt");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let old_dir = home.path().join("sessions").join(OLD);
+    std::fs::create_dir_all(&old_dir).unwrap();
+    let first = started(&workspace, Some(worktree(&workspace)));
+    std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
+    let recorded = resolve(&new(), &old(), &old_dir, &workspace).unwrap();
+    // The worktree went with its parents: `share` cannot open its
+    // lock, so the mapping refuses `session_not_found` naming the
+    // old session.
+    std::fs::remove_dir_all(home.path().join("par")).unwrap();
+    let error = super::shared(&recorded, &old()).unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::SessionNotFound);
+    assert!(
+        error.message.contains(OLD),
+        "the refusal names the old session: {}",
+        error.message
+    );
+    // No new session line was written: the sessions dir holds only the
+    // old session, never the refused new one. No lock file was created
+    // beside the missing path either: `share` never opened it.
+    assert!(
+        !old_dir
+            .parent()
+            .unwrap()
+            .join("s_bbbbbbbbbbbbbbbb")
+            .exists(),
+        "no new session log was created"
+    );
+    assert!(
+        !home.path().join("par").join("wt.lock").exists(),
+        "no lock file was left behind"
+    );
+}
+
+#[test]
+fn share_failure_with_worktree_standing_propagates_io_failed() {
+    let (_home, old_dir, workspace) = fixture("main-continues-share-lock", None);
+    let first = started(&workspace, Some(worktree(&workspace)));
+    std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
+    let recorded = resolve(&new(), &old(), &old_dir, &workspace).unwrap();
+    // A directory planted where the sibling lock file goes: `share`
+    // cannot open it while the worktree stands, so the `io_failed`
+    // failure propagates unchanged.
+    let mut lock = workspace.clone();
+    lock.set_file_name("wt.lock");
+    std::fs::create_dir(&lock).unwrap();
+    let error = super::shared(&recorded, &old()).unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::IoFailed);
+    assert!(
+        error.message.contains("wt.lock"),
+        "the failure names the lock file: {}",
+        error.message
+    );
+}
+
+#[test]
 fn a_longer_old_log_resolves_on_its_first_line() {
     // A live old session keeps appending: only the first line is read.
     // Parsing the whole log would refuse a log like this as corrupt.

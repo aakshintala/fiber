@@ -61,8 +61,12 @@ pub(crate) fn session_continues(
     // The continuing process runs in the recorded worktree it did not
     // create: it shares the worktree's lock file for its life, so a
     // recreation or a removal never takes the worktree under it.
-    let _shared = match doors::share(Path::new(&recorded.path)) {
+    let _shared = match shared(&recorded, &old) {
         Ok(shared) => shared,
+        // The mapped refusal answers before any session line, as the
+        // recheck does; a share failure with the worktree standing
+        // propagates through the run's reporting, as today.
+        Err(failure) if failure.code == ErrorCode::SessionNotFound => return ask_failed(failure),
         Err(failure) => return crate::session_command::report(signals, failure),
     };
     // The old session may have ended and cleaned up between validation
@@ -183,6 +187,20 @@ fn resolve(
         ));
     }
     Ok(recorded)
+}
+
+/// Rulings 15: shares the recorded worktree's lock file. `share` opens
+/// the sibling `.lock` file without creating parents, so a worktree
+/// gone with its parents fails here, before the recheck: a failure
+/// with the recorded path absent refuses `session_not_found` naming
+/// the old session, and a failure with the path present propagates
+/// unchanged.
+fn shared(recorded: &Worktree, old: &SessionId) -> Result<doors::Shared, Failure> {
+    match doors::share(Path::new(&recorded.path)) {
+        Ok(shared) => Ok(shared),
+        Err(failure) if Path::new(&recorded.path).exists() => Err(failure),
+        Err(_) => Err(not_found(old)),
+    }
 }
 
 /// Rulings 15: the recorded worktree path rechecked after the shared
