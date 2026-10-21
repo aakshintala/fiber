@@ -651,6 +651,33 @@ impl LuaExtension {
         self.registered(|timeouts| timeouts.watchers.clone())
     }
 
+    /// Queues a watcher delivery as `Target::Watcher`, in the ordered
+    /// stream behind whatever runs or waits. Refused while the extension
+    /// is not running: nothing is queued, so the cursor must not advance
+    /// for it.
+    pub(crate) fn push_watcher(&self, index: usize, arg: Value) -> bool {
+        let mut shared = self.hub.lock();
+        if !matches!(shared.phase, Phase::Ready(_)) {
+            return false;
+        }
+        let asked = self.hub.clock().now();
+        shared.push(Target::Watcher { index }, arg, asked);
+        drop(shared);
+        self.hub.notify();
+        true
+    }
+
+    /// Whether the watcher has a delivery queued or running: the busy bit
+    /// the thread sets on start and clears on finish, or a queued job the
+    /// thread has not started. An ephemeral offer skips while this holds.
+    pub(crate) fn is_watcher_busy(&self, index: usize) -> bool {
+        let shared = self.hub.lock();
+        shared.watcher_busy.contains(&index)
+            || shared.queue.iter().any(
+                |job| matches!(&job.target, Target::Watcher { index: queued } if *queued == index),
+            )
+    }
+
     /// Runs the hook `index` registered at `point`, in registration order
     /// from 0, passing `arg`, and returns what its `run` returned as JSON.
     #[cfg(test)]

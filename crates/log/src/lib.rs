@@ -56,7 +56,7 @@ pub use search::{Identity, SessionScan};
 pub use state_fold::{Fold, Ruled, StateSeed, fold, fold_boundary, fold_from, seed};
 pub use usage::usage;
 pub use weak_emit::WeakEmit;
-pub use write::{Log, cut_joined, cut_notice};
+pub use write::{Log, Subscription, cut_joined, cut_notice};
 
 /// The log's name in a session directory.
 const EVENTS: &str = "events.jsonl";

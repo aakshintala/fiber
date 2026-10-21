@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
-use contract::events::CallStatus;
+use contract::events::{CallStatus, Notice};
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks, JobDelivery};
 use contract::shapes::Process;
 use contract::tool::SpillFile;
@@ -2329,4 +2329,347 @@ fn a_hook_given_a_call_without_a_file_sees_no_path_or_size() {
     let session = home.load(&[]);
     let answer = after_tool(&session, "x");
     assert_eq!(changed_content(&answer), Some("nil|nil"));
+}
+
+/// One delivered event's kind and payload, as a watcher test builds it.
+fn completed(n: u64) -> contract::events::Event {
+    contract::events::Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![],
+        details: Some(json!({"n": n})),
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        hosts_surfaced: vec![],
+        provider_item: None,
+        loaded: None,
+    })
+}
+
+fn noticed(message: &str) -> contract::events::Event {
+    contract::events::Event::Notice(Notice {
+        code: ErrorCode::ExtensionFailed,
+        message: message.to_owned(),
+        extension: None,
+    })
+}
+
+fn stepped() -> contract::events::Event {
+    contract::events::Event::StepStarted(contract::events::Empty {})
+}
+
+/// One `host.status` line per watcher run, sent on a channel in run
+/// order: the tests wait on the channel through a deadline, never on a
+/// sleep.
+struct StatusSignal(mpsc::Sender<String>);
+
+impl contract::emit::Emit for StatusSignal {
+    fn emit(&self, event: &contract::events::Event) {
+        if let contract::events::Event::ExtensionUi(ui) = event
+            && let contract::events::Ui::Status { status } = &ui.ui
+        {
+            let _ignored = self.0.send(status.clone());
+        }
+    }
+}
+
+/// Installs the status emitter on `session`, returning the lines' channel.
+#[track_caller]
+fn status_channel(session: &Arc<SessionExtensions>) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    session.emit_to(Arc::new(StatusSignal(tx)));
+    rx
+}
+
+/// A watcher on `tool_call_completed` beside an `after_tool` hook: each
+/// completion arrives in session order, interleaved with the hook.
+#[test]
+fn a_watcher_receives_each_completion_in_session_order_with_the_hooks() {
+    let home = Home::new();
+    home.install(
+        "ordered",
+        Some(
+            "fiber.hook(\"after_tool\", { timeout = 2000, on_failure = \"non-blocking\", run = function(call) host.status('hook:' .. call.tool) return {} end })\n\
+             fiber.watch({\"tool_call_completed\"}, { timeout = 2000, run = function(ev) host.status('watch:' .. ev.payload.details.n) end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    session.deliver(&completed(1), Some(contract::Seq(0)));
+    let (hook_tx, hook_rx) = mpsc::channel();
+    let hook_session = Arc::clone(&session);
+    thread::spawn(move || {
+        hook_tx.send(after_tool(&hook_session, "first")).unwrap();
+    });
+    // The completion queues first, so the hook waits behind it: the single
+    // worker runs them in stream order, and the hook's return proves it ran.
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the first completion"),
+        "watch:1"
+    );
+    let answer = Deadline::after(WAIT)
+        .recv(&hook_rx)
+        .expect("waited for the hook to run");
+    assert!(matches!(answer.outcome, AfterToolOutcome::Unchanged));
+    session.deliver(&completed(2), Some(contract::Seq(1)));
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the hook's line"),
+        "hook:read"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the second completion"),
+        "watch:2"
+    );
+}
+
+/// An idle watcher receives an ephemeral offer: the positive case a
+/// drop-all-ephemeral mutant fails.
+#[test]
+fn an_idle_watcher_receives_an_ephemeral_offer() {
+    let home = Home::new();
+    home.install(
+        "idle",
+        Some(
+            "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('idle:' .. ev.payload.message) end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    // An ephemeral offer carries no seq, as the log gives it none.
+    session.deliver(&noticed("hello"), None);
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the idle watcher to run"),
+        "idle:hello"
+    );
+}
+
+/// A parked watcher drops an ephemeral offer but queues the durable one,
+/// then receives it after release; the cursor only advances on seqs.
+#[test]
+fn a_parked_watcher_drops_the_ephemeral_offer_and_queues_the_durable_one() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
+    let home = Home::new();
+    home.install(
+        "busy",
+        Some(&format!(
+            "fiber.watch({{\"notice\"}}, {{ timeout = 5000, run = function(ev) host.http({{ url = \"{url}\" }}) host.status('ephemeral-ran') end }})\n\
+             fiber.watch({{\"step_started\"}}, {{ timeout = 5000, run = function(ev) host.status('durable-ran') end }})\n"
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    session.deliver(&noticed("park"), None);
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for the watcher to park on host.http"
+    );
+    // While it is parked the ephemeral offer is dropped and the durable one
+    // queues: the parked watcher is busy, and the durable one must be too,
+    // since the single worker cannot run it while the first is parked.
+    session.deliver(&noticed("dropped"), None);
+    session.deliver(&stepped(), Some(contract::Seq(7)));
+    {
+        let lua = session
+            .lua_extension("fiber.test/busy")
+            .expect("the watchers-only extension stays loaded");
+        assert!(lua.is_watcher_busy(0), "the parked watcher is busy");
+        assert!(
+            lua.is_watcher_busy(1),
+            "the durable offer queues behind the parked watcher"
+        );
+    }
+    server.release();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the parked watcher"),
+        "ephemeral-ran"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the queued durable one"),
+        "durable-ran"
+    );
+    // The ephemeral offers carried no seq, so only the durable one moves a cursor.
+    let cursors = session
+        .cursors
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(cursors.get(&("fiber.test/busy".to_owned(), 0)), None);
+    assert_eq!(cursors.get(&("fiber.test/busy".to_owned(), 1)), Some(&7));
+}
+
+/// A kind no watcher registered for fires nothing and moves no cursor: the
+/// later matching offer proves the stream processed everything, so the
+/// unmatched one left no trace.
+#[test]
+fn an_unmatched_kind_fires_no_watcher() {
+    let home = Home::new();
+    home.install(
+        "picky",
+        Some(
+            "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('picky:' .. ev.payload.message) end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    session.deliver(&stepped(), Some(contract::Seq(3)));
+    session.deliver(&noticed("after"), None);
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the later matching offer"),
+        "picky:after"
+    );
+    // The unmatched offer queued nothing and moved no cursor: the later
+    // offer carries no seq, so the cursor map stays empty.
+    assert!(
+        session
+            .cursors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+    );
+}
+
+/// A cursor advances to each offered seq, in order.
+#[test]
+fn a_cursor_advances_to_each_offered_seq() {
+    let home = Home::new();
+    home.install(
+        "cursor",
+        Some("fiber.watch({\"step_started\"}, { timeout = 2000, run = function(ev) end })\n"),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    session.deliver(&stepped(), Some(contract::Seq(3)));
+    session.deliver(&stepped(), Some(contract::Seq(5)));
+    assert_eq!(
+        *session
+            .cursors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        [("fiber.test/cursor".to_owned(), 0, 5)]
+            .into_iter()
+            .map(|(name, index, seq)| ((name, index), seq))
+            .collect()
+    );
+}
+
+/// A watcher registered mid-session receives only events offered after its
+/// registration: A reaches the early watcher alone, B reaches both, in
+/// extension-name order.
+#[test]
+fn a_late_watcher_receives_only_events_after_its_registration() {
+    let home = Home::new();
+    home.install(
+        "early",
+        Some(
+            "fiber.watch({\"step_started\"}, { timeout = 2000, run = function(ev) host.status('early-ran') end })\n",
+        ),
+        &[],
+    );
+    let first = home.load(&[]);
+    assert!(first.notices().is_empty(), "{:?}", first.notices());
+    let first_statuses = status_channel(&first);
+    first.deliver(&stepped(), Some(contract::Seq(4)));
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&first_statuses)
+            .expect("waited for the early watcher"),
+        "early-ran"
+    );
+    home.install(
+        "late",
+        Some(
+            "fiber.watch({\"step_started\"}, { timeout = 2000, run = function(ev) host.status('late-ran') end })\n",
+        ),
+        &[],
+    );
+    // Loading again registers the late extension mid-session: A was never
+    // offered to a session that holds it.
+    let second = home.load(&[]);
+    assert!(second.notices().is_empty(), "{:?}", second.notices());
+    let second_statuses = status_channel(&second);
+    second.deliver(&stepped(), Some(contract::Seq(9)));
+    // Each extension runs on its own worker, so the two runs race: the set
+    // is what the fan-out pins — the late watcher sees only B, never A.
+    let mut ran = vec![
+        Deadline::after(WAIT)
+            .recv(&second_statuses)
+            .expect("waited for the first watcher"),
+        Deadline::after(WAIT)
+            .recv(&second_statuses)
+            .expect("waited for the second watcher"),
+    ];
+    ran.sort();
+    assert_eq!(
+        ran,
+        vec!["early-ran".to_owned(), "late-ran".to_owned()],
+        "both watchers receive only B"
+    );
+    // The first session never sees B: its stream ended at A, and the two
+    // sessions share nothing.
+    assert!(
+        Deadline::after(Duration::from_secs(1))
+            .recv(&first_statuses)
+            .is_err(),
+        "nothing further runs on the first session"
+    );
+}
+
+/// Watchers of one extension run in registration order: the same worker
+/// serves the one stream, so the fan-out's push order is the run order.
+#[test]
+fn one_extensions_watchers_run_in_registration_order() {
+    let home = Home::new();
+    home.install(
+        "pair",
+        Some(
+            "fiber.watch({\"step_started\"}, { timeout = 2000, run = function(ev) host.status('first') end })\n\
+             fiber.watch({\"step_started\"}, { timeout = 2000, run = function(ev) host.status('second') end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    session.deliver(&stepped(), Some(contract::Seq(2)));
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the first watcher"),
+        "first"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the second watcher"),
+        "second"
+    );
 }
