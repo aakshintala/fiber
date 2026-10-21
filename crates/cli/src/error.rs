@@ -137,6 +137,12 @@ pub enum CliError {
     /// The login was cancelled; nothing was stored.
     #[error("the login was cancelled; nothing was stored.")]
     LoginCancelled,
+    /// A host answer that is not a host: refused, nothing written.
+    #[error("`{name}` is not a host; pass a host or press Ctrl-D to skip.")]
+    HostNotHost {
+        /// The setting the answer was for, never the answer.
+        name: String,
+    },
     /// The provider's key comes from elsewhere, so logout cannot remove it.
     #[error("{name}'s key comes from {origin}; fiber logout cannot remove it")]
     KeyFromElsewhere {
@@ -650,6 +656,7 @@ impl CliError {
             | Self::NothingChosen
             | Self::ChoiceUnknown { .. }
             | Self::DeviceNeedsBrowserProvider
+            | Self::HostNotHost { .. }
             | Self::LogoutSeveral { .. }
             | Self::LabelNotStorable { .. }
             | Self::StoreRefused { .. }
@@ -714,6 +721,7 @@ impl From<CliError> for Failure {
             | CliError::NothingChosen
             | CliError::ChoiceUnknown { .. }
             | CliError::DeviceNeedsBrowserProvider
+            | CliError::HostNotHost { .. }
             | CliError::LogoutSeveral { .. }
             | CliError::LabelNotStorable { .. }
             | CliError::StoreRefused { .. }

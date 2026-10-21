@@ -154,6 +154,15 @@ fn the_first_shutdown_code_stays() {
     assert_eq!(cancel.shutdown_code(), Some(143));
 }
 
+/// Exit code 1 is a shutdown code, not the no-shutdown sentinel: without
+/// the sentinel's `-` it reads as no shutdown at all.
+#[test]
+fn shutdown_with_code_one_reports_one() {
+    let cancel = TurnCancel::default();
+    cancel.shutdown(1);
+    assert_eq!(cancel.shutdown_code(), Some(1));
+}
+
 #[test]
 fn a_fresh_signal_arms_and_has_no_shutdown_code() {
     let cancel = TurnCancel::default();

@@ -17,11 +17,11 @@ use crate::keys::{Edit, Key};
 use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
 
 /// The key the theme choice edits.
-const THEME: &str = "tui.theme";
+pub(crate) const THEME: &str = "tui.theme";
 
 /// The themes offered before the theme files: following the terminal,
 /// then the built-ins.
-const BUILT_IN_THEMES: [&str; 3] = ["auto", "dark", "light"];
+pub(crate) const BUILT_IN_THEMES: [&str; 3] = ["auto", "dark", "light"];
 
 /// The widest key column; a longer key pushes its value right.
 const KEY_COLUMN: usize = 36;
@@ -224,6 +224,9 @@ pub(crate) struct Settings {
     rows: Vec<SettingRow>,
     list: List,
     mode: Mode,
+    /// The entry `tui.theme`, resolved once when the view opened: a
+    /// cancel restores this, whatever a preview queued since.
+    entry_theme: ThemeSetting,
     /// What the last action said, shown below the rows.
     said: Vec<String>,
 }
@@ -235,10 +238,50 @@ impl Settings {
             rows: Vec::new(),
             list: List::default(),
             mode: Mode::Rows,
+            entry_theme: ThemeSetting::Follow,
             said: Vec::new(),
         };
         settings.reread(ctx);
+        settings.entry_theme = settings.entry_setting(ctx);
         settings
+    }
+
+    /// The view opened directly in the theme choices, as `/theme`
+    /// opens it: the `tui.theme` row focused with its choices open.
+    /// With no theme row the view opens on its rows, as `open` does.
+    pub(crate) fn open_theme(ctx: &Ctx<'_>) -> Self {
+        let mut settings = Self::open(ctx);
+        if let Some(at) = settings.rows.iter().position(|row| row.key == THEME) {
+            settings
+                .list
+                .select(at, settings.rows.len(), settings.shown(ctx));
+            settings.edit(ctx);
+        }
+        settings
+    }
+
+    /// The entry `tui.theme`, resolved against `ctx`'s seam: the theme
+    /// the choices restore on a cancel.
+    fn entry_setting(&self, ctx: &Ctx<'_>) -> ThemeSetting {
+        let name = self
+            .rows
+            .iter()
+            .find(|row| row.key == THEME)
+            .map(|row| match &row.value {
+                Shown::Value(value) => as_typed(value),
+                Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => "auto".to_owned(),
+            })
+            .unwrap_or_else(|| "auto".to_owned());
+        ctx.seam.theme(ctx.workspace, &name)
+    }
+
+    /// The captured entry theme, while the theme choices are open: what
+    /// a cancel restores. `None` on the rows and in the field.
+    pub(crate) fn choices_entry(&self) -> Option<ThemeSetting> {
+        match &self.mode {
+            Mode::Choices { .. } => Some(self.entry_theme.clone()),
+            Mode::Rows | Mode::Field(_) => None,
+        }
     }
 
     /// Reads the rows again, keeping the selection where it was; a failed
@@ -281,9 +324,18 @@ impl Settings {
                     return name.map_or(Act::Stay, |name| self.choose(&name, ctx));
                 }
                 if *key == Key::Esc {
+                    // A cancel restores the entry theme and writes
+                    // nothing: the preview it undoes was never saved.
+                    let entry = self.entry_theme.clone();
                     self.mode = Mode::Rows;
-                } else {
-                    list.key(key, names.len(), shown);
+                    return Act::Theme(entry);
+                }
+                if list.key(key, names.len(), shown) {
+                    // Moving focus previews the focused theme live;
+                    // the single-slot queue keeps only the last one.
+                    if let Some(name) = names.get(list.selected()).cloned() {
+                        return Act::Theme(ctx.seam.theme(ctx.workspace, &name));
+                    }
                 }
                 Act::Stay
             }

@@ -1,9 +1,10 @@
 //! Validates hub answers before the configuration views consume them.
 
 use crate::configure::{
-    ConfigureError, FileOutcome, FileSaved, Layer, LoginKind, LoginTarget, LogoutRow, NotesFile,
-    NotesSaved, ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesSection, Saved, SettingRow,
-    Shown, SkillsDisabled, Stored, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    ConfigureError, FileOutcome, FileSaved, HostGap, HostSaved, Layer, LoginKind, LoginTarget,
+    LogoutRow, NotesFile, NotesSaved, ReviewerModels, ReviewerNotes, Revoked, RuleRow,
+    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, ToolGroup, ToolLists,
+    ToolSwitches, WriteScope,
 };
 use contract::{ErrorCode, HubLine};
 use serde_json::Value;
@@ -225,6 +226,28 @@ pub(super) fn reviewer(value: &Value) -> Option<ReviewerModels> {
         models: read!(value, "models")?,
         notices: read!(value, "notices")?,
         selected: optional!(value, "selected")?,
+    })
+}
+/// One presence gap per entry: its setting with its declared environment
+/// variable, which is `None` when the placeholder declares none.
+pub(super) fn gaps(value: &Value) -> Option<Vec<HostGap>> {
+    value
+        .get("gaps")?
+        .as_array()?
+        .iter()
+        .map(|gap| {
+            Some(HostGap {
+                name: read!(gap, "name")?,
+                env: read!(gap, "env")?,
+            })
+        })
+        .collect()
+}
+/// What a host save reported: the project settings file hiding the saved
+/// value, absent when nothing hides it.
+pub(super) fn host_saved(value: &Value) -> Option<HostSaved> {
+    Some(HostSaved {
+        masked: optional!(value, "masked")?,
     })
 }
 fn lists(value: &Value) -> Option<ToolLists> {

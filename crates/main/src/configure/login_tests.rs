@@ -42,6 +42,26 @@ impl Setup {
         );
     }
 
+    /// Installs a provider `name` whose models need the `workspace`
+    /// host, with `login` set when the provider signs in by browser.
+    fn install_host(&self, name: &str, login_browser: bool) {
+        let mut data = json!({
+            "name": name,
+            "placeholders": {"workspace": {"env": "FIBER_TEST_2909_SEAM_HOST"}, "other": {}},
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
+        });
+        if login_browser {
+            data["login"] = json!("browser");
+        }
+        install_extension(
+            &self.home(),
+            &format!("extensions/{name}"),
+            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+            &[(name, data)],
+        );
+    }
+
     /// Installs the extension `extension` with no provider, declaring
     /// `secrets`.
     fn declare(&self, extension: &str, secrets: &[&str]) {
@@ -53,6 +73,53 @@ impl Setup {
             &[],
         );
     }
+}
+
+#[test]
+fn login_targets_marks_a_browser_login_provider_as_browser() {
+    // Without the browser override the row below reads `Key`: the login
+    // view would stage key questions for a provider that signs in by
+    // browser, and its `Done` would never reach the host panel.
+    let setup = Setup::new();
+    setup.install_host("acme", true);
+    let rows = Seam::new(setup.home()).login_targets().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "acme");
+    assert_eq!(rows[0].kind, LoginKind::Browser);
+}
+
+#[test]
+fn gaps_names_each_unset_placeholder_with_its_variable() {
+    let setup = Setup::new();
+    setup.install_host("acme", false);
+    let gaps = Seam::new(setup.home()).gaps("acme").unwrap();
+    assert_eq!(
+        gaps,
+        [
+            tui::HostGap {
+                name: "other".to_owned(),
+                env: None,
+            },
+            tui::HostGap {
+                name: "workspace".to_owned(),
+                env: Some("FIBER_TEST_2909_SEAM_HOST".to_owned()),
+            },
+        ]
+    );
+}
+
+#[test]
+fn save_host_writes_the_global_setting_it_validates() {
+    let setup = Setup::new();
+    setup.install_host("acme", false);
+    let seam = Seam::new(setup.home());
+    let saved = seam
+        .save_host("acme", "workspace", "https://adb-1.example.test/")
+        .unwrap();
+    assert_eq!(saved.masked, None);
+    let text = fs::read_to_string(setup.home().join("config").join("acme.json")).unwrap();
+    assert!(text.contains("adb-1.example.test"), "{text}");
+    assert!(!text.contains("https://"), "{text}");
 }
 
 #[test]

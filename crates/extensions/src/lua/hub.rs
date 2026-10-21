@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use contract::RequestId;
 use contract::clock::{Clock, Wake};
 use contract::diag::DebugLog;
+use contract::events::{Event, Notice};
 use contract::inbox::Delivery;
 use contract::tool::InnerCalls;
 use serde_json::Value;
@@ -26,12 +27,13 @@ use serde_json::Value;
 use crate::Error;
 use crate::host::Reply;
 use crate::host::script::HostScript;
+use contract::ErrorCode;
 
 use super::asks::PendingAsk;
 use super::{ENTRY, GRACE, LOAD_TIMEOUT, Target, expired, timeout_ms};
 
 pub(super) use super::declared::CallbackTimeouts;
-pub(crate) use super::declared::{DeclaredHooks, HookPhase};
+pub(crate) use super::declared::{DeclaredHooks, DeclaredWatchers, HookPhase};
 
 pub(super) use super::errors::{StopReason, not_registered, stopped, timed_out};
 
@@ -62,6 +64,10 @@ pub(super) enum Window {
     Emitting,
     EmitFlushing,
     LoadRecorded,
+    /// The drain's pre-replay wait parked with a watcher delivery still
+    /// queued or running: the test's proof the wait engaged, fired under
+    /// the hub lock — the hook must not take it again.
+    DrainWait,
 }
 
 #[cfg(test)]
@@ -249,6 +255,51 @@ impl Hub {
         self.notify();
     }
 
+    /// Records a watcher delivery's end: a failure gives a `notice` naming
+    /// the extension through the late-bound emitter (dropped after the
+    /// seal, when the drain collects failures itself instead), and the
+    /// watcher's busy bit clears. The result is dropped unless the drain
+    /// keeps it to collect: a mid-session delivery has no waiter.
+    pub(super) fn finish_watcher(
+        &self,
+        name: &str,
+        id: u64,
+        index: usize,
+        result: Result<Value, Error>,
+    ) {
+        // The session-end drain waits on its own delivery, so the result
+        // is recorded for its waiter and no notice is emitted: the log is
+        // already closed to new lines. A mid-session delivery has no
+        // waiter, so its failure is noticed and the call forgotten — even
+        // while the drain keeps its own call: a live delivery finishing
+        // under the drain still needs its notice, and the drain never
+        // collects another call's result.
+        let kept = self.lock().keep_watcher_done;
+        if kept == Some(id) {
+            if let Some(progress) = self.lock().calls.get_mut(&id) {
+                *progress = Progress::Done(result);
+            }
+        } else if let Err(e) = &result {
+            self.emit(Event::Notice(Notice {
+                code: ErrorCode::ExtensionFailed,
+                message: format!(
+                    "The `watcher:{index}` watcher failed, so its event was dropped: {e}"
+                ),
+                extension: Some(name.to_owned()),
+            }));
+        }
+        let mut shared = self.lock();
+        if shared.abandon.as_ref().is_some_and(|watch| watch.id == id) {
+            shared.abandon = None;
+        }
+        shared.watcher_busy.remove(&index);
+        if shared.keep_watcher_done != Some(id) {
+            shared.calls.remove(&id);
+        }
+        drop(shared);
+        self.notify();
+    }
+
     /// Hands the call `id`'s parked callback the answer to what it waits on.
     /// A stopped extension's thread takes no more replies, so the reply is
     /// dropped, releasing a credential lock in it.
@@ -301,6 +352,25 @@ impl Hub {
         };
         drop(unsent);
         self.notify();
+    }
+
+    /// Waits until no watcher delivery is queued or running on this hub:
+    /// the drain's pre-replay wait, so a durable delivery the live offer
+    /// already covered has run before the drain treats it as covered. A
+    /// stop wakes it too: what never runs is then refused as `Stopped` by
+    /// the drain's own push, never lost silent.
+    pub(super) fn wait_for_watchers_idle(&self) {
+        let mut shared = self.lock();
+        #[cfg(test)]
+        let mut signalled = false;
+        while !shared.watcher_idle() && !matches!(shared.phase, Phase::Stopped(_)) {
+            #[cfg(test)]
+            if !signalled {
+                signalled = true;
+                self.at_window(Window::DrainWait);
+            }
+            shared = self.wait(shared, None);
+        }
     }
 
     /// Closes admission and waits until every admitted exec has queued its line.
@@ -426,6 +496,18 @@ pub(crate) struct Shared {
     /// Set by `abandon`: a leaked thread of this VM may still run Lua, and
     /// its `host.delegate` is refused from here on.
     pub(super) abandoned: bool,
+    /// The watchers with a delivery queued or running, by watcher index:
+    /// an ephemeral offer skips while its watcher is here. Set when the
+    /// thread starts or resumes the delivery, cleared when it finishes.
+    /// Durable offers always queue, whatever is here.
+    pub(super) watcher_busy: HashSet<usize>,
+    /// The drain's call id while its finished watcher delivery is kept
+    /// for the drain to collect instead of dropping it. Only the
+    /// session-end drain sets it, when no mid-session delivery waits on
+    /// anything — and only for its own call, so a live delivery finishing
+    /// under it still notices its failure instead of being retained with
+    /// no waiter to collect it.
+    pub(super) keep_watcher_done: Option<u64>,
 }
 
 /// What a waiter drops after it releases the hub lock: the deliveries
@@ -541,10 +623,13 @@ pub(super) enum Next {
     Sleep(Option<Instant>),
 }
 
-/// A running hook or command answers at its deadline; every other target
+/// A running hook, watcher or command answers at its deadline; every other target
 /// waits out its grace.
 fn answers_at_deadline(target: &Target) -> bool {
-    matches!(target, Target::Hook { .. } | Target::Command(_))
+    matches!(
+        target,
+        Target::Hook { .. } | Target::Watcher { .. } | Target::Command(_)
+    )
 }
 
 impl Shared {
@@ -602,6 +687,16 @@ impl Shared {
             Gate::Wait(at) => (Next::Sleep(at.into_iter().chain(until).min()), unsent),
             Gate::Ready(_) => (Next::Sleep(until), unsent),
         }
+    }
+
+    /// No watcher delivery queued or running: what the drain's pre-replay
+    /// wait holds for.
+    fn watcher_idle(&self) -> bool {
+        self.watcher_busy.is_empty()
+            && !self
+                .queue
+                .iter()
+                .any(|job| matches!(&job.target, Target::Watcher { .. }))
     }
 
     /// Queues a call and returns its id.

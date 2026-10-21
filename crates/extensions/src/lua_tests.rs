@@ -1932,3 +1932,517 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
         "alive"
     );
 }
+
+/// The watchers one entry script registered, loaded on a thread under
+/// [`WAIT`]: the fake clock never ends a wait the runtime does not end
+/// itself.
+#[track_caller]
+fn watchers_result(init: &str) -> Result<DeclaredWatchers, Error> {
+    let dir = extension("watch-registration", init);
+    let ext = LuaExtension::new("ext", dir.path(), dir.path(), FakeClock::new());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = ext.watchers();
+        tx.send(result).unwrap();
+        drop(dir);
+    });
+    Deadline::after(WAIT).recv_or_fail(&rx, "watch registration result")
+}
+
+/// One `host.status` line per watcher run, in run order: the fake emitter
+/// the tests install, so no file or clock is involved.
+struct StatusSignal(mpsc::Sender<String>);
+
+impl contract::emit::Emit for StatusSignal {
+    fn emit(&self, event: &contract::events::Event) {
+        if let contract::events::Event::ExtensionUi(ui) = event
+            && let contract::events::Ui::Status { status } = &ui.ui
+        {
+            match self.0.send(status.clone()) {
+                Ok(()) | Err(mpsc::SendError(_)) => {}
+            }
+        }
+    }
+}
+
+/// Installs the status emitter on `ext` and boots it on a thread: the
+/// receiver gets the registration once the entry script ran.
+#[track_caller]
+fn boot_watching(
+    ext: &Arc<LuaExtension>,
+    statuses: mpsc::Sender<String>,
+) -> mpsc::Receiver<Result<DeclaredWatchers, Error>> {
+    ext.set_emit(Arc::new(StatusSignal(statuses)));
+    let caller = Arc::clone(ext);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(caller.watchers()).unwrap();
+    });
+    rx
+}
+
+#[test]
+fn fiber_watch_registers_kinds_and_timeout() {
+    let declared = watchers_result(
+        "fiber.watch({\"notice\", \"step_started\"}, { timeout = 2000, run = function(ev) end })\n",
+    )
+    .unwrap();
+    assert!(declared.problems.is_empty(), "{:?}", declared.problems);
+    assert_eq!(declared.watchers.len(), 1);
+    assert_eq!(
+        declared.watchers[0].kinds,
+        vec!["notice".to_owned(), "step_started".to_owned()]
+    );
+    assert_eq!(declared.watchers[0].timeout, Duration::from_millis(2000));
+}
+
+#[test]
+fn a_watch_missing_its_timeout_is_not_registered_and_says_why() {
+    let declared =
+        watchers_result("fiber.watch({\"notice\"}, { run = function(ev) end })\n").unwrap();
+    assert!(declared.watchers.is_empty());
+    assert_eq!(declared.problems.len(), 1);
+    assert!(
+        declared.problems[0].contains("`watcher:0`")
+            && declared.problems[0].contains("missing `timeout`"),
+        "{}",
+        declared.problems[0]
+    );
+}
+
+#[test]
+fn a_watch_with_a_non_table_kinds_is_not_registered_and_says_why() {
+    let declared =
+        watchers_result("fiber.watch(\"notice\", { timeout = 100, run = function(ev) end })\n")
+            .unwrap();
+    assert!(declared.watchers.is_empty());
+    assert_eq!(declared.problems.len(), 1);
+    assert!(
+        declared.problems[0].contains("`watcher:0`") && declared.problems[0].contains("`kinds`"),
+        "{}",
+        declared.problems[0]
+    );
+}
+
+#[test]
+fn a_watch_with_an_empty_kinds_list_is_not_registered_and_says_why() {
+    let declared =
+        watchers_result("fiber.watch({}, { timeout = 100, run = function(ev) end })\n").unwrap();
+    assert!(declared.watchers.is_empty());
+    assert_eq!(declared.problems.len(), 1);
+    assert!(
+        declared.problems[0].contains("`watcher:0`") && declared.problems[0].contains("`kinds`"),
+        "{}",
+        declared.problems[0]
+    );
+}
+
+#[test]
+fn a_watch_with_a_non_string_kind_is_not_registered_and_says_why() {
+    let declared =
+        watchers_result("fiber.watch({42}, { timeout = 100, run = function(ev) end })\n").unwrap();
+    assert!(declared.watchers.is_empty());
+    assert_eq!(declared.problems.len(), 1);
+    assert!(
+        declared.problems[0].contains("`watcher:0`") && declared.problems[0].contains("`kinds`"),
+        "{}",
+        declared.problems[0]
+    );
+}
+
+#[test]
+fn a_watch_on_an_unknown_kind_is_not_registered_and_names_the_kind() {
+    let declared = watchers_result(
+        "fiber.watch({\"frobnicate\"}, { timeout = 100, run = function(ev) end })\n",
+    )
+    .unwrap();
+    assert!(declared.watchers.is_empty());
+    assert_eq!(declared.problems.len(), 1);
+    assert!(
+        declared.problems[0].contains("`watcher:0`")
+            && declared.problems[0].contains("`frobnicate`"),
+        "{}",
+        declared.problems[0]
+    );
+}
+
+#[test]
+fn a_watch_keeps_its_known_kinds_and_drops_the_unknown_one() {
+    let declared = watchers_result(
+        "fiber.watch({\"notice\", \"frobnicate\"}, { timeout = 100, run = function(ev) end })\n",
+    )
+    .unwrap();
+    assert_eq!(declared.watchers.len(), 1);
+    assert_eq!(declared.watchers[0].kinds, vec!["notice".to_owned()]);
+    assert_eq!(declared.problems.len(), 1);
+    assert!(
+        declared.problems[0].contains("`frobnicate`"),
+        "{}",
+        declared.problems[0]
+    );
+}
+
+/// A pushed watcher job runs under the timeout it declared, and one the
+/// entry script never registered is refused by name.
+#[test]
+fn a_watcher_job_serves_its_declared_timeout() {
+    let dir = extension(
+        "watch-serve",
+        "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('watcher-ran') end })\n",
+    );
+    let clock = FakeClock::new();
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        dir.path(),
+        dir.path(),
+        clock.clone(),
+    ));
+    let (status_tx, status_rx) = mpsc::channel();
+    let boot_rx = boot_watching(&ext, status_tx);
+    assert!(
+        until(&ext.hub, |shared| matches!(shared.phase, Phase::Ready(_))),
+        "waited for the extension to be ready"
+    );
+    let asked = clock.now();
+    {
+        let mut shared = ext.hub.lock();
+        shared.push(
+            Target::Watcher { index: 0 },
+            serde_json::json!({"kind": "notice", "payload": {}}),
+            asked,
+        );
+    }
+    ext.hub.notify();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&status_rx)
+            .expect("waited for the watcher to run"),
+        "watcher-ran"
+    );
+    assert!(
+        until(&ext.hub, |shared| !shared.watcher_busy.contains(&0)),
+        "waited for the watcher's busy bit to clear"
+    );
+    // A watcher the entry script never registered is refused by name.
+    let missing = {
+        let mut shared = ext.hub.lock();
+        shared.push(
+            Target::Watcher { index: 3 },
+            serde_json::json!({"kind": "notice", "payload": {}}),
+            clock.now(),
+        )
+    };
+    ext.hub.notify();
+    assert!(
+        until(&ext.hub, |shared| matches!(
+            shared.calls.get(&missing),
+            Some(Progress::Done(Err(Error::UnknownCallback { callback, .. })))
+            if callback == "watcher:3"
+        )),
+        "waited for the unregistered watcher to be refused"
+    );
+    assert!(
+        Deadline::after(WAIT)
+            .recv(&boot_rx)
+            .expect("waited for the registration")
+            .is_ok()
+    );
+}
+
+/// A hook queued behind a watcher parked on a host call does not start:
+/// the watcher holds the ordered stream.
+#[test]
+fn a_hook_queued_behind_a_parked_watcher_does_not_start() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
+    let dir = extension(
+        "hook-behind-parked-watcher",
+        &format!(
+            "fiber.hook(\"after_tool\", {{ timeout = 5000, on_failure = \"non-blocking\", run = function(call) host.status('hook-ran') return {{}} end }})\n\
+             fiber.watch({{\"notice\"}}, {{ timeout = 5000, run = function(ev) host.http({{ url = \"{url}\" }}) host.status('watcher-ran') end }})\n"
+        ),
+    );
+    let clock = FakeClock::new();
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        dir.path(),
+        dir.path(),
+        clock.clone(),
+    ));
+    let (status_tx, status_rx) = mpsc::channel();
+    let _boot_rx = boot_watching(&ext, status_tx);
+    assert!(
+        until(&ext.hub, |shared| matches!(shared.phase, Phase::Ready(_))),
+        "waited for the extension to be ready"
+    );
+    let asked = clock.now();
+    {
+        let mut shared = ext.hub.lock();
+        shared.push(
+            Target::Watcher { index: 0 },
+            serde_json::json!({"kind": "notice", "payload": {}}),
+            asked,
+        );
+    }
+    ext.hub.notify();
+    assert!(
+        server.await_requests(1, WAIT_UNTIL),
+        "waited for the watcher to reach the server"
+    );
+    assert!(
+        until(&ext.hub, |shared| shared.calls.values().any(
+            |progress| matches!(
+                progress,
+                Progress::Started {
+                    run: Run::Parked,
+                    ..
+                }
+            )
+        )),
+        "waited for the watcher to park"
+    );
+    let hook = {
+        let mut shared = ext.hub.lock();
+        shared.push(
+            Target::Hook {
+                point: "after_tool".to_owned(),
+                index: 0,
+            },
+            serde_json::json!({}),
+            clock.now(),
+        )
+    };
+    ext.hub.notify();
+    // The hook may not start while the watcher is parked: judged under the
+    // hub lock, so a racing start cannot slip between the check and this.
+    {
+        let shared = ext.hub.lock();
+        assert!(
+            matches!(shared.calls.get(&hook), Some(Progress::Queued)),
+            "the hook started while the watcher was parked"
+        );
+        assert!(shared.queue.iter().any(|job| job.id == hook));
+    }
+    server.release();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&status_rx)
+            .expect("waited for the watcher to run"),
+        "watcher-ran"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&status_rx)
+            .expect("waited for the hook to run"),
+        "hook-ran"
+    );
+}
+
+/// A watcher queued behind a parked hook likewise waits for the stream.
+#[test]
+fn a_watcher_queued_behind_a_parked_hook_does_not_start() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
+    let dir = extension(
+        "watcher-behind-parked-hook",
+        &format!(
+            "fiber.hook(\"after_tool\", {{ timeout = 5000, on_failure = \"non-blocking\", run = function(call) host.http({{ url = \"{url}\" }}) host.status('hook-ran') return {{}} end }})\n\
+             fiber.watch({{\"notice\"}}, {{ timeout = 5000, run = function(ev) host.status('watcher-ran') end }})\n"
+        ),
+    );
+    let clock = FakeClock::new();
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        dir.path(),
+        dir.path(),
+        clock.clone(),
+    ));
+    let (status_tx, status_rx) = mpsc::channel();
+    let _boot_rx = boot_watching(&ext, status_tx);
+    assert!(
+        until(&ext.hub, |shared| matches!(shared.phase, Phase::Ready(_))),
+        "waited for the extension to be ready"
+    );
+    let asked = clock.now();
+    {
+        let mut shared = ext.hub.lock();
+        shared.push(
+            Target::Hook {
+                point: "after_tool".to_owned(),
+                index: 0,
+            },
+            serde_json::json!({}),
+            asked,
+        );
+    }
+    ext.hub.notify();
+    assert!(
+        server.await_requests(1, WAIT_UNTIL),
+        "waited for the hook to reach the server"
+    );
+    assert!(
+        until(&ext.hub, |shared| shared.calls.values().any(
+            |progress| matches!(
+                progress,
+                Progress::Started {
+                    run: Run::Parked,
+                    ..
+                }
+            )
+        )),
+        "waited for the hook to park"
+    );
+    let watcher = {
+        let mut shared = ext.hub.lock();
+        shared.push(
+            Target::Watcher { index: 0 },
+            serde_json::json!({"kind": "notice", "payload": {}}),
+            clock.now(),
+        )
+    };
+    ext.hub.notify();
+    {
+        let shared = ext.hub.lock();
+        assert!(
+            matches!(shared.calls.get(&watcher), Some(Progress::Queued)),
+            "the watcher started while the hook was parked"
+        );
+        assert!(shared.queue.iter().any(|job| job.id == watcher));
+    }
+    server.release();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&status_rx)
+            .expect("waited for the hook to run"),
+        "hook-ran"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&status_rx)
+            .expect("waited for the watcher to run"),
+        "watcher-ran"
+    );
+}
+
+/// While one watcher's completion is withheld, the hook, the later watcher
+/// and the command behind it all wait; released, they run in stream order.
+#[test]
+fn a_parked_watcher_holds_a_hook_a_later_watcher_and_a_command() {
+    let dir = extension(
+        "withheld-watcher",
+        "fiber.command(\"later\", { timeout = 5000, run = function(text) host.status('command-ran') return \"later\" end })\n\
+         fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"non-blocking\", run = function(call) host.status('hook-ran') return {} end })\n\
+         fiber.watch({\"notice\"}, { timeout = 5000, run = function(ev) host.status('watcher-zero') end })\n\
+         fiber.watch({\"notice\"}, { timeout = 5000, run = function(ev) host.status('watcher-one') end })\n",
+    );
+    let clock = FakeClock::new();
+    let ext = Arc::new(LuaExtension::new(
+        "fiber.test/withheld-watcher",
+        dir.path(),
+        dir.path(),
+        clock.clone(),
+    ));
+    let (status_tx, status_rx) = mpsc::channel();
+    let _boot_rx = boot_watching(&ext, status_tx);
+    assert!(
+        until(&ext.hub, |shared| matches!(shared.phase, Phase::Ready(_))),
+        "waited for the extension to be ready"
+    );
+    // Withhold the first watcher's completion past everything queued below.
+    let (hold_tx, hold_rx) = mpsc::channel();
+    super::schedule::withhold_watcher_completion("fiber.test/withheld-watcher", 0, hold_rx);
+    let asked = clock.now();
+    {
+        let mut shared = ext.hub.lock();
+        shared.push(
+            Target::Watcher { index: 0 },
+            serde_json::json!({"kind": "notice", "payload": {}}),
+            asked,
+        );
+    }
+    ext.hub.notify();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&status_rx)
+            .expect("waited for the first watcher to run"),
+        "watcher-zero"
+    );
+    // A hook, a later watcher and a command queue behind the withheld one.
+    // The hook and the later watcher queue through the hub; the command
+    // through its caller, which blocks until the stream reaches it.
+    let hook = {
+        let mut shared = ext.hub.lock();
+        shared.push(
+            Target::Hook {
+                point: "after_tool".to_owned(),
+                index: 0,
+            },
+            serde_json::json!({}),
+            clock.now(),
+        )
+    };
+    let second = {
+        let mut shared = ext.hub.lock();
+        shared.push(
+            Target::Watcher { index: 1 },
+            serde_json::json!({"kind": "notice", "payload": {}}),
+            clock.now(),
+        )
+    };
+    let (command_tx, command_rx) = mpsc::channel();
+    let command_caller = Arc::clone(&ext);
+    thread::spawn(move || {
+        command_tx
+            .send(command_caller.command("later", ""))
+            .unwrap();
+    });
+    ext.hub.notify();
+    // None of the three starts while the first watcher is withheld: judged
+    // under the hub lock, so a racing start cannot slip between the checks.
+    assert!(
+        until(&ext.hub, |shared| shared.queue.len() == 3),
+        "waited for the hook, the later watcher and the command to queue"
+    );
+    {
+        let shared = ext.hub.lock();
+        assert!(
+            matches!(shared.calls.get(&hook), Some(Progress::Queued)),
+            "the hook started while the watcher was withheld"
+        );
+        assert!(
+            matches!(shared.calls.get(&second), Some(Progress::Queued)),
+            "the later watcher started while the first was withheld"
+        );
+    }
+    // Released, they run in stream order behind the first watcher: dropping
+    // the hold sender lets the withheld completion land at once.
+    drop(hold_tx);
+    super::schedule::release_hook_completion();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&command_rx)
+            .expect("waited for the command to run")
+            .unwrap(),
+        "later"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&status_rx)
+            .expect("waited for the hook's line"),
+        "hook-ran"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&status_rx)
+            .expect("waited for the later watcher's line"),
+        "watcher-one"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&status_rx)
+            .expect("waited for the command's line"),
+        "command-ran"
+    );
+}

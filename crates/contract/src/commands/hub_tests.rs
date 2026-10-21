@@ -33,6 +33,7 @@ fn samples() -> Vec<Value> {
             "overrides": ["a=b"], "worktree": true,
             "content": [{"type": "text", "text": "t"}]}}),
         json!({"id": "c", "command": "start", "args": {"workspace": "/w"}}),
+        json!({"id": "c", "command": "start", "args": {"workspace": "/w", "continues": "s_2"}}),
         json!({"id": "c", "command": "delete", "args": {"session": "s_1"}}),
         json!({"id": "c", "command": "delete",
             "args": {"session": "s_1", "cascade": true, "expect": ["s_2"]}}),

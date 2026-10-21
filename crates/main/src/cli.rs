@@ -754,10 +754,21 @@ pub(crate) struct SessionArgs {
         value_name = "session_id",
         value_parser = parse_session_id,
         hide = true,
-        conflicts_with_all = ["resume", "prompt", "model", "overrides", "worktree", "parent", "delegate_id", "forked_from", "forked_seq"]
+        conflicts_with_all = ["resume", "prompt", "model", "overrides", "worktree", "parent", "delegate_id", "forked_from", "forked_seq", "continues"]
     )]
     pub(crate) rewound_from: Option<String>,
 
+    /// Continue in the worktree of the session `start` names: hidden
+    /// and free to change, passed by the hub that starts a session with
+    /// `continues` (`docs/invocation.md`, "Isolation").
+    #[arg(
+        long = "continues",
+        value_name = "session_id",
+        value_parser = parse_session_id,
+        hide = true,
+        conflicts_with_all = ["resume", "rewound_from", "parent", "forked_from", "forked_seq"]
+    )]
+    pub(crate) continues: Option<String>,
     /// Continue the session this fork names from its point: hidden and
     /// free to change, passed by the parent that starts a fork's new
     /// session. Requires its sequence, the parent, the delegate job and
@@ -771,7 +782,7 @@ pub(crate) struct SessionArgs {
         requires = "parent",
         requires = "delegate_id",
         requires = "prompt",
-        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from"]
+        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from", "continues"]
     )]
     pub(crate) forked_from: Option<String>,
 
@@ -785,7 +796,7 @@ pub(crate) struct SessionArgs {
         requires = "parent",
         requires = "delegate_id",
         requires = "prompt",
-        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from"]
+        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from", "continues"]
     )]
     pub(crate) forked_seq: Option<u64>,
 
@@ -833,6 +844,7 @@ impl From<&SessionArgs> for contract::session_argv::SessionArgv {
             credential: args.credential.clone(),
             worktree: args.worktree,
             rewound_from: args.rewound_from.clone().map(contract::SessionId),
+            continues: args.continues.clone().map(contract::SessionId),
             forked_from: args.forked_from.clone().map(contract::SessionId),
             forked_seq: args.forked_seq,
             parent: args.parent.clone().map(contract::SessionId),

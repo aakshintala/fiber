@@ -24,12 +24,12 @@ use contract::clock::{Clock, Wake};
 use contract::commands::{Remember, RememberScope, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    AskStep, Decision, Event, FiberExited, Interaction, PermissionRequested, RuleScope,
-    StandingRule, ToolCallRequested, TurnOutcome,
+    AskStep, Decision, Event, FiberExited, Interaction, Notice, OnFork, PermissionRequested,
+    RuleScope, StandingRule, ToolCallRequested, TurnOutcome,
 };
 use contract::hook::{
     AfterToolAnswer, AfterToolOutcome, BeforeToolAnswer, BeforeToolOutcome, CheckAnswer,
-    CheckOutcome, HookFailure, Hooks, Refusal,
+    CheckOutcome, HookFailure, Hooks, Refusal, StateLine,
 };
 use contract::inbox::{Ack, Delivery};
 use contract::provider::{
@@ -104,6 +104,9 @@ enum Answer {
         advance_ms: u64,
     },
     Hold,
+    /// Parks the call until the test sends its answer: the release queue
+    /// hands a sender per held call to the test in arrival order.
+    Held,
 }
 
 fn text_reply(text: &str) -> (Vec<Delta>, Result<Reply, CallError>) {
@@ -143,13 +146,29 @@ fn tool_answer(name: &str, arguments: Value, advance_ms: u64) -> Answer {
 }
 
 /// A model answer calling two tools in order, then nothing else.
+/// A model answer calling two tools in order, then nothing else.
 fn tool_answer_two(first: (&str, Value), second: (&str, Value), advance_ms: u64) -> Answer {
+    tool_answer_many(&[first, second], advance_ms)
+}
+
+/// A model answer calling three tools in order, then nothing else.
+fn tool_answer_three(
+    first: (&str, Value),
+    second: (&str, Value),
+    third: (&str, Value),
+    advance_ms: u64,
+) -> Answer {
+    tool_answer_many(&[first, second, third], advance_ms)
+}
+
+/// A model answer calling each tool in order, then nothing else.
+fn tool_answer_many(calls: &[(&str, Value)], advance_ms: u64) -> Answer {
     let mut end = fakes::reply("");
     let mut deltas = Vec::new();
-    for (index, (name, arguments)) in [first, second].into_iter().enumerate() {
+    for (index, (name, arguments)) in calls.iter().enumerate() {
         end.actions.push(ReplyAction::ToolCall(ToolCallRequested {
-            name: name.into(),
-            arguments: arguments.clone(),
+            name: (*name).into(),
+            arguments: (*arguments).clone(),
             provider_id: None,
             repair: None,
             ran_by: None,
@@ -157,8 +176,8 @@ fn tool_answer_two(first: (&str, Value), second: (&str, Value), advance_ms: u64)
         }));
         deltas.push(Delta::ToolCallArguments(
             contract::events::ToolCallArgumentsDelta {
-                index: u32::try_from(index).expect("two calls fit"),
-                name: Some(name.into()),
+                index: u32::try_from(index).expect("the reply fits"),
+                name: Some((*name).into()),
                 text: arguments.to_string(),
             },
         ));
@@ -190,9 +209,19 @@ fn error_answer(code: ErrorCode, advance_ms: u64) -> Answer {
 /// One scripted reviewer answer, clonable so a resume rebuilds it.
 #[derive(Clone)]
 enum ReviewReply {
-    Text { text: String, advance_ms: u64 },
-    Error { code: ErrorCode, advance_ms: u64 },
+    Text {
+        text: String,
+        advance_ms: u64,
+    },
+    Error {
+        code: ErrorCode,
+        advance_ms: u64,
+    },
     Hold,
+    /// Parks the call until the test sends its answer through the queued
+    /// release, so a batch test holds every first stage in flight and
+    /// releases them in whatever order it chooses.
+    HoldAnswer,
 }
 
 fn review_text(text: &str, advance_ms: u64) -> ReviewReply {
@@ -220,6 +249,7 @@ fn review_answers(script: &[ReviewReply]) -> Vec<Answer> {
             }
             ReviewReply::Error { code, advance_ms } => error_answer(code.clone(), *advance_ms),
             ReviewReply::Hold => Answer::Hold,
+            ReviewReply::HoldAnswer => Answer::Held,
         })
         .collect()
 }
@@ -231,11 +261,24 @@ struct ScriptProvider {
     entered: Mutex<Option<mpsc::Sender<()>>>,
     hold_pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     calls: AtomicUsize,
+    /// Every request received, in arrival order.
+    requests: Mutex<Vec<ModelRequest>>,
+    /// Cloned into each held call: every hold signals entry, so the test
+    /// counts them in flight.
+    hold_entered: Mutex<Option<mpsc::Sender<()>>>,
+    /// One sender per held call, in arrival order: the test answers each
+    /// hold through these, in whatever order it chooses.
+    hold_releases: Arc<Mutex<VecDeque<mpsc::Sender<Answer>>>>,
 }
 
 impl ScriptProvider {
     fn called(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    /// Every request the provider received, in arrival order.
+    fn requests(&self) -> Vec<ModelRequest> {
+        lock(&self.requests).clone()
     }
 
     /// Holds the next call ahead of its hold: the call blocks on
@@ -253,7 +296,7 @@ impl Provider for ScriptProvider {
     }
 
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
-        let _ = request;
+        lock(&self.requests).push(request.clone());
         self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(entered) = lock(&self.entered).take() {
             let _sent = entered.send(());
@@ -264,18 +307,30 @@ impl Provider for ScriptProvider {
             signal = Some(cancelled);
             pause = Some(release);
         }
+        let answer = lock(&self.script)
+            .pop_front()
+            .expect("the script has a reply");
+        let hold = matches!(answer, Answer::Held).then(|| {
+            let entered = lock(&self.hold_entered)
+                .clone()
+                .expect("a held call needs the test's entry signal");
+            (entered, Arc::clone(&self.hold_releases))
+        });
         Box::new(ScriptCall {
             clock: Arc::clone(&self.clock),
-            answer: lock(&self.script)
-                .pop_front()
-                .expect("the script has a reply"),
+            answer,
             release: Mutex::new(None),
             cancelled: AtomicBool::new(false),
             signal,
             pause: Mutex::new(pause),
+            hold,
         })
     }
 }
+
+/// Who wakes a held scripted call: its entry signal, and the queue of
+/// per-call answer senders the test drains in arrival order.
+type HoldRelease = (mpsc::Sender<()>, Arc<Mutex<VecDeque<mpsc::Sender<Answer>>>>);
 
 struct ScriptCall {
     clock: Arc<FakeClock>,
@@ -289,22 +344,22 @@ struct ScriptCall {
     /// Holds the run ahead of its release store; taken out and dropped
     /// before the block, so the cancel never meets this lock.
     pause: Mutex<Option<mpsc::Receiver<()>>>,
+    /// Set for held calls: signals entry, then parks for the test's
+    /// answer through the queued release.
+    hold: Option<HoldRelease>,
 }
 
 impl ModelCall for ScriptCall {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        if self.hold.is_some() {
+            return self.run_released(sink);
+        }
         match &self.answer {
             Answer::Run {
                 deltas,
                 end,
                 advance_ms,
-            } => {
-                for delta in deltas {
-                    sink(delta.clone());
-                }
-                self.clock.sleep(Duration::from_millis(*advance_ms));
-                clone_end(end)
-            }
+            } => run_answer(&self.clock, deltas, end, *advance_ms, sink),
             // Parks until the test cancels the call: the release is the
             // signal the code under test is waiting on the cancellation.
             Answer::Hold => {
@@ -332,6 +387,9 @@ impl ModelCall for ScriptCall {
                     usage: Box::new(fakes::unnamed_usage()),
                 })
             }
+            Answer::Held => {
+                unreachable!("a held call parks for the test's answer before matching");
+            }
         }
     }
 
@@ -347,6 +405,68 @@ impl ModelCall for ScriptCall {
             let _sent = signal.send(());
         }
     }
+}
+
+impl ScriptCall {
+    /// Parks a held call until the test sends its answer: signals entry,
+    /// queues the release, then runs the test's answer as the reply.
+    /// A cancel still ends the hold cancelled, as with `Answer::Hold`.
+    /// The block carries no deadline: the channel is the test's own — the
+    /// test pops the sender and sends the answer, and dropping it releases
+    /// the hold too. The test's own deadline on the entry signal and the
+    /// turn's end names a hang.
+    #[allow(clippy::result_large_err, reason = "test helper mirroring the seam")]
+    fn run_released(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        let (entered, releases) = self
+            .hold
+            .as_ref()
+            .expect("a held call is armed by the test");
+        let _sent = entered.send(());
+        let (tx, rx) = mpsc::channel();
+        lock(releases).push_back(tx);
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(CallError::Cancelled {
+                usage: Box::new(fakes::unnamed_usage()),
+            });
+        }
+        let answer = rx.recv().expect("the test releases the hold");
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(CallError::Cancelled {
+                usage: Box::new(fakes::unnamed_usage()),
+            });
+        }
+        match &answer {
+            Answer::Run {
+                deltas,
+                end,
+                advance_ms,
+            } => run_answer(&self.clock, deltas, end, *advance_ms, sink),
+            Answer::Hold | Answer::Held => {
+                panic!("a hold releases with a run answer, never another hold")
+            }
+        }
+    }
+}
+
+/// Runs one scripted answer's fake work: its deltas, its clock advance,
+/// then its end. `run` and released holds share it, so a released hold
+/// replays exactly what the session would have run for that answer.
+#[allow(
+    clippy::result_large_err,
+    reason = "the scripted reply reuses the provider's error type"
+)]
+fn run_answer(
+    clock: &FakeClock,
+    deltas: &[Delta],
+    end: &Result<Reply, CallError>,
+    advance_ms: u64,
+    sink: &mut dyn FnMut(Delta),
+) -> Result<Reply, CallError> {
+    for delta in deltas {
+        sink(delta.clone());
+    }
+    clock.sleep(Duration::from_millis(advance_ms));
+    clone_end(end)
 }
 
 #[allow(clippy::result_large_err, reason = "test helper mirroring the seam")]
@@ -942,6 +1062,9 @@ struct ProbeHooks {
     /// entry waits on `gate`: the failed-commit test's shutdown window.
     entered: Mutex<Option<mpsc::Sender<()>>>,
     gate: Mutex<Option<mpsc::Receiver<()>>>,
+    /// When set, every `before_tool` answer carries one notice naming
+    /// the tool, so a batch test pins notice order across calls.
+    notice_each: AtomicBool,
 }
 
 impl ProbeHooks {
@@ -977,6 +1100,7 @@ impl ProbeHooks {
             clock: Mutex::new(None),
             entered: Mutex::new(None),
             gate: Mutex::new(None),
+            notice_each: AtomicBool::new(false),
         }
     }
     fn refusing() -> Self {
@@ -1017,7 +1141,7 @@ impl ProbeHooks {
 }
 
 impl Hooks for ProbeHooks {
-    fn before_tool(&self, _: &contract::hook::BeforeToolCall<'_>) -> BeforeToolAnswer {
+    fn before_tool(&self, call: &contract::hook::BeforeToolCall<'_>) -> BeforeToolAnswer {
         self.before_calls.fetch_add(1, Ordering::SeqCst);
         // Every entry signals and waits: entries queue on the receiver
         // itself, so one gate holds each dispatch in turn.
@@ -1032,9 +1156,18 @@ impl Hooks for ProbeHooks {
         if let Some(clock) = lock(&self.clock).clone() {
             clock.sleep(Duration::from_millis(self.before_ms));
         }
+        let notices = if self.notice_each.load(Ordering::SeqCst) {
+            vec![Notice {
+                code: ErrorCode::HookFailed,
+                message: format!("hook saw {}", call.tool),
+                extension: Some("fiber.test/guard".into()),
+            }]
+        } else {
+            Vec::new()
+        };
         BeforeToolAnswer {
             outcome: lock(&self.before).clone(),
-            notices: Vec::new(),
+            notices,
         }
     }
 
@@ -1135,6 +1268,9 @@ struct Setup {
     reviewer_script: Option<Vec<ReviewReply>>,
     reviewer_cost: Option<contract::provider::Cost>,
     reviewer_wake: Option<mpsc::Sender<()>>,
+    /// Cloned into each held reviewer call: every hold signals entry, so
+    /// the test counts them all in flight.
+    reviewer_hold_entered: Option<mpsc::Sender<()>>,
     reviewer_limits: Option<(u64, u64)>,
     budget: Option<f64>,
     answerable: bool,
@@ -1152,6 +1288,7 @@ impl Setup {
             reviewer_script: None,
             reviewer_cost: None,
             reviewer_wake: None,
+            reviewer_hold_entered: None,
             reviewer_limits: None,
             budget: None,
             answerable: true,
@@ -1214,6 +1351,9 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
         entered: Mutex::new(None),
         calls: AtomicUsize::new(0),
         hold_pause: Mutex::new(None),
+        requests: Mutex::new(Vec::new()),
+        hold_entered: Mutex::new(None),
+        hold_releases: Arc::new(Mutex::new(VecDeque::new())),
     });
     // Every timer reads this world's clock: tools, rules and the hook
     // gate advance it from whichever thread they run on.
@@ -1287,6 +1427,9 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
             entered: Mutex::new(setup.reviewer_wake.clone()),
             calls: AtomicUsize::new(0),
             hold_pause: Mutex::new(None),
+            requests: Mutex::new(Vec::new()),
+            hold_entered: Mutex::new(setup.reviewer_hold_entered.clone()),
+            hold_releases: Arc::new(Mutex::new(VecDeque::new())),
         });
         let (consecutive, session) = setup.reviewer_limits.unwrap_or((3, 20));
         looped = looped.reviewer(
@@ -1605,6 +1748,9 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
         entered: Mutex::new(None),
         calls: AtomicUsize::new(0),
         hold_pause: Mutex::new(None),
+        requests: Mutex::new(Vec::new()),
+        hold_entered: Mutex::new(None),
+        hold_releases: Arc::new(Mutex::new(VecDeque::new())),
     });
     let workspace = world.home.path().join("workspace");
     for tool in &world.tools {
@@ -1681,6 +1827,9 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
             entered: Mutex::new(None),
             calls: AtomicUsize::new(0),
             hold_pause: Mutex::new(None),
+            requests: Mutex::new(Vec::new()),
+            hold_entered: Mutex::new(None),
+            hold_releases: Arc::new(Mutex::new(VecDeque::new())),
         });
         let (consecutive, session) = world.reviewer_limits.unwrap_or((3, 20));
         looped = looped.reviewer(
@@ -5507,4 +5656,774 @@ fn a_failed_diagnostics_file_changes_no_output() {
     assert_eq!(outcome, control_outcome);
     assert_eq!(kinds, control_kinds, "the event sequence is unchanged");
     assert_eq!(ran, control_ran);
+}
+
+// Three stage-1 requests fly together and resolve in request order: with
+// every first stage held, all three entries land before any answer
+// returns; releasing in reverse arrival order still resolves 1-2-3 before
+// any `tool_call_started`.
+#[test]
+fn three_first_stages_fly_together_and_resolve_in_request_order() {
+    let rules = Arc::new(FakeRules::default());
+    let atlas = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let bruno = Arc::new(ProbeTool::executes("bruno", "bruno run"));
+    let coral = Arc::new(ProbeTool::executes("coral", "coral run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&atlas));
+    setup.tools.push(Arc::clone(&bruno));
+    setup.tools.push(Arc::clone(&coral));
+    setup.reviewer_script = Some(vec![
+        ReviewReply::HoldAnswer,
+        ReviewReply::HoldAnswer,
+        ReviewReply::HoldAnswer,
+    ]);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    setup.reviewer_hold_entered = Some(entered_tx);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer_three(
+                ("atlas", json!({})),
+                ("bruno", json!({})),
+                ("coral", json!({})),
+                0,
+            ),
+            text_answer("Done.", 0),
+            text_answer("Spare.", 0),
+            text_answer("Spare.", 0),
+        ],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let deadline = fakes::Deadline::after(WAIT);
+    for _ in 0..3 {
+        deadline.recv_or_fail(&entered_rx, "each first stage enters");
+    }
+    let judging = world.reviewer.as_ref().expect("a reviewer");
+    assert_eq!(
+        judging.called(),
+        3,
+        "all three first stages are in flight together"
+    );
+    // Releases go out in reverse arrival order; the resolutions must
+    // still come out in request order.
+    let mut answers = review_answers(&[
+        review_text("allow", 1),
+        review_text("allow", 1),
+        review_text("allow", 1),
+    ]);
+    for _ in 0..3 {
+        let release = lock(&judging.hold_releases)
+            .pop_back()
+            .expect("each hold queues its release");
+        release
+            .send(answers.pop().expect("one answer per hold"))
+            .expect("the hold waits");
+    }
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(atlas.ran(), 1);
+    assert_eq!(bruno.ran(), 1);
+    assert_eq!(coral.ran(), 1);
+    // The resolutions name the calls in request order, even though the
+    // answers arrived in reverse.
+    let lines = log::read(&world.home.path().join("s_test")).unwrap();
+    let requested: Vec<String> = lines
+        .iter()
+        .filter(|line| line.kind == "tool_call_requested")
+        .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
+        .collect();
+    let resolved: Vec<(String, String)> = lines
+        .iter()
+        .filter(|line| line.kind == "permission_resolved")
+        .map(|line| {
+            (
+                line.action_id.clone().map(|id| id.0).unwrap_or_default(),
+                line.payload["decision"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(requested.len(), 3);
+    assert_eq!(
+        resolved,
+        requested
+            .into_iter()
+            .map(|id| (id, "allow".to_owned()))
+            .collect::<Vec<_>>(),
+        "every resolution allows its call in request order"
+    );
+    assert_eq!(
+        kinds(&world),
+        vec![
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "usage_recorded",
+            "permission_resolved",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+        "resolutions stay in request order before any start",
+    );
+}
+
+// Carried hook state stays with its already-decided call: with the batch's
+// first call already decided and carrying state, and two more calls still
+// to judge, the state is written before the first call's start, not the
+// second's. Matching any other action would hand the first call's state to
+// the second call.
+#[test]
+fn carried_hook_state_stays_with_its_already_decided_call() {
+    let rules = Arc::new(FakeRules::default());
+    let atlas = Arc::new(ProbeTool::reads("atlas"));
+    let bruno = Arc::new(ProbeTool::reads("bruno"));
+    let coral = Arc::new(ProbeTool::reads("coral"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&atlas));
+    setup.tools.push(Arc::clone(&bruno));
+    setup.tools.push(Arc::clone(&coral));
+    setup.hooks = Some(Arc::new(ProbeHooks::passing()));
+    setup.reviewer_script = Some(Vec::new());
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(&setup, home, Vec::new());
+    let turn = TurnId("t_test".into());
+    let call = |name: &str| ToolCallRequested {
+        name: name.into(),
+        arguments: json!({}),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+        provider_item: None,
+    };
+    let prepared = |tool: &Arc<ProbeTool>| crate::before_tool::Prepared {
+        tool: Arc::clone(tool) as Arc<dyn Tool>,
+        arguments: Map::new(),
+        effects: Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        },
+        rewritten: None,
+    };
+    let id_a = ActionId("a_a".into());
+    let id_b = ActionId("a_b".into());
+    let id_c = ActionId("a_c".into());
+    let state = vec![StateLine {
+        extension: "probe.test".into(),
+        key: "carried".into(),
+        value: Some((json!("kept"), OnFork::AtPoint)),
+        landing: 0,
+    }];
+    let done = world
+        .loop_mut()
+        .run_batch(
+            vec![
+                (id_a.clone(), call("atlas"), Some(Ok(prepared(&atlas)))),
+                (id_b.clone(), call("bruno"), None),
+                (id_c.clone(), call("coral"), None),
+            ],
+            &turn,
+            None,
+            Some((id_a.clone(), state)),
+        )
+        .expect("the batch runs");
+    assert!(!done, "no cancel ends the batch");
+    let lines = log::read(&world.home.path().join("s_test")).unwrap();
+    let started: Vec<String> = lines
+        .iter()
+        .filter(|line| line.kind == "tool_call_started")
+        .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
+        .collect();
+    assert_eq!(
+        started,
+        vec!["a_a".to_owned(), "a_b".to_owned(), "a_c".to_owned()],
+        "every call runs in request order"
+    );
+    let state_at = lines
+        .iter()
+        .position(|line| line.kind == "extension_state_set")
+        .expect("the carried state is written");
+    assert_eq!(lines[state_at].payload["key"], json!("carried"));
+    let started_a_at = lines
+        .iter()
+        .position(|line| {
+            line.kind == "tool_call_started"
+                && line.action_id.as_ref().is_some_and(|id| id.0 == "a_a")
+        })
+        .expect("the first call starts");
+    assert!(
+        state_at < started_a_at,
+        "the carried state lands before its call's start, not the next call's"
+    );
+}
+
+// An idle unwind commits the cursor past the applied first stage: with the
+// first call allowed and the second escalating into an idle wait, the shared
+// cursor still advances past the applied cuts, so the next review chains
+// from them. Skipping the commit would leave the cursor behind.
+#[test]
+fn an_idle_unwind_commits_the_cursor_past_the_applied_first_stage() {
+    let rules = Arc::new(FakeRules::default());
+    let atlas = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let bruno = Arc::new(ProbeTool::executes("bruno", "bruno run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&atlas));
+    setup.tools.push(Arc::clone(&bruno));
+    setup.reviewer_script = Some(vec![
+        review_text("allow", 0),
+        review_text("check", 0),
+        review_text("block its reason", 0),
+    ]);
+    setup.reviewer_limits = Some((1, 20));
+    setup.idle = Some(IDLE);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer_two(
+            ("atlas", json!({})),
+            ("bruno", json!({})),
+            0,
+        )],
+    );
+    prompt(&world, "hi");
+    suspend_on_approval(&mut world);
+    assert!(
+        world.loop_mut().reviewer_sent.is_some(),
+        "the unwind commits the cursor past the applied first stage"
+    );
+}
+
+// A block on the second of three calls counts first: with the consecutive
+// limit at two, the third call's block escalates. Stage 1 fans out, so
+// its replies are uniform checks and the verdicts land serially at
+// stage 2 in request order.
+#[test]
+fn a_second_blocks_count_lands_the_escalation_on_the_third_call() {
+    let rules = Arc::new(FakeRules::default());
+    let atlas = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let bruno = Arc::new(ProbeTool::executes("bruno", "bruno run"));
+    let coral = Arc::new(ProbeTool::executes("coral", "coral run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&atlas));
+    setup.tools.push(Arc::clone(&bruno));
+    setup.tools.push(Arc::clone(&coral));
+    setup.reviewer_script = Some(vec![
+        review_text("check", 1),
+        review_text("check", 1),
+        review_text("check", 1),
+        review_text("allow", 1),
+        review_text("block second reason", 1),
+        review_text("block third reason", 1),
+    ]);
+    setup.reviewer_limits = Some((2, 20));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer_three(
+                ("atlas", json!({})),
+                ("bruno", json!({})),
+                ("coral", json!({})),
+                0,
+            ),
+            text_answer("Done.", 0),
+            text_answer("Spare.", 0),
+            text_answer("Spare.", 0),
+        ],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the third call escalates",
+    );
+    reply(&world, &request, allow());
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(atlas.ran(), 1);
+    assert_eq!(bruno.ran(), 0, "the denied call never ran");
+    assert_eq!(coral.ran(), 1);
+    let lines = log::read(&world.home.path().join("s_test")).unwrap();
+    assert_eq!(
+        kinds(&world),
+        vec![
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+        "each call applies in request order with its own usages",
+    );
+    let requested: Vec<&contract::Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "permission_requested")
+        .collect();
+    assert_eq!(requested.len(), 1, "only the third call escalates");
+    assert_eq!(
+        requested[0].payload["escalation"],
+        json!({"cause": "consecutive_blocks", "reason": "third reason"}),
+    );
+    let resolved: Vec<&str> = lines
+        .iter()
+        .filter(|line| line.kind == "permission_resolved")
+        .map(|line| line.payload["decision"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(resolved, vec!["allow", "deny", "allow"]);
+    assert_eq!(
+        world.reviewer.as_ref().expect("a reviewer").called(),
+        6,
+        "three first stages plus three second stages",
+    );
+}
+
+// The cache chain survives the batch: the same three-call reply plus a
+// follow-up review records the same cache counts, chains the same
+// `previous_end` values and lands the same `reviewer_sent` cursor whether
+// the reply fans out (no budget) or takes the serial path (budget set).
+#[test]
+fn a_mixed_batch_matches_the_serial_event_stream() {
+    struct Run {
+        kinds: Vec<String>,
+        resolved: Vec<(String, String)>,
+        sends: usize,
+        first_prevs: Vec<Option<usize>>,
+        second_prevs: Vec<Option<usize>>,
+        follow_prev: Option<usize>,
+        follow_len: usize,
+        follow_key: String,
+    }
+
+    fn run(budget: Option<f64>, script: Vec<ReviewReply>) -> Run {
+        let rules = Arc::new(FakeRules::default());
+        rules.set(deny_rule("bruno", "bruno"));
+        let mut setup = Setup::new(Arc::clone(&rules));
+        setup
+            .tools
+            .push(Arc::new(ProbeTool::executes("atlas", "atlas run")));
+        setup
+            .tools
+            .push(Arc::new(ProbeTool::executes("bruno", "bruno run")));
+        setup
+            .tools
+            .push(Arc::new(ProbeTool::executes("coral", "coral run")));
+        setup.reviewer_script = Some(script);
+        setup.budget = budget;
+        let home = fakes::TempDir::new("fiber-tool-timing");
+        let mut world = build(
+            &setup,
+            home,
+            vec![
+                tool_answer_three(
+                    ("atlas", json!({})),
+                    ("bruno", json!({})),
+                    ("coral", json!({})),
+                    0,
+                ),
+                text_answer("Done.", 0),
+                tool_answer("atlas", json!({}), 0),
+                text_answer("Done.", 0),
+                text_answer("Spare.", 0),
+            ],
+        );
+        prompt(&world, "hi");
+        let outcome = turn(&mut world).unwrap();
+        assert_eq!(outcome, Some(TurnOutcome::Completed));
+        let kinds = kinds(&world);
+        let lines = log::read(&world.home.path().join("s_test")).unwrap();
+        let resolved: Vec<(String, String)> = lines
+            .iter()
+            .filter(|line| line.kind == "permission_resolved")
+            .map(|line| {
+                (
+                    line.payload["decision"].as_str().unwrap_or("").to_owned(),
+                    line.payload["decided_by"].as_str().unwrap_or("").to_owned(),
+                )
+            })
+            .collect();
+        let sends = world.reviewer.as_ref().expect("a reviewer").called();
+        // The cache chain each request names: first stages fan out in
+        // arrival order, so their ends compare as a set; second stages
+        // pre-send in request order. Both must match the serial path.
+        let mut first_prevs: Vec<Option<usize>> = Vec::new();
+        let mut second_prevs: Vec<Option<usize>> = Vec::new();
+        for request in world.reviewer.as_ref().expect("a reviewer").requests() {
+            // First stages cap their reply; second stages do not.
+            if request.max_output_tokens.is_some() {
+                first_prevs.push(request.previous_end);
+            } else {
+                second_prevs.push(request.previous_end);
+            }
+        }
+        first_prevs.sort();
+        // The next reply's review must chain past the batch exactly as it
+        // chains past the serial path: one more reviewed call proves the
+        // `reviewer_sent` cursor and the cache prefix match, not just the
+        // batch's own ends.
+        prompt(&world, "again");
+        let follow_outcome = turn(&mut world).unwrap();
+        assert_eq!(follow_outcome, Some(TurnOutcome::Completed));
+        let follow = world
+            .reviewer
+            .as_ref()
+            .expect("a reviewer")
+            .requests()
+            .last()
+            .cloned()
+            .expect("the follow-up review sends");
+        assert!(
+            follow.max_output_tokens.is_some(),
+            "the follow-up review is a first stage"
+        );
+        Run {
+            kinds,
+            resolved,
+            sends,
+            first_prevs,
+            second_prevs,
+            follow_prev: follow.previous_end,
+            follow_len: follow.conversation.len(),
+            follow_key: follow.cache_key,
+        }
+    }
+    let check = review_text("check", 1);
+    let allow = review_text("allow", 1);
+    let block = review_text("block coral reason", 1);
+    let batch = run(
+        None,
+        vec![
+            check.clone(),
+            check.clone(),
+            allow.clone(),
+            block.clone(),
+            allow.clone(),
+        ],
+    );
+    let serial = run(
+        Some(1000.0),
+        vec![
+            check.clone(),
+            allow.clone(),
+            check.clone(),
+            block.clone(),
+            allow.clone(),
+        ],
+    );
+    assert_eq!(batch.sends, 4, "the denied call sends nothing");
+    assert_eq!(serial.sends, 4);
+    assert_eq!(
+        batch.resolved,
+        vec![
+            ("allow".to_owned(), "reviewer".to_owned()),
+            ("deny".to_owned(), "standing_rule".to_owned()),
+            ("deny".to_owned(), "reviewer".to_owned()),
+        ],
+        "allow, standing deny, reviewer deny in request order",
+    );
+    assert_eq!(serial.resolved, batch.resolved);
+    assert_eq!(
+        batch.kinds, serial.kinds,
+        "the batch's event stream matches the serial path exactly"
+    );
+    assert_eq!(
+        batch.first_prevs, serial.first_prevs,
+        "the fanned-out first stages keep the serial cache chain"
+    );
+    assert_eq!(
+        batch.second_prevs, serial.second_prevs,
+        "the pre-sent second stages keep the serial cache chain"
+    );
+    assert_eq!(
+        batch.follow_prev, serial.follow_prev,
+        "the follow-up review chains past the same cursor"
+    );
+    assert_eq!(
+        batch.follow_len, serial.follow_len,
+        "the follow-up review sends the same cached prefix"
+    );
+    assert_eq!(
+        batch.follow_key, serial.follow_key,
+        "the follow-up review keeps the serial cache key"
+    );
+}
+
+// A grant installed mid-batch re-judges the calls still waiting, in
+// request order: the first call blocks, escalates and is allowed with a
+// remembered prefix; the second still needs its review; the third is the
+// same tool under the grant, so its fanned-out second stage is discarded
+// and its recorded first-stage usage stays. Six requests go out either
+// way.
+#[test]
+fn a_grant_remembers_across_the_rest_of_the_batch() {
+    let rules = Arc::new(FakeRules::default());
+    let atlas = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let bruno = Arc::new(ProbeTool::executes("bruno", "bruno run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&atlas));
+    setup.tools.push(Arc::clone(&bruno));
+    setup.reviewer_script = Some(vec![
+        review_text("check", 1),
+        review_text("check", 1),
+        review_text("check", 1),
+        review_text("block atlas reason", 1),
+        review_text("allow", 1),
+        review_text("allow", 1),
+    ]);
+    setup.reviewer_limits = Some((1, 20));
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer_three(
+                ("atlas", json!({})),
+                ("bruno", json!({})),
+                ("atlas", json!({})),
+                0,
+            ),
+            text_answer("Done.", 0),
+            text_answer("Spare.", 0),
+        ],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
+    let (request, _) = wait_requested(
+        &mut watcher,
+        &fakes::Deadline::after(WAIT),
+        "the first call escalates",
+    );
+    reply(
+        &world,
+        &request,
+        ReplyAnswer::Approval {
+            decision: Decision::Allow,
+            feedback: None,
+            remember: Some(Remember {
+                scope: RememberScope::Session,
+                prefix: "atlas".into(),
+            }),
+        },
+    );
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(atlas.ran(), 2, "both atlas calls ran");
+    assert_eq!(bruno.ran(), 1);
+    let lines = log::read(&world.home.path().join("s_test")).unwrap();
+    let resolved: Vec<(String, String)> = lines
+        .iter()
+        .filter(|line| line.kind == "permission_resolved")
+        .map(|line| {
+            (
+                line.payload["decision"].as_str().unwrap_or("").to_owned(),
+                line.payload["decided_by"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        resolved,
+        vec![
+            ("allow".to_owned(), "person".to_owned()),
+            ("allow".to_owned(), "reviewer".to_owned()),
+            ("allow".to_owned(), "session_grant".to_owned()),
+        ],
+        "the grant decides the third call",
+    );
+    assert_eq!(
+        world.reviewer.as_ref().expect("a reviewer").called(),
+        6,
+        "all six requests went out, the third's second stage discarded",
+    );
+    // The third call's first-stage usage is recorded under its own action,
+    // even though its second stage never ran.
+    let requested: Vec<String> = lines
+        .iter()
+        .filter(|line| line.kind == "tool_call_requested")
+        .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
+        .collect();
+    let third = requested.get(2).expect("three calls");
+    let third_usages: Vec<&contract::Envelope> = lines
+        .iter()
+        .filter(|line| {
+            line.kind == "usage_recorded"
+                && line.payload.get("reviewer").is_some_and(|reviewer| {
+                    reviewer["purpose"] == "stage_1" && reviewer["action_id"] == *third
+                })
+        })
+        .collect();
+    assert_eq!(
+        third_usages.len(),
+        1,
+        "the mooted first stage still records its usage"
+    );
+    assert_eq!(kinds(&world).len(), lines.len());
+}
+
+// A reply's hook notices come first in request order, then its
+// `permission_resolved` lines (`docs/permissions.md`, "What is recorded"):
+// preparing every call runs its `before_tool` hooks before the first
+// stage fans out, so no fanned-out usage can slip ahead of a notice.
+#[test]
+fn hook_notices_come_before_the_fanned_out_usages() {
+    let rules = Arc::new(FakeRules::default());
+    let hooks = Arc::new(ProbeHooks::staged(
+        BeforeToolOutcome::Unchanged,
+        CheckOutcome::Passed,
+        AfterToolOutcome::Unchanged,
+        0,
+        0,
+        0,
+    ));
+    hooks.notice_each.store(true, Ordering::SeqCst);
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.hooks = Some(Arc::clone(&hooks));
+    setup
+        .tools
+        .push(Arc::new(ProbeTool::executes("atlas", "atlas run")));
+    setup
+        .tools
+        .push(Arc::new(ProbeTool::executes("bruno", "bruno run")));
+    setup
+        .tools
+        .push(Arc::new(ProbeTool::executes("coral", "coral run")));
+    setup.reviewer_script = Some(vec![
+        review_text("check", 1),
+        review_text("check", 1),
+        review_text("check", 1),
+        review_text("allow", 1),
+        review_text("allow", 1),
+        review_text("allow", 1),
+    ]);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer_three(
+                ("atlas", json!({})),
+                ("bruno", json!({})),
+                ("coral", json!({})),
+                0,
+            ),
+            text_answer("Done.", 0),
+            text_answer("Spare.", 0),
+        ],
+    );
+    // Notices are ephemeral: they stream but never reach the durable
+    // log, so a watcher registered before the turn captures them.
+    let mut watcher = world.log.as_ref().expect("the log is open").watch();
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    let deadline = fakes::Deadline::after(WAIT);
+    let mut streamed = Vec::new();
+    while let Some(line) = watcher
+        .recv_timeout(deadline.left())
+        .unwrap_or_else(|| panic!("the stream ends after the turn"))
+        .expect("no end yet")
+    {
+        let last = line.kind == "turn_completed";
+        streamed.push(line);
+        if last {
+            break;
+        }
+    }
+    let notices: Vec<String> = streamed
+        .iter()
+        .filter(|line| line.kind == "notice")
+        .map(|line| line.payload["message"].as_str().unwrap_or("").to_owned())
+        .collect();
+    assert_eq!(
+        notices,
+        vec![
+            "hook saw atlas".to_owned(),
+            "hook saw bruno".to_owned(),
+            "hook saw coral".to_owned(),
+        ],
+        "one notice per call, in request order",
+    );
+    let first_usage = streamed
+        .iter()
+        .position(|line| line.kind == "usage_recorded" && line.payload.get("reviewer").is_some())
+        .expect("the fanned-out stages record usage");
+    let last_notice = streamed
+        .iter()
+        .rposition(|line| line.kind == "notice")
+        .expect("hooks noticed");
+    assert!(
+        last_notice < first_usage,
+        "every hook notice comes before any fanned-out usage",
+    );
 }

@@ -856,6 +856,7 @@ fn on_start(
         );
         return;
     };
+    let continues = args.continues.map(|id| SessionId(id.to_owned()));
     let (session_id, held) = match start::run(
         hub,
         id,
@@ -864,6 +865,7 @@ fn on_start(
         &args.overrides,
         args.worktree,
         args.content,
+        continues.as_ref(),
     ) {
         Outcome::Accepted { session_id, first } => (session_id, first),
         Outcome::Rejected(refused) => {
@@ -964,14 +966,16 @@ fn on_stop(
 /// `start`'s `args`: `workspace` (required string), `model` (optional
 /// string), `overrides` (optional array of strings, each one a
 /// `key=value` the session takes as `-c`), `worktree` (optional boolean,
-/// absent is false), `content` (optional, passed through as JSON once it
-/// fits `prompt`'s `content`). A wrong, missing or extra key, or an
+/// absent is false), `continues` (optional string, the id of the session
+/// whose worktree the new session runs in), `content` (optional, passed
+/// through as JSON once it fits `prompt`'s `content`). A wrong, missing or extra key, or an
 /// explicit `null`, is `None`.
 struct StartArgs<'a> {
     workspace: &'a str,
     model: Option<&'a str>,
     overrides: Vec<&'a str>,
     worktree: bool,
+    continues: Option<&'a str>,
     content: Option<&'a Value>,
 }
 
@@ -984,6 +988,7 @@ fn start_args(args: &Map<String, Value>) -> Option<StartArgs<'_>> {
             && key != "model"
             && key != "overrides"
             && key != "worktree"
+            && key != "continues"
             && key != "content"
     }) {
         return None;
@@ -1010,6 +1015,11 @@ fn start_args(args: &Map<String, Value>) -> Option<StartArgs<'_>> {
         Some(Value::Bool(worktree)) => *worktree,
         Some(_) => return None,
     };
+    let continues = match args.get("continues") {
+        None => None,
+        Some(Value::String(continues)) => Some(continues.as_str()),
+        Some(_) => return None,
+    };
     let content = args.get("content");
     if let Some(content) = content
         && serde_json::from_value::<Vec<SentPart>>(content.clone()).is_err()
@@ -1021,6 +1031,7 @@ fn start_args(args: &Map<String, Value>) -> Option<StartArgs<'_>> {
         model,
         overrides,
         worktree,
+        continues,
         content,
     })
 }
@@ -1106,8 +1117,8 @@ pub(crate) fn line(hub: &Hub, kind: &str, payload: Map<String, Value>) -> Vec<u8
 /// Whether `value` holds an explicit `null`: an optional key is absent,
 /// never `null`.
 // exempted: every explicit null this scan rejects is rejected again in
-// `start_args` below: `workspace`, `model`, `overrides` and `worktree`
-// take no null through their typed checks, and `content` must parse as
+// `start_args` below: `workspace`, `model`, `overrides`, `worktree` and
+// `continues` take no null through their typed checks, and `content` must parse as
 // `Vec<SentPart>`, whose fields are all required strings. Forcing this
 // scan to false changes no answer `start` gives.
 #[cfg_attr(false, mutants::skip)]

@@ -154,6 +154,9 @@ pub struct Start {
     /// With true, the session runs in a new worktree of the workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<bool>,
+    /// The session whose worktree this session continues: its id. Set from `--continues`, beside `--rewound-from`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continues: Option<SessionId>,
     /// The session's first prompt, sent after the answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<Vec<SentPart>>,
