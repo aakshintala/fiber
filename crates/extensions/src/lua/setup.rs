@@ -67,15 +67,15 @@ pub(crate) fn install(
             None => (dir.clone(), format!("{}.lua", name.replace('.', "/"))),
             Some((dep, module)) => {
                 if dep.is_empty() || module.is_empty() {
-                    return Ok((None, Some(format!("`dependency '{dep}' not installed"))));
+                    return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
                 }
                 let Some(mapped) = deps.get(dep) else {
-                    return Ok((None, Some(format!("`dependency '{dep}' not installed"))));
+                    return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
                 };
                 match mapped.canonicalize() {
                     Ok(root) => (root, format!("{}.lua", module.replace('.', "/"))),
                     Err(_) => {
-                        return Ok((None, Some(format!("`dependency '{dep}' not installed"))));
+                        return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
                     }
                 }
             }

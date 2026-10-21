@@ -240,9 +240,9 @@ fn login_provider_fails_when_the_vm_registers_an_undeclared_provider() {
 }
 
 /// Installs the `strings` dependency beside `name`, declares it in `name`'s
-/// manifest, and points `name`'s provider at its `trim` module: the login
+/// manifest, and points `name`'s provider at the `require`d module: the login
 /// VM serves the declared dependency the way the session VM does.
-fn install_with_strings_dep(home: &std::path::Path, name: &str, provider: &str) {
+fn install_with_strings_dep(home: &std::path::Path, name: &str, provider: &str, require: &str) {
     install(home, name, provider);
     let dir = home.join("extensions").join(name);
     let mut manifest: serde_json::Value =
@@ -261,7 +261,7 @@ fn install_with_strings_dep(home: &std::path::Path, name: &str, provider: &str) 
     fs::write(
         dir.join("providers").join(format!("{provider}.lua")),
         format!(
-            r#"local trim = require("strings:trim")
+            r#"local trim = require("{require}")
 fiber.provider("{provider}", {{
   credential = {{ timeout = 60000, run = function(arg)
     return {{ token = trim, expires_at = 4102444800 }}
@@ -276,7 +276,7 @@ fiber.provider("{provider}", {{
 fn a_login_provider_loads_a_declared_dependency_module() {
     let root = fakes::TempDir::new("fiber-login-dep-loads");
     let home = root.path().join("home");
-    install_with_strings_dep(&home, "acme-ext", "acme");
+    install_with_strings_dep(&home, "acme-ext", "acme", "strings:trim");
     let (providers, notices) = Providers::load(&home).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
     let provider = login_provider(
@@ -290,4 +290,27 @@ fn a_login_provider_loads_a_declared_dependency_module() {
     // The provider file requires the dependency at load: a refusal would
     // fail the load, so listing its functions proves the require served.
     assert_eq!(provider.functions().unwrap(), ["credential"]);
+}
+
+#[test]
+fn a_login_provider_refuses_a_module_outside_its_dependencies() {
+    let root = fakes::TempDir::new("fiber-login-dep-refused");
+    let home = root.path().join("home");
+    install_with_strings_dep(&home, "acme-ext", "acme", "other:trim");
+    let (providers, notices) = Providers::load(&home).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    let provider = login_provider(
+        &home,
+        &providers,
+        "acme",
+        Arc::new(SystemBrowser::default()),
+        FakeClock::new(),
+    )
+    .unwrap();
+    let err = provider.functions().unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("`dependency 'other' not installed`"),
+        "{err}"
+    );
 }

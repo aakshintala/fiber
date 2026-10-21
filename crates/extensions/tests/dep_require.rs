@@ -44,13 +44,15 @@ fn manifest_with_provider(name: &str) -> serde_json::Value {
     manifest
 }
 
-/// A root whose `after_tool` hook returns the dependency's answer after the
-/// call's own content.
-fn root_init(dep: &str) -> String {
+/// A root whose `after_tool` hook requires `name` and returns the answer
+/// after the call's own content. A refused require fails the hook: with a
+/// non-blocking hook the refusal lands in the answer's notices, with a
+/// blocking one the call is withheld.
+fn root_init_require(name: &str, on_failure: &str) -> String {
     format!(
-        "fiber.hook(\"after_tool\", {{ timeout = 5000, on_failure = \"blocking\",\n\
+        "fiber.hook(\"after_tool\", {{ timeout = 5000, on_failure = \"{on_failure}\",\n\
            run = function(call)\n\
-             local dep = require(\"{dep}:trim\")\n\
+             local dep = require(\"{name}\")\n\
              return {{ content = call.content .. \"|\" .. dep.trim(\"x\") }} end }})\n"
     )
 }
@@ -142,13 +144,171 @@ fn answer(rx: mpsc::Receiver<AfterToolAnswer>) -> AfterToolAnswer {
         .expect("waited for the answer")
 }
 
+/// The refusal notice of a run whose non-blocking hook require was
+/// refused: the loader's error text, exactly as reported.
+fn refused(session: &Arc<SessionExtensions>) -> String {
+    let answer = answer(ask(session));
+    assert_eq!(answer.notices.len(), 1, "{answer:?}");
+    let notice = answer.notices.into_iter().next().unwrap();
+    assert_eq!(notice.code, contract::ErrorCode::HookFailed);
+    assert_eq!(notice.extension.as_deref(), Some(ROOT));
+    notice.message
+}
+
 #[test]
 fn a_personal_install_loads_a_declared_dependency_module() {
     let setup = Setup::new();
-    install_pair(&setup, &root_init(DEP));
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:trim"), "blocking"),
+    );
     let session = load(&setup, FakeClock::new());
     let AfterToolOutcome::Changed { content, .. } = answer(ask(&session)).outcome else {
         panic!("the hook runs");
     };
     assert_eq!(content.as_deref(), Some("x|x"));
+}
+
+#[test]
+fn an_undeclared_dependency_is_refused() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require("example.com/acme/other:trim", "non-blocking"),
+    );
+    let session = load(&setup, FakeClock::new());
+    let message = refused(&session);
+    assert!(
+        message.contains("`dependency 'example.com/acme/other' not installed`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_declared_but_missing_dependency_names_the_dependency() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:trim"), "non-blocking"),
+    );
+    // The dependency was installed, then removed: the map still points at
+    // its directory, so the require names it instead of reading the file
+    // loader's error.
+    std::fs::remove_dir_all(setup.home().join("extensions").join(config::dir_name(DEP))).unwrap();
+    let session = load(&setup, FakeClock::new());
+    let message = refused(&session);
+    let want = format!("`dependency '{DEP}' not installed`");
+    assert!(message.contains(&want), "{message} vs {want}");
+}
+
+#[test]
+fn a_missing_module_names_the_module() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:nosuch"), "non-blocking"),
+    );
+    let session = load(&setup, FakeClock::new());
+    let message = refused(&session);
+    assert!(message.contains("`nosuch.lua`"), "{message}");
+}
+
+#[test]
+fn an_empty_module_is_refused_as_an_unknown_dependency() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:"), "non-blocking"),
+    );
+    let session = load(&setup, FakeClock::new());
+    let message = refused(&session);
+    assert!(
+        message.contains(&format!("`dependency '{DEP}' not installed`")),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_leading_colon_is_refused_as_an_unknown_dependency() {
+    let setup = Setup::new();
+    install_pair(&setup, &root_init_require(":trim", "non-blocking"));
+    let session = load(&setup, FakeClock::new());
+    let message = refused(&session);
+    assert!(
+        message.contains("`dependency '' not installed`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_second_colon_stays_in_the_module() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:a:b"), "non-blocking"),
+    );
+    let session = load(&setup, FakeClock::new());
+    // The split is at the first colon only: `a:b` maps to the file
+    // `a:b.lua`, which is missing.
+    let message = refused(&session);
+    assert!(message.contains("`a:b.lua`"), "{message}");
+}
+
+#[test]
+fn a_colon_holding_depends_key_is_unaddressable() {
+    let setup = Setup::new();
+    install_pair(&setup, &root_init_require("weird:key:trim", "non-blocking"));
+    // The installed manifest gains a colon-holding key after the install:
+    // the manifest is what the session reads, not the install record.
+    let manifest = setup
+        .home()
+        .join("extensions")
+        .join(config::dir_name(ROOT))
+        .join("extension.json");
+    let mut root: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest).unwrap()).unwrap();
+    root["depends"]
+        .as_object_mut()
+        .unwrap()
+        .insert("weird:key".to_owned(), serde_json::json!("1.0"));
+    std::fs::write(&manifest, root.to_string()).unwrap();
+    let session = load(&setup, FakeClock::new());
+    // The split is at the first colon: the head `weird` never equals the
+    // colon-holding key, so the lookup fails as an unknown dependency.
+    let message = refused(&session);
+    assert!(
+        message.contains("`dependency 'weird' not installed`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_symlink_pointing_out_of_the_dependency_is_refused() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:link"), "non-blocking"),
+    );
+    let outside = setup.root().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(
+        outside.join("secret.lua"),
+        "return { trim = function(s) return s end }",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        outside.join("secret.lua"),
+        setup
+            .home()
+            .join("extensions")
+            .join(config::dir_name(DEP))
+            .join("link.lua"),
+    )
+    .unwrap();
+    let session = load(&setup, FakeClock::new());
+    let message = refused(&session);
+    assert!(
+        message.contains("outside the extension's directory"),
+        "{message}"
+    );
 }
