@@ -67,29 +67,35 @@ impl Temp {
         workspace
     }
 
-    /// Writes `first` as the first line of `SID`'s log in a project.
-    fn log(&self, first: &str) {
+    /// `id`'s log in a project: `projects/-p/sessions/<id>/events.jsonl`,
+    /// created with it.
+    fn events(&self, id: &str) -> PathBuf {
         let dir = self
             .dir
             .join("projects")
             .join("-p")
             .join("sessions")
-            .join(SID);
+            .join(id);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("events.jsonl"), format!("{first}\n{{}}\n")).unwrap();
+        dir.join("events.jsonl")
+    }
+
+    /// Writes `lines` as the whole of `id`'s log.
+    fn write_lines(&self, id: &str, lines: &[String]) {
+        let mut text = lines.join("\n");
+        text.push('\n');
+        fs::write(self.events(id), text).unwrap();
+    }
+
+    /// Writes `first` as the first line of `SID`'s log in a project.
+    fn log(&self, first: &str) {
+        self.write_lines(SID, &[first.to_owned(), "{}".to_owned()]);
     }
 
     /// Writes `bytes` as the whole of `SID`'s log, with no newline added:
     /// for a first line still being written or torn mid-character.
     fn log_bytes(&self, bytes: &[u8]) {
-        let dir = self
-            .dir
-            .join("projects")
-            .join("-p")
-            .join("sessions")
-            .join(SID);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("events.jsonl"), bytes).unwrap();
+        fs::write(self.events(SID), bytes).unwrap();
     }
 
     /// `SID`'s log recording [`Temp::workspace`].
@@ -125,13 +131,7 @@ impl Temp {
 
     /// Appends `kind` as the last line of `SID`'s log.
     fn append(&self, kind: &str) {
-        let log = self
-            .dir
-            .join("projects")
-            .join("-p")
-            .join("sessions")
-            .join(SID)
-            .join("events.jsonl");
+        let log = self.events(SID);
         let mut text = fs::read_to_string(&log).unwrap();
         text.push_str(&json!({"kind": kind, "session_id": SID, "payload": {}}).to_string());
         text.push('\n');
@@ -2433,13 +2433,6 @@ fn a_refused_labelled_subscribe_asks_once() {
 /// `seq`, so a replay carries `last_seq` and a verbatim fold.
 fn finished_delegate_log(temp: &Temp) {
     let workspace = temp.workspace();
-    let dir = temp
-        .dir
-        .join("projects")
-        .join("-p")
-        .join("sessions")
-        .join(SID);
-    fs::create_dir_all(&dir).unwrap();
     let started = json!({"kind": "session_started", "seq": 0, "session_id": SID,
         "ts": 1, "schema_version": 1,
         "payload": {"workspace": workspace, "parent": parent()}});
@@ -2447,38 +2440,27 @@ fn finished_delegate_log(temp: &Temp) {
         "ts": 2, "schema_version": 1, "payload": {}});
     let exited = json!({"kind": "fiber_exited", "seq": 2, "session_id": SID,
         "ts": 3, "schema_version": 1, "payload": {}});
-    let mut text = started.to_string();
-    text.push('\n');
-    text.push_str(&middle.to_string());
-    text.push('\n');
-    text.push_str(&exited.to_string());
-    text.push('\n');
-    fs::write(dir.join("events.jsonl"), text).unwrap();
+    temp.write_lines(
+        SID,
+        &[started.to_string(), middle.to_string(), exited.to_string()],
+    );
 }
 
 /// Writes the parent's log with `session_started` then one job line per
 /// `kinds`, each naming `j_1` with the next `seq`.
 fn parent_log(temp: &Temp, kinds: &[&str]) {
     let workspace = temp.workspace();
-    let dir = temp
-        .dir
-        .join("projects")
-        .join("-p")
-        .join("sessions")
-        .join("s_1111111111111111");
-    fs::create_dir_all(&dir).unwrap();
-    let mut text = json!({"kind": "session_started", "seq": 0,
+    let started = json!({"kind": "session_started", "seq": 0,
         "session_id": "s_1111111111111111", "ts": 1, "schema_version": 1,
         "payload": {"workspace": workspace}})
     .to_string();
-    text.push('\n');
+    let mut lines = vec![started];
     for (n, kind) in kinds.iter().enumerate() {
         let line = json!({"kind": kind, "seq": n + 1, "session_id": "s_1111111111111111",
             "ts": 2, "schema_version": 1, "payload": {"job_id": "j_1"}});
-        text.push_str(&line.to_string());
-        text.push('\n');
+        lines.push(line.to_string());
     }
-    fs::write(dir.join("events.jsonl"), text).unwrap();
+    temp.write_lines("s_1111111111111111", &lines);
 }
 
 #[test]
