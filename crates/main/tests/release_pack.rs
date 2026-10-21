@@ -1231,6 +1231,45 @@ fn nightly_notes_at_the_stable_tag_prints_head_itself() {
     assert!(run.stdout.contains("first"), "{}", run.stdout);
 }
 
+/// `nightly-notes` reads the repository at `GITHUB_WORKSPACE`, so the
+/// publish job can run it from outside the checkout.
+#[test]
+fn nightly_notes_outside_the_checkout_reads_the_workspace() {
+    let pack = Pack::start();
+    let repo = pack.root.path().to_path_buf();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    pack.wfile("note-src/one.txt", b"one", 0o644);
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "first"]);
+    fakes::git::git(&repo, &["tag", "v0.0.9"]);
+    pack.wfile("note-src/two.txt", b"two", 0o644);
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "second"]);
+    let head = fakes::git::git(&repo, &["rev-parse", "HEAD"]);
+    let outside = fakes::TempDir::new("rlp-outside");
+    let path = format!("{}:/usr/bin:/bin", fixture_bin().display());
+    let mut command = Command::new(script());
+    command
+        .process_group(0)
+        .args(["nightly-notes", "v0.0.9", &head])
+        .current_dir(outside.path())
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", path)
+        .env("HOME", pack.root.path())
+        .env("TMPDIR", pack.path("tmp"))
+        .env("RELEASE_PACK_STATE", pack.state())
+        .env("GITHUB_WORKSPACE", &repo)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let run = run_watched(&mut command, pack.deadline, "nightly-notes to exit");
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout.lines().count(), 1);
+    assert!(run.stdout.starts_with("- "), "{}", run.stdout);
+    assert!(run.stdout.contains("second"), "{}", run.stdout);
+}
+
 /// `draft-begin --prerelease` carries `--prerelease` through to the
 /// `gh release create` call.
 #[test]
