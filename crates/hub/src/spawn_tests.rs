@@ -705,3 +705,45 @@ fn start_command_passes_worktree_only_when_set() {
     );
     assert!(!args_of(&without).contains(&"--worktree".to_owned()));
 }
+
+#[test]
+fn session_command_passes_continues_only_when_set() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let old = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let with = session_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        false,
+        false,
+        None,
+        Some(&old),
+        false,
+    );
+    assert_eq!(
+        args_of(&with),
+        [
+            "session",
+            "--id=s_0123456789abcdef",
+            "--workspace=/w",
+            "--continues=s_aaaaaaaaaaaaaaaa"
+        ]
+    );
+    let without = session_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        false,
+        false,
+        None,
+        None,
+        false,
+    );
+    assert!(
+        !args_of(&without)
+            .iter()
+            .any(|arg| arg.starts_with("--continues"))
+    );
+}

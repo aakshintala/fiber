@@ -22,7 +22,7 @@ use contract::shapes::{Failure, Worktree};
 use contract::{ErrorCode, SessionId};
 use log::Log;
 
-use super::{RecreateError, isolate};
+use super::{RecreateError, isolate, same_worktree};
 use crate::project;
 use fakes::git::git;
 
@@ -1623,4 +1623,36 @@ fn recreate_error_debug_names_the_isolation_state() {
             }
         },
     );
+}
+
+#[test]
+fn same_worktree_with_the_exact_spelling_is_true_even_when_unresolvable() {
+    let missing = "/nonexistent-fiber-worktree-s_0123456789abcdef";
+    assert!(same_worktree(missing, Path::new(missing)));
+}
+
+#[test]
+fn same_worktree_with_an_alias_spelling_of_one_directory_is_true() {
+    let dir = fakes::TempDir::new("doors-same-worktree-alias");
+    let aliased = format!("{}/", dir.path().display());
+    assert!(same_worktree(&aliased, dir.path()));
+}
+
+#[test]
+fn same_worktree_with_two_different_directories_is_false() {
+    let first = fakes::TempDir::new("doors-same-worktree-first");
+    let second = fakes::TempDir::new("doors-same-worktree-second");
+    assert!(!same_worktree(
+        first.path().to_str().unwrap(),
+        second.path()
+    ));
+}
+
+#[test]
+fn same_worktree_with_one_side_missing_is_false() {
+    let dir = fakes::TempDir::new("doors-same-worktree-present");
+    assert!(!same_worktree(
+        "/nonexistent-fiber-worktree-s_0123456789abcdef",
+        dir.path()
+    ));
 }
