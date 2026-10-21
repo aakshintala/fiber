@@ -163,8 +163,15 @@ jobs:
             --shard "$SHARD/$TOTAL"
             --sharding round-robin
           )
-          systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}" 2>&1 | tee "$run_log"
-          status=${PIPESTATUS[0]}
+          # Guarded by `if` so errexit (-e, which Actions' `bash`
+          # shell sets) does not exit on a non-zero pipeline before the
+          # status capture: a survivors-only shard (status 2) must reach
+          # the helper below instead of failing the step here.
+          if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}" 2>&1 | tee "$run_log"; then
+            status=0
+          else
+            status=${PIPESTATUS[0]}
+          fi
           if [ "$status" -ne 0 ]; then
             last_log=$(find mutants.out/log -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
               | sort -nr | head -n 1 | cut -d' ' -f2- || true)
