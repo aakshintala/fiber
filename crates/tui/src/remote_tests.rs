@@ -301,6 +301,37 @@ fn each_configure_operation_uses_the_hub_wire_shape() {
         |r| r.set_reviewer("a", "m"),
     )
     .unwrap();
+    assert_eq!(
+        hub.call(
+            "gaps",
+            json!({"name":"a"}),
+            json!({"gaps":[{"name":"workspace","env":"ACME_HOST"},{"name":"other","env":null}]}),
+            |r| r.gaps("a")
+        )
+        .unwrap(),
+        [
+            crate::configure::HostGap {
+                name: "workspace".to_owned(),
+                env: Some("ACME_HOST".to_owned()),
+            },
+            crate::configure::HostGap {
+                name: "other".to_owned(),
+                env: None,
+            },
+        ]
+    );
+    assert_eq!(
+        hub.call(
+            "save_host",
+            json!({"name":"a","key":"workspace","value":"h.example"}),
+            json!({"masked":"/hub/projects/p/config/a.json"}),
+            |r| r.save_host("a", "workspace", "h.example")
+        )
+        .unwrap(),
+        crate::configure::HostSaved {
+            masked: Some(PathBuf::from("/hub/projects/p/config/a.json")),
+        }
+    );
     let read = hub.call(
         "reviewer_notes",
         json!({"workspace":w}),
