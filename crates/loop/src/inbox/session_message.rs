@@ -46,18 +46,25 @@ impl Loop {
     }
 
     /// A session message taken while a turn runs: queued for the next step
-    /// boundary, in an after-`close` turn too. It never marks the session
-    /// attended (`docs/invocation.md`, "Lifecycle").
+    /// boundary, in an after-`close` turn too, in arrival order. It never
+    /// marks the session attended (`docs/invocation.md`, "Lifecycle").
     pub(super) fn admit_message_running(
         &mut self,
         message: SessionMessage,
         turn: &TurnId,
     ) -> Result<(), crate::Error> {
+        let id = message.command_id.clone();
+        let framed = framed(message);
+        let emit = super::TurnEmit {
+            log: &self.log,
+            turn: Some(turn.clone()),
+        };
+        self.steering
+            .admit_message(id, framed.content.clone(), framed.sender.clone(), &emit);
         self.queued.push_back(Queued::Steer(
-            framed(message),
+            framed,
             crate::before_message::Hooked::default(),
         ));
-        self.emit_queue(Some(turn))?;
         Ok(())
     }
 
@@ -108,6 +115,7 @@ impl Loop {
         self.queued
             .iter()
             .any(|piece| matches!(piece, Queued::Steer(message, _) if is_session(message)))
+            || self.steering.has_session()
             || self
                 .deferred
                 .iter()

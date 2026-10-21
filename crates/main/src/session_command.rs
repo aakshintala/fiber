@@ -616,6 +616,7 @@ pub(crate) fn run_new(
     let inbox_wake = session.inbox_wake();
     let rewrites = session.rewrites();
     let admission = session.admission();
+    let steering = session.steering();
     // The fetch runs a prompt row through its server, starting a lazy
     // one as a first tool call does (`docs/mcp.md`, "Prompts and
     // resources"). No logic lives here beyond that call.
@@ -727,6 +728,7 @@ pub(crate) fn run_new(
                         .inbox_wake(inbox_wake)
                         .on_rewrite(rewrites)
                         .admission(admission)
+                        .steering(steering)
                 }),
                 budget,
                 idle,

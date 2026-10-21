@@ -1131,7 +1131,7 @@ fn a_check_before_message_hook_that_replaces_has_failed() {
 }
 
 #[test]
-fn a_refused_steer_and_prompt_over_the_socket_are_rejected_message_refused() {
+fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected() {
     use extension_harness::{send as session_send, until_session as session_until};
 
     let setup = Setup::new_with_fm_root();
@@ -1157,13 +1157,19 @@ fn a_refused_steer_and_prompt_over_the_socket_are_rejected_message_refused() {
         &client,
         r#"{"id":"c_s1","command":"steer","args":{"content":[{"type":"text","text":"aside"}]}}"#,
     );
-    let refused = session_until(&client, "the refused steer", |line| {
-        line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_s1"
+    let accepted = session_until(&client, "the steer's at-once acceptance", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_s1"
     });
-    assert_eq!(
-        refused.last().unwrap()["payload"]["code"],
-        "message_refused"
+    assert!(
+        !accepted.is_empty(),
+        "the refused steer is still answered at once"
     );
+    // The refusal lands after the answer, as a notice naming the code,
+    // the extension and the reason: the loop never rejects a steer it
+    // already accepted.
+    let refused = session_until(&client, "the refused steer's notice", |line| {
+        line["kind"] == "notice" && line["payload"]["code"] == "message_refused"
+    });
     assert_eq!(
         refused.last().unwrap()["payload"]["message"],
         "Extension fiber.test/guard refused the message: no keys"

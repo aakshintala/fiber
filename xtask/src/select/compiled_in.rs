@@ -76,6 +76,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/opencode/providers/opencode-go.json", "main"),
     ("providers/opencode/providers/opencode-zen.json", "main"),
     ("providers/openrouter/providers/openrouter.json", "main"),
+    ("providers/databricks/thinking.lua", "main"),
     ("providers/anthropic/providers/anthropic.json", "config"),
     ("providers/codex/providers/codex.json", "config"),
     ("providers/databricks/providers/databricks.json", "config"),

@@ -74,10 +74,13 @@ fn assert_fingerprint(request: &Request, header: &str, value: &str) {
 
 /// Copies the `databricks` package with its origin rewritten to the fake
 /// server and installs it with `fiber extension install` on closed stdin,
-/// returning the fake host and port.
-fn install(setup: &Setup, server: &ProviderServer) -> String {
+/// returning the fake host and port. The copy also carries the given
+/// thinking table, which `copy_package` does not copy: it only copies
+/// `extension.json` and `providers/`.
+fn install(setup: &Setup, server: &ProviderServer, thinking: &str) -> String {
     let to = setup.root.path().join("pkg-databricks");
     support::package::copy_package("databricks", &to, "https://", "http://");
+    std::fs::write(to.join("thinking.lua"), thinking).unwrap();
     let installed = run(setup, &["extension", "install", to.to_str().unwrap()], &[]);
     assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
     assert!(
@@ -211,7 +214,11 @@ fn assert_turn(requests: &[Request], model_path: &str) {
 fn claude_completes_a_turn_on_the_anthropic_route() {
     let setup = Setup::new();
     let server = ProviderServer::start(discovery().into_iter().chain([anthropic_hello()])).unwrap();
-    let host = install(&setup, &server);
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
 
     let run = run(
         &setup,
@@ -238,7 +245,11 @@ fn claude_completes_a_turn_on_the_anthropic_route() {
 fn responses_model_completes_a_turn_on_the_codex_route() {
     let setup = Setup::new();
     let server = ProviderServer::start(discovery().into_iter().chain([hello()])).unwrap();
-    let host = install(&setup, &server);
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
 
     let run = run(
         &setup,
@@ -257,7 +268,11 @@ fn completions_model_completes_a_turn_on_the_mlflow_route() {
     let setup = Setup::new();
     let server =
         ProviderServer::start(discovery().into_iter().chain([completions_hello()])).unwrap();
-    let host = install(&setup, &server);
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
 
     let run = run(
         &setup,
@@ -275,7 +290,11 @@ fn completions_model_completes_a_turn_on_the_mlflow_route() {
 fn models_lists_exactly_the_three_discovered_references() {
     let setup = Setup::new();
     let server = ProviderServer::start(discovery()).unwrap();
-    let host = install(&setup, &server);
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
 
     let run = run(&setup, &["models", "--json"], &credentials(&host));
 
@@ -303,7 +322,11 @@ fn the_setting_wins_over_the_environment() {
     let setup = Setup::new();
     let server =
         ProviderServer::start(discovery().into_iter().chain([completions_hello()])).unwrap();
-    let host = install(&setup, &server);
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
     // The person's setting names the fake server while the environment
     // names the refused address (`docs/testing/fakes.md`, "Fakes").
     write_json(
@@ -352,7 +375,11 @@ fn assert_pre_session(output: &Output, exit: i32, code: &str) -> String {
 fn unset_workspace_leaves_the_seed_model_out() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
-    install(&setup, &server);
+    install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
 
     let mut command = setup.fiber(&[
         "ask",
@@ -417,7 +444,11 @@ fn a_thousand_row_catalog_page_fits_the_memory_cap() {
         Response::status(200, json!({"models": rows}).to_string()),
     ])
     .unwrap();
-    let host = install(&setup, &server);
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
 
     let run = run(&setup, &["models", "--json"], &credentials(&host));
 
@@ -429,4 +460,70 @@ fn a_thousand_row_catalog_page_fits_the_memory_cap() {
         .collect();
     assert_eq!(models, ["databricks/databricks-bulk-model"]);
     assert_eq!(server.requests().len(), 2);
+}
+
+/// A `:level` suffix on a discovered Claude model reaches the Anthropic
+/// route as adaptive thinking (`docs/model-routing.md`, "Thinking").
+#[test]
+fn claude_thinking_suffix_sends_adaptive_thinking() {
+    let setup = Setup::new();
+    let server = ProviderServer::start(discovery().into_iter().chain([anthropic_hello()])).unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
+
+    let run = run(
+        &setup,
+        &[
+            "ask",
+            "--model",
+            "databricks/databricks-claude-opus-5:high",
+            "hi",
+        ],
+        &credentials(&host),
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.text_completed(), "Hello.");
+    let requests = server.requests();
+    assert_turn(&requests, "/ai-gateway/anthropic/v1/messages");
+    let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    assert_eq!(body["thinking"], json!({"type": "adaptive"}));
+    assert_eq!(body["output_config"], json!({"effort": "high"}));
+}
+
+/// A discovered model's default level applies with no suffix: one synthetic
+/// row overlaid onto the copied package's thinking table chooses `medium`.
+#[test]
+fn discovered_default_level_sends_without_a_suffix() {
+    let setup = Setup::new();
+    let server = ProviderServer::start(discovery().into_iter().chain([anthropic_hello()])).unwrap();
+    let host = install(
+        &setup,
+        &server,
+        "return {[\"claude-opus-5\"]={levels={\"low\",\"medium\",\"high\"},default=\"medium\"}}\n",
+    );
+
+    let run = run(
+        &setup,
+        &[
+            "ask",
+            "--model",
+            "databricks/databricks-claude-opus-5",
+            "hi",
+        ],
+        &credentials(&host),
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.text_completed(), "Hello.");
+    let requests = server.requests();
+    assert_turn(&requests, "/ai-gateway/anthropic/v1/messages");
+    let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    assert_eq!(body["thinking"], json!({"type": "adaptive"}));
+    assert_eq!(body["output_config"], json!({"effort": "medium"}));
 }
