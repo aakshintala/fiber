@@ -224,26 +224,26 @@ fn shells_map_by_basename_with_a_dash_and_unknowns_map_to_none() {
 fn completions_are_installed_only_with_the_line_present() {
     let setup = Setup::new();
     let home_env = setup.home();
-    assert_eq!(completions_installed(&home_env, "zsh"), Some(false));
-    assert_eq!(completions_installed(&home_env, "elvish"), None);
+    assert!(!completions_installed(&home_env, "zsh"));
+    assert!(!completions_installed(&home_env, "elvish"));
     fs::write(home_env.join(".zshrc"), "export X=1\n").unwrap();
-    assert_eq!(completions_installed(&home_env, "zsh"), Some(false));
+    assert!(!completions_installed(&home_env, "zsh"));
     fs::write(
         home_env.join(".zshrc"),
         "export X=1\neval \"$(fiber completion zsh)\"\n",
     )
     .unwrap();
-    assert_eq!(completions_installed(&home_env, "zsh"), Some(true));
+    assert!(completions_installed(&home_env, "zsh"));
 }
 
 #[test]
-fn a_startup_file_that_fails_to_read_is_neither_done_nor_missing() {
+fn a_startup_file_that_fails_to_read_holds_no_line() {
     let setup = Setup::new();
     let home_env = setup.home();
     // A directory fails to read with an error other than `NotFound`:
-    // the step must ask again instead of reporting no line is held.
+    // the step asks again instead of reporting the line is held.
     fs::create_dir(home_env.join(".zshrc")).unwrap();
-    assert_eq!(completions_installed(&home_env, "zsh"), None);
+    assert!(!completions_installed(&home_env, "zsh"));
 }
 
 fn answers(text: &str) -> Cursor<String> {

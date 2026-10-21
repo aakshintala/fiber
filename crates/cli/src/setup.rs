@@ -175,16 +175,15 @@ pub(crate) fn shell_from_env(var: &dyn Fn(&str) -> Option<OsString>) -> Option<S
 }
 
 /// Whether the startup file for `shell` already holds its completion
-/// line: `None` for an unknown shell, which has no line to hold.
-pub(crate) fn completions_installed(home_env: &Path, shell: &str) -> Option<bool> {
-    let (file, line) = startup_line(home_env, shell).ok()?;
-    // Only a missing file is a missing line: any other read error is
-    // unknown, so the question asks again and the write reports it.
-    match std::fs::read_to_string(&file) {
-        Ok(previous) => Some(previous.lines().any(|held| held == line)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Some(false),
-        Err(_) => None,
-    }
+/// line: a missing or unreadable file holds nothing, so the question
+/// asks again and the write reports an unreadable file.
+pub(crate) fn completions_installed(home_env: &Path, shell: &str) -> bool {
+    let Ok((file, line)) = startup_line(home_env, shell) else {
+        return false;
+    };
+    std::fs::read_to_string(&file)
+        .map(|previous| previous.lines().any(|held| held == line))
+        .unwrap_or(false)
 }
 
 /// Runs the five setup steps in order against the process terminal. Each
@@ -552,8 +551,7 @@ fn step_completions(
     let home_env = std::env::var_os("HOME").map(PathBuf::from);
     let done = home_env
         .as_ref()
-        .and_then(|dir| completions_installed(dir, &shell))
-        .unwrap_or(false);
+        .is_some_and(|dir| completions_installed(dir, &shell));
     if done {
         writeln!(err, "Completions for {shell} are installed (done).")
             .map_err(CliError::StandardError)?;
@@ -794,9 +792,8 @@ fn install_completions(shell: &str) -> Result<(), String> {
         .filter(|home| home.is_absolute())
         .ok_or_else(|| "HOME must be an absolute path to install completions".to_owned())?;
     let (file, line) = startup_line(&home, shell)?;
-    if let Some(parent) = file.parent()
-        && !parent.as_os_str().is_empty()
-    {
+    // The home is absolute, so a parent is a real directory to create.
+    if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("creating {}: {e}", parent.display()))?;
     }
