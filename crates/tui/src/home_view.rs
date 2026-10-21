@@ -529,7 +529,7 @@ fn draw_list(
     // past it. A focused row outside the window pulls into view, and
     // pulls the stored offset with it, so the wheel carries on from
     // the rows shown.
-    let mut start = screen.list_scroll.min(max);
+    let mut start = app.home_list_scroll().min(max);
     if let Some(at) = focused.and_then(|spot| rows.iter().position(|r| r.spot == Some(spot))) {
         let height = 1 + usize::from(
             rows.get(at.saturating_add(1))

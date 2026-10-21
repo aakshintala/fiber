@@ -267,9 +267,6 @@ pub(crate) struct HomeScreen {
     /// The delete question's scroll offset: Up shows earlier rows,
     /// Down later ones.
     pub(crate) question_scroll: usize,
-    /// The session list's scroll offset: the wheel over its rows
-    /// moves it by three rows, the focus unmoved.
-    pub(crate) list_scroll: usize,
     /// The input box shows its placeholder.
     pub(crate) placeholder: bool,
 }

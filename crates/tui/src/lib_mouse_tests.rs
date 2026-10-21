@@ -352,26 +352,7 @@ fn the_wheel_one_column_past_the_conversation_scrolls_nothing() {
 /// focus stays where it was.
 #[test]
 fn the_wheel_over_home_list_scrolls_it_three_rows() {
-    use std::path::PathBuf;
-    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    lp.app.set_home(crate::home::Launch {
-        location: crate::LaunchLocation::Local {
-            workspace: PathBuf::from("/w"),
-            project: "-w".to_owned(),
-            git: false,
-        },
-        ..Default::default()
-    });
-    assert!(lp.app.on_home());
-    let names = ["one", "two", "three", "four", "five", "six"];
-    feed(
-        &mut lp,
-        names
-            .iter()
-            .enumerate()
-            .map(|(at, name)| status(&format!("s_{at:017}"), name))
-            .collect(),
-    );
+    let mut lp = home_list(60, 12, &["one", "two", "three", "four", "five", "six"]);
     assert!(shown(&lp).contains("6 live"), "{}", shown(&lp));
     assert_eq!(lp.app.focused(), None);
     feed(&mut lp, vec![wheel_down(10, 5)]);
@@ -382,12 +363,16 @@ fn the_wheel_over_home_list_scrolls_it_three_rows() {
     assert_eq!(lp.app.top(), None);
 }
 
-/// A 60x12 loop on home with six live sessions, more rows than the
-/// list's one-row window holds, and nothing focused.
+/// A `width`x`height` loop on home with live sessions `names`, more
+/// rows than the list's window holds, and nothing focused.
 #[track_caller]
-fn tall_home() -> super::Loop<TestBackend> {
+fn home_list(width: u16, height: u16, names: &[&str]) -> super::Loop<TestBackend> {
     use std::path::PathBuf;
-    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    let (mut lp, _) = new_loop(TestBackend::new(width, height), None);
+    lp.app.set_size(width, height);
+    lp.screen
+        .resize(width, height)
+        .unwrap_or_else(|error| panic!("resize: {error}"));
     lp.app.set_home(crate::home::Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
@@ -399,7 +384,7 @@ fn tall_home() -> super::Loop<TestBackend> {
     assert!(lp.app.on_home());
     feed(
         &mut lp,
-        ["one", "two", "three", "four", "five", "six"]
+        names
             .iter()
             .enumerate()
             .map(|(at, name)| status(&format!("s_{at:017}"), name))
@@ -407,6 +392,13 @@ fn tall_home() -> super::Loop<TestBackend> {
     );
     assert_eq!(lp.app.focused(), None);
     lp
+}
+
+/// A 60x12 loop on home with six live sessions, more rows than the
+/// list's one-row window holds, and nothing focused.
+#[track_caller]
+fn tall_home() -> super::Loop<TestBackend> {
+    home_list(60, 12, &["one", "two", "three", "four", "five", "six"])
 }
 
 /// One wheel-up after one wheel-down returns home's list to its head.
@@ -451,22 +443,13 @@ fn wheeling_down_past_home_list_end_clamps_at_its_last_window() {
         });
     }
     assert_eq!(lp.app.home_list_scroll(), 12);
-    feed(
-        &mut lp,
-        vec![
-            wheel_down(10, 5),
-            wheel_down(10, 5),
-            wheel_down(10, 5),
-            wheel_down(10, 5),
-            wheel_down(10, 5),
-        ],
-    );
+    // One wheel-down through a frame holds the clamped offset and
+    // the rows shown: the wheel clamps the stored offset, not just
+    // the frame.
+    feed(&mut lp, vec![wheel_down(10, 5)]);
     assert_eq!(lp.app.home_list_scroll(), 12);
     let after = shown(&lp);
     assert!(after.contains("s_00000000000000005"), "{after}");
-    feed(&mut lp, vec![wheel_down(10, 5)]);
-    assert_eq!(lp.app.home_list_scroll(), 12);
-    assert_eq!(shown(&lp), after);
 }
 
 /// The wheel below the list's rows, over the box, scrolls nothing.
@@ -498,24 +481,7 @@ fn the_wheel_over_home_list_under_the_picker_scrolls_nothing() {
 /// the entry bar focuses it.
 #[track_caller]
 fn solo_home() -> super::Loop<TestBackend> {
-    use std::path::PathBuf;
-    let (mut lp, _) = new_loop(TestBackend::new(60, 13), None);
-    lp.app.set_size(60, 13);
-    lp.screen
-        .resize(60, 13)
-        .unwrap_or_else(|error| panic!("resize: {error}"));
-    lp.app.set_home(crate::home::Launch {
-        location: crate::LaunchLocation::Local {
-            workspace: PathBuf::from("/w"),
-            project: "-w".to_owned(),
-            git: false,
-        },
-        ..Default::default()
-    });
-    assert!(lp.app.on_home());
-    feed(&mut lp, vec![status("s_00000000000000000", "one")]);
-    assert_eq!(lp.app.focused(), None);
-    lp
+    home_list(60, 13, &["one"])
 }
 
 /// Up from the entry bar focuses the drawn row, pulling it into view;

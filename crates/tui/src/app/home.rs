@@ -512,7 +512,6 @@ impl App {
             question,
             question_import: matches!(home.questions.prompt(), Some(Prompt::Import)),
             question_scroll,
-            list_scroll: home.list_scroll.get(),
             // Until the first prompt, the placeholder says "/? for
             // shortcuts"; no session exists before Enter, so opening the
             // terminal, glancing at home and leaving creates nothing.
