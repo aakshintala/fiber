@@ -106,7 +106,9 @@ fn remote_texts(workspace: &Path) -> Vec<String> {
     remotes.sort();
     remotes
         .into_iter()
-        .map(|(name, url)| cut(&format!("git remote {name}: {}", strip_userinfo(&url))))
+        .map(|(name, url)| {
+            cut_text(&format!("git remote {name}: {}", strip_userinfo(&url))).to_owned()
+        })
         .collect()
 }
 
@@ -177,11 +179,14 @@ fn ci_texts(workspace: &Path, root: &Path) -> Vec<String> {
     read.into_iter()
         .filter_map(|(path, text)| {
             let rel = path.strip_prefix(workspace).ok()?;
-            Some(cut(&format!(
-                "CI configuration {}:\n{}",
-                rel.display(),
-                strip_userinfo(&text)
-            )))
+            Some(
+                cut_text(&format!(
+                    "CI configuration {}:\n{}",
+                    rel.display(),
+                    strip_userinfo(&text)
+                ))
+                .to_owned(),
+            )
         })
         .collect()
 }
@@ -217,7 +222,7 @@ fn push_registries(
     texts.extend(
         lines(&content)
             .into_iter()
-            .map(|line| cut(&format!("registry {rel}: {}", strip_userinfo(&line)))),
+            .map(|line| cut_text(&format!("registry {rel}: {}", strip_userinfo(&line))).to_owned()),
     );
 }
 
@@ -358,11 +363,6 @@ fn cut_text(text: &str) -> &str {
         end -= 1;
     }
     &text[..end]
-}
-
-/// The owned form, for cutting a built item.
-fn cut(text: &str) -> String {
-    cut_text(text).to_owned()
 }
 
 /// One item per counted prefix: `<count> escalations answered allow for
