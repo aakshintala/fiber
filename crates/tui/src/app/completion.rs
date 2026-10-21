@@ -32,6 +32,8 @@ pub(super) struct Completion {
     pub(super) commands_id: Option<String>,
     /// Esc closed the `/` panel for this draft.
     pub(super) slash_closed: bool,
+    /// Esc closed the `/theme ` panel for this draft.
+    pub(super) theme_closed: bool,
     /// The selected row of the open completion panel.
     pub(super) selected: usize,
     /// The `@` panel, while open.
@@ -48,6 +50,7 @@ impl Default for Completion {
             extensions: Vec::new(),
             commands_id: None,
             slash_closed: false,
+            theme_closed: false,
             selected: 0,
             files: None,
             generation: 0,
@@ -90,7 +93,9 @@ impl App {
     /// The completion panel above the input line, while one is open and
     /// the approval panel is closed. An empty `/` list shows "no
     /// matches", an empty `@` result "no files match"; before an `@`
-    /// search answers, no panel shows.
+    /// search answers, no panel shows. A `/theme ` draft offers the
+    /// theme names, while any match; with none, no panel shows, so Esc
+    /// still interrupts and Enter still refuses the unknown name.
     pub(crate) fn completions(&self) -> Option<Completions> {
         if self.panel().is_some() {
             return None;
@@ -105,6 +110,19 @@ impl App {
                 .cloned()
                 .collect();
             return Some(Completions::slash(all, self.completion.selected, query));
+        }
+        // The `@` search wins over the theme names, as it does over the
+        // `/` list: an `@` past a space closes the `/` panel.
+        if self.completion.files.is_none() && self.theme_open() {
+            let names = self.theme_names();
+            if names.is_empty() {
+                return None;
+            }
+            return Some(Completions::files(
+                &names,
+                self.completion.selected,
+                self.theme_query(),
+            ));
         }
         let query = self.file_query().unwrap_or_default();
         match self
@@ -131,6 +149,48 @@ impl App {
     /// The text after the `/`.
     fn slash_query(&self) -> String {
         self.draft.expand().get(1..).unwrap_or_default().to_owned()
+    }
+
+    /// Whether the theme-name panel is open: the draft starts with
+    /// `/theme `, and Esc has not closed the panel for it.
+    fn theme_open(&self) -> bool {
+        !self.completion.theme_closed && self.draft.expand().starts_with("/theme ")
+    }
+
+    /// The text after the `/theme ` boundary.
+    fn theme_query(&self) -> String {
+        self.draft
+            .expand()
+            .get("/theme ".len()..)
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// The theme names the `/theme ` panel offers, filtered by prefix
+    /// on the text after the space: the built-ins plus the seam's file
+    /// themes. None while an extension owns `theme`, when the panel
+    /// stays closed and the draft goes out as its command.
+    fn theme_names(&self) -> Vec<String> {
+        if self
+            .completion
+            .extensions
+            .iter()
+            .any(|name| name == "theme")
+        {
+            return Vec::new();
+        }
+        let mut names: Vec<String> = crate::settings_view::BUILT_IN_THEMES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        if let (Some(seam), Some(workspace)) = (self.configure_seam(), self.workspace()) {
+            names.extend(seam.themes(&workspace));
+        }
+        let query = self.theme_query().to_lowercase();
+        names
+            .into_iter()
+            .filter(|name| name.to_lowercase().starts_with(&query))
+            .collect()
     }
 
     /// The names of the `/` panel's rows, in order.
@@ -188,6 +248,9 @@ impl App {
         self.history.sync(&self.draft.expand());
         if !self.draft.expand().starts_with('/') {
             self.completion.slash_closed = false;
+        }
+        if !self.draft.expand().starts_with("/theme ") {
+            self.completion.theme_closed = false;
         }
         if let Some(panel) = &self.completion.files
             && self.draft.mention(panel.anchor).is_none()
@@ -256,13 +319,24 @@ impl App {
     /// A key for the open completion panel; `None` when no panel is open
     /// or the key is the input box's.
     pub(super) fn completion_key(&mut self, key: &Key) -> Option<Effect> {
+        // One open panel at a time: the `/` list, the `@` search, or the
+        // `/theme ` names, which the `@` search wins over. No panel
+        // without a candidate: the keys fall through, so Esc still
+        // interrupts and Enter still refuses the unknown name.
         let names = if self.slash_open() {
             self.slash_names()
         } else if self.completion.files.is_some() {
             self.file_paths().to_vec()
+        } else if self.theme_open() {
+            let names = self.theme_names();
+            if names.is_empty() {
+                return None;
+            }
+            names
         } else {
             return None;
         };
+        let theme = !self.slash_open() && self.completion.files.is_none();
         let chosen = names.get(self.completion.selected).cloned();
         match key {
             Key::Up => self.completion.selected = self.completion.selected.saturating_sub(1),
@@ -274,13 +348,22 @@ impl App {
                     .min(names.len().saturating_sub(1));
             }
             Key::Esc => {
-                if self.completion.files.take().is_none() {
+                if theme {
+                    self.completion.theme_closed = true;
+                } else if self.completion.files.take().is_none() {
                     self.completion.slash_closed = true;
                 }
             }
             Key::Tab | Key::Enter => {
                 let chosen = chosen?;
-                if let Some(panel) = self.completion.files.take() {
+                if theme {
+                    // Acceptance replaces the whole rest, spaces included.
+                    self.draft.set(&format!("/theme {chosen}"));
+                    self.completion.selected = 0;
+                    if *key == Key::Enter {
+                        return Some(self.on_enter());
+                    }
+                } else if let Some(panel) = self.completion.files.take() {
                     if chosen.ends_with('/')
                         && let Some((_, end)) = self.draft.mention(panel.anchor)
                     {

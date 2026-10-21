@@ -17,11 +17,11 @@ use crate::keys::{Edit, Key};
 use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
 
 /// The key the theme choice edits.
-const THEME: &str = "tui.theme";
+pub(crate) const THEME: &str = "tui.theme";
 
 /// The themes offered before the theme files: following the terminal,
 /// then the built-ins.
-const BUILT_IN_THEMES: [&str; 3] = ["auto", "dark", "light"];
+pub(crate) const BUILT_IN_THEMES: [&str; 3] = ["auto", "dark", "light"];
 
 /// The widest key column; a longer key pushes its value right.
 const KEY_COLUMN: usize = 36;

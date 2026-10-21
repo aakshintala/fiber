@@ -23,7 +23,7 @@ use crate::login_worker::{LoginJob, LoginStart, LoginStep, LoginTicket, LoginWor
 use crate::logout_view::Logout;
 use crate::mcp_view::Mcp;
 use crate::rules_view::Rules;
-use crate::settings_view::{Act, Ctx, Settings};
+use crate::settings_view::{Act, BUILT_IN_THEMES, Ctx, Settings, THEME};
 use crate::skills_view::Skills;
 use crate::swapped::{Frame, List, Spot};
 use crate::tools_view::Tools;
@@ -181,6 +181,52 @@ impl App {
     /// The seam the views and the model picker write through, if any.
     pub(crate) fn configure_seam(&self) -> Option<Arc<dyn Configure>> {
         self.config_views.seam.clone()
+    }
+
+    /// Runs `/theme <name>`: saves the named theme to the global file
+    /// and applies it at once, without opening the picker. The whole
+    /// name is matched exactly against the built-ins and the seam's
+    /// file themes, so `solar dawn` is one theme and `Light` is
+    /// unknown; an unknown name is refused with a notice naming it,
+    /// and nothing changes. With no seam, or nothing addressable, a
+    /// notice says so and nothing changes.
+    pub(in crate::app) fn theme_command(&mut self, name: &str) -> Effect {
+        self.draft.clear();
+        let Some(seam) = self.configure_seam() else {
+            self.push_notice("io_failed", UNAVAILABLE.to_owned());
+            return Effect::None;
+        };
+        let Some(workspace) = self.view_workspace() else {
+            // A failed remote read already pushed its notice; a local
+            // terminal with no workspace says the view is unavailable.
+            if self.remote().is_none() {
+                self.push_notice("io_failed", UNAVAILABLE.to_owned());
+            }
+            return Effect::None;
+        };
+        let known = BUILT_IN_THEMES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .chain(seam.themes(&workspace));
+        if !known.into_iter().any(|known| known == name) {
+            self.push_notice("invalid_arguments", format!("Unknown theme \"{name}\"."));
+            return Effect::None;
+        }
+        let text = Value::String(name.to_owned()).to_string();
+        match self.write_global(THEME, &text) {
+            Some(Ok(_)) => self.config_act(Act::Theme(seam.theme(&workspace, name))),
+            Some(Err(error)) => {
+                self.push_notice(
+                    "io_failed",
+                    format!("Could not save {THEME}: {}", error.message),
+                );
+                Effect::None
+            }
+            None => {
+                self.push_notice("io_failed", UNAVAILABLE.to_owned());
+                Effect::None
+            }
+        }
     }
 
     /// Saves one setting's text to the global configuration through the

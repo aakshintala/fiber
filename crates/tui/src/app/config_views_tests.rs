@@ -1191,7 +1191,7 @@ fn theme_choices(app: &App) -> Vec<String> {
 /// Paints `app` whole in `setting`, through the same two steps the
 /// loop's theme apply performs, on an 80x24 test screen.
 fn painted(app: &mut App, setting: crate::ThemeSetting) -> crate::screen::Screen<TestBackend> {
-    let vars = vec![("COLORTERM".to_owned(), "truecolor".to_owned())];
+    let vars = [("COLORTERM".to_owned(), "truecolor".to_owned())];
     let (look, _) = crate::look::Look::new(setting, &|name| {
         vars.iter()
             .find(|(set, _)| set == name)
@@ -1372,4 +1372,108 @@ fn slash_theme_restores_the_saved_entry_theme() {
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
     assert!(seam.writes().is_empty());
+}
+
+/// Types `text` and presses Enter, returning the sent lines parsed.
+fn enter_text(app: &mut App, text: &str) -> Vec<serde_json::Value> {
+    for ch in text.chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    match app.on_key(Key::Enter, now()) {
+        Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_default())
+            .collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => Vec::new(),
+    }
+}
+
+#[test]
+fn slash_theme_name_saves_applies_and_refuses() {
+    let seam = Arc::new(theme_fake());
+
+    // `/theme light` saves globally and queues the live theme, opening
+    // nothing.
+    let mut app = attached(Some(Arc::clone(&seam)));
+    assert!(enter_text(&mut app, "/theme light").is_empty());
+    assert!(!app.config_view_open());
+    assert_eq!(
+        seam.writes(),
+        [(
+            PathBuf::from("/w"),
+            Layer::Global,
+            "tui.theme".to_owned(),
+            "\"light\"".to_owned()
+        )]
+    );
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Light));
+    assert_eq!(app.input().expand(), "");
+    let saved = painted(&mut app, crate::ThemeSetting::Light);
+    assert!(
+        saved
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .any(|cell| cell.bg == Color::Rgb(0xff, 0xff, 0xff)),
+        "the named save paints the light page"
+    );
+    insta::assert_snapshot!("theme_named_light_saved", painted_text(&saved));
+
+    // A spaced file theme saves whole.
+    let mut app = attached(Some(Arc::clone(&seam)));
+    assert!(enter_text(&mut app, "/theme solar dawn").is_empty());
+    assert_eq!(
+        seam.writes().last(),
+        Some(&(
+            PathBuf::from("/w"),
+            Layer::Global,
+            "tui.theme".to_owned(),
+            "\"solar dawn\"".to_owned()
+        ))
+    );
+    assert!(
+        matches!(app.take_theme_choice(), Some(crate::ThemeSetting::File { ref name, .. }) if name == "solar dawn")
+    );
+
+    // An unknown name is refused with a notice naming it, changing nothing.
+    let mut app = attached(Some(Arc::clone(&seam)));
+    let writes = seam.writes().len();
+    assert!(enter_text(&mut app, "/theme nope").is_empty());
+    assert!(
+        app.notices().iter().any(
+            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if code == "invalid_arguments" && text == "Unknown theme \"nope\".")
+        ),
+        "the refusal names the typed text"
+    );
+    assert_eq!(seam.writes().len(), writes);
+    assert_eq!(app.take_theme_choice(), None);
+    assert_eq!(app.input().expand(), "");
+
+    // Case folds nothing: `Light` is unknown. Esc dismisses the
+    // completion panel first: with it open, Enter would accept the
+    // shown `light` candidate instead, as the accepted-name test proves.
+    let mut app = attached(Some(Arc::clone(&seam)));
+    for ch in "/theme Light".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(
+        app.notices().iter().any(
+            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if code == "invalid_arguments" && text == "Unknown theme \"Light\".")
+        )
+    );
+    assert_eq!(seam.writes().len(), writes);
+    assert_eq!(app.take_theme_choice(), None);
 }
