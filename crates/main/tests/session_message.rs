@@ -829,16 +829,24 @@ fn delivered_is_answered_only_after_the_hook_returns() {
         );
     }
     // While the hook stays held on the hole's `/hold` signal, no
-    // completion may arrive: a bounded receive on the sender's
-    // `tool_call_completed` signal must time out (`docs/testing.md`,
-    // "Waits and timeouts"). A premature completion after the marker
-    // above would fail here instead of passing the post-release check.
-    assert!(
-        fakes::Deadline::after(std::time::Duration::from_millis(100))
-            .recv(&s_rx)
-            .is_err(),
-        "no tool_call_completed while the hook stays held on the hole's /hold signal"
-    );
+    // completion for this call may arrive: drain a bounded 100 ms window
+    // from one start instant (`docs/testing.md`, "Waits and timeouts")
+    // and fail only on the sender's own `tool_call_completed`. Other
+    // lines are benign traffic that macOS may order into the window.
+    let held = fakes::Deadline::after(std::time::Duration::from_millis(100));
+    loop {
+        match held.recv(&s_rx) {
+            Err(_) => break,
+            Ok(text) => {
+                let text: String = text;
+                let line: Value = serde_json::from_str(&text).unwrap();
+                assert!(
+                    !(line["kind"] == "tool_call_completed" && line["action_id"] == action),
+                    "no tool_call_completed while the hook stays held on the hole's /hold signal: {line}"
+                );
+            }
+        }
+    }
     hole.release();
     // Released, the hook answers and the sender is delivered.
     let completed = loop {
