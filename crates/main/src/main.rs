@@ -206,15 +206,19 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers }), _) => {
             refresh_entry(&providers, clock, read_signals::CancelOnSignal::new)
         }
-        cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, test_base_url }), _) => {
-            ::cli::release_install(
-                &version,
-                test_base_url.base_url.as_deref(),
-                env!("CARGO_PKG_VERSION"),
-                option_env!("FIBER_COMMIT"),
-                clock.as_ref(),
-            )
-        }
+        cli::Invocation::Run(
+            Some(cli::Commands::ReleaseInstall {
+                version,
+                test_base_url,
+            }),
+            _,
+        ) => ::cli::release_install(
+            &version,
+            test_base_url.base_url.as_deref(),
+            env!("CARGO_PKG_VERSION"),
+            option_env!("FIBER_COMMIT"),
+            clock.as_ref(),
+        ),
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd)), _) => match cmd {
             cli::ExtensionCommands::Install {
                 name_or_path,
@@ -283,7 +287,13 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
             ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
         }
-        cli::Invocation::Run(Some(cli::Commands::Update { channel, test_base_url }), _) => {
+        cli::Invocation::Run(
+            Some(cli::Commands::Update {
+                channel,
+                test_base_url,
+            }),
+            _,
+        ) => {
             let flag = channel.map(|flag| match flag {
                 cli::ChannelArg::Stable => ::cli::Channel::Stable,
                 cli::ChannelArg::Nightly => ::cli::Channel::Nightly,
