@@ -123,6 +123,84 @@ impl RepositorySet {
         set
     }
 
+    /// The set for a one-shot command in `workspace`: each declared
+    /// extension whose current content this project approved, held only
+    /// when its copy is already pinned and finished. A missing or
+    /// unfinished copy is skipped silently: nothing is built and nothing
+    /// is written — no `pinned/` directory, no lock file, no hash index
+    /// save — and no notice is raised. A workspace whose declarations
+    /// fail to read, or that declares no extension, gives the empty set.
+    /// Every held entry keeps its shared `.ready` lock for the loading
+    /// process's life, so a concurrent prune cannot remove a copy
+    /// between load and use.
+    pub fn load_pinned(
+        home: &Path,
+        project: &ProjectKey,
+        workspace: &Path,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        let mut set = Self::default();
+        // A declaration that fails to read gives no entry and no notice,
+        // as in `load`.
+        let items = match declared_items(workspace, clock.as_ref()) {
+            Ok(items) => items,
+            Err(_) => return set,
+        };
+        let declared: Vec<&RepoItem> = items
+            .iter()
+            .filter(|item| item.kind == OfferedKind::Extension)
+            .collect();
+        // A workspace declaring no extension touches nothing in Fiber home.
+        if declared.is_empty() {
+            return set;
+        }
+        let store = Store::new(home, project, clock);
+        // The index is read but never saved: an unchanged declared file
+        // is still compared by size and modification time, never read,
+        // while the load writes nothing.
+        let mut index = Index::load(home);
+        for item in declared {
+            // A file that vanished between gathering and hashing is left
+            // out, as in `load`.
+            let current = match hash(&mut index, item) {
+                Ok(current) => current,
+                Err(_) => continue,
+            };
+            if !matches!(
+                store.decision(OfferedKind::Extension, &current),
+                Some(Decision::Approve)
+            ) {
+                continue;
+            }
+            if item.required {
+                set.required.push(item.name.clone());
+            }
+            let copy = store.copy_dir(&current);
+            // Only an already-pinned finished copy loads: a missing copy
+            // is skipped, never rebuilt, and a dependency-bearing copy
+            // without its completion marker is legacy, not finished.
+            let hold = match store.try_hold_finished(&current) {
+                Ok(hold) => hold,
+                Err(_) => continue,
+            };
+            // Any failure reads as unfinished: the copy is skipped
+            // silently, never rebuilt.
+            if !store.finished(item, &copy).unwrap_or(false) {
+                continue;
+            }
+            set.pinned(item, &copy, hold);
+        }
+        // Packages first, then dependencies, settling as in `load`: the
+        // first entry of a name wins in every declaration order.
+        let mut staged = std::mem::take(&mut set.staged);
+        set.entries.append(&mut staged);
+        set.settle();
+        // A one-shot command never reports the set: a skipped copy stays
+        // silent, so only the providers load's shadow notices print.
+        set.notices.clear();
+        set
+    }
+
     /// A copy the session holds: its entry, then its dependencies'
     /// entries, in declaration order. A manifest that does not read leaves
     /// the copy out with one notice; dependencies that are not real
