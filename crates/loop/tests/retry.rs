@@ -133,7 +133,7 @@ fn a_rate_limit_then_a_reply_retries_after_2s() {
         let turn = scope.spawn(|| session.turn());
         let until = clock.origin() + Duration::from_secs(2);
         assert!(
-            clock.await_parked(until, DEADLINE),
+            clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the first backoff parks 2s out"
         );
         assert_eq!(
@@ -631,7 +631,10 @@ fn a_cancel_during_the_wait_ends_the_turn_interrupted() {
     std::thread::scope(|scope| {
         let turn = scope.spawn(|| session.turn());
         let until = clock.origin() + Duration::from_secs(2);
-        assert!(clock.await_parked(until, DEADLINE), "the backoff parks");
+        assert!(
+            clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
+            "the backoff parks"
+        );
         assert!(cancel.cancel());
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
     });
@@ -706,7 +709,7 @@ fn a_clock_advance_during_the_failing_call_does_not_shorten_the_wait() {
         let turn = scope.spawn(|| session.turn());
         let until = clock.origin() + Duration::from_secs(12);
         assert!(
-            clock.await_parked(until, DEADLINE),
+            clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the wait parks the full delay from its start"
         );
         assert_eq!(

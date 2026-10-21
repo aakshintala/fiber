@@ -18,6 +18,7 @@ use contract::events::OfferedKind;
 use contract::mcp_remote::McpRemote;
 use contract::shapes::Failure;
 use extensions::{Browser, Index, Store};
+use fakes::Deadline;
 use serde_json::json;
 
 use super::{mcp_login, mcp_logout, run_login, run_logout};
@@ -591,7 +592,7 @@ fn child_exit(
     let output = fakes::rerun_prepared(
         &format!("{test}::mcp_login_wrappers_exit_with_the_command_code"),
         &[(CHILD, "1"), (CASE, case)],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", home)

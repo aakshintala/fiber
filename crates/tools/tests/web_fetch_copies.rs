@@ -21,7 +21,7 @@ use contract::shapes::ContentPart;
 use contract::tool::{Output, Tool};
 use fakes::alloc::{Counting, large_blocks_during};
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, ProviderServer, Recorder, Response, TempDir, within};
+use fakes::{CancelToken, Deadline, ProviderServer, Recorder, Response, TempDir, within};
 use serde_json::{Map, Value};
 use tools::WebFetch;
 
@@ -65,7 +65,7 @@ fn fetch(content_type: &str, page: Vec<u8>) -> Fetched {
     let tool = WebFetch::new(artifacts.clone(), FakeClock::new()).with_proxy(None);
     let mut arguments = Map::new();
     arguments.insert("url".to_owned(), Value::String(url.clone()));
-    let (output, peak) = within("the fetch", FETCH, move || {
+    let (output, peak) = within("the fetch", Deadline::after(FETCH), move || {
         let cancel = CancelToken::new();
         let emit = Recorder::default();
         large_blocks_during(|| tool.run(&arguments, &cancel, &emit))

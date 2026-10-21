@@ -256,21 +256,25 @@ fn await_opened(opened: &mpsc::Receiver<String>, wait: &Deadline) -> String {
 #[track_caller]
 fn redirect(port: u16, target: &str) {
     let target = target.to_owned();
-    fakes::within("the callback to listen", BROWSER_WAIT, move || {
-        loop {
-            match TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
-                Ok(mut stream) => {
-                    stream.set_read_timeout(Some(WAIT)).unwrap();
-                    write!(stream, "GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
-                    let mut reply = String::new();
-                    stream.read_to_string(&mut reply).unwrap();
-                    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-                    return;
+    fakes::within(
+        "the callback to listen",
+        Deadline::after(BROWSER_WAIT),
+        move || {
+            loop {
+                match TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
+                    Ok(mut stream) => {
+                        stream.set_read_timeout(Some(WAIT)).unwrap();
+                        write!(stream, "GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+                        let mut reply = String::new();
+                        stream.read_to_string(&mut reply).unwrap();
+                        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+                        return;
+                    }
+                    Err(_) => thread::yield_now(),
                 }
-                Err(_) => thread::yield_now(),
             }
-        }
-    });
+        },
+    );
 }
 
 fn state_of(url: &str) -> String {
@@ -920,7 +924,7 @@ fn run_login_of_a_key_provider_with_device_is_a_usage_failure() {
     let output = fakes::rerun_prepared(
         &format!("{name}::run_login_of_a_key_provider_with_device_is_a_usage_failure"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command.env("FIBER_HOME", setup.home());
         },
@@ -1125,14 +1129,18 @@ fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
     assert!(!global.contains("credential"), "{global}");
     drop(server);
     let callback_port = browser.port();
-    fakes::within("the callback port to bind again", BROWSER_WAIT, move || {
-        loop {
-            if TcpListener::bind((Ipv4Addr::LOCALHOST, callback_port)).is_ok() {
-                return;
+    fakes::within(
+        "the callback port to bind again",
+        Deadline::after(BROWSER_WAIT),
+        move || {
+            loop {
+                if TcpListener::bind((Ipv4Addr::LOCALHOST, callback_port)).is_ok() {
+                    return;
+                }
+                thread::yield_now();
             }
-            thread::yield_now();
-        }
-    });
+        },
+    );
 }
 
 #[test]

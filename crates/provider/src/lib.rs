@@ -33,7 +33,7 @@ mod strict;
 mod unfinished;
 mod wire;
 
-pub use error::Error;
+pub use error::{Error, LoginAdvice};
 
 use std::sync::Arc;
 
@@ -86,6 +86,9 @@ pub struct Endpoint {
     /// each left-out image gets one text line saying so (`docs/tools.md`,
     /// "read"). False by default, so images are sent unchanged.
     pub text_only: bool,
+    /// Whether a failure's sentence about the credential advises `fiber
+    /// login` (`docs/errors.md`, "The shape").
+    pub login_advice: LoginAdvice,
 }
 
 impl Endpoint {
@@ -137,6 +140,7 @@ impl std::fmt::Debug for Endpoint {
             .field("direct", &self.direct)
             .field("limits", &self.limits)
             .field("text_only", &self.text_only)
+            .field("login_advice", &self.login_advice)
             .finish()
     }
 }

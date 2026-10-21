@@ -491,7 +491,8 @@ fn a_label_bearing_subscribe_past_an_exited_process_starts_the_session_on_it() {
     client.subscribe_with("c_1", "full", Some("work"));
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
@@ -684,7 +685,8 @@ fn a_held_resume_of_an_exited_session_retries_until_the_lock_is_released() {
     for k in 1..=2 {
         let until = temp.clock.origin() + HELD_POLL * k;
         assert!(
-            temp.clock.await_parked(until, DEADLINE),
+            temp.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the hub waits a poll after held failure {k}"
         );
         assert_eq!(starter.resumed().len(), usize::try_from(k).unwrap());
@@ -710,7 +712,8 @@ fn a_resume_held_past_the_shutdown_bound_is_session_held() {
     for k in 1..=polls() {
         let until = temp.clock.origin() + HELD_POLL * k;
         assert!(
-            temp.clock.await_parked(until, DEADLINE),
+            temp.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the hub waits poll {k} inside the bound"
         );
         assert!(finished.try_recv().is_err(), "no answer before the bound");
@@ -1190,7 +1193,8 @@ fn a_command_answered_closing_after_fiber_exited_reaches_the_resumed_session() {
     // The exiting process still accepts on its socket: the hub waits.
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     assert!(starter.resumed().is_empty());
@@ -1239,7 +1243,8 @@ fn two_commands_answered_closing_reach_one_resumed_session() {
     release_tx.send(()).unwrap_or(());
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
@@ -1279,7 +1284,8 @@ fn a_command_read_while_a_reroute_opens_follows_it_on_one_connection() {
     // lookup finds nothing and opens a second relay.
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     let (parked_tx, parked_rx) = mpsc::channel();
@@ -1436,7 +1442,8 @@ fn commands_held_behind_a_failed_reroute_are_each_refused_in_order() {
     client.send("c_1", "reply");
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     let (routed_tx, routed_rx) = mpsc::channel();
@@ -1449,7 +1456,8 @@ fn commands_held_behind_a_failed_reroute_are_each_refused_in_order() {
     for k in 1..=polls() {
         let until = temp.clock.origin() + HELD_POLL * k;
         assert!(
-            temp.clock.await_parked(until, DEADLINE),
+            temp.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the hub waits poll {k} inside the bound"
         );
         temp.clock
@@ -1462,7 +1470,8 @@ fn commands_held_behind_a_failed_reroute_are_each_refused_in_order() {
     for k in 1..=polls() {
         let until = temp.clock.origin() + SHUTDOWN_BOUND + HELD_POLL * k;
         assert!(
-            temp.clock.await_parked(until, DEADLINE),
+            temp.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the hub waits poll {k} inside the second bound"
         );
         temp.clock
@@ -1539,7 +1548,8 @@ fn an_exiting_process_that_never_ends_is_session_held_past_the_bound() {
     for k in 1..=polls() {
         let until = temp.clock.origin() + HELD_POLL * k;
         assert!(
-            temp.clock.await_parked(until, DEADLINE),
+            temp.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the hub waits poll {k} inside the bound"
         );
         temp.clock
@@ -1754,7 +1764,8 @@ fn a_subscribe_answered_closing_after_fiber_exited_is_sent_once() {
     client.subscribe("c_1", "full");
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
@@ -2036,7 +2047,8 @@ fn the_last_queued_command_holds_the_relay_until_its_queue_is_empty() {
     client.send("c_1", "reply");
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     let (routed_tx, routed_rx) = mpsc::channel();
@@ -2103,7 +2115,8 @@ fn a_client_that_leaves_drops_the_queue_and_passes_nothing_on() {
     client.send("c_1", "reply");
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     let (routed_tx, routed_rx) = mpsc::channel();
@@ -2183,7 +2196,8 @@ fn an_acknowledgement_is_forwarded_before_the_next_queued_command_passes_on() {
     release_tx.send(()).unwrap_or(());
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     let (routed_tx, routed_rx) = mpsc::channel();

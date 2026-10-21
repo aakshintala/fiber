@@ -192,5 +192,5 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
             text_of(&listed)
         );
     }
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }

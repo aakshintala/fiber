@@ -329,7 +329,10 @@ fn a_timeout_maps_to_timeout() {
         .recv(&went)
         .expect("waited for the backend to start");
     assert!(
-        clock.await_parked(asked + Duration::from_millis(50) + GRACE, WAIT),
+        clock.await_parked(
+            asked + Duration::from_millis(50) + GRACE,
+            fakes::Deadline::after(WAIT)
+        ),
         "the caller parked at the grace"
     );
     clock.advance_when_parked(

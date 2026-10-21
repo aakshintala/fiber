@@ -229,12 +229,15 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
     let loop_thread = looping.thread().id();
     // On the default 1-hour lifetime the refresh is due 30 s before it ends.
     let due = start + Duration::from_secs(3570);
-    assert!(clock.await_parked(due, DEADLINE), "the refresh is due");
+    assert!(
+        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        "the refresh is due"
+    );
     advance_to(&clock, loop_thread, &inbox, due);
     // Warming stopped at the cap, 3600 s; the idle clock counts from there.
     let exit = start + Duration::from_secs(3660);
     assert!(
-        clock.await_parked(exit, DEADLINE),
+        clock.await_parked(exit, fakes::Deadline::after(DEADLINE)),
         "idle counts from the cap"
     );
     advance_to(&clock, loop_thread, &inbox, exit);

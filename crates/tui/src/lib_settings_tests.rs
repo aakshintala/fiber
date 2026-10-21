@@ -79,7 +79,7 @@ fn ctrl_g_opens_the_rows_file_and_reads_the_rows_again() {
         Some("edited".to_owned())
     );
     assert_eq!(seam.reads().len(), 2);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
     crate::term::restore();
 }
 

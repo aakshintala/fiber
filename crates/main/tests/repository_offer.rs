@@ -208,7 +208,7 @@ fn attach(setup: &Setup, id: &str, sub: &str) -> Client {
         ))
         .unwrap();
     client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "clients" && line["payload"]["count"] == 1
         })
         .expect("the session counts the client within the deadline");
@@ -217,14 +217,14 @@ fn attach(setup: &Setup, id: &str, sub: &str) -> Client {
 
 fn recv_kind(deadline: Deadline, client: &Client, kind: &str) -> Value {
     client
-        .recv_until(deadline.left(), |line| line["kind"] == kind)
+        .recv_until(deadline, |line| line["kind"] == kind)
         .unwrap_or_else(|| panic!("no {kind} within the deadline"))
 }
 
 /// The answer to the command `id`.
 fn answer(deadline: Deadline, client: &Client, id: &str) -> Value {
     client
-        .recv_until(deadline.left(), |line| {
+        .recv_until(deadline, |line| {
             (line["kind"] == "command_accepted" || line["kind"] == "command_rejected")
                 && line["payload"]["command_id"] == id
         })
@@ -303,7 +303,7 @@ fn a_full_client_reads_a_listed_file_and_nothing_else() {
     std::os::unix::fs::symlink(&outside, &script).unwrap();
     ask_file("c_link", "tools/db.sh");
     let rejected = client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             assert!(
                 !line.to_string().contains(secret),
                 "protected bytes reached the client: {line}"
@@ -359,7 +359,7 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
     assert_eq!(items[0]["name"], "db");
     let hash = items[0]["hash"].as_str().unwrap().to_owned();
     let status = client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "session_status" && line["payload"]["state"] == "waiting"
         })
         .expect("a waiting session_status within the deadline");
@@ -785,7 +785,7 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
     // latest one before the client is counted.
     let since = Cell::new(0);
     client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             if line["kind"] == "fiber_started" {
                 since.set(seq(line));
             }
@@ -795,7 +795,7 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
     let since = since.get();
     prompt(&client, "c_prompt2");
     let again = client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "repository_code_offered" && seq(line) > since
         })
         .expect("the offer raised again within the deadline");
@@ -906,7 +906,7 @@ fn a_start_with_content_that_never_subscribes_runs_unattended() {
     // The offer is decided once, before the first model request: by then
     // the session has decided with nobody to answer.
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the turn's model request within the deadline"
     );
     subscribe(&client, &id);

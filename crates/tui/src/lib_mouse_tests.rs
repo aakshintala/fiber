@@ -1539,7 +1539,7 @@ fn a_link_click_runs_the_opener() {
         std::fs::read_to_string(&out).ok().as_deref(),
         Some("https://example.com/a")
     );
-    watchdog.stand_down(LINK_DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(LINK_DEADLINE));
 }
 
 /// `turns` turns that each read one file: every turn leaves a group line,

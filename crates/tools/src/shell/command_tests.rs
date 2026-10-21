@@ -372,9 +372,9 @@ fn a_command_is_listed_while_it_runs_and_not_once_it_ends() {
     let dir = fakes::TempDir::new("fiber-groups-listed");
     let ready = Ready::new(dir.path());
     let done = run(dir.path(), ignores_sigterm(ready.path()));
-    let pgid = ready.wait(LIST_DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(LIST_DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    let _own = ready.wait(LIST_DEADLINE);
+    let _own = ready.wait(fakes::Deadline::after(LIST_DEADLINE));
     // The child's ready files do not prove the listing: `spawn` lists the
     // group only after `Command::spawn` returns.
     assert!(wait_listed(pgid), "the running group is listed");
@@ -391,7 +391,7 @@ fn a_command_is_listed_while_it_runs_and_not_once_it_ends() {
         !support::group::live().contains(pgid),
         "an empty group leaves the list"
     );
-    watchdog.stand_down(LIST_DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(LIST_DEADLINE));
 }
 
 #[test]
@@ -402,7 +402,7 @@ fn a_finished_command_is_not_listed() {
         dir.path(),
         format!("echo $$ > '{}'", ready.path().display()),
     );
-    let pgid = ready.wait(LIST_DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(LIST_DEADLINE))[0];
     let finished = Deadline::after(LIST_DEADLINE)
         .recv(&done)
         .expect("the run ended");
@@ -484,7 +484,7 @@ fn the_drain_polls_while_the_group_may_be_occupied() {
     let super::super::drive::LoopEnd::Finished(_) = end else {
         panic!("an occupied drain that empties finishes");
     };
-    watchdog.stand_down(LIST_DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(LIST_DEADLINE));
 }
 
 /// `send_term` signals a group only when it was neither signalled nor seen
@@ -540,7 +540,7 @@ fn send_term_signals_only_a_group_neither_signalled_nor_empty() {
             fakes::kill_group(pgid, "KILL").expect("the cleanup kill sent");
             assert_eq!(reap(child).signal(), Some(9));
         }
-        watchdog.stand_down(LIST_DEADLINE);
+        watchdog.stand_down(fakes::Deadline::after(LIST_DEADLINE));
     }
 }
 
@@ -567,7 +567,7 @@ fn kill_every_group_kills_a_listed_group_and_then_drops_it() {
     support::group::kill_every_group();
     assert!(!support::group::live().contains(pgid));
     support::group::live().unlist(listing);
-    watchdog.stand_down(LIST_DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(LIST_DEADLINE));
 }
 
 #[test]
@@ -1134,8 +1134,8 @@ impl Job {
             let _sent = tx.send(finished);
         });
         // Both lines: the fifo exists and fd 3 is open once the second arrives.
-        assert_eq!(ready.wait(JOB_DEADLINE)[0], pgid);
-        let _own = ready.wait(JOB_DEADLINE);
+        assert_eq!(ready.wait(fakes::Deadline::after(JOB_DEADLINE))[0], pgid);
+        let _own = ready.wait(fakes::Deadline::after(JOB_DEADLINE));
         // Read-write, so the open never waits for the shell.
         let block = std::fs::OpenOptions::new()
             .read(true)
@@ -1167,7 +1167,8 @@ impl Job {
             .recv(&self.done)
             .expect("the job's drive did not return within the deadline");
         assert!(!alive(self.pgid), "the group was left running");
-        self.watchdog.stand_down(JOB_DEADLINE);
+        self.watchdog
+            .stand_down(fakes::Deadline::after(JOB_DEADLINE));
         (finished, self.dir, self.deltas)
     }
 }
@@ -1227,13 +1228,15 @@ fn a_job_streams_paced_deltas_and_flushes_the_rest_at_its_end() {
     let due = job.clock.origin() + Duration::from_millis(100);
     job.go();
     assert!(
-        job.deltas.wait_for_text("one", JOB_DEADLINE),
+        job.deltas
+            .wait_for_text("one", fakes::Deadline::after(JOB_DEADLINE)),
         "waited {JOB_DEADLINE:?} for the first delta"
     );
     job.go();
     // Parked at the interval: the second write is held, not emitted.
     assert!(
-        job.clock.await_parked(due, JOB_DEADLINE),
+        job.clock
+            .await_parked(due, fakes::Deadline::after(JOB_DEADLINE)),
         "waited {JOB_DEADLINE:?} for the job to park for the held delta"
     );
     assert_eq!(job.deltas.text(), "one");
@@ -1244,7 +1247,8 @@ fn a_job_streams_paced_deltas_and_flushes_the_rest_at_its_end() {
         &Deadline::after(JOB_DEADLINE),
     );
     assert!(
-        job.deltas.wait_for_text("onetwo", JOB_DEADLINE),
+        job.deltas
+            .wait_for_text("onetwo", fakes::Deadline::after(JOB_DEADLINE)),
         "waited {JOB_DEADLINE:?} for the held delta after the interval"
     );
     job.go();
@@ -1313,7 +1317,7 @@ fn a_foreground_command_past_a_mebibyte_spills() {
     let work = dir.path().to_path_buf();
     let ran = fakes::within(
         "a foreground command past a mebibyte",
-        JOB_DEADLINE,
+        Deadline::after(JOB_DEADLINE),
         move || {
             super::execute(
                 std::path::Path::new("/bin/sh"),
@@ -1360,31 +1364,35 @@ fn a_command_moved_at_once_never_spills() {
     let work = dir.path().to_path_buf();
     // `execute` and `resume` both block: each runs on its own thread
     // under the deadline (`docs/testing.md`, "Waits and timeouts").
-    let moved = fakes::within("a background command moves", JOB_DEADLINE, {
-        let clock = Arc::clone(&clock);
-        let cancel = cancel.clone();
-        let artifacts = artifacts.clone();
-        move || {
-            let ran = super::execute(
-                std::path::Path::new("/bin/sh"),
-                &held,
-                &work,
-                Duration::from_secs(60),
-                clock.as_ref(),
-                &cancel,
-                &Recorder::default(),
-                MovePolicy::Background,
-                None,
-                Some(spill_config(&artifacts)),
-                None,
-            )
-            .unwrap();
-            let super::Ran::Moved(moved) = ran else {
-                panic!("a background command did not move");
-            };
-            moved
-        }
-    });
+    let moved = fakes::within(
+        "a background command moves",
+        Deadline::after(JOB_DEADLINE),
+        {
+            let clock = Arc::clone(&clock);
+            let cancel = cancel.clone();
+            let artifacts = artifacts.clone();
+            move || {
+                let ran = super::execute(
+                    std::path::Path::new("/bin/sh"),
+                    &held,
+                    &work,
+                    Duration::from_secs(60),
+                    clock.as_ref(),
+                    &cancel,
+                    &Recorder::default(),
+                    MovePolicy::Background,
+                    None,
+                    Some(spill_config(&artifacts)),
+                    None,
+                )
+                .unwrap();
+                let super::Ran::Moved(moved) = ran else {
+                    panic!("a background command did not move");
+                };
+                moved
+            }
+        },
+    );
     // The move is observed: releasing the command lets it end.
     std::fs::write(&release, b"go\n").unwrap();
     {
@@ -1393,7 +1401,7 @@ fn a_command_moved_at_once_never_spills() {
         assert!(inner.spill.is_none());
     }
     // The move's command ends cleanly back in the foreground.
-    let finished = fakes::within("a moved command resumes", JOB_DEADLINE, {
+    let finished = fakes::within("a moved command resumes", Deadline::after(JOB_DEADLINE), {
         let clock = Arc::clone(&clock);
         let cancel = cancel.clone();
         move || moved.resume(clock.as_ref(), &cancel, &Recorder::default())
@@ -1420,30 +1428,34 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
     let work = dir.path().to_path_buf();
     // `execute` and `resume` both block: each runs on its own thread
     // under the deadline (`docs/testing.md`, "Waits and timeouts").
-    let moved = fakes::within("a background command moves", JOB_DEADLINE, {
-        let clock = Arc::clone(&clock);
-        let cancel = cancel.clone();
-        move || {
-            let ran = super::execute(
-                std::path::Path::new("/bin/sh"),
-                &held,
-                &work,
-                Duration::from_secs(60),
-                clock.as_ref(),
-                &cancel,
-                &Recorder::default(),
-                MovePolicy::Background,
-                None,
-                Some(spill_config(&artifacts)),
-                None,
-            )
-            .unwrap();
-            let super::Ran::Moved(moved) = ran else {
-                panic!("a background command did not move");
-            };
-            moved
-        }
-    });
+    let moved = fakes::within(
+        "a background command moves",
+        Deadline::after(JOB_DEADLINE),
+        {
+            let clock = Arc::clone(&clock);
+            let cancel = cancel.clone();
+            move || {
+                let ran = super::execute(
+                    std::path::Path::new("/bin/sh"),
+                    &held,
+                    &work,
+                    Duration::from_secs(60),
+                    clock.as_ref(),
+                    &cancel,
+                    &Recorder::default(),
+                    MovePolicy::Background,
+                    None,
+                    Some(spill_config(&artifacts)),
+                    None,
+                )
+                .unwrap();
+                let super::Ran::Moved(moved) = ran else {
+                    panic!("a background command did not move");
+                };
+                moved
+            }
+        },
+    );
     // The job's file arrived first: the resume must not arm the spill
     // over it, so the buffered output stays whole. Injected while the
     // command is still held, so its end cannot land before this state.
@@ -1454,7 +1466,7 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
     }
     // The move is observed: releasing the command lets it end.
     std::fs::write(&release, b"go\n").unwrap();
-    let finished = fakes::within("a filed command resumes", JOB_DEADLINE, {
+    let finished = fakes::within("a filed command resumes", Deadline::after(JOB_DEADLINE), {
         let clock = Arc::clone(&clock);
         let cancel = cancel.clone();
         move || moved.resume(clock.as_ref(), &cancel, &Recorder::default())
@@ -1483,35 +1495,39 @@ fn a_resumed_command_arms_the_spill() {
     let work = dir.path().to_path_buf();
     // `execute` and `resume` both block: each runs on its own thread
     // under the deadline (`docs/testing.md`, "Waits and timeouts").
-    let moved = fakes::within("a background command moves", JOB_DEADLINE, {
-        let clock = Arc::clone(&clock);
-        let cancel = cancel.clone();
-        move || {
-            let ran = super::execute(
-                std::path::Path::new("/bin/sh"),
-                &held,
-                &work,
-                Duration::from_secs(60),
-                clock.as_ref(),
-                &cancel,
-                &Recorder::default(),
-                MovePolicy::Background,
-                None,
-                Some(spill_config(&artifacts)),
-                None,
-            )
-            .unwrap();
-            let super::Ran::Moved(moved) = ran else {
-                panic!("a background command did not move");
-            };
-            moved
-        }
-    });
+    let moved = fakes::within(
+        "a background command moves",
+        Deadline::after(JOB_DEADLINE),
+        {
+            let clock = Arc::clone(&clock);
+            let cancel = cancel.clone();
+            move || {
+                let ran = super::execute(
+                    std::path::Path::new("/bin/sh"),
+                    &held,
+                    &work,
+                    Duration::from_secs(60),
+                    clock.as_ref(),
+                    &cancel,
+                    &Recorder::default(),
+                    MovePolicy::Background,
+                    None,
+                    Some(spill_config(&artifacts)),
+                    None,
+                )
+                .unwrap();
+                let super::Ran::Moved(moved) = ran else {
+                    panic!("a background command did not move");
+                };
+                moved
+            }
+        },
+    );
     // The move is observed: releasing the command lets it run its payload.
     std::fs::write(&release, b"go\n").unwrap();
     // A move on the first pass never spills; the resume arms it, and the
     // command's output past 1 MiB spills from there.
-    let finished = fakes::within("a moved command resumes", JOB_DEADLINE, {
+    let finished = fakes::within("a moved command resumes", Deadline::after(JOB_DEADLINE), {
         let clock = Arc::clone(&clock);
         let cancel = cancel.clone();
         move || moved.resume(clock.as_ref(), &cancel, &Recorder::default())

@@ -53,6 +53,12 @@ pub(crate) struct CommandEntry {
 /// read it beside the table.
 pub(crate) fn alias_of(name: &str) -> Option<&'static str> {
     match name {
+        "thinking" => Some("effort"),
+        "usage" => Some("cost"),
+        "settings" => Some("config"),
+        "keys" => Some("keybindings"),
+        "name" => Some("rename"),
+        "feedback" => Some("bug"),
         "quit" => Some("exit"),
         _ => None,
     }
@@ -132,6 +138,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Opens the quota view and fetches every label's quota.",
         hint: None,
         run: run_quota,
+    },
+    CommandEntry {
+        name: "diff",
+        description: "Opens the Changed files view.",
+        hint: None,
+        run: run_diff,
     },
     CommandEntry {
         name: "panel",
@@ -385,6 +397,11 @@ fn run_credential(app: &mut App, rest: &str) -> Option<Effect> {
 fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.quota_view())
+}
+
+fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::ChangedFiles))
 }
 
 fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -888,6 +905,14 @@ pub(crate) mod commands_testkit;
 #[cfg(test)]
 #[path = "exit_alias_tests.rs"]
 mod exit_alias;
+
+#[cfg(test)]
+#[path = "aliases_tests.rs"]
+mod aliases;
+
+#[cfg(test)]
+#[path = "diff_command_tests.rs"]
+mod diff_command;
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

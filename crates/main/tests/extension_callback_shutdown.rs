@@ -161,7 +161,7 @@ impl Fiber {
             "fiber left a process in its group"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(deadline.cleanup());
+        watchdog.stand_down(deadline.cleanup_phase());
         Ended {
             code: status.code(),
             lines: seen
@@ -262,7 +262,7 @@ fn sigterm_stops_an_after_tool_callback_and_its_exec_group() {
     let fiber = setup.start(&["ask", "read the note"], Stdio::null());
     // The exec program runs past its trap, and its `read` opened the FIFO,
     // so the hook is in flight and parked before the shutdown starts.
-    let _started = ready.wait(setup.deadline.left());
+    let _started = ready.wait(setup.deadline);
     let _writer = setup
         .deadline
         .recv(&writing)
@@ -357,11 +357,11 @@ fn is_stopped(deadline: Deadline, pid: u32) -> bool {
             match support::kill_group(deadline, ps_group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            watchdog.stand_down(deadline.cleanup());
+            watchdog.stand_down(deadline.cleanup_phase());
             panic!("ps did not exit within {wait:?}");
         }
     };
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
     if !output.status.success() {
         return false;
     }
@@ -420,7 +420,7 @@ fn a_sigterm_landing_inside_the_blocking_read_still_runs_the_trap() {
     let guard = KillGroup(group);
     let watchdog = Watchdog::group(group);
     // The pid line proves the trap is armed before any signal goes out.
-    let pid = ready.wait(setup.deadline.left())[0];
+    let pid = ready.wait(setup.deadline)[0];
     // The shell stopped inside the blocking command's expansion: SIGTERM
     // stays pending until SIGCONT resumes it into the read.
     wait_stopped(setup.deadline, pid);
@@ -470,9 +470,9 @@ fn a_sigterm_landing_inside_the_blocking_read_still_runs_the_trap() {
         Ok(_) | Err(_) => {}
     }
     assert!(
-        fakes::group_empties(group, setup.deadline.cleanup()),
+        fakes::group_empties(group, setup.deadline.cleanup_phase()),
         "the exec program's group emptied"
     );
     std::mem::forget(guard);
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
 }

@@ -108,7 +108,7 @@ fn a_debug_ask_writes_one_startup_line_per_operation_before_attach() {
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -166,7 +166,7 @@ fn at_default_no_timing_or_debug_line_is_written() {
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -371,7 +371,7 @@ impl Running {
                 panic!("the stderr reader ended without its text")
             }
         };
-        self.watchdog.stand_down(self.deadline.cleanup());
+        self.watchdog.stand_down(self.deadline.cleanup_phase());
         (status, stderr)
     }
 }
@@ -504,7 +504,7 @@ fn a_debug_switch_writes_one_routing_line_with_the_session() {
     let id = doors::mint("s_");
     let _stream = switch_journey(&setup, &id);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the new model's request arrived: a passing test really switched"
     );
     let lines: Vec<Value> = op_lines(&setup)
@@ -548,7 +548,7 @@ fn at_default_a_switch_writes_no_timing_line_and_leaves_the_same_log() {
     let id = doors::mint("s_");
     switch_journey(&setup, &id);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the new model's request arrived: a passing test really switched"
     );
     assert!(

@@ -183,7 +183,7 @@ fn a_poll_sleep_past_the_credential_deadline_is_not_wrapped() {
             .unwrap_or(());
     });
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "poll request arrived; early result: {:?}",
         rx.try_recv()
     );
@@ -255,7 +255,7 @@ end}}}})
         let time = clock.clone();
         let session = fakes::within(
             "SessionExtensions::load",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || SessionExtensions::load(&home, &cfg, time, Arc::new(NoLock), None),
         );
         assert!(session.notices().is_empty(), "{:?}", session.notices());
@@ -336,9 +336,11 @@ fn unset_session_refuses_before_any_interactive_side_effect() {
     let server = OauthServer::start(vec![OauthReply::pending()]);
     let env = SessionLogin::new(&device(&server), false);
     let provider = env.provider();
-    let error = fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
-        provider.token(&pair("acme", "default"))
-    })
+    let error = fakes::within(
+        "provider.token",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || provider.token(&pair("acme", "default")),
+    )
     .unwrap_err();
     assert!(matches!(error, Error::Unattended { .. }));
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed);
@@ -346,7 +348,7 @@ fn unset_session_refuses_before_any_interactive_side_effect() {
     assert!(matches!(
         fakes::within(
             "provider.credential_token",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || provider.credential_token(&pair("acme", "other"))
         ),
         Err(signing::Error::Unattended { .. })
@@ -385,17 +387,21 @@ fn attended_callback_login_exchanges_a_code_for_a_token() {
         "Open https://login.example/verify to log in."
     );
     Deadline::after(WAIT).recv_or_fail(&ready, "callback recorded");
-    let response = fakes::within("callback.get", fakes::MUST_SUCCEED_WITHIN, move || {
-        let mut socket = std::net::TcpStream::connect_timeout(&addr, WAIT).unwrap();
-        socket.set_read_timeout(Some(WAIT)).unwrap();
-        socket.set_write_timeout(Some(WAIT)).unwrap();
-        socket
-            .write_all(b"GET /?code=returned HTTP/1.1\r\nHost: localhost\r\n\r\n")
-            .unwrap();
-        let mut response = String::new();
-        socket.read_to_string(&mut response).unwrap();
-        response
-    });
+    let response = fakes::within(
+        "callback.get",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let mut socket = std::net::TcpStream::connect_timeout(&addr, WAIT).unwrap();
+            socket.set_read_timeout(Some(WAIT)).unwrap();
+            socket.set_write_timeout(Some(WAIT)).unwrap();
+            socket
+                .write_all(b"GET /?code=returned HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .unwrap();
+            let mut response = String::new();
+            socket.read_to_string(&mut response).unwrap();
+            response
+        },
+    );
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert_eq!(
         Deadline::after(WAIT)
@@ -420,7 +426,7 @@ fn attended_device_login_delivers_url_before_the_held_poll() {
         notice.message,
         format!("Open {}/verify to log in.", server.url())
     );
-    assert!(server.await_requests(1, WAIT));
+    assert!(server.await_requests(1, Deadline::after(WAIT)));
     server.release();
     assert_eq!(
         Deadline::after(WAIT)
@@ -463,9 +469,11 @@ fn show_delivers_one_notice_with_the_url_and_device_code() {
     );
     let provider = env.provider();
     assert_eq!(
-        fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
-            provider.token(&pair("acme", "default"))
-        })
+        fakes::within(
+            "provider.token",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || { provider.token(&pair("acme", "default")) }
+        )
         .unwrap()
         .expose(),
         "ok"
@@ -501,17 +509,21 @@ fn provider_only_status_is_emitted_until_the_session_is_sealed() {
         true,
     );
     let provider = env.provider();
-    fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
-        provider.token(&pair("acme", "default"))
-    })
+    fakes::within(
+        "provider.token",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || provider.token(&pair("acme", "default")),
+    )
     .unwrap();
     let before = env.notices.events.lock().unwrap().len();
     assert!(before > 0);
     env.session.seal();
     let provider = env.provider();
-    fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
-        provider.token(&pair("acme", "other"))
-    })
+    fakes::within(
+        "provider.token",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || provider.token(&pair("acme", "other")),
+    )
     .unwrap();
     assert_eq!(env.notices.events.lock().unwrap().len(), before);
 }
@@ -524,7 +536,7 @@ fn failed_refresh_waits_for_interactive_login_before_returning_a_token() {
     let rx = env.start();
     let notice = env.notice();
     assert_eq!(notice.code, ErrorCode::LoginUrl);
-    assert!(server.await_requests(1, WAIT));
+    assert!(server.await_requests(1, Deadline::after(WAIT)));
     assert!(
         matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "held login has not returned"
@@ -577,7 +589,7 @@ fn a_provider_started_after_a_model_switch_gets_the_browser_and_emitter() {
         env.notice().message,
         format!("Open {}/verify to log in.", server.url())
     );
-    assert!(server.await_requests(1, WAIT));
+    assert!(server.await_requests(1, Deadline::after(WAIT)));
     server.release();
     assert_eq!(
         Deadline::after(WAIT)
@@ -590,9 +602,11 @@ fn a_provider_started_after_a_model_switch_gets_the_browser_and_emitter() {
     env.session.retain_lua_providers(&[]);
     let before = env.notices.events.lock().unwrap().len();
     let provider = env.fresh();
-    fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
-        provider.token(&pair("acme", "other"))
-    })
+    fakes::within(
+        "provider.token",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || provider.token(&pair("acme", "other")),
+    )
     .unwrap();
     assert_eq!(env.notices.events.lock().unwrap().len(), before);
 }

@@ -12,7 +12,7 @@ use super::callback::{MAX_HEAD, SILENT_POLLS, Served, answer, decode};
 use super::*;
 use crate::test_support::{FakeTokens, WITHIN};
 use contract::mcp_tokens::TokenFiles;
-use fakes::{ProviderServer, Request, Response};
+use fakes::{Deadline, ProviderServer, Request, Response};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -1632,7 +1632,7 @@ fn at_899s_the_wait_continues_and_at_900s_it_fails() {
             &fakes::Deadline::after(WITHIN),
         );
         assert!(
-            clock.await_parked_since(&mark, Some(deadline), WITHIN),
+            clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(WITHIN)),
             "the login ended before 900 s"
         );
         clock.advance_when_parked(
@@ -1672,7 +1672,7 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
             fakes::Deadline::after(WITHIN).recv_or_fail(&received_url, "the authorization URL");
         let deadline = clock.origin() + CALLBACK_WAIT;
         assert!(
-            clock.await_parked(deadline, WITHIN),
+            clock.await_parked(deadline, fakes::Deadline::after(WITHIN)),
             "the login never waited on the clock"
         );
         // A slow drip: one byte at a time, never completing a head. Each
@@ -2056,7 +2056,7 @@ fn drive_wait(
         // this signal does the test interact, and only after it may the
         // fallback below advance the clock.
         assert!(
-            clock.await_parked(deadline, WITHIN),
+            clock.await_parked(deadline, fakes::Deadline::after(WITHIN)),
             "the callback wait never waited on the clock"
         );
         let echo = interact(addr);
@@ -2418,7 +2418,7 @@ fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
             );
             writer.write_all(b"G").unwrap();
             assert!(
-                clock.await_parked_since(&mark, Some(deadline), WITHIN),
+                clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(WITHIN)),
                 "the drain never waited on the clock"
             );
         }
@@ -2429,7 +2429,7 @@ fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
             &fakes::Deadline::after(WITHIN),
         );
         assert!(
-            clock.await_parked_since(&mark, Some(deadline), WITHIN),
+            clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(WITHIN)),
             "the drain never waited on the clock"
         );
         clock.advance_when_parked(
@@ -2518,11 +2518,15 @@ fn a_connection_silent_for_the_given_count_is_dropped_on_that_poll() {
             wait.recv_or_fail(&silence, "the second silent poll");
             wait.recv_or_fail(&silence, "the third silent poll");
             // The drop closes the connection: read to the close.
-            fakes::within("the dropped connection's close", WITHIN, || {
-                let mut idle = idle;
-                let mut byte = [0_u8; 1];
-                while idle.read(&mut byte).expect("the idle connection's close") != 0 {}
-            });
+            fakes::within(
+                "the dropped connection's close",
+                Deadline::after(WITHIN),
+                || {
+                    let mut idle = idle;
+                    let mut byte = [0_u8; 1];
+                    while idle.read(&mut byte).expect("the idle connection's close") != 0 {}
+                },
+            );
             let served = wait.recv_or_fail(&received, "the dropped connection's answer");
             assert!(served.is_none(), "a silent connection is dropped");
             // No fourth poll: the drop came on the third.

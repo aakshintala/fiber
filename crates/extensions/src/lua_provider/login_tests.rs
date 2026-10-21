@@ -392,7 +392,7 @@ fn stop_while_a_login_waits_on_its_callback_ends_it_and_frees_the_port() {
     // the wall deadline.
     fakes::within(
         "the callback port to bind again",
-        std::time::Duration::from_secs(10),
+        Deadline::after(std::time::Duration::from_secs(10)),
         move || loop {
             if std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok() {
                 return;

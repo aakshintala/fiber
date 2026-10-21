@@ -1,0 +1,7 @@
+#!/bin/sh
+# A stand-in `gcloud` for crates/main/tests/vertex.rs: notes each run in the
+# file FIBER_TEST_GCLOUD_RAN names, and prints a token that expires long
+# after the test. Checked in, so no test executes a file it just wrote
+# (docs/testing.md, "Waits and timeouts").
+echo "$@" >> "$FIBER_TEST_GCLOUD_RAN"
+printf '%s' '{"credential": {"access_token": "vertex-test-token", "token_expiry": "2099-01-01T00:00:00Z"}}'

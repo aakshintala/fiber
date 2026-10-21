@@ -786,7 +786,7 @@ fn waiting_on_an_offer_is_idle() {
     // A clock move reaches the loop as a wake, which the wait discards.
     session.inbox.send(Delivery::Cancelled).unwrap();
     assert!(
-        clock.await_parked_since(&mark, Some(deadline), DEADLINE),
+        clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(DEADLINE)),
         "1 ms early the offer still waits"
     );
     assert!(finished.try_recv().is_err());
@@ -1530,9 +1530,10 @@ fn a_pending_offer_waits_for_a_client_at_the_prompt() {
     let (looped, inbox) = history.resume(&code, true);
     let finished = run_on(looped.idle_exit(Some(delay)));
     assert!(
-        history
-            .clock
-            .await_parked(history.clock.now() + delay, DEADLINE),
+        history.clock.await_parked(
+            history.clock.now() + delay,
+            fakes::Deadline::after(DEADLINE)
+        ),
         "the resumed loop waits for a prompt"
     );
     assert_eq!(history.of("repository_code_offered").len(), 1);

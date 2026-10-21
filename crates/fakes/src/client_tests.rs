@@ -57,11 +57,9 @@ fn recv_returns_a_buffered_line_without_waiting_for_the_socket_to_close() {
     let mut server = accept_within(&listener);
     server.write_all(b"{\"ok\":true}\n").unwrap();
     let (tx, rx) = mpsc::channel();
-    thread::spawn(
-        move || {
-            if let Ok(()) = tx.send(client.recv(Duration::from_secs(60))) {}
-        },
-    );
+    thread::spawn(move || {
+        if let Ok(()) = tx.send(client.recv(Deadline::after(Duration::from_secs(60)))) {}
+    });
     let line = Deadline::after(MUST)
         .recv(&rx)
         .expect("recv returns when the line is buffered")
@@ -77,7 +75,7 @@ fn a_line_keeps_no_trailing_cr_or_lf() {
     let client = Client::connect(&path).unwrap();
     let mut server = accept_within(&listener);
     server.write_all(b"hello\r\n").unwrap();
-    let line = client.recv(MUST).expect("a line arrives");
+    let line = client.recv(Deadline::after(MUST)).expect("a line arrives");
     assert_eq!(line, Value::String("hello".into()));
 }
 
@@ -90,7 +88,9 @@ fn drop_closes_the_socket() {
     let mut server = accept_within(&listener);
     server.write_all(b"{\"ok\":true}\n").unwrap();
     server.set_read_timeout(Some(MUST)).unwrap();
-    client.recv(MUST).expect("the line arrives");
+    client
+        .recv(Deadline::after(MUST))
+        .expect("the line arrives");
     drop(client);
     let mut buf = [0u8; 8];
     let n = server.read(&mut buf).expect("drop closes the socket");
@@ -108,12 +108,14 @@ fn recv_until_skips_non_matching_lines_and_returns_the_match() {
         .write_all(b"{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n{\"n\":4}\n")
         .unwrap();
     let got = client
-        .recv_until(MUST, |line| {
+        .recv_until(Deadline::after(MUST), |line| {
             line.get("n").and_then(Value::as_u64) == Some(3)
         })
         .expect("the matching line arrives");
     assert_eq!(got["n"], 3);
-    let next = client.recv(MUST).expect("the line after the match");
+    let next = client
+        .recv(Deadline::after(MUST))
+        .expect("the line after the match");
     assert_eq!(
         next["n"], 4,
         "lines before the match are dropped, later ones kept"
@@ -128,9 +130,11 @@ fn recv_until_without_a_match_consumes_nothing() {
     let client = Client::connect(&path).unwrap();
     let mut server = accept_within(&listener);
     server.write_all(b"{\"n\":1}\n{\"n\":2}\n").unwrap();
-    let got = client.recv_until(Duration::from_millis(100), |_| false);
+    let got = client.recv_until(Deadline::after(Duration::from_millis(100)), |_| false);
     assert!(got.is_none(), "no match returns none");
-    let first = client.recv(MUST).expect("the first queued line");
+    let first = client
+        .recv(Deadline::after(MUST))
+        .expect("the first queued line");
     assert_eq!(first["n"], 1, "a miss consumes nothing");
 }
 
@@ -142,9 +146,11 @@ fn recv_until_returns_none_at_once_when_the_socket_closes() {
     let client = Client::connect(&path).unwrap();
     let server = accept_within(&listener);
     drop(server);
-    let got = within("a closed socket", Duration::from_secs(10), move || {
-        client.recv_until(Duration::from_secs(60), |_| false)
-    });
+    let got = within(
+        "a closed socket",
+        Deadline::after(Duration::from_secs(10)),
+        move || client.recv_until(Deadline::after(Duration::from_secs(60)), |_| false),
+    );
     assert!(got.is_none(), "a close with no match returns none");
 }
 
@@ -196,7 +202,7 @@ fn send_by_delivers_the_line_with_a_newline() {
     let end = clock.origin() + Duration::from_secs(60);
     let read = drain(server, || {});
     let left_clock = Arc::clone(&clock);
-    let client = within("send_by", MUST, move || {
+    let client = within("send_by", Deadline::after(MUST), move || {
         client
             .send_by(r#"{"id":1}"#, &|| left_until(&left_clock, end))
             .unwrap();
@@ -213,7 +219,7 @@ fn send_by_delivers_the_line_with_a_newline() {
 fn send_by_keeps_a_newline_the_line_already_has() {
     let (_dir, client, server) = pair();
     let read = drain(server, || {});
-    let client = within("send_by", MUST, move || {
+    let client = within("send_by", Deadline::after(MUST), move || {
         client.send_by("{}\n", &|| MUST).unwrap();
         client
     });
@@ -238,10 +244,14 @@ fn send_by_does_not_renew_its_deadline_across_partial_writes() {
     });
     let line = "x".repeat(1 << 20);
     let left_clock = Arc::clone(&clock);
-    let (sent, client) = within("send_by", Duration::from_secs(10), move || {
-        let sent = client.send_by(&line, &|| left_until(&left_clock, end));
-        (sent, client)
-    });
+    let (sent, client) = within(
+        "send_by",
+        Deadline::after(Duration::from_secs(10)),
+        move || {
+            let sent = client.send_by(&line, &|| left_until(&left_clock, end));
+            (sent, client)
+        },
+    );
     drop(client);
     let got = Deadline::after(MUST)
         .recv(&read)
@@ -262,7 +272,7 @@ fn send_by_does_not_renew_its_deadline_across_partial_writes() {
 fn send_by_at_zero_writes_nothing() {
     let (_dir, client, server) = pair();
     let read = drain(server, || {});
-    let (sent, client) = within("send_by", MUST, move || {
+    let (sent, client) = within("send_by", Deadline::after(MUST), move || {
         (client.send_by("{}", &|| Duration::ZERO), client)
     });
     drop(client);
@@ -282,7 +292,7 @@ fn send_by_reads_what_is_left_once_per_4_kib_chunk() {
         let (_dir, client, server) = pair();
         let read = drain(server, || {});
         let line = "x".repeat(len);
-        let (calls, client) = within("send_by", MUST, move || {
+        let (calls, client) = within("send_by", Deadline::after(MUST), move || {
             let calls = AtomicUsize::new(0);
             client
                 .send_by(&line, &|| {
@@ -347,7 +357,7 @@ fn send_by_returns_ok_when_the_peer_closes_before_the_reset() {
 fn send_by_returns_the_write_error_when_the_peer_is_gone() {
     let (_dir, client, server) = pair();
     drop(server);
-    let (result, client) = within("send_by", MUST, move || {
+    let (result, client) = within("send_by", Deadline::after(MUST), move || {
         let result = client.send_by("{}", &|| MUST);
         (result, client)
     });
@@ -393,7 +403,7 @@ fn a_client_dropped_during_an_unwind_keeps_the_first_panic() {
     client.notify_when_blocked(blocked);
     // Starts the reader without waiting: with no lines queued the zero
     // bound expires at once, leaving the reader blocked in `read`.
-    assert!(client.recv(Duration::ZERO).is_none());
+    assert!(client.recv(Deadline::after(Duration::ZERO)).is_none());
     Deadline::after(MUST)
         .recv(&is_blocked)
         .expect("the reader to block in read");

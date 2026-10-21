@@ -2130,7 +2130,7 @@ fn prompts(starter: &FakeStarter) -> usize {
 fn still_waiting(clock: &fakes::clock::FakeClock, due: std::time::Instant, by: Duration) {
     let mark = clock.advance_marked(by);
     assert!(
-        clock.await_parked_since(&mark, Some(due), DEADLINE),
+        clock.await_parked_since(&mark, Some(due), fakes::Deadline::after(DEADLINE)),
         "the first prompt re-checked and still waits"
     );
 }
@@ -2142,7 +2142,10 @@ fn start_with_content_answers_before_the_prompt() {
     let mut client = Client::connect(&hub);
     client.hello();
     let (_, due) = start_with_content(&mut client, &temp, &clock);
-    assert!(clock.await_parked(due, DEADLINE), "the bound is armed");
+    assert!(
+        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        "the bound is armed"
+    );
     let received = commands(&starter);
     assert_eq!(received.len(), 1, "only the hub's subscription so far");
     assert_eq!(received[0]["args"]["level"], "summary");
@@ -2177,7 +2180,7 @@ fn a_raise_from_summary_to_full_releases_the_prompt() {
     client.send(&relayed_subscribe("c_summary", &session, "summary"));
     let (id, _) = accepted(&client.next("the summary answer"));
     assert_eq!(id, "c_summary");
-    assert!(clock.await_parked(due, DEADLINE));
+    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
     still_waiting(&clock, due, Duration::ZERO);
     assert_eq!(prompts(&starter), 0);
     client.send(&relayed_subscribe("c_full", &session, "full"));
@@ -2196,7 +2199,7 @@ fn a_summary_subscribe_waits_for_the_bound() {
     let (session, due) = start_with_content(&mut client, &temp, &clock);
     client.send(&relayed_subscribe("c_summary", &session, "summary"));
     let _answer = accepted(&client.next("the summary answer"));
-    assert!(clock.await_parked(due, DEADLINE));
+    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
     still_waiting(&clock, due, Duration::ZERO);
     assert_eq!(prompts(&starter), 0);
     still_waiting(&clock, due, Duration::from_millis(999));
@@ -2218,7 +2221,7 @@ fn a_full_subscribe_on_another_connection_does_not_release() {
     other.send(&relayed_subscribe("c_other", &session, "full"));
     let (id, _) = accepted(&other.next("the other client's answer"));
     assert_eq!(id, "c_other");
-    assert!(clock.await_parked(due, DEADLINE));
+    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
     still_waiting(&clock, due, Duration::ZERO);
     assert_eq!(prompts(&starter), 0);
     clock.advance(FIRST_PROMPT_WAIT);
@@ -2248,7 +2251,10 @@ fn a_failed_answer_write_still_arms_the_bound() {
         .recv(&done)
         .expect("start returned");
     let due = clock.now() + FIRST_PROMPT_WAIT;
-    assert!(clock.await_parked(due, DEADLINE), "the bound is armed");
+    assert!(
+        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        "the bound is armed"
+    );
     clock.advance(FIRST_PROMPT_WAIT);
     assert!(starter.await_received(2, DEADLINE));
     assert_eq!(prompts(&starter), 1);
@@ -2276,7 +2282,7 @@ fn a_connection_that_never_subscribes_gets_the_prompt_at_the_bound() {
     let mut client = Client::connect(&hub);
     client.hello();
     let (session, due) = start_with_content(&mut client, &temp, &clock);
-    assert!(clock.await_parked(due, DEADLINE));
+    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
     clock.advance(FIRST_PROMPT_WAIT);
     assert!(starter.await_received(2, DEADLINE));
     client.send(&relayed_subscribe("c_late", &session, "full"));

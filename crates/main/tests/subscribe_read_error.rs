@@ -89,7 +89,7 @@ fn finish(running: Running) {
         "fiber left a process in its group"
     );
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 }
 
 /// Connects a raw socket to `path`, on a thread bounded by the deadline.
@@ -133,7 +133,7 @@ fn a_full_subscriber_gets_every_line_before_an_unreadable_one_then_end_of_file()
     .unwrap();
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
     let log_path =

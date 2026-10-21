@@ -422,7 +422,7 @@ fn a_failed_append_returns_before_calling_the_ack() {
             "notes append failure child",
             child,
             b"trap '' XFSZ\nexec \"$@\"\n",
-            DEADLINE,
+            Deadline::after(DEADLINE),
         );
         assert!(
             output.status.success(),
@@ -525,7 +525,7 @@ fn a_late_cost_replaces_the_notes_calls_usage_without_a_turn_or_action() {
     let mark =
         clock.advance_when_parked(Some(due), None, crate::late_cost::LOOKUP_AFTER, &deadline);
     assert!(
-        clock.await_parked_since(&mark, None, deadline.left()),
+        clock.await_parked_since(&mark, None, deadline),
         "lookup has pushed its settled record before parking with an empty queue"
     );
     looped.write_settled().unwrap();

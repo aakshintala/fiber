@@ -41,7 +41,10 @@ struct Home {
 
 impl Drop for Home {
     fn drop(&mut self) {
-        self.watchdog.take().unwrap().stand_down(WAIT);
+        self.watchdog
+            .take()
+            .unwrap()
+            .stand_down(fakes::Deadline::after(WAIT));
     }
 }
 
@@ -342,11 +345,18 @@ fn a_command_deadline_ends_its_runner_at_but_not_below_the_boundary() {
         };
         (request.taken)();
         let until = clock.origin() + Duration::from_millis(1100);
-        assert!(clock.await_thread_parked(caller.thread().id(), Some(until), WAIT));
+        assert!(clock.await_thread_parked(
+            caller.thread().id(),
+            Some(until),
+            fakes::Deadline::after(WAIT)
+        ));
         // The VM ends a parked callback at its own deadline; the caller's
         // grace is a backstop, not extra command time.
         let parked = clock
-            .mark_parked(clock.origin() + Duration::from_millis(100), WAIT)
+            .mark_parked(
+                clock.origin() + Duration::from_millis(100),
+                fakes::Deadline::after(WAIT),
+            )
             .expect("the scheduler parks at the command deadline");
         let parked = parked.threads();
         assert_eq!(
@@ -366,7 +376,11 @@ fn a_command_deadline_ends_its_runner_at_but_not_below_the_boundary() {
             assert!(!request.cancel.is_cancelled());
             assert_eq!(session.lua[0].runners_held(), 1);
             assert!(result.try_recv().is_err());
-            assert!(clock.await_thread_parked(caller.thread().id(), Some(until), WAIT));
+            assert!(clock.await_thread_parked(
+                caller.thread().id(),
+                Some(until),
+                fakes::Deadline::after(WAIT)
+            ));
             clock.advance_when_parked(
                 Some(park),
                 Some(vm),
@@ -438,12 +452,12 @@ fn an_untaken_request_keeps_stream_order_under_both_timeout_orders() {
         assert!(clock.await_thread_parked(
             command_thread.thread().id(),
             Some(clock.origin() + Duration::from_millis(command_ms + 1000)),
-            WAIT
+            fakes::Deadline::after(WAIT)
         ));
         assert!(clock.await_thread_parked(
             hook_thread.thread().id(),
             Some(clock.origin() + Duration::from_millis(hook_ms)),
-            WAIT
+            fakes::Deadline::after(WAIT)
         ));
         assert!(!marker.exists());
         let (park, thread) = if command_first {
@@ -767,7 +781,10 @@ fn the_door_returns_a_tool_failure_normally_and_ends_a_running_call_at_timeout()
         (request.taken)();
         assert!(session.lua[0].runs_own_command_call());
         let parked = clock
-            .mark_parked(clock.origin() + Duration::from_secs(2), WAIT)
+            .mark_parked(
+                clock.origin() + Duration::from_secs(2),
+                fakes::Deadline::after(WAIT),
+            )
             .expect("the call parks at its timeout plus the grace");
         let parked = parked.threads();
         assert_eq!(

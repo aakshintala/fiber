@@ -49,7 +49,7 @@ fn a_spawned_group_is_listed() {
     assert!(support::group::alive(pgid));
     child.kill().unwrap();
     child.wait().unwrap();
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Reaps `child` on its own thread, at most `DEADLINE` of wall clock:
@@ -75,8 +75,11 @@ fn a_live_group_gets_sigterm() {
     // Reaped before the emptiness check: on Linux a zombie still answers
     // kill(-pgid, 0), so the group reads occupied until it is reaped.
     assert_eq!(reap(child, "SIGTERM").signal(), Some(15));
-    assert!(group_empties(pgid, DEADLINE), "SIGTERM emptied the group");
-    watchdog.stand_down(DEADLINE);
+    assert!(
+        group_empties(pgid, fakes::Deadline::after(DEADLINE)),
+        "SIGTERM emptied the group"
+    );
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -86,14 +89,14 @@ fn a_reaped_group_whose_members_are_gone_leaves_the_list() {
     let mut listing = Some(listing);
     child.kill().unwrap();
     child.wait().unwrap();
-    assert!(group_empties(pgid, DEADLINE));
+    assert!(group_empties(pgid, fakes::Deadline::after(DEADLINE)));
     assert!(retire_if_empty(&mut listing));
     assert!(listing.is_none(), "the token is gone with its entry");
     assert!(!listed(pgid));
     // Retired, a signal to it is a no-op: the id may already belong to
     // someone else.
     assert!(!signal(pgid, rustix::process::Signal::KILL));
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -129,19 +132,23 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
     let pgid = child.id();
     let mut listing = Some(listing);
     let watchdog = Watchdog::group(pgid);
-    let member: u32 = within("the member writes its pid", DEADLINE, move || {
-        loop {
-            let Ok(text) = std::fs::read_to_string(&pidfile) else {
-                thread::yield_now();
-                continue;
-            };
-            let Ok(pid) = text.trim().parse() else {
-                thread::yield_now();
-                continue;
-            };
-            return pid;
-        }
-    });
+    let member: u32 = within(
+        "the member writes its pid",
+        Deadline::after(DEADLINE),
+        move || {
+            loop {
+                let Ok(text) = std::fs::read_to_string(&pidfile) else {
+                    thread::yield_now();
+                    continue;
+                };
+                let Ok(pid) = text.trim().parse() else {
+                    thread::yield_now();
+                    continue;
+                };
+                return pid;
+            }
+        },
+    );
     child.wait().unwrap();
     reap_locked(&mut child, &mut listing);
     assert!(listing.is_some(), "with a member surviving the token stays");
@@ -150,14 +157,14 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
         "with a member surviving the group stays listed"
     );
     assert!(
-        fakes::pids_exit(&[member], DEADLINE),
+        fakes::pids_exit(&[member], fakes::Deadline::after(DEADLINE)),
         "the surviving member got SIGKILL"
     );
-    assert!(group_empties(pgid, DEADLINE));
+    assert!(group_empties(pgid, fakes::Deadline::after(DEADLINE)));
     assert!(retire_if_empty(&mut listing));
     assert!(!listed(pgid));
     // The watchdog finds nothing left to kill.
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -176,7 +183,7 @@ fn an_unlisted_live_group_is_not_signalled() {
     assert!(kill_group(pgid, "0").unwrap(), "nothing was sent");
     child.kill().unwrap();
     child.wait().unwrap();
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -217,7 +224,7 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
         .recv(&waited)
         .expect("the reap ran");
     assert!(!listed(pid), "the empty group retired under the lock");
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Whether `pid` has exited without being reaped: `waitid` with `NOWAIT`
@@ -225,7 +232,7 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
 #[track_caller]
 fn wait_for_exit(pid: u32) {
     use rustix::process::{Pid, WaitId, WaitIdOptions};
-    within("the leader exits", DEADLINE, move || {
+    within("the leader exits", Deadline::after(DEADLINE), move || {
         let id = Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
         loop {
             let seen = rustix::process::waitid(
@@ -258,5 +265,5 @@ fn a_listed_group_with_a_member_is_not_retired() {
     assert!(!retire_if_empty(&mut none));
     child.kill().unwrap();
     child.wait().unwrap();
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }

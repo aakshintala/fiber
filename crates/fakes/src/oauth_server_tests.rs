@@ -252,7 +252,7 @@ fn hold_records_the_request_and_replies_only_after_release() {
     let rx = post_later(&server);
 
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the held request is recorded"
     );
     assert_eq!(
@@ -284,11 +284,11 @@ fn release_with_nothing_held_leaves_replies_immediate() {
 fn await_requests_is_false_at_its_deadline_and_true_once_they_arrive() {
     let server = OauthServer::start(vec![OauthReply::pending()]);
 
-    assert!(server.await_requests(0, Duration::ZERO));
-    assert!(!server.await_requests(1, QUIET));
+    assert!(server.await_requests(0, Deadline::after(Duration::ZERO)));
+    assert!(!server.await_requests(1, Deadline::after(QUIET)));
     post(&server, "/token", "");
-    assert!(server.await_requests(1, Duration::ZERO));
-    assert!(!server.await_requests(2, QUIET));
+    assert!(server.await_requests(1, Deadline::after(Duration::ZERO)));
+    assert!(!server.await_requests(2, Deadline::after(QUIET)));
 }
 
 #[test]
@@ -296,7 +296,7 @@ fn dropping_a_holding_server_releases_its_client() {
     let server = OauthServer::start(vec![OauthReply::pending()]);
     server.hold();
     let rx = post_later(&server);
-    assert!(server.await_requests(1, WAIT));
+    assert!(server.await_requests(1, Deadline::after(WAIT)));
 
     drop(server);
     let (status, _) = Deadline::after(WAIT)

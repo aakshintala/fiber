@@ -22,6 +22,7 @@ use serde_json::json;
 
 use super::super::{PruneArgs, prune_run};
 use super::*;
+use fakes::Deadline;
 use fakes::git::git;
 
 const PROJECT: &str = "p";
@@ -846,18 +847,24 @@ const _: () = assert!(
 #[test]
 fn a_git_redirect_keeps_scope_on_the_workspace_repository() {
     if std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_CHILD").is_ok() {
-        fakes::within("the child's redirect checks", REDIRECT_CHILD_BUDGET, || {
-            let home = PathBuf::from(std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_HOME").unwrap());
-            let workspace =
-                PathBuf::from(std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_WORKSPACE").unwrap());
-            let expected = std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_EXPECTED").unwrap();
-            assert_eq!(super::scope_keys(&home, &workspace), vec![expected]);
-        });
+        fakes::within(
+            "the child's redirect checks",
+            Deadline::after(REDIRECT_CHILD_BUDGET),
+            || {
+                let home =
+                    PathBuf::from(std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_HOME").unwrap());
+                let workspace = PathBuf::from(
+                    std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_WORKSPACE").unwrap(),
+                );
+                let expected = std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_EXPECTED").unwrap();
+                assert_eq!(super::scope_keys(&home, &workspace), vec![expected]);
+            },
+        );
         return;
     }
     fakes::within(
         "a_git_redirect_keeps_scope_on_the_workspace_repository",
-        REDIRECT_RERUN_OUTER,
+        Deadline::after(REDIRECT_RERUN_OUTER),
         || {
             let root = fakes::TempDir::new("cli-prune-scope-redirect");
             let repo = root.path().join("repo");
@@ -890,7 +897,7 @@ fn a_git_redirect_keeps_scope_on_the_workspace_repository() {
                     ("GIT_DIR", decoy_git.as_str()),
                     ("GIT_WORK_TREE", decoy_str.as_str()),
                 ],
-                REDIRECT_RERUN_WITHIN,
+                Deadline::after(REDIRECT_RERUN_WITHIN),
                 |_| {},
             );
             assert!(

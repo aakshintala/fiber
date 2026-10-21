@@ -50,21 +50,22 @@ pub fn rerun(test: &str, env: &[(&str, &str)]) -> Output {
     rerun_bounded(test, env, CHILD_WITHIN, CHILD_WITHIN, |_| {})
 }
 
-/// [`rerun`] with the caller's bound on the child: a child that runs slowly
-/// on a loaded host gets a longer one. The bound applies twice, once to the
-/// child's exit and once to the whole cleanup after it, so a caller keeps
-/// `2 * within` inside half of nextest's per-test timeout
-/// (`docs/testing.md`, "Waits and timeouts").
+/// [`rerun`] with the caller's deadline on the child: a child that runs
+/// slowly on a loaded host gets a longer one. What remains of the deadline
+/// applies twice, once to the child's exit and once to the whole cleanup
+/// after it, so a caller keeps `2 * within` inside half of nextest's
+/// per-test timeout (`docs/testing.md`, "Waits and timeouts").
 ///
 /// # Panics
 ///
 /// When the test binary cannot be re-run, or the child is still running
-/// after `within`: the child's group is killed first, so a hung child never
+/// after `deadline`: the child's group is killed first, so a hung child never
 /// keeps running. When the child exits but leaves processes in its group:
 /// the group is killed and the rerun fails, so a leaked background process
 /// never keeps running either.
 #[track_caller]
-pub fn rerun_within(test: &str, env: &[(&str, &str)], within: Duration) -> Output {
+pub fn rerun_within(test: &str, env: &[(&str, &str)], deadline: Deadline) -> Output {
+    let within = deadline.left();
     rerun_bounded(test, env, within, within, |_| {})
 }
 
@@ -90,10 +91,10 @@ pub fn rerun_within(test: &str, env: &[(&str, &str)], within: Duration) -> Outpu
 pub fn rerun_prepared(
     test: &str,
     env: &[(&str, &str)],
-    within: Duration,
+    deadline: Deadline,
     prepare: impl FnOnce(&mut Command),
 ) -> Output {
-    rerun_bounded(test, env, within, CHILD_WITHIN, prepare)
+    rerun_bounded(test, env, deadline.left(), CHILD_WITHIN, prepare)
 }
 
 /// [`rerun_prepared`] with the exit bound and the cleanup bound set
@@ -161,14 +162,14 @@ fn rerun_bounded(
     match Deadline::after(within).recv(&finished) {
         Ok(Ok(output)) => {
             let cleanup = Deadline::after(reap);
-            if crate::group_empties(group, half(reap)) {
-                watchdog.stand_down(cleanup.left());
+            if crate::group_empties(group, Deadline::after(half(reap))) {
+                watchdog.stand_down(cleanup);
                 return output;
             }
             match crate::kill_group(group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            let emptied = crate::group_empties(group, cleanup.left());
+            let emptied = crate::group_empties(group, cleanup);
             // Dropping the watchdog closes its standard input, a second net
             // around the group.
             panic!(
@@ -180,7 +181,7 @@ fn rerun_bounded(
             match crate::kill_group(group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            match crate::group_empties(group, cleanup.left()) {
+            match crate::group_empties(group, cleanup) {
                 true | false => {}
             }
             panic!("`{test}` has no output: {err}");
@@ -191,7 +192,7 @@ fn rerun_bounded(
                 Ok(_) | Err(_) => {}
             }
             let reaped = cleanup.recv(&finished).is_ok();
-            let emptied = crate::group_empties(group, cleanup.left());
+            let emptied = crate::group_empties(group, cleanup);
             panic!(
                 "waited {within:?} for `{test}` to exit (reaped: {reaped}, group empty: {emptied})"
             );

@@ -33,6 +33,13 @@ const CONVERSE_PLAIN: &[u8] =
 /// The package's endpoint, which the copy points at the fake server.
 const ENDPOINT: &str = "https://bedrock-runtime.{region}.amazonaws.com";
 
+/// The Invoke probe's recorded 403 for a malformed API key
+/// (`research/bedrock-invoke-probe/raw/bad-bearer.json`): its body and the
+/// exception its `x-amzn-ErrorType` names.
+const BAD_BEARER: &str = r#"{"Message":"Invalid API Key format: Delimiter ':' not found"}"#;
+const ACCESS_DENIED: &str =
+    "AccessDeniedException:http://internal.amazon.com/coral/com.amazon.coral.service/";
+
 /// Parses `fiber ask` stdout into a run: one JSON value per line, without
 /// `session_status` lines, which an observer thread writes.
 impl From<Output> for Run {
@@ -86,6 +93,23 @@ const CONVERSE_TURN: [&str; 15] = [
     "fiber_exited",
 ];
 
+/// The event kinds of one turn whose only model call fails.
+const FAILED_TURN: [&str; 13] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "extension_exec",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
 /// The fake server answering once with `body` as Bedrock frames it, naming
 /// the request in `x-amzn-RequestId` when `request_id` is set, and the
 /// installed package's region: the server's host, read from `AWS_REGION`.
@@ -97,14 +121,22 @@ fn bedrock(setup: &Setup, body: &[u8], request_id: Option<&str>) -> (ProviderSer
     if let Some(id) = request_id {
         headers.push(("x-amzn-RequestId".to_owned(), id.to_owned()));
     }
-    let server = ProviderServer::start([Response {
-        status: 200,
-        headers,
-        body: body.to_vec(),
-        drop_connection: false,
-        stall: false,
-    }])
-    .unwrap();
+    bedrock_answering(
+        setup,
+        Response {
+            status: 200,
+            headers,
+            body: body.to_vec(),
+            drop_connection: false,
+            stall: false,
+        },
+    )
+}
+
+/// The fake server answering once with `response`, and the installed
+/// package's region: the server's host, read from `AWS_REGION`.
+fn bedrock_answering(setup: &Setup, response: Response) -> (ProviderServer, String) {
+    let server = ProviderServer::start([response]).unwrap();
     let to = setup.root.path().join("pkg-bedrock");
     support::package::copy_package("bedrock", &to, ENDPOINT, "http://{region}");
     let installed = run(setup, &["extension", "install", to.to_str().unwrap()], &[]);
@@ -303,4 +335,43 @@ fn a_converse_reply_without_a_request_id_is_minted_its_id_and_left_unpriced() {
     assert!(id.starts_with("fiber-"), "{id}");
     assert_eq!(usage["tokens"]["input"], 15);
     assert_eq!(usage["cost"], Value::Null);
+}
+
+#[test]
+fn an_access_denied_reply_is_fiber_s_sentence_without_fiber_login() {
+    let setup = Setup::new();
+    let (server, host) = bedrock_answering(
+        &setup,
+        Response::status(403, BAD_BEARER).header("x-amzn-ErrorType", ACCESS_DENIED),
+    );
+
+    let run = run(
+        &setup,
+        &[
+            "ask",
+            "--model",
+            "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "hi",
+        ],
+        &[
+            ("AWS_BEARER_TOKEN_BEDROCK", "bedrock-test-key"),
+            ("AWS_REGION", &host),
+        ],
+    );
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), FAILED_TURN);
+    // `fiber login bedrock` stores a key `credential()` never reads, so the
+    // sentence names no login (`docs/errors.md`, "The shape").
+    let error = &run.first("fiber_exited")["payload"]["error"];
+    assert_eq!(error["code"], "authentication_failed");
+    assert_eq!(
+        error["message"],
+        "bedrock rejected the credential (HTTP 403)."
+    );
+    assert_eq!(
+        error["provider"]["message"],
+        "Invalid API Key format: Delimiter ':' not found"
+    );
+    assert_eq!(server.requests().len(), 1);
 }

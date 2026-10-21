@@ -14,6 +14,7 @@ use common::Setup;
 use config::{
     ConfigError, McpRefusalKind, McpServer, McpTransport, ScriptRead, mcp_servers, read_script,
 };
+use fakes::Deadline;
 use serde_json::json;
 
 /// Whether the URL holds a user name or password, as the tests see it.
@@ -387,9 +388,11 @@ fn debug_names_a_refusal_and_its_kind() {
 /// fail the test instead of hanging it.
 fn read_on_worker(path: &Path) -> Result<ScriptRead, ConfigError> {
     let path = path.to_path_buf();
-    fakes::within("a script read", fakes::MUST_SUCCEED_WITHIN, move || {
-        read_script(&path)
-    })
+    fakes::within(
+        "a script read",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || read_script(&path),
+    )
 }
 
 #[test]
