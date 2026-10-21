@@ -175,11 +175,15 @@ impl Loop {
         }
         let weak = Arc::downgrade(&jobs);
         let tap: contract::jobs::UsageTap = Arc::new(move |line| {
+            // Counts the arrival as pending and folds it atomically: the
+            // loop's later acknowledgment of this arrival's delivery keeps
+            // this newer value instead of replaying the delivery's older
+            // line. The guard is released before stopping delegates.
             let tripped = {
                 let mut guard = trip
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.apply(&line)
+                guard.tap(&line)
             };
             if tripped && let Some(jobs) = weak.upgrade() {
                 jobs.stop_delegates();

@@ -157,6 +157,7 @@ impl crate::Loop {
     ) -> Result<(), crate::Error> {
         let Recorded { line, lookable } = recorded;
         self.put_usage(&line, turn, action)?;
+        self.record_usage(&line);
         let Some(lookup) = lookup.filter(|_| lookable) else {
             return Ok(());
         };
@@ -189,6 +190,7 @@ impl crate::Loop {
                 settled.turn.as_ref(),
                 settled.action.as_ref(),
             )?;
+            self.record_usage(&settled.record);
         }
         Ok(())
     }
@@ -207,9 +209,13 @@ impl crate::Loop {
         turn: Option<&TurnId>,
         action: Option<&ActionId>,
     ) -> Result<(), crate::Error> {
+        // Writes and ledgers only: the tripwire update runs after this
+        // returns, so a failed append never touches the trip and a copy
+        // never folds its older line over a newer watcher value. Own
+        // calls follow with `record_usage`; copies follow with
+        // `publish_usage` on the acknowledgment path.
         self.write(&Event::UsageRecorded(recorded.clone()), turn, action)?;
         self.ledger.record(recorded);
-        self.record_usage(recorded);
         Ok(())
     }
 
@@ -250,16 +256,19 @@ impl crate::Loop {
     }
 
     /// Publishes one ledgered line to the spend tripwire, stopping
-    /// delegates at once when it claims the one-way trip. The tripwire
-    /// lock is released before the stop, and the stop tolerates ended
-    /// jobs, so a trip racing a job end stops nothing twice.
+    /// delegates at once when it claims the one-way trip. The acknowledgment
+    /// consumes one tapped arrival not yet folded and keeps the watcher's
+    /// latest value; with no arrival pending (a direct or backfilled copy)
+    /// it folds the copy's own delta. The tripwire lock is released before
+    /// the stop, and the stop tolerates ended jobs, so a trip racing a job
+    /// end stops nothing twice.
     fn publish_usage(&self, recorded: &UsageRecorded) {
         let tripped = {
             let mut trip = self
                 .spend_trip
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            trip.apply(recorded)
+            trip.ack(recorded)
         };
         if tripped && let Some(jobs) = &self.ending.jobs {
             jobs.stop_delegates();
@@ -397,15 +406,19 @@ impl Ledger {
 
 /// The spend the loop has seen, shared with the delegate-socket reader:
 /// one leaf mutex protecting the per-generation billed-cost map, the
-/// accumulated billed spend, the optional budget and the one-way tripped
-/// flag. Every access holds it; the stop and the inbox send run after it
+/// accumulated billed spend, the optional budget, the one-way tripped
+/// flag and the count of tapped arrivals not yet folded per generation.
+/// Every access holds it; the stop and the inbox send run after it
 /// is released, so the watcher never holds it across a stop or a send.
+/// The pending count is process-local coordination, never durable state:
+/// a resume rebuilds the map from the ledger with no arrivals pending.
 #[derive(Debug)]
 pub(crate) struct Tripwire {
     billed: BTreeMap<GenerationId, f64>,
     sum: f64,
     budget: Option<f64>,
     tripped: bool,
+    pending: BTreeMap<GenerationId, usize>,
 }
 
 impl Tripwire {
@@ -426,6 +439,7 @@ impl Tripwire {
             sum: 0.0,
             budget,
             tripped: false,
+            pending: BTreeMap::new(),
         };
         for line in ledger.lines() {
             let cost = Self::billed_cost(line);
@@ -460,6 +474,43 @@ impl Tripwire {
     /// untrips.
     pub(crate) fn apply(&mut self, line: &UsageRecorded) -> bool {
         self.fold(line);
+        self.claim()
+    }
+
+    /// Taps one watcher arrival: counts it as pending and folds its delta
+    /// atomically, true when this call claims the one-way trip. The watcher
+    /// runs this before offering the arrival's delivery, under the same
+    /// lock, so a loop fold racing the offer never replays an older line
+    /// over this newer value.
+    pub(crate) fn tap(&mut self, line: &UsageRecorded) -> bool {
+        *self.pending.entry(line.generation_id.clone()).or_insert(0) += 1;
+        self.fold(line);
+        self.claim()
+    }
+
+    /// Acknowledges one loop-folded copy: with a tapped arrival of its
+    /// generation still pending, consumes one without folding the copy's
+    /// (older) line again, preserving the watcher's latest value through
+    /// all older acknowledgments, including downward corrections and
+    /// zero-cost records. With nothing pending (a direct or backfilled
+    /// copy) folds the copy's own delta. Either way checks the one-way
+    /// trip on the current sum under the same lock hold.
+    pub(crate) fn ack(&mut self, line: &UsageRecorded) -> bool {
+        if let Some(count) = self.pending.get_mut(&line.generation_id)
+            && *count > 0
+        {
+            *count -= 1;
+            if *count == 0 {
+                self.pending.remove(&line.generation_id);
+            }
+            return self.claim();
+        }
+        self.apply(line)
+    }
+
+    /// Checks the one-way trip on the current sum: true once, when the
+    /// sum first reaches the budget. A downward correction never untrips.
+    fn claim(&mut self) -> bool {
         if self.tripped {
             return false;
         }
@@ -496,3 +547,316 @@ impl Tripwire {
 #[cfg(test)]
 #[path = "usage_tests.rs"]
 mod tests;
+
+/// The pending-arrival acknowledgment against an older copy replaying a
+/// newer tap (`Sol settlement 2`): the watcher counts each tapped arrival
+/// and folds it atomically; the loop's copy fold consumes one pending
+/// arrival without folding the older line again. Each test forces its
+/// order with channels, never sleeps, and fails when the acknowledgment
+/// is removed (the older line replays, the sum is wrong and the trip is
+/// missed).
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code signals ordering through channels"
+)]
+mod pending_tests {
+    use std::collections::BTreeMap;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
+    use std::time::Duration;
+
+    use contract::GenerationId;
+    use contract::events::UsageRecorded;
+    use contract::shapes::Tokens;
+    use fakes::Deadline;
+
+    use super::{Ledger, Tripwire};
+
+    /// How long a signal may take before the test fails naming it.
+    const WAIT: Duration = Duration::from_secs(5);
+
+    /// A billed line for `id` at `cost`: what the tripwire folds is only
+    /// the generation, the cost and the subscription flag.
+    fn cost_line(id: &str, cost: Option<f64>) -> UsageRecorded {
+        UsageRecorded {
+            generation_id: GenerationId(id.into()),
+            model: "fake/m".into(),
+            tokens: Tokens {
+                input: 10,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 3,
+            },
+            input_bytes: 0,
+            input_media: None,
+            web_searches: None,
+            cost,
+            subscription: None,
+            extension: None,
+            origin_session_id: None,
+            reviewer: None,
+        }
+    }
+
+    /// The tripwire sum under its lock.
+    fn sum_of(trip: &Arc<Mutex<Tripwire>>) -> f64 {
+        trip.lock().unwrap().sum
+    }
+
+    /// Taps `line` on `trip`, counting a claimed trip in `stops`.
+    fn tap(trip: &Arc<Mutex<Tripwire>>, stops: &Arc<AtomicUsize>, line: &UsageRecorded) -> bool {
+        let tripped = trip.lock().unwrap().tap(line);
+        if tripped {
+            stops.fetch_add(1, Ordering::SeqCst);
+        }
+        tripped
+    }
+
+    /// Acknowledges `line` on `trip` while recording it in `ledger`,
+    /// counting a claimed trip in `stops`.
+    fn ack(
+        trip: &Arc<Mutex<Tripwire>>,
+        ledger: &Arc<Mutex<Ledger>>,
+        stops: &Arc<AtomicUsize>,
+        line: &UsageRecorded,
+    ) -> bool {
+        ledger.lock().unwrap().record(line);
+        let tripped = trip.lock().unwrap().ack(line);
+        if tripped {
+            stops.fetch_add(1, Ordering::SeqCst);
+        }
+        tripped
+    }
+
+    #[test]
+    fn an_older_copy_ack_keeps_the_newer_tap_and_a_sibling_trips() {
+        // Budget $4: watcher taps g at $1 then its $3 correction while
+        // both deliveries are held; the loop folds only g's $1 delivery;
+        // watcher h at $1 trips before the $3 correction folds. Without
+        // the acknowledgment the $1 fold replays over $3, the map totals
+        // $2 at h and the stop is missed.
+        let trip = Arc::new(Mutex::new(Tripwire::from_ledger(
+            &Ledger::default(),
+            Some(4.0),
+        )));
+        let ledger = Arc::new(Mutex::new(Ledger::default()));
+        let stops = Arc::new(AtomicUsize::new(0));
+        let (both_tapped_tx, both_tapped_rx) = mpsc::channel::<()>();
+        let (folded_g1_tx, folded_g1_rx) = mpsc::channel::<()>();
+        let (tapped_h_tx, tapped_h_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            scope.spawn({
+                let trip = Arc::clone(&trip);
+                let stops = Arc::clone(&stops);
+                move || {
+                    assert!(!tap(&trip, &stops, &cost_line("g", Some(1.0))));
+                    assert!(!tap(&trip, &stops, &cost_line("g", Some(3.0))));
+                    both_tapped_tx.send(()).unwrap();
+                    Deadline::after(WAIT)
+                        .recv(&folded_g1_rx)
+                        .expect("the loop folds g's $1 delivery");
+                    // The sibling arrives before the correction folds: $3 + $1
+                    // reaches $4, so this tap claims the one-way trip.
+                    assert!(tap(&trip, &stops, &cost_line("h", Some(1.0))));
+                    assert_eq!(stops.load(Ordering::SeqCst), 1);
+                    assert!((sum_of(&trip) - 4.0).abs() < 1e-9);
+                    tapped_h_tx.send(()).unwrap();
+                }
+            });
+            scope.spawn({
+                let trip = Arc::clone(&trip);
+                let ledger = Arc::clone(&ledger);
+                let stops = Arc::clone(&stops);
+                move || {
+                    Deadline::after(WAIT)
+                        .recv(&both_tapped_rx)
+                        .expect("the watcher taps g twice");
+                    // Folds only the older $1 delivery: the acknowledgment keeps
+                    // the watcher's $3, so the sum stays $3.
+                    assert!(!ack(&trip, &ledger, &stops, &cost_line("g", Some(1.0))));
+                    assert!((sum_of(&trip) - 3.0).abs() < 1e-9);
+                    assert_eq!(stops.load(Ordering::SeqCst), 0);
+                    folded_g1_tx.send(()).unwrap();
+                    Deadline::after(WAIT)
+                        .recv(&tapped_h_rx)
+                        .expect("the watcher taps h");
+                    // The watcher already stopped delegates exactly once at h;
+                    // the held correction and the sibling fold without
+                    // claiming again, and the ledger totals $4.
+                    assert_eq!(stops.load(Ordering::SeqCst), 1);
+                    assert!(!ack(&trip, &ledger, &stops, &cost_line("g", Some(3.0))));
+                    assert!(!ack(&trip, &ledger, &stops, &cost_line("h", Some(1.0))));
+                    assert!((ledger.lock().unwrap().spend() - 4.0).abs() < 1e-9);
+                    assert!((sum_of(&trip) - 4.0).abs() < 1e-9);
+                    assert_eq!(stops.load(Ordering::SeqCst), 1);
+                    done_tx.send(()).unwrap();
+                }
+            });
+            Deadline::after(WAIT)
+                .recv(&done_rx)
+                .expect("the loop folds the correction and h");
+        });
+        assert!((ledger.lock().unwrap().spend() - 4.0).abs() < 1e-9);
+        assert!((sum_of(&trip) - 4.0).abs() < 1e-9);
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_newer_copy_ack_first_still_keeps_the_newer_tap() {
+        // The reverse ordering: both g deliveries held, the loop folds
+        // the newer $3 first, then the older $1. Both acknowledgments keep
+        // $3; the sibling still trips at $4. Without the acknowledgment
+        // the older $1 replays over $3 and the sum is wrong.
+        let trip = Arc::new(Mutex::new(Tripwire::from_ledger(
+            &Ledger::default(),
+            Some(4.0),
+        )));
+        let ledger = Arc::new(Mutex::new(Ledger::default()));
+        let stops = Arc::new(AtomicUsize::new(0));
+        let (both_tapped_tx, both_tapped_rx) = mpsc::channel::<()>();
+        let (folded_new_tx, folded_new_rx) = mpsc::channel::<()>();
+        let (tapped_h_tx, tapped_h_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            scope.spawn({
+                let trip = Arc::clone(&trip);
+                let stops = Arc::clone(&stops);
+                move || {
+                    assert!(!tap(&trip, &stops, &cost_line("g", Some(1.0))));
+                    assert!(!tap(&trip, &stops, &cost_line("g", Some(3.0))));
+                    both_tapped_tx.send(()).unwrap();
+                    Deadline::after(WAIT)
+                        .recv(&folded_new_rx)
+                        .expect("the loop folds g's $3 delivery");
+                    assert!(tap(&trip, &stops, &cost_line("h", Some(1.0))));
+                    assert_eq!(stops.load(Ordering::SeqCst), 1);
+                    tapped_h_tx.send(()).unwrap();
+                }
+            });
+            scope.spawn({
+                let trip = Arc::clone(&trip);
+                let ledger = Arc::clone(&ledger);
+                let stops = Arc::clone(&stops);
+                move || {
+                    Deadline::after(WAIT)
+                        .recv(&both_tapped_rx)
+                        .expect("the watcher taps g twice");
+                    assert!(!ack(&trip, &ledger, &stops, &cost_line("g", Some(3.0))));
+                    assert!((sum_of(&trip) - 3.0).abs() < 1e-9);
+                    folded_new_tx.send(()).unwrap();
+                    Deadline::after(WAIT)
+                        .recv(&tapped_h_rx)
+                        .expect("the watcher taps h");
+                    // The older $1 acknowledgment keeps the watcher's $3, so the
+                    // tripwire still totals $4 at h. The ledger follows fold
+                    // order, so this artificial reverse fold leaves it holding
+                    // the older $1 (spend $2); production folds in delivery
+                    // order, as the first test proves, and the ledger totals
+                    // $4 there.
+                    assert!(!ack(&trip, &ledger, &stops, &cost_line("g", Some(1.0))));
+                    assert!((sum_of(&trip) - 4.0).abs() < 1e-9);
+                    assert!(!ack(&trip, &ledger, &stops, &cost_line("h", Some(1.0))));
+                    assert!((ledger.lock().unwrap().spend() - 2.0).abs() < 1e-9);
+                    assert!((sum_of(&trip) - 4.0).abs() < 1e-9);
+                    assert_eq!(stops.load(Ordering::SeqCst), 1);
+                    done_tx.send(()).unwrap();
+                }
+            });
+            Deadline::after(WAIT)
+                .recv(&done_rx)
+                .expect("the loop folds the older correction");
+        });
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_downward_correction_ack_keeps_the_lower_tap() {
+        // Budget $2: watcher taps g at $3 then its downward correction to
+        // $1 while both deliveries are held; the loop folds the older $3
+        // first without replaying over $1, so no second claim; h at $1 then
+        // holds $2 with the trip already claimed once. The ledger totals $2.
+        let trip = Arc::new(Mutex::new(Tripwire::from_ledger(
+            &Ledger::default(),
+            Some(2.0),
+        )));
+        let ledger = Arc::new(Mutex::new(Ledger::default()));
+        let stops = Arc::new(AtomicUsize::new(0));
+        let (both_tapped_tx, both_tapped_rx) = mpsc::channel::<()>();
+        let (folded_old_tx, folded_old_rx) = mpsc::channel::<()>();
+        let (tapped_h_tx, tapped_h_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            scope.spawn({
+                let trip = Arc::clone(&trip);
+                let stops = Arc::clone(&stops);
+                move || {
+                    assert!(tap(&trip, &stops, &cost_line("g", Some(3.0))));
+                    assert_eq!(stops.load(Ordering::SeqCst), 1);
+                    assert!(!tap(&trip, &stops, &cost_line("g", Some(1.0))));
+                    // A downward correction never untrips: the first tap
+                    // already claimed, the second claims nothing more.
+                    assert_eq!(stops.load(Ordering::SeqCst), 1);
+                    both_tapped_tx.send(()).unwrap();
+                    Deadline::after(WAIT)
+                        .recv(&folded_old_rx)
+                        .expect("the loop folds g's $3 delivery");
+                    assert!(!tap(&trip, &stops, &cost_line("h", Some(1.0))));
+                    assert_eq!(stops.load(Ordering::SeqCst), 1);
+                    tapped_h_tx.send(()).unwrap();
+                }
+            });
+            scope.spawn({
+                let trip = Arc::clone(&trip);
+                let ledger = Arc::clone(&ledger);
+                let stops = Arc::clone(&stops);
+                move || {
+                    Deadline::after(WAIT)
+                        .recv(&both_tapped_rx)
+                        .expect("the watcher taps g twice");
+                    // The older $3 acknowledgment keeps the watcher's $1.
+                    assert!(!ack(&trip, &ledger, &stops, &cost_line("g", Some(3.0))));
+                    assert!((sum_of(&trip) - 1.0).abs() < 1e-9);
+                    folded_old_tx.send(()).unwrap();
+                    Deadline::after(WAIT)
+                        .recv(&tapped_h_rx)
+                        .expect("the watcher taps h");
+                    assert!(!ack(&trip, &ledger, &stops, &cost_line("g", Some(1.0))));
+                    assert!((sum_of(&trip) - 2.0).abs() < 1e-9);
+                    assert!(!ack(&trip, &ledger, &stops, &cost_line("h", Some(1.0))));
+                    assert!((ledger.lock().unwrap().spend() - 2.0).abs() < 1e-9);
+                    assert_eq!(stops.load(Ordering::SeqCst), 1);
+                    done_tx.send(()).unwrap();
+                }
+            });
+            Deadline::after(WAIT)
+                .recv(&done_rx)
+                .expect("the loop folds the correction");
+        });
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_copy_with_nothing_pending_folds_its_own_delta() {
+        // A directly delivered or backfilled copy with no tapped arrival
+        // pending applies its own delta, so existing direct-copy,
+        // null-cost and subscription behaviour holds.
+        let mut trip = Tripwire::from_ledger(&Ledger::default(), Some(4.0));
+        assert!(!trip.ack(&cost_line("g", Some(1.0))));
+        assert!((trip.sum - 1.0).abs() < 1e-9);
+        assert!(!trip.ack(&cost_line("n", None)));
+        assert!((trip.sum - 1.0).abs() < 1e-9);
+        let mut subscription = cost_line("s", Some(2.0));
+        subscription.subscription = Some(true);
+        assert!(!trip.ack(&subscription));
+        assert!((trip.sum - 1.0).abs() < 1e-9);
+        assert!(trip.ack(&cost_line("h", Some(3.0))));
+        assert!((trip.sum - 4.0).abs() < 1e-9);
+    }
+}
