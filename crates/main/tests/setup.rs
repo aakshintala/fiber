@@ -1,8 +1,9 @@
-//! Binary-level tests of `fiber setup` without a terminal
-//! (`docs/testing.md`, "Levels"): the built `fiber` runs in its own
-//! process group with its own `FIBER_HOME`, holding an ordinary provider
-//! for the login step and stub managers for the hub step. No test reads or
-//! sleeps on the real clock; every wait takes the test's one deadline.
+//! Binary-level tests of `fiber setup` (`docs/testing.md`, "Levels"): the
+//! built `fiber` runs in its own process group with its own `FIBER_HOME`,
+//! holding an ordinary provider for the login step and stub managers for
+//! the hub step. Without a terminal only the flags apply; the question
+//! flow runs with stdin on a pseudo-terminal. No test reads or sleeps on
+//! the real clock; every wait takes the test's one deadline.
 
 #![allow(
     clippy::unwrap_used,
@@ -14,8 +15,11 @@
 
 mod support;
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
+use std::os::fd::OwnedFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -23,6 +27,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use fakes::ProviderServer;
+use rustix::pty;
 use serde_json::{Value, json};
 use support::{Output, Setup, group_alive};
 
@@ -306,4 +311,315 @@ fn thinking_without_a_model_fails_naming_the_step() {
     assert!(run.stderr.contains("setup model failed"), "{}", run.stderr);
     // The model step failed, so the later steps never ran.
     assert!(!run.stderr.contains("skipped hub"), "{}", run.stderr);
+}
+
+/// A pseudo-terminal for stdin: the child reads a terminal while its
+/// prompts stay on the stderr pipe. The test types whole answers up
+/// front; every setup question reads whole lines in order, so nothing is
+/// consumed early.
+struct Terminal {
+    main: OwnedFd,
+    slave: fs::File,
+}
+
+impl Terminal {
+    #[track_caller]
+    fn open() -> Self {
+        let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
+        pty::grantpt(&main).unwrap();
+        pty::unlockpt(&main).unwrap();
+        let name = pty::ptsname(&main, Vec::new()).unwrap();
+        let path = PathBuf::from(OsStr::from_bytes(name.as_bytes()));
+        let slave = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        Self { main, slave }
+    }
+}
+
+impl Setup {
+    /// Runs `fiber` with `args` and stdin on a new pseudo-terminal fed
+    /// `typed`, stdout and stderr on pipes: stdin is a terminal, so the
+    /// questions are asked.
+    #[track_caller]
+    fn run_on_terminal(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> Output {
+        let terminal = Terminal::open();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
+            .args(args)
+            .current_dir(self.root.path().join("w"))
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", self.root.path())
+            .env("FIBER_HOME", self.home())
+            .env("FIBER_TEST_FAKE_KEY", "sk-test")
+            .envs(env.iter().copied())
+            .stdin(Stdio::from(terminal.slave.try_clone().unwrap()))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (child, watchdog) = support::spawn_watched(&mut command);
+        let group = child.id();
+        let guard = support::KillGroup(group);
+        let mut main = fs::File::from(terminal.main);
+        main.write_all(typed.as_bytes()).unwrap();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match self.deadline.recv(&finished) {
+            Ok(output) => output.unwrap(),
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
+        };
+        assert!(
+            !group_alive(self.deadline, group),
+            "`fiber` left a process in its group behind"
+        );
+        std::mem::forget(guard);
+        watchdog.stand_down(self.deadline.cleanup());
+        Output::from(output)
+    }
+
+    /// Installs `fake` with a thinking model served from `server`.
+    fn install_thinking_provider(&self, server: &ProviderServer) {
+        let source = self.root.path().join("src");
+        support::write_json(
+            &source.join("extension.json"),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+        );
+        support::write_json(
+            &source.join("providers/fake.json"),
+            &json!({
+                "name": "fake",
+                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000, "thinking_levels": ["low", "high"], "thinking_default": "low"}]
+            }),
+        );
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(source),
+            "0.0.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+    }
+
+    /// Installs an unsigned second provider with its own model.
+    fn install_other(&self, server: &ProviderServer) {
+        let source = self.root.path().join("other");
+        support::write_json(
+            &source.join("extension.json"),
+            &json!({"name": "other", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"other": [format!("{}/v1", server.url())]}}),
+        );
+        support::write_json(
+            &source.join("providers/other.json"),
+            &json!({
+                "name": "other",
+                "credential": {"env": "FIBER_TEST_OTHER_KEY"},
+                "models": [{"id": "o1", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
+            }),
+        );
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(source),
+            "0.0.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+    }
+}
+
+/// The position of `needle` in `text`, for asserting prompt order.
+fn position(text: &str, needle: &str) -> usize {
+    text.find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} not in {text:?}"))
+}
+
+#[test]
+fn the_terminal_run_asks_each_question_with_the_current_answers_preselected() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.install_thinking_provider(&server);
+    setup.install_other(&server);
+    // The current answers: fake is signed in, the global model is set,
+    // and the Claude directory waits for its import.
+    config::store_credential(
+        &setup.home(),
+        "fake",
+        "default",
+        &config::Secret::new("sk-seed".into()),
+    )
+    .unwrap();
+    fs::write(
+        setup.home().join("config.json"),
+        json!({"model": "fake/m", "unrelated": "kept"}).to_string(),
+    )
+    .unwrap();
+    fs::create_dir_all(setup.root.path().join(".claude")).unwrap();
+
+    // Skip the providers, import Claude's configuration, keep the model
+    // and thinking, install the completions, skip the hub.
+    let run = setup.run_on_terminal(&["setup"], "\ny\n\n\ny\nn\n", &[("SHELL", "/bin/zsh")]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let order = [
+        "Providers:",
+        "1) fake (signed in)",
+        "2) other",
+        "Sign in to providers",
+        "Import Claude Code's configuration (~/.claude)? [y/N]:",
+        "Default model (current: fake/m):",
+        "1) fake/m",
+        "Pick the default model",
+        "Thinking for fake/m (current: unset): low, high",
+        "Install completions for zsh (~/.zshrc)? [y/N]:",
+        "Register the hub as a login service? [y/N]:",
+    ];
+    let mut mark = 0;
+    for needle in order {
+        let at = position(&run.stderr[mark..], needle);
+        mark += at + needle.len();
+    }
+    // The unsigned provider's model is never offered.
+    assert!(!run.stderr.contains("other/o1"), "{}", run.stderr);
+    assert!(!run.stderr.contains("other (signed in)"), "{}", run.stderr);
+    // The providers question was skipped, so the seeded credential is
+    // untouched and no login ran.
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/fake/default")).unwrap(),
+        "sk-seed"
+    );
+    // The import ran and wrote its receipt.
+    let receipt = read_json(&setup.home().join("import-claude-code.json"));
+    assert_eq!(receipt["source"], "claude-code", "{receipt}");
+    // The completions answer installed the one startup line.
+    let startup = setup.root.path().join(".zshrc");
+    assert_eq!(
+        fs::read_to_string(&startup).unwrap(),
+        "eval \"$(fiber completion zsh)\"\n",
+    );
+    // Kept answers wrote nothing: the model and the unrelated key are
+    // unchanged, and no thinking was set.
+    let config = read_json(&setup.home().join("config.json"));
+    assert_eq!(
+        config,
+        json!({"model": "fake/m", "unrelated": "kept"}),
+        "{config}"
+    );
+    // The hub answer left no unit behind.
+    assert!(setup.hub_units().is_empty());
+}
+
+#[test]
+fn a_rerun_shows_done_steps_and_leaves_startup_files_alone() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.install_thinking_provider(&server);
+    setup.install_other(&server);
+    config::store_credential(
+        &setup.home(),
+        "fake",
+        "default",
+        &config::Secret::new("sk-seed".into()),
+    )
+    .unwrap();
+    fs::write(
+        setup.home().join("config.json"),
+        json!({"model": "fake/m", "models": {"fake/m": {"thinking": "low"}}}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        setup.home().join("import-claude-code.json"),
+        json!({"source": "claude-code"}).to_string(),
+    )
+    .unwrap();
+    let startup = setup.root.path().join(".zshrc");
+    fs::write(&startup, "eval \"$(fiber completion zsh)\"\n").unwrap();
+    let before = fs::read(&startup).unwrap();
+    // The hub is already registered, so the rerun names it instead of
+    // asking.
+    let installed = setup.run_setup(
+        &["hub", "install"],
+        None,
+        &[("PATH", &stub_managers(&setup))],
+    );
+    assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
+    assert_eq!(setup.hub_units().len(), 1);
+
+    // Skip the providers, keep the model and thinking, keep the done
+    // completions: the import and the hub are shown as done, never asked.
+    let run = setup.run_on_terminal(&["setup"], "\n\n\nn\n", &[("SHELL", "/bin/zsh")]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        run.stderr.contains("Claude Code: already imported (done)"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("Default model (current: fake/m):"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("Thinking for fake/m (current: low): low, high"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("Completions for zsh are installed (done)."),
+        "{}",
+        run.stderr
+    );
+    assert!(run.stderr.contains("login service"), "{}", run.stderr);
+    assert!(run.stderr.contains("is installed"), "{}", run.stderr);
+    assert!(!run.stderr.contains("Register the hub"), "{}", run.stderr);
+    // Nothing was rewritten: the startup file is byte-identical with its
+    // one line, and the config keeps its thinking.
+    assert_eq!(fs::read(&startup).unwrap(), before);
+    assert_eq!(fs::read_to_string(&startup).unwrap().lines().count(), 1);
+    let config = read_json(&setup.home().join("config.json"));
+    assert_eq!(config["models"]["fake/m"]["thinking"], "low", "{config}");
+}
+
+#[test]
+fn without_providers_the_first_and_third_steps_skip_and_nothing_is_asked() {
+    let setup = Setup::new();
+    let run = setup.run_on_terminal(&["setup", "--no-hub"], "", &[]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        run.stderr.contains("skipped providers: run fiber login"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("skipped import: run fiber import"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("skipped model: run fiber setup --model <model>"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("skipped completions: run fiber setup --completions <shell>"),
+        "{}",
+        run.stderr
+    );
+    assert!(!run.stderr.contains("[y/N]"), "{}", run.stderr);
+    assert!(!run.stderr.contains("by number or name"), "{}", run.stderr);
 }
