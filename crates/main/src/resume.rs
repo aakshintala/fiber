@@ -538,6 +538,7 @@ fn resumed_session(
         }
     };
     session.shell(driver);
+    session.notes_workspace(workspace.clone());
     session.jobs(jobs.clone());
     session.repository_code(Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>);
     session.images(Arc::clone(&session_servers.images));

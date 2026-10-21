@@ -111,7 +111,7 @@ groups, then the flags and examples.
 | `sessions delete [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
 | `sessions export <id> [<path>]` | Writes the session's log and its artifacts to `<path>`, default `./<id>/` ("Deleting and pruning"). |
 | `sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
-| `models [<search>] [--json]` | Lists the models the installed providers serve: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. |
+| `models [<search>] [--json]` | Lists the models the installed providers serve, merged with the current workspace's approved repository set: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. |
 
 `sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;
@@ -142,10 +142,11 @@ credential a session uses"). A new session takes its label from
 | `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). `upgrade` runs the same command. A repository's extensions are not updated: each changes only through a new offer. |
 | `setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code \| codex>]... [--completions <shell> \| --no-completions] [--hub \| --no-hub]` | Asks the questions a new install needs, and applies each answer with the command that already does it (below). `install.sh` runs it last; a person runs it again at any time. |
 | `approve [--yes]` | Run in a repository: shows every extension, hook and MCP server the repository declares, as one offer would, and approves them for this person (`docs/extensions.md`, "Code a repository ships"). `--yes` approves without asking, for a script or a machine image. It prints each approval on stderr. |
-| `login [<name>] [--as <label>] [--device]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"), or a secret an installed extension declares (`docs/configuration.md`, "Secrets"). Without `--as`, a provider's label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. `--as` applies only to a provider. `--device` applies only to a provider that logs in by browser, and logs in with a device code instead of the browser. A name that is neither an installed provider nor a declared secret is a usage error that lists both. With no name, a terminal offers the installed providers and the declared secrets; without a terminal, it is a usage error. |
+| `login [<name>] [--as <label>] [--device]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"), or a secret an installed extension declares (`docs/configuration.md`, "Secrets"). Without `--as`, a provider's label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. `--as` applies only to a provider. `--device` applies only to a provider that logs in by browser, and logs in with a device code instead of the browser. A name that is neither an installed provider, nor a provider the current workspace's approved repository set registers, nor a declared secret is a usage error that names the providers and the declared secrets. With no name, a terminal offers the providers, installed and approved repository ones alike, and the declared secrets; without a terminal, it is a usage error. |
 | `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `import <claude-code \| codex>` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
+| `feedback [<prompt>] [-]` | Writes a feedback report with the description, version, platform and `fiber doctor` output, and prints the issue link. |
 | `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
 | `help [<command>]` | Prints the menu, or a command's help. |
 | `version` | Prints the version. |
@@ -168,6 +169,10 @@ age (`docs/state.md`, "What each part holds"). When `docs/` is missing from
 Fiber home, it says `` user guide not installed: run `fiber update` ``
 (`docs/releasing.md`). It never touches the network, so it does not check that
 a key is valid.
+
+`fiber feedback` takes its description as `fiber ask` takes its prompt
+("Getting a prompt in"): the argument is the description, else stdin, and `-`
+is accepted only as the last positional.
 
 **Setting up.** `fiber setup` asks, in this order, and each answer runs the
 command that already does that job:
@@ -401,6 +406,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `handoff` | `instructions` (string, optional) |
 | `rewind` | `from_session_id` (string, optional), `seq` (integer, optional), `summarise` (boolean, default false) |
 | `shell` | `command` (string); `send` (boolean, default false) |
+| `propose_notes` | `topic` (string: `source_control`, `internal_hosts`, `internal_tools`, `routine_actions` or `never`), `answer` (string, optional), `earlier` (array of strings, optional) |
 | `command` | `name` (string); `text` (string, optional), what the person typed after the name |
 | `close` | `now` (boolean, default false) |
 | `import` | `source` (string, optional), `claude-code` or `codex`; absent means both sources |
@@ -437,6 +443,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `handoff` | Starts a handoff: the model's context restarts from a note the model, or an extension's `before_handoff` hook, writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
 | `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id, or the code the new session's start failed with, when its process could not start. Takes an optional `from_session_id`, default this session: this session or one its `forked_from` chain passes through, the session whose log `seq` counts in, and any other is rejected `invalid_arguments`, since it is rewound through the hub; an optional `seq`, default the start of the latest turn that is not a summary's (`docs/events.md`, `turn_started`, `rewind`); and whether to summarise, which first runs the old session's model in a turn of its own (`docs/events.md`, "Rewind"). Every job still running stops (`docs/events.md`, "Rewind"). Rejected `busy` if a turn is running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, `delegate_session` if it is a delegate, and `summary_failed` if it asked for a summary that could not be made. |
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
+| `propose_notes` | Proposes reviewer-note lines for one topic on the session's model, in a request of its own with no conversation, from the evidence `docs/permissions.md` "Setting up the notes" lists, with user names and passwords removed from every URL; answers `evidence`, `proposed` and `error`; when it sends the request, writes one `usage_recorded` with no turn and no action, and no configuration; rejected `busy` while a turn runs or an approval waits, and `closing` after `close`. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands and screens"). Rejected `unknown_command` for a name no extension registered. |
 | `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. With `now`, it starts a shutdown instead ("Shutdown"): the turn in flight ends, every job and delegate stops, and the session exits 0. A `close` with `now` is accepted also after `close`. |
 | `import` | Runs the same one-time import `fiber import` runs (`docs/configuration.md`, "Importing"), and reports the same imported and left-behind lists. |

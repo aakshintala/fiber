@@ -163,7 +163,8 @@ fn opened(app: &mut App) {
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
-        | crate::app::Effect::ReadImage(_) => panic!("opening sends"),
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. } => panic!("opening sends"),
     };
     let id = out
         .iter()
@@ -268,7 +269,8 @@ fn open_item(app: &mut App) {
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
-        | crate::app::Effect::ReadImage(_) => panic!("opening sends or nothing"),
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. } => panic!("opening sends or nothing"),
     }
     assert!(app.item_open());
 }
@@ -474,7 +476,8 @@ fn clicking_stop_sends_job_stop_to_the_parent() {
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
-        | crate::app::Effect::ReadImage(_) => panic!("stop sends"),
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. } => panic!("stop sends"),
     };
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "job_stop");
@@ -527,7 +530,8 @@ fn the_stop_target_is_reached_from_the_keyboard() {
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
-        | crate::app::Effect::ReadImage(_) => panic!("Enter stops"),
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. } => panic!("Enter stops"),
     };
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "job_stop");
@@ -680,7 +684,8 @@ fn a_drag_selection_starts_at_the_transcript_first_row() {
         | crate::app::Effect::Exit(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
-        | crate::app::Effect::ReadImage(_) => panic!("a release copies"),
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. } => panic!("a release copies"),
     }
 }
 
@@ -973,7 +978,8 @@ fn a_refusal_message_draws_on_the_status_row() {
         | crate::app::Effect::Copy(_)
         | crate::app::Effect::OpenLink(_)
         | crate::app::Effect::OpenFile(_)
-        | crate::app::Effect::ReadImage(_) => panic!("opening sends"),
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. } => panic!("opening sends"),
     };
     let id = out
         .iter()

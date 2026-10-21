@@ -20,6 +20,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use support::repo_provider::{declare_repo_provider, git_init};
 use support::write_record;
 
 use fakes::Watchdog;
@@ -713,4 +714,131 @@ fn models_leaves_out_a_model_whose_base_url_is_not_listed() {
     assert!(run.stdout.contains("fake/m"), "stdout: {}", run.stdout);
     assert!(!run.stdout.contains("fake/n"), "stdout: {}", run.stdout);
     assert!(run.stderr.contains("fake/n"), "stderr: {}", run.stderr);
+}
+
+/// Runs `fiber` with `args` in `dir`: [`Setup::fiber`] anywhere but the
+/// workspace, under the test's [`Deadline`].
+#[track_caller]
+fn fiber_in(setup: &Setup, dir: &Path, args: &[&str]) -> Output {
+    let mut command = Command::new(setup.exe());
+    command
+        .args(args)
+        .current_dir(dir)
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", setup.root.path())
+        .env("FIBER_HOME", setup.home())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (child, watchdog) = spawn_watched(&mut command);
+    let group = child.id();
+    let guard = KillGroup(group);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match setup.deadline.recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(_) => support::expired(
+            setup.deadline,
+            group,
+            &finished,
+            &format!("`fiber {}` to exit", args.join(" ")),
+        ),
+    }
+    .into();
+    assert!(
+        !group_alive(setup.deadline, group),
+        "`fiber` left a process behind"
+    );
+    std::mem::forget(guard);
+    watchdog.stand_down(setup.deadline.cleanup());
+    output
+}
+
+#[test]
+fn models_lists_an_approved_repository_providers_models() {
+    let setup = Setup::new();
+    let workspace = setup.root.path().join("w");
+    git_init(&workspace);
+    declare_repo_provider(
+        &workspace,
+        "fiber.test/acme",
+        "acme",
+        &json!([{"id": "big", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]),
+    );
+    let approved = setup.fiber(&["approve", "--yes"]);
+    assert_eq!(approved.code, Some(0), "stderr: {}", approved.stderr);
+    let run = setup.fiber(&["models"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(run.stdout.contains("acme/big"), "stdout: {}", run.stdout);
+}
+
+#[test]
+fn models_outside_the_project_lists_no_repository_models() {
+    let setup = Setup::new();
+    let workspace = setup.root.path().join("w");
+    git_init(&workspace);
+    declare_repo_provider(
+        &workspace,
+        "fiber.test/acme",
+        "acme",
+        &json!([{"id": "big", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]),
+    );
+    let approved = setup.fiber(&["approve", "--yes"]);
+    assert_eq!(approved.code, Some(0), "stderr: {}", approved.stderr);
+    let elsewhere = fakes::TempDir::new("fm-outside");
+    let run = fiber_in(&setup, elsewhere.path(), &["models"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!run.stdout.contains("acme/big"), "stdout: {}", run.stdout);
+}
+
+#[test]
+fn models_never_runs_an_unapproved_repository_providers_code() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start([fakes::Response::status(
+        200,
+        json!({"data": [{"id": "m1", "context_length": 1000}]}).to_string(),
+    )])
+    .unwrap();
+    config::store_secret(
+        &setup.home(),
+        "fixture.url",
+        &config::Secret::new(server.url()),
+    )
+    .unwrap();
+    config::store_secret(
+        &setup.home(),
+        "fixture.api_key",
+        &config::Secret::new("k".to_owned()),
+    )
+    .unwrap();
+    // A Lua-only provider: its models list exists only if its code runs.
+    // Nothing is approved, so nothing may run it.
+    let workspace = setup.root.path().join("w");
+    git_init(&workspace);
+    let dir = workspace.join("repo");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({"name": "fiber.test/lua", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+               "providers": {"fixture": [format!("{}/v1", server.url())]}})
+        .to_string(),
+    )
+    .unwrap();
+    fs::copy(
+        fakes::lua_fixture().join("providers/fixture.lua"),
+        dir.join("providers/fixture.lua"),
+    )
+    .unwrap();
+    write(
+        &workspace.join(".fiber/config.json"),
+        &json!({"repository_extensions": [{"path": "repo"}]}),
+    );
+    let run = setup.fiber(&["models"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!run.stdout.contains("fixture"), "stdout: {}", run.stdout);
+    assert!(server.requests().is_empty(), "its code ran");
 }

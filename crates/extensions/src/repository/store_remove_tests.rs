@@ -534,7 +534,8 @@ fn kept_copies_lists_each_hash_once_with_sorted_owners() {
     assert!(!hook_entry.machine_wide);
     assert_eq!(hook_entry.dir, repo.home().join("pinned").join(&digest));
     let server_entry = kept.iter().find(|k| k.hash == server_hash).unwrap();
-    assert!(server_entry.owners.is_empty());
+    // The approving project also holds a server record for the copy.
+    assert_eq!(server_entry.owners, vec!["prune-a".to_owned()]);
     assert!(server_entry.machine_wide);
     // Sorted by hash.
     let mut sorted = hashes.clone();
@@ -757,5 +758,162 @@ fn a_prune_between_pinning_and_recording_keeps_the_copy() {
             .join("approvals")
             .join(&digest)
             .is_file()
+    );
+}
+
+#[test]
+fn approving_a_server_writes_the_project_record_with_the_same_body() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, KEY).approve(&item, &digest).unwrap();
+    let home = repo.home();
+    let machine = fs::read_to_string(home.join("approvals").join(&digest)).unwrap();
+    let record = home
+        .join("projects")
+        .join(KEY)
+        .join("servers")
+        .join(&digest);
+    // The project record mirrors the machine approval byte for byte.
+    assert_eq!(fs::read_to_string(&record).unwrap(), machine);
+}
+
+#[test]
+fn approving_a_hook_writes_no_server_project_record() {
+    let repo = Repo::new();
+    let item = hook(&repo);
+    let digest = approved(&repo, KEY, &item);
+    // Only a server approval writes under `servers/`: an extension or a
+    // hook leaves no record there, so it names no project owner.
+    assert!(
+        repo.home()
+            .join("projects")
+            .join(KEY)
+            .join("servers")
+            .join(&digest)
+            .symlink_metadata()
+            .is_err()
+    );
+}
+
+#[test]
+fn never_removes_the_server_project_record_and_writes_no_new_one() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, KEY).approve(&item, &digest).unwrap();
+    let record = || {
+        repo.home()
+            .join("projects")
+            .join(KEY)
+            .join("servers")
+            .join(&digest)
+    };
+    assert!(record().is_file());
+    store(&repo, KEY).never(&item, &digest).unwrap();
+    assert!(record().symlink_metadata().is_err());
+    // A never with no earlier approval writes no project record, while
+    // the machine record still stands.
+    store(&repo, "other").never(&item, &digest).unwrap();
+    assert!(
+        repo.home()
+            .join("projects")
+            .join("other")
+            .join("servers")
+            .join(&digest)
+            .symlink_metadata()
+            .is_err()
+    );
+    assert!(repo.home().join("approvals").join(&digest).is_file());
+}
+
+#[test]
+fn never_surfaces_a_server_project_record_removal_failure() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, KEY).approve(&item, &digest).unwrap();
+    // A directory where the project record goes fails its removal with
+    // an error other than absence on every platform, which `never`
+    // surfaces instead of swallowing: with the absence guard replaced by
+    // `true` this returns `Ok` and the test fails.
+    let record = repo
+        .home()
+        .join("projects")
+        .join(KEY)
+        .join("servers")
+        .join(&digest);
+    fs::remove_file(&record).unwrap();
+    fs::create_dir(&record).unwrap();
+    let err = store(&repo, KEY).never(&item, &digest).unwrap_err();
+    assert!(err.to_string().contains(&digest), "{err}");
+}
+
+#[test]
+fn kept_copies_lists_server_project_records_as_owners() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, "prune-a").approve(&item, &digest).unwrap();
+    // The same server copy approved by a second project: both name an
+    // owner, alongside the per-machine record.
+    store(&repo, "prune-b").approve(&item, &digest).unwrap();
+    let kept = Store::kept_copies(&repo.home()).unwrap();
+    let entry = kept.iter().find(|k| k.hash == digest).unwrap();
+    assert_eq!(
+        entry.owners,
+        vec!["prune-a".to_owned(), "prune-b".to_owned()]
+    );
+    assert!(entry.machine_wide);
+}
+
+#[test]
+fn kept_copies_ignores_non_hash_names_in_the_servers_dir() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, KEY).approve(&item, &digest).unwrap();
+    // Names that are not 64 lowercase hex name no owner: one just short
+    // of the hash length, one of the right length in the wrong case.
+    let servers = repo.home().join("projects").join(KEY).join("servers");
+    fs::write(servers.join("a".repeat(63)), "{}").unwrap();
+    fs::write(servers.join("B".repeat(64)), "{}").unwrap();
+    let kept = Store::kept_copies(&repo.home()).unwrap();
+    let entry = kept.iter().find(|k| k.hash == digest).unwrap();
+    assert_eq!(entry.owners, vec![KEY.to_owned()]);
+    assert_eq!(kept.len(), 1);
+}
+
+#[test]
+fn kept_copies_fails_closed_on_an_unreadable_servers_dir() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, KEY).approve(&item, &digest).unwrap();
+    let servers = repo.home().join("projects").join(KEY).join("servers");
+    let _guard = RestoreMode::set(&servers, 0o000);
+    let err = Store::kept_copies(&repo.home()).unwrap_err();
+    assert!(err.to_string().contains("servers"), "{err}");
+}
+
+#[test]
+fn a_blocked_project_record_dir_errors_leaving_the_machine_approval() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    // A file where the project's `servers/` goes blocks the record
+    // write, after the machine approval is already in place.
+    let servers = repo.home().join("projects").join(KEY).join("servers");
+    fs::create_dir_all(servers.parent().unwrap()).unwrap();
+    fs::write(&servers, "not a dir").unwrap();
+    let err = store(&repo, KEY).approve(&item, &digest).unwrap_err();
+    assert!(err.to_string().contains("servers"), "{err}");
+    assert!(
+        repo.home().join("approvals").join(&digest).is_file(),
+        "the machine approval stands"
+    );
+    assert!(
+        repo.home().join("pinned").join(&digest).is_dir(),
+        "the copy stays"
     );
 }
