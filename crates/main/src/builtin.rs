@@ -158,6 +158,11 @@ pub(crate) fn builtin_timed(
         registered(tools::SessionMessage::new(
             sessions,
             delegates.session().clone(),
+            Arc::new({
+                let home = home.to_path_buf();
+                let own = delegates.session().clone();
+                move || log::session_parent(&home, &own)
+            }),
         ))?,
         registered(tools::SessionSearch::new(Arc::new(match scan_timing {
             Some(scan_timing) => log::SessionScan::new(home, workspace, Arc::new(doors::project))
