@@ -4,6 +4,7 @@
 use std::fs;
 
 use super::{is_enabled, package_names, read};
+use fakes::Deadline;
 
 /// A healthy install record, as `extensions/<dir>/.fiber.json` holds it.
 const RECORD: &str = r#"{"name":"x","version":"1.0.0","requested":true,"source":{"path":"/p"}}"#;
@@ -114,7 +115,7 @@ fn config_with(home: &std::path::Path, text: &str) -> config::Config {
 fn enabled_lookup_addresses_quote_names_without_dotted_key_parsing() {
     fakes::within(
         "enabled quote-name lookup",
-        std::time::Duration::from_secs(10),
+        Deadline::after(std::time::Duration::from_secs(10)),
         || {
             let home = fakes::TempDir::new("fiber-enabled-quote");
             for enabled in [false, true] {

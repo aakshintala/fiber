@@ -191,9 +191,10 @@ jobs:
       - *checkout-full
       - *toolchain
       - *cache-restore
+      # The notices parity step in scripts/check never skips here.
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
-          tool: cargo-deny
+          tool: cargo-deny,cargo-about
       - name: scripts/check, the platform-independent checks
         run: scripts/check --base "$BASE" --shared-only
       - name: cargo-deny licences, sources and bans

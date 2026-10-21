@@ -140,6 +140,56 @@ fn writer(home: &Path, clock: &Arc<FakeClock>) -> Arc<Diag> {
     Arc::new(Diag::new(home, Process::Ask, Level::Info, timed))
 }
 
+/// Every diagnostic line under `home`'s `logs/`, as `(file, line)` in file
+/// order: the whole list, so a missing, extra or misfiled line fails the
+/// assertion. Each line's `ts` reads as a positive integer; the caller
+/// compares the rest whole. An absent `logs/` holds no lines.
+fn diag_lines(home: &Path) -> Vec<(String, serde_json::Value)> {
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(home.join("logs")) {
+        for entry in entries {
+            names.push(entry.unwrap().file_name().into_string().unwrap());
+        }
+    }
+    names.sort();
+    let mut lines = Vec::new();
+    for name in names {
+        let text = std::fs::read_to_string(home.join("logs").join(&name)).unwrap();
+        for line in text.lines() {
+            let value: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert!(
+                value
+                    .get("ts")
+                    .and_then(|ts| ts.as_u64())
+                    .is_some_and(|ts| ts > 0),
+                "ts is a positive integer: {line}"
+            );
+            lines.push((name.clone(), value));
+        }
+    }
+    lines
+}
+
+/// `line` without its `ts`: the clock's reading is pinned by the positive
+/// check in [`diag_lines`], so assertions compare the rest whole.
+fn without_ts(mut line: serde_json::Value) -> serde_json::Value {
+    line.as_object_mut().unwrap().remove("ts");
+    line
+}
+
+/// The early line a pre-`fiber_started` `signal` leaves: level `error`,
+/// no `session_id`, code `signal`, naming the signal and the exit code.
+fn early_line(signal: &str, code: i32) -> serde_json::Value {
+    serde_json::json!({
+        "level": "error",
+        "process": "ask",
+        "code": "signal",
+        "message": format!(
+            "{signal} arrived before the session started; the process exits {code}."
+        ),
+    })
+}
+
 /// The bound line in `home`'s pid-named file, or nothing when the file is
 /// absent. Never called on a FIFO, whose open would block with no reader.
 fn log_text(home: &Path) -> String {
@@ -285,7 +335,7 @@ fn the_bound_kills_and_exits_at_4_9_seconds_with_no_writer() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(until), DEADLINE),
+        clock.await_parked_since(&mark, Some(until), fakes::Deadline::after(DEADLINE)),
         "short of the bound it waits again"
     );
     assert!(calls.try_recv().is_err(), "nothing killed before the bound");
@@ -319,7 +369,7 @@ fn the_bound_kills_at_4_9_seconds_then_writes_its_line_then_exits() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(kill_at), DEADLINE),
+        clock.await_parked_since(&mark, Some(kill_at), fakes::Deadline::after(DEADLINE)),
         "short of the kill point it waits again"
     );
     assert!(
@@ -335,14 +385,17 @@ fn the_bound_kills_at_4_9_seconds_then_writes_its_line_then_exits() {
     let ended = Deadline::after(DEADLINE);
     assert_eq!(
         ended.recv(&calls).unwrap(),
-        (Did::Bound, String::new()),
-        "the kill comes before the line"
+        (
+            Did::Bound,
+            "{\"ts\":1700000000000,\"level\":\"error\",\"process\":\"ask\",\"code\":\"signal\",\"message\":\"SIGTERM arrived before the session started; the process exits 143.\"}\n".to_owned()
+        ),
+        "the kill comes after the early line"
     );
     let (did, text) = ended.recv(&calls).unwrap();
     assert_eq!(did, Did::Exit(143));
     assert_eq!(
         text,
-        "{\"ts\":1700000004900,\"level\":\"error\",\"process\":\"ask\",\"code\":\"timeout\",\"message\":\"The shutdown reached its 4.9-second kill point; every process group still alive was killed and the process exits 143.\"}\n"
+        "{\"ts\":1700000000000,\"level\":\"error\",\"process\":\"ask\",\"code\":\"signal\",\"message\":\"SIGTERM arrived before the session started; the process exits 143.\"}\n{\"ts\":1700000004900,\"level\":\"error\",\"process\":\"ask\",\"code\":\"timeout\",\"message\":\"The shutdown reached its 4.9-second kill point; every process group still alive was killed and the process exits 143.\"}\n"
     );
     assert_eq!(clock.now(), start + Duration::from_millis(4_900));
 }
@@ -385,7 +438,7 @@ fn a_stalled_bound_line_still_exits_at_5_seconds() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(exit_by), DEADLINE),
+        clock.await_parked_since(&mark, Some(exit_by), fakes::Deadline::after(DEADLINE)),
         "short of 5 s it waits again"
     );
     assert!(did.try_recv().is_err(), "no exit before 5 s");
@@ -759,12 +812,22 @@ fn after_attach_the_bound_line_names_the_session_and_the_early_line_the_pid() {
         "{}",
         line["message"]
     );
-    assert!(
-        !home
-            .join("logs")
-            .join(format!("ask-{}.log", std::process::id()))
-            .exists(),
-        "nothing lands in the pid-named file"
+    // The early line stays pid-named: `attach` routes only the bound line
+    // to the session file.
+    let early = std::fs::read_to_string(
+        home.join("logs")
+            .join(format!("ask-{}.log", std::process::id())),
+    )
+    .unwrap();
+    assert_eq!(early.lines().count(), 1, "exactly one early line");
+    let line: serde_json::Value = serde_json::from_str(early.trim_end()).unwrap();
+    assert_eq!(line["level"], "error");
+    assert_eq!(line["process"], "ask");
+    assert!(line.get("session_id").is_none());
+    assert_eq!(line["code"], "signal");
+    assert_eq!(
+        line["message"],
+        "SIGTERM arrived before the session started; the process exits 143."
     );
 
     let temp = support::Temp::new();
@@ -824,7 +887,7 @@ fn a_real_sigterm_while_booting_exits_143() {
     let output = fakes::rerun_within(
         &format!("{name}::a_real_sigterm_while_booting_exits_143"),
         &[(CHILD, "1")],
-        CHILD_WITHIN,
+        Deadline::after(CHILD_WITHIN),
     );
     assert_eq!(output.status.code(), Some(143), "{}", output.status);
 }
@@ -864,23 +927,37 @@ fn a_bound_that_cannot_start_its_thread_writes_its_line_then_ends_at_once() {
     signals.spawn = Box::new(|_| Err(std::io::Error::other("no thread for the test")));
     let signals = Arc::new(signals);
     let (record_tx, record_calls) = mpsc::channel();
-    let (bound_tx, bound_calls) = mpsc::channel();
-    let bound_home: PathBuf = home.to_path_buf();
+    // `end` runs `on_bound` before the timeout append: block there to
+    // observe the released readers ahead of the line.
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release = Mutex::new(release_rx);
     signals.arm(
         Box::new(move || record_tx.send(Did::Signal(-1)).unwrap()),
-        Box::new(move || bound_tx.send((Did::Bound, log_text(&bound_home))).unwrap()),
+        Box::new(move || {
+            entered_tx.send(()).unwrap();
+            release.lock().unwrap().recv().unwrap();
+        }),
     );
     let start = clock.now();
     let (worker_tx, worker_rx) = mpsc::channel();
+    let worker = Arc::clone(&signals);
     thread::spawn(move || {
-        signals.handle(SIGTERM);
+        worker.handle(SIGTERM);
         if let Ok(()) = worker_tx.send(()) {}
     });
     let waited = Deadline::after(DEADLINE);
+    // The bound ran on the signal's own thread: `end` reached `on_bound`.
+    waited.recv(&entered_rx).unwrap();
+    // Readers are released before `end` writes: the code is out with no
+    // line on disk yet.
+    assert_eq!(signals.recorded(), Some(143));
     assert_eq!(
-        waited.recv(&bound_calls).unwrap(),
-        (Did::Bound, String::new())
+        diag_lines(&home).len(),
+        0,
+        "no line before the timeout append"
     );
+    release_tx.send(()).unwrap();
     let (did, text) = waited.recv(&did).unwrap();
     assert_eq!(did, Did::Exit(143));
     // The clock never moved: the bound ran on the signal's own thread.
@@ -891,6 +968,10 @@ fn a_bound_that_cannot_start_its_thread_writes_its_line_then_ends_at_once() {
     waited.recv(&worker_rx).unwrap();
     assert_eq!(record_calls.try_recv().unwrap(), Did::Signal(-1));
     assert_eq!(clock.now(), start);
+    // The early line is never written on this path: the timeout line only.
+    let lines = diag_lines(&home);
+    assert_eq!(lines.len(), 1, "exactly one line: {lines:?}");
+    assert_eq!(lines[0].1["code"], "timeout");
 }
 
 #[test]
@@ -1095,4 +1176,428 @@ fn close_now_after_a_signal_while_committing_does_nothing() {
     assert_eq!(ended.recv(&did).unwrap(), Did::Exit(143));
     assert!(calls.try_recv().is_err(), "no second bound ran");
     assert!(did.try_recv().is_err(), "no second exit ran");
+}
+
+/// Signals with a held writer whose exit recorder sends only the code.
+fn exiting(clock: &Arc<FakeClock>, home: &Path) -> (Arc<Signals>, Receiver<Did>) {
+    let (exit_tx, did) = mpsc::channel();
+    let exit = Box::new(move |code| exit_tx.send(Did::Exit(code)).unwrap());
+    let timed: Arc<dyn contract::clock::Clock> = clock.clone();
+    let signals = Arc::new(Signals::new(timed, exit, Some(writer(home, clock))));
+    (signals, did)
+}
+
+/// Arms `signals` with an `on_record` that first sends `entered`, then
+/// blocks on `release`: the committed pause seam, so the test orders
+/// other threads between the publish and the early append. The `Receiver`
+/// rides a mutex, as an `Fn` callback must stay `Sync`.
+fn arm_held(signals: &Signals, entered: Sender<()>, release: Receiver<()>, bound: Sender<Did>) {
+    let entered = Mutex::new(entered);
+    let release = Mutex::new(release);
+    let bound = Mutex::new(bound);
+    signals.arm(
+        Box::new(move || {
+            entered.lock().unwrap().send(()).unwrap();
+            release.lock().unwrap().recv().unwrap();
+        }),
+        Box::new(move || bound.lock().unwrap().send(Did::Bound).unwrap()),
+    );
+}
+
+#[test]
+fn a_signal_while_booting_writes_one_line_before_it_exits() {
+    for (signal, code, name) in [
+        (SIGTERM, 143, "SIGTERM"),
+        (SIGINT, 130, "SIGINT"),
+        (SIGHUP, 129, "SIGHUP"),
+    ] {
+        let temp = support::Temp::new();
+        let home = temp.0.join("h");
+        let clock = FakeClock::new();
+        let (signals, did) = exiting(&clock, &home);
+        signals.handle(signal);
+        assert_eq!(
+            Deadline::after(DEADLINE).recv(&did).unwrap(),
+            Did::Exit(code)
+        );
+        // The exit fires after the append, so the line is on disk.
+        let lines = diag_lines(&home);
+        assert_eq!(lines.len(), 1, "exactly one line: {lines:?}");
+        assert_eq!(
+            lines[0].0,
+            format!("ask-{}.log", std::process::id()),
+            "the early line stays pid-named"
+        );
+        assert_eq!(without_ts(lines[0].1.clone()), early_line(name, code));
+        assert!(
+            lines[0].1.get("session_id").is_none(),
+            "no session id before the session exists"
+        );
+        assert_eq!(signals.recorded(), Some(code));
+        // A second booting signal writes nothing more.
+        signals.handle(signal);
+        assert!(
+            did.try_recv().is_err(),
+            "a second booting signal exits nothing"
+        );
+        assert_eq!(diag_lines(&home).len(), 1, "still one line");
+    }
+}
+
+#[test]
+fn a_signal_while_armed_writes_one_line_and_a_second_none() {
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let clock = FakeClock::new();
+    let (signals, did) = exiting(&clock, &home);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    signals.handle(SIGHUP);
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
+    assert!(did.try_recv().is_err(), "an armed record exits nothing");
+    let lines = diag_lines(&home);
+    assert_eq!(lines.len(), 1, "exactly one line: {lines:?}");
+    assert_eq!(without_ts(lines[0].1.clone()), early_line("SIGHUP", 129));
+    signals.handle(SIGTERM);
+    assert!(
+        calls.try_recv().is_err(),
+        "a second signal while armed does nothing"
+    );
+    assert!(did.try_recv().is_err(), "nothing exited");
+    assert_eq!(diag_lines(&home).len(), 1, "still one line");
+    assert_eq!(signals.recorded(), Some(129));
+}
+
+#[test]
+fn the_lifeline_and_an_armed_race_write_one_line() {
+    // The race: SIGTERM reaches pre-append, then the hangup runs while the
+    // first line is still held. The hangup funnels into the same `handle`
+    // entry the lifeline's worker calls, so a race through `handle` covers
+    // the lifeline too.
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let clock = FakeClock::new();
+    let (signals, did) = exiting(&clock, &home);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (bound_tx, bound_calls) = mpsc::channel();
+    arm_held(&signals, entered_tx, release_rx, bound_tx);
+    let worker = Arc::clone(&signals);
+    let (term_done_tx, term_done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        worker.handle(SIGTERM);
+        if let Ok(()) = term_done_tx.send(()) {}
+    });
+    Deadline::after(DEADLINE)
+        .recv(&entered_rx)
+        .expect("SIGTERM reached pre-append");
+    let racer = Arc::clone(&signals);
+    let (hup_done_tx, hup_done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        racer.handle(SIGHUP);
+        if let Ok(()) = hup_done_tx.send(()) {}
+    });
+    // The second event is processed while the first line is still held:
+    // joining here fails if it blocks behind the line instead.
+    Deadline::after(DEADLINE)
+        .recv(&hup_done_rx)
+        .expect("the hangup ran during the hold");
+    drop(bound_calls);
+    release_tx.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&term_done_rx)
+        .expect("SIGTERM appended its line");
+    assert!(did.try_recv().is_err(), "the armed path exits nothing");
+    let lines = diag_lines(&home);
+    assert_eq!(lines.len(), 1, "exactly one line: {lines:?}");
+    assert_eq!(without_ts(lines[0].1.clone()), early_line("SIGTERM", 143));
+
+    // Solo lifeline: end of file while booting takes the SIGHUP path,
+    // with the line and the hangup code.
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let clock = FakeClock::new();
+    let (signals, did) = exiting(&clock, &home);
+    signals.lifeline(Box::new(std::io::Cursor::new(Vec::new())));
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&did).unwrap(),
+        Did::Exit(129)
+    );
+    let lines = diag_lines(&home);
+    assert_eq!(lines.len(), 1, "exactly one line: {lines:?}");
+    assert_eq!(without_ts(lines[0].1.clone()), early_line("SIGHUP", 129));
+}
+
+#[test]
+fn no_line_once_started_while_committing_or_on_close_now() {
+    // Once started, a signal shuts down with no early line.
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let clock = FakeClock::new();
+    let (signals, did) = exiting(&clock, &home);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start_only(&signals, &tx), None);
+    assert!(signals.commit(|| ()).is_ok());
+    signals.handle(SIGTERM);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&calls).unwrap(),
+        Did::Signal(143)
+    );
+    assert!(did.try_recv().is_err(), "nothing exited before the bound");
+    assert!(diag_lines(&home).is_empty(), "no early line once started");
+
+    // While committing, a first signal defers with no early line: the
+    // write closure acks its start before the signal arrives.
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let clock = FakeClock::new();
+    let (signals, did) = exiting(&clock, &home);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start_only(&signals, &tx), None);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let worker = Arc::clone(&signals);
+    let (commit_tx, commit_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let commit: Result<(), i32> = worker.commit(|| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        if let Ok(()) = commit_tx.send(commit) {}
+    });
+    Deadline::after(DEADLINE)
+        .recv(&started_rx)
+        .expect("the commit started writing");
+    let retraced = Arc::clone(&signals);
+    let (hup_done_tx, hup_done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        retraced.handle(SIGHUP);
+        if let Ok(()) = hup_done_tx.send(()) {}
+    });
+    Deadline::after(DEADLINE)
+        .recv(&hup_done_rx)
+        .expect("the committing signal deferred");
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&commit_rx).unwrap(),
+        Ok(()),
+        "a committing signal still lets the write finish"
+    );
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&calls).unwrap(),
+        Did::Signal(129),
+        "the deferred signal shuts down once the write returns"
+    );
+    assert!(did.try_recv().is_err(), "nothing exited before the bound");
+    assert!(
+        diag_lines(&home).is_empty(),
+        "no early line while committing"
+    );
+
+    // `close_now` writes no early line, booting or armed.
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let clock = FakeClock::new();
+    let (signals, did) = exiting(&clock, &home);
+    let (tx, calls) = mpsc::channel();
+    signals.close_now();
+    assert!(calls.try_recv().is_err(), "no shutdown ran while booting");
+    assert!(did.try_recv().is_err(), "nothing exited while booting");
+    assert_eq!(signals.recorded(), None);
+    arm(&signals, &tx);
+    signals.close_now();
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
+    assert!(did.try_recv().is_err(), "nothing exited while armed");
+    assert_eq!(signals.recorded(), Some(0));
+    assert!(diag_lines(&home).is_empty(), "no early line on close_now");
+}
+
+#[test]
+fn a_recorded_code_waits_for_its_line() {
+    // Window 1, armed record: `recorded` and `start` wait while the line
+    // is in flight. The `entered` ack proves the handler is held in
+    // `on_record`, hence after the publish and before the append; the
+    // state read and the empty `logs/` re-check that hold without the
+    // clock, and the readers' only wake is the append's notify, so the
+    // codes joined after the release necessarily came after their line.
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let clock = FakeClock::new();
+    let timed: Arc<dyn contract::clock::Clock> = clock.clone();
+    let (exit_tx, did) = mpsc::channel();
+    let exit = Box::new(move |code| exit_tx.send(Did::Exit(code)).unwrap());
+    let signals = Arc::new(Signals::new(timed, exit, Some(writer(&home, &clock))));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (bound_tx, bound_calls) = mpsc::channel();
+    arm_held(&signals, entered_tx, release_rx, bound_tx);
+    let worker = Arc::clone(&signals);
+    let (term_done_tx, term_done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        worker.handle(SIGTERM);
+        if let Ok(()) = term_done_tx.send(()) {}
+    });
+    Deadline::after(DEADLINE)
+        .recv(&entered_rx)
+        .expect("SIGTERM reached pre-append");
+    let reader = Arc::clone(&signals);
+    let (recorded_tx, recorded_rx) = mpsc::channel();
+    thread::spawn(
+        move || {
+            if let Ok(()) = recorded_tx.send(reader.recorded()) {}
+        },
+    );
+    let starter = Arc::clone(&signals);
+    let (start_tx, start_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let voted = starter.start(Box::new(|_| {}), Box::new(|| {}));
+        if let Ok(()) = start_tx.send(voted) {}
+    });
+    // Held in `on_record`: the publish ran and the append has not, so
+    // the readers spawned above can only be parked in `settled_state`.
+    {
+        let state = signals.state.lock().unwrap();
+        assert_eq!(state.recorded, Some(143), "the code is published");
+        assert_eq!(state.early_pending, Some(143), "its line is in flight");
+    }
+    assert!(
+        diag_lines(&home).is_empty(),
+        "no line while the append is held"
+    );
+    drop(bound_calls);
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&recorded_rx).unwrap(),
+        Some(143)
+    );
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&start_rx).unwrap(),
+        Some(143)
+    );
+    Deadline::after(DEADLINE)
+        .recv(&term_done_rx)
+        .expect("SIGTERM appended its line");
+    assert!(did.try_recv().is_err(), "the armed path exits nothing");
+    let lines = diag_lines(&home);
+    assert_eq!(lines.len(), 1, "exactly one line: {lines:?}");
+    assert_eq!(without_ts(lines[0].1.clone()), early_line("SIGTERM", 143));
+
+    // Window 2, record between `start` and `commit`: `commit` waits while
+    // the line is in flight, then reports the code without writing. The
+    // `entered` ack orders the hold as in window 1; the state read and the
+    // empty `logs/` re-check it without the clock.
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let clock = FakeClock::new();
+    let timed: Arc<dyn contract::clock::Clock> = clock.clone();
+    let (exit_tx, did) = mpsc::channel();
+    let exit = Box::new(move |code| exit_tx.send(Did::Exit(code)).unwrap());
+    let signals = Arc::new(Signals::new(timed, exit, Some(writer(&home, &clock))));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (bound_tx, bound_calls) = mpsc::channel();
+    arm_held(&signals, entered_tx, release_rx, bound_tx);
+    let (tx, calls) = mpsc::channel();
+    assert_eq!(start_only(&signals, &tx), None);
+    let worker = Arc::clone(&signals);
+    let (term_done_tx, term_done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        worker.handle(SIGTERM);
+        if let Ok(()) = term_done_tx.send(()) {}
+    });
+    Deadline::after(DEADLINE)
+        .recv(&entered_rx)
+        .expect("SIGTERM reached pre-append");
+    let committer = Arc::clone(&signals);
+    let (commit_tx, commit_rx) = mpsc::channel();
+    let wrote = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let marking = Arc::clone(&wrote);
+    thread::spawn(move || {
+        let commit: Result<(), i32> = committer.commit(|| {
+            marking.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        if let Ok(()) = commit_tx.send(commit) {}
+    });
+    // Held in `on_record`, as in window 1: the committer can only be
+    // parked in `settled_state` until the append releases it.
+    {
+        let state = signals.state.lock().unwrap();
+        assert_eq!(state.recorded, Some(143), "the code is published");
+        assert_eq!(state.early_pending, Some(143), "its line is in flight");
+    }
+    assert!(
+        diag_lines(&home).is_empty(),
+        "no line while the append is held"
+    );
+    drop(bound_calls);
+    drop(calls);
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&commit_rx).unwrap(),
+        Err(143)
+    );
+    assert!(
+        !wrote.load(std::sync::atomic::Ordering::SeqCst),
+        "nothing is written once a signal was recorded"
+    );
+    Deadline::after(DEADLINE)
+        .recv(&term_done_rx)
+        .expect("SIGTERM appended its line");
+    assert!(did.try_recv().is_err(), "the armed path exits nothing");
+    let lines = diag_lines(&home);
+    assert_eq!(lines.len(), 1, "exactly one line: {lines:?}");
+    assert_eq!(without_ts(lines[0].1.clone()), early_line("SIGTERM", 143));
+}
+
+/// The child's marker: set, the test installs the signals with a writer
+/// and sends itself SIGTERM while booting.
+const WRITER_CHILD: &str = "FIBER_DOORS_SIGNALS_WRITER_CHILD";
+
+/// The child's Fiber home, holding the `logs/` the early line lands in.
+const WRITER_HOME: &str = "FIBER_DOORS_SIGNALS_WRITER_HOME";
+
+#[test]
+fn install_with_a_writer_records_a_real_sigterm() {
+    if std::env::var_os(WRITER_CHILD).is_some() {
+        let home = PathBuf::from(std::env::var_os(WRITER_HOME).unwrap());
+        let clock = FakeClock::new();
+        let timed: Arc<dyn contract::clock::Clock> = clock.clone();
+        let _signals = Signals::install(
+            timed.clone(),
+            Some(Diag::new(&home, Process::Ask, Level::Info, timed)),
+        )
+        .unwrap();
+        fakes::kill_pid(std::process::id(), "TERM").unwrap();
+        // The signals thread exits the process; this wait only bounds a
+        // child whose exit never came.
+        let (_held, never) = mpsc::channel::<()>();
+        let _waited = Deadline::after(DEADLINE).recv(&never);
+        std::process::exit(0);
+    }
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let held = home.to_str().unwrap().to_owned();
+    let name = module_path!().split_once("::").unwrap().1;
+    let output = fakes::rerun_within(
+        &format!("{name}::install_with_a_writer_records_a_real_sigterm"),
+        &[(WRITER_CHILD, "1"), (WRITER_HOME, held.as_str())],
+        Deadline::after(CHILD_WITHIN),
+    );
+    assert_eq!(output.status.code(), Some(143), "{}", output.status);
+    // The child runs in its own process group under the rerun's watchdog,
+    // so no cleanup of its own is needed here.
+    let lines = diag_lines(&home);
+    assert_eq!(lines.len(), 1, "exactly one line: {lines:?}");
+    assert!(
+        lines[0]
+            .0
+            .strip_prefix("ask-")
+            .is_some_and(|tail| tail.ends_with(".log")),
+        "the early line stays pid-named: {}",
+        lines[0].0
+    );
+    assert_eq!(without_ts(lines[0].1.clone()), early_line("SIGTERM", 143));
+    assert!(lines[0].1.get("session_id").is_none());
 }

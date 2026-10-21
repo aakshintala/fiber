@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use config::Layer;
 use contract::ErrorCode;
+use fakes::Deadline;
 use serde_json::json;
 
 use super::{run_get, run_set};
@@ -353,7 +354,7 @@ fn spawn_child(name: &str, test: &str, setup: &Setup) -> std::process::Output {
     fakes::rerun_prepared(
         &format!("{name}::{test}"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())

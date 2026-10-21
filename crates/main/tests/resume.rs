@@ -127,7 +127,7 @@ impl Setup {
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         RawRun::from(output)
     }
 }
@@ -919,7 +919,7 @@ fn finish(running: Running) {
     // The group is empty. Skip the drop, which would kill it again.
     std::mem::forget(guard);
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 }
 
 /// One finished background run: its exit code, stdout's lines, and stderr.
@@ -955,7 +955,7 @@ fn finish_output(running: Running) -> Finished {
         "`fiber` left a process in its group behind"
     );
     std::mem::forget(guard);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
     let stderr = deadline
         .recv(&stderr)
         .expect("waited until the deadline for stderr to close");
@@ -988,7 +988,7 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     assert_eq!(started["kind"], "session_started");
     let id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 

@@ -26,52 +26,57 @@ use fakes::{Deadline, NoLock};
 
 #[test]
 fn catalogue_and_cached_model_lists_follow_project_configuration() {
-    fakes::within("project model catalogue", Duration::from_secs(10), || {
-        let setup = Setup::new();
-        let model = json!([{"id":"m", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}]);
-        setup.install("acme", "p", &model);
-        setup.install("other", "other", &model);
-        setup.write_config(&json!({"extensions":{"acme":{"enabled":false}}}));
-        config::write_model_cache(&setup.home(), "p", &model).unwrap();
-        let (providers, _, notices) =
-            providers_and_config(&setup.home(), &setup.workspace()).unwrap();
-        assert!(notices.is_empty());
-        assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
-        let (providers, _, notices) = crate::model_lists::model_lists(
-            &setup.home(),
-            &setup.workspace(),
-            crate::model_lists::ModelLists::Cached,
-            &|_| unreachable!("cached lists start no extensions"),
-            &fakes::children::grouped_output,
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap();
-        assert!(notices.is_empty());
-        assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
-        let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
-        config::set(
-            &setup.home(),
-            &setup.workspace(),
-            &project,
-            config::Layer::Project,
-            "extensions.acme.enabled",
-            json!(true),
-        )
-        .unwrap();
-        let (providers, _, _) = providers_and_config(&setup.home(), &setup.workspace()).unwrap();
-        assert_eq!(providers.names().collect::<Vec<_>>(), ["other", "p"]);
-        let other_workspace = setup.root.path().join("elsewhere");
-        fs::create_dir(&other_workspace).unwrap();
-        let (providers, _, _) = providers_and_config(&setup.home(), &other_workspace).unwrap();
-        assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
-    });
+    fakes::within(
+        "project model catalogue",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            let model = json!([{"id":"m", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}]);
+            setup.install("acme", "p", &model);
+            setup.install("other", "other", &model);
+            setup.write_config(&json!({"extensions":{"acme":{"enabled":false}}}));
+            config::write_model_cache(&setup.home(), "p", &model).unwrap();
+            let (providers, _, notices) =
+                providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+            assert!(notices.is_empty());
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+            let (providers, _, notices) = crate::model_lists::model_lists(
+                &setup.home(),
+                &setup.workspace(),
+                crate::model_lists::ModelLists::Cached,
+                &|_| unreachable!("cached lists start no extensions"),
+                &fakes::children::grouped_output,
+                &*fakes::clock::FakeClock::new(),
+            )
+            .unwrap();
+            assert!(notices.is_empty());
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+            let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
+            config::set(
+                &setup.home(),
+                &setup.workspace(),
+                &project,
+                config::Layer::Project,
+                "extensions.acme.enabled",
+                json!(true),
+            )
+            .unwrap();
+            let (providers, _, _) =
+                providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other", "p"]);
+            let other_workspace = setup.root.path().join("elsewhere");
+            fs::create_dir(&other_workspace).unwrap();
+            let (providers, _, _) = providers_and_config(&setup.home(), &other_workspace).unwrap();
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+        },
+    );
 }
 
 #[test]
 fn refresh_skips_disabled_malformed_provider_data_and_refreshes_enabled_control() {
     fakes::within(
         "filtered background model refresh",
-        Duration::from_secs(20),
+        Deadline::after(Duration::from_secs(20)),
         || {
             let setup = Setup::new();
             setup.install_lua("enabled", "good", &lua_list("new"));
@@ -624,7 +629,7 @@ fn reap_group_leader(
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()));
     if let Ok(status) = Deadline::after(deadline).recv(&finished) {
-        watchdog.stand_down(REAP_DEADLINE);
+        watchdog.stand_down(fakes::Deadline::after(REAP_DEADLINE));
         return status.unwrap();
     }
     fakes::kill_group(group, "KILL").unwrap();
@@ -668,7 +673,7 @@ fn models_exits_zero_and_prints_the_row() {
     let output = fakes::rerun_prepared(
         &format!("{name}::models_exits_zero_and_prints_the_row"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -700,7 +705,7 @@ fn models_with_a_relative_fiber_home_is_a_usage_failure() {
     let output = fakes::rerun_prepared(
         &format!("{name}::models_with_a_relative_fiber_home_is_a_usage_failure"),
         &[(CHILD, "1"), ("FIBER_HOME", "relative")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command.current_dir(setup.workspace());
         },
@@ -761,7 +766,7 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
     let output = fakes::rerun_prepared(
         &format!("{name}::models_spawns_its_refresh_child_from_the_recorded_path"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -813,7 +818,7 @@ fn models_with_an_unusable_recorded_path_still_prints_from_the_cache() {
     let output = fakes::rerun_prepared(
         &format!("{name}::models_with_an_unusable_recorded_path_still_prints_from_the_cache"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -1287,7 +1292,7 @@ fn the_hidden_refresh_child_refreshes_a_stale_list() {
     let output = fakes::rerun_prepared(
         &format!("{name}::the_hidden_refresh_child_refreshes_a_stale_list"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -1379,7 +1384,7 @@ fn a_repository_settings_file_cannot_supply_the_host() {
     let output = fakes::rerun_prepared(
         &format!("{name}::a_repository_settings_file_cannot_supply_the_host"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -1429,83 +1434,93 @@ fn repo_lua(name: &str, models_body: &str) -> String {
 
 #[test]
 fn repository_provider_models_list_inside_the_project_but_not_outside() {
-    fakes::within("repository models list", Duration::from_secs(30), || {
-        let setup = Setup::new();
-        let manifest = repo_manifest(
-            "fiber.test/acme",
-            &json!({"acme": ["http://127.0.0.1:1/v1"]}),
-        );
-        let data = repo_data("acme", "http://127.0.0.1:1/v1", &["repo-model"]);
-        declare_repo(
-            &setup.workspace(),
-            &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
-        );
-        approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
-        let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
-        assert!(result.is_ok(), "{result:?} {err}");
-        assert!(out.contains("acme/repo-model"), "{out:?}");
-        // Outside the project the approved provider is invisible: no
-        // personal install serves it, so the run says so.
-        let elsewhere = setup.root.path().join("elsewhere");
-        fs::create_dir(&elsewhere).unwrap();
-        let (result, out, err) = setup.run_in(
-            &elsewhere,
-            None,
-            false,
-            &no_spawn,
-            fakes::clock::FakeClock::new(),
-        );
-        assert!(result.is_ok(), "{result:?} {err}");
-        assert!(!out.contains("acme/repo-model"), "{out:?}");
-        assert!(err.contains("No provider is installed"), "{err:?}");
-    });
+    fakes::within(
+        "repository models list",
+        Deadline::after(Duration::from_secs(30)),
+        || {
+            let setup = Setup::new();
+            let manifest = repo_manifest(
+                "fiber.test/acme",
+                &json!({"acme": ["http://127.0.0.1:1/v1"]}),
+            );
+            let data = repo_data("acme", "http://127.0.0.1:1/v1", &["repo-model"]);
+            declare_repo(
+                &setup.workspace(),
+                &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
+            );
+            approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
+            let (result, out, err) =
+                setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+            assert!(result.is_ok(), "{result:?} {err}");
+            assert!(out.contains("acme/repo-model"), "{out:?}");
+            // Outside the project the approved provider is invisible: no
+            // personal install serves it, so the run says so.
+            let elsewhere = setup.root.path().join("elsewhere");
+            fs::create_dir(&elsewhere).unwrap();
+            let (result, out, err) = setup.run_in(
+                &elsewhere,
+                None,
+                false,
+                &no_spawn,
+                fakes::clock::FakeClock::new(),
+            );
+            assert!(result.is_ok(), "{result:?} {err}");
+            assert!(!out.contains("acme/repo-model"), "{out:?}");
+            assert!(err.contains("No provider is installed"), "{err:?}");
+        },
+    );
 }
 
 #[test]
 fn repository_lua_provider_models_run_without_a_cached_list() {
-    fakes::within("repository Lua models", Duration::from_secs(30), || {
-        let setup = Setup::new();
-        let manifest = repo_manifest(
-            "fiber.test/acme",
-            &json!({"acme": ["http://127.0.0.1:1/v1"]}),
-        );
-        let script = repo_lua(
-            "acme",
-            "{ { id = \"live-model\", protocol = \"openai-responses\", \
+    fakes::within(
+        "repository Lua models",
+        Deadline::after(Duration::from_secs(30)),
+        || {
+            let setup = Setup::new();
+            let manifest = repo_manifest(
+                "fiber.test/acme",
+                &json!({"acme": ["http://127.0.0.1:1/v1"]}),
+            );
+            let script = repo_lua(
+                "acme",
+                "{ { id = \"live-model\", protocol = \"openai-responses\", \
              base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 } }",
-        );
-        declare_repo(
-            &setup.workspace(),
-            &[("repo", manifest, &[("providers/acme.lua", script.as_str())])],
-        );
-        approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
-        // No cached list: the one-shot run serves the Lua `models()`.
-        assert!(
-            !setup.home().join("cache/models/acme.json").exists(),
-            "no cached list stands in for the Lua models()"
-        );
-        let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
-        assert!(result.is_ok(), "{result:?} {err}");
-        assert!(out.contains("acme/live-model"), "{out:?} {err:?}");
-        let elsewhere = setup.root.path().join("elsewhere");
-        fs::create_dir(&elsewhere).unwrap();
-        let (result, out, _) = setup.run_in(
-            &elsewhere,
-            None,
-            false,
-            &no_spawn,
-            fakes::clock::FakeClock::new(),
-        );
-        assert!(result.is_ok(), "{result:?}");
-        assert!(!out.contains("acme/live-model"), "{out:?}");
-    });
+            );
+            declare_repo(
+                &setup.workspace(),
+                &[("repo", manifest, &[("providers/acme.lua", script.as_str())])],
+            );
+            approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
+            // No cached list: the one-shot run serves the Lua `models()`.
+            assert!(
+                !setup.home().join("cache/models/acme.json").exists(),
+                "no cached list stands in for the Lua models()"
+            );
+            let (result, out, err) =
+                setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+            assert!(result.is_ok(), "{result:?} {err}");
+            assert!(out.contains("acme/live-model"), "{out:?} {err:?}");
+            let elsewhere = setup.root.path().join("elsewhere");
+            fs::create_dir(&elsewhere).unwrap();
+            let (result, out, _) = setup.run_in(
+                &elsewhere,
+                None,
+                false,
+                &no_spawn,
+                fakes::clock::FakeClock::new(),
+            );
+            assert!(result.is_ok(), "{result:?}");
+            assert!(!out.contains("acme/live-model"), "{out:?}");
+        },
+    );
 }
 
 #[test]
 fn unapproved_and_never_repository_providers_never_load() {
     fakes::within(
         "unapproved repository models",
-        Duration::from_secs(30),
+        Deadline::after(Duration::from_secs(30)),
         || {
             let setup = Setup::new();
             let ghost = repo_manifest(
@@ -1547,7 +1562,7 @@ fn unapproved_and_never_repository_providers_never_load() {
 fn a_shadowed_personal_provider_prints_one_notice() {
     fakes::within(
         "shadowed repository models",
-        Duration::from_secs(60),
+        Deadline::after(Duration::from_secs(60)),
         || {
             let setup = Setup::new();
             setup.install(

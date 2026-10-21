@@ -73,6 +73,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "steer", "args": {"content": content}}),
         json!({"id": "c", "command": "steer_drop", "args": {"command_id": "c0"}}),
         json!({"id": "c", "command": "message", "args": {"from_session_id": "s", "text": "t"}}),
+        json!({"id": "c", "command": "message", "args": {"from_session_id": "s", "parent_session_id": "s_0123456789abcdef", "text": "t"}}),
         json!({"id": "c", "command": "cancel"}),
         json!({"id": "c", "command": "reply",
             "args": {"request_id": "r", "declined": true}}),
@@ -781,6 +782,47 @@ fn a_rewind_with_an_unknown_key_is_refused() {
 /// `import` takes an all-optional `source` naming the harness: a missing
 /// or empty `args` reads as both sources, through the missing-or-empty
 /// retry in `CommandLine::deserialize`.
+#[test]
+fn message_parent_round_trip_missing_key_parses_and_none_omits_the_key() {
+    let with_parent = parse(
+        r#"{"id":"c","command":"message","args":{"from_session_id":"s","parent_session_id":"s_0123456789abcdef","text":"t"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        with_parent.command,
+        Command::Message(Message {
+            from_session_id: SessionId("s".into()),
+            parent_session_id: Some(SessionId("s_0123456789abcdef".into())),
+            text: "t".into(),
+        })
+    );
+    assert_eq!(
+        serde_json::to_string(&with_parent).unwrap(),
+        r#"{"id":"c","command":"message","args":{"from_session_id":"s","parent_session_id":"s_0123456789abcdef","text":"t"}}"#
+    );
+    let without_parent =
+        parse(r#"{"id":"c","command":"message","args":{"from_session_id":"s","text":"t"}}"#)
+            .unwrap();
+    assert_eq!(
+        without_parent.command,
+        Command::Message(Message {
+            from_session_id: SessionId("s".into()),
+            parent_session_id: None,
+            text: "t".into(),
+        })
+    );
+    assert_eq!(
+        serde_json::to_string(&without_parent).unwrap(),
+        r#"{"id":"c","command":"message","args":{"from_session_id":"s","text":"t"}}"#
+    );
+    assert!(
+        parse(
+            r#"{"id":"c","command":"message","args":{"from_session_id":"s","parent_session_id":null,"text":"t"}}"#
+        )
+        .is_err()
+    );
+}
+
 #[test]
 fn import_source_reads_missing_and_empty_as_both() {
     for line in [

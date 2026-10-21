@@ -8,17 +8,19 @@
 //! bytes, so the next install sees it changed again and repeats every call.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::commands::hub::{HubCommand, NoArgs};
 use contract::shapes::Failure;
 use serde_json::Value;
 
 use crate::hub_unit::{Manager, Service};
+use crate::sessions::request_value;
 use crate::{failed, finish, write_line};
 
 /// How often install asks launchd whether a booted-out service is gone.
@@ -137,6 +139,9 @@ pub(crate) struct InstallRow<'a> {
     pub(crate) write: &'a UnitWrite,
 }
 
+/// The `id` of the `stop` command install sends a running hub.
+const STOP_ID: &str = "c_stop";
+
 /// Installs `service` listening on `port` as well as its socket, and loads
 /// it. `hub_answers` says whether a hub already answers on `run/hub`.
 /// `write` writes the unit file: a failed write restores like a failed
@@ -146,15 +151,24 @@ pub(crate) fn install(
     run: &ManagerRun,
     row: InstallRow<'_>,
 ) -> Result<(), Failure> {
-    config::replace_global(row.home, "hub.port", row.port.map(Value::from))
-        .map_err(|e| failed(e.code(), e))?;
     let previous = read_unit(&service.unit)?;
     let rendered = service.render(row.port)?;
     let changed = previous.as_deref() != Some(rendered.as_bytes());
+    if row.hub_answers && changed {
+        // The installed hub takes over at once through the `run/` lock
+        // handoff, so no wait follows the send. A second install of an
+        // unchanged unit sends nothing, so the running hub keeps its pid.
+        stop_running_hub(row.home, row.clock);
+    }
+    config::replace_global(row.home, "hub.port", row.port.map(Value::from))
+        .map_err(|e| failed(e.code(), e))?;
     let loaded = match service.manager {
         Manager::Launchd { uid } => call(run, "launchctl", &print_args(service, uid))?.success,
         Manager::Systemd => previous.is_some(),
     };
+    if row.hub_answers && !changed && !loaded {
+        stop_running_hub(row.home, row.clock);
+    }
     if changed && let Err(error) = (row.write)(&service.unit, rendered.as_bytes()) {
         return Err(restore_or_rerun(&service.unit, previous.as_deref(), error));
     }
@@ -177,14 +191,26 @@ pub(crate) fn install(
             service.unit.display()
         ),
     )?;
-    if row.hub_answers && !loaded {
-        write_line(
-            row.out,
-            "A hub a client started is running; the installed hub takes over once it exits, \
-             when no client has been connected for hub.idle_exit_ms.",
-        )?;
-    }
     Ok(())
+}
+
+/// Sends `stop` to the hub answering on `home`, if one still does, so the
+/// installed hub takes over at once. Every failure proceeds silently: a
+/// hub that vanished between the probe and the send needs nothing, and
+/// the `run/` lock handoff covers a live hub.
+pub(crate) fn stop_running_hub(home: &Path, clock: &dyn Clock) {
+    let mut never = || Err(io::Error::new(io::ErrorKind::NotFound, "no hub runs"));
+    let Ok((stream, _)) =
+        doors::hub::connect_within(home, &mut never, clock, doors::hub::CONNECT_DEADLINE)
+    else {
+        return;
+    };
+    let mut read = BufReader::new(stream);
+    drop(request_value(
+        &mut read,
+        STOP_ID,
+        HubCommand::Stop(NoArgs {}),
+    ));
 }
 
 /// The manager calls after the unit file is written, per manager, whether

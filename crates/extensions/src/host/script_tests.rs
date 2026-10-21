@@ -220,7 +220,7 @@ fn park_hang_ends_when_the_clock_reaches_the_deadline() {
         let _ignored = done_tx.send(());
     });
     assert!(
-        clock.await_parked(deadline, Duration::from_secs(5)),
+        clock.await_parked(deadline, fakes::Deadline::after(Duration::from_secs(5))),
         "the worker parks at its deadline before the advance"
     );
     clock.advance(Duration::from_millis(100));
@@ -246,7 +246,7 @@ fn a_stopped_park_pushes_no_miss() {
         let _ignored = done_tx.send(());
     });
     assert!(
-        clock.await_parked(deadline, Duration::from_secs(5)),
+        clock.await_parked(deadline, fakes::Deadline::after(Duration::from_secs(5))),
         "the worker parks at its deadline before the stop"
     );
     drop(stop_tx);

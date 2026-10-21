@@ -53,15 +53,19 @@ fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaPr
 
 #[track_caller]
 fn signer_of(provider: &Arc<LuaProvider>) -> Arc<dyn Signer> {
-    fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(provider);
-        move || {
-            provider
-                .signer(pair(provider.name(), "default"))
-                .unwrap()
-                .unwrap()
-        }
-    })
+    fakes::within(
+        "provider.signer",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(provider);
+            move || {
+                provider
+                    .signer(pair(provider.name(), "default"))
+                    .unwrap()
+                    .unwrap()
+            }
+        },
+    )
 }
 
 /// A row of the clash table: a header `credential()` returns, the headers
@@ -436,10 +440,14 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     let provider = LuaProvider::new(extension, "p");
     let signer = signer_of(&provider);
     // A token fetched and replaced before any sign leaves no trace.
-    let unused = fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(&provider);
-        move || provider.token(&pair(provider.name(), "default"))
-    })
+    let unused = fakes::within(
+        "provider.token",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.token(&pair(provider.name(), "default"))
+        },
+    )
     .unwrap();
     assert_eq!(unused.expose(), "tok-unused");
     // No code under test waits on the clock here; the token call returned
@@ -459,7 +467,7 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
         .unwrap_or(());
     });
     assert!(
-        blocking.await_requests(1, CALL_DEADLINE),
+        blocking.await_requests(1, Deadline::after(CALL_DEADLINE)),
         "the call with seventeen values reaches its held sign request"
     );
 
@@ -467,7 +475,11 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     // scheduler parks at the deadline, so the caller is named.
     let park = asked + Duration::from_secs(36_000) + GRACE;
     assert!(
-        clock.await_thread_parked(held_thread.thread().id(), Some(park), WAIT),
+        clock.await_thread_parked(
+            held_thread.thread().id(),
+            Some(park),
+            fakes::Deadline::after(WAIT)
+        ),
         "the held sign parked past its check at its grace"
     );
     clock.advance_when_parked(
@@ -560,7 +572,7 @@ fn a_running_call_values_are_reported_until_it_finishes() {
         done.send(result).unwrap_or(());
     });
     assert!(
-        blocking.await_requests(1, WAIT),
+        blocking.await_requests(1, Deadline::after(WAIT)),
         "waited for the first sign to block on the held server"
     );
     // Seventeen synchronous refreshes while the first call runs: its two
@@ -570,7 +582,11 @@ fn a_running_call_values_are_reported_until_it_finishes() {
     let park = asked + Duration::from_secs(36_000) + GRACE;
     for round in 1..=17_u32 {
         assert!(
-            clock.await_thread_parked(held_thread.thread().id(), Some(park), WAIT),
+            clock.await_thread_parked(
+                held_thread.thread().id(),
+                Some(park),
+                fakes::Deadline::after(WAIT)
+            ),
             "round {round}: the held sign parked past its check at its grace"
         );
         clock.advance_when_parked(
@@ -690,13 +706,17 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
     let asked1 = clock.now();
     let held1 = launch(1, Arc::clone(&signer), done.clone());
     assert!(
-        first_call.await_requests(1, CALL_DEADLINE),
+        first_call.await_requests(1, Deadline::after(CALL_DEADLINE)),
         "call 1 reached its held sign request"
     );
     for call in 2..=17 {
         let park1 = asked1 + Duration::from_secs(36_000) + GRACE;
         assert!(
-            clock.await_thread_parked(held1.thread().id(), Some(park1), WAIT),
+            clock.await_thread_parked(
+                held1.thread().id(),
+                Some(park1),
+                fakes::Deadline::after(WAIT)
+            ),
             "call {call}: call 1 parked past its check at its grace"
         );
         clock.advance_when_parked(
@@ -707,7 +727,7 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
         );
         let _held = launch(call, Arc::clone(&signer), done.clone());
         assert!(
-            later_calls.await_requests(call - 1, CALL_DEADLINE),
+            later_calls.await_requests(call - 1, Deadline::after(CALL_DEADLINE)),
             "call {call} reached its held sign request"
         );
     }
@@ -830,7 +850,7 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
         .unwrap_or(());
     });
     assert!(
-        blocking.await_requests(1, WAIT),
+        blocking.await_requests(1, Deadline::after(WAIT)),
         "waited for the first sign to block on the held server"
     );
     // Call 2 signs with the same token and starts the background refresh.
@@ -840,7 +860,7 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
         Some("Bearer tok-A-value".to_owned())
     );
     assert!(
-        tokens.await_requests(2, WAIT),
+        tokens.await_requests(2, Deadline::after(WAIT)),
         "waited for the background refresh to return the new token"
     );
     // The refresh replaced the cache: a new sign carries the new token.
@@ -954,7 +974,11 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
             if round > 1 {
                 let park = asked + Duration::from_secs(36_000) + GRACE;
                 assert!(
-                    clock.await_thread_parked(threads[0].thread().id(), Some(park), WAIT),
+                    clock.await_thread_parked(
+                        threads[0].thread().id(),
+                        Some(park),
+                        fakes::Deadline::after(WAIT)
+                    ),
                     "calls {calls}: round {round} waits for the first sign to park at its grace"
                 );
                 clock.advance_when_parked(
@@ -984,16 +1008,16 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
             // round, so every call is in flight at once.
             if round == calls {
                 assert!(
-                    blocking.await_requests(calls - 1, CALL_DEADLINE),
+                    blocking.await_requests(calls - 1, Deadline::after(CALL_DEADLINE)),
                     "calls {calls}: earlier signs reach their held requests"
                 );
                 assert!(
-                    last.await_requests(1, CALL_DEADLINE),
+                    last.await_requests(1, Deadline::after(CALL_DEADLINE)),
                     "calls {calls}: latest cached token reaches its held request"
                 );
             } else {
                 assert!(
-                    blocking.await_requests(round, CALL_DEADLINE),
+                    blocking.await_requests(round, Deadline::after(CALL_DEADLINE)),
                     "calls {calls}: sign {round} reaches its held request"
                 );
             }
@@ -1087,19 +1111,27 @@ fn a_held_fetch_never_holds_the_token_lock() {
         let _sent = done_tx.send(fetching.token(&worker_pair));
     });
     assert!(
-        tokens.await_requests(1, WAIT),
+        tokens.await_requests(1, Deadline::after(WAIT)),
         "the first fetch reaches the server"
     );
     // The fetch is held, yet the cache reads return at once.
-    fakes::within("provider.cached_token", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(&provider);
-        move || provider.cached_token(&pair)
-    });
+    fakes::within(
+        "provider.cached_token",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.cached_token(&pair)
+        },
+    );
     let signer = signer_of(&provider);
-    fakes::within("signer.credentials", fakes::MUST_SUCCEED_WITHIN, {
-        let signer = Arc::clone(&signer);
-        move || signer.credentials()
-    });
+    fakes::within(
+        "signer.credentials",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let signer = Arc::clone(&signer);
+            move || signer.credentials()
+        },
+    );
     tokens.release();
     let token = Deadline::after(WAIT)
         .recv(&done_rx)

@@ -101,7 +101,34 @@ A script loads another script with `require`. `require` finds files inside the
 extension's own directory and nowhere else, so one extension cannot load
 another's code by path. Code shared between extensions reaches an extension in
 one of two ways: the extension vendors a copy, or it depends on the extension
-that holds the code.
+that holds the code (see [Shared dependency modules](#shared-dependency-modules)).
+
+## Shared dependency modules
+
+An extension that needs another extension's Lua declares it in `depends`, a
+mapping of each dependency's name to the minimum version it runs with:
+`"depends": { "example.com/acme/strings": "1.0" }`. Installing the
+extension installs its dependencies beside it, at the lowest tags that meet
+every minimum: Fiber installs nothing newer than someone asked for, and a
+dependency's own `depends` resolves the same way.
+
+A script loads a dependency's module with the dependency's name, a colon, and
+the module path: `require("example.com/acme/strings:trim")`. The module path
+works exactly as it does inside the dependency — dots become directory
+separators — and everything after the first colon is the path, so a second
+colon stays in the module. A name with no colon loads the extension's own
+file; a name nobody declared, an empty module, and a leading colon all fail
+the same way, naming the unknown dependency. The modules are available from
+the moment the extension starts, in a session and in the login-time provider
+that asks for credentials.
+
+Each read canonicalizes the dependency's directory and serves only what stays
+under it: a link pointing outside the dependency is refused, and a dependency
+whose directory is missing names the dependency rather than reaching the file
+loader. A repository copy serves its own `.fiber-depends` before the
+personal install, so a copy's dependency answers even when a different
+version sits beside it, and a copy whose dependency is missing names it
+without reading Fiber home.
 
 The binary for this platform installs as `bin/<last segment of the manifest name>`: with `"name": "github.com/acme/fiber-acme"` that is `bin/fiber-acme` on every platform. A binary installed before this change gets that name at the next `fiber extension update`. A native binary is run as a process extension, or through `host.exec` ("Host calls") as `host.exec("bin/fiber-acme", args)`.
 
@@ -114,7 +141,7 @@ WASM, and full TypeScript — are in [ADR 0006](adr/0006-extension-runtime-lua.m
 
 The embedding is bare. An extension sees a stripped standard library — `table`,
 `string`, `math`, `utf8`, `coroutine` — plus a `require` limited to its own
-directory, and nothing else. There is no `io`, no `os`, no `package`, no
+directory and its declared dependencies, and nothing else. There is no `io`, no `os`, no `package`, no
 `debug`. Every capability reaches it through a host-provided global, and the
 host calls give it what a process has natively: files, programs, HTTP and
 timers. Routing them through the host lets Fiber stop them on cancel and at
@@ -1055,7 +1082,7 @@ keys below; values use the shapes of `docs/events.md` ("Content parts",
 | Hook point | What `run` is given | What it may return |
 |---|---|---|
 | `session_start` | `reason`, why the session started: start, resume, fork, rewind or handoff; `session_id`; `workspace`, the workspace root | `context`, a non-empty string to add |
-| `before_message` | `content`, the message's content parts as logged | `content`, a non-empty list of parts that replaces the message: text parts, and image or pdf parts the message holds; `context`, a non-empty string to add; or `refuse`, a non-empty string, alone |
+| `before_message` | `content`, the message's content parts as logged; `from_session_id`, the sending session, and `parent_session_id`, its parent, for a session message, each absent otherwise | `content`, a non-empty list of parts that replaces the message: text parts, and image or pdf parts the message holds; `context`, a non-empty string to add; or `refuse`, a non-empty string, alone |
 | `turn_start` | `input`, the turn's input as the turn_started event logs it | `context`, a non-empty string to add |
 | `before_tool` | `tool`; `arguments`; `effects`, a list of effect names; `paths`, absent when the call declares none; `reversible` | `arguments`, a table that replaces the arguments, or `refuse`, a non-empty string, alone |
 | `before_model_call` | `model`, the model reference; `usage`, the session's usage so far, its delegates included, with cost absent when unknown | `refuse`, a non-empty string, alone |

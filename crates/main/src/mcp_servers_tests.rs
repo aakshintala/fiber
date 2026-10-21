@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::NoSkills;
 use serde_json::json;
 
@@ -1128,8 +1129,10 @@ fn wired(
     let workspace = rig.workspace.clone();
     let delegates = delegates();
     let skills = skills();
-    let (tools, _infos, _driver, servers) =
-        fakes::within("the session tools", WIRING_WITHIN, move || {
+    let (tools, _infos, _driver, servers) = fakes::within(
+        "the session tools",
+        Deadline::after(WIRING_WITHIN),
+        move || {
             super::session_tools(
                 Ok(fiber),
                 &home,
@@ -1150,7 +1153,8 @@ fn wired(
                 Default::default(),
             )
             .expect("the session builds")
-        });
+        },
+    );
     (tools, servers)
 }
 
@@ -1199,14 +1203,18 @@ fn loaded(session: super::SessionServers, key: r#loop::OfferKey) -> Vec<(String,
     let super::SessionServers { later, servers, .. } = session;
     let declare: doors::Declare = std::sync::Arc::new(move |_name: &str, _info| {});
     let load = later.into_load(declare, std::collections::BTreeMap::new());
-    let approved = fakes::within("the post-offer load", WIRING_WITHIN, move || {
-        load(&r#loop::OfferOutcome {
-            skipped: vec![],
-            reported: vec![key],
-            held: vec![],
-        })
-        .expect("the load runs")
-    });
+    let approved = fakes::within(
+        "the post-offer load",
+        Deadline::after(WIRING_WITHIN),
+        move || {
+            load(&r#loop::OfferOutcome {
+                skipped: vec![],
+                reported: vec![key],
+                held: vec![],
+            })
+            .expect("the load runs")
+        },
+    );
     let names: Vec<(String, String)> = approved
         .tools
         .iter()
@@ -1214,6 +1222,77 @@ fn loaded(session: super::SessionServers, key: r#loop::OfferKey) -> Vec<(String,
         .collect();
     servers.stop();
     names
+}
+
+#[test]
+fn reload_server_names_keep_successes_and_omit_failed_starts() {
+    let rig = offer_rig();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    approve_db(&rig, &clock);
+    rig.write_global(&json!({"mcp":{"servers":{"broken":{
+        "command":rig.root.path().join("missing-server"), "required":false
+    }}}}));
+    let config = rig.config(Vec::<String>::new());
+    let specs = super::specs(&config).unwrap();
+    let artifacts = rig.root.path().join("artifacts");
+    let jobs = jobs::Registry::new(
+        artifacts.clone(),
+        clock.clone(),
+        std::sync::Arc::new(fakes::Recorder::default()),
+    );
+    let locks = std::sync::Arc::new(tools::PathLocks::new());
+    let project = config::ProjectKey::new("test").unwrap();
+    let home = rig.home.clone();
+    let workspace = rig.workspace.clone();
+    let fiber = rig.root.path().join("fiber-stub");
+    let delegates = delegates();
+    let (tools, _, _, session) = fakes::within(
+        "session with a failed optional server",
+        Deadline::after(WIRING_WITHIN),
+        move || {
+            super::session_tools(
+                Ok(fiber),
+                &home,
+                &workspace,
+                &artifacts,
+                &clock,
+                &jobs,
+                &locks,
+                &project,
+                specs.specs,
+                specs.repository,
+                &[],
+                None,
+                &delegates,
+                skills(),
+                Vec::new(),
+                None,
+                Default::default(),
+            )
+            .unwrap()
+        },
+    );
+    assert!(
+        tools.iter().any(|(registered_by, tool)| {
+            registered_by == "db" && tool.definition().name == "mcp__db__echo"
+        }),
+        "the session keeps the successful server's tools",
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|(registered_by, _)| registered_by != "broken"),
+        "the session omits the failed server's tools",
+    );
+    assert_eq!(
+        session
+            .failed
+            .iter()
+            .map(|failure| failure.server.as_str())
+            .collect::<Vec<_>>(),
+        ["broken"]
+    );
+    session.servers.stop();
 }
 
 #[test]

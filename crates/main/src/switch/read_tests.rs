@@ -51,7 +51,7 @@ fn listed(reads: &Reads) -> Vec<u32> {
 /// assert.
 #[track_caller]
 fn generation_reaches(wake: &Arc<Parker>, target: u64, what: &str) {
-    fakes::within(what, DEADLINE, {
+    fakes::within(what, Deadline::after(DEADLINE), {
         let wake = Arc::clone(wake);
         move || loop {
             let seen = wake.generation();
@@ -100,7 +100,7 @@ fn poll_step(
 #[test]
 fn run_returns_the_reads_value() {
     let reads = Reads::default();
-    let value = fakes::within("the read", DEADLINE, move || {
+    let value = fakes::within("the read", Deadline::after(DEADLINE), move || {
         reads.run("credential read", || 7)
     });
     assert_eq!(value.unwrap(), 7);
@@ -127,7 +127,7 @@ fn cancel_ends_a_blocked_run_with_closing_and_a_late_value_changes_nothing() {
         .recv(&began)
         .expect("the read started");
     reads.cancel();
-    let rejected = fakes::within("the cancelled run", DEADLINE, move || {
+    let rejected = fakes::within("the cancelled run", Deadline::after(DEADLINE), move || {
         waiter.join().unwrap()
     });
     let failure = rejected.expect_err("a cancelled read is no value");
@@ -160,12 +160,12 @@ fn cancel_ends_a_blocked_run_started_before_a_quick_one_with_closing() {
     // replaces A's wake, and its finish removes A's entry, so the cancel
     // below never wakes A.
     let probe = Arc::clone(&reads);
-    let quick = fakes::within("the quick run", DEADLINE, move || {
+    let quick = fakes::within("the quick run", Deadline::after(DEADLINE), move || {
         probe.run("credential read", || 1)
     });
     assert_eq!(quick.unwrap(), 1);
     reads.cancel();
-    let rejected = fakes::within("the cancelled run", DEADLINE, move || {
+    let rejected = fakes::within("the cancelled run", Deadline::after(DEADLINE), move || {
         waiter.join().unwrap()
     });
     let failure = rejected.expect_err("a cancelled read is no value");
@@ -193,7 +193,7 @@ fn a_value_answered_after_cancel_is_closing() {
         .expect("the run answered");
     reads.cancel();
     open.send(()).unwrap();
-    let failure = fakes::within("the cancelled run", DEADLINE, move || {
+    let failure = fakes::within("the cancelled run", Deadline::after(DEADLINE), move || {
         waiter.join().unwrap()
     })
     .expect_err("a read answered after cancel is no value");
@@ -208,7 +208,7 @@ fn run_after_cancel_is_closing_without_running_the_read() {
     reads.cancel();
     let ran = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&ran);
-    let failure = fakes::within("the refused read", DEADLINE, move || {
+    let failure = fakes::within("the refused read", Deadline::after(DEADLINE), move || {
         reads.run("credential read", move || {
             flag.store(true, Ordering::SeqCst)
         })
@@ -236,24 +236,29 @@ fn a_command_leads_its_own_group_and_is_listed_until_the_group_empties() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let ids = ready.wait(DEADLINE);
+    let ids = ready.wait(fakes::Deadline::after(DEADLINE));
     let (pid, pgid) = (ids[0], ids[1]);
     let watchdog = fakes::Watchdog::group(pid);
     assert_eq!(pid, pgid, "the command leads its own group");
     assert_eq!(listed(&reads), vec![pid], "listed while it runs");
     std::fs::write(&go, "").unwrap();
-    let output = fakes::within("the command", DEADLINE, move || running.join().unwrap()).unwrap();
+    let output = fakes::within("the command", Deadline::after(DEADLINE), move || {
+        running.join().unwrap()
+    })
+    .unwrap();
     assert_eq!(String::from_utf8_lossy(&output.stdout), "key\n");
-    assert!(fakes::group_empties(pid, DEADLINE));
+    assert!(fakes::group_empties(pid, fakes::Deadline::after(DEADLINE)));
     // The next command prunes the empty group.
     let probe = Arc::clone(&reads);
-    let pruned = fakes::within("the pruning command", DEADLINE, move || {
-        probe.command(&mut sh("true"))
-    });
+    let pruned = fakes::within(
+        "the pruning command",
+        Deadline::after(DEADLINE),
+        move || probe.command(&mut sh("true")),
+    );
     pruned.unwrap();
     assert!(!listed(&reads).contains(&pid), "{:?}", listed(&reads));
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -269,17 +274,17 @@ fn cancel_kills_a_running_command_and_it_errs() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pid: u32 = ready.wait(DEADLINE)[0];
+    let pid: u32 = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pid);
     reads.cancel();
-    let error = fakes::within("the killed command", DEADLINE, move || {
+    let error = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running.join().unwrap()
     })
     .expect_err("a killed command");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
-    assert!(fakes::group_empties(pid, DEADLINE));
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    assert!(fakes::group_empties(pid, fakes::Deadline::after(DEADLINE)));
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -295,22 +300,27 @@ fn a_descendant_keeps_its_group_listed_and_cancel_kills_it() {
     // so only a command-line watchdog covers the spawn itself.
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let first = Arc::clone(&reads);
-    let output = fakes::within("the first command", DEADLINE, move || {
+    let output = fakes::within("the first command", Deadline::after(DEADLINE), move || {
         first.command(&mut sh(&script)).unwrap()
     });
     assert_eq!(String::from_utf8_lossy(&output.stdout), "key\n");
-    let group: u32 = ready.wait(DEADLINE)[0];
+    let group: u32 = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(group);
     assert!(fakes::kill_group(group, "0").unwrap(), "sleep lives"); // A later command prunes only empty groups: `sleep` keeps this one.
     let probe = Arc::clone(&reads);
-    fakes::within("the pruning command", DEADLINE, move || {
-        probe.command(&mut sh("true")).unwrap()
-    });
+    fakes::within(
+        "the pruning command",
+        Deadline::after(DEADLINE),
+        move || probe.command(&mut sh("true")).unwrap(),
+    );
     assert!(listed(&reads).contains(&group), "{:?}", listed(&reads));
     reads.cancel();
-    assert!(fakes::group_empties(group, DEADLINE), "cancel killed sleep");
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    assert!(
+        fakes::group_empties(group, fakes::Deadline::after(DEADLINE)),
+        "cancel killed sleep"
+    );
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -336,12 +346,16 @@ fn a_cancel_between_a_read_starting_and_its_spawn_starts_no_command() {
         .expect("the job started");
     reads.cancel();
     open.send(()).unwrap();
-    let error = fakes::within("the refused command", DEADLINE, move || job.join().unwrap())
-        .expect_err("a cancelled command");
+    let error = fakes::within(
+        "the refused command",
+        Deadline::after(DEADLINE),
+        move || job.join().unwrap(),
+    )
+    .expect_err("a cancelled command");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(!marker.exists(), "the command never started");
     assert!(listed(&reads).is_empty());
-    pre.stand_down(DEADLINE);
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Runs `reads.credential` for `command` on a thread of its own, returning
@@ -376,7 +390,7 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
     // command-line watchdog covers a spawn no later watchdog can reach.
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let mark = clock.advance_when_parked(
         Some(deadline),
@@ -385,7 +399,7 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(deadline), DEADLINE),
+        clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(DEADLINE)),
         "the wait parked again after the advance"
     );
     // Armed while the wait is parked: the bump drives one more pass
@@ -404,7 +418,7 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
     );
     release.send(()).unwrap();
     assert!(
-        clock.await_parked(deadline, DEADLINE),
+        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
         "the wait parked at its deadline again"
     );
     assert!(
@@ -479,11 +493,11 @@ fn a_credential_command_still_running_at_its_timeout_is_killed_and_times_out() {
         .expect_err("a command still running at its timeout");
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the real group is gone"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -498,7 +512,7 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
     let script = format!("echo $$ > '{}'; sleep 600 & exit 0", ready.path().display());
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let mark = clock.advance_when_parked(
         Some(deadline),
@@ -507,7 +521,7 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(deadline), DEADLINE),
+        clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(DEADLINE)),
         "the wait parked again after the advance"
     );
     // Armed while the wait is parked: the bump drives one more pass
@@ -567,11 +581,11 @@ fn a_leader_that_exits_while_its_descendant_holds_stdout_times_out_and_the_group
     };
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the timeout killed the group"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// The timeout kill re-kills a group that survives the first SIGKILL until
@@ -597,10 +611,10 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
     let script = format!("echo $$ > '{}'; sleep 600 & exit 0", ready.path().display());
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     assert!(
-        clock.await_parked(deadline, DEADLINE),
+        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
         "the wait parked at its deadline"
     );
     // The reaper's answer bump can otherwise still be in flight here:
@@ -647,11 +661,11 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
         Ok(_) | Err(_) => {}
     }
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the real group is gone"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// The timeout gives up re-killing at its bound: one nanosecond short it
@@ -672,10 +686,10 @@ fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
     let script = format!("echo $$ > '{}'; sleep 600 & exit 0", ready.path().display());
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     assert!(
-        clock.await_parked(deadline, DEADLINE),
+        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
         "the wait parked at its deadline"
     );
     // Alive past every probe within the bound: 600 scripted sends at a
@@ -687,7 +701,7 @@ fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
     );
     clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
     assert!(
-        clock.await_parked(deadline + GROUP_POLL, DEADLINE),
+        clock.await_parked(deadline + GROUP_POLL, fakes::Deadline::after(DEADLINE)),
         "the timeout parked at its first poll"
     );
     // Jump to one nanosecond short of the end: every pass between still
@@ -699,7 +713,7 @@ fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
             .expect("the bound holds a nanosecond"),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(end), DEADLINE),
+        clock.await_parked_since(&mark, Some(end), fakes::Deadline::after(DEADLINE)),
         "the timeout parked again short of its bound"
     );
     assert!(
@@ -732,11 +746,11 @@ fn timeout_leaves_a_stubborn_group_listed_at_its_bound() {
         Ok(_) | Err(_) => {}
     }
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the real group is gone"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// The timeout shares one absolute end for settlement and the reap: the
@@ -758,10 +772,10 @@ fn timeout_with_a_live_leader_answers_at_the_bound_without_the_reap() {
     let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     assert!(
-        clock.await_parked(deadline, DEADLINE),
+        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
         "the wait parked at its deadline"
     );
     // Alive past every probe within the bound: 600 scripted sends at a
@@ -773,7 +787,7 @@ fn timeout_with_a_live_leader_answers_at_the_bound_without_the_reap() {
     );
     clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
     assert!(
-        clock.await_parked(deadline + GROUP_POLL, DEADLINE),
+        clock.await_parked(deadline + GROUP_POLL, fakes::Deadline::after(DEADLINE)),
         "the timeout parked at its first poll"
     );
     // Jump to one nanosecond short of the end: still parked, no answer.
@@ -784,7 +798,7 @@ fn timeout_with_a_live_leader_answers_at_the_bound_without_the_reap() {
             .expect("the bound holds a nanosecond"),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(end), DEADLINE),
+        clock.await_parked_since(&mark, Some(end), fakes::Deadline::after(DEADLINE)),
         "the timeout parked again short of its bound"
     );
     assert!(
@@ -817,11 +831,11 @@ fn timeout_with_a_live_leader_answers_at_the_bound_without_the_reap() {
         Ok(_) | Err(_) => {}
     }
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the real group is gone"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A cancel that lands while the timeout settles its group answers
@@ -839,10 +853,10 @@ fn cancel_during_settlement_answers_interrupted() {
     let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     assert!(
-        clock.await_parked(deadline, DEADLINE),
+        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
         "the wait parked at its deadline"
     );
     // Scripted alive through the controlled poll: a real SIGKILL and the
@@ -859,7 +873,7 @@ fn cancel_during_settlement_answers_interrupted() {
     // The settlement re-kills on the poll cadence: parked at its first
     // poll, the wait can only leave through the cancel below.
     assert!(
-        clock.await_parked(deadline + GROUP_POLL, DEADLINE),
+        clock.await_parked(deadline + GROUP_POLL, fakes::Deadline::after(DEADLINE)),
         "the timeout parked at its first poll"
     );
     reads.cancel();
@@ -873,11 +887,11 @@ fn cancel_during_settlement_answers_interrupted() {
         Ok(_) | Err(_) => {}
     }
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the real group is gone"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -901,7 +915,7 @@ fn a_quick_command_answers_without_the_clock_moving() {
         0,
         "the successful spawn dropped the count"
     );
-    guard.stand_down(DEADLINE);
+    guard.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A finish that lands between the wait's checks and its park is not
@@ -931,7 +945,7 @@ fn a_completion_between_the_checks_and_the_park_is_not_missed() {
     let (release, freed) = mpsc::channel();
     reads.pause_at_checks(checked, freed);
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     Deadline::after(DEADLINE).recv_or_fail(&is_checked, "the wait's checks");
     // Both wakes land while the wait is held past its checks: the park
@@ -947,11 +961,11 @@ fn a_completion_between_the_checks_and_the_park_is_not_missed() {
         .unwrap();
     assert_eq!(output.stdout, b"key");
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the group reaped its leader"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A key finished after its timeout is refused: the state lock holds the
@@ -974,10 +988,10 @@ fn a_key_finished_after_its_timeout_is_refused() {
     );
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     assert!(
-        clock.await_parked(deadline, DEADLINE),
+        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
         "the wait parked at its deadline"
     );
     // The helper finishes while the wait is held here, then the clock
@@ -996,11 +1010,11 @@ fn a_key_finished_after_its_timeout_is_refused() {
         .expect_err("a key finished after its timeout");
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the timeout killed the group"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A helper that prints its key, closes stdout, then finishes cleanup
@@ -1032,7 +1046,7 @@ fn a_leader_that_closes_stdout_before_it_exits_answers_without_the_clock_moving(
     let (release_one, freed_one) = mpsc::channel::<()>();
     reads.pause_at_checks(checked_one, freed_one);
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let wake = Arc::clone(&reads.wake);
     let sent = wake.generation();
@@ -1058,11 +1072,11 @@ fn a_leader_that_closes_stdout_before_it_exits_answers_without_the_clock_moving(
         .unwrap();
     assert_eq!(output.stdout, b"key");
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the group reaped its leader"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1074,7 +1088,7 @@ fn cancel_ends_a_credential_wait_with_interrupted_and_kills_the_group() {
     let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     reads.cancel();
     let error = Deadline::after(DEADLINE)
@@ -1082,11 +1096,11 @@ fn cancel_ends_a_credential_wait_with_interrupted_and_kills_the_group() {
         .expect_err("a cancelled read");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the cancel killed the group"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1111,7 +1125,7 @@ fn a_timeout_past_what_the_clock_can_count_starts_nothing() {
     );
     assert!(!marker.exists(), "the command never started");
     assert!(listed(&reads).is_empty());
-    guard.stand_down(DEADLINE);
+    guard.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1148,20 +1162,20 @@ fn dropping_cancel_on_drop_kills_what_a_finished_command_left() {
         .recv_or_fail(&finished, "the finished read")
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&output.stdout), "key");
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     assert!(fakes::kill_group(pgid, "0").unwrap(), "sleep lives");
     drop(CancelOnDrop(Arc::clone(&reads)));
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "dropping the guard killed sleep"
     );
     let error = reads
         .credential(&mut sh("true"), Duration::from_secs(30), &*clock)
         .expect_err("a read after the drop");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A cancel lands while a spawn is blocked before it spawns: the cancel
@@ -1187,7 +1201,7 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script_a)))
     };
-    let pid_a: u32 = ready_a.wait(DEADLINE)[0];
+    let pid_a: u32 = ready_a.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog_a = fakes::Watchdog::group(pid_a);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1222,17 +1236,17 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         .recv(&cancel_done_rx)
         .expect("the cancel returns while the spawn is blocked");
     assert!(
-        fakes::group_empties(pid_a, DEADLINE),
+        fakes::group_empties(pid_a, fakes::Deadline::after(DEADLINE)),
         "the cancel killed group A"
     );
-    let late_a = fakes::within("the killed command", DEADLINE, move || {
+    let late_a = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running_a.join().unwrap()
     })
     .expect_err("a killed command");
     match release_tx.send(()) {
         Ok(()) | Err(_) => {}
     }
-    let error = fakes::within("the late command", DEADLINE, move || {
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
         running_b.join().unwrap()
     })
     .expect_err("a command spawned after the cancel");
@@ -1254,7 +1268,7 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         listed(&reads)
     );
     assert!(
-        fakes::matching_exits(&marker, DEADLINE),
+        fakes::matching_exits(&marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
     // Settlement retires the reaped late group: nothing stays listed.
@@ -1270,9 +1284,9 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         listed(&reads)
     );
     assert_eq!(late_a.kind(), std::io::ErrorKind::Interrupted);
-    watchdog_a.stand_down(DEADLINE);
-    pre_a.stand_down(DEADLINE);
-    late.stand_down(DEADLINE);
+    watchdog_a.stand_down(fakes::Deadline::after(DEADLINE));
+    pre_a.stand_down(fakes::Deadline::after(DEADLINE));
+    late.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A spawn prunes without signalling: only SRCH retires a listed group,
@@ -1300,7 +1314,7 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
         let script = format!("echo $$ > '{}'; exec sleep 600", ready_a.path().display());
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pid_a: u32 = ready_a.wait(DEADLINE)[0];
+    let pid_a: u32 = ready_a.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog_a = fakes::Watchdog::group(pid_a);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1319,7 +1333,7 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
             let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
             std::thread::spawn(move || reads.command(&mut sh(&script)))
         };
-        let pid: u32 = ready.wait(DEADLINE)[0];
+        let pid: u32 = ready.wait(fakes::Deadline::after(DEADLINE))[0];
         Deadline::after(DEADLINE)
             .recv(&listed_rx)
             .expect("the group listed its group");
@@ -1386,14 +1400,17 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
         ("the second command", running_b),
         ("the third command", running_c),
     ] {
-        fakes::within(what, DEADLINE, move || running.join().unwrap()).unwrap();
+        fakes::within(what, Deadline::after(DEADLINE), move || {
+            running.join().unwrap()
+        })
+        .unwrap();
     }
-    watchdog_a.stand_down(DEADLINE);
-    watchdog_b.stand_down(DEADLINE);
-    watchdog_c.stand_down(DEADLINE);
-    pre_a.stand_down(DEADLINE);
-    pre_b.stand_down(DEADLINE);
-    pre_c.stand_down(DEADLINE);
+    watchdog_a.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog_b.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog_c.stand_down(fakes::Deadline::after(DEADLINE));
+    pre_a.stand_down(fakes::Deadline::after(DEADLINE));
+    pre_b.stand_down(fakes::Deadline::after(DEADLINE));
+    pre_c.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Drives a settle to completion on the fake clock and returns its
@@ -1430,7 +1447,7 @@ fn drive_settle_to_completion(
     let start = clock.origin();
     let poll = start + GROUP_POLL;
     assert!(
-        clock.await_parked(poll, drive.left()),
+        clock.await_parked(poll, *drive),
         "the settle parked at its poll"
     );
     // Blind-probe phase, holds maintained: fifty poll steps. Each
@@ -1454,7 +1471,8 @@ fn drive_settle_to_completion(
         }
     }
     let mark = mark.expect("the blind probe stepped at least once");
-    let reparked = clock.await_any_parked_since(&mark, drive.left().min(PARK_PAUSE));
+    let reparked =
+        clock.await_any_parked_since(&mark, fakes::Deadline::after(drive.left().min(PARK_PAUSE)));
     if !reparked && !answered {
         answered = finished.try_recv().is_ok();
     }
@@ -1486,10 +1504,10 @@ fn drive_settle_to_completion(
         );
     }
     let frozen = clock
-        .mark_parked(clock.now() + GROUP_POLL, drive.left())
+        .mark_parked(clock.now() + GROUP_POLL, *drive)
         .expect("the settle parked at its poll");
     assert!(
-        !clock.await_any_parked_since(&frozen, PARK_PAUSE),
+        !clock.await_any_parked_since(&frozen, fakes::Deadline::after(PARK_PAUSE)),
         "the settle re-parked without a clock advance"
     );
     assert_eq!(
@@ -1552,13 +1570,19 @@ fn drive_settle_to_completion(
                 break drive.recv(finished).expect("the settle");
             }
             let parked_at = clock.now() + GROUP_POLL;
-            match clock.mark_parked(parked_at, drive.left().min(PARK_PAUSE)) {
+            match clock.mark_parked(
+                parked_at,
+                fakes::Deadline::after(drive.left().min(PARK_PAUSE)),
+            ) {
                 // No park again: the settle answered instead; take it
                 // under the drive.
                 None => break drive.recv(finished).expect("the settle"),
                 Some(since) => {
                     if !listed(reads).contains(&real)
-                        && clock.await_any_parked_since(&since, drive.left().min(PARK_PAUSE))
+                        && clock.await_any_parked_since(
+                            &since,
+                            fakes::Deadline::after(drive.left().min(PARK_PAUSE)),
+                        )
                     {
                         let _stepped = poll_step(clock, parked_at, GROUP_POLL, drive);
                     }
@@ -1607,7 +1631,7 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pgid: u32 = ready.wait(DEADLINE)[0];
+    let pgid: u32 = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1635,11 +1659,11 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     match fakes::kill_group(pgid, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    let _finished = fakes::within("the killed command", DEADLINE, move || {
+    let _finished = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running.join().unwrap()
     });
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
     assert!(answer, "settle answers `true` once the group is empty");
     assert!(
         !lives,
@@ -1683,7 +1707,7 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pgid: u32 = ready.wait(DEADLINE)[0];
+    let pgid: u32 = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1711,7 +1735,7 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
     let drive = Deadline::after(DEADLINE);
     let poll = clock.origin() + GROUP_POLL;
     assert!(
-        clock.await_parked(poll, drive.left()),
+        clock.await_parked(poll, drive),
         "the settle parked at its poll"
     );
     let cycles = (doors::SHUTDOWN_BOUND.as_millis() / 50) as usize;
@@ -1729,7 +1753,7 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
         if !clock.await_parked_since(
             &mark,
             Some(clock.now() + GROUP_POLL),
-            drive.left().min(PARK_PAUSE),
+            fakes::Deadline::after(drive.left().min(PARK_PAUSE)),
         ) {
             answer = Some(drive.recv(&settled).expect("the settle"));
             break;
@@ -1762,11 +1786,11 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
     match fakes::kill_group(pgid, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    let _finished = fakes::within("the killed command", DEADLINE, move || {
+    let _finished = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running.join().unwrap()
     });
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A cancelled group that survives the first kill gets SIGKILL again, and
@@ -1790,7 +1814,7 @@ fn settle_sends_again_until_srch_then_never_again() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pgid: u32 = ready.wait(DEADLINE)[0];
+    let pgid: u32 = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1832,15 +1856,15 @@ fn settle_sends_again_until_srch_then_never_again() {
     match fakes::kill_group(pgid, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    let _finished = fakes::within("the killed command", DEADLINE, move || {
+    let _finished = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running.join().unwrap()
     });
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the real group is gone"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Two cancelled groups drain together within the one bound, though their
@@ -1901,8 +1925,8 @@ fn settle_drains_two_groups_together_within_one_bound() {
     Deadline::after(DEADLINE)
         .recv(&is_held_two)
         .expect("the second command held before its reap");
-    let pgid_one: u32 = ready_one.wait(DEADLINE)[0];
-    let pgid_two: u32 = ready_two.wait(DEADLINE)[0];
+    let pgid_one: u32 = ready_one.wait(fakes::Deadline::after(DEADLINE))[0];
+    let pgid_two: u32 = ready_two.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog_one = fakes::Watchdog::group(pgid_one);
     let watchdog_two = fakes::Watchdog::group(pgid_two);
     assert_eq!(listed(&reads).len(), 2, "both groups listed");
@@ -1937,25 +1961,29 @@ fn settle_drains_two_groups_together_within_one_bound() {
     );
     assert_eq!(reads.scripted_sends(), 2, "one send per pass before SRCH");
     assert!(
-        fakes::group_empties(pgid_two, DEADLINE),
+        fakes::group_empties(pgid_two, fakes::Deadline::after(DEADLINE)),
         "the real group died through the shared settlement"
     );
     // Reap both command threads on every path: the first was killed up
     // front, the second through the shared settlement.
-    let _one = fakes::within("the first killed command", DEADLINE, move || {
-        running_one.join().unwrap()
-    });
-    let _two = fakes::within("the second killed command", DEADLINE, move || {
-        running_two.join().unwrap()
-    });
+    let _one = fakes::within(
+        "the first killed command",
+        Deadline::after(DEADLINE),
+        move || running_one.join().unwrap(),
+    );
+    let _two = fakes::within(
+        "the second killed command",
+        Deadline::after(DEADLINE),
+        move || running_two.join().unwrap(),
+    );
     assert!(
-        fakes::group_empties(pgid_one, DEADLINE),
+        fakes::group_empties(pgid_one, fakes::Deadline::after(DEADLINE)),
         "the scripted group is gone"
     );
-    watchdog_one.stand_down(DEADLINE);
-    watchdog_two.stand_down(DEADLINE);
-    pre_one.stand_down(DEADLINE);
-    pre_two.stand_down(DEADLINE);
+    watchdog_one.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog_two.stand_down(fakes::Deadline::after(DEADLINE));
+    pre_one.stand_down(fakes::Deadline::after(DEADLINE));
+    pre_two.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// PERM and other probe errors keep a cancelled group pending: they never
@@ -1977,7 +2005,7 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pgid: u32 = ready.wait(DEADLINE)[0];
+    let pgid: u32 = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1993,7 +2021,7 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
     // cannot answer before the bound: every probe keeps it pending.
     let poll = clock.origin() + GROUP_POLL;
     assert!(
-        clock.await_parked(poll, DEADLINE),
+        clock.await_parked(poll, fakes::Deadline::after(DEADLINE)),
         "the settle parked at its poll"
     );
     // Crosses only poll pauses to the shutdown end; the run is proven parked at its poll (ruling 6260728504).
@@ -2014,7 +2042,11 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
             break;
         }
         assert!(
-            clock.await_parked_since(&mark, Some(clock.now() + GROUP_POLL), DEADLINE),
+            clock.await_parked_since(
+                &mark,
+                Some(clock.now() + GROUP_POLL),
+                fakes::Deadline::after(DEADLINE)
+            ),
             "the settle parked again"
         );
         if let Ok(answer) = finished.try_recv() {
@@ -2037,15 +2069,15 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
     match fakes::kill_group(pgid, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    let _finished = fakes::within("the killed command", DEADLINE, move || {
+    let _finished = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running.join().unwrap()
     });
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the real group is gone"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A refusal id stays not alive without consulting its script: 0 and 1
@@ -2143,7 +2175,7 @@ fn repeat_shutdowns_reuse_the_first_end() {
         .expect("the spawn reached its pause");
     let first = cancel_and_settle_on_thread(&reads, &clock, bound);
     assert!(
-        clock.await_parked(end, DEADLINE),
+        clock.await_parked(end, fakes::Deadline::after(DEADLINE)),
         "the first shutdown parked at its end"
     );
     assert_eq!(
@@ -2161,7 +2193,7 @@ fn repeat_shutdowns_reuse_the_first_end() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(end), DEADLINE),
+        clock.await_parked_since(&mark, Some(end), fakes::Deadline::after(DEADLINE)),
         "the first shutdown parked again at its end"
     );
     let second = cancel_and_settle_on_thread(&reads, &clock, bound);
@@ -2197,14 +2229,16 @@ fn repeat_shutdowns_reuse_the_first_end() {
         "a settle past the shared end answers false at once"
     );
     release.send(()).expect("the spawn's release");
-    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
-        .expect_err("a command spawned after the cancel");
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
+        held.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::matching_exits(marker, DEADLINE),
+        fakes::matching_exits(marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
-    watching.stand_down(DEADLINE);
+    watching.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// An end past what the clock can count expires at once: a held spawn
@@ -2239,14 +2273,16 @@ fn an_overflowing_shutdown_end_expires_at_once() {
         "overflow stores now, not None"
     );
     release.send(()).expect("the spawn's release");
-    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
-        .expect_err("a command spawned after the cancel");
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
+        held.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::matching_exits(marker, DEADLINE),
+        fakes::matching_exits(marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
-    watching.stand_down(DEADLINE);
+    watching.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// An empty shutdown answers `true` even past its stored end: expiry only
@@ -2312,7 +2348,7 @@ fn settle_on_thread(
 #[track_caller]
 fn still_settling(clock: &FakeClock, until: Instant, settled: &mpsc::Receiver<bool>, what: &str) {
     assert!(
-        clock.await_parked(until, DEADLINE),
+        clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the settle parks at its wait: {what}"
     );
     assert!(
@@ -2400,11 +2436,11 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
     // the shell is gone; the group wait proves the whole group is empty
     // before the drive advances.
     assert!(
-        fakes::matching_exits(&marker, DEADLINE),
+        fakes::matching_exits(&marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the late group is empty"
     );
     // A fork that landed inside the kill still lists the group after the
@@ -2462,7 +2498,7 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
         "the settle retired the late group: {:?}",
         listed(&reads)
     );
-    watching.stand_down(DEADLINE);
+    watching.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// The settle waits for the late child's reap, not just its kill: the
@@ -2600,7 +2636,7 @@ fn settle_waits_for_the_late_childs_reap() {
                 // raised. The park wait proves which without moving the
                 // clock.
                 assert!(
-                    clock.await_parked(end, DEADLINE),
+                    clock.await_parked(end, fakes::Deadline::after(DEADLINE)),
                     "the settle parks at its end once the group is gone"
                 );
                 assert!(
@@ -2636,10 +2672,10 @@ fn settle_waits_for_the_late_childs_reap() {
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert_eq!(reads.lock().spawning, 0, "the late kill dropped the count");
     assert!(
-        fakes::matching_exits(&marker, DEADLINE),
+        fakes::matching_exits(&marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
-    watching.stand_down(DEADLINE);
+    watching.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -2655,7 +2691,7 @@ fn a_failed_spawn_does_not_leave_the_count_raised() {
     // the bound fails the test instead of hanging the binary. The exact
     // count pins the decrement at once, so a `+=` or `/=` mutant fails
     // here instead of running out the settle below.
-    let error = fakes::within("the failed spawn", DEADLINE, {
+    let error = fakes::within("the failed spawn", Deadline::after(DEADLINE), {
         let reads = Arc::clone(&reads);
         move || reads.command(&mut missing)
     })
@@ -2708,7 +2744,7 @@ fn settle_gives_up_at_the_bound() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(end), DEADLINE),
+        clock.await_parked_since(&mark, Some(end), fakes::Deadline::after(DEADLINE)),
         "the settle parked again short of its bound"
     );
     // One nanosecond short of the bound the settle still parks with no
@@ -2729,14 +2765,16 @@ fn settle_gives_up_at_the_bound() {
     );
     reads.cancel();
     release.send(()).expect("the spawn's release");
-    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
-        .expect_err("a command spawned after the cancel");
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
+        held.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::matching_exits(marker, DEADLINE),
+        fakes::matching_exits(marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
-    watching.stand_down(DEADLINE);
+    watching.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// The settle subscribes before it reads the count: on a clock nothing
@@ -2775,14 +2813,16 @@ fn settle_wakes_on_a_clock_advance_with_no_earlier_subscription() {
     );
     reads.cancel();
     release.send(()).expect("the spawn's release");
-    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
-        .expect_err("a command spawned after the cancel");
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
+        held.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::matching_exits(marker, DEADLINE),
+        fakes::matching_exits(marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
-    watching.stand_down(DEADLINE);
+    watching.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -2843,12 +2883,14 @@ fn settle_pins_zero_true_and_held_false_at_once() {
     );
     reads.cancel();
     release.send(()).expect("the spawn's release");
-    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
-        .expect_err("a command spawned after the cancel");
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
+        held.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::matching_exits(marker, DEADLINE),
+        fakes::matching_exits(marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
-    watching.stand_down(DEADLINE);
+    watching.stand_down(fakes::Deadline::after(DEADLINE));
 }

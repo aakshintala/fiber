@@ -1,6 +1,6 @@
 //! `session_message` (`docs/tools.md`, "Messaging other sessions"): sends a
-//! plain-text message to one running session, answered `delivered` once it
-//! is in the target's inbox.
+//! plain-text message to one running session, answered `delivered` once the
+//! target takes it, after its `before_message` hook ran.
 
 use std::sync::Arc;
 
@@ -27,12 +27,22 @@ struct Args {
 pub struct SessionMessage {
     sessions: Arc<dyn Sessions>,
     own: SessionId,
+    parent_of: Arc<dyn Fn() -> Option<SessionId> + Send + Sync>,
 }
 
 impl SessionMessage {
-    /// Uses the socket client and the calling session's id.
-    pub fn new(sessions: Arc<dyn Sessions>, own: SessionId) -> Self {
-        Self { sessions, own }
+    /// Uses the socket client and the calling session's id; `parent_of`
+    /// reads the calling session's parent for the target's hook.
+    pub fn new(
+        sessions: Arc<dyn Sessions>,
+        own: SessionId,
+        parent_of: Arc<dyn Fn() -> Option<SessionId> + Send + Sync>,
+    ) -> Self {
+        Self {
+            sessions,
+            own,
+            parent_of,
+        }
     }
 }
 
@@ -40,7 +50,7 @@ impl Tool for SessionMessage {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "session_message".to_owned(),
-            description: "Sends a plain-text message to one running Fiber session by its full id from session_list. It arrives there as steering during a turn, or starts a turn. Answers \"delivered\" once it is in that session's inbox; fails unreachable when no running session has the id, and closing when the target is closing.".into(),
+            description: "Sends a plain-text message to one running Fiber session by its full id from session_list. It arrives there as steering during a turn, or starts a turn. Answers \"delivered\" once the target takes it; fails unreachable, closing, message_refused, or hook_failed.".into(),
             input_schema: json!({"type":"object","properties":{"id":{"type":"string","description":"The target session's full id, as session_list gives it."},"text":{"type":"string","description":"The message, plain text."}},"required":["id","text"],"additionalProperties":false}),
             deferred: false,
             hosted: None,
@@ -68,7 +78,10 @@ impl Tool for SessionMessage {
             Err(error) => return errored(SessionMessageError::from(error)),
         };
         let to = SessionId(args.id.clone());
-        let result = self.sessions.message(&to, &self.own, &args.text, cancel);
+        let parent = (self.parent_of)();
+        let result = self
+            .sessions
+            .message(&to, &self.own, parent.as_ref(), &args.text, cancel);
         // The call claims nothing about delivery when it is cancelled: the
         // target may hold the message while the call reports the cancel.
         if cancel.is_cancelled() {

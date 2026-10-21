@@ -325,7 +325,7 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
     assert_eq!(record.reason, ServerFailure::Deadline);
     assert!(record.will_restart, "a failed first start is its one death");
     setup.stop(started.servers);
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -426,7 +426,10 @@ fn stop_stops_a_lazily_started_server_and_ignores_a_never_started_one() {
         .parse()
         .expect("a pid");
     setup.stop(started.servers);
-    assert!(fakes::pids_exit(&[pid], WITHIN), "pid {pid} to be reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "pid {pid} to be reaped"
+    );
     assert!(!fakes::pid_alive(pid), "pid {pid} to be reaped");
 }
 
@@ -609,7 +612,9 @@ fn concurrent_calls_that_see_one_death_record_it_once() {
     }
     drop(done);
     assert!(
-        setup.fake.await_parked_count(deadline, 2, WITHIN),
+        setup
+            .fake
+            .await_parked_count(deadline, 2, fakes::Deadline::after(WITHIN)),
         "both calls wait on the server",
     );
     fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
@@ -850,7 +855,9 @@ fn a_call_ended_by_the_stop_records_no_death() {
         .checked_add(DEFAULT_CALL_TIMEOUT)
         .expect("deadline");
     assert!(
-        setup.fake.await_parked(deadline, WITHIN),
+        setup
+            .fake
+            .await_parked(deadline, fakes::Deadline::after(WITHIN)),
         "the call waits on its timeout",
     );
     let slot = std::sync::Arc::clone(&started.servers.slots.lock().unwrap()[0]);
@@ -1419,7 +1426,9 @@ fn call_asking_forwards_the_asker_without_leaving_the_seam() {
     let started = setup.start(vec![setup.spec("fx")]);
     let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
     let serving = Arc::clone(&slot);
-    let server = fakes::within("the serve", WITHIN, move || match serving.run("ask") {
+    let server = fakes::within("the serve", Deadline::after(WITHIN), move || match serving
+        .run("ask")
+    {
         Run::Call(server, _) => server,
         Run::Removed(_) => panic!("the server still lists ask"),
         Run::Failed(failed) => panic!("the server runs: {}", failed.error),
@@ -1432,7 +1441,7 @@ fn call_asking_forwards_the_asker_without_leaving_the_seam() {
             },
         )],
     );
-    let called = fakes::within("the asking call", WITHIN, move || {
+    let called = fakes::within("the asking call", Deadline::after(WITHIN), move || {
         let empty = serde_json::Map::new();
         let params = crate::rpc::Named {
             arguments: &empty,

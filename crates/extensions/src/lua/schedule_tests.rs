@@ -450,6 +450,7 @@ fn start_in(dir: &std::path::Path) -> Start {
         browser: Arc::new(crate::oauth::SystemBrowser::default()),
         session: None,
         secrets: Vec::new(),
+        deps: Default::default(),
     }
 }
 
@@ -1156,6 +1157,7 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
                         browser,
                         session: None,
                         secrets: Vec::new(),
+                        deps: Default::default(),
                     },
                     &hub,
                     &mut parked,
@@ -1535,7 +1537,7 @@ fn a_finished_timer_records_timer_done_for_its_own_target() {
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
-        clock.await_parked(due, WAIT_FOR_TIMER),
+        clock.await_parked(due, fakes::Deadline::after(WAIT_FOR_TIMER)),
         "the timer waits for its due time"
     );
     clock.advance_when_parked(
@@ -1616,7 +1618,7 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
-        clock.await_parked(due, WAIT_FOR_TIMER),
+        clock.await_parked(due, fakes::Deadline::after(WAIT_FOR_TIMER)),
         "the timer waits for its due time"
     );
     clock.advance_when_parked(
@@ -1627,7 +1629,7 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
     );
     // The child reached its script, so the suspension below stays put:
     // nothing advances the fake clock while the exec is held.
-    let started = ready.wait(WAIT_FOR_TIMER);
+    let started = ready.wait(fakes::Deadline::after(WAIT_FOR_TIMER));
     {
         let shared = hub.lock();
         assert!(
@@ -1655,7 +1657,7 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
         vec![(Target::Timer { id: 0 }.to_string(), Pause::TimerDone)]
     );
     assert!(
-        fakes::group_empties(started[0], WAIT_FOR_TIMER),
+        fakes::group_empties(started[0], fakes::Deadline::after(WAIT_FOR_TIMER)),
         "the released exec left its group behind"
     );
 }
@@ -1702,7 +1704,7 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
-        clock.await_parked(due, WAIT_FOR_TIMER),
+        clock.await_parked(due, fakes::Deadline::after(WAIT_FOR_TIMER)),
         "the timer waits for its due time"
     );
     clock.advance_when_parked(
@@ -1713,7 +1715,7 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     );
     // The child reached its script, so it is at or on its way to the gate:
     // the gate read comes before the block open, whatever the scheduling.
-    let started = ready.wait(WAIT_FOR_TIMER);
+    let started = ready.wait(fakes::Deadline::after(WAIT_FOR_TIMER));
     {
         let shared = hub.lock();
         assert!(
@@ -1752,10 +1754,10 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
         vec![(Target::Timer { id: 0 }.to_string(), Pause::TimerDone)]
     );
     assert!(
-        fakes::group_empties(started[0], WAIT_FOR_TIMER),
+        fakes::group_empties(started[0], fakes::Deadline::after(WAIT_FOR_TIMER)),
         "the released exec left its group behind"
     );
-    watchdog.stand_down(WAIT_FOR_TIMER);
+    watchdog.stand_down(fakes::Deadline::after(WAIT_FOR_TIMER));
 }
 
 /// A non-timer call that finishes records no `TimerDone`. Without the

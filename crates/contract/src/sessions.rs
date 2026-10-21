@@ -66,12 +66,14 @@ pub trait Sessions: Send + Sync {
     /// seconds in all for their latest summaries.
     fn list(&self, cancel: &dyn Cancel) -> Result<Vec<Running>, ListError>;
 
-    /// Sends `text` to `to` as a session message from `from`, on one
-    /// connection closed straight after the answer.
+    /// Sends `text` to `to` as a session message from `from`, whose parent
+    /// is `parent` when the sender has one, on one connection closed
+    /// straight after the answer.
     fn message(
         &self,
         to: &SessionId,
         from: &SessionId,
+        parent: Option<&SessionId>,
         text: &str,
         cancel: &dyn Cancel,
     ) -> Result<(), MessageError>;

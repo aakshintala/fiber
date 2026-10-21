@@ -124,7 +124,7 @@ fn wait_parked_since<T: Send>(
 ) -> Option<T> {
     let bound = Deadline::after(Duration::from_secs(10));
     loop {
-        if clock.await_any_parked_since(mark, ROUND) {
+        if clock.await_any_parked_since(mark, fakes::Deadline::after(ROUND)) {
             return None;
         }
         match done.try_recv() {

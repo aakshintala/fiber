@@ -154,7 +154,7 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
     // The first run parked on the held server; the mid-session run happened
     // exactly once.
     assert!(
-        held.await_requests(1, setup.deadline.left()),
+        held.await_requests(1, setup.deadline),
         "waited for the watcher to park mid-session"
     );
     assert_eq!(fs::read_to_string(&marker).unwrap(), "run\n");

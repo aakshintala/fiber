@@ -613,7 +613,7 @@ printf 'fakepng' > "$root.png""#,
             &cancel,
         )));
     });
-    ready.wait(LIMIT);
+    ready.wait(fakes::Deadline::after(LIMIT));
     assert!(
         done_rx.try_recv().is_err(),
         "the call ended before the cancel"

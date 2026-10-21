@@ -195,7 +195,7 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
         })
         .unwrap();
     assert!(
-        clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
+        clock.await_parked(clock.now() + GROUP_POLL, fakes::Deadline::after(WITHIN)),
         "waited {WITHIN:?} for diff to park while running"
     );
     // The stall proves it is stuck before the clock first moves: stopping
@@ -241,7 +241,7 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
         leftovers.is_empty(),
         "the stalled diff is gone: {leftovers:?}"
     );
-    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// A `diff` that fails at once keeps the missing-commit fallback: only a
@@ -264,5 +264,104 @@ fn a_failed_diff_keeps_the_missing_commit_fallback() {
     assert_eq!(
         changes, "The installed commit is not in the repository.\n",
         "a failed diff stands in the missing-commit text"
+    );
+}
+
+/// A repository with a lightweight tag `v1`, an annotated tag `v1-annotated`
+/// (whose peeled `^{}` line must never match) and a `v10` that must not
+/// match a `v1` lookup, served over `file://`.
+fn tagged_repo() -> (fakes::TempDir, Origin) {
+    let repo = fakes::git::repo("fiber-git-tag-commit");
+    fakes::git::git(repo.path(), &["tag", "v1"]);
+    fakes::git::git(repo.path(), &["tag", "-a", "-m", "ten", "v10"]);
+    fakes::git::git(
+        repo.path(),
+        &["tag", "-a", "-m", "annotated", "v1-annotated"],
+    );
+    let path = repo.path().to_owned();
+    let origin = Origin::new("git", move |_| format!("file://{}", path.display()));
+    (repo, origin)
+}
+
+#[test]
+fn tag_commit_returns_the_exact_tag_line_only() {
+    let (_repo, origin) = tagged_repo();
+    let clock = fakes::clock::FakeClock::new();
+    let sha = origin.tag_commit("x", "v1", clock.as_ref()).unwrap();
+    assert_eq!(sha.len(), 40, "{sha}");
+    assert_eq!(sha, origin.tag_commit("x", "v1", clock.as_ref()).unwrap());
+    // `v10` is its own tag: the `v1` lookup never matches it.
+    let other = origin.tag_commit("x", "v10", clock.as_ref()).unwrap();
+    assert_eq!(other.len(), 40, "{other}");
+    // An annotated tag resolves to its tag line, never the peeled commit.
+    let annotated = origin
+        .tag_commit("x", "v1-annotated", clock.as_ref())
+        .unwrap();
+    assert_eq!(annotated.len(), 40, "{annotated}");
+    assert_ne!(annotated, other);
+}
+
+#[test]
+fn tag_commit_matches_the_whole_tag_only() {
+    let (_repo, origin) = tagged_repo();
+    let clock = fakes::clock::FakeClock::new();
+    // `v1-annotated` exists, but `v1-annotate` is no tag: a prefix match
+    // would wrongly return the longer tag's SHA.
+    let err = origin
+        .tag_commit("github.com/acme/x", "v1-annotate", clock.as_ref())
+        .unwrap_err();
+    let Error::MissingTag { repo, tag } = &err else {
+        panic!("a prefix of a tag is a missing tag: {err}");
+    };
+    assert_eq!(repo, "github.com/acme/x");
+    assert_eq!(tag, "v1-annotate");
+}
+
+#[test]
+fn tag_commit_names_a_missing_tag_and_its_repository() {
+    let (_repo, origin) = tagged_repo();
+    let clock = fakes::clock::FakeClock::new();
+    let err = origin
+        .tag_commit("github.com/acme/x", "v9.9.9", clock.as_ref())
+        .unwrap_err();
+    assert!(err.to_string().contains("v9.9.9"), "{err}");
+    assert!(err.to_string().contains("github.com/acme/x"), "{err}");
+}
+
+/// The fake `git` answering `ls-remote`, so a failed listing names the
+/// repository the URL asked for.
+fn failing_git(url: String) -> Origin {
+    let git = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fake-git/git")
+        .to_string_lossy()
+        .into_owned();
+    Origin::new(git, move |_| url.clone())
+}
+
+/// `ls-remote` failing with a missing-repository error maps to
+/// `NoRepository`, naming the repository: the guard's true arm.
+#[test]
+fn tag_commit_reports_a_missing_repository() {
+    let clock = fakes::clock::FakeClock::new();
+    let err = failing_git("https://fake-missing-repo/x".to_owned())
+        .tag_commit("github.com/acme/x", "v1", clock.as_ref())
+        .unwrap_err();
+    let Error::NoRepository { name, .. } = &err else {
+        panic!("a missing repository is NoRepository: {err}");
+    };
+    assert_eq!(name, "github.com/acme/x");
+}
+
+/// `ls-remote` failing any other way stays a `Git` failure: the guard's
+/// false arm. An authentication failure is not a missing repository.
+#[test]
+fn tag_commit_keeps_a_non_missing_git_failure() {
+    let clock = fakes::clock::FakeClock::new();
+    let err = failing_git("https://fake-broken-repo/x".to_owned())
+        .tag_commit("github.com/acme/x", "v1", clock.as_ref())
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Git { .. }),
+        "a non-missing failure stays git: {err}"
     );
 }

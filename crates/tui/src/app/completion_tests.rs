@@ -33,6 +33,7 @@ fn typing_filters_prefix_matches_first() {
         shown(&app),
         [
             "/resume  Goes home, focused on the first exited row.  command",
+            "/name /rename <text>  Names the session.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
             "/credential [<label>]  Switches the credential label, or opens the credential picker.  command",
             "/areview  Runs areview.  skill",
@@ -520,7 +521,7 @@ fn slash_completions_carry_their_window() {
     type_text(&mut app, "/re");
     let completions = app.completions().expect("the panel shows");
     assert_eq!(completions.query, "re");
-    assert_eq!(completions.total, 4);
+    assert_eq!(completions.total, 5);
     assert_eq!(completions.start, 0);
     assert_eq!(completions.selected, Some(0));
     let names: Vec<&str> = match &completions.rows {
@@ -529,11 +530,12 @@ fn slash_completions_carry_their_window() {
             panic!("a slash window, not {:?}", completions.rows)
         }
     };
-    assert_eq!(names, ["resume", "reload", "credential", "areview"]);
+    assert_eq!(names, ["resume", "name", "reload", "credential", "areview"]);
     assert_eq!(
         completions.lines(),
         [
             "/resume  Goes home, focused on the first exited row.  command",
+            "/name /rename <text>  Names the session.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
             "/credential [<label>]  Switches the credential label, or opens the credential picker.  command",
             "/areview  Runs areview.  skill",
@@ -982,4 +984,30 @@ fn slash_theme_name_without_a_seam_is_a_notice() {
         ),
         "a notice names why nothing changed"
     );
+}
+
+#[test]
+fn extensions_loaded_asks_again_and_its_answer_runs_the_new_command() {
+    // An offer's approval loads its extensions with no `reloaded`: the
+    // `extensions_loaded` that follows brings their commands in.
+    let mut app = attached();
+    answer_commands(&mut app, &["tdd"]);
+    let asked = app.on_line(session_line(
+        "extensions_loaded",
+        json!({"extensions": [{"name": "acme", "version": "1.0.0"}]}),
+    ));
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    assert_eq!(asked["command"], "commands");
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": [
+            {"name": "deploy", "description": "Deploys.", "tag": "acme",
+                "extension": true}]}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    let lines = sent(enter(&mut app, "/deploy now"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "command");
+    assert_eq!(lines[0]["args"], json!({"name": "deploy", "text": "now"}));
 }

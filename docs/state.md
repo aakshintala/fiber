@@ -223,7 +223,7 @@ on. Each process writes its own file, so every file has one writer, as a
 session log does: the hub writes `logs/hub.log`, and any other process that
 has something to record writes `logs/<kind>-<id>.log`, where `<kind>` is
 `session`, `ask` or `tui` and `<id>` its session id once its session log
-exists, or its process id until then.
+exists, or its process id until then, except a signal before Fiber starts writing `fiber_started`, which stays pid-named with no `session_id`.
 
 Each line is one JSON object: `ts`, `level` (`error`, `warn`, `info` or
 `debug`), `process` (`hub`, `session`, `ask` or `tui`), `session_id` when one

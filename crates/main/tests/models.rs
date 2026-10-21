@@ -153,7 +153,7 @@ impl Setup {
             "`fiber` left a process behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
     }
 }
@@ -392,7 +392,7 @@ fn a_failed_openrouter_refresh_keeps_the_cached_list() {
     assert_eq!(third.code, Some(0), "stderr: {}", third.stderr);
     assert_eq!(third.stdout, first.stdout);
     await_refresh_exit(setup.deadline, &setup.refresh_pattern());
-    refresh_guard.stand_down(setup.deadline.cleanup());
+    refresh_guard.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -462,11 +462,11 @@ fn models_lists_every_first_party_model_and_drops_none() {
 /// and fails.
 #[track_caller]
 fn await_refresh_exit(deadline: Deadline, pattern: &str) {
-    if fakes::matching_exits(pattern, deadline.left()) {
+    if fakes::matching_exits(pattern, deadline) {
         return;
     }
     support::kill_matching(deadline, pattern).unwrap();
-    fakes::try_matching_exits(pattern, deadline.cleanup()).unwrap_or_else(|err| {
+    fakes::try_matching_exits(pattern, deadline.cleanup_phase()).unwrap_or_else(|err| {
         panic!("the refresh child outlived SIGKILL past the cleanup deadline: {err}")
     });
     panic!("waited until the deadline for the refresh child to exit");
@@ -573,7 +573,7 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     // the guard without an exit would kill it instead of checking it,
     // and a timeout above drops it, so no run leaves one behind.
     await_refresh_exit(setup.deadline, &setup.refresh_pattern());
-    refresh_guard.stand_down(setup.deadline.cleanup());
+    refresh_guard.stand_down(setup.deadline.cleanup_phase());
 }
 
 fn install_data(home: &std::path::Path, name: &str, providers: &Value, datas: &[(&str, Value)]) {
@@ -752,7 +752,7 @@ fn fiber_in(setup: &Setup, dir: &Path, args: &[&str]) -> Output {
         "`fiber` left a process behind"
     );
     std::mem::forget(guard);
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     output
 }
 

@@ -8,7 +8,7 @@ use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use fakes::{TempDir, finished};
+use fakes::{Deadline, TempDir, finished};
 
 /// Runs `command` to its end under `within` and returns its exit code and
 /// its combined output. `stdin` holds the bytes for piped standard input,
@@ -25,7 +25,7 @@ pub(crate) fn run(
         .process_group(0)
         .spawn()
         .unwrap();
-    let output = finished(what, child, stdin, within);
+    let output = finished(what, child, stdin, Deadline::after(within));
     let text =
         String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap();
     (output.status.code(), text)

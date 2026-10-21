@@ -7,7 +7,7 @@
 //! `fiber mcp remove`, `fiber mcp list`, `fiber mcp login`, `fiber mcp logout`, `fiber hub install`,
 //! `fiber hub uninstall`, `fiber hub status`, `fiber hub refresh`, `fiber hub add`,
 //! `fiber hub remove`, `fiber doctor`, and the hub restart
-//! `fiber update` calls, and the release install step `install.sh` runs
+//! `fiber update` calls, `fiber setup`, and the release install step `install.sh` runs
 //! (`docs/architecture.md`, "The modules"). `main` parses argv and
 //! dispatches here; this crate takes plain values.
 
@@ -112,7 +112,17 @@ mod sessions_list;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod sessions_search;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
+mod setup;
 mod table;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
+mod update;
 
 #[cfg(test)]
 mod test_support;
@@ -121,7 +131,7 @@ pub use approve::approve;
 pub use config::{config_get, config_set, config_set_text};
 pub use doctor::{capture, doctor, with_fix};
 pub use extension::{
-    FirstPartyInstall, LoginNeed, extension_install, extension_list, extension_reinstall,
+    FirstPartyInstall, Io, LoginNeed, extension_install, extension_list, extension_reinstall,
     extension_remove, extension_update, install_first_party,
 };
 pub use extension_test::extension_test;
@@ -148,6 +158,8 @@ pub use sessions::{delete, export};
 pub use sessions_list::list as sessions_list;
 pub use sessions_list::resolve_listed;
 pub use sessions_search::search as sessions_search;
+pub use setup::{Completions, Hub, SetupFlags, setup};
+pub use update::{Channel, ChannelError, ReleaseBases, resolve_channel, update};
 
 /// What `fiber logout` says when it is given no provider.
 pub const LOGOUT_SHAPE: &str =

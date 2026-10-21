@@ -221,7 +221,7 @@ fn in_child(test: &str, store_pem: &[u8], expected: &str) {
             ("SSL_CERT_DIR", dir_text.as_str()),
             (NET_CHILD, expected),
         ],
-        CHILD_WITHIN,
+        Deadline::after(CHILD_WITHIN),
     );
     assert!(
         output.status.success(),

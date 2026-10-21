@@ -450,7 +450,10 @@ dependency.
   on the list.
 - Every release ships a notices file with the licence text and copyright
   notice of every crate compiled into the binary. cargo-about generates it
-  from `Cargo.lock`, and CI fails if it cannot.
+  from `Cargo.lock` with the root `about.toml`, whose accepted list carries
+  the same set of licences as `deny.toml`, and CI fails if it cannot. The
+  pull-request `scripts/check` run generates the same file, so a licence
+  the config rejects fails the pull request, not the release.
 - An advisory fails a pull request that changes `Cargo.lock`, the daily
   advisory run and a release (`docs/ci.md`), including one that marks a crate
   unmaintained.

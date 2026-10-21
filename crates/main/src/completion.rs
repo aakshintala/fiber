@@ -19,6 +19,17 @@ pub(crate) enum Shell {
     Fish,
 }
 
+impl Shell {
+    /// The parser's spelling of the shell, the one name every call site uses.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Shell::Bash => "bash",
+            Shell::Zsh => "zsh",
+            Shell::Fish => "fish",
+        }
+    }
+}
+
 /// The parser, built once so the copy's names borrow `'static` text.
 static PARSER: LazyLock<Command> = LazyLock::new(crate::cli::command);
 

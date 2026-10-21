@@ -369,6 +369,7 @@ fn provider_extension(
 ) -> Option<Arc<extensions::LuaExtension>> {
     let extension_for = |package: &extensions::Installed| {
         let dir = config::extensions_dir(home).join(config::dir_name(&package.name));
+        let deps = extensions::dep_dirs(home, &dir, &package.depends, false);
         Arc::new(
             extensions::LuaExtension::new(
                 package.name.clone(),
@@ -376,6 +377,7 @@ fn provider_extension(
                 home.to_path_buf(),
                 Arc::clone(clock),
             )
+            .with_dependencies(deps)
             .with_host_script(Arc::clone(host))
             .with_browser(Arc::new(CaseBrowser(attended))),
         )

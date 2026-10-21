@@ -2,6 +2,7 @@
 //! coroutine (`docs/extensions.md`, "How an extension runs").
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -35,6 +36,7 @@ pub(crate) fn install(
     dir: PathBuf,
     memory_cap: usize,
     loading: Rc<RefCell<Option<String>>>,
+    deps: BTreeMap<String, PathBuf>,
 ) -> mlua::Result<(
     Table,
     Table,
@@ -55,11 +57,78 @@ pub(crate) fn install(
         Ok(thread)
     })?;
     let load_module = lua.create_function(move |lua, name: String| {
-        let file = format!("{}.lua", name.replace('.', "/"));
-        Ok(match load_file(lua, &dir, &file, memory_cap)? {
-            Ok(chunk) => (Some(chunk), None),
-            Err(message) => (None, Some(message)),
-        })
+        // A qualified name loads from the named dependency's directory:
+        // the longest manifest depends key K such that the name starts
+        // with K plus a colon wins, and the remainder maps to a file
+        // exactly as an unqualified name does. An empty name, an empty
+        // remainder, or no prefix match is the same backtick-file error
+        // the loader already reports, naming the unknown dependency. The
+        // serving root is the mapped directory canonicalized per read,
+        // so a symlinked home still serves through the same link; a
+        // missing directory fails here, naming the dependency, without
+        // reaching the file loader. A mapped directory whose final
+        // component is a symlink is refused below; any other escape
+        // is refused by the file loader's serving-root check.
+        if name.is_empty() {
+            return Ok((None, Some("`dependency '' not installed`".to_owned())));
+        }
+        if !name.contains(':') {
+            let (root, file) = (dir.clone(), format!("{}.lua", name.replace('.', "/")));
+            return Ok(match load_file(lua, &root, &file, memory_cap)? {
+                Ok(chunk) => (Some(chunk), None),
+                Err(message) => (None, Some(message)),
+            });
+        }
+        // The longest depends key followed by a colon wins; a key that is
+        // only a string prefix (the boundary byte is not a colon) matches
+        // nothing, so `dep:a:` with only key `dep` loads module `a:`.
+        let best = deps
+            .iter()
+            .filter(|(key, _)| {
+                name.starts_with(key.as_str()) && name.as_bytes().get(key.len()) == Some(&b':')
+            })
+            .max_by_key(|(key, _)| key.len());
+        // A qualified name whose remainder past its matched key is
+        // empty names the dependency it matched: `dep:` with key `dep`
+        // is an unknown dependency, and a remainder that only looks
+        // empty (`dep:a:` with only key `dep` leaves `a:`) loads as a
+        // module, so a trailing colon alone never decides.
+        if let Some((key, mapped)) = best {
+            let module = name[key.len() + 1..].to_owned();
+            let dep = key.clone();
+            if module.is_empty() {
+                return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
+            }
+            let root = match mapped.canonicalize() {
+                Ok(root) => root,
+                Err(_) => {
+                    return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
+                }
+            };
+            let file = format!("{}.lua", module.replace('.', "/"));
+            // A mapped directory that is itself a symlink never serves:
+            // the final component is checked before any read, so a
+            // symlinked FIBER_HOME still serves (its final component is
+            // a real directory) while a symlinked dependency root is
+            // refused with the outside-directory error the file loader
+            // also reports. The root re-resolves on every require, so a
+            // link retargeted mid-run refuses its new target.
+            if mapped
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+            {
+                return Ok((
+                    None,
+                    Some(format!("`{file}` is outside the extension's directory")),
+                ));
+            }
+            return Ok(match load_file(lua, &root, &file, memory_cap)? {
+                Ok(chunk) => (Some(chunk), None),
+                Err(message) => (None, Some(message)),
+            });
+        }
+        let head = name.split_once(':').map_or(name.as_str(), |(head, _)| head);
+        Ok((None, Some(format!("`dependency '{head}' not installed`"))))
     })?;
     let failures = crate::host::failure::install(lua)?;
     let loading = lua.create_function(move |_, ()| Ok(loading.borrow().clone()))?;
@@ -95,8 +164,14 @@ pub(crate) fn install_prelude(
     Table,
     crate::host::failure::FailureLib,
 )> {
-    let (commands, providers, hooks, watchers, problems, _violations, failures) =
-        install(lua, deadline, dir, memory_cap, Rc::default())?;
+    let (commands, providers, hooks, watchers, problems, _violations, failures) = install(
+        lua,
+        deadline,
+        dir,
+        memory_cap,
+        Rc::default(),
+        BTreeMap::new(),
+    )?;
     Ok((commands, providers, hooks, watchers, problems, failures))
 }
 

@@ -665,7 +665,7 @@ fn cap_boundaries_hold_on_both_paths() {
             ProviderServer::start_responding(move |_| Response::status(status, body.clone()))
                 .unwrap();
         let request = get(&server.url(), None);
-        let plain = fakes::within("perform", fakes::MUST_SUCCEED_WITHIN, {
+        let plain = fakes::within("perform", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
             let request = HttpRequest {
                 method: request.method.clone(),
                 url: request.url.clone(),
@@ -677,21 +677,25 @@ fn cap_boundaries_hold_on_both_paths() {
         });
         let (sink, _) = Watching::new();
         let held = sink.clone();
-        let seen = fakes::within("perform_observed", fakes::MUST_SUCCEED_WITHIN, {
-            let request = HttpRequest {
-                method: "GET".to_owned(),
-                url: server.url(),
-                headers: Vec::new(),
-                body: None,
-                timeout: None,
-            };
-            move || {
-                perform_observed(
-                    &request,
-                    observed("p", Purpose::Quota, held.clone(), FakeClock::new()),
-                )
-            }
-        });
+        let seen = fakes::within(
+            "perform_observed",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            {
+                let request = HttpRequest {
+                    method: "GET".to_owned(),
+                    url: server.url(),
+                    headers: Vec::new(),
+                    body: None,
+                    timeout: None,
+                };
+                move || {
+                    perform_observed(
+                        &request,
+                        observed("p", Purpose::Quota, held.clone(), FakeClock::new()),
+                    )
+                }
+            },
+        );
         assert_eq!(plain, seen);
         let records = sink.records();
         assert_eq!(records.len(), 1);
@@ -1083,11 +1087,11 @@ fn worker_emits_only_after_the_guard_releases() {
     // deadline plus the grace for a suspended call, while its callback
     // stays suspended. A transient hold no longer fails the read below.
     assert!(
-        fake.await_parked(mark + Duration::from_secs(60), WAIT),
+        fake.await_parked(mark + Duration::from_secs(60), fakes::Deadline::after(WAIT)),
         "the hook caller parked at its deadline"
     );
     assert!(
-        fake.await_parked(mark + Duration::from_secs(61), WAIT),
+        fake.await_parked(mark + Duration::from_secs(61), fakes::Deadline::after(WAIT)),
         "the caller parked past its check"
     );
     // Gate the models caller's next park past its check: the window where
@@ -1153,7 +1157,7 @@ fn worker_emits_only_after_the_guard_releases() {
         .expect("the zero advance returns after the release")
         .expect("the zero advance succeeded");
     assert!(
-        fake.await_parked(mark + Duration::from_secs(61), WAIT),
+        fake.await_parked(mark + Duration::from_secs(61), fakes::Deadline::after(WAIT)),
         "the caller parked past its check"
     );
     // With the scheduler frozen past the rendezvous and the worker gated
@@ -1218,11 +1222,11 @@ fn gated_park_holds_the_hub_guard() {
         let _sent = tx.send(provider.list_models(&ModelsArg::default()));
     });
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the worker suspended on HTTP"
     );
     assert!(
-        fake.await_parked(mark + Duration::from_secs(61), WAIT),
+        fake.await_parked(mark + Duration::from_secs(61), fakes::Deadline::after(WAIT)),
         "the caller parked past its check"
     );
     let (gated_arrived, gated_release) = clock.arm(Some(mark + Duration::from_secs(61)));
@@ -1276,9 +1280,11 @@ fn spawn_failure_starts_no_request_or_record() {
     let ext = LuaExtension::new("ext", dir.path(), dir.path(), clock)
         .with_diagnostics(sink.clone() as Arc<dyn DebugLog>);
     fail_next_spawn_for("sf");
-    let err = fakes::within("ext.provider_call", fakes::MUST_SUCCEED_WITHIN, move || {
-        ext.provider_call("sf", "models", serde_json::Value::Null)
-    })
+    let err = fakes::within(
+        "ext.provider_call",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || ext.provider_call("sf", "models", serde_json::Value::Null),
+    )
     .unwrap_err();
     assert_eq!(err.code(), ErrorCode::IoFailed);
     assert!(server.requests().is_empty(), "a failed spawn sends nothing");
@@ -1367,7 +1373,10 @@ fn expired_before_admission_starts_nothing() {
         })
     };
     assert!(
-        clock.await_parked(mark + Duration::from_millis(1000), WAIT),
+        clock.await_parked(
+            mark + Duration::from_millis(1000),
+            fakes::Deadline::after(WAIT)
+        ),
         "the queued call parked at its deadline"
     );
     clock.advance_when_parked(
@@ -1476,11 +1485,14 @@ fn late_workers_emit_once_and_drop_late_replies() {
         })
     };
     assert!(
-        hook_server.await_requests(1, WAIT),
+        hook_server.await_requests(1, Deadline::after(WAIT)),
         "the hook suspended on HTTP"
     );
     assert!(
-        clock.await_parked(mark + Duration::from_millis(2000), WAIT),
+        clock.await_parked(
+            mark + Duration::from_millis(2000),
+            fakes::Deadline::after(WAIT)
+        ),
         "the hook caller parked past its check on the suspended callback"
     );
     // Past the hook's deadline but inside its grace: its caller takes the
@@ -1506,7 +1518,7 @@ fn late_workers_emit_once_and_drop_late_replies() {
         "the expired callback returns its timeout: {err:?}"
     );
     // The next callback runs on the live VM.
-    fakes::within("ext.hook", fakes::MUST_SUCCEED_WITHIN, {
+    fakes::within("ext.hook", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
         let ext = Arc::clone(&ext);
         move || ext.hook("turn_start", 0, serde_json::Value::Null)
     })
@@ -1519,7 +1531,7 @@ fn late_workers_emit_once_and_drop_late_replies() {
         let _sent = models_tx.send(observer.list_models(&ModelsArg::default()));
     });
     assert!(
-        models_server.await_requests(1, WAIT),
+        models_server.await_requests(1, Deadline::after(WAIT)),
         "the provider suspended on HTTP"
     );
     ext.dispose();

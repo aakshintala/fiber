@@ -80,7 +80,9 @@ fn two_names_share_a_url_token_but_a_changed_url_does_not() {
             fake.requests()[offset].header("authorization"),
             expected.as_deref()
         );
-        fakes::within("remote stop", WITHIN, move || started.servers.stop());
+        fakes::within("remote stop", Deadline::after(WITHIN), move || {
+            started.servers.stop()
+        });
     }
 }
 
@@ -112,7 +114,7 @@ fn an_unusable_token_before_initialized_fails_the_public_start_with_login_advice
     let worker = std::thread::spawn(move || {
         done.send(setup.start(vec![spec])).unwrap();
     });
-    assert!(fake.await_requests(1, WITHIN));
+    assert!(fake.await_requests(1, Deadline::after(WITHIN)));
     files.state.lock().unwrap().records.get_mut(&key).unwrap()["access_token"] = json!("bad\r\n");
     fake.release_one();
     let started = Deadline::after(WITHIN)
@@ -494,7 +496,7 @@ fn a_server_that_misses_its_deadline_is_left_out() {
             ErrorCode::McpServerUnavailable
         );
         started.servers.stop();
-        watchdog.stand_down(WITHIN);
+        watchdog.stand_down(fakes::Deadline::after(WITHIN));
     });
 }
 
@@ -740,7 +742,7 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
          Raise `startup_timeout_ms` under `mcp.servers.slow` if it needs longer.",
     );
     setup.stop(started.servers);
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -1272,7 +1274,10 @@ fn adopt_then_stop_stops_the_adopted_server() {
     idle.servers.adopt(started.servers);
     assert_eq!(idle.servers.slots.lock().unwrap().len(), 1);
     setup.stop(idle.servers);
-    assert!(fakes::pids_exit(&[pid], WITHIN), "pid {pid} to be reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "pid {pid} to be reaped"
+    );
     assert!(!fakes::pid_alive(pid), "pid {pid} to be reaped");
 }
 

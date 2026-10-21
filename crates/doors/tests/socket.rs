@@ -172,10 +172,13 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("drop {}", id.0)
         }
-        Delivery::Message(message) => format!(
-            "message {} {}",
-            message.from_session_id.0, message.command_id.0
-        ),
+        Delivery::Message(message, ack) => {
+            ack.0(Ok(None));
+            format!(
+                "message {} {}",
+                message.from_session_id.0, message.command_id.0
+            )
+        }
         Delivery::Reply(reply, ack) => {
             ack.0(Ok(None));
             format!("reply {}", reply.request_id.0)
@@ -1534,7 +1537,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
-                | Delivery::Message(_)
+                | Delivery::Message(..)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::ProposeNotes(..)
@@ -1577,7 +1580,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
-                | Delivery::Message(_)
+                | Delivery::Message(..)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::ProposeNotes(..)
@@ -1672,7 +1675,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
-                | Delivery::Message(_)
+                | Delivery::Message(..)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::ProposeNotes(..)
@@ -1772,7 +1775,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ExtensionExec(_)
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
-                | Delivery::Message(_)
+                | Delivery::Message(..)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::ProposeNotes(..)
@@ -1819,7 +1822,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ExtensionExec(_)
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
-                | Delivery::Message(_)
+                | Delivery::Message(..)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::ProposeNotes(..)
@@ -2557,7 +2560,7 @@ fn answer_within(client: &Client, id: &str) -> Option<Value> {
 fn answers_within(client: &Client, ids: &[&str]) -> Vec<Option<Value>> {
     let mut answers: Vec<Option<Value>> = vec![None; ids.len()];
     while answers.iter().any(Option::is_none) {
-        let Some(line) = client.recv(DEADLINE) else {
+        let Some(line) = client.recv(fakes::Deadline::after(DEADLINE)) else {
             break;
         };
         if let Some(slot) = ids
@@ -4688,11 +4691,18 @@ fn close_now_with_a_non_boolean_is_invalid_and_starts_nothing() {
 }
 
 const SENDER: &str = "s_0123456789abcdef";
+const PARENT: &str = "s_parent00000001";
 const MESSAGE_CLOSED: &str = "The session is closing and takes no session message.";
 
 fn message_line(id: &str, from: &str, text: &str) -> String {
     format!(
         r#"{{"id":"{id}","command":"message","args":{{"from_session_id":"{from}","text":"{text}"}}}}"#
+    )
+}
+
+fn message_line_with_parent(id: &str, from: &str, parent: &str, text: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","command":"message","args":{{"from_session_id":"{from}","parent_session_id":"{parent}","text":"{text}"}}}}"#
     )
 }
 
@@ -4716,7 +4726,7 @@ fn named_sender(opened: &Opened, sender: &str, name: Option<&str>) {
 }
 
 #[test]
-fn message_is_answered_without_waiting_for_the_loop_and_carries_the_senders_name() {
+fn message_is_answered_once_the_loop_takes_it_and_carries_the_senders_name() {
     let opened = Opened::open(vec![]);
     named_sender(&opened, SENDER, Some("builder"));
     let socket = opened.socket.clone();
@@ -4729,12 +4739,11 @@ fn message_is_answered_without_waiting_for_the_loop_and_carries_the_senders_name
                 &client,
                 &message_line("c_m1", SENDER, "Tests pass on main."),
             );
-            // Answered before the test takes the inbox: the door answers,
-            // never the loop.
-            let accepted = response(&client, "c_m1");
-            assert_eq!(kind(&accepted), "command_accepted");
-            assert_eq!(command_id(&accepted), Some("c_m1"));
-            let Delivery::Message(message) = Deadline::after(DEADLINE)
+            send(
+                &client,
+                &message_line_with_parent("c_m2", SENDER, PARENT, "A child reports."),
+            );
+            let Delivery::Message(message, ack) = Deadline::after(DEADLINE)
                 .recv(&inbox)
                 .expect("the message is delivered")
             else {
@@ -4744,6 +4753,26 @@ fn message_is_answered_without_waiting_for_the_loop_and_carries_the_senders_name
             assert_eq!(message.command_id.0, "c_m1");
             assert_eq!(message.text, "Tests pass on main.");
             assert_eq!(message.name.as_deref(), Some("builder"));
+            assert_eq!(message.parent_session_id, None);
+            // Answered by the take, never at admission.
+            ack.0(Ok(None));
+            let accepted = response(&client, "c_m1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_m1"));
+            let Delivery::Message(child, child_ack) = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the child message is delivered")
+            else {
+                panic!("the child message is delivered as a message");
+            };
+            assert_eq!(child.command_id.0, "c_m2");
+            assert_eq!(
+                child.parent_session_id.as_ref().map(|id| id.0.as_str()),
+                Some(PARENT),
+                "the sender's parent reaches the take"
+            );
+            child_ack.0(Ok(None));
+            assert_eq!(kind(&response(&client, "c_m2")), "command_accepted");
             Ok(())
         })
         .unwrap();
@@ -4764,10 +4793,8 @@ fn message_from_an_unknown_or_odd_sender_is_delivered_with_no_name() {
                 &message_line("c_m1", "s_ffffffffffffffff", "Hello."),
             );
             send(&client, &message_line("c_m2", "../x", "Hello."));
-            assert_eq!(kind(&response(&client, "c_m1")), "command_accepted");
-            assert_eq!(kind(&response(&client, "c_m2")), "command_accepted");
-            for id in ["c_m1", "c_m2"] {
-                let Delivery::Message(message) = Deadline::after(DEADLINE)
+            for (id, answer) in [("c_m1", "c_m1"), ("c_m2", "c_m2")] {
+                let Delivery::Message(message, ack) = Deadline::after(DEADLINE)
                     .recv(&inbox)
                     .expect("the message is delivered")
                 else {
@@ -4775,6 +4802,9 @@ fn message_from_an_unknown_or_odd_sender_is_delivered_with_no_name() {
                 };
                 assert_eq!(message.command_id.0, id);
                 assert_eq!(message.name, None);
+                // Answered by the take, never at admission.
+                ack.0(Ok(None));
+                assert_eq!(kind(&response(&client, answer)), "command_accepted");
             }
             Ok(())
         })
@@ -4804,8 +4834,7 @@ fn message_to_itself_reads_its_own_name() {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
             send(&client, &message_line("c_m1", &own, "Note to self."));
-            assert_eq!(kind(&response(&client, "c_m1")), "command_accepted");
-            let Delivery::Message(message) = Deadline::after(DEADLINE)
+            let Delivery::Message(message, ack) = Deadline::after(DEADLINE)
                 .recv(&inbox)
                 .expect("the message is delivered")
             else {
@@ -4813,6 +4842,8 @@ fn message_to_itself_reads_its_own_name() {
             };
             assert_eq!(message.from_session_id.0, own);
             assert_eq!(message.name.as_deref(), Some("selfish"));
+            ack.0(Ok(None));
+            assert_eq!(kind(&response(&client, "c_m1")), "command_accepted");
             Ok(())
         })
         .unwrap();
@@ -5967,7 +5998,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
-                | Delivery::Message(_)
+                | Delivery::Message(..)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::ExtensionJob(..)
@@ -6070,6 +6101,7 @@ mod import_sameness {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use fakes::Deadline;
     use serde_json::{Map, Value, json};
 
     use super::support::{Opened, kind, response, send, subscribe};
@@ -6284,7 +6316,7 @@ mod import_sameness {
         let output = fakes::rerun_prepared(
             &format!("{}::{test}", child_name()),
             &[(CHILD, case)],
-            CHILD_WITHIN,
+            Deadline::after(CHILD_WITHIN),
             |command| {
                 command.env("HOME", person);
             },

@@ -116,7 +116,7 @@ fn exit_cleanly(running: Running) {
         "fiber left a process in its group"
     );
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
     let running = start(&setup, &["ask", "go"]);
     let session_id = session_of(&running);
     assert!(
-        server.await_requests(1, running.deadline.left()),
+        server.await_requests(1, running.deadline),
         "the held tool call was requested"
     );
 
@@ -270,7 +270,7 @@ fn driver_shell_sent_ending_after_settle_answers_closing_and_logs_nothing() {
     let running = start(&setup, &["ask", "go"]);
     let session_id = session_of(&running);
     assert!(
-        server.await_requests(1, running.deadline.left()),
+        server.await_requests(1, running.deadline),
         "the held response was requested"
     );
 
@@ -441,7 +441,7 @@ fn driver_shell_sent_during_a_turn_joins_the_next_turn_only() {
     let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
     subscribe_full(&direct);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held turn was requested"
     );
     let marker = setup.workspace().join("shell.done");

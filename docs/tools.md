@@ -674,6 +674,16 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   more of `n`, `e`, `E`; every other word is text, and of the option words
   only `-n` (and clusters of `n`, such as `-nn`) is accepted, so `echo ---`
   reads while `echo -e` does not.
+- `head` and `tail` accept `-<number>`, such as `head -20`, besides
+  `-n <number>`; `tail -n +<number>`, such as `tail -n +3 f`, reads from
+  that line on. An attached value, such as `head -n10`, is not on the
+  list, so the call declares `executes`.
+- `find` accepts the selection operators `-not`, `-a`, `-o` and `-prune`:
+  they only choose which paths print, so a call holding only them declares
+  `reads`. `-exec`, `-execdir`, `-ok`, `-delete` and `-fprint*` still
+  declare `executes`. The new forms run the system `find` unreviewed: the
+  built-in search ("Search", "Flags") handles none of them, so the
+  call runs `find` unchanged while the `reads` declaration skips review.
 - A part with a path under `/proc/`, resolved against `workdir`, is not
   read-only, so the call is reviewed: `/proc/<pid>/environ` holds the
   process's environment, a key from an `env` source among it
@@ -1188,8 +1198,7 @@ The text is plain text; a session message carries no images.
 the target's socket, sends the driver command `message`, reads the answer and
 closes the connection at once, so it never keeps the target alive
 (`docs/invocation.md`, "Lifecycle"). The target runs `before_message` before
-it answers, so the call answers `delivered` only once the message is in the
-target's inbox. `delivered` means the message is in the target's inbox. A
+it answers, so the call answers `delivered` only once the target has taken the message and its hook has passed. `delivered` means the target took the message. A
 shutdown or a rewind of the target before it runs the message drops it, as
 it drops queued steers, and so does a `close` that fails the target's run
 while a required repository item is unanswered. Otherwise it fails with one

@@ -174,7 +174,7 @@ fn running_admission_holds_a_command_request_without_writing_it() {
         Some(Delivery::InnerCall(_))
     ));
     assert_eq!(saved_kinds(&home), ["session_started"]);
-    watchdog.stand_down(Duration::from_secs(3));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(3)));
 }
 
 struct Unanswered(Arc<std::sync::atomic::AtomicBool>);
@@ -217,7 +217,7 @@ fn an_alone_request_after_command_end_or_shutdown_writes_nothing_and_never_calls
         };
         fakes::within(
             "drop stopped command request",
-            Duration::from_secs(3),
+            Deadline::after(Duration::from_secs(3)),
             move || {
                 looped.run_alone(request).unwrap();
             },
@@ -226,7 +226,7 @@ fn an_alone_request_after_command_end_or_shutdown_writes_nothing_and_never_calls
         assert!(!taken.load(std::sync::atomic::Ordering::SeqCst));
         assert!(!answered.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(saved_kinds(&home), ["session_started"]);
-        watchdog.stand_down(Duration::from_secs(3));
+        watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(3)));
     }
 }
 
@@ -259,7 +259,7 @@ fn the_drain_runs_commands_in_order_and_preserves_interleaved_model_switches() {
         }
         let looped = fakes::within(
             "boundary command drain",
-            Duration::from_secs(3),
+            Deadline::after(Duration::from_secs(3)),
             move || {
                 looped.drain(&TurnId("t_1".into())).unwrap();
                 looped
@@ -298,7 +298,7 @@ fn the_drain_runs_commands_in_order_and_preserves_interleaved_model_switches() {
                 .collect::<Vec<_>>(),
             kinds
         );
-        watchdog.stand_down(Duration::from_secs(3));
+        watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(3)));
     }
 }
 
@@ -797,7 +797,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             Delivery::Close(_) => "close",
             Delivery::SteerDrop(..)
             | Delivery::Name(..)
-            | Delivery::Message(_)
+            | Delivery::Message(..)
             | Delivery::Model(..)
             | Delivery::Reload(..)
             | Delivery::McpReconnect(..)
@@ -1741,7 +1741,8 @@ fn a_same_id_session_message_never_rescues_a_dropped_steer() {
     // globally unique: its staged entry must not rescue the dropped steer.
     looped
         .admit_message_running(
-            super::session_message::for_test("s_other", None, "c_1", "session says hi"),
+            super::session_message::for_test("s_other", None, None, "c_1", "session says hi"),
+            steer_ignore(),
             &turn,
         )
         .unwrap();
@@ -1939,5 +1940,5 @@ fn running_admission_rejects_a_reconnect_until_the_turn_ends() {
         rejection.message,
         "A turn is running; reconnect once it ends."
     );
-    watchdog.stand_down(Duration::from_secs(3));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(3)));
 }

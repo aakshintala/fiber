@@ -66,7 +66,7 @@ impl Setup {
             "`fiber` left a process behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         let stdout = String::from_utf8(output.stdout).unwrap();
         Run {
             code: output.status.code(),
@@ -261,7 +261,7 @@ fn debug_ask_times_stdio_connect() {
     let run = setup.run(&["ask", "call the echo tool"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the tool call lands and the turn ends"
     );
     let lines = log_lines(&setup.home());
@@ -325,11 +325,11 @@ fn debug_ask_times_http_connect() {
     let run = setup.run(&["ask", "call the echo tool"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        provider.await_requests(2, setup.deadline.left()),
+        provider.await_requests(2, setup.deadline),
         "the tool call lands and the turn ends"
     );
     assert!(
-        fake.await_requests(3, setup.deadline.left()),
+        fake.await_requests(3, setup.deadline),
         "the remote server is dialed and listed"
     );
     let lines = log_lines(&setup.home());
@@ -352,7 +352,7 @@ fn info_ask_writes_no_op_timing() {
     let run = setup.run(&["ask", "call the echo tool"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the tool call lands and the turn ends"
     );
     let lines = log_lines(&setup.home());

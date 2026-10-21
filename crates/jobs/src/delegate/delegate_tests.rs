@@ -395,7 +395,7 @@ fn concurrent_spawn_cap_is_checked_after_model_validation() {
             assert!(output.error.is_none());
             assert_eq!(rig.launch_count.load(Ordering::SeqCst), 1);
             rig.registry.stop_delegates();
-            watchdog.stand_down(DEADLINE);
+            watchdog.stand_down(fakes::Deadline::after(DEADLINE));
         } else {
             let error = output.error.unwrap();
             assert_eq!(error.code, contract::ErrorCode::ToolError);
@@ -477,7 +477,7 @@ fn absent_timeout_keeps_the_delegate_running_after_a_poll() {
     assert_eq!(rig.registry.stop_delegates(), 1);
     drop(release);
     assert_cancelled_notice(&rig);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -506,7 +506,7 @@ fn timeout_spawn_stops_and_reaps_its_child() {
         contract::ErrorCode::Timeout
     );
     assert!(notice.completed.process.unwrap().timed_out);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -539,9 +539,13 @@ fn eof_before_exit_reports_without_a_clock_move() {
     // The child closed stdout before blocking on the fifo, so its exit
     // follows this write with no stdout event and no clock move: the
     // runner must still reap it and report.
-    within("the child reads the fifo", DEADLINE, move || {
-        std::fs::write(&fifo, "\n").unwrap();
-    });
+    within(
+        "the child reads the fifo",
+        Deadline::after(DEADLINE),
+        move || {
+            std::fs::write(&fifo, "\n").unwrap();
+        },
+    );
     let deadline = Deadline::after(DEADLINE);
     let Delivery::Job(notice) = deadline
         .recv(&rig.inbox)
@@ -554,7 +558,7 @@ fn eof_before_exit_reports_without_a_clock_move() {
         notice.completed.error.unwrap().code,
         contract::ErrorCode::Indeterminate
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]

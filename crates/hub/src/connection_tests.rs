@@ -259,6 +259,96 @@ fn names_outside_the_hub_table_are_unknown_command() {
     }
 }
 
+#[test]
+fn stop_from_a_local_client_is_accepted_and_records_the_stop() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_stop", "stop", json!({})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_stop");
+    assert_eq!(result, Value::Null);
+    // The store landed: the idle wait ends the hub as a SIGTERM does,
+    // with no clock advance.
+    assert!(matches!(
+        hub.idle_wait(
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &AtomicI32::new(0)
+        ),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
+#[test]
+fn stop_with_arguments_is_invalid_arguments_and_stops_nothing() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_1", "stop", json!({"level": "full"})));
+    let (code, echoed, message) = rejected(&client.next("the rejection"));
+    assert_eq!(code, "invalid_arguments");
+    assert_eq!(echoed.as_deref(), Some("c_1"));
+    assert_eq!(message, "The arguments do not fit this command.");
+    // No stop flag: a fresh accept still counts.
+    let (served, _peer) = UnixStream::pair().unwrap();
+    assert!(matches!(
+        hub.poll_accept(&served, &AtomicBool::new(false)),
+        Accept::Counted(_)
+    ));
+}
+
+#[test]
+fn stop_from_a_device_is_unknown_command() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let dir = temp.dir.join("hub").join("devices");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("phone"),
+        format!(
+            "{{\"token_sha256\":\"{}\"}}",
+            crate::devices::sha256_hex(b"tok-planted")
+        ),
+    )
+    .unwrap();
+    let who = hub
+        .pairing
+        .authenticate(&hub, 1, "tok-planted")
+        .expect("the device authenticates");
+    // An authenticated connection hears no `hub_hello`, as on the port.
+    let (served, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let hub_for_thread = Arc::clone(&hub);
+    thread::Builder::new()
+        .name("hub-conn".to_owned())
+        .spawn(move || serve_authenticated(served, hub_for_thread, 1, who, None))
+        .unwrap();
+    let mut bytes = serde_json::to_vec(&command("c_1", "stop", json!({}))).unwrap();
+    bytes.push(b'\n');
+    peer.try_clone().unwrap().write_all(&bytes).unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let mut read = BufReader::new(peer);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut text = String::new();
+            let outcome = read.read_line(&mut text);
+            done_tx.send((outcome, text)).unwrap_or(());
+        });
+        let (outcome, text) = Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .unwrap_or_else(|_| panic!("never received the rejection"));
+        outcome.unwrap_or_else(|_| panic!("the hub never answers"));
+        let line: Value = serde_json::from_str(&text).unwrap();
+        let (code, echoed, message) = rejected(&line);
+        assert_eq!(code, "unknown_command");
+        assert_eq!(echoed.as_deref(), Some("c_1"));
+        assert_eq!(message, "`stop` is not a hub command.");
+    });
+}
+
 /// The import answer the driver answers with, scripted through the
 /// machine: names and reasons only, never secret values.
 fn import_report() -> Value {
@@ -2040,7 +2130,7 @@ fn prompts(starter: &FakeStarter) -> usize {
 fn still_waiting(clock: &fakes::clock::FakeClock, due: std::time::Instant, by: Duration) {
     let mark = clock.advance_marked(by);
     assert!(
-        clock.await_parked_since(&mark, Some(due), DEADLINE),
+        clock.await_parked_since(&mark, Some(due), fakes::Deadline::after(DEADLINE)),
         "the first prompt re-checked and still waits"
     );
 }
@@ -2052,7 +2142,10 @@ fn start_with_content_answers_before_the_prompt() {
     let mut client = Client::connect(&hub);
     client.hello();
     let (_, due) = start_with_content(&mut client, &temp, &clock);
-    assert!(clock.await_parked(due, DEADLINE), "the bound is armed");
+    assert!(
+        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        "the bound is armed"
+    );
     let received = commands(&starter);
     assert_eq!(received.len(), 1, "only the hub's subscription so far");
     assert_eq!(received[0]["args"]["level"], "summary");
@@ -2087,7 +2180,7 @@ fn a_raise_from_summary_to_full_releases_the_prompt() {
     client.send(&relayed_subscribe("c_summary", &session, "summary"));
     let (id, _) = accepted(&client.next("the summary answer"));
     assert_eq!(id, "c_summary");
-    assert!(clock.await_parked(due, DEADLINE));
+    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
     still_waiting(&clock, due, Duration::ZERO);
     assert_eq!(prompts(&starter), 0);
     client.send(&relayed_subscribe("c_full", &session, "full"));
@@ -2106,7 +2199,7 @@ fn a_summary_subscribe_waits_for_the_bound() {
     let (session, due) = start_with_content(&mut client, &temp, &clock);
     client.send(&relayed_subscribe("c_summary", &session, "summary"));
     let _answer = accepted(&client.next("the summary answer"));
-    assert!(clock.await_parked(due, DEADLINE));
+    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
     still_waiting(&clock, due, Duration::ZERO);
     assert_eq!(prompts(&starter), 0);
     still_waiting(&clock, due, Duration::from_millis(999));
@@ -2128,7 +2221,7 @@ fn a_full_subscribe_on_another_connection_does_not_release() {
     other.send(&relayed_subscribe("c_other", &session, "full"));
     let (id, _) = accepted(&other.next("the other client's answer"));
     assert_eq!(id, "c_other");
-    assert!(clock.await_parked(due, DEADLINE));
+    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
     still_waiting(&clock, due, Duration::ZERO);
     assert_eq!(prompts(&starter), 0);
     clock.advance(FIRST_PROMPT_WAIT);
@@ -2158,7 +2251,10 @@ fn a_failed_answer_write_still_arms_the_bound() {
         .recv(&done)
         .expect("start returned");
     let due = clock.now() + FIRST_PROMPT_WAIT;
-    assert!(clock.await_parked(due, DEADLINE), "the bound is armed");
+    assert!(
+        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        "the bound is armed"
+    );
     clock.advance(FIRST_PROMPT_WAIT);
     assert!(starter.await_received(2, DEADLINE));
     assert_eq!(prompts(&starter), 1);
@@ -2186,7 +2282,7 @@ fn a_connection_that_never_subscribes_gets_the_prompt_at_the_bound() {
     let mut client = Client::connect(&hub);
     client.hello();
     let (session, due) = start_with_content(&mut client, &temp, &clock);
-    assert!(clock.await_parked(due, DEADLINE));
+    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
     clock.advance(FIRST_PROMPT_WAIT);
     assert!(starter.await_received(2, DEADLINE));
     client.send(&relayed_subscribe("c_late", &session, "full"));

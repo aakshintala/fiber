@@ -122,6 +122,10 @@ pub(crate) fn carries(dir: &Path, manifest: &Manifest) -> Vec<String> {
 /// was fetched.
 pub struct Plan<'c> {
     root: String,
+    /// Every member a batch plan updates: reachability and resolution
+    /// walk from all of them, where a personal plan walks from its root
+    /// alone. Empty for a personal plan.
+    roots: BTreeSet<String>,
     /// In dependency mode, the unstaged root's name, version and
     /// minimums: what the pinned copy's own manifest needs and is,
     /// seeding reachability and wants without ever staging the root
@@ -131,7 +135,7 @@ pub struct Plan<'c> {
     fresh: BTreeSet<String>,
     damaged: Vec<Damaged>,
     scratch: Scratch,
-    _lock: Lock,
+    _lock: Option<Lock>,
     clock: &'c dyn Clock,
 }
 
@@ -156,7 +160,33 @@ impl Plan<'_> {
     /// downloads each binary at its final path, or puts nothing in place.
     /// Returns their names, the one asked for
     /// first.
-    pub fn commit(self) -> Result<Vec<String>, Error> {
+    pub fn commit(mut self) -> Result<Vec<String>, Error> {
+        self.commit_run(|manifest, target, clock| prepare(target, manifest, clock))
+    }
+
+    /// Puts every extension in place like [`Plan::commit`], but every
+    /// member was prepared while staging: each install step runs at its
+    /// final path, and no binary is downloaded. The lock stays held: the
+    /// caller releases it with [`Plan::unlock`] before the docs swap.
+    pub(crate) fn commit_prepared(&mut self) -> Result<Vec<String>, Error> {
+        self.commit_run(|manifest, target, clock| {
+            crate::prepare::install_step(target, manifest, clock)
+        })
+    }
+
+    /// Releases the lock over `extensions/`, after the commit and before
+    /// the docs swap.
+    pub(crate) fn unlock(&mut self) {
+        self._lock = None;
+    }
+
+    /// Puts every staged extension in place, running `run` for each
+    /// manifest at its final path, or puts nothing in place. Returns
+    /// their names, the plan's root first.
+    fn commit_run(
+        &mut self,
+        run: impl Fn(&Manifest, &Path, &dyn Clock) -> Result<(), Error>,
+    ) -> Result<Vec<String>, Error> {
         let paths: Vec<Paths> = self.items.values().map(|i| i.paths.clone()).collect();
         let manifests: Vec<&Manifest> = self.items.values().map(|i| &i.manifest).collect();
         let clock = self.clock;
@@ -171,12 +201,62 @@ impl Plan<'_> {
                         "a commit step without a staged manifest",
                     )));
                 };
-                prepare(target, manifest, clock)
+                run(manifest, target, clock)
             },
         )?;
         let mut names: Vec<String> = self.items.keys().cloned().collect();
         names.sort_by_key(|n| *n != self.root);
         Ok(names)
+    }
+
+    /// Stages one archive-covered member over what the batch plan staged
+    /// from git: removes the fetched copy, then stages the unpacked
+    /// archive member `adopted` with the release's version and commit,
+    /// keeping the installed requested and floor. The item carries no
+    /// changes: the archive is the update.
+    pub(crate) fn adopt(
+        &mut self,
+        home: &Path,
+        fiber_version: &str,
+        adopted: &Adopted<'_>,
+    ) -> Result<(), Error> {
+        let Adopted {
+            installed,
+            version,
+            commit,
+            source,
+        } = adopted;
+        let record = Record {
+            name: installed.name.clone(),
+            provenance: Provenance::Git {
+                commit: (*commit).into(),
+            },
+            version: (*version).into(),
+            requested: installed.requested,
+            floor: installed.floor.clone(),
+        };
+        let (manifest, providers, paths) = stage(home, source, fiber_version, &record)?;
+        if manifest.name != installed.name {
+            remove(&paths.fresh)?;
+            return Err(Error::WrongName {
+                asked: installed.name.clone(),
+                found: manifest.name,
+            });
+        }
+        retire(self, &installed.name)?;
+        self.items.insert(
+            installed.name.clone(),
+            Item {
+                name: installed.name.clone(),
+                version: record.version,
+                provenance: record.provenance,
+                changes: None,
+                manifest,
+                providers,
+                paths,
+            },
+        );
+        Ok(())
     }
 }
 
@@ -215,12 +295,13 @@ fn empty<'c>(home: &Path, clock: &'c dyn Clock) -> Result<Plan<'c>, Error> {
     let scratch = Scratch::create(&std::env::temp_dir(), "fiber-fetch", 0o777)?;
     Ok(Plan {
         root: String::new(),
+        roots: BTreeSet::new(),
         seed: None,
         items: BTreeMap::new(),
         fresh: BTreeSet::new(),
         damaged: Vec::new(),
         scratch,
-        _lock: lock,
+        _lock: Some(lock),
         clock,
     })
 }
@@ -312,28 +393,7 @@ pub fn plan<'c>(
             match &have.provenance {
                 Provenance::Path(path) => ctx.add_path(&mut plan, path, Some(&name))?,
                 Provenance::Git { .. } => {
-                    // Every installed dependent's minimum, the person
-                    // minimum and the persistent floor constrain the root
-                    // tag before any fetch; no constraints mean the newest
-                    // tag.
-                    let mut minima = BTreeMap::new();
-                    for other in &listing.installed {
-                        if let Some(min) = other.depends.get(&name) {
-                            minima.insert(other.name.clone(), min.clone());
-                        }
-                    }
-                    let version = have.version.clone();
-                    let requested = have.requested;
-                    let floor = have.floor.clone();
-                    if requested {
-                        minima.insert("your install".into(), version);
-                    }
-                    if let Some(floor) = floor {
-                        minima.insert("your update".into(), floor);
-                    }
-                    let (repo, _) = split(&name)?;
-                    let tag = newest_within(&name, &minima, &ctx.origin.tags(repo, ctx.clock)?)?;
-                    ctx.add_git(&mut plan, &name, Some(tag), false, None, true)?;
+                    ctx.stage_git_member(&mut plan, have)?;
                     name
                 }
             }
@@ -380,13 +440,81 @@ pub fn plan<'c>(
     Ok(plan)
 }
 
+/// Fetches and checks what every installed extension updates to, staging
+/// the whole home at once as `fiber update` prepares all members
+/// together (`docs/extensions.md`, "Updating"): one lock hold, each
+/// member staged as an update-all run stages it alone, the same
+/// resolution settling every member, one commit putting them in place.
+/// Members the release's archives cover are staged from git too; the
+/// update step replaces those copies from the archives afterwards.
+/// Damaged members stay installed, recorded in the plan for the caller
+/// to name.
+pub(crate) fn plan_updates<'c>(
+    home: &Path,
+    fiber_version: &str,
+    origin: &Origin,
+    clock: &'c dyn Clock,
+) -> Result<Plan<'c>, Error> {
+    let mut plan = empty(home, clock)?;
+    let listing = read(home)?;
+    plan.damaged = listing.damaged.clone();
+    // The installed set read under the same hold: every member stages
+    // from this snapshot, and nothing else changes it meanwhile.
+    let installed = listing.installed;
+    let mut ctx = Ctx {
+        home,
+        fiber_version,
+        origin,
+        installed: &installed,
+        update_all: true,
+        clock,
+    };
+    for member in &installed {
+        if plan.damaged.iter().any(|hit| is_damaged(hit, &member.name)) {
+            continue;
+        }
+        match &member.provenance {
+            Provenance::Path(path) => {
+                ctx.add_path(&mut plan, path, Some(&member.name))?;
+            }
+            Provenance::Git { .. } => {
+                ctx.stage_git_member(&mut plan, member)?;
+            }
+        }
+        plan.roots.insert(member.name.clone());
+    }
+    ctx.resolve(&mut plan)?;
+    let installed: BTreeSet<&str> = installed.iter().map(|i| i.name.as_str()).collect();
+    plan.fresh = plan
+        .items
+        .keys()
+        .filter(|name| !installed.contains(name.as_str()))
+        .cloned()
+        .collect();
+    Ok(plan)
+}
+
+/// One archive-covered member `fiber update` stages over the batch plan's
+/// git-staged copy: the installed entry plus the release's version and
+/// commit and the member's unpacked archive directory.
+pub(crate) struct Adopted<'a> {
+    /// The installed member the archive replaces.
+    pub installed: &'a Installed,
+    /// The release's version.
+    pub version: &'a str,
+    /// The release tag's commit.
+    pub commit: &'a str,
+    /// The member's unpacked archive directory.
+    pub source: &'a Path,
+}
+
 struct Ctx<'a, 'c> {
     home: &'a Path,
     fiber_version: &'a str,
     origin: &'a Origin,
     installed: &'a [Installed],
-    /// Whether the plan's root is a no-name update's member for one
-    /// installed extension: its floor then still constrains resolution.
+    /// Whether the plan's roots are no-name update members: their floors
+    /// then still constrain resolution.
     update_all: bool,
     clock: &'c dyn Clock,
 }
@@ -469,6 +597,29 @@ impl Ctx<'_, '_> {
             },
         );
         Ok(name)
+    }
+
+    /// Stages the installed git member the update moves to: every installed
+    /// dependent's minimum, the person's own version and the persistent
+    /// floor constrain the tag before any fetch; no constraints mean the
+    /// newest tag. Shared by an update-all run and the batch plan, which
+    /// stages every installed git member this way.
+    fn stage_git_member(&mut self, plan: &mut Plan, member: &Installed) -> Result<(), Error> {
+        let mut minima = BTreeMap::new();
+        for other in self.installed {
+            if let Some(min) = other.depends.get(&member.name) {
+                minima.insert(other.name.clone(), min.clone());
+            }
+        }
+        if member.requested {
+            minima.insert("your install".into(), member.version.clone());
+        }
+        if let Some(floor) = &member.floor {
+            minima.insert("your update".into(), floor.clone());
+        }
+        let (repo, _) = split(&member.name)?;
+        let tag = newest_within(&member.name, &minima, &self.origin.tags(repo, self.clock)?)?;
+        self.add_git(plan, &member.name, Some(tag), false, None, true)
     }
 
     /// Fetches `name` at `tag`, or at its newest tag when none, and stages it.
@@ -760,7 +911,8 @@ fn is_damaged(hit: &Damaged, name: &str) -> bool {
 /// ends there instead of staging it.
 fn reachable(plan: &Plan) -> BTreeSet<String> {
     let mut reach = BTreeSet::from([plan.root.clone()]);
-    let mut queue = vec![plan.root.clone()];
+    reach.extend(plan.roots.iter().cloned());
+    let mut queue: Vec<String> = reach.iter().cloned().collect();
     while let Some(name) = queue.pop() {
         let staged = plan.items.get(&name).map(|item| &item.manifest.depends);
         let seeded = plan

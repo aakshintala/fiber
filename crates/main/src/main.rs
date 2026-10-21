@@ -206,15 +206,19 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers }), _) => {
             refresh_entry(&providers, clock, read_signals::CancelOnSignal::new)
         }
-        cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, base_url }), _) => {
-            ::cli::release_install(
-                &version,
-                base_url.as_deref(),
-                env!("CARGO_PKG_VERSION"),
-                option_env!("FIBER_COMMIT"),
-                clock.as_ref(),
-            )
-        }
+        cli::Invocation::Run(
+            Some(cli::Commands::ReleaseInstall {
+                version,
+                test_base_url,
+            }),
+            _,
+        ) => ::cli::release_install(
+            &version,
+            test_base_url.base_url.as_deref(),
+            env!("CARGO_PKG_VERSION"),
+            option_env!("FIBER_COMMIT"),
+            clock.as_ref(),
+        ),
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd)), _) => match cmd {
             cli::ExtensionCommands::Install {
                 name_or_path,
@@ -280,8 +284,61 @@ fn run() -> i32 {
             };
             ::cli::run_logout(args.provider.as_deref(), target)
         }
+        cli::Invocation::Run(Some(cli::Commands::Setup(args)), _) => {
+            setup_entry(args, clock, read_signals::CancelOnSignal::new)
+        }
         cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
             ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
+        }
+        cli::Invocation::Run(
+            Some(cli::Commands::Update {
+                channel,
+                test_base_url,
+            }),
+            _,
+        ) => {
+            let flag = channel.map(|flag| match flag {
+                cli::ChannelArg::Stable => ::cli::Channel::Stable,
+                cli::ChannelArg::Nightly => ::cli::Channel::Nightly,
+            });
+            let channel = match ::cli::resolve_channel(
+                flag,
+                std::env::var("FIBER_CHANNEL").ok().as_deref(),
+            ) {
+                Ok(channel) => channel,
+                Err(error) => {
+                    eprintln!("fiber: {error}");
+                    return 2;
+                }
+            };
+            let home = match config::fiber_home_from_env() {
+                Ok(home) => home,
+                Err(e) => return fail(failed(e.code(), e)),
+            };
+            let stdin = io::stdin();
+            let stderr = io::stderr();
+            // A test seam, not a user control: the binary update tests
+            // point both roots at their fixture server through
+            // `--base-url`. Production runs leave it absent.
+            let mut bases = ::cli::ReleaseBases::production();
+            if let Some(base) = test_base_url.base_url {
+                bases.web = base.clone();
+                bases.api = base;
+            }
+            ::cli::update(
+                &home,
+                env!("CARGO_PKG_VERSION"),
+                env!("FIBER_TARGET"),
+                channel,
+                &bases,
+                clock.as_ref(),
+                ::cli::Io {
+                    terminal: stdin.is_terminal(),
+                    input: &mut stdin.lock(),
+                    err: &mut stderr.lock(),
+                },
+                &::extensions::Origin::github(),
+            )
         }
         cli::Invocation::Run(Some(cli::Commands::Feedback(args)), _) => {
             match cli::ask_parts(&args.prompt) {
@@ -463,6 +520,64 @@ fn models_entry(
         Arc::clone(&clock),
         Arc::new(tools::PathLocks::new()),
         fiber,
+        &runner,
+    )
+}
+
+/// `fiber setup`: answers each install question with its command, killing
+/// what its credential commands left on a normal return and on a
+/// foreground signal. The guard is built before the runner, so a refused
+/// registration returns before any credential command starts.
+fn setup_entry(
+    args: cli::SetupArgs,
+    clock: Arc<dyn contract::clock::Clock>,
+    register: Register,
+) -> i32 {
+    let reads = Arc::new(crate::switch::Reads::default());
+    let guards = match read_signals::guarded(&reads, &clock, &read_signals::FOREGROUND, register) {
+        Ok(guards) => guards,
+        Err(error) => return fail(error),
+    };
+    // Bound in watcher-then-cancel order, so the watcher drops first: a
+    // taken signal's exit lands before the plain cancel runs.
+    let (_cancel, _watcher) = guards;
+    let runner = |command: &mut std::process::Command, timeout: std::time::Duration| {
+        reads.credential(command, timeout, &*clock)
+    };
+    // Clap's `conflicts_with` refuses `--completions` with
+    // `--no-completions` and `--hub` with `--no-hub` before this runs,
+    // which `setup_flags_conflict_in_pairs` asserts, so both set never
+    // reaches the `else if`.
+    let completions = if args.no_completions {
+        ::cli::Completions::No
+    } else if let Some(shell) = args.completions {
+        ::cli::Completions::Yes(shell.name().to_owned())
+    } else {
+        ::cli::Completions::Unset
+    };
+    let hub = if args.no_hub {
+        ::cli::Hub::No
+    } else if args.hub {
+        ::cli::Hub::Yes
+    } else {
+        ::cli::Hub::Unset
+    };
+    let flags = ::cli::SetupFlags {
+        provider: args.provider,
+        model: args.model,
+        thinking: args.thinking,
+        import: args
+            .import
+            .into_iter()
+            .map(config::ImportSource::from)
+            .collect(),
+        completions,
+        hub,
+    };
+    ::cli::setup(
+        &flags,
+        Arc::clone(&clock),
+        Arc::new(tools::PathLocks::new()),
         &runner,
     )
 }
@@ -700,7 +815,7 @@ fn drain_exit_code(exited: i32, stopped: bool, code: Option<i32>) -> i32 {
 /// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
 /// what ran. `run` writes the session's first lines through
 /// [`Signals::commit`](doors::Signals::commit): `Ok(Some(code))` means
-/// nothing was written for this process, and `run_turn` returns `code`
+/// nothing was written to the session log for this process, and `run_turn` returns `code`
 /// with no `quiesce`, no `fiber_exited` and no stderr line. One cancel
 /// signal, `cancel`, serves the door and the loop, so
 /// a `cancel` ends the turn the prompt starts; a shutdown's code on it is
@@ -752,7 +867,7 @@ fn run_turn(
             }
         }),
     };
-    // Nothing was written for this process: the commit found a recorded
+    // Nothing was written to the session log for this process: the commit found a recorded
     // signal, so the log stays as it was and the code is the exit code.
     if let Some(code) = committed {
         return code;

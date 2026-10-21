@@ -69,6 +69,8 @@ pub enum HubCommand {
     Status(NoArgs),
     /// Rebuilds the hub's environment.
     Refresh(NoArgs),
+    /// Ends the hub as SIGTERM does, on the local socket only.
+    Stop(NoArgs),
     /// Answers with the hub's captured values for the named placeholders.
     PlaceholderEnv(PlaceholderEnvArgs),
     /// Answers with a new pairing code for the device.

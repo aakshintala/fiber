@@ -210,6 +210,9 @@ pub struct SteerDrop {
 pub struct Message {
     /// The sending session.
     pub from_session_id: SessionId,
+    /// The sender's parent session, when the sender has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<SessionId>,
     /// The message.
     pub text: String,
 }
@@ -502,23 +505,29 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "resume",
     "model",
     "thinking",
+    "effort",
     "credential",
     "scoped-models",
     "context",
     "usage",
+    "cost",
     "quota",
+    "diff",
     "tools",
     "mcp",
     "panel",
     "rail",
     "rules",
     "settings",
+    "config",
     "theme",
     "keys",
+    "keybindings",
     "skills",
     "rewind",
     "handoff",
     "name",
+    "rename",
     "login",
     "logout",
     "approvals",
@@ -530,6 +539,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "?",
     "help",
     "feedback",
+    "bug",
 ];
 
 #[cfg(test)]

@@ -150,12 +150,12 @@ fn a_live_codex_turn_replies() {
         received = Deadline::after(REAP_DEADLINE).recv(&finished).ok();
     }
 
-    let empty = fakes::group_empties(group, REAP_DEADLINE);
+    let empty = fakes::group_empties(group, fakes::Deadline::after(REAP_DEADLINE));
     if !empty {
         fakes::kill_group(group, "KILL").unwrap_or(false);
     }
-    let cleaned = empty || fakes::group_empties(group, REAP_DEADLINE);
-    watchdog.stand_down(REAP_DEADLINE);
+    let cleaned = empty || fakes::group_empties(group, fakes::Deadline::after(REAP_DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(REAP_DEADLINE));
     assert!(
         cleaned,
         "the live turn left process group {group} behind after cleanup"

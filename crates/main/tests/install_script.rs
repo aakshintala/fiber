@@ -14,6 +14,7 @@
 mod support;
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
+use ::support::group;
 use fakes::Watchdog;
 use fakes::ustar::{archive, gzip, header, sha256};
 use support::{Deadline, Output, Setup};
@@ -39,6 +41,14 @@ fn fixture() -> PathBuf {
 /// The checked-in stub binary each fixture archive holds.
 fn stub() -> Vec<u8> {
     fs::read(fixture().join("fiber")).unwrap()
+}
+
+/// Whether `haystack` holds `needle` as bytes.
+fn contains(haystack: &[u8], needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 /// The operating system and CPU the stubs report.
@@ -138,6 +148,11 @@ impl Setup {
         fs::read_to_string(self.path("stub/calls")).ok()
     }
 
+    /// What the stub's `setup` recorded, or `None` if it never ran.
+    fn setup_calls(&self) -> Option<String> {
+        fs::read_to_string(self.path("stub/setup-calls")).ok()
+    }
+
     /// Runs `/bin/dash scripts/install.sh --base-url <release>` on `host`,
     /// with `FIBER_INSTALL_DIR` set to `dest` and then each of `env`, and
     /// waits for it under the test's [`Deadline`].
@@ -180,7 +195,7 @@ impl Setup {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(self.deadline, group, &finished, "install.sh to exit"),
         };
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         assert_eq!(
             fs::read_dir(self.path("tmp")).unwrap().count(),
             0,
@@ -832,4 +847,323 @@ fn a_nightly_fiber_version_is_refused() {
         format!("fiber: FIBER_VERSION={asked} is not a version such as 0.3.0.\n")
     );
     assert!(!setup.dest().exists());
+}
+
+impl Setup {
+    /// Runs install.sh with stdio on a new pseudo-terminal the child
+    /// controls, answering each question once its prompt arrives:
+    /// `/dev/tty` opens, so the directory and `PATH` questions are
+    /// asked. Returns the exit and everything the run printed.
+    #[track_caller]
+    fn install_on_tty(
+        &self,
+        host: &Host,
+        args: &[&str],
+        env: &[(&str, &str)],
+        answers: &[&str],
+    ) -> (Option<i32>, String) {
+        const PROMPTS: [&str; 2] = ["install to [", "to PATH in"];
+        assert_eq!(
+            answers.len(),
+            PROMPTS.len(),
+            "one answer per question install.sh asks on a terminal"
+        );
+        let terminal = support::pty::open(120, 32);
+        let slave = terminal.terminal;
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/install.sh");
+        let path = format!("{}:/usr/bin:/bin", fixture().join("bin").display());
+        let mut command = Command::new("/bin/dash");
+        command
+            .arg(script)
+            .args(["--base-url", &self.base()])
+            .args(args)
+            .current_dir(self.root.path())
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", path)
+            .env("HOME", self.path("home"))
+            .env("TMPDIR", self.path("tmp"))
+            .env("FIBER_HOME", self.path("stub"))
+            .env("FIBER_INSTALL_DIR", self.dest())
+            .env("FIBER_TEST_UNAME_S", host.os)
+            .env("FIBER_TEST_UNAME_M", host.cpu)
+            .env("FIBER_TEST_ARM64", host.arm64)
+            .envs(env.iter().copied())
+            .stdin(Stdio::from(slave.try_clone().unwrap()))
+            .stdout(Stdio::from(slave.try_clone().unwrap()))
+            .stderr(Stdio::from(slave.try_clone().unwrap()));
+        // A new session with the secondary as its controlling terminal:
+        // `/dev/tty` is this terminal.
+        group::detach(&mut command, true);
+        let mut child = command.spawn().unwrap();
+        // The command holds the secondary ends: dropping it and the
+        // original lets the master read end once the child is gone.
+        drop(command);
+        drop(slave);
+        let group = child.id();
+        let watchdog = Watchdog::group(group);
+        // The master drains on a thread from the spawn to end of file,
+        // publishing each chunk over `chunks`: the run's output never
+        // waits for the test to read it (`docs/testing/screens.md`).
+        let (send, chunks) = mpsc::channel();
+        let mut writer = fs::File::from(terminal.main.try_clone().unwrap());
+        fakes::pty::read_to_eof(fs::File::from(terminal.main), move |bytes| {
+            send.send(bytes.to_vec()).unwrap_or(());
+        });
+        let mut seen = Vec::new();
+        // Each answer is typed only after its prompt arrives: pasted
+        // input must not precede the read.
+        for (prompt, answer) in PROMPTS.iter().zip(answers.iter()) {
+            loop {
+                if contains(&seen, prompt) {
+                    break;
+                }
+                match self.deadline.recv(&chunks) {
+                    Ok(chunk) => seen.extend_from_slice(&chunk),
+                    Err(_) => panic!("waited until the deadline for the {prompt} prompt"),
+                }
+            }
+            let line = format!("{answer}\n");
+            writer = support::bounded(
+                self.deadline,
+                "typing the answer on the terminal",
+                move || {
+                    writer.write_all(line.as_bytes()).unwrap();
+                    writer
+                },
+            );
+        }
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait()).unwrap());
+        let status = match self.deadline.recv(&finished) {
+            Ok(status) => status.unwrap(),
+            Err(_) => support::expired(self.deadline, group, &finished, "install.sh to exit"),
+        };
+        watchdog.stand_down(self.deadline.cleanup_phase());
+        // The reader ends at end of file once the child is gone: the
+        // channel's disconnect is the whole output.
+        while let Ok(chunk) = self.deadline.cleanup_phase().recv(&chunks) {
+            seen.extend_from_slice(&chunk);
+        }
+        let text = String::from_utf8_lossy(&seen).into_owned();
+        assert_eq!(
+            fs::read_dir(self.path("tmp")).unwrap().count(),
+            0,
+            "install.sh left its temporary directory"
+        );
+        (status.code(), text)
+    }
+}
+
+#[test]
+fn dir_installs_the_binary_where_dir_says() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let custom = setup.path("custom");
+    let run = setup.install_args(&LINUX_X86_64, &["--dir", custom.to_str().unwrap()], &[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    setup.assert_installed(&custom);
+    assert!(!setup.dest().join("fiber").exists());
+    assert_eq!(setup.setup_calls().unwrap(), "setup\n");
+}
+
+#[test]
+fn path_appends_the_line_once_across_a_rerun() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    for _ in 0..2 {
+        let run = setup.install_args(&LINUX_X86_64, &["--path"], &[("SHELL", "/bin/zsh")]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        assert!(!run.stderr.contains("is not on PATH"), "{}", run.stderr);
+    }
+    assert_eq!(
+        fs::read_to_string(setup.path("home/.zshrc")).unwrap(),
+        format!("export PATH='{}':$PATH\n", setup.dest().display())
+    );
+}
+
+#[test]
+fn startup_lines_quote_directories_with_shell_syntax() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    // A space, a single quote and a dollar: each would split or expand
+    // the line unquoted.
+    let custom = setup.path("my 'dir$x");
+    let run = setup.install_args(
+        &LINUX_X86_64,
+        &["--dir", custom.to_str().unwrap(), "--path"],
+        &[("SHELL", "/bin/zsh")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let startup = setup.path("home/.zshrc");
+    let escaped = custom.display().to_string().replace('\'', "'\\''");
+    assert_eq!(
+        fs::read_to_string(&startup).unwrap(),
+        format!("export PATH='{escaped}':$PATH\n")
+    );
+    // Sourcing the line puts the directory on PATH whole, not split or
+    // expanded.
+    let probed = Command::new("/bin/dash")
+        .arg("-c")
+        .arg(format!(". {}; printf '%s' \"$PATH\"", startup.display()))
+        .env_clear()
+        .env("PATH", "sentinel")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(probed.stdout).unwrap(),
+        format!("{}:sentinel", custom.display())
+    );
+
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let custom = setup.path("my dir");
+    let run = setup.install_args(
+        &LINUX_X86_64,
+        &["--dir", custom.to_str().unwrap(), "--path"],
+        &[("SHELL", "/bin/fish")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        fs::read_to_string(setup.path("home/.config/fish/config.fish")).unwrap(),
+        format!("fish_add_path '{}'\n", custom.display())
+    );
+}
+
+#[test]
+fn a_directory_with_a_newline_is_refused_before_the_path_line() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let evil = format!("{}-evil\nline", setup.path("custom").display());
+    let run = setup.install_args(&LINUX_X86_64, &["--dir", &evil], &[("SHELL", "/bin/zsh")]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("holds a newline, so it cannot go on PATH"),
+        "{}",
+        run.stderr
+    );
+    assert!(!setup.path("home/.zshrc").exists());
+}
+
+#[test]
+fn no_path_leaves_the_line_out_with_the_warning_kept() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let run = setup.install_args(&LINUX_X86_64, &["--no-path"], &[("SHELL", "/bin/zsh")]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        run.stderr.contains(&format!(
+            "fiber: {} is not on PATH. Add it to use fiber.\n",
+            setup.dest().display()
+        )),
+        "{}",
+        run.stderr
+    );
+    assert!(!setup.path("home/.zshrc").exists());
+}
+
+#[test]
+fn no_setup_runs_no_setup_step() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let run = setup.install_args(&LINUX_X86_64, &["--no-setup"], &[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    setup.assert_installed(&setup.dest());
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!("release-install 0.0.9 --base-url {}\n", setup.base())
+    );
+    assert_eq!(setup.setup_calls(), None);
+}
+
+#[test]
+fn everything_past_the_second_dashes_reaches_setup_verbatim() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let run = setup.install_args(
+        &LINUX_X86_64,
+        &["--", "--provider", "openrouter", "--no-hub"],
+        &[],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        setup.setup_calls().unwrap(),
+        "setup --provider openrouter --no-hub\n"
+    );
+
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let run = setup.install_args(&LINUX_X86_64, &["--bogus"], &[]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("fiber: install.sh does not take --bogus.\n"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(setup.setup_calls(), None);
+}
+
+#[test]
+fn a_failing_setup_keeps_the_binary_and_propagates_its_exit() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    fs::write(setup.path("stub/exit-setup"), "3").unwrap();
+    let run = setup.install_args(&LINUX_X86_64, &["--", "--no-hub"], &[]);
+    assert_eq!(run.code, Some(3), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("fiber: fiber setup exited 3.\n"),
+        "{}",
+        run.stderr
+    );
+    setup.assert_installed(&setup.dest());
+    assert_eq!(setup.setup_calls().unwrap(), "setup --no-hub\n");
+}
+
+#[test]
+fn the_terminal_answers_put_the_binary_where_typed_and_path_on_the_line() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let custom = setup.path("custom");
+    let dir = custom.display().to_string();
+    for _ in 0..2 {
+        let (code, text) = setup.install_on_tty(
+            &LINUX_X86_64,
+            &[],
+            &[("SHELL", "/bin/zsh")],
+            &[dir.as_str(), "y"],
+        );
+        assert_eq!(code, Some(0), "{text}");
+        assert!(
+            text.find("install to [").unwrap() < text.find("to PATH in").unwrap(),
+            "{text}"
+        );
+    }
+    setup.assert_installed(&custom);
+    assert!(!setup.dest().join("fiber").exists());
+    assert_eq!(
+        fs::read_to_string(setup.path("home/.zshrc")).unwrap(),
+        format!("export PATH='{}':$PATH\n", custom.display())
+    );
+    assert_eq!(setup.setup_calls().unwrap(), "setup\nsetup\n");
+}
+
+#[test]
+fn answering_no_to_path_prints_the_line_to_add() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let custom = setup.path("custom");
+    let dir = custom.display().to_string();
+    let (code, text) = setup.install_on_tty(
+        &LINUX_X86_64,
+        &[],
+        &[("SHELL", "/bin/zsh")],
+        &[dir.as_str(), "n"],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    setup.assert_installed(&custom);
+    let line = format!("export PATH='{}':$PATH", custom.display());
+    assert!(text.contains(&line), "{text}");
+    assert!(!setup.path("home/.zshrc").exists());
 }

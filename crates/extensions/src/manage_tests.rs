@@ -40,6 +40,34 @@ fn retiring_an_absent_name_changes_nothing() {
     assert!(plan.items.is_empty());
 }
 
+/// `unlock` releases the lock over `extensions/`: while the plan holds
+/// it a second lock attempt fails at once, and after `unlock` it
+/// succeeds. `StagedUpdate::commit` releases the lock here, before the
+/// docs swap, so the swap and any later operation take it freely.
+#[test]
+fn unlock_releases_the_extensions_lock() {
+    let held = fakes::TempDir::new("fiber-unlock");
+    let clock = fakes::clock::FakeClock::new();
+    let home = held.path().join("home");
+    let mut plan = empty(&home, &*clock).unwrap();
+    let lock_path = config::extensions_dir(&home).join(".lock");
+    let probe = || {
+        std::fs::File::options()
+            .read(true)
+            .open(&lock_path)
+            .unwrap()
+            .try_lock()
+    };
+    // The plan holds the lock, so the release below is what frees it,
+    // not the plan's later drop.
+    assert!(
+        matches!(probe(), Err(std::fs::TryLockError::WouldBlock)),
+        "the plan holds the lock"
+    );
+    plan.unlock();
+    assert!(probe().is_ok(), "unlock releases the lock");
+}
+
 #[test]
 fn a_superseded_copy_that_cannot_be_removed_keeps_its_item() {
     let held = fakes::TempDir::new("fiber-retire");

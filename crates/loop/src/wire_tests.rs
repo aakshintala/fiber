@@ -431,7 +431,7 @@ fn a_cancel_during_the_backoff_invents_no_further_construction() {
         // started, so the test never races the failing call.
         let until = clock.origin() + Duration::from_secs(2);
         assert!(
-            clock.await_parked(until, WAIT),
+            clock.await_parked(until, fakes::Deadline::after(WAIT)),
             "the retry parks its backoff before the cancel lands"
         );
         cancel.cancel();

@@ -1,5 +1,6 @@
 use super::*;
 use crate::test_support::Rig;
+use fakes::Deadline;
 use serde_json::json;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -144,24 +145,28 @@ impl Fixture {
         );
         let home = rig.home.clone();
         let workspace = rig.workspace.clone();
-        let parts = fakes::within("startup parts", fakes::MUST_SUCCEED_WITHIN, move || {
-            crate::parts_in(
-                home,
-                workspace,
-                Vec::new(),
-                None,
-                None.into(),
-                None,
-                fakes::clock::FakeClock::new(),
-                None,
-                None,
-                Arc::default(),
-                log::diag::Process::Session,
-                extensions::StateSeed::new(),
-                crate::session_extensions::RepositoryScope::default(),
-            )
-            .unwrap()
-        });
+        let parts = fakes::within(
+            "startup parts",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                crate::parts_in(
+                    home,
+                    workspace,
+                    Vec::new(),
+                    None,
+                    None.into(),
+                    None,
+                    fakes::clock::FakeClock::new(),
+                    None,
+                    None,
+                    Arc::default(),
+                    log::diag::Process::Session,
+                    extensions::StateSeed::new(),
+                    crate::session_extensions::RepositoryScope::default(),
+                )
+                .unwrap()
+            },
+        );
         assert!(
             parts.extensions.notices().is_empty(),
             "{:?}",
@@ -259,18 +264,22 @@ impl Fixture {
         let artifacts = fixture.state.artifacts.clone();
         let cache = config::mcp_cache_dir(&fixture.state.sources.home);
         let clock = fixture.state.template.clock.clone();
-        let started = fakes::within("servers start", fakes::MUST_SUCCEED_WITHIN, move || {
-            mcp::start_observed(
-                specs.specs,
-                &workspace,
-                &artifacts,
-                Arc::new(DummyImages),
-                &cache,
-                &clock,
-                "test",
-                None,
-            )
-        });
+        let started = fakes::within(
+            "servers start",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                mcp::start_observed(
+                    specs.specs,
+                    &workspace,
+                    &artifacts,
+                    Arc::new(DummyImages),
+                    &cache,
+                    &clock,
+                    "test",
+                    None,
+                )
+            },
+        );
         assert!(started.failed.is_empty(), "{:?}", started.failed);
         fixture.state = Arc::new(assemble(&fixture.state, started));
         fixture.servers = fakes;
@@ -279,17 +288,21 @@ impl Fixture {
 
     fn prepare(&self) -> r#loop::ReloadPrepared {
         let state = self.state.clone();
-        fakes::within("reload prepared", fakes::MUST_SUCCEED_WITHIN, move || {
-            state
-                .prepare_inner(
-                    &r#loop::ReloadRoute {
-                        model: "scripted/s.json".into(),
-                        credential: None,
-                    },
-                    false,
-                )
-                .unwrap()
-        })
+        fakes::within(
+            "reload prepared",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                state
+                    .prepare_inner(
+                        &r#loop::ReloadRoute {
+                            model: "scripted/s.json".into(),
+                            credential: None,
+                        },
+                        false,
+                    )
+                    .unwrap()
+            },
+        )
     }
 }
 
@@ -299,18 +312,22 @@ fn invalid_config_keeps_the_set_and_a_repaired_config_can_install() {
     let old = fixture.state.current.get();
     std::fs::write(fixture.rig.home.join("config.json"), "{").unwrap();
     let state = fixture.state.clone();
-    let rejected = fakes::within("invalid reload", fakes::MUST_SUCCEED_WITHIN, move || {
-        state
-            .prepare_inner(
-                &r#loop::ReloadRoute {
-                    model: "scripted/s.json".into(),
-                    credential: None,
-                },
-                false,
-            )
-            .err()
-            .unwrap()
-    });
+    let rejected = fakes::within(
+        "invalid reload",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            state
+                .prepare_inner(
+                    &r#loop::ReloadRoute {
+                        model: "scripted/s.json".into(),
+                        credential: None,
+                    },
+                    false,
+                )
+                .err()
+                .unwrap()
+        },
+    );
     assert_eq!(rejected.code, contract::ErrorCode::ConfigInvalid);
     assert!(rejected.message.contains("config.json"));
     assert!(Arc::ptr_eq(&old, &fixture.state.current.get()));
@@ -453,7 +470,7 @@ fn reviewer_credentials_publish_only_when_installed_and_are_reused_afterwards() 
     let switching = fixture.state.switching.clone();
     let switched = fakes::within(
         "model switch after reload",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             crate::switch::prepare(
                 &switching,
@@ -571,18 +588,22 @@ fn a_rejected_reload_keeps_the_list_and_a_repaired_config_installs() {
     );
     std::fs::write(fixture.rig.home.join("config.json"), "{").unwrap();
     let state = fixture.state.clone();
-    let rejected = fakes::within("invalid reload", fakes::MUST_SUCCEED_WITHIN, move || {
-        state
-            .prepare_inner(
-                &r#loop::ReloadRoute {
-                    model: "scripted/s.json".into(),
-                    credential: None,
-                },
-                false,
-            )
-            .err()
-            .unwrap()
-    });
+    let rejected = fakes::within(
+        "invalid reload",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            state
+                .prepare_inner(
+                    &r#loop::ReloadRoute {
+                        model: "scripted/s.json".into(),
+                        credential: None,
+                    },
+                    false,
+                )
+                .err()
+                .unwrap()
+        },
+    );
     assert_eq!(rejected.code, contract::ErrorCode::ConfigInvalid);
     assert_eq!(
         *fixture.state.shell_read_only.lock().unwrap(),
@@ -767,18 +788,22 @@ fn reload_rejects_a_missing_required_package_and_keeps_current() {
     );
     let old = fixture.state.current.get();
     let state = fixture.state.clone();
-    let rejected = fakes::within("required reload", fakes::MUST_SUCCEED_WITHIN, move || {
-        state
-            .prepare_inner(
-                &r#loop::ReloadRoute {
-                    model: "scripted/s.json".into(),
-                    credential: None,
-                },
-                false,
-            )
-            .err()
-            .unwrap()
-    });
+    let rejected = fakes::within(
+        "required reload",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            state
+                .prepare_inner(
+                    &r#loop::ReloadRoute {
+                        model: "scripted/s.json".into(),
+                        credential: None,
+                    },
+                    false,
+                )
+                .err()
+                .unwrap()
+        },
+    );
     assert_eq!(rejected.code, contract::ErrorCode::ExtensionRequiredFailed);
     assert!(
         rejected.message.contains("fiber.test/need"),
@@ -834,13 +859,17 @@ fn the_late_preparer_drops_written_notices_and_keeps_new_ones() {
     let state =
         Arc::try_unwrap(fixture.state).unwrap_or_else(|_| panic!("only the test holds the state"));
     let (_reload, late) = state.preparers(written);
-    let prepared = fakes::within("late preparation", fakes::MUST_SUCCEED_WITHIN, move || {
-        late(&r#loop::ReloadRoute {
-            model: "scripted/s.json".into(),
-            credential: None,
-        })
-        .unwrap()
-    });
+    let prepared = fakes::within(
+        "late preparation",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            late(&r#loop::ReloadRoute {
+                model: "scripted/s.json".into(),
+                credential: None,
+            })
+            .unwrap()
+        },
+    );
     assert_eq!(prepared.notices.len(), 1, "{:?}", prepared.notices);
     assert!(
         prepared.notices[0].message.contains("new boom"),
@@ -890,13 +919,17 @@ fn the_late_preparer_skips_the_mcp_sync() {
     let state =
         Arc::try_unwrap(fixture.state).unwrap_or_else(|_| panic!("only the test holds the state"));
     let (_reload, late) = state.preparers(Vec::new());
-    let prepared = fakes::within("late preparation", fakes::MUST_SUCCEED_WITHIN, move || {
-        late(&r#loop::ReloadRoute {
-            model: "scripted/s.json".into(),
-            credential: None,
-        })
-        .unwrap()
-    });
+    let prepared = fakes::within(
+        "late preparation",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            late(&r#loop::ReloadRoute {
+                model: "scripted/s.json".into(),
+                credential: None,
+            })
+            .unwrap()
+        },
+    );
     assert!(prepared.server_sync.servers.kept.is_empty());
     assert!(prepared.server_sync.servers.restarted.is_empty());
     assert!(prepared.server_sync.servers.started.is_empty());
@@ -974,18 +1007,22 @@ fn a_rejected_required_package_quotes_its_own_notice() {
         "fiber.test/need",
     );
     let state = fixture.state.clone();
-    let rejected = fakes::within("required detail", fakes::MUST_SUCCEED_WITHIN, move || {
-        state
-            .prepare_inner(
-                &r#loop::ReloadRoute {
-                    model: "scripted/s.json".into(),
-                    credential: None,
-                },
-                false,
-            )
-            .err()
-            .unwrap()
-    });
+    let rejected = fakes::within(
+        "required detail",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            state
+                .prepare_inner(
+                    &r#loop::ReloadRoute {
+                        model: "scripted/s.json".into(),
+                        credential: None,
+                    },
+                    false,
+                )
+                .err()
+                .unwrap()
+        },
+    );
     assert_eq!(rejected.code, contract::ErrorCode::ExtensionRequiredFailed);
     assert!(
         rejected.message.contains("need boom"),
@@ -1048,13 +1085,17 @@ fn a_late_install_does_not_repeat_the_startup_notices() {
     let state =
         Arc::try_unwrap(fixture.state).unwrap_or_else(|_| panic!("only the test holds the state"));
     let (_reload, late) = state.preparers(written);
-    let prepared = fakes::within("late install", fakes::MUST_SUCCEED_WITHIN, move || {
-        late(&r#loop::ReloadRoute {
-            model: "scripted/s.json".into(),
-            credential: None,
-        })
-        .unwrap()
-    });
+    let prepared = fakes::within(
+        "late install",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            late(&r#loop::ReloadRoute {
+                model: "scripted/s.json".into(),
+                credential: None,
+            })
+            .unwrap()
+        },
+    );
     assert_eq!(prepared.notices.len(), 1, "{:?}", prepared.notices);
     assert!(
         prepared.notices[0].message.contains("new boom"),
@@ -1219,15 +1260,19 @@ fn assemble(base: &State, started: mcp::Started) -> State {
 impl Fixture {
     fn try_prepare(&self) -> Result<r#loop::ReloadPrepared, contract::inbox::Rejection> {
         let state = self.state.clone();
-        fakes::within("reload attempted", fakes::MUST_SUCCEED_WITHIN, move || {
-            state.prepare_inner(
-                &r#loop::ReloadRoute {
-                    model: "scripted/s.json".into(),
-                    credential: None,
-                },
-                false,
-            )
-        })
+        fakes::within(
+            "reload attempted",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                state.prepare_inner(
+                    &r#loop::ReloadRoute {
+                        model: "scripted/s.json".into(),
+                        credential: None,
+                    },
+                    false,
+                )
+            },
+        )
     }
 
     /// Replaces the global config's `mcp.servers` with `entries`, as
@@ -1298,18 +1343,22 @@ impl Fixture {
         let artifacts = self.state.artifacts.clone();
         let cache = config::mcp_cache_dir(&self.state.sources.home);
         let clock = self.state.template.clock.clone();
-        let started = fakes::within("servers relaunch", fakes::MUST_SUCCEED_WITHIN, move || {
-            mcp::start_observed(
-                all,
-                &workspace,
-                &artifacts,
-                Arc::new(DummyImages),
-                &cache,
-                &clock,
-                "test",
-                None,
-            )
-        });
+        let started = fakes::within(
+            "servers relaunch",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                mcp::start_observed(
+                    all,
+                    &workspace,
+                    &artifacts,
+                    Arc::new(DummyImages),
+                    &cache,
+                    &clock,
+                    "test",
+                    None,
+                )
+            },
+        );
         assert!(started.failed.is_empty(), "{:?}", started.failed);
         self.state = Arc::new(assemble(&self.state, started));
     }
@@ -1424,18 +1473,22 @@ fn reload_routes_a_replaced_servers_kept_prompt_through_the_replacement() {
     let artifacts = fixture.state.artifacts.clone();
     let cache = config::mcp_cache_dir(&fixture.state.sources.home);
     let clock = fixture.state.template.clock.clone();
-    let started = fakes::within("servers start", fakes::MUST_SUCCEED_WITHIN, move || {
-        mcp::start_observed(
-            specs.specs,
-            &workspace,
-            &artifacts,
-            Arc::new(DummyImages),
-            &cache,
-            &clock,
-            "test",
-            None,
-        )
-    });
+    let started = fakes::within(
+        "servers start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            mcp::start_observed(
+                specs.specs,
+                &workspace,
+                &artifacts,
+                Arc::new(DummyImages),
+                &cache,
+                &clock,
+                "test",
+                None,
+            )
+        },
+    );
     assert!(started.failed.is_empty(), "{:?}", started.failed);
     fixture.state = Arc::new(assemble(&fixture.state, started));
     fixture.servers = vec![fx];

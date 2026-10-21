@@ -110,9 +110,11 @@ fn await_response(shared: &super::Shared) {
 /// line is logged.
 fn barrier(server: &Arc<Server>) {
     let echoed = Arc::clone(server);
-    let answered = fakes::within("the echo barrier call", WITHIN, move || {
-        call_plain(&echoed, "echo", Duration::from_secs(30))
-    });
+    let answered = fakes::within(
+        "the echo barrier call",
+        Deadline::after(WITHIN),
+        move || call_plain(&echoed, "echo", Duration::from_secs(30)),
+    );
     answered.expect("the echo barrier answers");
 }
 

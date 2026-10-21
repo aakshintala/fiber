@@ -352,7 +352,7 @@ fn a_person_name_pins_the_session_after_a_resume() {
     let started: Value = serde_json::from_str(&first_raw).unwrap();
     let id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
     let client = Socket::connect(setup.deadline, &setup.session_socket(&id));
@@ -577,7 +577,7 @@ fn finish(running: Running) {
         "fiber left a process in its group"
     );
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 }
 
 #[test]
@@ -603,7 +603,7 @@ fn the_person_name_pins_refuses_the_model_and_clears() {
     let started: Value = serde_json::from_str(&first_raw).unwrap();
     let id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 
@@ -642,7 +642,7 @@ fn the_person_name_pins_refuses_the_model_and_clears() {
         "{pinned:?}"
     );
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the pinned call sent a second request"
     );
 
@@ -666,7 +666,7 @@ fn the_person_name_pins_refuses_the_model_and_clears() {
         "{cleared:?}"
     );
     assert!(
-        server.await_requests(3, setup.deadline.left()),
+        server.await_requests(3, setup.deadline),
         "the unpinned call sent a third request"
     );
 

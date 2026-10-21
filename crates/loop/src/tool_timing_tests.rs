@@ -4,8 +4,8 @@
 //! Time comes from the injected clock: synchronous fake work inside the
 //! rules, the provider, the hooks and the tool sets each duration, and a
 //! test advances the fake clock during a person's wait only after the wait
-//! parks on it. Every receive, join and log tap carries one named 5 s
-//! deadline.
+//! parks on it. Every receive, join and log tap carries the shared
+//! must-succeed bound (`fakes::MUST_SUCCEED_WITHIN`).
 
 #![allow(
     clippy::unwrap_used,
@@ -40,14 +40,11 @@ use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Se
 use contract::tool::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, CommandId, ErrorCode, RequestId, SessionId, TurnId};
 use fakes::clock::FakeClock;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 use log::Log;
 use serde_json::{Map, Value, json};
 
 use crate::{BlockLimits, Error, Loop, Model, Reviewer};
-
-/// How long a test waits for a turn, a request or a parked wait: the one
-/// named deadline every receive and join in this file carries.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// The idle delay a suspending turn waits out.
 const IDLE: Duration = Duration::from_secs(60);
@@ -269,6 +266,10 @@ struct ScriptProvider {
     /// One sender per held call, in arrival order: the test answers each
     /// hold through these, in whatever order it chooses.
     hold_releases: Arc<Mutex<VecDeque<mpsc::Sender<Answer>>>>,
+    /// One-shot pause for the next held call: the call sends `parked`
+    /// once it reaches the pause, then blocks on `gate`. Consumed once;
+    /// later calls run as today.
+    held_pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl ScriptProvider {
@@ -287,6 +288,13 @@ impl ScriptProvider {
     /// later calls run as today.
     fn pause_hold(&self, cancelled: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
         *lock(&self.hold_pause) = Some((cancelled, release));
+    }
+
+    /// Parks the next held call between its release queue and its entry
+    /// signal: the call sends `parked` once it reaches the pause, then
+    /// blocks on `gate`. Consumed once; later calls run as today.
+    fn pause_held(&self, parked: mpsc::Sender<()>, gate: mpsc::Receiver<()>) {
+        *lock(&self.held_pause) = Some((parked, gate));
     }
 }
 
@@ -314,7 +322,8 @@ impl Provider for ScriptProvider {
             let entered = lock(&self.hold_entered)
                 .clone()
                 .expect("a held call needs the test's entry signal");
-            (entered, Arc::clone(&self.hold_releases))
+            let pause = Mutex::new(lock(&self.held_pause).take());
+            (entered, Arc::clone(&self.hold_releases), pause)
         });
         Box::new(ScriptCall {
             clock: Arc::clone(&self.clock),
@@ -328,9 +337,14 @@ impl Provider for ScriptProvider {
     }
 }
 
-/// Who wakes a held scripted call: its entry signal, and the queue of
-/// per-call answer senders the test drains in arrival order.
-type HoldRelease = (mpsc::Sender<()>, Arc<Mutex<VecDeque<mpsc::Sender<Answer>>>>);
+/// Who wakes a held scripted call: its entry signal, the queue of
+/// per-call answer senders the test drains in arrival order, and the
+/// test's one-shot pause between the queue and the signal.
+type HoldRelease = (
+    mpsc::Sender<()>,
+    Arc<Mutex<VecDeque<mpsc::Sender<Answer>>>>,
+    Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+);
 
 struct ScriptCall {
     clock: Arc<FakeClock>,
@@ -344,8 +358,8 @@ struct ScriptCall {
     /// Holds the run ahead of its release store; taken out and dropped
     /// before the block, so the cancel never meets this lock.
     pause: Mutex<Option<mpsc::Receiver<()>>>,
-    /// Set for held calls: signals entry, then parks for the test's
-    /// answer through the queued release.
+    /// Set for held calls: queues the release, signals entry, then parks
+    /// for the test's answer through the queued release.
     hold: Option<HoldRelease>,
 }
 
@@ -382,7 +396,7 @@ impl ModelCall for ScriptCall {
                         usage: Box::new(fakes::unnamed_usage()),
                     });
                 }
-                fakes::Deadline::after(WAIT).recv_or_fail(&rx, "the test cancels the hold");
+                Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "the test cancels the hold");
                 Err(CallError::Cancelled {
                     usage: Box::new(fakes::unnamed_usage()),
                 })
@@ -408,22 +422,33 @@ impl ModelCall for ScriptCall {
 }
 
 impl ScriptCall {
-    /// Parks a held call until the test sends its answer: signals entry,
-    /// queues the release, then runs the test's answer as the reply.
+    /// Parks a held call until the test sends its answer: queues the release,
+    /// then signals entry, then runs the test's answer as the reply.
+    /// A wired pause parks the call between the queue and the signal: the
+    /// test owns both ends, so the block carries no deadline, and a dropped
+    /// gate releases it too. A test parked there observes the queue exactly
+    /// as the old signal-then-queue order left it: empty.
     /// A cancel still ends the hold cancelled, as with `Answer::Hold`.
-    /// The block carries no deadline: the channel is the test's own — the
+    /// The answer block carries no deadline: the channel is the test's own — the
     /// test pops the sender and sends the answer, and dropping it releases
     /// the hold too. The test's own deadline on the entry signal and the
     /// turn's end names a hang.
     #[allow(clippy::result_large_err, reason = "test helper mirroring the seam")]
     fn run_released(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let (entered, releases) = self
+        let (entered, releases, pause) = self
             .hold
             .as_ref()
             .expect("a held call is armed by the test");
-        let _sent = entered.send(());
         let (tx, rx) = mpsc::channel();
         lock(releases).push_back(tx);
+        // A wired pause parks the call after it queues its release and
+        // before it signals entry: taken out before the block, so the
+        // test's drop of the gate releases it too.
+        if let Some((parked, gate)) = lock(pause).take() {
+            let _sent = parked.send(());
+            let _released = gate.recv();
+        }
+        let _sent = entered.send(());
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(CallError::Cancelled {
                 usage: Box::new(fakes::unnamed_usage()),
@@ -831,7 +856,8 @@ impl ProbeTool {
             let wake: Arc<dyn Wake> = Arc::new(CancelWake(wake_tx));
             cancel.subscribe(Arc::downgrade(&wake));
             if !cancel.is_cancelled() {
-                fakes::Deadline::after(WAIT).recv_or_fail(&wake_rx, "the loop cancels the leaf");
+                Deadline::after(MUST_SUCCEED_WITHIN)
+                    .recv_or_fail(&wake_rx, "the loop cancels the leaf");
             }
             let _sent = seen.send(());
         }
@@ -841,17 +867,18 @@ impl ProbeTool {
             let clock = lock(&self.clock).clone().expect("the build wires a clock");
             if let Some(rehold) = lock(&self.run_rehold).take() {
                 clock.wait_until(None, &mut |_| {
-                    fakes::Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv_or_fail(&rehold, "the test releases the run to re-park");
                 });
             }
             clock.wait_until(None, &mut |_| {
                 if let Some(gate) = lock(&self.run_gate).take() {
-                    fakes::Deadline::after(WAIT).recv_or_fail(&gate, "the test releases the run");
+                    Deadline::after(MUST_SUCCEED_WITHIN)
+                        .recv_or_fail(&gate, "the test releases the run");
                 }
             });
         } else if let Some(gate) = lock(&self.run_gate).take() {
-            fakes::Deadline::after(WAIT).recv_or_fail(&gate, "the test releases the run");
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&gate, "the test releases the run");
         }
         if let Some(clock) = lock(&self.clock).clone() {
             clock.sleep(Duration::from_millis(self.run_ms));
@@ -890,7 +917,8 @@ impl ProbeTool {
                 }
             });
             if let Some(gate) = lock(&self.forget_gate).take() {
-                fakes::Deadline::after(WAIT).recv_or_fail(&gate, "the test releases the forgetter");
+                Deadline::after(MUST_SUCCEED_WITHIN)
+                    .recv_or_fail(&gate, "the test releases the forgetter");
             }
             return Output {
                 content: vec![ContentPart::Text {
@@ -1149,7 +1177,7 @@ impl Hooks for ProbeHooks {
             let _sent = entered.send(());
         }
         if lock(&self.gate).is_some() {
-            fakes::Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(lock(&self.gate).as_ref().expect("the gate is armed"))
                 .expect("the test releases the gate");
         }
@@ -1351,6 +1379,7 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
         entered: Mutex::new(None),
         calls: AtomicUsize::new(0),
         hold_pause: Mutex::new(None),
+        held_pause: Mutex::new(None),
         requests: Mutex::new(Vec::new()),
         hold_entered: Mutex::new(None),
         hold_releases: Arc::new(Mutex::new(VecDeque::new())),
@@ -1427,6 +1456,7 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
             entered: Mutex::new(setup.reviewer_wake.clone()),
             calls: AtomicUsize::new(0),
             hold_pause: Mutex::new(None),
+            held_pause: Mutex::new(None),
             requests: Mutex::new(Vec::new()),
             hold_entered: Mutex::new(setup.reviewer_hold_entered.clone()),
             hold_releases: Arc::new(Mutex::new(VecDeque::new())),
@@ -1536,9 +1566,12 @@ impl World {
     }
 }
 
+/// The bound `join_turn` waits for the turn on: the shared must-succeed bound.
+const JOIN_WITHIN: Duration = MUST_SUCCEED_WITHIN;
+
 fn join_turn(world: &mut World, flight: Flight) -> Result<Option<TurnOutcome>, Error> {
     let (outcome, looped) =
-        fakes::Deadline::after(WAIT).recv_or_fail(&flight.done, "the turn ends");
+        Deadline::after(JOIN_WITHIN).recv_or_fail(&flight.done, "the turn ends");
     world.looped = Some(looped);
     outcome
 }
@@ -1548,14 +1581,18 @@ fn turn(world: &mut World) -> Result<Option<TurnOutcome>, Error> {
     join_turn(world, flight)
 }
 
+#[test]
+fn join_turn_carries_the_shared_must_succeed_bound() {
+    assert_eq!(
+        JOIN_WITHIN, MUST_SUCCEED_WITHIN,
+        "join_turn waits out the shared must-succeed bound",
+    );
+}
+
 /// The next `permission_requested` on a watcher registered before the turn,
-/// with its request and action ids. One deadline bounds the whole wait:
-/// every skipped line takes what remains of it, never a fresh wait.
-fn wait_requested(
-    watcher: &mut log::Watcher,
-    deadline: &fakes::Deadline,
-    what: &str,
-) -> (String, String) {
+/// with its request and action ids. The shared must-succeed bound covers
+/// the whole wait: every skipped line takes what remains of it, never a fresh wait.
+fn wait_requested(watcher: &mut log::Watcher, deadline: &Deadline, what: &str) -> (String, String) {
     loop {
         let line = watcher
             .recv_timeout(deadline.left())
@@ -1578,7 +1615,7 @@ fn wait_requested(
 /// for the second, the re-raise. One deadline bounds all `n` taps.
 fn wait_requested_nth(
     watcher: &mut log::Watcher,
-    deadline: &fakes::Deadline,
+    deadline: &Deadline,
     n: usize,
     what: &str,
 ) -> (String, String) {
@@ -1748,6 +1785,7 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
         entered: Mutex::new(None),
         calls: AtomicUsize::new(0),
         hold_pause: Mutex::new(None),
+        held_pause: Mutex::new(None),
         requests: Mutex::new(Vec::new()),
         hold_entered: Mutex::new(None),
         hold_releases: Arc::new(Mutex::new(VecDeque::new())),
@@ -1827,6 +1865,7 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
             entered: Mutex::new(None),
             calls: AtomicUsize::new(0),
             hold_pause: Mutex::new(None),
+            held_pause: Mutex::new(None),
             requests: Mutex::new(Vec::new()),
             hold_entered: Mutex::new(None),
             hold_releases: Arc::new(Mutex::new(VecDeque::new())),
@@ -1894,18 +1933,19 @@ fn resolved_bys(world: &World) -> Vec<(String, String)> {
 /// approval wait parks on the clock. Returns the pending request's id.
 fn suspend_on_approval(world: &mut World) -> String {
     let flight = spawn_turn(world);
-    let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
+    let thread =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&flight.thread, "the turn starts");
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the approval is raised",
     );
     world.clock.advance_when_parked(
         Some(world.origin + IDLE),
         Some(thread),
         IDLE,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     // A clock move alone never wakes the inbox wait: a wake makes it look
     // again, find the delay passed, and unwind (`docs/testing.md`).
@@ -2286,11 +2326,12 @@ fn a_persons_allow_holds_the_wait_inside_permission() {
     );
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
+    let thread =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&flight.thread, "the turn starts");
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the approval is raised",
     );
     assert!(
@@ -2301,7 +2342,7 @@ fn a_persons_allow_holds_the_wait_inside_permission() {
         None,
         Some(thread),
         Duration::from_millis(7),
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     reply(&world, &request, allow());
     assert_eq!(
@@ -2340,7 +2381,7 @@ fn a_persons_deny_ends_permission_without_running() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the approval is raised",
     );
     reply(&world, &request, deny());
@@ -2400,7 +2441,7 @@ fn a_closed_inbox_denies_the_waiting_approval() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let _ = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the approval is raised",
     );
     world.inbox_tx.take();
@@ -2433,7 +2474,7 @@ fn close_while_waiting_denies_with_one_record() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let _ = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the approval is raised",
     );
     world
@@ -2472,13 +2513,15 @@ fn a_cancel_while_waiting_ends_cancelled_with_one_record() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let _ = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the approval is raised",
     );
     // The cancel lands only once the wait parks on the clock: any earlier
     // and the unarmed signal swallows it.
     assert!(
-        world.clock.await_parked_unbounded(WAIT),
+        world
+            .clock
+            .await_parked_unbounded(Deadline::after(MUST_SUCCEED_WITHIN)),
         "the approval wait parks on the clock"
     );
     world.cancel.cancel();
@@ -2518,7 +2561,7 @@ fn a_stale_and_an_unfit_reply_are_rejected_before_an_allow() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the approval is raised",
     );
     let inbox = world.inbox_tx.as_ref().expect("the inbox is open").clone();
@@ -2535,7 +2578,7 @@ fn a_stale_and_an_unfit_reply_are_rejected_before_an_allow() {
                 })),
             ))
             .unwrap();
-        fakes::Deadline::after(WAIT).recv_or_fail(&rx, "the reply is answered")
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "the reply is answered")
     };
     assert!(
         answered("r_stale", allow()).is_err(),
@@ -2614,7 +2657,7 @@ fn a_shutdown_while_waiting_abandons_with_one_record() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let _ = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the approval is raised",
     );
     world.cancel.shutdown(0);
@@ -2684,7 +2727,7 @@ fn a_session_grant_allows_the_next_call() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the escalation is raised",
     );
     reply(
@@ -2741,11 +2784,12 @@ fn a_resumed_allow_starts_a_fresh_segment() {
     assert_eq!(ops(&world, "tool.permission").len(), 1);
     exit_and_resume(&mut world, &request, vec![text_answer("Done.", 0)]);
     let flight = spawn_turn(&mut world);
-    let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
+    let thread =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&flight.thread, "the turn starts");
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (raised, _) = wait_requested_nth(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         2,
         "the approval is raised again",
     );
@@ -2762,7 +2806,7 @@ fn a_resumed_allow_starts_a_fresh_segment() {
         Some(world.origin + IDLE),
         Some(thread),
         Duration::from_millis(7),
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     reply(&world, &raised, allow());
     assert_eq!(
@@ -2801,7 +2845,7 @@ fn a_resumed_deny_ends_its_segment_without_running() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (raised, _) = wait_requested_nth(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         2,
         "the approval is raised again",
     );
@@ -2907,12 +2951,14 @@ fn a_resumed_cancel_ends_its_segment_cancelled() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let _ = wait_requested_nth(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         2,
         "the approval is raised again",
     );
     assert!(
-        world.clock.await_parked(world.origin + IDLE, WAIT),
+        world
+            .clock
+            .await_parked(world.origin + IDLE, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the resumed wait parks on the clock"
     );
     world.cancel.cancel();
@@ -2948,11 +2994,12 @@ fn a_resumed_idle_abandons_its_own_segment() {
     let request = suspend_on_approval(&mut world);
     exit_and_resume(&mut world, &request, vec![text_answer("Done.", 0)]);
     let flight = spawn_turn(&mut world);
-    let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
+    let thread =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&flight.thread, "the turn starts");
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let _ = wait_requested_nth(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         2,
         "the approval is raised again",
     );
@@ -2960,7 +3007,7 @@ fn a_resumed_idle_abandons_its_own_segment() {
         Some(world.origin + IDLE),
         Some(thread),
         IDLE,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     world
         .inbox_tx
@@ -2998,7 +3045,7 @@ fn a_resumed_shutdown_abandons_its_own_segment() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let _ = wait_requested_nth(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         2,
         "the approval is raised again",
     );
@@ -3039,7 +3086,7 @@ fn a_failed_commit_on_resume_settles_nothing() {
     world.hooks = Some(Arc::new(ProbeHooks::gated(entered_tx, gate_rx)));
     exit_and_resume(&mut world, &request, vec![text_answer("Done.", 0)]);
     let flight = spawn_turn(&mut world);
-    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the hooks re-run on resume");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the hooks re-run on resume");
     world.cancel.shutdown(0);
     gate_tx.send(()).expect("the hook waits on the gate");
     let outcome = join_turn(&mut world, flight);
@@ -3095,7 +3142,7 @@ fn a_resumed_schema_failure_completes_unchecked() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (raised, _) = wait_requested_nth(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         2,
         "the recorded request is raised",
     );
@@ -3140,7 +3187,7 @@ fn a_resumed_unknown_tool_completes_unchecked() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (raised, _) = wait_requested_nth(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         2,
         "the recorded request is raised",
     );
@@ -3245,7 +3292,7 @@ fn dropping_suspended_state_closes_its_guard_once() {
 
 /// The next `interaction_requested` on a watcher, with its request id.
 /// One deadline bounds the whole wait.
-fn wait_interaction(watcher: &mut log::Watcher, deadline: &fakes::Deadline, what: &str) -> String {
+fn wait_interaction(watcher: &mut log::Watcher, deadline: &Deadline, what: &str) -> String {
     wait_interaction_nth(watcher, deadline, 1, what)
 }
 
@@ -3255,7 +3302,7 @@ fn wait_interaction(watcher: &mut log::Watcher, deadline: &fakes::Deadline, what
 /// remains of it, never a fresh wait.
 fn wait_interaction_nth(
     watcher: &mut log::Watcher,
-    deadline: &fakes::Deadline,
+    deadline: &Deadline,
     n: usize,
     what: &str,
 ) -> String {
@@ -3297,7 +3344,7 @@ fn a_resumed_interaction_runs_with_no_second_permission() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let asked = wait_interaction(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the tool asks its question",
     );
     world.cancel.shutdown(0);
@@ -3314,7 +3361,7 @@ fn a_resumed_interaction_runs_with_no_second_permission() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let raised = wait_interaction_nth(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         2,
         "the question is raised again",
     );
@@ -3435,7 +3482,7 @@ fn a_failing_first_stage_escalates_with_its_record() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the escalation is raised",
     );
     reply(&world, &request, deny());
@@ -3472,7 +3519,7 @@ fn a_failing_second_stage_keeps_both_records() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the escalation is raised",
     );
     reply(&world, &request, deny());
@@ -3521,7 +3568,7 @@ fn cancelling_a_stage_ends_cancelled_with_its_record() {
         .pause_hold(cancelled_tx, release_rx);
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the stage starts its request");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the stage starts its request");
     assert!(
         world.cancel.cancel(),
         "the turn is armed while the stage runs"
@@ -3534,7 +3581,7 @@ fn cancelling_a_stage_ends_cancelled_with_its_record() {
         .unwrap();
     // The cancel is handled before the hold stores its release, so
     // the test never depends on the cancel landing after the store.
-    fakes::Deadline::after(WAIT).recv_or_fail(&cancelled_rx, "the call sees the cancel");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&cancelled_rx, "the call sees the cancel");
     release_tx.send(()).expect("the hold waits");
     assert!(join_turn(&mut world, flight).is_ok());
     assert_eq!(tool.ran(), 0, "the cancelled call never ran");
@@ -3580,7 +3627,7 @@ fn a_cancel_before_the_hold_stores_its_release_still_ends_the_hold() {
         .pause_hold(cancelled_tx, release_rx);
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the stage starts its request");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the stage starts its request");
     assert!(
         world.cancel.cancel(),
         "the turn is armed while the stage runs"
@@ -3591,7 +3638,7 @@ fn a_cancel_before_the_hold_stores_its_release_still_ends_the_hold() {
         .expect("the inbox is open")
         .send(Delivery::Cancelled)
         .unwrap();
-    fakes::Deadline::after(WAIT).recv_or_fail(&cancelled_rx, "the call sees the cancel");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&cancelled_rx, "the call sees the cancel");
     release_tx.send(()).expect("the hold waits");
     assert!(join_turn(&mut world, flight).is_ok());
     assert_eq!(tool.ran(), 0, "the cancelled call never ran");
@@ -3686,7 +3733,7 @@ fn no_reviewer_model_escalates_with_no_stage_timer() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the escalation is raised",
     );
     reply(&world, &request, allow());
@@ -3741,18 +3788,19 @@ fn an_escalated_block_splits_stage_and_wait_durations() {
     );
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    let thread = fakes::Deadline::after(WAIT).recv_or_fail(&flight.thread, "the turn starts");
+    let thread =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&flight.thread, "the turn starts");
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the escalation is raised",
     );
     world.clock.advance_when_parked(
         None,
         Some(thread),
         Duration::from_millis(11),
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     reply(&world, &request, allow());
     assert_eq!(
@@ -4161,7 +4209,7 @@ fn a_shutdown_between_before_and_check_emits_before_only() {
     );
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the before hooks run");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the before hooks run");
     world.cancel.shutdown(0);
     gate_tx.send(()).expect("the hook waits on the gate");
     assert!(join_turn(&mut world, flight).is_ok());
@@ -4592,7 +4640,7 @@ fn an_entered_outer_run_times_its_hold() {
     );
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the run is entered");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the run is entered");
     let worker = tool
         .run_threads()
         .into_iter()
@@ -4606,7 +4654,7 @@ fn an_entered_outer_run_times_its_hold() {
         None,
         Some(worker),
         Duration::from_millis(2),
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     gate_tx.send(()).expect("the run waits on the gate");
     assert_eq!(
@@ -4679,7 +4727,7 @@ fn a_cancel_mid_run_completes_cancelled_with_its_record() {
     );
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the run is entered");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the run is entered");
     assert!(
         world.cancel.cancel(),
         "the turn is armed while the run holds"
@@ -4723,11 +4771,13 @@ fn a_cancel_before_the_run_check_times_no_run() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let _ = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the approval is raised",
     );
     assert!(
-        world.clock.await_parked_unbounded(WAIT),
+        world
+            .clock
+            .await_parked_unbounded(Deadline::after(MUST_SUCCEED_WITHIN)),
         "the approval wait parks on the clock"
     );
     assert!(world.cancel.cancel());
@@ -4774,8 +4824,8 @@ fn concurrent_runs_keep_independent_spans_in_request_order() {
     );
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    fakes::Deadline::after(WAIT).recv_or_fail(&first_rx, "the first run is entered");
-    fakes::Deadline::after(WAIT).recv_or_fail(&second_rx, "the second run is entered");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&first_rx, "the first run is entered");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&second_rx, "the second run is entered");
     let first_worker = first
         .run_threads()
         .into_iter()
@@ -4792,12 +4842,12 @@ fn concurrent_runs_keep_independent_spans_in_request_order() {
         None,
         Some(second_worker),
         Duration::from_millis(2),
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     second_gate_tx.send(()).expect("the second run waits");
     // The first worker's span must not see the next advance: it lands
     // only after the second worker's guard dropped, proven by its record.
-    let bound = fakes::Deadline::after(WAIT);
+    let bound = Deadline::after(MUST_SUCCEED_WITHIN);
     loop {
         if ops(&world, "tool.run")
             .iter()
@@ -4813,7 +4863,7 @@ fn concurrent_runs_keep_independent_spans_in_request_order() {
         None,
         Some(first_worker),
         Duration::from_millis(3),
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     first_gate_tx.send(()).expect("the first run waits");
     assert_eq!(
@@ -5227,7 +5277,7 @@ fn cancelling_an_inner_run_completes_it_cancelled() {
     );
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the inner run is entered");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the inner run is entered");
     assert!(world.cancel.cancel(), "the turn is armed");
     gate_tx.send(()).expect("the inner run waits");
     assert!(join_turn(&mut world, flight).is_ok());
@@ -5299,9 +5349,9 @@ fn cancelling_a_hooked_inner_call_never_runs_it() {
     let flight = spawn_turn(&mut world);
     // The outer call's hooks run first; releasing them lets the inner
     // call reach its own hooks, where the cancel lands.
-    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "a before hook runs");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "a before hook runs");
     gate_tx.send(()).expect("the hook waits");
-    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the inner before hook runs");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the inner before hook runs");
     assert!(world.cancel.cancel(), "the turn is armed");
     gate_tx.send(()).expect("the hook waits");
     assert!(join_turn(&mut world, flight).is_ok());
@@ -5377,9 +5427,9 @@ fn a_descendant_that_returns_before_its_anchor_completes() {
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     // The leaf runs and answers while the held anchor is unreturned.
-    fakes::Deadline::after(WAIT).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
     leaf_gate_tx.send(()).expect("the leaf run waits");
-    let report = fakes::Deadline::after(WAIT).recv_or_fail(&report_rx, "the leaf answers");
+    let report = Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&report_rx, "the leaf answers");
     assert_eq!(
         report, "answered Completed",
         "a leaf that beats its anchor completes"
@@ -5412,16 +5462,16 @@ fn a_returned_anchor_cancels_its_running_descendant() {
     let flight = spawn_turn(&mut world);
     // The leaf is admitted while its anchor still runs, then the anchor
     // returns while the leaf still runs.
-    fakes::Deadline::after(WAIT).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
     forget_tx.send(()).expect("the forgetter waits");
-    fakes::Deadline::after(WAIT).recv_or_fail(&seen_rx, "the leaf sees its cancel");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&seen_rx, "the leaf sees its cancel");
     leaf_gate_tx.send(()).expect("the leaf run waits");
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
         Some(TurnOutcome::Completed)
     );
     assert_eq!(leaf.ran(), 1, "the descendant run was entered");
-    let report = fakes::Deadline::after(WAIT).recv_or_fail(&report_rx, "the leaf answers");
+    let report = Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&report_rx, "the leaf answers");
     assert_eq!(
         report, "answered Cancelled",
         "the orphaned leaf is cancelled"
@@ -5448,17 +5498,17 @@ fn a_returned_anchor_cancels_a_descendant_released_early() {
     leaf.watch_cancel(seen_tx);
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    fakes::Deadline::after(WAIT).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&leaf_entered_rx, "the leaf run is entered");
     // The old order: the gate is already queued when the anchor returns.
     leaf_gate_tx.send(()).expect("the leaf run waits");
     forget_tx.send(()).expect("the forgetter waits");
-    fakes::Deadline::after(WAIT).recv_or_fail(&seen_rx, "the leaf sees its cancel");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&seen_rx, "the leaf sees its cancel");
     assert_eq!(
         join_turn(&mut world, flight).unwrap(),
         Some(TurnOutcome::Completed)
     );
     assert_eq!(leaf.ran(), 1, "the descendant run was entered");
-    let report = fakes::Deadline::after(WAIT).recv_or_fail(&report_rx, "the leaf answers");
+    let report = Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&report_rx, "the leaf answers");
     assert_eq!(
         report, "answered Cancelled",
         "the early leaf is cancelled too"
@@ -5500,7 +5550,8 @@ fn a_command_inner_call_runs_alone_with_its_timers() {
     let flight = spawn_turn(&mut world);
     assert!(join_turn(&mut world, flight).is_ok());
     assert_eq!(tool.ran(), 1);
-    let status = fakes::Deadline::after(WAIT).recv_or_fail(&answer_rx, "the command answers");
+    let status =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&answer_rx, "the command answers");
     assert_eq!(status, contract::events::CallStatus::Completed);
     let permission = ops(&world, "tool.permission");
     assert_eq!(permission.len(), 1);
@@ -5545,12 +5596,13 @@ fn cancelling_a_command_inner_run_completes_it_cancelled() {
         .unwrap();
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    fakes::Deadline::after(WAIT).recv_or_fail(&entered_rx, "the command run is entered");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the command run is entered");
     token.cancel();
     gate_tx.send(()).expect("the run waits");
     assert!(join_turn(&mut world, flight).is_ok());
     assert_eq!(tool.ran(), 1, "the run was entered");
-    let status = fakes::Deadline::after(WAIT).recv_or_fail(&answer_rx, "the command answers");
+    let status =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&answer_rx, "the command answers");
     assert_eq!(status, CallStatus::Cancelled);
     assert_eq!(ops(&world, "tool.permission").len(), 1);
     assert_eq!(ops(&world, "tool.run").len(), 1);
@@ -5658,6 +5710,54 @@ fn a_failed_diagnostics_file_changes_no_output() {
     assert_eq!(ran, control_ran);
 }
 
+// An observed entry means the release is already queued: the hold queues
+// its release before it signals entry. The pause parks the held call
+// between the queue and the signal, so the pop below runs while the old
+// signal-then-queue order would still show an empty queue: it fails there
+// and passes here, with no wall-clock wait.
+// A reviewer hold answers one tool call, then the turn completes.
+#[test]
+fn an_entered_hold_already_queues_its_release() {
+    let rules = Arc::new(FakeRules::default());
+    let atlas = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&atlas));
+    setup.reviewer_script = Some(vec![ReviewReply::HoldAnswer]);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    setup.reviewer_hold_entered = Some(entered_tx);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer("atlas", json!({}), 0),
+            text_answer("Done.", 0),
+            text_answer("Spare.", 0),
+        ],
+    );
+    let judging = Arc::clone(world.reviewer.as_ref().expect("a reviewer"));
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (gate_tx, gate_rx) = mpsc::channel();
+    judging.pause_held(parked_tx, gate_rx);
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+    deadline.recv_or_fail(&parked_rx, "the held call reaches its release pause");
+    let release = lock(&judging.hold_releases)
+        .pop_front()
+        .expect("an entered hold already queues its release");
+    let _sent = gate_tx.send(());
+    deadline.recv_or_fail(&entered_rx, "the held call enters");
+    release
+        .send(review_answers(&[review_text("allow", 0)]).remove(0))
+        .expect("the hold waits");
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(atlas.ran(), 1);
+}
+
 // Three stage-1 requests fly together and resolve in request order: with
 // every first stage held, all three entries land before any answer
 // returns; releasing in reverse arrival order still resolves 1-2-3 before
@@ -5697,7 +5797,7 @@ fn three_first_stages_fly_together_and_resolve_in_request_order() {
     );
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
-    let deadline = fakes::Deadline::after(WAIT);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     for _ in 0..3 {
         deadline.recv_or_fail(&entered_rx, "each first stage enters");
     }
@@ -5973,7 +6073,7 @@ fn a_second_blocks_count_lands_the_escalation_on_the_third_call() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the third call escalates",
     );
     reply(&world, &request, allow());
@@ -6261,7 +6361,7 @@ fn a_grant_remembers_across_the_rest_of_the_batch() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch_all();
     let (request, _) = wait_requested(
         &mut watcher,
-        &fakes::Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         "the first call escalates",
     );
     reply(
@@ -6387,7 +6487,7 @@ fn hook_notices_come_before_the_fanned_out_usages() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch();
     prompt(&world, "hi");
     assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
-    let deadline = fakes::Deadline::after(WAIT);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let mut streamed = Vec::new();
     while let Some(line) = watcher
         .recv_timeout(deadline.left())

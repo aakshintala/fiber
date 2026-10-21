@@ -29,7 +29,7 @@ use contract::inbox::Delivery;
 use contract::shapes::ContentPart;
 use contract::tool::Tool;
 use fakes::alloc::{Counting, large_blocks_during};
-use fakes::{Scripted, within};
+use fakes::{Deadline, Scripted, within};
 use serde_json::json;
 
 use support::{Session, TestTool, calls_reply, delivery};
@@ -72,7 +72,7 @@ fn turn(tool: TestTool, hooks: Option<Arc<dyn Hooks>>) -> (Session, Vec<Envelope
         looped = looped.hooks(hooks);
     }
     session.inbox.send(delivery("go")).unwrap();
-    let (looped, outcome, peak) = within("the turn", TURN, move || {
+    let (looped, outcome, peak) = within("the turn", Deadline::after(TURN), move || {
         let (outcome, peak) = large_blocks_during(|| looped.turn().unwrap());
         (looped, outcome, peak)
     });

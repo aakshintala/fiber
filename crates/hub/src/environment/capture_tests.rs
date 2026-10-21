@@ -324,10 +324,10 @@ fn get(vars: &[(OsString, OsString)], name: &str) -> Option<String> {
 fn reap_group(pid: u32, watchdog: fakes::Watchdog) {
     fakes::kill_group(pid, "KILL").unwrap();
     assert!(
-        fakes::group_empties(pid, WITHIN),
+        fakes::group_empties(pid, fakes::Deadline::after(WITHIN)),
         "the held group is reaped"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -347,7 +347,10 @@ exec /bin/sh -c "$4""#,
     let watchdog = fake.watchdog();
     let vars = outcome_of(&done, "the successful capture").expect("the capture succeeds");
     let pid = fake.pid();
-    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "the shell is reaped"
+    );
     assert_eq!(fake.side("args").trim(), "-l -i -c");
     let home = fake.dir.to_string_lossy().into_owned();
     assert_eq!(
@@ -364,7 +367,7 @@ exec /bin/sh -c "$4""#,
         .into_owned();
     assert_eq!(fake.side("pwd").trim(), physical);
     assert_eq!(get(&vars, "FROM_PROFILE").as_deref(), Some("1"));
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -386,11 +389,11 @@ exec /bin/sh -c "$4""#,
     let watchdog = fake.watchdog();
     let vars = outcome_of(&done, "the capture with a missing HOME").expect("still succeeds");
     assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
+        fakes::pids_exit(&[fake.pid()], fakes::Deadline::after(WITHIN)),
         "the shell is reaped"
     );
     assert_eq!(get(&vars, "FROM_PROFILE").as_deref(), Some("1"));
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 /// A capture with no shell to spawn: nothing runs, and the failure names
@@ -468,10 +471,10 @@ fn a_shell_that_exits_before_printing_is_exited() {
         Err(Failed::Exited)
     );
     assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
+        fakes::pids_exit(&[fake.pid()], fakes::Deadline::after(WITHIN)),
         "the shell is reaped"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -491,10 +494,10 @@ exit 0"#,
         Err(Failed::Exited)
     );
     assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
+        fakes::pids_exit(&[fake.pid()], fakes::Deadline::after(WITHIN)),
         "the shell is reaped"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -516,10 +519,10 @@ exec sleep 600"#,
         Err(Failed::TooLarge)
     );
     assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
+        fakes::pids_exit(&[fake.pid()], fakes::Deadline::after(WITHIN)),
         "the shell is reaped"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -538,10 +541,10 @@ fn a_missing_env_prints_begin_but_no_end() {
         Err(Failed::Exited)
     );
     assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
+        fakes::pids_exit(&[fake.pid()], fakes::Deadline::after(WITHIN)),
         "the shell is reaped"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -563,10 +566,10 @@ fn a_hanging_shell_times_out_on_the_fake_clock() {
         Err(Failed::TimedOut)
     );
     assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
+        fakes::pids_exit(&[fake.pid()], fakes::Deadline::after(WITHIN)),
         "the shell is reaped"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -600,10 +603,10 @@ fn the_deadline_fires_at_or_after_ten_seconds() {
         Err(Failed::TimedOut)
     );
     assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
+        fakes::pids_exit(&[fake.pid()], fakes::Deadline::after(WITHIN)),
         "the shell is reaped"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -621,10 +624,10 @@ exec /bin/sh -c "$4; exec sleep 600""#,
     let vars = outcome_of(&done, "the succeeding capture").expect("the capture succeeds");
     assert_eq!(get(&vars, "FROM_PROFILE").as_deref(), Some("1"));
     assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
+        fakes::pids_exit(&[fake.pid()], fakes::Deadline::after(WITHIN)),
         "the shell is reaped"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -640,8 +643,11 @@ fn cancelling_a_hung_capture_kills_and_reaps() {
         outcome_of(&done, "the cancelled capture"),
         Err(Failed::Cancelled)
     );
-    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
-    watchdog.stand_down(WITHIN);
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "the shell is reaped"
+    );
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -659,7 +665,10 @@ fn cancelling_with_a_held_output_still_returns() {
         outcome_of(&done, "the cancelled capture"),
         Err(Failed::Cancelled)
     );
-    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "the shell is reaped"
+    );
     reap_group(pid, watchdog);
 }
 
@@ -682,7 +691,10 @@ fn a_timeout_with_a_held_output_still_returns() {
         Err(Failed::TimedOut)
     );
     let pid = fake.pid();
-    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "the shell is reaped"
+    );
     reap_group(pid, watchdog);
 }
 
@@ -697,7 +709,10 @@ fn a_success_with_a_held_output_still_returns() {
     let watchdog = fake.watchdog();
     outcome_of(&done, "the succeeding capture").expect("the capture succeeds");
     let pid = fake.pid();
-    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "the shell is reaped"
+    );
     reap_group(pid, watchdog);
 }
 
@@ -750,7 +765,7 @@ fn a_large_environment_under_the_cap_succeeds() {
     let watchdog = fake.watchdog();
     let vars = outcome_of(&done, "the large capture").expect("the capture succeeds");
     assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
+        fakes::pids_exit(&[fake.pid()], fakes::Deadline::after(WITHIN)),
         "the shell is reaped"
     );
     let pads: Vec<&(OsString, OsString)> = vars
@@ -761,7 +776,7 @@ fn a_large_environment_under_the_cap_succeeds() {
     for (_, value) in pads {
         assert_eq!(value.to_string_lossy().len(), PAD_LEN);
     }
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -802,7 +817,10 @@ fn a_cap_sized_output_without_a_marker_parks() {
         Err(Failed::Cancelled)
     );
     let pid = fake.pid();
-    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "the shell is reaped"
+    );
     reap_group(pid, watchdog);
 }
 
