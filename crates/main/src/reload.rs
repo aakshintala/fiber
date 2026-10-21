@@ -311,16 +311,9 @@ impl State {
         inputs.extension_sections = patch.extension_sections.clone();
         inputs.skills_disabled = patch.skills_disabled.clone();
         inputs.cache_lifetime = patch.cache_lifetime;
-        let listed = r#loop::commands(
-            &inputs,
-            &self.sources.workspace,
-            &self.prompt_rows,
-            &extensions.commands(),
-        );
         let skills = r#loop::skills(&inputs, &self.sources.workspace);
         let mut notices = config.notices().to_vec();
         notices.extend(extensions.notices().iter().cloned());
-        notices.extend(listed.notices);
         // The MCP sync: classify the new person specs against the live
         // slots, stage (re-list keeps, shadow-start replacements and
         // starts), and commit only after every required shadow start
@@ -356,6 +349,25 @@ impl State {
             message: error.message,
         })?;
         let synced = mcp::commit_sync(staged, &self.servers, &cache, &self.artifacts, &self.images);
+        // New prompt sources join the `/` list when their server had no
+        // startup row (started, newly added, or approved in-session);
+        // every startup row stays, and kept servers refresh the cache
+        // file only.
+        let mut new_prompts = Vec::new();
+        for prompt in synced.prompts {
+            if !self.prompt_rows.iter().any(|row| row.tag == prompt.tag) {
+                new_prompts.push(prompt);
+            }
+        }
+        let mut prompt_rows = self.prompt_rows.clone();
+        prompt_rows.extend(new_prompts.clone());
+        let listed = r#loop::commands(
+            &inputs,
+            &self.sources.workspace,
+            &prompt_rows,
+            &extensions.commands(),
+        );
+        notices.extend(listed.notices);
         let mut tools: Tools = self
             .tools
             .iter()
@@ -477,12 +489,10 @@ impl State {
             extensions: loaded,
             notices,
             server_sync: r#loop::ServerSync {
-                kept_servers: synced.kept,
-                restarted_servers: synced.restarted,
-                started_servers: synced.started,
-                stopped_servers: synced.stopped,
+                servers: synced.servers,
                 server_records: synced.records,
                 server_failures: synced.failed,
+                new_prompts,
             },
             hooks: Some(hooks),
             reviewer,

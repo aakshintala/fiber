@@ -569,10 +569,10 @@ fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
     let mut w = world();
     w.looped = w.looped.reloader(Arc::new(|_| {
         let mut next = prepared();
-        next.server_sync.kept_servers = vec!["keep".into()];
-        next.server_sync.restarted_servers = vec!["changed".into()];
-        next.server_sync.started_servers = vec!["new".into()];
-        next.server_sync.stopped_servers = vec!["gone".into()];
+        next.server_sync.servers.kept = vec!["keep".into()];
+        next.server_sync.servers.restarted = vec!["changed".into()];
+        next.server_sync.servers.started = vec!["new".into()];
+        next.server_sync.servers.stopped = vec!["gone".into()];
         next.server_sync.server_records = vec![
             contract::tool::ServerRecord::Ready(McpServerReady {
                 server: "changed".into(),

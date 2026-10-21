@@ -8,11 +8,12 @@ use std::path::Path;
 use std::sync::{Arc, PoisonError};
 
 use contract::clock::Clock;
-use contract::events::{McpServerFailed, ToolInfo};
+use contract::events::{CommandInfo, McpServerFailed, McpServerReady, ReloadedServers, ToolInfo};
 use contract::images::Images;
 use contract::tool::{ServerRecord, Tool};
 
 use crate::cache::{self, Cached};
+use crate::prompt::Prompts;
 use crate::slot::Slot;
 use crate::start::{
     Declaration, ServerSpec, Servers, Shadowed, declare, open_staged, resources_info,
@@ -141,21 +142,22 @@ enum StagedRow {
         slot: Arc<Slot>,
         listed: Cached,
         used: Vec<Declaration>,
-        ready: contract::tool::ServerRecord,
         /// The old death the commit writes before the ready.
         records: Vec<contract::tool::ServerRecord>,
         /// Whether the commit files the shadow under `restarted` (a
         /// replacement, or a fallback for a slot that left) or
         /// `started` (a fresh start).
         restarted: bool,
+        /// The shadow's runnable prompt rows, carried for servers with
+        /// no startup rows; kept servers refresh the cache file only.
+        prompts: Vec<CommandInfo>,
     },
-    ReplaceFailed {
+    Failed {
         spec: ServerSpec,
         failure: McpServerFailed,
-    },
-    StartFailed {
-        spec: ServerSpec,
-        failure: McpServerFailed,
+        /// Whether the commit files the failure under `restarted`
+        /// (a replacement) or `started` (a fresh start).
+        replaces: bool,
     },
     Remove {
         name: String,
@@ -167,14 +169,6 @@ enum StagedRow {
 /// `main`, which passes it from stage to commit.
 pub struct StagedSync {
     rows: Vec<StagedRow>,
-}
-
-/// Stops every shadow started so far: the stage's required-failure
-/// path, so no replacement child outlives the rejected reload.
-fn stop_shadows(shadows: &[Arc<Slot>]) {
-    for shadow in shadows {
-        shadow.stop();
-    }
 }
 
 /// The start's failure for a required shadow that failed to start: the
@@ -232,28 +226,28 @@ pub fn stage_sync(
         ) {
             Shadowed::Up(opened) => {
                 shadows.push(Arc::clone(&opened.slot));
-                let ready = ServerRecord::Ready(contract::events::McpServerReady {
-                    server: spec.name.clone(),
-                });
+                let prompts = Prompts::collect(opened.sources).commands();
                 Ok(StagedRow::Replaced {
                     spec,
                     slot: opened.slot,
                     listed: opened.listed,
                     used: opened.declared,
-                    ready,
                     records,
                     restarted,
+                    prompts,
                 })
             }
             Shadowed::Down { failure, required } => {
                 if required {
-                    stop_shadows(&shadows);
+                    for shadow in &shadows {
+                        shadow.stop();
+                    }
                     return Err(required_failed(&failure));
                 }
-                Ok(if restarted {
-                    StagedRow::ReplaceFailed { spec, failure }
-                } else {
-                    StagedRow::StartFailed { spec, failure }
+                Ok(StagedRow::Failed {
+                    spec,
+                    failure,
+                    replaces: restarted,
                 })
             }
         }
@@ -312,16 +306,12 @@ pub struct Synced {
     pub records: Vec<ServerRecord>,
     /// Each non-required server failure, for `reloaded`'s `failed` entry.
     pub failed: Vec<contract::events::ReloadFailure>,
-    /// Kept as they were.
-    pub kept: Vec<String>,
-    /// Restarted: shadow-started replacements, including non-required
-    /// ones whose shadow failed (the old slot is still stopped at
-    /// commit, with the server showing failed).
-    pub restarted: Vec<String>,
-    /// Started: fresh starts, including non-required ones that failed.
-    pub started: Vec<String>,
-    /// Stopped: removed declarations, never started again.
-    pub stopped: Vec<String>,
+    /// Kept, restarted, started and stopped, by name.
+    pub servers: ReloadedServers,
+    /// The shadow-started servers' runnable prompt rows, for the
+    /// servers with no startup rows; kept servers refresh the cache
+    /// file only.
+    pub prompts: Vec<CommandInfo>,
 }
 
 /// Commits the staged sync: stops and removes old slots, installs the new
@@ -338,10 +328,13 @@ pub fn commit_sync(
     let mut tools = Vec::new();
     let mut records = Vec::new();
     let mut failed = Vec::new();
-    let mut kept = Vec::new();
-    let mut restarted = Vec::new();
-    let mut started = Vec::new();
-    let mut stopped = Vec::new();
+    let mut grouping = ReloadedServers {
+        kept: Vec::new(),
+        restarted: Vec::new(),
+        started: Vec::new(),
+        stopped: Vec::new(),
+    };
+    let mut prompts = Vec::new();
     for row in staged.rows {
         match row {
             StagedRow::Keep { spec, listed, used } => {
@@ -355,7 +348,7 @@ pub fn commit_sync(
                     }
                     slot.install_relisted(listed);
                     tools.extend(used);
-                    kept.push(name);
+                    grouping.kept.push(name);
                 }
             }
             StagedRow::Replaced {
@@ -363,9 +356,9 @@ pub fn commit_sync(
                 slot,
                 listed,
                 used,
-                ready,
                 records: carried,
                 restarted: replaces,
+                prompts: carried_prompts,
             } => {
                 let name = spec.name.clone();
                 // A fresh start swaps a leftover slot out, and a
@@ -381,37 +374,44 @@ pub fn commit_sync(
                 cache::write(cache, &name, &spec.key(), &listed);
                 tools.extend(used);
                 records.extend(carried);
-                records.push(ready);
+                records.push(ServerRecord::Ready(McpServerReady {
+                    server: name.clone(),
+                }));
+                prompts.extend(carried_prompts);
                 if replaces {
-                    restarted.push(name);
+                    grouping.restarted.push(name);
                 } else {
-                    started.push(name);
+                    grouping.started.push(name);
                 }
             }
-            StagedRow::ReplaceFailed { spec, failure } => {
+            StagedRow::Failed {
+                spec,
+                failure,
+                replaces,
+            } => {
                 let name = spec.name.clone();
-                servers.remove(&name);
+                if replaces {
+                    // A non-required replacement still stops the old
+                    // slot at commit: the configuration changed, so no
+                    // stale slot survives, with the server showing
+                    // failed.
+                    servers.remove(&name);
+                }
                 records.push(ServerRecord::Failed(failure.clone()));
                 failed.push(contract::events::ReloadFailure {
                     server: name.clone(),
                     reason: failure.reason,
                     error: failure.error,
                 });
-                restarted.push(name);
-            }
-            StagedRow::StartFailed { spec, failure } => {
-                let name = spec.name.clone();
-                records.push(ServerRecord::Failed(failure.clone()));
-                failed.push(contract::events::ReloadFailure {
-                    server: name.clone(),
-                    reason: failure.reason,
-                    error: failure.error,
-                });
-                started.push(name);
+                if replaces {
+                    grouping.restarted.push(name);
+                } else {
+                    grouping.started.push(name);
+                }
             }
             StagedRow::Remove { name } => {
                 servers.remove(&name);
-                stopped.push(name);
+                grouping.stopped.push(name);
             }
         }
     }
@@ -436,9 +436,7 @@ pub fn commit_sync(
         tools,
         records,
         failed,
-        kept,
-        restarted,
-        started,
-        stopped,
+        servers: grouping,
+        prompts,
     }
 }

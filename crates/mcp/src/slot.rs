@@ -639,9 +639,11 @@ impl Slot {
             Vec::new()
         };
         let prompts = if list_prompts {
-            // A prompts list that errors leaves no prompts while the
-            // re-list goes on, as at startup; only a missed deadline,
-            // a death or an expiry falls back to the replace path.
+            // A prompts list that is refused or errors leaves no prompts
+            // while the re-list goes on, as at startup; a missed
+            // deadline, a death, an expiry, or a login failure falls
+            // back to the replace path, so a failed listing never
+            // writes a cache from an empty list.
             match crate::server::list_pages::<ListedPrompt, ListEnd>(
                 &server,
                 &self.clock,
@@ -650,9 +652,7 @@ impl Slot {
                 bound,
                 &crate::wait::NoCancel,
                 |error| match error {
-                    Some(CallError::JsonRpc { .. } | CallError::Http(_) | CallError::Login(_)) => {
-                        Ok(Vec::new())
-                    }
+                    Some(CallError::JsonRpc { .. } | CallError::Http(_)) => Ok(Vec::new()),
                     error => Err(end(error)),
                 },
             ) {

@@ -1291,17 +1291,17 @@ fn run_named(
 fn reload_with_a_changed_executable_serves_the_new_servers_tools() {
     let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
     let first = fixture.prepare();
-    assert_eq!(first.server_sync.kept_servers, ["fx"]);
+    assert_eq!(first.server_sync.servers.kept, ["fx"]);
     let pid = fixture.servers[0].pid();
     // A second fake directory is the new executable.
     let next = FakeServer::new(&fixture.rig, "fx-next", &json!([{"name": "plus"}]));
     next.answer("plus", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     fixture.rewrite(json!({"fx": next.entry(json!({}))}));
     let prepared = fixture.prepare();
-    assert!(prepared.server_sync.kept_servers.is_empty());
-    assert_eq!(prepared.server_sync.restarted_servers, ["fx"]);
-    assert!(prepared.server_sync.started_servers.is_empty());
-    assert!(prepared.server_sync.stopped_servers.is_empty());
+    assert!(prepared.server_sync.servers.kept.is_empty());
+    assert_eq!(prepared.server_sync.servers.restarted, ["fx"]);
+    assert!(prepared.server_sync.servers.started.is_empty());
+    assert!(prepared.server_sync.servers.stopped.is_empty());
     assert!(
         run_named(&prepared.tools, &fixture, "mcp__fx__plus")
             .error
@@ -1342,8 +1342,8 @@ fn reload_with_only_a_timeout_change_replaces_with_the_new_spec() {
     let pid = fixture.servers[0].pid();
     fixture.rewrite(json!({"fx": fixture.servers[0].entry(json!({"startup_timeout_ms": 6000}))}));
     let prepared = fixture.prepare();
-    assert!(prepared.server_sync.kept_servers.is_empty());
-    assert_eq!(prepared.server_sync.restarted_servers, ["fx"]);
+    assert!(prepared.server_sync.servers.kept.is_empty());
+    assert_eq!(prepared.server_sync.servers.restarted, ["fx"]);
     assert_ne!(
         fixture.servers[0].pid(),
         pid,
@@ -1362,10 +1362,10 @@ fn reload_with_an_unchanged_spec_keeps_without_reconnecting() {
     let pid = fixture.servers[0].pid();
     let cache = fixture.cache_bytes("fx");
     let prepared = fixture.prepare();
-    assert_eq!(prepared.server_sync.kept_servers, ["fx"]);
-    assert!(prepared.server_sync.restarted_servers.is_empty());
-    assert!(prepared.server_sync.started_servers.is_empty());
-    assert!(prepared.server_sync.stopped_servers.is_empty());
+    assert_eq!(prepared.server_sync.servers.kept, ["fx"]);
+    assert!(prepared.server_sync.servers.restarted.is_empty());
+    assert!(prepared.server_sync.servers.started.is_empty());
+    assert!(prepared.server_sync.servers.stopped.is_empty());
     assert!(prepared.server_sync.server_records.is_empty());
     assert_eq!(fixture.servers[0].pid(), pid, "no reconnect");
     assert_eq!(fixture.cache_bytes("fx"), cache, "no cache write");
@@ -1379,8 +1379,8 @@ fn reload_replaces_a_dead_server_beside_the_old_slot() {
     let pid = fixture.servers[0].pid();
     fixture.servers[0].kill();
     let prepared = fixture.prepare();
-    assert!(prepared.server_sync.kept_servers.is_empty());
-    assert_eq!(prepared.server_sync.restarted_servers, ["fx"]);
+    assert!(prepared.server_sync.servers.kept.is_empty());
+    assert_eq!(prepared.server_sync.servers.restarted, ["fx"]);
     assert_ne!(
         fixture.servers[0].pid(),
         pid,
@@ -1408,8 +1408,8 @@ fn reload_starts_an_unstarted_server() {
     fake.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     fixture.rewrite(json!({"fx": fake.entry(json!({}))}));
     let prepared = fixture.prepare();
-    assert_eq!(prepared.server_sync.started_servers, ["fx"]);
-    assert!(prepared.server_sync.kept_servers.is_empty());
+    assert_eq!(prepared.server_sync.servers.started, ["fx"]);
+    assert!(prepared.server_sync.servers.kept.is_empty());
     assert!(
         run_named(&prepared.tools, &fixture, "mcp__fx__echo")
             .error
@@ -1438,7 +1438,7 @@ fn reload_declares_a_tool_added_to_an_advertised_empty_list() {
     fixture.servers[0].set_tools(&json!([{"name": "echo"}]));
     fixture.servers[0].answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     let prepared = fixture.prepare();
-    assert_eq!(prepared.server_sync.kept_servers, ["fx"]);
+    assert_eq!(prepared.server_sync.servers.kept, ["fx"]);
     assert!(
         run_named(&prepared.tools, &fixture, "mcp__fx__echo")
             .error
@@ -1457,7 +1457,7 @@ fn reload_stops_a_removed_server_and_undeclares_its_tools() {
     );
     fixture.rewrite(json!({}));
     let prepared = fixture.prepare();
-    assert_eq!(prepared.server_sync.stopped_servers, ["fx"]);
+    assert_eq!(prepared.server_sync.servers.stopped, ["fx"]);
     assert!(
         prepared
             .tools
@@ -1481,10 +1481,10 @@ fn reload_starts_a_readded_name_fresh() {
     let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
     fixture.rewrite(json!({}));
     let removed = fixture.prepare();
-    assert_eq!(removed.server_sync.stopped_servers, ["fx"]);
+    assert_eq!(removed.server_sync.servers.stopped, ["fx"]);
     fixture.rewrite(json!({"fx": fixture.servers[0].entry(json!({}))}));
     let prepared = fixture.prepare();
-    assert_eq!(prepared.server_sync.started_servers, ["fx"]);
+    assert_eq!(prepared.server_sync.servers.started, ["fx"]);
     assert!(
         run_named(&prepared.tools, &fixture, "mcp__fx__echo")
             .error
@@ -1503,8 +1503,8 @@ fn reload_skips_a_repository_server_without_approval() {
     )
     .unwrap();
     let prepared = fixture.prepare();
-    assert_eq!(prepared.server_sync.kept_servers, ["fx"]);
-    assert!(prepared.server_sync.started_servers.is_empty());
+    assert_eq!(prepared.server_sync.servers.kept, ["fx"]);
+    assert!(prepared.server_sync.servers.started.is_empty());
     assert!(prepared.server_sync.server_records.is_empty());
     assert!(prepared.server_sync.server_failures.is_empty());
     assert!(
@@ -1569,8 +1569,8 @@ fn reload_with_a_failing_replacement_stops_the_old_slot_and_shows_failed() {
     let prepared = fixture.prepare();
     // Non-required, so the reload succeeds with the server failed: the
     // old slot is stopped at commit, never restarted.
-    assert!(prepared.server_sync.kept_servers.is_empty());
-    assert_eq!(prepared.server_sync.restarted_servers, ["fx"]);
+    assert!(prepared.server_sync.servers.kept.is_empty());
+    assert_eq!(prepared.server_sync.servers.restarted, ["fx"]);
     assert_eq!(prepared.server_sync.server_failures.len(), 1);
     assert_eq!(prepared.server_sync.server_failures[0].server, "fx");
     assert!(
@@ -1630,7 +1630,7 @@ fn reload_adds_mcp_resources_when_a_protected_slot_offers_them() {
     .unwrap();
     fixture.rewrite(json!({"fx": fixture.servers[0].entry(json!({}))}));
     let prepared = fixture.prepare();
-    assert_eq!(prepared.server_sync.started_servers, ["fx"]);
+    assert_eq!(prepared.server_sync.servers.started, ["fx"]);
     assert!(
         prepared
             .tools
@@ -1664,7 +1664,7 @@ fn reload_removes_mcp_resources_when_no_post_sync_slot_offers_them() {
     // The live server advertises no resources, so the sync drops the
     // stale tool and its declaration.
     let prepared = fixture.prepare();
-    assert_eq!(prepared.server_sync.started_servers, ["fx"]);
+    assert_eq!(prepared.server_sync.servers.started, ["fx"]);
     assert!(
         prepared
             .tools
@@ -1677,4 +1677,51 @@ fn reload_removes_mcp_resources_when_no_post_sync_slot_offers_them() {
             .declared_names()
             .contains(&mcp::RESOURCES_TOOL.to_owned())
     );
+}
+
+#[test]
+fn reload_appends_a_started_servers_prompts_while_keeping_every_startup_row() {
+    // A started server's prompts join the `/` list while every startup
+    // row stays: bites the discard of the re-listed prompt sources,
+    // where the old code rebuilt commands from the startup snapshot.
+    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    assert!(
+        fixture.state.prompt_rows.is_empty(),
+        "the startup lists no prompts"
+    );
+    let dir = fixture.rig.root.path().join("new");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("tools.json"),
+        json!([{"name": "echo"}]).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("call-echo.json"),
+        r#"{"content":[{"type":"text","text":"hi"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("prompts.json"),
+        json!([{"name": "greet", "description": "Greets."}]).to_string(),
+    )
+    .unwrap();
+    let entry = json!({
+        "command": fakes::mcp_fixture().display().to_string(),
+        "args": [dir.display().to_string()],
+    });
+    fixture.rewrite(json!({
+        "fx": fixture.servers[0].entry(json!({})),
+        "new": entry,
+    }));
+    let prepared = fixture.prepare();
+    assert_eq!(prepared.server_sync.servers.kept, ["fx"]);
+    assert_eq!(prepared.server_sync.servers.started, ["new"]);
+    assert!(
+        fixture.state.prompt_rows.is_empty(),
+        "prepare keeps every startup row"
+    );
+    assert_eq!(prepared.server_sync.new_prompts.len(), 1);
+    assert_eq!(prepared.server_sync.new_prompts[0].name, "greet");
+    assert_eq!(prepared.server_sync.new_prompts[0].tag, "new");
 }

@@ -240,7 +240,12 @@ fn prepared() -> ReloadPrepared {
         }],
         notices: Vec::new(),
         server_sync: r#loop::ServerSync {
-            kept_servers: vec!["kept".into()],
+            servers: contract::events::ReloadedServers {
+                kept: vec!["kept".into()],
+                restarted: Vec::new(),
+                started: Vec::new(),
+                stopped: Vec::new(),
+            },
             ..r#loop::ServerSync::default()
         },
         hooks: None,

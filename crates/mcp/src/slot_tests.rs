@@ -1578,6 +1578,75 @@ fn relist_with_refused_prompts_lists_tools_and_no_prompts() {
 }
 
 #[test]
+fn relist_with_login_prompts_signals_replace_without_a_cache_write() {
+    // Bites the prompts/list login swallow: a login failure during the
+    // re-list's prompts page must fall back to the replace path, never
+    // an empty success that would rewrite the cache from a failed
+    // listing.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let setup = Setup::new();
+    let prompts_calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&prompts_calls);
+    let server = fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
+        use serde_json::Value;
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result = |result: Value| {
+            json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
+        };
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => fakes::Response::status(
+                200,
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}, "prompts": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                })),
+            )
+            .header("mcp-session-id", "1868a90c"),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => fakes::Response::status(
+                200,
+                result(json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]})),
+            ),
+            Some("prompts/list") => {
+                if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                    fakes::Response::status(
+                        200,
+                        result(json!({"prompts": [{"name": "old", "description": "Old."}]})),
+                    )
+                } else {
+                    fakes::Response::status(401, "secret")
+                }
+            }
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap();
+    let started = setup.start(vec![
+        setup.remote_spec("fx", &format!("{}/mcp", server.url())),
+    ]);
+    assert!(started.failed.is_empty());
+    let slot = started.servers.slot("fx").expect("the fx slot");
+    let cache_before = setup.cache_bytes();
+    match slot.relist() {
+        Relisted::Up { .. } => panic!("a login failure never re-lists empty"),
+        Relisted::Replace { .. } => {}
+    }
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "a failed listing writes no cache"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
 fn relist_without_a_running_server_signals_replace_without_records() {
     let setup = Setup::new();
     setup.tools(&serde_json::json!([{"name": "echo"}]));
@@ -2015,7 +2084,7 @@ fn stage_and_commit_keep_a_healthy_server_on_its_new_lists() {
         &setup.artifacts(),
         &every(&images),
     );
-    assert_eq!(synced.kept, vec!["fx".to_owned()]);
+    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     assert!(synced.records.is_empty(), "a clean keep writes no records");
     assert_eq!(setup.pid(), pid, "the keep reconnects nothing");
     assert_eq!(
@@ -2087,7 +2156,7 @@ fn commit_installs_the_keep_lists_back_on_its_slot() {
         &setup.artifacts(),
         &every(&images),
     );
-    assert_eq!(synced.kept, vec!["fx".to_owned()]);
+    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     let held: Vec<String> = slot
         .listed_snapshot()
         .tools
@@ -2129,7 +2198,7 @@ fn commit_writes_no_cache_for_an_unchanged_keep() {
         &setup.artifacts(),
         &every(&images),
     );
-    assert_eq!(synced.kept, vec!["fx".to_owned()]);
+    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     assert_eq!(
         setup.cache_bytes(),
         cache_before,
@@ -2166,7 +2235,7 @@ fn commit_writes_a_prompts_only_change_for_an_unchanged_tool_list() {
         &setup.artifacts(),
         &every(&images),
     );
-    assert_eq!(synced.kept, vec!["fx".to_owned()]);
+    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     let names: Vec<String> = setup
         .cached_prompts()
         .iter()
@@ -2205,7 +2274,7 @@ fn stage_and_commit_replace_a_dead_slot_carrying_its_death() {
         &setup.artifacts(),
         &every(&images),
     );
-    assert_eq!(synced.restarted, vec!["fx".to_owned()]);
+    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
     assert_eq!(synced.records.len(), 2, "the exit and the ready");
     let contract::tool::ServerRecord::Failed(exit) = &synced.records[0] else {
         panic!("the old death comes first")
@@ -2376,7 +2445,7 @@ fn stage_of_a_wedged_keep_fails_optional_stopping_the_old_slot_at_commit() {
         &setup.artifacts(),
         &every(&images),
     );
-    assert_eq!(synced.restarted, vec!["fx".to_owned()]);
+    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
     assert_eq!(synced.records.len(), 1, "the shadow's start failure");
     let contract::tool::ServerRecord::Failed(failed) = &synced.records[0] else {
         panic!("the failure rides a failed record")
@@ -2424,7 +2493,7 @@ fn stage_and_commit_remove_a_dropped_name() {
         &setup.artifacts(),
         &every(&images),
     );
-    assert_eq!(synced.stopped, vec!["fx".to_owned()]);
+    assert_eq!(synced.servers.stopped, vec!["fx".to_owned()]);
     assert!(synced.records.is_empty(), "a removal writes no records");
     assert!(started.servers.slot("fx").is_none());
     assert!(!slot.is_running(), "the removal stops the slot");
@@ -2460,7 +2529,7 @@ fn stage_and_commit_start_an_undeclared_name() {
         &setup.artifacts(),
         &every(&images),
     );
-    assert_eq!(synced.started, vec!["fx".to_owned()]);
+    assert_eq!(synced.servers.started, vec!["fx".to_owned()]);
     assert_eq!(synced.records.len(), 1, "the ready");
     assert!(
         matches!(&synced.records[0], contract::tool::ServerRecord::Ready(_)),
@@ -2556,7 +2625,7 @@ fn classify_starts_a_lazy_slot_and_commit_swaps_it_for_a_live_one() {
         &setup.artifacts(),
         &every(&images),
     );
-    assert_eq!(synced.started, ["fx".to_owned()]);
+    assert_eq!(synced.servers.started, ["fx".to_owned()]);
     assert!(
         matches!(synced.records.as_slice(), [ServerRecord::Ready(_)]),
         "a fresh start reads ready, not failed"

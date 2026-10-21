@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use crate::{BlockLimits, Error, HandoffSettings, Loop, Retry, Reviewer};
 use contract::diag::Observe;
-use contract::events::{CacheLifetime, LoadedExtension, Notice, ReloadFailure};
+use contract::events::{
+    CacheLifetime, CommandInfo, LoadedExtension, Notice, ReloadFailure, ReloadedServers,
+};
 use contract::hook::Hooks;
 use contract::inbox::{Ack, Rejection};
 use contract::shapes::Failure;
@@ -86,21 +88,39 @@ pub struct ReloadSettings {
 /// non-required failures for its `failed` entry. Carried as one result
 /// from preparation through installation to the log, so the six fields
 /// describing one sync never drift apart.
-#[derive(Default)]
+impl Default for ServerSync {
+    fn default() -> Self {
+        Self {
+            servers: ReloadedServers {
+                kept: Vec::new(),
+                restarted: Vec::new(),
+                started: Vec::new(),
+                stopped: Vec::new(),
+            },
+            server_records: Vec::new(),
+            server_failures: Vec::new(),
+            new_prompts: Vec::new(),
+        }
+    }
+}
+/// One reload's MCP server sync, in `reloaded` order: the four-quadrant
+/// grouping, the server lines written before `reloaded`, the
+/// non-required failures for its `failed` entry, and the carried
+/// new-server prompt rows. Carried as one result from preparation
+/// through installation to the log, so the fields describing one sync
+/// never drift apart.
 pub struct ServerSync {
-    /// Kept as they were.
-    pub kept_servers: Vec<String>,
-    /// Restarted beside the old servers.
-    pub restarted_servers: Vec<String>,
-    /// Started fresh, with no old server.
-    pub started_servers: Vec<String>,
-    /// Stopped and undeclared.
-    pub stopped_servers: Vec<String>,
+    /// Kept, restarted, started and stopped, by name.
+    pub servers: ReloadedServers,
     /// The `mcp_server_failed`/`mcp_server_ready` lines in sync order,
     /// written before `reloaded`.
     pub server_records: Vec<contract::tool::ServerRecord>,
     /// Each non-required server failure, for `reloaded`'s `failed` entry.
     pub server_failures: Vec<ReloadFailure>,
+    /// The shadow-started servers' runnable prompt rows, for servers
+    /// with no startup rows; `install` appends them, keeping every
+    /// startup row.
+    pub new_prompts: Vec<CommandInfo>,
 }
 
 /// A complete reload ready for an infallible field swap and installation.
@@ -253,18 +273,23 @@ impl Loop {
         crate::switch::deny_also(&mut self.credential_files, prepared.credential_files);
         (self.tools, self.replaced) = crate::calls::register(prepared.tools);
         self.hooks = prepared.hooks;
+        // New servers' prompts join the `/` list; every startup row stays.
+        let mut sync = prepared.server_sync;
+        if !sync.new_prompts.is_empty()
+            && let Some(prompts) = self.server_prompts.as_mut()
+        {
+            prompts.rows.append(&mut sync.new_prompts);
+        }
         (prepared.installed)();
         Installed {
             extensions: prepared.extensions,
             notices: prepared.notices,
-            sync: prepared.server_sync,
+            sync,
         }
     }
 
     fn apply_reload(&mut self, prepared: ReloadPrepared, ack: Ack) -> Result<(), Error> {
-        use contract::events::{
-            Event, ExtensionsLoaded, PreambleReason, Reloaded, ReloadedServers,
-        };
+        use contract::events::{Event, ExtensionsLoaded, PreambleReason, Reloaded};
         let installed = self.install(prepared);
         #[cfg(test)]
         if tests::fail_reload_write() {
@@ -285,12 +310,7 @@ impl Loop {
             .then(|| installed.sync.server_failures.clone());
         self.write(
             &Event::Reloaded(Reloaded {
-                servers: ReloadedServers {
-                    kept: installed.sync.kept_servers,
-                    restarted: installed.sync.restarted_servers,
-                    started: installed.sync.started_servers,
-                    stopped: installed.sync.stopped_servers,
-                },
+                servers: installed.sync.servers.clone(),
                 extensions: installed
                     .extensions
                     .iter()
