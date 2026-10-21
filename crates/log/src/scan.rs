@@ -150,10 +150,12 @@ impl SessionStarted {
 
     /// The recorded worktree: the strict policy the hub and the session
     /// continuation walk by. Absent (the key is missing) is `Ok(None)`;
-    /// a record with string `path` and `branch` and a present
-    /// absolute-path `repository` is `Ok(Some)`; `null` is `Err`
+    /// a record with an absolute-string `path`, a string `branch` and a
+    /// present absolute-path `repository` is `Ok(Some)`; `null` is `Err`
     /// (the payload rules forbid `null`: an optional key is absent, never
-    /// `null`), as is any other present value.
+    /// `null`), as is any other present value (every path other than
+    /// specified relative paths is absolute, so a relative recorded path
+    /// is foreign data).
     /// Public because the hub and the session process both validate
     /// through it.
     pub fn worktree_record(&self) -> Result<Option<Worktree>, MalformedWorktree> {
@@ -162,10 +164,11 @@ impl SessionStarted {
             Some(Value::Null) => Err(MalformedWorktree),
             Some(raw) => match serde_json::from_value::<Worktree>(raw.clone()) {
                 Ok(record)
-                    if record
-                        .repository
-                        .as_deref()
-                        .is_some_and(|repository| Path::new(repository).is_absolute()) =>
+                    if Path::new(&record.path).is_absolute()
+                        && record
+                            .repository
+                            .as_deref()
+                            .is_some_and(|repository| Path::new(repository).is_absolute()) =>
                 {
                     Ok(Some(record))
                 }
@@ -195,8 +198,9 @@ impl SessionStarted {
 #[derive(Debug)]
 pub(crate) struct MalformedFork;
 
-/// A `worktree` value that is present but is not a record with string
-/// `path` and `branch` and a present absolute-path `repository`.
+/// A `worktree` value that is present but is not a record with an
+/// absolute-string `path`, a string `branch` and a present absolute-path
+/// `repository`.
 /// Public because the hub and the session process both refuse it as
 /// `log_corrupt`; only named in this crate's signatures.
 #[derive(Debug)]

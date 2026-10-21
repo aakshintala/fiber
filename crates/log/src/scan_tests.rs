@@ -235,6 +235,7 @@ fn worktree_record_is_malformed_unless_a_record_with_an_absolute_repository() {
         json!({"path": "/wt-1", "branch": "fiber/s"}),
         json!({"path": 7, "branch": "fiber/s", "repository": "/r"}),
         json!({"path": "/wt-1", "branch": "fiber/s", "repository": "relative/r"}),
+        json!({"path": "relative", "branch": "b", "repository": "/r"}),
         json!({"path": "/wt-1", "branch": "fiber/s", "repository": Value::Null}),
     ] {
         let payload = json!({"workspace": "/w", "worktree": worktree});

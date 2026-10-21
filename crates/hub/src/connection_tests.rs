@@ -799,6 +799,28 @@ fn start_with_continues_and_a_worktree_without_repository_is_log_corrupt() {
 }
 
 #[test]
+fn start_with_continues_and_a_relative_worktree_path_is_log_corrupt() {
+    // Every recorded path is absolute, so a relative recorded path is
+    // foreign data and malformed: the starter records nothing.
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let dir = temp.dir.join("projects/-w/sessions").join(OLD);
+    fs::create_dir_all(&dir).unwrap();
+    let first = json!({"kind": "session_started", "payload": {
+        "workspace": workspace,
+        "worktree": {"path": "relative", "branch": "b", "repository": "/r"},
+    }})
+    .to_string()
+        + "\n";
+    fs::write(dir.join("events.jsonl"), first).unwrap();
+    refused_start(
+        &temp,
+        json!({"workspace": workspace, "continues": OLD}),
+        "log_corrupt",
+    );
+}
+
+#[test]
 fn start_with_continues_naming_a_session_with_no_worktree_is_invalid_arguments() {
     let temp = Temp::new();
     let workspace = temp.workspace();

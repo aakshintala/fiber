@@ -405,6 +405,32 @@ fn relative_repository_is_corrupt() {
     );
 }
 
+#[test]
+fn relative_path_is_corrupt() {
+    // Every recorded path is absolute, so a relative recorded path is
+    // foreign data and malformed: no new session log is created.
+    let (_home, old_dir, workspace) = fixture("main-continues-relative-path", None);
+    let first = started(
+        &workspace,
+        Some(json!({
+            "path": "relative",
+            "branch": "b",
+            "repository": "/r",
+        })),
+    );
+    std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
+    assert!(
+        !old_dir
+            .parent()
+            .unwrap()
+            .join("s_bbbbbbbbbbbbbbbb")
+            .exists(),
+        "no new session log was created"
+    );
+}
+
 /// Re-running this test's entry-point case in a child process: `run`
 /// reports through the process's stdout and stderr and every non-usage
 /// code exits 1, so only a child run can pin the reported code and the
