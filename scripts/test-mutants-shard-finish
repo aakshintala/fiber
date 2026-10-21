@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# The self-test for scripts/mutants-shard-finish: the finished-shard
+# status mapping the scheduled mutants workflow reads in its mutants
+# step. Each case pins the exit status and what reaches the step summary,
+# including a description that itself holds colons and the empty-input,
+# missing-file and non-numeric edges.
+set -euo pipefail
+top=$(git rev-parse --show-toplevel)
+finish=$top/scripts/mutants-shard-finish
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/work/mutants.out"
+cd "$tmp/work"
+
+fail() {
+  echo "scripts/test-mutants-shard-finish: $1" >&2
+  exit 1
+}
+
+# A missed.txt holding two missed mutants, one whose description holds
+# colons.
+cat >mutants.out/missed.txt <<'EOF'
+crates/tui/src/login_view.rs:411:23: delete ! in Login::draw
+crates/hub/src/session.rs:87:5: replace Ok(()): () with Err(()): ()
+EOF
+printf '%s\n' 'crates/tui/src/login_view.rs:411' 'crates/hub/src/session.rs:87' >"$tmp/want2.txt"
+
+# Status 0 exits 0 silently: empty stdout and an empty summary.
+GITHUB_STEP_SUMMARY="$tmp/summary0.txt" "$finish" 0 >"$tmp/got0.txt" 2>"$tmp/err0.txt" \
+  || fail "status 0 exited $?"
+[ -s "$tmp/got0.txt" ] && fail "status 0 printed stdout"
+[ -s "$tmp/err0.txt" ] && fail "status 0 printed stderr"
+[ -s "$tmp/summary0.txt" ] 2>/dev/null && fail "status 0 wrote the summary"
+
+# Status 2 exits 0 and appends each missed mutant's file:line to the
+# summary; the description's colons never leak in.
+GITHUB_STEP_SUMMARY="$tmp/summary2.txt" "$finish" 2 >"$tmp/got2.txt" 2>"$tmp/err2.txt" \
+  || fail "status 2 exited $?"
+[ -s "$tmp/got2.txt" ] && fail "status 2 printed stdout when the summary is set"
+[ -s "$tmp/err2.txt" ] && fail "status 2 printed stderr"
+cmp -s "$tmp/want2.txt" "$tmp/summary2.txt" || {
+  echo "--- want:" >&2
+  cat "$tmp/want2.txt" >&2
+  echo "--- got:" >&2
+  cat "$tmp/summary2.txt" >&2
+  fail "status 2 summary differs"
+}
+
+# Status 2 with an empty missed.txt still exits 0, leaving an empty summary.
+: >mutants.out/missed.txt
+GITHUB_STEP_SUMMARY="$tmp/summary-empty.txt" "$finish" 2 >"$tmp/got-empty.txt" 2>"$tmp/err-empty.txt" \
+  || fail "status 2 with empty input exited $?"
+[ -s "$tmp/got-empty.txt" ] && fail "status 2 with empty input printed stdout"
+[ -s "$tmp/err-empty.txt" ] && fail "status 2 with empty input printed stderr"
+[ -s "$tmp/summary-empty.txt" ] 2>/dev/null && fail "status 2 with empty input wrote the summary"
+
+# Status 2 with no missed.txt at all still exits 0 with an empty summary.
+rm mutants.out/missed.txt
+GITHUB_STEP_SUMMARY="$tmp/summary-missing.txt" "$finish" 2 >"$tmp/got-missing.txt" 2>"$tmp/err-missing.txt" \
+  || fail "status 2 with missing input exited $?"
+[ -s "$tmp/got-missing.txt" ] && fail "status 2 with missing input printed stdout"
+[ -s "$tmp/summary-missing.txt" ] 2>/dev/null && fail "status 2 with missing input wrote the summary"
+
+# Any other status passes through unchanged.
+for other in 1 3; do
+  rc=0
+  GITHUB_STEP_SUMMARY="$tmp/summary$other.txt" "$finish" "$other" \
+    >"$tmp/got$other.txt" 2>"$tmp/err$other.txt" || rc=$?
+  [ "$rc" -eq "$other" ] || fail "status $other exited $rc, want $other"
+done
+
+# A non-numeric status exits 2 with empty stdout.
+rc=0
+GITHUB_STEP_SUMMARY="$tmp/summary-bad.txt" "$finish" abc \
+  >"$tmp/got-bad.txt" 2>"$tmp/err-bad.txt" || rc=$?
+[ "$rc" -eq 2 ] || fail "non-numeric status exited $rc, want 2"
+[ -s "$tmp/got-bad.txt" ] && fail "non-numeric status printed stdout"
+[ -s "$tmp/err-bad.txt" ] || fail "non-numeric status printed no message"
