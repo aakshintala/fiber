@@ -27,6 +27,7 @@ Sessions:
   models [<search>] [--json]                                                                                      List the models the installed providers serve
 
 Fiber itself:
+  setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code | codex>]... [--completions <shell> | --no-completions] [--hub | --no-hub]  Ask the questions a new install needs, applying each answer
   update                                    Update the Fiber binary and every installed extension together; `upgrade` runs the same command, with `--channel stable|nightly`
   approve [--yes]                           Show what this repository ships and approve it
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
@@ -229,6 +230,8 @@ pub(crate) enum Commands {
     },
     /// Store a provider's key or an extension's secret
     Login(LoginArgs),
+    /// Ask the questions a new install needs, applying each answer
+    Setup(SetupArgs),
     /// Delete a provider's stored key
     Logout(LogoutArgs),
     /// Say whether a session can start, and how to fix it when it cannot
@@ -699,6 +702,38 @@ pub(crate) struct LogoutArgs {
     /// Delete every stored label.
     #[arg(long)]
     pub(crate) all: bool,
+}
+
+/// `fiber setup`: one flag per question. A flag answers its question and
+/// the rest are still asked; without a terminal nothing is asked and each
+/// flag is applied as its command does it (`docs/invocation.md",
+/// "Setting up").
+#[derive(Debug, clap::Args)]
+pub(crate) struct SetupArgs {
+    /// Sign in to this provider, as `fiber login <name>` does. May repeat.
+    #[arg(long = "provider", value_name = "name")]
+    pub(crate) provider: Vec<String>,
+    /// The default model, written to the global `config.json`.
+    #[arg(long, value_name = "model")]
+    pub(crate) model: Option<String>,
+    /// The default thinking level for the model, written beside it.
+    #[arg(long, value_name = "level")]
+    pub(crate) thinking: Option<String>,
+    /// Import this source's configuration, as `fiber import` does. May repeat.
+    #[arg(long = "import", value_name = "claude-code | codex")]
+    pub(crate) import: Vec<ImportSource>,
+    /// Install completions for this shell in its startup file.
+    #[arg(long, value_name = "shell", conflicts_with = "no_completions")]
+    pub(crate) completions: Option<crate::completion::Shell>,
+    /// Leave the shell's startup file alone.
+    #[arg(long)]
+    pub(crate) no_completions: bool,
+    /// Register the hub as a login service, as `fiber hub install` does.
+    #[arg(long, conflicts_with = "no_hub")]
+    pub(crate) hub: bool,
+    /// Leave the hub's login service alone.
+    #[arg(long)]
+    pub(crate) no_hub: bool,
 }
 
 #[derive(Debug, clap::Args)]
