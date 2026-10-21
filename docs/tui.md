@@ -2065,8 +2065,10 @@ the model picker inside its view.
 
 Fiber ships a dark and a light theme. A person adds their own as files in
 Fiber home, an installed extension can carry more, and either is picked in
-`/settings`, which writes `tui.theme`. `/theme` opens the same theme picker,
-and `/theme <name>` sets the named theme at once, saving `tui.theme`. With no
+`/settings`, which writes `tui.theme`. `/theme` opens the same theme picker:
+moving focus previews each theme live, Enter saves the choice, and Esc or
+the close button restores the theme that was showing.
+`/theme <name>` sets the named theme at once, saving `tui.theme`. With no
 theme set, the theme follows the terminal's light or dark appearance and
 switches when the terminal reports a change.
 
