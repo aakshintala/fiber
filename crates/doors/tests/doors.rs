@@ -255,26 +255,10 @@ fn project_ignores_worktree_and_index_redirects() {
             let temp = Temp::new();
             let repo = temp.0.join("repo");
             fs::create_dir_all(repo.join("docs")).unwrap();
-            assert!(
-                Command::new("git")
-                    .arg("init")
-                    .arg("-q")
-                    .arg(&repo)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            fakes::git::git(&repo, &["init", "--quiet"]);
             let decoy = temp.0.join("decoy");
             fs::create_dir_all(&decoy).unwrap();
-            assert!(
-                Command::new("git")
-                    .arg("init")
-                    .arg("-q")
-                    .arg(&decoy)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            fakes::git::git(&decoy, &["init", "--quiet"]);
             let decoy_git = decoy.join(".git").to_str().unwrap().to_owned();
             let decoy_work = decoy.to_str().unwrap().to_owned();
             let decoy_index = decoy
@@ -335,26 +319,10 @@ fn discovery_runs_git_with_the_scrubbed_environment() {
             let temp = Temp::new();
             let repo = temp.0.join("repo");
             fs::create_dir_all(&repo).unwrap();
-            assert!(
-                Command::new("git")
-                    .arg("init")
-                    .arg("-q")
-                    .arg(&repo)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            fakes::git::git(&repo, &["init", "--quiet"]);
             let decoy = temp.0.join("decoy");
             fs::create_dir_all(&decoy).unwrap();
-            assert!(
-                Command::new("git")
-                    .arg("init")
-                    .arg("-q")
-                    .arg(&decoy)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            fakes::git::git(&decoy, &["init", "--quiet"]);
             // An executable `git` that logs every discovery invocation's
             // argv and watched environment, then runs the real git: the
             // log pins the scrub set discovery invoked it with.

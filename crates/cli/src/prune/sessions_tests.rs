@@ -562,28 +562,10 @@ fn a_git_redirect_keeps_selection_scoped_to_the_workspace_project() {
             let root = fakes::TempDir::new("cli-prune-sessions-redirect");
             let repo = root.path().join("repo");
             fs::create_dir_all(&repo).unwrap();
-            assert!(
-                Command::new("git")
-                    .args(["init", "-q"])
-                    .arg(&repo)
-                    .stdin(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            fakes::git::git(&repo, &["init", "--quiet"]);
             let decoy = root.path().join("decoy");
             fs::create_dir_all(&decoy).unwrap();
-            assert!(
-                Command::new("git")
-                    .args(["init", "-q"])
-                    .arg(&decoy)
-                    .stdin(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            fakes::git::git(&decoy, &["init", "--quiet"]);
             let workspace = fs::canonicalize(&repo).unwrap();
             let decoy_canon = fs::canonicalize(&decoy).unwrap();
             let home = root.path().join("home");
