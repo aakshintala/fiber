@@ -16,7 +16,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+
 use support::{Setup, Socket, function_call, hello};
 
 /// Installs provider `pa/m` on `openai-responses` at the server, and makes
@@ -657,30 +657,30 @@ fn delivered_is_answered_only_after_the_hook_returns() {
         hole.await_requests(1, deadline.left()),
         "the hook parked on its blocking read"
     );
-    // While it is parked the sender's answer stays pending: no completion
-    // for the call arrives within the hold.
-    let stop = Instant::now() + Duration::from_secs(2);
+    // While it is parked the sender's answer stays pending: no line up
+    // to the call completes it. The drain ends on the call itself, under
+    // the test's deadline.
     let mut action = None;
-    loop {
-        let left = stop.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            break;
+    while action.is_none() {
+        let text: String = deadline.recv_or_fail(&s_rx, "the sender's call");
+        let line: Value = serde_json::from_str(&text).unwrap();
+        if line["kind"] == "tool_call_requested" && line["payload"]["name"] == "session_message" {
+            action = Some(line["action_id"].as_str().unwrap().to_owned());
         }
-        match support::Deadline::after(left).recv(&s_rx) {
-            Err(_) => break,
-            Ok(text) => {
-                let line: Value = serde_json::from_str(&text).unwrap();
-                if line["kind"] == "tool_call_requested"
-                    && line["payload"]["name"] == "session_message"
-                {
-                    action = Some(line["action_id"].as_str().unwrap().to_owned());
-                }
-                assert!(
-                    line["kind"] != "tool_call_completed",
-                    "the sender waits for the hook: {line}"
-                );
-            }
-        }
+        assert!(
+            line["kind"] != "tool_call_completed",
+            "the sender waits for the hook: {line}"
+        );
+    }
+    // Still parked, so the take cannot have answered: anything queued
+    // behind the call completes nothing. The hook holds the ack, so no
+    // completion can be in flight past this check.
+    while let Ok(text) = s_rx.try_recv() {
+        let line: Value = serde_json::from_str(&text).unwrap();
+        assert!(
+            line["kind"] != "tool_call_completed",
+            "the sender waits for the hook: {line}"
+        );
     }
     hole.release();
     // Released, the hook answers and the sender is delivered.
@@ -701,7 +701,11 @@ fn delivered_is_answered_only_after_the_hook_returns() {
             break;
         }
     }
-    support::kill_group(deadline, s_group.0, "TERM").ok();
+    // The sender already exited on its own, so the group may be gone:
+    // the kill's result is ignored, as `expired` ignores its cleanup kill.
+    match support::kill_group(deadline, s_group.0, "TERM") {
+        Ok(_) | Err(_) => {}
+    }
     s.wait().unwrap();
     s_watchdog.stand_down(deadline.cleanup());
     let t_closer = Socket::connect(deadline, &setup.session_socket(&t_id));
