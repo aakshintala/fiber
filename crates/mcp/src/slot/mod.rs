@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use contract::clock::Clock;
@@ -144,9 +144,11 @@ pub(crate) enum Served {
 /// The running-server re-list behind its own module boundary, so this
 /// file stays under the size guideline: identical shapes, reached
 /// through [`Slot::relist`], which the sync boundary calls.
+mod lease;
 mod relist;
 
 pub(crate) use relist::Relisted;
+use lease::lock;
 
 impl Slot {
     /// One slot from its parts, in `state`: `resources` is fixed here
@@ -662,49 +664,6 @@ impl Slot {
         Some(death)
     }
 
-    /// Takes the slot's start lease, waiting while another attempt holds
-    /// it: one start runs at a time, and a stop waits for the in-flight
-    /// one. The mutex is never held across a start, only across the flag;
-    /// the guard releases it on unwind too, so a panic never wedges the
-    /// slot.
-    fn acquire(&self) -> LeaseGuard<'_> {
-        let mut busy = lock(&self.lease);
-        while *busy {
-            #[cfg(test)]
-            self.note_lease_wait();
-            busy = self.wake.wait(busy).unwrap_or_else(PoisonError::into_inner);
-        }
-        *busy = true;
-        LeaseGuard {
-            lease: &self.lease,
-            wake: &self.wake,
-        }
-    }
-
-    /// Whether both locks are free right now: the state lock and the
-    /// lease lock. Test-only: a test's timing guard calls it while the
-    /// attempt's guard drops, proving no diagnostic drop holds either
-    /// lock. A mutant that moves the drop under one fails the test.
-    #[cfg(test)]
-    pub(crate) fn locks_free(&self) -> bool {
-        self.state.try_lock().is_ok() && self.lease.try_lock().is_ok()
-    }
-
-    /// Signals once when an acquirer finds the lease held. Test-only:
-    /// installed before a contender starts, taken on its first wait.
-    #[cfg(test)]
-    fn note_lease_wait(&self) {
-        if let Some(hook) = lock(&self.wait_hook).take() {
-            hook.send(()).unwrap_or(());
-        }
-    }
-
-    /// Installs the one-shot [`Slot::note_lease_wait`] signal. Test-only.
-    #[cfg(test)]
-    pub(crate) fn on_lease_wait(&self, hook: std::sync::mpsc::Sender<()>) {
-        *lock(&self.wait_hook) = Some(hook);
-    }
-
     /// Runs `hook` after the next `serve` reserves its attempt and
     /// before it launches. Test-only: holds the replacement on the
     /// reservation so a late death report lands inside it.
@@ -785,24 +744,5 @@ fn died(server: &str, will_restart: bool, remote: bool) -> Death {
     }
 }
 
-/// One in-flight start's hold on its slot: clearing the flag and waking
-/// the waiters on drop, so an unwind releases the lease too.
-struct LeaseGuard<'a> {
-    lease: &'a Mutex<bool>,
-    wake: &'a Condvar,
-}
-
-impl Drop for LeaseGuard<'_> {
-    fn drop(&mut self) {
-        *lock(self.lease) = false;
-        self.wake.notify_all();
-    }
-}
-
-fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 #[cfg(test)]
-#[path = "../slot_tests.rs"]
 mod tests;

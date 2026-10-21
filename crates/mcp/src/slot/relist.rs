@@ -64,18 +64,13 @@ pub(super) fn relist(slot: &Slot) -> Relisted {
             } if server.is_gone() => {
                 // It died while idle: this re-list is the first to see
                 // it, as the entry of `serve` is for a call.
-                let death = died(&slot.spec.name, !*restarted, slot.spec.remote());
-                return Relisted::Replace {
-                    records: vec![ServerRecord::Failed(death.record)],
-                };
+                return replace(slot, *restarted, Some(CallError::Gone));
             }
             State::Running { .. }
             | State::NotStarted { .. }
             | State::Down { .. }
             | State::Dead { .. } => {
-                return Relisted::Replace {
-                    records: Vec::new(),
-                };
+                return replace(slot, false, None);
             }
         }
     };
@@ -84,20 +79,7 @@ pub(super) fn relist(slot: &Slot) -> Relisted {
     // Maps a failed page to the replace path: a timeout misses the
     // deadline, a death carries the death this re-list is the first to
     // see, and any other end replaces with no records.
-    let fail = |error: Option<CallError>| match error {
-        Some(CallError::Timeout) => Relisted::Replace {
-            records: vec![deadline_death(slot)],
-        },
-        Some(CallError::Gone) => {
-            let death = died(&slot.spec.name, !restarted, slot.spec.remote());
-            Relisted::Replace {
-                records: vec![ServerRecord::Failed(death.record)],
-            }
-        }
-        _ => Relisted::Replace {
-            records: Vec::new(),
-        },
-    };
+    let fail = |error: Option<CallError>| replace(slot, restarted, error);
     let tools = if list_tools {
         match crate::server::list_pages::<ListedTool, Relisted>(
             &server,
@@ -139,6 +121,23 @@ pub(super) fn relist(slot: &Slot) -> Relisted {
             resources: slot.resources,
         },
     }
+}
+
+/// The replace path for a re-list that cannot serve: the death outcome
+/// the shared path already yields, built without moving the slot. A
+/// timeout carries the missed-deadline death, a death carries the death
+/// this re-list is the first to see, and any other end — expired and
+/// refused lists included — carries none.
+fn replace(slot: &Slot, restarted: bool, error: Option<CallError>) -> Relisted {
+    let records = match error {
+        Some(CallError::Timeout) => vec![deadline_death(slot)],
+        Some(CallError::Gone) => {
+            let death = died(&slot.spec.name, !restarted, slot.spec.remote());
+            vec![ServerRecord::Failed(death.record)]
+        }
+        _ => Vec::new(),
+    };
+    Relisted::Replace { records }
 }
 
 /// The missed-deadline record for a re-list the bound outlived: the

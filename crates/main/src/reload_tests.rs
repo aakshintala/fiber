@@ -420,12 +420,7 @@ fn reload_preserves_tool_precedence_late_tools_and_only_current_declarations() {
         .extend([("removed".into(), removed), ("read".into(), read_info)]);
     // The offer flow only adopts declared servers, so the reloaded
     // config still declares the repository server whose tools stay.
-    std::fs::create_dir_all(fixture.rig.workspace.join(".fiber")).unwrap();
-    std::fs::write(
-        fixture.rig.workspace.join(".fiber/config.json"),
-        json!({"mcp": {"servers": {"db": {"command": "db"}}}}).to_string(),
-    )
-    .unwrap();
+    write_repo_config(&fixture, &json!({"db": {"command": "db"}}));
     let prepared = fixture.prepare();
     assert_eq!(
         prepared
@@ -1940,12 +1935,7 @@ fn reload_adds_mcp_resources_when_a_protected_slot_offers_them() {
             .any(|(_, tool)| tool.definition().name == mcp::RESOURCES_TOOL),
         "the lazy start declares the resources tool"
     );
-    std::fs::create_dir_all(fixture.rig.workspace.join(".fiber")).unwrap();
-    std::fs::write(
-        fixture.rig.workspace.join(".fiber/config.json"),
-        json!({"mcp": {"servers": {"db": repo.entry(json!({}))}}}).to_string(),
-    )
-    .unwrap();
+    write_repo_config(&fixture, &json!({"db": repo.entry(json!({}))}));
     fixture.rewrite(json!({"fx": fixture.servers[0].entry(json!({}))}));
     let prepared = fixture.prepare();
     assert_eq!(prepared.server_sync.servers.started, ["fx"]);
