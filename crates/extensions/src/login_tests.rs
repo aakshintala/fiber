@@ -238,3 +238,56 @@ fn login_provider_fails_when_the_vm_registers_an_undeclared_provider() {
     assert_eq!(err.code(), contract::ErrorCode::ExtensionFailed);
     assert!(err.to_string().contains("rogue"), "{err}");
 }
+
+/// Installs the `strings` dependency beside `name`, declares it in `name`'s
+/// manifest, and points `name`'s provider at its `trim` module: the login
+/// VM serves the declared dependency the way the session VM does.
+fn install_with_strings_dep(home: &std::path::Path, name: &str, provider: &str) {
+    install(home, name, provider);
+    let dir = home.join("extensions").join(name);
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("extension.json")).unwrap()).unwrap();
+    manifest["depends"] = json!({"strings": "1.0"});
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    let dep = home.join("extensions").join("strings");
+    fs::create_dir_all(&dep).unwrap();
+    fs::write(
+        dep.join("extension.json"),
+        json!({"name": "strings", "version": "v1.0.0", "fiber": "0.1.0", "api": 1}).to_string(),
+    )
+    .unwrap();
+    write_record(&dep);
+    fs::write(dep.join("trim.lua"), "return \"trimmed\"").unwrap();
+    fs::write(
+        dir.join("providers").join(format!("{provider}.lua")),
+        format!(
+            r#"local trim = require("strings:trim")
+fiber.provider("{provider}", {{
+  credential = {{ timeout = 60000, run = function(arg)
+    return {{ token = trim, expires_at = 4102444800 }}
+  end }}
+}})"#,
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_login_provider_loads_a_declared_dependency_module() {
+    let root = fakes::TempDir::new("fiber-login-dep-loads");
+    let home = root.path().join("home");
+    install_with_strings_dep(&home, "acme-ext", "acme");
+    let (providers, notices) = Providers::load(&home).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    let provider = login_provider(
+        &home,
+        &providers,
+        "acme",
+        Arc::new(SystemBrowser::default()),
+        FakeClock::new(),
+    )
+    .unwrap();
+    // The provider file requires the dependency at load: a refusal would
+    // fail the load, so listing its functions proves the require served.
+    assert_eq!(provider.functions().unwrap(), ["credential"]);
+}

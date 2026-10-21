@@ -2,6 +2,7 @@
 //! coroutine (`docs/extensions.md`, "How an extension runs").
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -34,6 +35,7 @@ pub(crate) fn install(
     dir: PathBuf,
     memory_cap: usize,
     loading: Rc<RefCell<Option<String>>>,
+    deps: BTreeMap<String, PathBuf>,
 ) -> mlua::Result<(
     Table,
     Table,
@@ -53,8 +55,32 @@ pub(crate) fn install(
         Ok(thread)
     })?;
     let load_module = lua.create_function(move |lua, name: String| {
-        let file = format!("{}.lua", name.replace('.', "/"));
-        Ok(match load_file(lua, &dir, &file, memory_cap)? {
+        // A qualified name loads from the named dependency's directory:
+        // the text before the first colon must exactly equal a manifest
+        // depends key, and the text after it maps to a file exactly as an
+        // unqualified name does. Anything else is the same backtick-file
+        // error the loader already reports. The serving root is the mapped
+        // directory canonicalized per read, so a symlinked home or root
+        // still serves; a missing directory fails here, naming the
+        // dependency, without reaching the file loader.
+        let (root, file) = match name.split_once(':') {
+            None => (dir.clone(), format!("{}.lua", name.replace('.', "/"))),
+            Some((dep, module)) => {
+                if dep.is_empty() || module.is_empty() {
+                    return Ok((None, Some(format!("`dependency '{dep}' not installed"))));
+                }
+                let Some(mapped) = deps.get(dep) else {
+                    return Ok((None, Some(format!("`dependency '{dep}' not installed"))));
+                };
+                match mapped.canonicalize() {
+                    Ok(root) => (root, format!("{}.lua", module.replace('.', "/"))),
+                    Err(_) => {
+                        return Ok((None, Some(format!("`dependency '{dep}' not installed"))));
+                    }
+                }
+            }
+        };
+        Ok(match load_file(lua, &root, &file, memory_cap)? {
             Ok(chunk) => (Some(chunk), None),
             Err(message) => (None, Some(message)),
         })
@@ -78,8 +104,14 @@ pub(crate) fn install_prelude(
     dir: PathBuf,
     memory_cap: usize,
 ) -> mlua::Result<(Table, Table, Table, Table, crate::host::failure::FailureLib)> {
-    let (commands, providers, hooks, problems, _violations, failures) =
-        install(lua, deadline, dir, memory_cap, Rc::default())?;
+    let (commands, providers, hooks, problems, _violations, failures) = install(
+        lua,
+        deadline,
+        dir,
+        memory_cap,
+        Rc::default(),
+        BTreeMap::new(),
+    )?;
     Ok((commands, providers, hooks, problems, failures))
 }
 

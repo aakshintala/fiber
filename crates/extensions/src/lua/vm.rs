@@ -93,6 +93,7 @@ impl Vm {
             browser,
             session,
             secrets,
+            deps,
         } = start;
         let deadline =
             Deadline::new(Arc::clone(&clock)).with_interrupt(Arc::clone(&hub.lock().interrupt));
@@ -123,6 +124,7 @@ impl Vm {
             dir.clone(),
             *memory_cap,
             Rc::clone(&loading),
+            deps.clone(),
         )
         .map_err(lua_error)?;
         let failure_state = failures.state.clone();

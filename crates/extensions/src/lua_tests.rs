@@ -133,6 +133,7 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
             browser: Arc::new(SystemBrowser::default()),
             session: None,
             secrets: Vec::new(),
+            deps: Default::default(),
         },
     )
     .unwrap();
@@ -685,6 +686,7 @@ fn serve_after(
                 browser: Arc::new(SystemBrowser::default()),
                 session: None,
                 secrets: Vec::new(),
+                deps: Default::default(),
             },
         );
         match done_tx.send(()) {
@@ -1138,6 +1140,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
                 browser: Arc::new(SystemBrowser::default()),
                 session: None,
                 secrets: Vec::new(),
+                deps: Default::default(),
             },
         );
         match done_tx.send(()) {
@@ -1230,6 +1233,7 @@ fn a_held_command_blocks_the_stream_until_released() {
                 browser: Arc::new(SystemBrowser::default()),
                 session: None,
                 secrets: Vec::new(),
+                deps: Default::default(),
             },
         );
         match done_tx.send(()) {
