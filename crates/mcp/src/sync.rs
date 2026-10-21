@@ -237,8 +237,8 @@ pub fn stage_sync(
                     prompts,
                 })
             }
-            Shadowed::Down { failure, required } => {
-                if required {
+            Shadowed::Down { failure } => {
+                if spec.required {
                     for shadow in &shadows {
                         shadow.stop();
                     }
@@ -314,31 +314,165 @@ pub struct Synced {
     pub prompts: Vec<CommandInfo>,
 }
 
+/// Installs a freshly shadow-started slot at commit: swaps the stale
+/// slot out, writes its cache, declares its tools and files it under
+/// `restarted` (a replacement) or `started` (a fresh start). Both the
+/// staged replacements and the kept slots that died after their re-list
+/// install through here, so the two paths cannot drift apart.
+#[allow(clippy::too_many_arguments, reason = "one commit's install inputs")]
+fn install_opened(
+    installing: &mut Synced,
+    servers: &Servers,
+    cache: &Path,
+    spec: &ServerSpec,
+    slot: &Arc<Slot>,
+    listed: &Cached,
+    used: Vec<Declaration>,
+    carried: Vec<ServerRecord>,
+    carried_prompts: Vec<CommandInfo>,
+    restarted: bool,
+) {
+    let name = spec.name.clone();
+    // A fresh start swaps a leftover slot out, and a replacement swaps
+    // the stale spec out: a lazy `NotStarted` or failed slot with the
+    // same name never serves again once the commit installs the new one.
+    servers.remove(&name);
+    servers
+        .slots
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(Arc::clone(slot));
+    cache::write(cache, &name, &spec.key(), listed);
+    installing.tools.extend(used);
+    installing.records.extend(carried);
+    installing.records.push(ServerRecord::Ready(McpServerReady {
+        server: name.clone(),
+    }));
+    installing.prompts.extend(carried_prompts);
+    if restarted {
+        installing.servers.restarted.push(name);
+    } else {
+        installing.servers.started.push(name);
+    }
+}
+
+/// Installs a non-required shadow-start failure at commit: the old slot
+/// is already gone for a replacement, the failure rides a failed record
+/// and the `failed` entry, filed under `restarted` (a replacement) or
+/// `started` (a fresh start).
+fn install_failed(
+    installing: &mut Synced,
+    servers: &Servers,
+    spec: &ServerSpec,
+    failure: McpServerFailed,
+    replaces: bool,
+) {
+    let name = spec.name.clone();
+    if replaces {
+        // A non-required replacement still stops the old slot at
+        // commit: the configuration changed, so no stale slot survives,
+        // with the server showing failed.
+        servers.remove(&name);
+    }
+    installing
+        .records
+        .push(ServerRecord::Failed(failure.clone()));
+    installing.failed.push(contract::events::ReloadFailure {
+        server: name.clone(),
+        reason: failure.reason,
+        error: failure.error,
+    });
+    if replaces {
+        installing.servers.restarted.push(name);
+    } else {
+        installing.servers.started.push(name);
+    }
+}
+
 /// Commits the staged sync: stops and removes old slots, installs the new
 /// ones, writes caches, and declares. Runs only after every required serve
 /// passed, so no two slots for one name ever serve at once and no stale
-/// spec survives.
+/// spec survives. A kept slot that died (or left) after its re-list takes
+/// the replacement path here instead of declaring its stale tools as kept
+/// (`docs/mcp.md`, "Reload" step 3): its old death rides the carried
+/// records and the fresh shadow installs as `restarted`. A required
+/// replacement that fails rejects with the start's code.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one commit's startup inputs, as at session start"
+)]
 pub fn commit_sync(
     staged: StagedSync,
     servers: &Servers,
     cache: &Path,
     artifacts: &Path,
     images: &Arc<dyn Images>,
-) -> Synced {
-    let mut tools = Vec::new();
-    let mut records = Vec::new();
-    let mut failed = Vec::new();
-    let mut grouping = ReloadedServers {
-        kept: Vec::new(),
-        restarted: Vec::new(),
-        started: Vec::new(),
-        stopped: Vec::new(),
+    workspace: &Path,
+    clock: &Arc<dyn Clock>,
+    version: &str,
+) -> Result<Synced, contract::shapes::Failure> {
+    let mut installing = Synced {
+        tools: Vec::new(),
+        records: Vec::new(),
+        failed: Vec::new(),
+        servers: ReloadedServers {
+            kept: Vec::new(),
+            restarted: Vec::new(),
+            started: Vec::new(),
+            stopped: Vec::new(),
+        },
+        prompts: Vec::new(),
     };
-    let mut prompts = Vec::new();
     for row in staged.rows {
         match row {
             StagedRow::Keep { spec, listed, used } => {
                 let name = spec.name.clone();
+                let live = servers.slot(&name).is_some_and(|slot| slot.is_live());
+                if !live {
+                    // The kept server died (or its slot left) after its
+                    // re-list: `install_relisted` would leave the dead
+                    // slot unchanged while the sync still declared its
+                    // tools as kept, so the replacement path restarts it
+                    // fresh instead.
+                    let carried: Vec<ServerRecord> = servers
+                        .slot(&name)
+                        .and_then(|slot| slot.idle_death())
+                        .into_iter()
+                        .collect();
+                    match open_staged(
+                        spec.clone(),
+                        workspace,
+                        artifacts,
+                        images,
+                        cache,
+                        clock,
+                        version,
+                        servers.timing(),
+                    ) {
+                        Shadowed::Up(opened) => {
+                            let carried_prompts = Prompts::collect(opened.sources).commands();
+                            install_opened(
+                                &mut installing,
+                                servers,
+                                cache,
+                                &spec,
+                                &opened.slot,
+                                &opened.listed,
+                                opened.declared,
+                                carried,
+                                carried_prompts,
+                                true,
+                            );
+                        }
+                        Shadowed::Down { failure } => {
+                            if spec.required {
+                                return Err(required_failed(&failure));
+                            }
+                            install_failed(&mut installing, servers, &spec, failure, true);
+                        }
+                    }
+                    continue;
+                }
                 if let Some(slot) = servers.slot(&name) {
                     // The whole cached payload decides: a prompts-only
                     // change rewrites the file even when the tools stay
@@ -347,8 +481,8 @@ pub fn commit_sync(
                         cache::write(cache, &name, &spec.key(), &listed);
                     }
                     slot.install_relisted(listed);
-                    tools.extend(used);
-                    grouping.kept.push(name);
+                    installing.tools.extend(used);
+                    installing.servers.kept.push(name);
                 }
             }
             StagedRow::Replaced {
@@ -360,58 +494,29 @@ pub fn commit_sync(
                 restarted: replaces,
                 prompts: carried_prompts,
             } => {
-                let name = spec.name.clone();
-                // A fresh start swaps a leftover slot out, and a
-                // replacement swaps the stale spec out: a lazy
-                // `NotStarted` or failed slot with the same name never
-                // serves again once the commit installs the new one.
-                servers.remove(&name);
-                servers
-                    .slots
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(Arc::clone(&slot));
-                cache::write(cache, &name, &spec.key(), &listed);
-                tools.extend(used);
-                records.extend(carried);
-                records.push(ServerRecord::Ready(McpServerReady {
-                    server: name.clone(),
-                }));
-                prompts.extend(carried_prompts);
-                if replaces {
-                    grouping.restarted.push(name);
-                } else {
-                    grouping.started.push(name);
-                }
+                install_opened(
+                    &mut installing,
+                    servers,
+                    cache,
+                    &spec,
+                    &slot,
+                    &listed,
+                    used,
+                    carried,
+                    carried_prompts,
+                    replaces,
+                );
             }
             StagedRow::Failed {
                 spec,
                 failure,
                 replaces,
             } => {
-                let name = spec.name.clone();
-                if replaces {
-                    // A non-required replacement still stops the old
-                    // slot at commit: the configuration changed, so no
-                    // stale slot survives, with the server showing
-                    // failed.
-                    servers.remove(&name);
-                }
-                records.push(ServerRecord::Failed(failure.clone()));
-                failed.push(contract::events::ReloadFailure {
-                    server: name.clone(),
-                    reason: failure.reason,
-                    error: failure.error,
-                });
-                if replaces {
-                    grouping.restarted.push(name);
-                } else {
-                    grouping.started.push(name);
-                }
+                install_failed(&mut installing, servers, &spec, failure, replaces);
             }
             StagedRow::Remove { name } => {
                 servers.remove(&name);
-                grouping.stopped.push(name);
+                installing.servers.stopped.push(name);
             }
         }
     }
@@ -430,13 +535,9 @@ pub fn commit_sync(
             artifacts,
             images,
         ));
-        tools.push(("builtin".to_owned(), tool, resources_info(&definition)));
+        installing
+            .tools
+            .push(("builtin".to_owned(), tool, resources_info(&definition)));
     }
-    Synced {
-        tools,
-        records,
-        failed,
-        servers: grouping,
-        prompts,
-    }
+    Ok(installing)
 }

@@ -39,7 +39,7 @@ pub use registry::stop_every_start;
 pub use resources::{RESOURCES_TOOL, resources_definition};
 pub use start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, Program, Restarted, SecretError, SecretReader,
-    ServerSpec, Servers, StagedSync, Started, StdioSpec, SyncRow, Synced, Transport, classify_sync,
-    commit_sync, restart, stage_sync, start, start_observed,
+    ServerSpec, Servers, Started, StdioSpec, Transport, restart, start, start_observed,
 };
+pub use sync::{StagedSync, SyncRow, Synced, classify_sync, commit_sync, stage_sync};
 pub use token::{Token, TokenError, store_token, token_key, url_has_userinfo};

@@ -91,7 +91,7 @@ pub(crate) struct State {
     pub(crate) switching: Arc<crate::switch::Switching>,
     pub(crate) tools: Tools,
     pub(crate) kept_infos: Vec<contract::events::ToolInfo>,
-    pub(crate) prompt_rows: Vec<contract::events::CommandInfo>,
+    pub(crate) prompt_rows: std::sync::Mutex<Vec<contract::events::CommandInfo>>,
     pub(crate) late: Arc<std::sync::Mutex<Late>>,
     /// The repository scope the next preparation reads: the launch
     /// workspace, or the recorded one on resume, and the content the
@@ -173,7 +173,7 @@ impl State {
             switching,
             tools,
             kept_infos: servers.kept_infos,
-            prompt_rows: servers.prompts.commands(),
+            prompt_rows: std::sync::Mutex::new(servers.prompts.commands()),
             late,
             repository,
             declare: session.declarer(),
@@ -348,18 +348,38 @@ impl State {
             code: error.code,
             message: error.message,
         })?;
-        let synced = mcp::commit_sync(staged, &self.servers, &cache, &self.artifacts, &self.images);
+        let synced = mcp::commit_sync(
+            staged,
+            &self.servers,
+            &cache,
+            &self.artifacts,
+            &self.images,
+            &self.sources.workspace,
+            &now.loader.clock,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .map_err(|error| Rejection {
+            code: error.code,
+            message: error.message,
+        })?;
         // New prompt sources join the `/` list when their server had no
-        // startup row (started, newly added, or approved in-session);
-        // every startup row stays, and kept servers refresh the cache
-        // file only.
+        // row yet (started, newly added, or approved in-session); every
+        // row the session already lists stays, and kept servers refresh
+        // the cache file only. The baseline is the session's current
+        // rows — startup plus every earlier reload's additions — so a
+        // second reload keeps the first reload's rows for kept servers.
+        let baseline = self
+            .prompt_rows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         let mut new_prompts = Vec::new();
         for prompt in synced.prompts {
-            if !self.prompt_rows.iter().any(|row| row.tag == prompt.tag) {
+            if !baseline.iter().any(|row| row.tag == prompt.tag) {
                 new_prompts.push(prompt);
             }
         }
-        let mut prompt_rows = self.prompt_rows.clone();
+        let mut prompt_rows = baseline;
         prompt_rows.extend(new_prompts.clone());
         let listed = r#loop::commands(
             &inputs,
@@ -448,7 +468,22 @@ impl State {
             },
         };
         let shared = self.clone();
+        let carried_prompts = new_prompts.clone();
         let installed = Box::new(move || {
+            // The session's current rows grow by this reload's additions,
+            // so the next preparation rebuilds from them, not from the
+            // startup snapshot alone.
+            {
+                let mut rows = shared
+                    .prompt_rows
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                for prompt in &carried_prompts {
+                    if !rows.iter().any(|row| row.tag == prompt.tag) {
+                        rows.push(prompt.clone());
+                    }
+                }
+            }
             extensions.emit_to(Arc::new(log::WeakEmit::new(&shared.log)));
             extensions.drive_to(shared.drive.clone());
             extensions.model_to(shared.model.clone());

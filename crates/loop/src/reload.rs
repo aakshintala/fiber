@@ -84,31 +84,12 @@ pub struct ReloadSettings {
 }
 
 /// One reload's MCP server sync, in `reloaded` order: the four-quadrant
-/// grouping, the server lines written before `reloaded`, and the
-/// non-required failures for its `failed` entry. Carried as one result
-/// from preparation through installation to the log, so the six fields
-/// describing one sync never drift apart.
-impl Default for ServerSync {
-    fn default() -> Self {
-        Self {
-            servers: ReloadedServers {
-                kept: Vec::new(),
-                restarted: Vec::new(),
-                started: Vec::new(),
-                stopped: Vec::new(),
-            },
-            server_records: Vec::new(),
-            server_failures: Vec::new(),
-            new_prompts: Vec::new(),
-        }
-    }
-}
-/// One reload's MCP server sync, in `reloaded` order: the four-quadrant
 /// grouping, the server lines written before `reloaded`, the
 /// non-required failures for its `failed` entry, and the carried
 /// new-server prompt rows. Carried as one result from preparation
 /// through installation to the log, so the fields describing one sync
 /// never drift apart.
+#[derive(Default)]
 pub struct ServerSync {
     /// Kept, restarted, started and stopped, by name.
     pub servers: ReloadedServers,

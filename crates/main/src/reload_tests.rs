@@ -117,6 +117,7 @@ struct Fixture {
     replacements: Arc<Mutex<Vec<doors::Replacement>>>,
     declared: Arc<Mutex<std::collections::BTreeMap<String, contract::events::ToolInfo>>>,
     delegate: Arc<RecordingDelegate>,
+    servers: Vec<FakeServer>,
 }
 
 impl Fixture {
@@ -189,7 +190,7 @@ impl Fixture {
             switching: Arc::new(parts.switching),
             tools: Vec::new(),
             kept_infos: Vec::new(),
-            prompt_rows: Vec::new(),
+            prompt_rows: Mutex::new(Vec::new()),
             late: Arc::default(),
             repository: Arc::new(Mutex::new(
                 crate::session_extensions::RepositoryScope::default(),
@@ -225,7 +226,55 @@ impl Fixture {
             replacements,
             declared,
             delegate,
+            servers: Vec::new(),
         }
+    }
+
+    /// A fixture with live fixture-backed MCP servers, each `(name,
+    /// tools)` declared from its own fake directory with every tool
+    /// answering `hi`: the global config declares them, started eagerly,
+    /// and `rewrite` replaces the global config before the next
+    /// `prepare`, as editing the files does.
+    fn with_servers(servers: &[(&str, serde_json::Value)]) -> Self {
+        let mut fixture = Self::new();
+        let fakes: Vec<FakeServer> = servers
+            .iter()
+            .map(|(name, tools)| {
+                let fake = FakeServer::new(&fixture.rig, name, tools);
+                for tool in tools.as_array().unwrap() {
+                    let tool = tool.get("name").unwrap().as_str().unwrap();
+                    fake.answer(tool, r#"{"content":[{"type":"text","text":"hi"}]}"#);
+                }
+                fake
+            })
+            .collect();
+        let mut entries = serde_json::Map::new();
+        for (fake, (name, _)) in fakes.iter().zip(servers.iter()) {
+            entries.insert((*name).to_owned(), fake.entry(json!({})));
+        }
+        fixture.rewrite(serde_json::Value::Object(entries));
+        let config = fixture.rig.config(Vec::<String>::new());
+        let specs = crate::mcp_servers::specs(&config).expect("the specs read");
+        let workspace = fixture.state.sources.workspace.clone();
+        let artifacts = fixture.state.artifacts.clone();
+        let cache = config::mcp_cache_dir(&fixture.state.sources.home);
+        let clock = fixture.state.template.clock.clone();
+        let started = fakes::within("servers start", fakes::MUST_SUCCEED_WITHIN, move || {
+            mcp::start_observed(
+                specs.specs,
+                &workspace,
+                &artifacts,
+                Arc::new(DummyImages),
+                &cache,
+                &clock,
+                "test",
+                None,
+            )
+        });
+        assert!(started.failed.is_empty(), "{:?}", started.failed);
+        fixture.state = Arc::new(assemble(&fixture.state, started));
+        fixture.servers = fakes;
+        fixture
     }
 
     fn prepare(&self) -> r#loop::ReloadPrepared {
@@ -986,154 +1035,6 @@ impl FakeServer {
     }
 }
 
-/// A reload fixture with live fixture-backed MCP servers: the global
-/// config declares them, started eagerly, and `rewrite` replaces the
-/// global config before the next `prepare`, as editing the files does.
-struct McpFixture {
-    rig: Rig,
-    state: Arc<State>,
-    declared: Arc<Mutex<std::collections::BTreeMap<String, contract::events::ToolInfo>>>,
-    servers: Vec<FakeServer>,
-}
-
-impl McpFixture {
-    /// Starts `servers`, each `(name, tools)` declared from its own fake
-    /// directory with every tool answering `hi`.
-    fn new(servers: &[(&str, serde_json::Value)]) -> Self {
-        let rig = Rig::new("fiber-reload-mcp");
-        rig.write_global(&json!({"model":"scripted/s.json"}));
-        std::fs::write(rig.workspace.join("s.json"), r#"{"steps":[{"text":"ok"}]}"#).unwrap();
-        crate::test_support::install_extension(
-            &rig.home,
-            "extensions/demo",
-            json!({"name":"demo","version":"v1.0.0","fiber":"0.1.0","api":1}),
-            &[],
-        );
-        std::fs::write(
-            rig.home.join("extensions/demo/init.lua"),
-            "fiber.command('old',{timeout=5000,run=function() return 'old' end})",
-        )
-        .unwrap();
-        let fakes: Vec<FakeServer> = servers
-            .iter()
-            .map(|(name, tools)| {
-                let fake = FakeServer::new(&rig, name, tools);
-                for tool in tools.as_array().unwrap() {
-                    let tool = tool.get("name").unwrap().as_str().unwrap();
-                    fake.answer(tool, r#"{"content":[{"type":"text","text":"hi"}]}"#);
-                }
-                fake
-            })
-            .collect();
-        let mut entries = serde_json::Map::new();
-        for (fake, (name, _)) in fakes.iter().zip(servers.iter()) {
-            entries.insert((*name).to_owned(), fake.entry(json!({})));
-        }
-        rig.write_global(&json!({"model":"scripted/s.json", "mcp": {"servers": entries}}));
-        let home = rig.home.clone();
-        let workspace = rig.workspace.clone();
-        let parts = fakes::within("startup parts", fakes::MUST_SUCCEED_WITHIN, move || {
-            crate::parts_in(
-                home,
-                workspace,
-                Vec::new(),
-                None,
-                None.into(),
-                None,
-                fakes::clock::FakeClock::new(),
-                None,
-                None,
-                Arc::default(),
-                log::diag::Process::Session,
-                extensions::StateSeed::new(),
-                crate::session_extensions::RepositoryScope::default(),
-            )
-            .unwrap()
-        });
-        let config = rig.config(Vec::<String>::new());
-        let specs = crate::mcp_servers::specs(&config).expect("the specs read");
-        let template = parts.prompt.clone();
-        let start_workspace = parts.sources.workspace.clone();
-        let start_artifacts = start_workspace.join("artifacts");
-        let start_cache = config::mcp_cache_dir(&parts.sources.home);
-        let start_clock = parts.prompt.clock.clone();
-        let started = fakes::within("servers start", fakes::MUST_SUCCEED_WITHIN, move || {
-            mcp::start_observed(
-                specs.specs,
-                &start_workspace,
-                &start_artifacts,
-                Arc::new(DummyImages),
-                &start_cache,
-                &start_clock,
-                "test",
-                None,
-            )
-        });
-        assert!(started.failed.is_empty(), "{:?}", started.failed);
-        let artifacts = parts.sources.workspace.join("artifacts");
-        let declared: Arc<Mutex<std::collections::BTreeMap<String, contract::events::ToolInfo>>> =
-            Arc::default();
-        let declare: doors::Declare = {
-            let declared = Arc::clone(&declared);
-            Arc::new(move |name, info| {
-                let mut map = declared.lock().unwrap();
-                match info {
-                    Some(info) => {
-                        map.insert(name.into(), info);
-                    }
-                    None => {
-                        map.remove(name);
-                    }
-                }
-            })
-        };
-        let state = Arc::new(State {
-            sources: parts.sources,
-            template,
-            current: Arc::new(crate::session_extensions::Current::new(parts.extensions)),
-            switching: Arc::new(parts.switching),
-            tools: started.tools,
-            kept_infos: started.infos,
-            prompt_rows: started.prompts.commands(),
-            late: Arc::default(),
-            repository: Arc::new(Mutex::new(
-                crate::session_extensions::RepositoryScope::default(),
-            )),
-            declare,
-            replace: Arc::new(|_| {}),
-            drive: Arc::new(NoDrive),
-            model: Arc::new(NoDrive),
-            delegate: Arc::new(RecordingDelegate {
-                retains: Mutex::new(Vec::new()),
-            }),
-            attended: Arc::new(|| true),
-            answerable: true,
-            log: Arc::new(
-                log::Log::create(
-                    &parts.sessions,
-                    contract::SessionId("reload-mcp-test".into()),
-                    parts.prompt.clock.clone(),
-                )
-                .unwrap(),
-            ),
-            diag: parts.diag,
-            names: Mutex::new(Vec::new()),
-            shell_read_only: parts.shell_read_only.clone(),
-            servers: Arc::new(started.servers),
-            artifacts,
-            images: Arc::new(DummyImages),
-        });
-        // The declare closure shares the map below, so installing the
-        // preparation shows its undeclares and declares there.
-        Self {
-            rig,
-            state,
-            declared,
-            servers: fakes,
-        }
-    }
-}
-
 /// Rebuilds the `State` around a fresh start, keeping the maps and
 /// closures the assertions share: the flip tests relaunch after
 /// rewriting a cache so the next start goes lazy.
@@ -1145,7 +1046,7 @@ fn assemble(base: &State, started: mcp::Started) -> State {
         switching: Arc::clone(&base.switching),
         tools: started.tools,
         kept_infos: started.infos,
-        prompt_rows: started.prompts.commands(),
+        prompt_rows: Mutex::new(started.prompts.commands()),
         late: Arc::clone(&base.late),
         repository: Arc::clone(&base.repository),
         declare: Arc::clone(&base.declare),
@@ -1165,19 +1066,7 @@ fn assemble(base: &State, started: mcp::Started) -> State {
     }
 }
 
-impl McpFixture {
-    fn prepare(&self) -> r#loop::ReloadPrepared {
-        let state = self.state.clone();
-        fakes::within("reload prepared", fakes::MUST_SUCCEED_WITHIN, move || {
-            state
-                .prepare(&r#loop::ReloadRoute {
-                    model: "scripted/s.json".into(),
-                    credential: None,
-                })
-                .unwrap()
-        })
-    }
-
+impl Fixture {
     fn try_prepare(&self) -> Result<r#loop::ReloadPrepared, contract::inbox::Rejection> {
         let state = self.state.clone();
         fakes::within("reload attempted", fakes::MUST_SUCCEED_WITHIN, move || {
@@ -1275,7 +1164,7 @@ impl McpFixture {
 
 fn run_named(
     tools: &[(String, Arc<dyn contract::tool::Tool>)],
-    fixture: &McpFixture,
+    fixture: &Fixture,
     name: &str,
 ) -> contract::tool::Output {
     let tool = tools
@@ -1289,7 +1178,7 @@ fn run_named(
 
 #[test]
 fn reload_with_a_changed_executable_serves_the_new_servers_tools() {
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     let first = fixture.prepare();
     assert_eq!(first.server_sync.servers.kept, ["fx"]);
     let pid = fixture.servers[0].pid();
@@ -1338,7 +1227,7 @@ fn reload_with_a_changed_executable_serves_the_new_servers_tools() {
 
 #[test]
 fn reload_with_only_a_timeout_change_replaces_with_the_new_spec() {
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     let pid = fixture.servers[0].pid();
     fixture.rewrite(json!({"fx": fixture.servers[0].entry(json!({"startup_timeout_ms": 6000}))}));
     let prepared = fixture.prepare();
@@ -1358,7 +1247,7 @@ fn reload_with_only_a_timeout_change_replaces_with_the_new_spec() {
 
 #[test]
 fn reload_with_an_unchanged_spec_keeps_without_reconnecting() {
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     let pid = fixture.servers[0].pid();
     let cache = fixture.cache_bytes("fx");
     let prepared = fixture.prepare();
@@ -1374,7 +1263,7 @@ fn reload_with_an_unchanged_spec_keeps_without_reconnecting() {
 
 #[test]
 fn reload_replaces_a_dead_server_beside_the_old_slot() {
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     fixture.prepare();
     let pid = fixture.servers[0].pid();
     fixture.servers[0].kill();
@@ -1403,7 +1292,7 @@ fn reload_replaces_a_dead_server_beside_the_old_slot() {
 
 #[test]
 fn reload_starts_an_unstarted_server() {
-    let fixture = McpFixture::new(&[]);
+    let fixture = Fixture::with_servers(&[]);
     let fake = FakeServer::new(&fixture.rig, "fx", &json!([{"name": "echo"}]));
     fake.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     fixture.rewrite(json!({"fx": fake.entry(json!({}))}));
@@ -1426,7 +1315,7 @@ fn reload_starts_an_unstarted_server() {
 
 #[test]
 fn reload_declares_a_tool_added_to_an_advertised_empty_list() {
-    let fixture = McpFixture::new(&[("fx", json!([]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([]))]);
     let quiet = fixture.prepare();
     assert!(
         quiet
@@ -1448,7 +1337,7 @@ fn reload_declares_a_tool_added_to_an_advertised_empty_list() {
 
 #[test]
 fn reload_stops_a_removed_server_and_undeclares_its_tools() {
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     (fixture.prepare().installed)();
     assert!(
         fixture
@@ -1478,7 +1367,7 @@ fn reload_stops_a_removed_server_and_undeclares_its_tools() {
 
 #[test]
 fn reload_starts_a_readded_name_fresh() {
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     fixture.rewrite(json!({}));
     let removed = fixture.prepare();
     assert_eq!(removed.server_sync.servers.stopped, ["fx"]);
@@ -1494,7 +1383,7 @@ fn reload_starts_a_readded_name_fresh() {
 
 #[test]
 fn reload_skips_a_repository_server_without_approval() {
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     let repo = FakeServer::new(&fixture.rig, "db", &json!([{"name": "echo"}]));
     std::fs::create_dir_all(fixture.rig.workspace.join(".fiber")).unwrap();
     std::fs::write(
@@ -1515,7 +1404,7 @@ fn reload_skips_a_repository_server_without_approval() {
 
 #[test]
 fn reload_rejects_a_required_shadow_failure_writing_nothing() {
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     let cache = fixture.cache_bytes("fx");
     fixture.rewrite(json!({
         "fx": fixture.servers[0].entry(json!({})),
@@ -1537,7 +1426,7 @@ fn reload_rejects_a_required_shadow_failure_writing_nothing() {
 
 #[test]
 fn reload_after_a_required_failure_keeps_the_staged_relist_out() {
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}, {"name": "plus"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}, {"name": "plus"}]))]);
     fixture.prepare();
     let cache = fixture.cache_bytes("fx");
     // The re-list would drop `plus`, but the required failure below
@@ -1564,7 +1453,7 @@ fn reload_after_a_required_failure_keeps_the_staged_relist_out() {
 
 #[test]
 fn reload_with_a_failing_replacement_stops_the_old_slot_and_shows_failed() {
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     fixture.rewrite(json!({"fx": {"command": "/nonexistent/fiber-mcp"}}));
     let prepared = fixture.prepare();
     // Non-required, so the reload succeeds with the server failed: the
@@ -1601,7 +1490,7 @@ fn reload_with_a_failing_replacement_stops_the_old_slot_and_shows_failed() {
 
 #[test]
 fn reload_adds_mcp_resources_when_a_protected_slot_offers_them() {
-    let mut fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let mut fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     let repo = FakeServer::new(&fixture.rig, "db", &json!([{"name": "echo"}]));
     repo.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     // The repository server starts as a person server so its cache is
@@ -1650,7 +1539,7 @@ fn reload_adds_mcp_resources_when_a_protected_slot_offers_them() {
 
 #[test]
 fn reload_removes_mcp_resources_when_no_post_sync_slot_offers_them() {
-    let mut fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let mut fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     fixture.flip_resources("fx", true);
     fixture.relaunch();
     assert!(
@@ -1684,9 +1573,9 @@ fn reload_appends_a_started_servers_prompts_while_keeping_every_startup_row() {
     // A started server's prompts join the `/` list while every startup
     // row stays: bites the discard of the re-listed prompt sources,
     // where the old code rebuilt commands from the startup snapshot.
-    let fixture = McpFixture::new(&[("fx", json!([{"name": "echo"}]))]);
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     assert!(
-        fixture.state.prompt_rows.is_empty(),
+        fixture.state.prompt_rows.lock().unwrap().is_empty(),
         "the startup lists no prompts"
     );
     let dir = fixture.rig.root.path().join("new");
@@ -1718,10 +1607,72 @@ fn reload_appends_a_started_servers_prompts_while_keeping_every_startup_row() {
     assert_eq!(prepared.server_sync.servers.kept, ["fx"]);
     assert_eq!(prepared.server_sync.servers.started, ["new"]);
     assert!(
-        fixture.state.prompt_rows.is_empty(),
+        fixture.state.prompt_rows.lock().unwrap().is_empty(),
         "prepare keeps every startup row"
     );
     assert_eq!(prepared.server_sync.new_prompts.len(), 1);
     assert_eq!(prepared.server_sync.new_prompts[0].name, "greet");
     assert_eq!(prepared.server_sync.new_prompts[0].tag, "new");
+}
+
+#[test]
+fn a_second_reload_retains_the_first_reloads_prompt_rows_for_kept_servers() {
+    // A prompt row added by the first reload stays in the `/` list
+    // across a second reload that keeps its server: bites the rebuild
+    // from the startup snapshot, which dropped the first reload's rows
+    // when the second sync carried no new prompts for the kept server.
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    let dir = fixture.rig.root.path().join("new");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("tools.json"),
+        json!([{"name": "echo"}]).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("call-echo.json"),
+        r#"{"content":[{"type":"text","text":"hi"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("prompts.json"),
+        json!([{"name": "greet", "description": "Greets."}]).to_string(),
+    )
+    .unwrap();
+    let entry = json!({
+        "command": fakes::mcp_fixture().display().to_string(),
+        "args": [dir.display().to_string()],
+    });
+    fixture.rewrite(json!({
+        "fx": fixture.servers[0].entry(json!({})),
+        "new": entry,
+    }));
+    let first = fixture.prepare();
+    assert_eq!(first.server_sync.servers.started, ["new"]);
+    (first.installed)();
+    let second = fixture.prepare();
+    assert_eq!(second.server_sync.servers.kept, ["fx", "new"]);
+    assert!(
+        second.server_sync.new_prompts.is_empty(),
+        "nothing new on the second reload"
+    );
+    (second.installed)();
+    let tags: Vec<String> = fixture
+        .state
+        .prompt_rows
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|row| row.tag.clone())
+        .collect();
+    assert!(
+        tags.contains(&"new".to_owned()),
+        "the first reload's row stays: {tags:?}"
+    );
+    let installed = fixture.replacements.lock().unwrap();
+    let commands = &installed.last().expect("two installs").commands;
+    assert!(
+        commands.iter().any(|row| row.tag == "new"),
+        "the `/` list keeps the first reload's row"
+    );
 }

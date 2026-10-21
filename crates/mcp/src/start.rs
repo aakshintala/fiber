@@ -511,8 +511,6 @@ pub fn restart(
 /// The reload's server sync: classified, staged and committed in
 /// [](crate::sync), re-exported here so the crate root's paths
 /// stay put.
-pub use crate::sync::{StagedSync, SyncRow, Synced, classify_sync, commit_sync, stage_sync};
-
 /// The default startup deadline: 5 seconds (`docs/configuration.md`).
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_millis(5000);
 
@@ -764,18 +762,12 @@ pub(crate) struct StagedOpen {
 }
 
 /// Launches one spec and declares its tools without writing the cache:
-/// the commit writes once every required start succeeds. `Err` carries
-/// the start failure with whether its server is required.
-/// What a shadow start reports: the staged opening, or the start failure
-/// with whether its server is required. A plain enum, not a `Result`:
-/// the failure half travels with its flag, as the death record travels
-/// with the call that observed it.
+/// the commit writes once every required start succeeds.
+/// What a shadow start stages: the running slot with its declarations
+/// and cache payload, or the start failure the caller files.
 pub(crate) enum Shadowed {
     Up(StagedOpen),
-    Down {
-        failure: McpServerFailed,
-        required: bool,
-    },
+    Down { failure: McpServerFailed },
 }
 
 #[allow(
@@ -801,7 +793,6 @@ pub(crate) fn open_staged(
         Err(error) => {
             return Shadowed::Down {
                 failure: not_started(&name, &error, timeout, required, remote).record,
-                required,
             };
         }
     };
@@ -850,6 +841,7 @@ pub(crate) fn open_observed(
 ) -> Opened {
     let name = spec.name.clone();
     let key = spec.key();
+    let required = spec.required;
     match open_staged(
         spec, workspace, artifacts, images, cache, clock, version, timing,
     ) {
@@ -857,7 +849,7 @@ pub(crate) fn open_observed(
             cache::write(cache, &name, &key, &opened.listed);
             Opened::Up(opened.slot, opened.declared, opened.sources)
         }
-        Shadowed::Down { failure, required } => Opened::Down { failure, required },
+        Shadowed::Down { failure } => Opened::Down { failure, required },
     }
 }
 
