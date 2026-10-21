@@ -237,13 +237,24 @@ fn a_reloaded_watcher_receives_the_kept_running_delegate_finish_exactly_once() {
     drop(first);
     second.deliver(&finished(&id), None);
     second.deliver(&completed(&id, Outcome::Completed), None);
-    // The watcher's log is the later ordered marker: the finish queued
-    // exactly one watcher delivery and the completion queued nothing on
-    // the delivering thread, so a non-blocking drain proves it ran once.
+    // An ordered completion marker: each `deliver` queues synchronously
+    // on this thread, and watcher deliveries run in queue order behind
+    // whatever waits, so the second finish's delivery sits strictly
+    // behind any duplicate of the first. Its log proves every earlier
+    // watcher delivery already ran. The completion queued nothing: no
+    // binding names the id in the reloaded set.
+    second.deliver(&finished("j_2"), None);
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        seen.push(next_log(&inbox2_rx, "the reloaded watcher"));
+    }
     assert_eq!(
-        next_log(&inbox2_rx, "the reloaded watcher"),
-        format!("saw:{id}")
+        seen,
+        [format!("saw:{id}"), "saw:j_2".to_owned()],
+        "the reloaded watcher ran exactly once, then the marker"
     );
+    // Nothing else follows: the marker ran last in queue order, so a
+    // non-blocking drain proves no duplicate run is behind it.
     assert!(
         inbox2_rx.try_recv().is_err(),
         "the watcher ran exactly once"

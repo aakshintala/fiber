@@ -5448,7 +5448,7 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         &client,
         r#"{"id":"c_go","command":"command","args":{"name":"go"}}"#,
     );
-    until_session(&client, "the delegate start", |line| {
+    let mut stream = until_session(&client, "the delegate start", |line| {
         line["kind"] == "extension_ui" && line["payload"].to_string().contains("started:")
     });
     assert!(
@@ -5464,15 +5464,16 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     );
     send(&client, r#"{"id":"c_reload","command":"reload"}"#);
     let reloaded = until_session(&client, "the reload", |line| line["kind"] == "reloaded");
+    stream.extend(reloaded.clone());
     assert!(
         reloaded.last().unwrap()["payload"].get("failed").is_none(),
         "the reload dropped the extension cleanly: {reloaded:?}"
     );
     // The stop ends the delegate `cancelled`, and its `run` never ran:
     // no invocation marker, so no finish read either.
-    until_session(&client, "the cancelled end", |line| {
+    stream.extend(until_session(&client, "the cancelled end", |line| {
         line["kind"] == "job_completed" && line["payload"]["status"] == "cancelled"
-    });
+    }));
     assert!(
         !setup.workspace().join("run-invoked.txt").is_file(),
         "the stopped delegate ran no run"
@@ -5506,7 +5507,46 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         ]
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_session_close(&client);
+    stream.extend(until_session_close(&client));
+    // The whole socket stream, in order, from the command's send to the
+    // session's exit: the replayed startup, the command's delegate start,
+    // the reload, and the cancelled end. `clients`, `session_status` and
+    // `attention` are independently triggered (`docs/testing.md`, "Event
+    // streams"), so they are set aside; every other line is pinned.
+    // `extension_ui` and `delegate_started` arrive in either order: the
+    // command writes its status after `host.delegate` returns, while the
+    // service writes the start beside the child's spawn, with no order
+    // between them. Either placement is valid; anything duplicated,
+    // missing or otherwise reordered fails.
+    let kinds = owned_kinds(&stream);
+    let ordered: Vec<&str> = kinds
+        .iter()
+        .filter(|kind| *kind != "session_status" && *kind != "clients" && *kind != "attention")
+        .map(String::as_str)
+        .collect();
+    let started_first: [&str; 15] = [
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "command_accepted",
+        "job_started",
+        "delegate_started",
+        "extension_ui",
+        "reloaded",
+        "command_accepted",
+        "extensions_loaded",
+        "preamble_built",
+        "delegate_finished",
+        "job_completed",
+        "command_accepted",
+        "fiber_exited",
+    ];
+    let mut ui_first = started_first;
+    ui_first.swap(5, 6);
+    assert!(
+        ordered == started_first || ordered == ui_first,
+        "unexpected stream: {ordered:?}"
+    );
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
