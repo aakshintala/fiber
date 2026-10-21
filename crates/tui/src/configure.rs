@@ -394,6 +394,11 @@ pub trait Configure: Send + Sync {
     /// project.
     fn rules(&self, workspace: &Path) -> Result<(RulesSection, RulesSection), ConfigureError>;
 
+    /// Whether the first-run import offer shows: true when neither
+    /// source has a completed receipt, so the offer fires at most
+    /// until the first import lands.
+    fn import_pending(&self) -> bool;
+
     /// Deletes line `line` of `scope`'s file when it still reads `text`.
     fn revoke(
         &self,

@@ -817,6 +817,7 @@ pub(crate) struct FakeMachine {
     pub(crate) answers: Mutex<std::collections::VecDeque<Result<Option<Value>, Failure>>>,
     pub(crate) search_gate: Mutex<Option<Arc<SearchGate>>>,
     pub(crate) logins: Mutex<std::collections::VecDeque<Arc<FakeLogin>>>,
+    pub(crate) imports: Mutex<std::collections::VecDeque<Result<Option<Value>, Failure>>>,
 }
 
 pub(crate) struct SearchGate {
@@ -927,6 +928,15 @@ impl crate::Machine for FakeMachine {
     ) -> Result<Option<Value>, Failure> {
         lock(&self.calls).push(serde_json::json!({"operation":operation,"args":args}));
         lock(&self.answers).pop_front().unwrap_or(Ok(None))
+    }
+    fn import(
+        &self,
+        home: &Path,
+        source: Option<&str>,
+        _clock: Arc<dyn contract::clock::Clock>,
+    ) -> Result<Option<Value>, Failure> {
+        lock(&self.calls).push(serde_json::json!({"import":{"home":home,"source":source}}));
+        lock(&self.imports).pop_front().unwrap_or(Ok(None))
     }
     fn read_config(&self, workspace: &Path, path: &Path) -> Result<(String, String), Failure> {
         lock(&self.calls).push(serde_json::json!({"read":[workspace,path]}));

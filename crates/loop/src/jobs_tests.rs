@@ -441,7 +441,7 @@ impl World {
         by_call: Vec<Vec<Delivery>>,
         tools: impl FnOnce(&Sender<Delivery>) -> Vec<Arc<dyn Tool>>,
     ) -> Self {
-        let home = fakes::TempDir::new("fiber-job-notices");
+        let home = fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-job-notices");
         let workspace = home.path().join("workspace");
         let credentials = home.path().join("credentials");
         std::fs::create_dir_all(&workspace).unwrap();

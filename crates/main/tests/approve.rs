@@ -33,7 +33,7 @@ impl Setup {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
-            root: fakes::TempDir::new("fiber-approve"),
+            root: fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-approve"),
         };
         fs::create_dir_all(setup.home()).unwrap();
         setup.repository("w");

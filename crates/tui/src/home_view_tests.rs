@@ -2620,8 +2620,8 @@ fn short_home_slash_keeps_its_selection_barred() {
     );
     let row = row_text(&buf, selected, 80);
     assert!(row.contains("credential"), "{shown}");
-    // `/mcp` is one more row in the list.
-    assert!(shown.contains("of 27"), "{shown}");
+    // `/mcp` and `/credential` are two more rows in the list.
+    assert!(shown.contains("of 28"), "{shown}");
 }
 
 /// A git home at 80x24 with two live rows in the launch project and no
@@ -3617,4 +3617,86 @@ fn a_picker_one_row_taller_than_the_room_above_the_box_stays_centred() {
     assert_eq!(title, 4);
     assert_eq!(footer + 2, 15);
     assert!(footer + 2 >= box_top, "the centred picker reaches the box");
+}
+
+/// The import offer's frame body rows: the head plus one row per source
+/// with its key. Rendering them pins the builder against an empty one.
+#[test]
+fn import_rows_lists_both_sources_with_their_keys() {
+    let area = Rect::new(0, 0, 80, 24);
+    let rows = super::import_rows(&crate::home::import_head(), area);
+    let text: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            row.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+    assert!(!rows.is_empty(), "the offer draws rows");
+    assert!(
+        text.iter().any(|line| line.contains("Bring settings")),
+        "the head draws"
+    );
+    assert!(
+        text.iter()
+            .any(|line| line.contains('1') && line.contains("Claude Code")),
+        "Claude Code draws with its key"
+    );
+    assert!(
+        text.iter()
+            .any(|line| line.contains('2') && line.contains("Codex")),
+        "Codex draws with its key"
+    );
+    assert!(
+        text.iter().any(|line| line.contains("~/.claude")),
+        "the Claude Code home draws"
+    );
+    assert!(
+        text.iter().any(|line| line.contains("~/.codex")),
+        "the Codex home draws"
+    );
+}
+
+/// The import offer over home: the frame draws its title, the head, one
+/// legend row per source and its footer.
+#[test]
+fn the_import_offer_draws_the_question_sources_and_footer() {
+    let mut app = home(80, 24);
+    app.set_import_offer(true);
+    let drawn = screen(&app, 80, 24);
+    assert!(drawn.contains("Import settings"), "{drawn}");
+    assert!(drawn.contains("Bring settings"), "{drawn}");
+    assert!(drawn.contains("Claude Code"), "{drawn}");
+    assert!(drawn.contains("Codex"), "{drawn}");
+    assert!(drawn.contains("not now"), "{drawn}");
+}
+
+/// The offer's swallow target exists exactly while the frame draws: one
+/// slab-wide target over every frame row, and none when the area holds
+/// no slab.
+#[test]
+fn the_import_offer_swallow_target_needs_a_drawn_slab() {
+    let question = crate::home::import_head();
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_import_question(&question, area, &mut buf, &mut targets);
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == crate::mouse::TargetId::Home(crate::home::Spot::Question)),
+        "the drawn offer swallows clicks behind it"
+    );
+    let area = Rect::new(0, 0, 80, 0);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_import_question(&question, area, &mut buf, &mut targets);
+    assert!(
+        !targets
+            .iter()
+            .any(|target| target.id == crate::mouse::TargetId::Home(crate::home::Spot::Question)),
+        "no slab, no swallow target"
+    );
 }

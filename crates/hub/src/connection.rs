@@ -726,6 +726,12 @@ fn on_command(
             &line.id,
             crate::delete::delete(hub, &line.args),
         ),
+        "import" if hub.machine.is_some() => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::machine::on_import(hub, &line.args),
+        ),
         "directories" => answer(
             writer,
             hub,
