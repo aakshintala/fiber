@@ -2,7 +2,7 @@
 //! "An extension's manifest" and "A provider's data"). Only this crate reads
 //! either file; `extensions` installs and registers what they describe.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -458,10 +458,12 @@ fn read_typed<T: DeserializeOwned>(file: &Path, expected: &'static str) -> Resul
 /// first segment against this union.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclaredSettings {
-    /// The top-level settings keys a repository's file may set.
+    /// The top-level settings keys a repository's file may set, never a
+    /// placeholder name: a placeholder's setting is never a
+    /// `repo_settings` key, so a repository never sets it.
     pub repo_settings: Vec<String>,
-    /// Every placeholder name the provider data declares, by name.
-    pub placeholders: BTreeMap<String, Placeholder>,
+    /// Every placeholder name the provider data declares.
+    pub placeholders: BTreeSet<String>,
 }
 
 /// Reads the declared settings of the extension in `dir`: the manifest's
@@ -471,12 +473,20 @@ pub struct DeclaredSettings {
 /// files: the caller passes the installed or approved directory.
 pub fn declared_settings_in(dir: &Path) -> Result<DeclaredSettings, ConfigError> {
     let manifest = read_manifest(dir)?;
-    let mut placeholders = BTreeMap::new();
+    let mut placeholders = BTreeSet::new();
     for provider in read_providers(dir)? {
-        placeholders.extend(provider.placeholders);
+        placeholders.extend(provider.placeholders.into_keys());
     }
+    // A placeholder's setting is never a `repo_settings` key: even a
+    // manifest listing one there keeps it out, so the repository gate
+    // and the read filter refuse it as undeclared there.
+    let repo_settings = manifest
+        .repo_settings
+        .into_iter()
+        .filter(|name| !placeholders.contains(name))
+        .collect();
     Ok(DeclaredSettings {
-        repo_settings: manifest.repo_settings,
+        repo_settings,
         placeholders,
     })
 }
@@ -513,7 +523,10 @@ pub fn host_shape(value: &str) -> Option<&str> {
         return None;
     }
     if let Some(port) = port {
-        if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+        // Only digits read as a port: `u16` parsing alone would take a
+        // leading `+`, so the digit check stays while the empty check
+        // goes, an empty port failing the parse below just the same.
+        if !port.chars().all(|c| c.is_ascii_digit()) {
             return None;
         }
         if port.parse::<u16>().is_err() {

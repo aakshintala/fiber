@@ -141,19 +141,29 @@ fn set_extension_setting(
     }
     let dir = match extension_dir {
         Some(dir) => dir.to_path_buf(),
-        None => installed_dir(home, extension).ok_or_else(|| ConfigError::Refused {
-            key: key.into(),
-            file: settings_layer_file(home, workspace, project, layer, extension),
-            why: UNINSTALLED,
-        })?,
+        None => {
+            let file = settings_layer_file(home, workspace, project, layer, extension);
+            installed_dir(home, extension).ok_or_else(|| ConfigError::Refused {
+                key: key.into(),
+                file,
+                why: UNINSTALLED,
+            })?
+        }
     };
     // An unreadable manifest or provider file fails the write before
     // anything is written.
     let declared = declared_settings_in(&dir)?;
-    if repository && !declared.repo_settings.iter().any(|name| name == first) {
+    let file = settings_layer_file(home, workspace, project, layer, extension);
+    // A placeholder's setting is never a `repo_settings` key: the
+    // repository refuses it even when the manifest lists it there, since
+    // `declared_settings_in` already keeps it out of `repo_settings`.
+    if repository
+        && (declared.placeholders.contains(first)
+            || !declared.repo_settings.iter().any(|name| name == first))
+    {
         return Err(ConfigError::Refused {
             key: key.into(),
-            file: settings_layer_file(home, workspace, project, layer, extension),
+            file: file.clone(),
             why: NOT_REPO_SETTING,
         });
     }
@@ -161,33 +171,32 @@ fn set_extension_setting(
         .repo_settings
         .iter()
         .map(String::as_str)
-        .chain(declared.placeholders.keys().map(String::as_str))
+        .chain(declared.placeholders.iter().map(String::as_str))
         .collect();
     if !declared_names.contains(&first.as_str()) {
         return Err(ConfigError::Refused {
             key: key.into(),
-            file: settings_layer_file(home, workspace, project, layer, extension),
+            file: file.clone(),
             why: UNKNOWN_SETTING,
         });
     }
-    if declared.placeholders.contains_key(first) && relative.len() > 1 {
+    if declared.placeholders.contains(first) && relative.len() > 1 {
         return Err(ConfigError::Refused {
             key: key.into(),
-            file: settings_layer_file(home, workspace, project, layer, extension),
+            file: file.clone(),
             why: PLACEHOLDER_DESCENDANT,
         });
     }
-    if declared.placeholders.contains_key(first)
+    if declared.placeholders.contains(first)
         && relative.len() == 1
         && !matches!(&value, Value::String(text) if host_shape(text).is_some())
     {
         return Err(ConfigError::Refused {
             key: key.into(),
-            file: settings_layer_file(home, workspace, project, layer, extension),
+            file: file.clone(),
             why: NOT_A_HOST,
         });
     }
-    let file = settings_layer_file(home, workspace, project, layer, extension);
     set_settings_file(&file, relative, value)?;
     Ok(file)
 }

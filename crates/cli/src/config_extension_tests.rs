@@ -1,8 +1,7 @@
 //! `fiber config set|get` for an extension's own setting
 //! (`docs/configuration.md`, "Extension settings"): `set` writes
 //! `config/<extension>.json` in the layer, `get` reads it back with its
-//! layer. Red first: every success-path test fails on the base, where the
-//! keys are unknown.
+//! layer.
 
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
@@ -526,6 +525,82 @@ fn get_of_an_unset_setting_names_it_on_stderr() {
     result.unwrap();
     assert_eq!(out, "");
     assert_eq!(err, "`extensions.\"acme\".settings.region` is not set.\n");
+}
+
+#[test]
+fn repo_set_of_a_placeholder_listed_in_repo_settings_is_still_refused() {
+    // Even a manifest listing the placeholder under `repo_settings` keeps
+    // the repository from setting it: the placeholder is never a
+    // repository key, so `--repo` refuses it as not-a-repo-setting.
+    let setup = Setup::new();
+    let mut manifest = repo_manifest("acme", &json!({"acme": ["https://{region}/v1"]}));
+    manifest["repo_settings"] = json!(["workspace_url", "region"]);
+    let data = json!({
+        "name": "acme",
+        "placeholders": {"region": {"env": REGION_ENV}},
+        "models": [{"id": "m", "protocol": "openai-responses",
+                    "base_url": "https://{region}/v1", "context_window": 1000}],
+    })
+    .to_string();
+    declare_repo(
+        &setup.workspace(),
+        &[("acme", manifest, &[("providers/acme.json", data.as_str())])],
+    );
+    approve_repo(&setup.home(), &setup.workspace(), "acme");
+    let (_, file, why) = refused(setup.set(
+        Layer::Repository,
+        "extensions.\"acme\".settings.region",
+        "example.com",
+    ));
+    assert_eq!(
+        file,
+        setup
+            .workspace()
+            .join(".fiber")
+            .join("config")
+            .join("acme.json")
+    );
+    assert_eq!(why, "the extension does not list it under repo_settings");
+    assert!(
+        !setup
+            .workspace()
+            .join(".fiber")
+            .join("config")
+            .join("acme.json")
+            .exists()
+    );
+}
+
+#[test]
+fn get_prints_the_notice_for_an_ignored_repository_key() {
+    // The repository holds `region`, which only the person may set: the
+    // get still reads the global value, and prints the ignored-key notice
+    // beside it.
+    let setup = Setup::new();
+    declare_and_approve(&setup, "acme", "acme");
+    setup.write_settings(
+        &setup.home().join("config").join("acme.json"),
+        &json!({"region": "global.example"}),
+    );
+    let repo_file = setup
+        .workspace()
+        .join(".fiber")
+        .join("config")
+        .join("acme.json");
+    setup.write_settings(&repo_file, &json!({"region": "repo.example"}));
+    let (result, out, err) = setup.get("extensions.\"acme\".settings.region");
+    result.unwrap();
+    assert_eq!(
+        out,
+        format!(
+            "\"global.example\" from {}\n",
+            setup.home().join("config").join("acme.json").display()
+        )
+    );
+    assert!(
+        err.contains("region"),
+        "the ignored key gets a notice: {err:?}"
+    );
 }
 
 #[test]

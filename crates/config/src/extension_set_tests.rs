@@ -38,6 +38,8 @@ fn host_shape_checks_the_port_boundary() {
     assert_eq!(host_shape("host:"), None);
     assert_eq!(host_shape("host:abc"), None);
     assert_eq!(host_shape("host:80:80"), None);
+    // A leading `+` is digits to `u16` parsing but never a host port.
+    assert_eq!(host_shape("host:+80"), None);
 }
 
 #[test]
@@ -77,12 +79,11 @@ fn declared_settings_join_repo_settings_with_placeholder_names() {
     fixture(&dir);
     let declared = declared_settings_in(&dir).unwrap();
     assert_eq!(declared.repo_settings, vec!["workspace_url".to_owned()]);
+    assert!(declared.placeholders.contains("region"));
+    // The provider data still names the environment fallback.
+    let providers = crate::extension::read_providers(&dir).unwrap();
     assert_eq!(
-        declared.placeholders.keys().collect::<Vec<_>>(),
-        vec!["region"]
-    );
-    assert_eq!(
-        declared.placeholders["region"].env.as_deref(),
+        providers[0].placeholders["region"].env.as_deref(),
         Some("FIBER_TEST_3021_REGION")
     );
 }
@@ -224,6 +225,7 @@ fn layered_get_reads_a_scalar_from_the_highest_holding_layer() {
         .extensions()
         .get_layered("acme", &["workspace_url"], "region")
         .unwrap()
+        .0
         .unwrap();
     // The repository's `region` is filtered out: only `workspace_url` is
     // declared there, so the global value reads.
@@ -242,6 +244,7 @@ fn layered_get_reads_a_repo_setting_from_the_repository_file() {
         .extensions()
         .get_layered("acme", &["workspace_url"], "workspace_url")
         .unwrap()
+        .0
         .unwrap();
     assert_eq!(value, json!("repo-wire"));
     assert_eq!(
@@ -264,6 +267,7 @@ fn layered_get_merges_objects_lowest_first_from_the_project() {
         .extensions()
         .get_layered("acme", &["workspace_url"], "obj")
         .unwrap()
+        .0
         .unwrap();
     assert_eq!(value, json!({"a": 1, "b": 2}));
     assert_eq!(
@@ -289,6 +293,7 @@ fn layered_get_reads_run_settings_first() {
         .extensions()
         .get_layered("acme", &["workspace_url"], "region")
         .unwrap()
+        .0
         .unwrap();
     assert_eq!(value, json!("run.example"));
     assert_eq!(source, Source::Run);
@@ -329,11 +334,16 @@ fn layered_get_hides_below_a_scalar_over_the_path() {
         .extensions()
         .get_layered("acme", &[], "a")
         .unwrap()
+        .0
         .unwrap();
     assert_eq!(value, json!(5));
     // Below it, the global `a.b` is hidden: no layer holds the key.
     assert_eq!(
-        config.extensions().get_layered("acme", &[], "a.b").unwrap(),
+        config
+            .extensions()
+            .get_layered("acme", &[], "a.b")
+            .unwrap()
+            .0,
         None
     );
 }
@@ -346,7 +356,8 @@ fn layered_get_reports_nothing_unset_and_fails_unparseable() {
         config
             .extensions()
             .get_layered("acme", &["workspace_url"], "missing")
-            .unwrap(),
+            .unwrap()
+            .0,
         None
     );
     assert!(
@@ -400,10 +411,52 @@ fn layered_get_ignores_a_missing_repo_key_filter() {
         .extensions()
         .get_layered("acme", &[], "region")
         .unwrap()
+        .0
         .unwrap();
     assert_eq!(value, json!("global.example"));
     assert_eq!(
         source,
         Source::Global(setup.home().join("config").join("acme.json"))
+    );
+}
+
+#[test]
+fn declared_settings_keep_a_placeholder_out_of_repo_settings() {
+    // Even a manifest listing a placeholder under `repo_settings` keeps
+    // it out: a placeholder's setting is never a repository key, so the
+    // write gate refuses it there and the read filter drops it.
+    let root = fakes::TempDir::new("fiber-extension-set");
+    let dir = root.path().join("acme");
+    fixture(&dir);
+    fs::write(
+        dir.join("extension.json"),
+        json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+               "repo_settings": ["workspace_url", "region"]})
+        .to_string(),
+    )
+    .unwrap();
+    let declared = declared_settings_in(&dir).unwrap();
+    assert_eq!(declared.repo_settings, vec!["workspace_url".to_owned()]);
+    assert!(declared.placeholders.contains("region"));
+}
+
+#[test]
+fn layered_get_returns_the_notice_for_an_ignored_repository_key() {
+    // The repository holds `region`, which no filter lists: the merged
+    // value ignores it with a notice, and the layered read returns that
+    // notice beside the global value.
+    let setup = Layered::new();
+    let config = setup.load(Vec::new());
+    let (found, notices) = config
+        .extensions()
+        .get_layered("acme", &["workspace_url"], "region")
+        .unwrap();
+    let (value, _) = found.unwrap();
+    assert_eq!(value, json!("global.example"));
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.message.contains("region")),
+        "the ignored repository key gets a notice: {notices:?}"
     );
 }

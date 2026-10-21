@@ -192,27 +192,31 @@ pub fn settings_key(key: &str) -> Option<(String, Vec<String>)> {
     }
 }
 
+/// The layered read of one settings key: the value with its source when
+/// some layer holds it, beside the repository notices the read ignored.
+type LayeredGet = (Option<(Value, Source)>, Vec<Notice>);
+
 impl ExtensionSettings {
-    /// The effective value of `key` in `extension`'s settings and the
-    /// layer it came from: `-c` run settings, then the project file, then
-    /// the repository file, then the global file
-    /// (`docs/configuration.md`, "Extension settings"). The repository's
-    /// file contributes only the keys `repo_settings` lists, as
-    /// [`Self::merged`] filters it. A scalar reads whole from the highest
-    /// layer holding it; objects merge key by key, lowest first, with the
-    /// highest contributing layer as source, as `Config::get_segments`
-    /// merges them. Corrupt JSON and non-object files are an error.
-    /// `None` when no layer holds the key.
+    /// The effective value of `key` in `extension`'s settings, the layer
+    /// it came from, and the repository notices the read ignored:
+    /// `-c` run settings, then the project file, then the repository
+    /// file, then the global file (`docs/configuration.md`, "Extension
+    /// settings"). The value reads through [`Self::merged`], so a higher
+    /// scalar over a lower object hides it there already; only the source
+    /// walks the layers highest-first. Corrupt JSON and non-object files
+    /// are an error. `None` when no layer holds the key.
     pub fn get_layered(
         &self,
         extension: &str,
         repo_settings: &[&str],
         key: &str,
-    ) -> Result<Option<(Value, Source)>, ConfigError> {
+    ) -> Result<LayeredGet, ConfigError> {
         let key = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+        let (merged, notices) = self.merged(extension, repo_settings)?;
+        let Some(value) = path::get(&merged, &key).cloned() else {
+            return Ok((None, notices));
+        };
         let extension = &full_name(extension);
-        // Lowest first, so the object merge below lays each layer over
-        // the ones beneath it.
         let global_file = write::settings_file(&self.home, extension);
         let repository_file = write::settings_file(&self.workspace.join(".fiber"), extension);
         let project_file = write::settings_file(
@@ -237,40 +241,15 @@ impl ExtensionSettings {
             layers.push((Source::Run, Some(run.clone())));
         }
         // Highest first: the first layer holding the key names the
-        // source. A higher layer holding a scalar over the key's path
-        // hides the layers below it, as `Config::fast_get` hides them.
-        let mut hiding = false;
+        // source, as `Config::get_segments` names it.
         for (source, subtree) in layers.iter().rev() {
             if let Some(subtree) = subtree
-                && let Some(found) = path::get(subtree, &key)
+                && path::get(subtree, &key).is_some()
             {
-                if hiding {
-                    return Ok(None);
-                }
-                if found.is_object() {
-                    let mut merged = Value::Object(Map::new());
-                    for (_, lower) in layers.iter() {
-                        if let Some(lower) = lower
-                            && let Some(value) = path::get(lower, &key)
-                        {
-                            path::merge(&mut merged, value);
-                        }
-                    }
-                    return Ok(Some((merged, source.clone())));
-                }
-                return Ok(Some((found.clone(), source.clone())));
-            }
-            if let Some(subtree) = subtree
-                && (1..key.len()).any(|len| {
-                    key.get(..len).is_some_and(|prefix| {
-                        path::get(subtree, prefix).is_some_and(|at| !at.is_object())
-                    })
-                })
-            {
-                hiding = true;
+                return Ok((Some((value, source.clone())), notices));
             }
         }
-        Ok(None)
+        Ok((None, notices))
     }
 }
 
