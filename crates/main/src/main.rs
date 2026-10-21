@@ -681,6 +681,12 @@ fn write_state_at_exit(
     Ok(())
 }
 
+/// The process exit after the session-end drain: the shutdown code when
+/// a signal stopped the drain (Ruling 19), else the `fiber_exited` code.
+fn drain_exit_code(exited: i32, cancel: &Arc<r#loop::TurnCancel>) -> i32 {
+    cancel.shutdown_code().unwrap_or(exited)
+}
+
 /// Runs one turn of the session `session` writes to `log`, once its log,
 /// model and prompt are known, shared by new and resumed sessions: sends
 /// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
@@ -780,7 +786,10 @@ fn run_turn(
             // The process's exit sample, after its successful exit line:
             // whatever the exit code, a failed read writes nothing.
             diag.peak_memory();
-            exited.code
+            // A signal during the drain wins over the pre-signal line
+            // (Ruling 19): `fiber_exited` already holds the pre-signal
+            // code, but the process exits with the signal code.
+            drain_exit_code(exited.code, &cancel)
         }
         Err(_) => 1,
     }

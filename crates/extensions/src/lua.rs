@@ -58,7 +58,6 @@ pub(super) const PRELUDE: &str = r#"
 local create, load_module, rethrow_panic, loading = ...
 local commands, providers, hooks, watchers, problems, violations = {}, {}, {}, {}, {}, {}
 local registered_files = {}
-local registered_files = {}
 
 local function refuse_registration(message, level)
   local file = loading()

@@ -2646,11 +2646,11 @@ fn a_late_watcher_receives_only_events_after_its_registration() {
         "both watchers receive only B"
     );
     // The first session never sees B: its stream ended at A, and the two
-    // sessions share nothing.
+    // sessions share nothing. The offer is synchronous and nothing was
+    // ever queued on the first session after A, so no worker can deliver
+    // later: the channel stays empty without waiting.
     assert!(
-        Deadline::after(Duration::from_secs(1))
-            .recv(&first_statuses)
-            .is_err(),
+        first_statuses.try_recv().is_err(),
         "nothing further runs on the first session"
     );
 }
@@ -2751,12 +2751,10 @@ fn an_erroring_watcher_emits_one_notice_and_the_stream_continues() {
         "second-ran"
     );
     // Exactly one notice: the error ends the one delivery, not the stream.
-    assert!(
-        Deadline::after(Duration::from_secs(1))
-            .recv(&notices)
-            .is_err(),
-        "no second notice follows"
-    );
+    // Both deliveries already ended (the notice proves the first, the
+    // status proves the second), so nothing more can arrive: the channel
+    // stays empty without waiting.
+    assert!(notices.try_recv().is_err(), "no second notice follows");
 }
 
 /// A watcher parked past its timeout yields the timeout notice naming the
@@ -3113,4 +3111,32 @@ fn a_signal_during_the_drain_stops_it_at_once() {
     );
     assert!(errors[0].message.contains("pre-signal"), "{errors:?}");
     assert!(!later.exists(), "no later watcher starts after the stop");
+}
+
+/// A watch refusal surfaces as the registration notice naming the
+/// extension (Ruling 6): a `fiber.watch` without a `timeout` registers
+/// nothing and leaves one notice. Without the surfacing, the session
+/// loads silent.
+#[test]
+fn a_watch_refusal_surfaces_as_the_registration_notice() {
+    let home = Home::new();
+    home.install(
+        "nowatch",
+        Some("fiber.watch({\"notice\"}, { run = function(ev) end })\n"),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.watchers.is_empty(), "nothing registers");
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices[0].extension.as_deref(),
+        Some("fiber.test/nowatch"),
+        "{notices:?}"
+    );
+    assert!(
+        notices[0].message.contains("`watcher:0`")
+            && notices[0].message.contains("missing `timeout`"),
+        "{notices:?}"
+    );
 }

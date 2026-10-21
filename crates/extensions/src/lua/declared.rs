@@ -209,3 +209,21 @@ fn is_known_kind(kind: &str) -> bool {
     };
     !matches!(Event::from_envelope(&line), Ok(None))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_watch_problem;
+
+    /// The conjunction boundary: each half alone is not a watch problem.
+    /// Flipping `&&` to `||` would admit either half alone.
+    #[test]
+    fn is_watch_problem_needs_both_halves() {
+        assert!(is_watch_problem(
+            "`watcher:0` watcher not registered: missing `timeout`"
+        ));
+        assert!(!is_watch_problem("`watcher:0` timed out after 300 ms"));
+        assert!(!is_watch_problem(
+            "`hook` watcher not registered: missing `timeout`"
+        ));
+    }
+}

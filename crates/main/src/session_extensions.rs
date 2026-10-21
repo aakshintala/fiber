@@ -269,13 +269,11 @@ mod tests {
         let _subscription = subscribe(&log, &extensions, &cancel);
         log.append(&noticed("skipped"), None, None).unwrap();
         // The offer closure runs synchronously inside `append`: it queued
-        // nothing, so no worker can run it later. The wait proves no
-        // status arrives, while the positive control above proves the rig
-        // delivers in milliseconds when no shutdown is set.
+        // nothing, so no worker can run it later and the channel stays
+        // empty without waiting, while the positive control above proves
+        // the rig delivers in milliseconds when no shutdown is set.
         assert!(
-            Deadline::after(Duration::from_secs(1))
-                .recv(&status_rx)
-                .is_err(),
+            status_rx.try_recv().is_err(),
             "no watcher runs while a shutdown is set"
         );
     }

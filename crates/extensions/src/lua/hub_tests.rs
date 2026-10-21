@@ -371,3 +371,32 @@ fn stop_for_shutdown_leaves_a_stopped_hub_unchanged() {
         "the queued call stays uncancelled"
     );
 }
+
+/// `finish_watcher` clears the abandon watch only for its own id: a finish
+/// with another id leaves the watch, its own clears it. Flipping `==` to
+/// `!=` would clear on the other id and keep on its own.
+#[test]
+fn finish_watcher_clears_the_abandon_watch_only_for_its_own_id() {
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    {
+        let mut shared = hub.lock();
+        shared.abandon = Some(AbandonWatch {
+            id: 7,
+            target: Target::Watcher { index: 0 },
+            deadline: None,
+        });
+    }
+    hub.finish_watcher("ext", 8, 0, Ok(serde_json::Value::Null));
+    assert!(
+        hub.lock()
+            .abandon
+            .as_ref()
+            .is_some_and(|watch| watch.id == 7),
+        "another watcher's finish leaves the watch"
+    );
+    hub.finish_watcher("ext", 7, 0, Ok(serde_json::Value::Null));
+    assert!(
+        hub.lock().abandon.is_none(),
+        "its own finish clears the watch"
+    );
+}

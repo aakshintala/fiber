@@ -574,18 +574,29 @@ impl SessionExtensions {
             // same registration.
             if let Some(lua) = &s.extension
                 && let Ok(declared) = lua.watchers()
-                && !declared.watchers.is_empty()
             {
-                for (index, watcher) in declared.watchers.iter().enumerate() {
-                    session.watchers.push(WatcherRegistration {
-                        name: s.name.clone(),
-                        extension: Arc::clone(lua),
-                        index,
-                        kinds: watcher.kinds.clone(),
-                    });
+                // A watch refusal surfaces as the registration notice,
+                // as hooks do (Ruling 6): even when no watcher survived,
+                // the problems still name the extension.
+                for problem in &declared.problems {
+                    session.notices.push(notice(
+                        ErrorCode::ExtensionFailed,
+                        problem.clone(),
+                        Some(&s.name),
+                    ));
                 }
-                if !session.lua.iter().any(|held| Arc::ptr_eq(held, lua)) {
-                    session.lua.push(Arc::clone(lua));
+                if !declared.watchers.is_empty() {
+                    for (index, watcher) in declared.watchers.iter().enumerate() {
+                        session.watchers.push(WatcherRegistration {
+                            name: s.name.clone(),
+                            extension: Arc::clone(lua),
+                            index,
+                            kinds: watcher.kinds.clone(),
+                        });
+                    }
+                    if !session.lua.iter().any(|held| Arc::ptr_eq(held, lua)) {
+                        session.lua.push(Arc::clone(lua));
+                    }
                 }
             }
             if let Some(opening) = s.manifest.opening {
