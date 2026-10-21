@@ -18,6 +18,7 @@ use std::thread;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
+use support::repo_provider::declare_repo_provider;
 use support::{
     Deadline, KillGroup, Output, Setup, group_alive, hello, is_status, run_to_exit, spawn_watched,
 };
@@ -288,4 +289,50 @@ fn a_repository_role_without_a_credential_raises_no_notice() {
         "stdout: {:?}, stderr: {:?}",
         get.stdout, get.stderr
     );
+}
+
+#[test]
+fn set_model_checks_against_an_approved_repository_provider() {
+    let setup = Setup::new_with_fc_root();
+    // Inits git in the workspace, so it reads as a project repository.
+    fakes::git::git(&setup.workspace(), &["init", "--quiet"]);
+    declare_repo_provider(
+        &setup.workspace(),
+        "fiber.test/acme",
+        "acme",
+        &json!([{"id": "big", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]),
+    );
+    let approved = setup.run_in_workspace(&["approve", "--yes"]);
+    assert_eq!(
+        approved.code,
+        Some(0),
+        "stdout: {:?}, stderr: {:?}",
+        approved.stdout,
+        approved.stderr
+    );
+    // A repository-only model sets, as an installed one does.
+    let set = setup.run_in_workspace(&["config", "set", "model", "acme/big"]);
+    assert_eq!(
+        set.code,
+        Some(0),
+        "stdout: {:?}, stderr: {:?}",
+        set.stdout,
+        set.stderr
+    );
+    let written: Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(written, json!({"model": "acme/big"}));
+    // A typo is rejected with the repository reference closest: the check
+    // runs against the merged providers.
+    let bad = setup.run_in_workspace(&["config", "set", "model", "acme/typo"]);
+    assert_eq!(
+        bad.code,
+        Some(1),
+        "stdout: {:?}, stderr: {:?}",
+        bad.stdout,
+        bad.stderr
+    );
+    assert!(bad.stderr.contains("acme/big"), "stderr: {}", bad.stderr);
 }
