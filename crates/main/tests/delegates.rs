@@ -2257,15 +2257,39 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
     let delegate_lines = for_session(&lines, &delegate);
     assert_eq!(answered(&lines, "c_steer")["kind"], "command_accepted");
     assert_eq!(answered(&lines, "c_dsub")["kind"], "command_accepted");
-    // After the first reply completes, the steered step follows: the queue
-    // holding the steer, the next step, the applied steer, the emptied
-    // queue, and the second reply's start. Other lines (the probe's own
-    // answer, statuses) travel the same stream and are not pinned here;
-    // the durable list below is the complete ordered one.
+    // After the first reply completes, the steered step follows: the next
+    // step, the applied steer, the emptied queue, and the second reply's
+    // start. The admission queue came earlier, while the first reply still
+    // streamed: the reader queues, emits and answers at once, so a
+    // non-empty queue holding the steer precedes the first completed
+    // message. Other lines (the probe's own answer, statuses) travel the
+    // same stream and are not pinned here; the durable list below is the
+    // complete ordered one.
     let first_done = delegate_lines
         .iter()
         .position(|line| line["kind"] == "assistant_message_completed")
         .expect("the delegate's first completed message");
+    let admission = delegate_lines[..first_done]
+        .iter()
+        .filter(|line| {
+            line["kind"] == "steering_queue"
+                && line["payload"]["messages"]
+                    .as_array()
+                    .is_some_and(|messages| !messages.is_empty())
+        })
+        .collect::<Vec<_>>();
+    assert!(!admission.is_empty(), "the at-once admission queue");
+    let held = admission.last().unwrap()["payload"]["messages"][0].clone();
+    assert_eq!(
+        held["command_id"], "c_steer",
+        "the admission queue holds the steer"
+    );
+    assert!(
+        serde_json::to_string(&held["content"])
+            .unwrap()
+            .contains(MARK),
+        "the admission queue holds the steered text: {held}"
+    );
     let steered: Vec<&Value> = delegate_lines[first_done + 1..]
         .iter()
         .filter(|line| {
@@ -2287,24 +2311,18 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
     assert_eq!(
         steered_kinds,
         [
-            "steering_queue",
             "step_started",
-            "steering_applied",
             "steering_queue",
+            "steering_applied",
             "assistant_message_started"
         ],
         "{steered_kinds:?}"
     );
     let after = steered;
+    // The drained queue is empty: the admission queue left the window
+    // with the at-once emit, so the emptied one precedes the apply.
     assert!(
-        serde_json::to_string(&after[0]["payload"]["messages"])
-            .unwrap()
-            .contains(MARK),
-        "{}",
-        after[0]
-    );
-    assert!(
-        after[3]["payload"]["messages"]
+        after[1]["payload"]["messages"]
             .as_array()
             .unwrap()
             .is_empty()
