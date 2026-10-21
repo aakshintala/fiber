@@ -236,6 +236,9 @@ pub(crate) struct App {
     history: history::History,
     /// "Copied" shows, from a click on `copy` to the next key or click.
     copied: bool,
+    /// A `/copy` waiting for the opening pass to end (`docs/tui.md`,
+    /// "Selection and copy").
+    copy_owed: bool,
     /// A whole-turn copy waiting on dropped pages (`docs/tui.md`,
     /// "History and paging").
     pending_turn: Option<crate::turn_text::PendingTurn>,
@@ -326,6 +329,7 @@ impl App {
             completion: completion::Completion::default(),
             history: history::History::default(),
             copied: false,
+            copy_owed: false,
             pending_turn: None,
             focus: None,
             stops: Vec::new(),

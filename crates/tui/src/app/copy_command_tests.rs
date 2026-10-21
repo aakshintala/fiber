@@ -100,3 +100,67 @@ fn a_dropped_page_before_any_reply_leaves_the_reply_paged_out() {
     );
     assert_eq!(last_reply(std::iter::empty()), LastReply::NoReply);
 }
+
+#[test]
+fn copy_waits_for_the_opening_pass_and_copies_once_it_ends() {
+    let mut app = attached();
+    turn_starts(&mut app);
+    message(&mut app, "a_1", &["the reply"]);
+    app.reopen_pending(contract::SessionId(
+        super::commands_testkit::SESSION.to_owned(),
+    ));
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    assert_eq!(app.notice(), None);
+    assert!(!app.copied());
+    // The frames during the pass copy nothing.
+    assert_eq!(app.take_owed_copy(), None);
+    app.passes.clear();
+    assert_eq!(app.take_owed_copy(), Some("the reply".to_owned()));
+    assert!(app.copied());
+    // It copies once.
+    assert_eq!(app.take_owed_copy(), None);
+}
+
+#[test]
+fn leaving_the_session_drops_a_copy_waiting_on_its_pass() {
+    let mut app = attached();
+    turn_starts(&mut app);
+    message(&mut app, "a_1", &["the reply"]);
+    app.reopen_pending(contract::SessionId(
+        super::commands_testkit::SESSION.to_owned(),
+    ));
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    assert_eq!(enter(&mut app, "/home"), Effect::None);
+    app.passes.clear();
+    assert_eq!(app.take_owed_copy(), None);
+    assert!(!app.copied());
+    assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn a_delegates_transcript_copies_its_own_reply_never_the_parents() {
+    use crate::app::items::testkit::{DELEGATE_A, home, opened, opened_item, start_delegate};
+    let mut app = home();
+    opened(&mut app);
+    turn_starts(&mut app);
+    message(&mut app, "a_1", &["the parent's reply"]);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    assert_eq!(app.notice(), Some("No reply to copy yet."));
+    assert!(!app.copied());
+}
+
+#[test]
+fn a_view_with_no_transcript_has_no_reply_to_copy() {
+    use crate::app::items::testkit::{home, opened, opened_item, start_job};
+    let mut app = home();
+    opened(&mut app);
+    turn_starts(&mut app);
+    message(&mut app, "a_1", &["the parent's reply"]);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    assert_eq!(app.notice(), Some("No reply to copy in this view."));
+    assert!(!app.copied());
+}

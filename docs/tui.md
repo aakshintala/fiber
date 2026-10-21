@@ -1414,7 +1414,11 @@ text, as the model wrote them, Markdown included, joined by a blank line.
 With no reply yet, a notice says "No reply to copy yet." When the window
 holds no reply newer than a page it has dropped ("History and paging"), the
 newest reply may be on that page, so nothing is copied and a notice says "The
-last reply is paged out; jump to the end, then /copy again."
+last reply is paged out; jump to the end, then /copy again." While an opening
+pass folds a session's history ("History and paging"), the conversation on
+screen stays as it was, so `/copy` waits and copies in the frame after the
+pass ends. A job's view, and a delegate's view with no transcript, hold no
+reply: there `/copy` says "No reply to copy in this view."
 
 Shift-drag stays the terminal's native selection. A selection's highlight
 counts as open, so Esc clears it before it can interrupt the turn.

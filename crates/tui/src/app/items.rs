@@ -183,6 +183,17 @@ impl App {
         self.items.open.is_some()
     }
 
+    /// Whether the open item's view shows a transcript: a Fiber
+    /// delegate's, swapped onto the screen. A job's view and another
+    /// harness's delegate show none, and the screen behind is the
+    /// parent's.
+    pub(super) fn item_transcript(&self) -> bool {
+        self.items
+            .open
+            .as_ref()
+            .is_some_and(|open| open.stashed.is_some())
+    }
+
     /// The open item's job, if any.
     fn open_job(&self) -> Option<JobId> {
         self.items.open.as_ref().map(|open| open.job_id.clone())

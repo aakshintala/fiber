@@ -628,6 +628,7 @@ impl App {
         self.completion.slash_rows = slash::rows(&[]);
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        self.copy_owed = false;
         true
     }
 

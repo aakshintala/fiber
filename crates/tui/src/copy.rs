@@ -95,25 +95,55 @@ fn reply_action(entry: &Entry) -> Option<&str> {
 impl App {
     /// `/copy`: the newest reply in the conversation on screen goes out
     /// through the copy path and "Copied" shows; otherwise a notice says
-    /// why nothing was copied.
+    /// why nothing was copied. While an opening pass runs, the screen
+    /// stays as it was, so the copy waits for the frame after the pass
+    /// ends ([`Self::take_owed_copy`]).
     pub(super) fn copy_last_reply(&mut self) -> Effect {
         self.draft.clear();
+        // A job's view, or a delegate's with no transcript, leaves the
+        // parent's conversation behind it, hidden.
+        if self.item_open() && !self.item_transcript() {
+            self.notices
+                .push("copy", "No reply to copy in this view.".to_owned());
+            return Effect::None;
+        }
+        if self.pass_open() {
+            self.copy_owed = true;
+            return Effect::None;
+        }
+        self.copy_now().map_or(Effect::None, Effect::Copy)
+    }
+
+    /// A `/copy` that waited for an opening pass, once no pass runs:
+    /// the text the frame copies. `None` while nothing waits, while the
+    /// pass goes on, or when the notice says why nothing was copied.
+    pub(crate) fn take_owed_copy(&mut self) -> Option<String> {
+        if !self.copy_owed || self.pass_open() {
+            return None;
+        }
+        self.copy_owed = false;
+        self.copy_now()
+    }
+
+    /// The newest reply on screen, with "Copied" showing; `None` after
+    /// the notice that says why there is none.
+    fn copy_now(&mut self) -> Option<String> {
         match last_reply(self.screen.pages().newest_first()) {
             LastReply::Text(text) => {
                 self.copied = true;
-                Effect::Copy(text)
+                Some(text)
             }
             LastReply::PagedOut => {
                 self.notices.push(
                     "copy",
                     "The last reply is paged out; jump to the end, then /copy again.".to_owned(),
                 );
-                Effect::None
+                None
             }
             LastReply::NoReply => {
                 self.notices
                     .push("copy", "No reply to copy yet.".to_owned());
-                Effect::None
+                None
             }
         }
     }
