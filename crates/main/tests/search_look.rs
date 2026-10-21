@@ -1032,6 +1032,46 @@ fn the_changed_files_rows_match_the_doc() {
 /// (`crates/tui/src/view/panel.rs`, `session_rows`). The `cost` label
 /// draws only with the row: `cost on subscription` draws without it, so
 /// its `cost` prefix does not count.
+/// A layout shift drops inputs sent at coordinates read before it: the
+/// frame hit-tests against its current targets, so a click at stale
+/// coordinates lands elsewhere and nothing the test waits for happens.
+/// The resize forces the losing interleaving every run (no real-clock
+/// hold): it stands in for a session row landing late, which moves the
+/// cards the same way. Red on main: the shifted grid no longer names
+/// the Jobs card at the pre-shift coordinates the click uses.
+#[test]
+fn stale_panel_coords_miss_after_a_shift() {
+    let (setup, _release, _guard, _command) = running_setup();
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"go\r");
+    let grid = run.wait_screen("the parent reply and running panel cards", |grid| {
+        grid.contents.contains(REPLY)
+            && panel_item_at(grid, "review the diff").is_some()
+            && panel_item_at(grid, "Jobs").is_some()
+            && session_settled(grid)
+    });
+    let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
+    let size = grid.size();
+    // The forced shift: narrowing the terminal moves the panel's cells
+    // left, as a session row landing late moves the cards down.
+    run.resize(150, 48);
+    let grid = run.wait_screen("the shifted panel", |grid| {
+        // The move itself, not just the new size: the first frames at
+        // the new size still show the old layout until the reflow lands.
+        grid.size() != size && panel_item_at(grid, "Jobs").is_some_and(|at| at != (x, y))
+    });
+    // The dropped input: sent at the pre-shift coordinates.
+    click(&mut run, x, y);
+    // The drop, named without a deadline: the grid the click ran
+    // against already proves its coordinates name another cell.
+    assert_eq!(
+        panel_item_at(&grid, "Jobs"),
+        Some((x, y)),
+        "the click at ({x}, {y}) missed the Jobs card after the shift"
+    );
+}
+
 fn session_settled(grid: &Grid) -> bool {
     // The panel starts at column 100, as in `panel_item_at`: a `cost`
     // elsewhere (a conversation echo, another card) does not settle us.
