@@ -361,13 +361,29 @@ fn on_message_returning_true_stops_the_read() {
 
 #[test]
 fn a_read_error_is_a_dropped_connection() {
-    struct Broken;
+    // The stream goes on to serve a whole event after the error, so a read
+    // that retried the error rather than failing would read it.
+    struct Broken {
+        bytes: Vec<u8>,
+        failed: bool,
+    }
     impl Read for Broken {
-        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::other("reset"))
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.failed {
+                self.failed = true;
+                return Err(std::io::Error::other("reset"));
+            }
+            let n = self.bytes.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.bytes[..n]);
+            self.bytes.drain(..n);
+            Ok(n)
         }
     }
-    let error = messages(Broken).unwrap_err();
+    let error = messages(Broken {
+        bytes: event("{}"),
+        failed: false,
+    })
+    .unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConnectionFailed);
 }
 
