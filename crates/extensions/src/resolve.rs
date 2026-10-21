@@ -24,6 +24,20 @@ pub fn nightly_parts(text: &str) -> Result<([u64; 3], String), Error> {
     Ok((version(base).map_err(|_| bad())?, date.to_owned()))
 }
 
+/// Whether `have` meets the `need` minimum, nightly-aware: a version
+/// parses as a stable triple, a nightly tag as its base and date; a
+/// nightly sorts below the stable release on its base, and two nightlies
+/// on one base order by date. Anything else is [`Error::BadVersion`].
+pub(crate) fn at_least(need: &str, have: &str) -> Result<bool, Error> {
+    fn key(text: &str) -> Result<([u64; 3], bool, String), Error> {
+        match nightly_parts(text) {
+            Ok((base, date)) => Ok((base, false, date)),
+            Err(_) => version(text).map(|base| (base, true, String::new())),
+        }
+    }
+    Ok(key(need)? <= key(have)?)
+}
+
 /// A minimum, such as `1.2`, `v1.2` or `v1.2.0`: missing numbers are 0.
 fn minimum(text: &str) -> Result<[u64; 3], Error> {
     parse(text, 1)

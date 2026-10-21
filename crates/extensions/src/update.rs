@@ -18,6 +18,18 @@ use crate::release::{
     DOCS, EXTENSIONS, Release, fetch_verified, layout, stage_docs_from, swap_docs_in,
     unpack_release_archive,
 };
+use crate::resolve::nightly_parts;
+
+/// The version compatibility checks stage against: a nightly target
+/// stands in for its base triple, anything else stages as itself, so a
+/// nightly release satisfies the same-base stable minimums its own
+/// archives state.
+fn compat(version: &str) -> String {
+    match nightly_parts(version) {
+        Ok((base, _)) => format!("{}.{}.{}", base[0], base[1], base[2]),
+        Err(_) => version.to_owned(),
+    }
+}
 
 /// The fiber repository holding the release tags.
 const FIBER_REPO: &str = "github.com/aakshintala/fiber";
@@ -117,10 +129,10 @@ pub fn stage_update<'c>(
     let extensions_dir = scratch.path().join("extensions");
     fs::create_dir(&extensions_dir).map_err(io(&extensions_dir))?;
     unpack_release_archive(&extensions_archive, &extensions_dir, EXTENSIONS)?;
-    let shorts = layout(&extensions_dir, &release.version)?;
+    let shorts = layout(&extensions_dir, &compat(&release.version))?;
     let tag = format!("v{}", release.version);
     let commit = origin.tag_commit(FIBER_REPO, &tag, clock)?;
-    let mut plan = plan_updates(home, &release.version, origin, clock)?;
+    let mut plan = plan_updates(home, &compat(&release.version), origin, clock)?;
     let docs_fresh = stage_docs_from(home, &docs_archive, scratch.path())?;
     let installed = read(home)?;
     for short in &shorts {
@@ -128,7 +140,7 @@ pub fn stage_update<'c>(
         if let Some(member) = installed.installed.iter().find(|i| i.name == name) {
             plan.adopt(
                 home,
-                &release.version,
+                &compat(&release.version),
                 &Adopted {
                     installed: member,
                     version: &release.version,

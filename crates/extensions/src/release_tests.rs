@@ -560,3 +560,34 @@ fn fetch_nightly_tag_names_a_failed_list() {
     );
     assert_eq!(name, "nightly");
 }
+
+#[test]
+fn latest_stable_tag_reads_the_redirect_tag() {
+    let mut redirect = fakes::Response::status(302, "");
+    redirect
+        .headers
+        .push(("location".into(), "/releases/tag/v0.2.0".into()));
+    let server = fakes::ProviderServer::start_routed(
+        [
+            ("/releases/latest", redirect),
+            ("/releases/tag/v0.2.0", fakes::Response::status(200, "")),
+        ],
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap();
+    assert_eq!(super::latest_stable_tag(&server.url()).unwrap(), "v0.2.0");
+}
+
+#[test]
+fn latest_stable_tag_names_a_failed_redirect() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(500, "nope")]).unwrap();
+    let err = super::latest_stable_tag(&server.url()).unwrap_err();
+    let Error::Download { name, why } = err else {
+        panic!("a failed redirect fails as its download failed: {err}");
+    };
+    assert_eq!(name, "stable");
+    assert!(
+        why.contains(&server.url()),
+        "the failure names the URL: {why}"
+    );
+}

@@ -194,7 +194,7 @@ pub(crate) fn install(
 /// installed hub takes over at once. Every failure proceeds silently: a
 /// hub that vanished between the probe and the send needs nothing, and
 /// the `run/` lock handoff covers a live hub.
-fn stop_running_hub(home: &Path, clock: &dyn Clock) {
+pub(crate) fn stop_running_hub(home: &Path, clock: &dyn Clock) {
     let mut never = || Err(io::Error::new(io::ErrorKind::NotFound, "no hub runs"));
     let Ok((stream, _)) =
         doors::hub::connect_within(home, &mut never, clock, doors::hub::CONNECT_DEADLINE)

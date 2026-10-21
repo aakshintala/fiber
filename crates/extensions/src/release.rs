@@ -106,6 +106,31 @@ pub fn install_docs_if_missing(
     swap_docs_in(home, &fresh)
 }
 
+/// The newest stable release tag: the tag `releases/latest` redirects
+/// to. A fetch failure is [`Error::Download`] naming the URL.
+pub fn latest_stable_tag(web_base: &str) -> Result<String, Error> {
+    use ureq::ResponseExt as _;
+    let url = format!("{}/releases/latest", web_base.trim_end_matches('/'));
+    let fail = |why: String| Error::Download {
+        name: "stable".into(),
+        why: format!("{url}: {why}"),
+    };
+    let agent = net::agent(
+        net::config().proxy(ureq::Proxy::try_from_env()).build(),
+        std::sync::Arc::new(()),
+        ureq::unversioned::resolver::DefaultResolver::default(),
+        net::LIMITS,
+    );
+    let response = agent.get(&url).call().map_err(|e| fail(e.to_string()))?;
+    let tag = response
+        .get_uri()
+        .path()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    Ok(tag.to_owned())
+}
+
 /// The newest nightly release tag the release list names: the maximum
 /// over (base version, date) across entries whose tag matches
 /// `vMAJOR.MINOR.PATCH-nightly.YYYYMMDD` with `prerelease` true and

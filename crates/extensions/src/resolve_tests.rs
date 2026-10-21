@@ -236,3 +236,29 @@ fn version_rejects_what_is_not_three_numbers() {
     }
     assert_eq!(version("v1.2.3").unwrap(), [1, 2, 3]);
 }
+
+#[test]
+fn meets_orders_stable_and_nightly_forms() {
+    use super::at_least;
+    let cases: [(&str, &str, bool); 8] = [
+        ("0.3.0", "0.3.0", true),
+        ("0.2.0", "0.3.0", true),
+        ("0.3.0", "0.2.0", false),
+        ("0.3.0-nightly.20240101", "0.3.0", true),
+        ("0.3.0", "0.3.0-nightly.20240101", false),
+        ("0.3.0-nightly.20240101", "0.3.0-nightly.20240201", true),
+        ("0.3.0-nightly.20240201", "0.3.0-nightly.20240101", false),
+        ("0.3.0-nightly.20240101", "0.3.0-nightly.20240101", true),
+    ];
+    for (need, have, want) in cases {
+        assert_eq!(at_least(need, have).unwrap(), want, "{need} in {have}");
+    }
+    assert!(matches!(
+        at_least("bogus", "0.3.0"),
+        Err(Error::BadVersion { .. })
+    ));
+    assert!(matches!(
+        at_least("0.3.0", "bogus"),
+        Err(Error::BadVersion { .. })
+    ));
+}

@@ -107,6 +107,10 @@ mod sessions_list;
 )]
 mod sessions_search;
 mod table;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod update;
 
 #[cfg(test)]

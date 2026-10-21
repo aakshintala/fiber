@@ -302,12 +302,22 @@ fn run() -> i32 {
             };
             let stdin = io::stdin();
             let stderr = io::stderr();
+            // A test seam, not a user control: the binary update tests
+            // point both roots at their fixture server. Production runs
+            // leave both unset.
+            let mut bases = ::cli::ReleaseBases::production();
+            if let Ok(web) = std::env::var("FIBER_UPDATE_WEB_BASE") {
+                bases.web = web;
+            }
+            if let Ok(api) = std::env::var("FIBER_UPDATE_API_BASE") {
+                bases.api = api;
+            }
             ::cli::update(
                 &home,
                 env!("CARGO_PKG_VERSION"),
                 env!("FIBER_TARGET"),
                 channel,
-                &::cli::ReleaseBases::production(),
+                &bases,
                 clock.as_ref(),
                 ::cli::Io {
                     terminal: stdin.is_terminal(),

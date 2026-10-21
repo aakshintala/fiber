@@ -14,7 +14,7 @@ use extensions::{Origin, Provenance, Request, approved_extension, approved_exten
 
 use crate::{CliError, finish, finish_code, write_line};
 
-mod approve;
+pub(crate) mod approve;
 
 /// The extensions installed and the outcome text for the model picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -504,7 +504,7 @@ fn plan_request<'c>(
     extensions::plan(home, &request, fiber_version, origin, clock).map_err(CliError::from)
 }
 
-fn summaries(plan: &extensions::Plan<'_>) -> Vec<approve::InstallSummary> {
+pub(crate) fn summaries(plan: &extensions::Plan<'_>) -> Vec<approve::InstallSummary> {
     plan.items()
         .map(|item| approve::InstallSummary {
             name: item.name.clone(),
