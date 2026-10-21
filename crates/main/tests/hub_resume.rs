@@ -760,7 +760,12 @@ fn a_resume_of_a_session_whose_workspace_is_gone_is_io_failed_naming_it() {
     let (code, lines) = setup.run(&["ask", "one"]);
     assert_eq!(code, Some(0));
     let id = lines[0]["session_id"].as_str().unwrap().to_owned();
-    let workspace = setup.workspace_text();
+    // The live session records its getcwd, which is canonical: on macOS
+    // `/var` is a symlink to `/private/var`, so the text form mismatches.
+    let workspace = fs::canonicalize(setup.workspace())
+        .unwrap()
+        .display()
+        .to_string();
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
     // The session exited; its plain workspace cannot be made again. The
