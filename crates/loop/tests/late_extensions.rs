@@ -693,6 +693,7 @@ fn start_rewound(
             },
         },
         r#loop::Rewound {
+            factory: None,
             from: contract::shapes::Point {
                 session_id: SessionId("s_test".into()),
                 seq: from,

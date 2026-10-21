@@ -426,10 +426,11 @@ fn branch_exists(setup: &Setup, id: &str) -> bool {
         .success()
 }
 
-/// A session `id` whose workspace is `workspace`: its log and an unheld
-/// lock file, like `session` but working anywhere.
-fn wt_session(setup: &Setup, id: &str, workspace: &Path) -> PathBuf {
-    let dir = project(setup).join("sessions").join(id);
+/// A session `id` whose workspace is `workspace` in the project at
+/// `project_dir`: its log and an unheld lock file, like `session` but
+/// working anywhere.
+fn wt_session(id: &str, workspace: &Path, project_dir: &Path) -> PathBuf {
+    let dir = project_dir.join("sessions").join(id);
     fs::create_dir_all(dir.join("artifacts")).unwrap();
     let first = json!({"kind": "session_started", "seq": 0, "payload": {"workspace": workspace}});
     let last = json!({"kind": "x", "ts": 0});
@@ -551,7 +552,7 @@ fn a_running_session_keeps_its_worktree_under_force() {
     let setup = setup();
     repo(&setup);
     let wt = kept(&setup, "s_00000000000000e1");
-    let user = wt_session(&setup, "s_00000000000000a1", &wt);
+    let user = wt_session("s_00000000000000a1", &wt, &project(&setup));
     let held = match log::try_hold(&user) {
         Ok(log::Hold::Held(held)) => held,
         Ok(log::Hold::Busy) | Err(_) => panic!("the user's lock is held"),
@@ -802,5 +803,79 @@ fn prune_keeps_a_held_pinned_copy() {
     assert!(
         !setup.home().join("pinned").join(&hash_a).exists(),
         "removed"
+    );
+}
+
+#[test]
+fn prune_under_a_git_redirect_judges_the_workspace_repository() {
+    let setup = setup();
+    repo(&setup);
+    let old = session(&setup, ROOT, None, 0);
+    // A decoy repository elsewhere, with one old exited session in its own
+    // project and one approved copy.
+    let decoy = setup.root.path().join("decoy");
+    fs::create_dir_all(&decoy).unwrap();
+    git_in_dir(setup.deadline, &decoy, &["init", "--quiet"]);
+    fs::write(decoy.join("file.txt"), "x").unwrap();
+    git_in_dir(setup.deadline, &decoy, &["add", "."]);
+    git_in_dir(
+        setup.deadline,
+        &decoy,
+        &["commit", "--quiet", "-m", "first"],
+    );
+    let decoy_canon = fs::canonicalize(&decoy).unwrap();
+    let decoy_project = log::sessions_dir(&setup.home(), &doors::project(&decoy_canon))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let decoy_session = wt_session("s_00000000000000e5", &decoy_canon, &decoy_project);
+    declare_hook(&decoy_canon, "decoy\n");
+    git_in_dir(setup.deadline, &decoy_canon, &["add", "."]);
+    git_in_dir(
+        setup.deadline,
+        &decoy_canon,
+        &["commit", "--quiet", "-m", "hook"],
+    );
+    let approved = approve_in(&setup, &decoy_canon);
+    assert!(
+        approved.status.success(),
+        "fiber approve: {}",
+        text(&approved.stderr)
+    );
+    let decoy_copy = copies(&setup)
+        .into_iter()
+        .find(|name| {
+            fs::read_to_string(
+                setup
+                    .home()
+                    .join("pinned")
+                    .join(name)
+                    .join("scripts/fmt.sh"),
+            )
+            .unwrap()
+                == "decoy\n"
+        })
+        .expect("one decoy copy");
+    // Prune with the git environment redirected at the decoy repository.
+    let mut command = setup.fiber(&["sessions", "prune", "--older-than", "30d", "--yes"]);
+    command.current_dir(setup.workspace());
+    command.env("GIT_DIR", decoy_canon.join(".git"));
+    command.env("GIT_WORK_TREE", &decoy_canon);
+    let output = run_to_exit(setup.deadline, "fiber sessions prune", command);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(!old.exists(), "the workspace session is gone");
+    assert!(
+        decoy_session.join("events.jsonl").is_file(),
+        "the decoy session stays"
+    );
+    assert!(
+        setup.home().join("pinned").join(&decoy_copy).is_dir(),
+        "the decoy copy stays"
+    );
+    assert_eq!(
+        pinned_lines(&out),
+        ["pinned  skipped: GIT_DIR is set, so git may read another repository"],
+        "{out}"
     );
 }

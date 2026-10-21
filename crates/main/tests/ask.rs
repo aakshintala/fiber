@@ -841,6 +841,7 @@ MCP servers:
 Configuration:
   config get <key>                              Print the effective value and the layer it came from
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
+  import <claude-code | codex>                   Copy another harness's configuration into Fiber home, once
 
 The hub:
   hub add [--default] <name> <address>  Add a hub to this client's list
@@ -1002,13 +1003,13 @@ fn version_prints_the_package_version() {
     let line = match option_env!("FIBER_COMMIT") {
         Some(commit) => {
             assert!(
-                commit.len() >= 4
+                commit.len() == 40
                     && commit
                         .bytes()
                         .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
                 "{commit}"
             );
-            format!("fiber 0.0.0 ({commit})\n")
+            format!("fiber 0.0.0 ({})\n", &commit[..7])
         }
         None => "fiber 0.0.0\n".to_owned(),
     };
@@ -2624,6 +2625,7 @@ fn two_runs_send_byte_identical_preambles() {
         names,
         [
             "ask_user",
+            "delegate_fork",
             "delegate_message",
             "delegate_models",
             "delegate_spawn",

@@ -1,7 +1,7 @@
-//! The session's image ids: every image part is noted when its line
-//! is folded, live or on a page reload, so each path draws under one
-//! id (`docs/tui.md`, "Images"). A child of `window`, so it reads the
-//! pages' fields.
+//! The chain's image ids: every image part is noted under its segment
+//! session when its line is folded, live or on a page reload, so each
+//! `(session, path)` draws under one id (`docs/tui.md`, "Images"). A
+//! child of `window`, so it reads the pages' fields.
 
 use contract::events::{SteeringApplied, ToolCallCompleted, TurnStarted};
 use contract::{Envelope, events::InputItem};
@@ -11,9 +11,10 @@ use super::Pages;
 use crate::image;
 
 impl Pages {
-    /// Notes every image part `envelope` carries, handing each unseen
-    /// path the next id; a path already seen keeps its id, so a page
-    /// dropped and folded again draws the same id.
+    /// Notes every image part `envelope` carries under its segment
+    /// session, handing each unseen `(session, path)` the next id; a
+    /// pair already seen keeps its id, so a page dropped and folded
+    /// again draws the same id.
     pub(super) fn note_images(&mut self, envelope: &Envelope) {
         let payload = Value::Object(envelope.payload.clone());
         let parts: Vec<image::Part> = match envelope.kind.as_str() {
@@ -24,7 +25,7 @@ impl Pages {
                         .iter()
                         .filter_map(|input| {
                             if let InputItem::Message { content, .. } = input {
-                                Some(image::parts(content))
+                                Some(image::parts(&envelope.session_id, content))
                             } else {
                                 None
                             }
@@ -34,10 +35,10 @@ impl Pages {
                 })
                 .unwrap_or_default(),
             "tool_call_completed" => serde_json::from_value::<ToolCallCompleted>(payload)
-                .map(|done| image::parts(&done.content))
+                .map(|done| image::parts(&envelope.session_id, &done.content))
                 .unwrap_or_default(),
             "steering_applied" => serde_json::from_value::<SteeringApplied>(payload)
-                .map(|applied| image::parts(&applied.content))
+                .map(|applied| image::parts(&envelope.session_id, &applied.content))
                 .unwrap_or_default(),
             _ => Vec::new(),
         };

@@ -100,7 +100,7 @@ fn names(lines: &[Value]) -> Vec<String> {
 /// Writes `lines` as the loop does once each write succeeds.
 fn write(app: &mut App, lines: Vec<String>) -> Vec<String> {
     for line in &lines {
-        app.wrote(line);
+        app.outbox.wrote(line);
     }
     lines
 }
@@ -263,7 +263,8 @@ fn a_rejected_sessions_keeps_the_rows() {
         ),
     );
     assert_eq!(rows(&app), ["✓  tidy docs"]);
-    assert_eq!(app.notice(), Some("Connection lost."));
+    // The reconnect ended the drop's cause: its notice goes with it.
+    assert_eq!(app.notice(), None);
 }
 
 #[test]
@@ -336,7 +337,7 @@ fn exited_rows_survive_sessions() {
         ),
     );
     assert_eq!(rows(&app), ["○  old work"]);
-    assert_eq!(app.link, Link::Up);
+    assert_eq!(app.outbox.link, Link::Up);
     let out = reconnect(&mut app);
     fold(&mut app, sessions_answer(&sessions_id(&out), &[]));
     assert_eq!(rows(&app), ["○  old work"]);

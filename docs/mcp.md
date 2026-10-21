@@ -300,6 +300,47 @@ Reload:
 It costs one prompt-cache miss. The log records it as the durable event
 `reloaded` (`docs/events.md`).
 
+## Servers, their state and the per-server commands
+
+`mcp_servers` is a driver command (`docs/invocation.md`) that answers with
+every configured server: its name, the layer that declares it (`global`,
+`project` or `repository`), its state, the failure's sentence when it
+failed, its tool count, and for a repository's server whether it is
+approved. The state is one of:
+
+- `connecting`: declared but never started this session, and no failure
+  recorded. A server with a cached tool list that this session has not
+  started yet shows as `connecting`.
+- `ready`: running, with its tools declared.
+- `failed`: the last start failed, and the row carries the
+  `mcp_server_failed` `error.message` sentence ("Starting servers").
+- `needs-login`: the last start failed `NotLoggedIn` with no later
+  `mcp_server_ready`.
+
+The tool count is the rows the `tools` driver answer declares for that
+server (`docs/tools.md`, "Seeing the tools"), so the two views never
+disagree; a `connecting` server shows no count until it lists.
+
+`mcp_reconnect` is a driver command that restarts one failed server, as
+reload restarts changed and dead servers above, and answers with its
+outcome. It restarts only the server it names. It is rejected `busy` while
+a turn runs, `invalid_arguments` for a server nothing declares, and
+`mcp_server_unapproved` for a repository's server nobody approved, with the
+advice `fiber approve`, since the session would never start it ("A
+repository's servers").
+
+`mcp_login` is a driver command that runs for one server the login `fiber
+mcp login` runs ("What Fiber does with MCP"): it opens the browser on the
+PKCE authorization with a loopback callback and waits for the callback,
+then stores the token and starts the server. While the login waits, that
+server's `mcp_servers` row carries `auth_url`, the login URL to open by
+hand. The command is accepted at once and answered when the login ends:
+`authentication_failed` when the callback never comes or the exchange
+fails, storing nothing. It is rejected `invalid_arguments` for a server
+nothing declares, `mcp_server_unapproved` for a repository's server nobody
+approved, with the advice `fiber approve`, and `busy` when a login for that
+server is already in flight.
+
 ## Elicitation, sampling and roots
 
 A server can ask the person a question in the middle of a call. This is MCP
@@ -370,6 +411,10 @@ the approval of that exact declaration for the person who ran it. Another
 person who gets the declaration with the repository has no approval on their
 machine, and is asked.
 
+An imported server is not a repository's server: it lands in the global
+layer, so no repository approval attaches to it, and the approval flow above
+is unchanged.
+
 The approval does not cover what the program fetches or reads while it runs.
 A declaration that fetches its program at start, such as `npx -y`, can run
 different code later under the same approval, and a server that loads other
@@ -409,6 +454,15 @@ the repository's `.fiber/config.json` with `--repo` (`docs/invocation.md`,
 "Commands and flags"). `fiber mcp list` lists every declared server, the layer
 that declares it, and for a repository's server whether it is approved. Any
 other field is set with `fiber config set`.
+
+An import from another harness (`docs/configuration.md`, "Importing") lands
+here too: each imported entry becomes a user-scope server in the global
+layer, with the source field map `command` to `command`, `args` to `args`,
+string `env` values to `env`, `url` to `url`, and `required` only when the
+source declares it. A secret value, auth block or token is refused to the
+left-behind list, never stored. An imported server starts unapproved, as any
+server the person declares does; approving what a repository ships is
+unchanged ("A repository's servers").
 
 ## Where servers run
 

@@ -244,12 +244,72 @@ fn question_rows(question: &str, area: Rect) -> Vec<super::overlay::Row> {
     rows
 }
 
+/// The import offer's frame body rows for `question` in `area`: the
+/// head wrapped at the frame's inner width, a blank row, and one row
+/// per source with its key. The offer never scrolls, so the rows
+/// always fit the frame they draw in.
+fn import_rows(question: &str, area: Rect) -> Vec<super::overlay::Row> {
+    // The frame wraps at its inner width first, so it shrinks to what
+    // the head needs: 67 content columns at the 71-column preference.
+    let inner = usize::from(area.width.saturating_sub(4)).clamp(1, 67);
+    let mut rows: Vec<super::overlay::Row> = wrap(question, inner)
+        .into_iter()
+        .map(|line| question_row(vec![Span::styled(line, Style::default())]))
+        .collect();
+    if rows.is_empty() {
+        rows.push(question_row(Vec::new()));
+    }
+    rows.push(question_row(Vec::new()));
+    for (key, name, dir) in [
+        ("1", "Claude Code", "~/.claude"),
+        ("2", "Codex", "~/.codex"),
+    ] {
+        rows.push(question_row(vec![
+            Span::styled(format!("{key} "), Style::new().add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{name} ({dir})")),
+        ]));
+    }
+    rows
+}
+
+/// Draws the import offer over `area`: the frame centred with its
+/// title, the head and one row per source, and its footer, beside
+/// the delete frame's drawing.
+fn draw_import_question(question: &str, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+    let rows = import_rows(question, area);
+    let framed = super::overlay::Overlay {
+        title: Some(("Import settings".to_owned(), Some(Span::raw("✕")))),
+        close: Some(TargetId::Home(Spot::Keep)),
+        body: rows,
+        footer: Some(super::overlay::legend(&[("Esc", "not now")])),
+        prefer: 71,
+    };
+    let before = targets.len();
+    let slab = super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
+    // One slab-wide target over every frame row, under the frame's
+    // own targets: the ✕ keeps its click, and every other frame cell
+    // swallows its click instead of reaching the rows under it.
+    if !slab.is_empty() {
+        targets.insert(
+            before.min(targets.len()),
+            Target {
+                id: TargetId::Home(Spot::Question),
+                rect: slab,
+            },
+        );
+    }
+}
+
 /// The delete question's maximum scroll offset in `area`: its body rows
-/// past the rows the frame shows them in.
+/// past the rows the frame shows them in. The import offer never
+/// scrolls.
 pub(crate) fn max_question_scroll(_app: &App, screen: &HomeScreen, area: Rect) -> usize {
     let Some(question) = screen.question.as_ref() else {
         return 0;
     };
+    if screen.question_import {
+        return 0;
+    }
     question_rows(question, area)
         .len()
         .saturating_sub(question_capacity(area.height))
@@ -834,7 +894,11 @@ pub(super) fn render(
         completions::draw(&panel, rect, placed.box_top, buf, &mut targets);
     }
     if let Some(question) = &screen.question {
-        draw_delete_question(question, screen.question_scroll, area, buf, &mut targets);
+        if screen.question_import {
+            draw_import_question(question, area, buf, &mut targets);
+        } else {
+            draw_delete_question(question, screen.question_scroll, area, buf, &mut targets);
+        }
     }
     if app.quit_open() {
         super::quit::draw(app, area, buf, &mut targets);

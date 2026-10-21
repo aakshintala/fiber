@@ -35,7 +35,9 @@ impl TempDir {
     }
 
     /// Creates `<parent>/<prefix>-<8 lowercase hex digits>`, as [`TempDir::new`]
-    /// but under `parent` instead of the system temporary directory.
+    /// but under `parent` instead of the system temporary directory. Root a
+    /// directory that holds a socket or a Fiber home a `fiber` process runs in
+    /// under a short parent such as `/tmp`: socket paths are limited to SUN_LEN bytes.
     pub fn under(parent: &Path, prefix: &str) -> Self {
         let path = create(parent, prefix, std::iter::from_fn(suffix));
         Self { path }

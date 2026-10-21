@@ -728,6 +728,9 @@ fn write_request(
         headers_ms,
         first_token_ms: None,
         total_ms: ms_since(sent, end),
+        prefix_hashes: None,
+        cache_read: None,
+        cache_write: None,
     });
 }
 

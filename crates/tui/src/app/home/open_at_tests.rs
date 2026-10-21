@@ -333,6 +333,98 @@ fn notice(session: &str, message: &str) -> Line {
     })
 }
 
+/// One durable tail line numbered `seq`, for the open's tail read.
+fn tail_line(
+    seq: contract::Seq,
+    kind: &str,
+    action: Option<contract::ActionId>,
+    payload: Value,
+) -> contract::Envelope {
+    contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: id("s_aaaaaaaaaaaaaaaa"),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action,
+        seq: Some(seq),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }
+}
+
+/// One turn of durable lines from the log's start: a single tail
+/// window fills the read, so one answer installs the preview.
+fn tail_log() -> Vec<contract::Envelope> {
+    vec![
+        tail_line(
+            contract::Seq(0),
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "prompt"}]}]}),
+        ),
+        tail_line(contract::Seq(1), "step_started", None, json!({})),
+        tail_line(
+            contract::Seq(2),
+            "assistant_message_started",
+            Some(contract::ActionId("a_m".to_owned())),
+            json!({}),
+        ),
+        tail_line(
+            contract::Seq(3),
+            "text_completed",
+            Some(contract::ActionId("a_m".to_owned())),
+            json!({"text": "the last reply holds quokkas"}),
+        ),
+        tail_line(
+            contract::Seq(4),
+            "assistant_message_completed",
+            Some(contract::ActionId("a_m".to_owned())),
+            json!({"outcome": "completed"}),
+        ),
+        tail_line(
+            contract::Seq(5),
+            "turn_completed",
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ]
+}
+
+/// A tail `history` answer arriving after the last draw still raises
+/// `full`: the raise waits on the installed tail, never on another
+/// draw or input. A late answer changes nothing, and the `full`
+/// subscribe goes out with no further input.
+#[test]
+fn a_history_answer_after_the_last_draw_still_raises_full() {
+    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
+    let lines = commands(app.on_line(hello()));
+    let first = lines[2]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let sent = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(sent.len(), 1, "the ack releases commands, got {sent:?}");
+    assert_eq!(sent[0]["command"], "commands");
+    assert!(app.tail_due().is_some(), "the tail read starts");
+    // The tail's window: the read is requested but unanswered.
+    assert_eq!(
+        app.tail_next(),
+        Some(json!({})),
+        "the first window reads the tail"
+    );
+    drawn(&mut app);
+    // The tail's `history` answer arrives after the last draw, with
+    // no further input: installing it still raises `full`.
+    app.tail_lines(tail_log());
+    assert_eq!(app.notice(), None);
+    app.install_tail();
+    let raise = raise_line(&mut app);
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(raise["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(raise["args"], json!({"level": "full"}));
+    assert!(app.take_raise().is_none(), "one raise only");
+}
+
 /// A session `command_accepted` line for `id`.
 fn session_accepted(session: &str, command: &str) -> Line {
     Line::Session(contract::Envelope {
@@ -534,6 +626,55 @@ fn an_open_with_summary_expected_sends_no_subscribe() {
     assert_eq!(raise["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(raise["args"], json!({"level": "full"}));
     assert!(app.take_raise().is_none(), "one raise only");
+}
+
+/// A non-attached session held at `full` with nothing in flight and a
+/// live row: reconcile's setup. The acceptance itself would reconcile
+/// on a live link, so it goes out while the link is down; the setup
+/// ends with the link up and queues no lowering line.
+fn full_with_live_row(app: &mut App, session: &str) {
+    app.on_line(status(session));
+    let subscribe: Value = serde_json::from_str(&app.subscribe(&id(session), Level::Full))
+        .unwrap_or_else(|err| panic!("{err}"));
+    let ack = subscribe["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("full id"));
+    app.outbox.link = crate::app::Link::Down;
+    app.on_line(session_accepted(session, ack));
+    app.outbox.link = crate::app::Link::Up;
+    assert!(
+        app.home.as_mut().unwrap().subs.take_outbox().is_empty(),
+        "setup queues no lowering line"
+    );
+}
+
+#[test]
+fn reconcile_lowers_a_full_live_row_when_the_link_is_up() {
+    let mut app = home_at(OpenAt::Home);
+    app.on_line(hello());
+    full_with_live_row(&mut app, "s_aaaaaaaaaaaaaaaa");
+    // Past the gate: the id answers no open, so only the lowering
+    // line can appear.
+    app.subscribe_accepted(&id("s_aaaaaaaaaaaaaaaa"), "no-such-subscribe");
+    let queued = app.home.as_mut().unwrap().subs.take_outbox();
+    assert_eq!(queued.len(), 1);
+    let line: Value = serde_json::from_str(&queued[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "subscribe");
+    assert_eq!(line["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(line["args"], json!({"level": "summary"}));
+}
+
+#[test]
+fn reconcile_queues_nothing_when_the_link_is_down() {
+    let mut app = home_at(OpenAt::Home);
+    app.on_line(hello());
+    full_with_live_row(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.outbox.link = crate::app::Link::Down;
+    app.subscribe_accepted(&id("s_aaaaaaaaaaaaaaaa"), "no-such-subscribe");
+    assert!(
+        app.home.as_mut().unwrap().subs.take_outbox().is_empty(),
+        "a lost connection lowers nothing"
+    );
 }
 
 /// The raise a frame releases, parsed from its line.

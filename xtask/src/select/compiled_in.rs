@@ -27,6 +27,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("crates/tools/tests/pages/rust-ownership.md", "tools"),
     ("crates/tools/tests/pages/wiki-toml.md", "tools"),
     ("docs/errors.md", "contract"),
+    ("docs/errors.md", "tui"),
     ("docs/events.md", "contract"),
     ("docs/extensions.md", "extensions"),
     ("docs/extensions.md", "main"),
@@ -76,6 +77,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/opencode/providers/opencode-go.json", "main"),
     ("providers/opencode/providers/opencode-zen.json", "main"),
     ("providers/openrouter/providers/openrouter.json", "main"),
+    ("providers/databricks/thinking.lua", "main"),
     ("providers/anthropic/providers/anthropic.json", "config"),
     ("providers/bedrock/providers/bedrock.json", "config"),
     ("providers/codex/providers/codex.json", "config"),
@@ -86,6 +88,8 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/opencode/providers/opencode-go.json", "config"),
     ("providers/opencode/providers/opencode-zen.json", "config"),
     ("providers/openrouter/providers/openrouter.json", "config"),
+    ("providers/opencode/providers/opencode-go.json", "provider"),
+    ("providers/opencode/providers/opencode-go.json", "xtask"),
     (
         "providers/openrouter/tests/models-from-the-recording.json",
         "main",
@@ -2154,7 +2158,8 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
 /// Crates whose tests read a first-party package under `providers/` or
 /// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
 /// sources by `package_reader_mismatches`.
-pub(super) const PACKAGE_READERS: &[&str] = &["cli", "config", "extensions", "main", "xtask"];
+pub(super) const PACKAGE_READERS: &[&str] =
+    &["cli", "config", "extensions", "main", "provider", "xtask"];
 
 fn include_path(stream: TokenStream) -> Option<String> {
     let mut tokens = stream.into_iter();

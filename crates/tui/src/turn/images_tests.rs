@@ -8,6 +8,10 @@ use crate::app::Target;
 use crate::image::Layout;
 use crate::rows::Rows;
 
+fn session() -> contract::SessionId {
+    contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned())
+}
+
 fn text(text: &str) -> ContentPart {
     ContentPart::Text {
         text: text.to_owned(),
@@ -28,6 +32,7 @@ fn noted(paths: &[&str]) -> Layout {
     let mut layout = Layout::default();
     for path in paths {
         layout.note(&crate::image::Part {
+            session: session(),
             path: (*path).to_owned(),
             width: 1280,
             height: 800,
@@ -43,12 +48,15 @@ fn texts(out: Rows) -> Vec<String> {
 
 #[test]
 fn a_prompt_keeps_its_images_in_order() {
-    let prompt = prompt_of(&[
-        text("look"),
-        image("artifacts/b.png"),
-        text("closer"),
-        image("artifacts/a.png"),
-    ]);
+    let prompt = prompt_of(
+        &session(),
+        &[
+            text("look"),
+            image("artifacts/b.png"),
+            text("closer"),
+            image("artifacts/a.png"),
+        ],
+    );
     assert_eq!(prompt.text, "lookcloser");
     assert_eq!(
         prompt
@@ -69,7 +77,7 @@ fn a_steer_keeps_its_images() {
     let content = vec![text("wait"), image("artifacts/s.png")];
     turn.steer(
         crate::app::text_of(&content),
-        crate::image::parts(&content),
+        crate::image::parts(&session(), &content),
         0,
     );
     let layout = noted(&["artifacts/s.png"]);
@@ -90,7 +98,7 @@ fn a_steer_keeps_its_images() {
 #[test]
 fn bubble_rows_put_each_image_line_under_the_text_right_aligned() {
     use ratatui::layout::Alignment;
-    let prompt = prompt_of(&[text("look"), image("artifacts/b.png")]);
+    let prompt = prompt_of(&session(), &[text("look"), image("artifacts/b.png")]);
     let layout = noted(&["artifacts/b.png"]);
     let mut out = Rows::default();
     bubble_rows(&prompt, 60, &layout, &mut out);
@@ -108,6 +116,7 @@ fn call_rows_sit_at_the_ledger_indent() {
     let mut out = Rows::default();
     call_rows(
         &[crate::image::Part {
+            session: session(),
             path: "artifacts/a.png".to_owned(),
             width: 1280,
             height: 800,
@@ -125,7 +134,7 @@ fn call_rows_sit_at_the_ledger_indent() {
 #[test]
 fn an_image_only_prompt_draws_its_line() {
     // No empty bubble row: the image line is the only row.
-    let prompt = prompt_of(&[image("artifacts/a.png")]);
+    let prompt = prompt_of(&session(), &[image("artifacts/a.png")]);
     assert!(prompt.text.trim().is_empty());
     let layout = noted(&["artifacts/a.png"]);
     let mut out = Rows::default();
@@ -140,6 +149,7 @@ fn steer_rows_draw_each_line_with_no_indent() {
     let mut out = Rows::default();
     steer_rows(
         &[crate::image::Part {
+            session: session(),
             path: "artifacts/s.png".to_owned(),
             width: 640,
             height: 480,

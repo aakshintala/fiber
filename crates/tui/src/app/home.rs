@@ -7,10 +7,10 @@ use serde_json::{Value, json};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use super::{App, Effect, Kind, Link, mint};
+use super::{App, Effect, Kind, mint};
 use crate::home::{
     Chip, Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line,
-    delete_line, from_status, line, recent_rows,
+    delete_line, from_status, import_head, line, recent_rows,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -43,6 +43,16 @@ pub(super) struct Home {
     pub(super) launch: Launch,
     /// A `start` went out in this run.
     prompted: bool,
+    /// The first-run import offer is still eligible: resolved once,
+    /// cleared by Esc or by its accepted answer, never re-resolved,
+    /// so a receipt landing mid-run neither retracts a shown offer
+    /// nor re-fires a dismissed one.
+    pub(super) import_offer: bool,
+    /// The offer's pending state still owes its hub read: set on a
+    /// remote home, whose receipts live on the hub machine past a link
+    /// the startup resolve cannot use. The first outgoing pass reads
+    /// it from the hub and clears this, so the read runs once.
+    pub(super) import_owed: bool,
     /// The chip focused last: ↓ from the entry bar and ↑ from the
     /// first row land here while drawn, else on the workspace chip.
     /// Always a chip; starts `Spot::Workspace`.
@@ -194,9 +204,15 @@ impl App {
         // The picker's scope starts from launch, then from what
         // `/scoped-models` saves.
         self.model_picker.scoped = launch.scoped_models.clone();
+        // A remote home owes the offer its hub read: the receipts live
+        // on the hub machine, past the link the startup resolve cannot
+        // use. A local home resolves from its own seam at startup.
+        let import_owed = matches!(launch.location, crate::home::LaunchLocation::Remote { .. });
         self.home = Some(Home {
             launch,
             prompted: false,
+            import_offer: false,
+            import_owed,
             sessions: Sessions::default(),
             fed: false,
             feed_id: None,
@@ -244,9 +260,9 @@ impl App {
             .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::Quit)))
     }
 
-    /// Whether a home modal holds the keyboard: the delete question or
-    /// the workspace picker, the two `home_key` branches after the quit
-    /// question.
+    /// Whether a home modal holds the keyboard: the delete question,
+    /// the import offer, or the workspace picker, the `home_key`
+    /// branches after the quit question.
     pub(super) fn home_modal(&self) -> bool {
         self.on_home()
             && self.home.as_ref().is_some_and(|home| {
@@ -284,6 +300,9 @@ impl App {
                 }),
                 *scroll,
             ),
+            // The first-run import offer draws its own frame below;
+            // the question carries its head.
+            Some(Prompt::Import) => (Some(import_head()), 0),
             // The quit question draws through the hint below, recomputed
             // every frame.
             Some(Prompt::Quit) | None => (None, 0),
@@ -466,6 +485,7 @@ impl App {
             blockers: home.blockers.clone(),
             foot,
             question,
+            question_import: matches!(home.questions.prompt(), Some(Prompt::Import)),
             question_scroll,
             // Until the first prompt, the placeholder says "/? for
             // shortcuts"; no session exists before Enter, so opening the
@@ -478,9 +498,13 @@ impl App {
     /// first unscoped `recent` page. The session list fills in when the
     /// hub's feed arrives.
     pub(super) fn home_outgoing(&mut self) -> Vec<String> {
-        if self.link != Link::Up {
+        if !self.outbox.is_up() {
             return Vec::new();
         }
+        // A remote home's offer waits for the hub: the startup
+        // resolve reads the terminal's own home, while the receipts
+        // live on the hub machine.
+        self.resolve_import_offer();
         let mut asks = self.picker_asks();
         asks.extend(self.start_model_pick());
         let Some(home) = self.home.as_mut() else {
@@ -549,6 +573,13 @@ impl App {
                     if let Some(lines) = self.subscribe_answer(id, accepted, &hub.payload) {
                         return Some(lines);
                     }
+                    // The offer's `import` folds as the `/import` row's:
+                    // Task 3's notices closing the offer on acceptance,
+                    // the existing refused path with the offer open on
+                    // rejection.
+                    if let Some(lines) = self.import_answer(id, accepted, &hub.payload) {
+                        return Some(lines);
+                    }
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &hub.payload));
                     }
@@ -559,7 +590,7 @@ impl App {
                     // box until the next `start` goes out. Reading
                     // `pending` first, it still reaches the rejection
                     // below, staying a notice as today.
-                    if !accepted && let Some((Kind::Start, _)) = self.pending.get(id) {
+                    if !accepted && let Some((Kind::Start, _)) = self.outbox.pending.get(id) {
                         if let Some(message) = hub.payload.get("message").and_then(Value::as_str)
                             && let Some(home) = self.home.as_mut()
                         {
@@ -885,6 +916,7 @@ impl App {
             }
             Spot::Keep => {
                 self.close_delete_prompt();
+                self.close_import_prompt();
                 Effect::None
             }
             Spot::Question => Effect::None,
@@ -964,7 +996,7 @@ impl App {
     /// Asks the first unscoped `recent` page again: an accepted delete
     /// fills the gap it left.
     fn ask_recent_first(&mut self) -> Vec<String> {
-        if self.link != Link::Up {
+        if !self.outbox.is_up() {
             return Vec::new();
         }
         let Some(home) = self.home.as_mut() else {

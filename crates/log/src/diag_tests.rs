@@ -85,6 +85,9 @@ fn request() -> ProviderRequest {
         headers_ms: Some(41),
         first_token_ms: None,
         total_ms: 180,
+        prefix_hashes: None,
+        cache_read: None,
+        cache_write: None,
     }
 }
 

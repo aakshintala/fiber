@@ -912,6 +912,177 @@ fn no_first_party_package_names_the_provider() {
 }
 
 #[test]
+fn older_than_unreadable_is_usage() {
+    check(
+        &CliError::OlderThanUnreadable,
+        ErrorCode::Usage,
+        "`--older-than` takes a duration such as `30d`: a whole number and `s`, `m`, `h` or `d`.",
+    );
+}
+
+#[test]
+fn prune_failed_forwards_a_non_io_code() {
+    check(
+        &CliError::PruneFailed {
+            code: ErrorCode::SessionHeld,
+            failed: 2,
+            total: 7,
+        },
+        ErrorCode::SessionHeld,
+        "2 of 7 could not be deleted",
+    );
+}
+
+#[test]
+fn log_ambiguous_is_usage_naming_both_matches() {
+    let source = log::Error::Ambiguous {
+        selector: "s_".to_owned(),
+        matches: vec!["s_a".to_owned(), "s_b".to_owned()],
+    };
+    let message = source.to_string();
+    check(&CliError::Log(source), ErrorCode::Usage, &message);
+}
+
+#[test]
+fn log_not_found_is_session_not_found() {
+    let source = log::Error::NotFound("s_missing".into());
+    let message = source.to_string();
+    check(&CliError::Log(source), ErrorCode::SessionNotFound, &message);
+}
+
+#[test]
+fn hub_local_names_the_hub() {
+    check(
+        &CliError::Hub(doors::Error::Local(io_error())),
+        ErrorCode::IoFailed,
+        "the hub: boom",
+    );
+}
+
+#[test]
+fn hub_keeps_the_doors_text_and_code() {
+    let source = doors::Error::UnknownHub { name: "box".into() };
+    let message = source.to_string();
+    check(&CliError::Hub(source), ErrorCode::Usage, &message);
+}
+
+#[test]
+fn hub_closed_names_the_command() {
+    check(
+        &CliError::HubClosed {
+            command: "delete".to_owned(),
+        },
+        ErrorCode::IoFailed,
+        "the hub closed the connection before answering `delete`",
+    );
+}
+
+#[test]
+fn rejected_carries_its_code_and_message() {
+    check(
+        &CliError::Rejected {
+            code: ErrorCode::SessionHasDependents,
+            message: "It has forks.".to_owned(),
+        },
+        ErrorCode::SessionHasDependents,
+        "It has forks.",
+    );
+}
+
+#[test]
+fn rejected_with_another_code_forwards_that_code() {
+    check(
+        &CliError::Rejected {
+            code: ErrorCode::InvalidArguments,
+            message: "no".to_owned(),
+        },
+        ErrorCode::InvalidArguments,
+        "no",
+    );
+}
+
+#[test]
+fn rejected_with_an_unknown_wire_code_is_other() {
+    check(
+        &CliError::Rejected {
+            code: ErrorCode::Other("future".into()),
+            message: "m".to_owned(),
+        },
+        ErrorCode::Other("future".into()),
+        "m",
+    );
+}
+
+#[test]
+fn command_encode_keeps_its_sentence() {
+    let source = json_error();
+    let message = format!("a command could not be written as JSON: {source}");
+    check(
+        &CliError::CommandEncode(source),
+        ErrorCode::IoFailed,
+        &message,
+    );
+}
+
+#[test]
+fn sessions_answer_keeps_its_sentence() {
+    let source = json_error();
+    let message = format!("the hub's answer to `sessions`: {source}");
+    check(
+        &CliError::SessionsAnswer(source),
+        ErrorCode::IoFailed,
+        &message,
+    );
+}
+
+#[test]
+fn session_row_keeps_its_sentence() {
+    let source = json_error();
+    let message = format!("a session row: {source}");
+    check(&CliError::SessionRow(source), ErrorCode::IoFailed, &message);
+}
+
+#[test]
+fn search_hit_keeps_its_sentence() {
+    let source = json_error();
+    let message = format!("a search hit: {source}");
+    check(&CliError::SearchHit(source), ErrorCode::IoFailed, &message);
+}
+
+#[test]
+fn delete_nobody_is_usage() {
+    check(
+        &CliError::DeleteNobody,
+        ErrorCode::Usage,
+        crate::sessions::DELETE_NOBODY,
+    );
+}
+
+#[test]
+fn session_not_found_on_hub_names_the_selector_and_hub() {
+    check(
+        &CliError::SessionNotFoundOnHub {
+            selector: "s_nope".to_owned(),
+            hub: "box".to_owned(),
+        },
+        ErrorCode::SessionNotFound,
+        "no session matches \"s_nope\" on hub `box`",
+    );
+}
+
+#[test]
+fn session_not_found_on_hub_with_an_empty_selector() {
+    check(
+        &CliError::SessionNotFoundOnHub {
+            selector: String::new(),
+            hub: "box".to_owned(),
+        },
+        ErrorCode::SessionNotFound,
+        "no session matches \"\" on hub `box`",
+    );
+}
+
+#[test]
 fn finish_maps_a_cli_error_to_its_exit_code() {
     assert_eq!(finish(Err(CliError::LogoutNeedsProvider)), 2);
     assert_eq!(

@@ -339,11 +339,12 @@ fn launched() -> jobs::Launched {
         session_id: SessionId("s_child".into()),
         job_id: contract::JobId("j_1".into()),
         parent: SessionId("s_parent".into()),
-        model: "fake/m:high".to_owned(),
         prompt: "scan the tree".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
-        resume: false,
-        credential: None,
+        start: jobs::Start::Fresh(jobs::Fresh::Spawn {
+            model: "fake/m:high".to_owned(),
+            credential: None,
+        }),
     }
 }
 
@@ -545,11 +546,9 @@ fn resumed() -> jobs::Launched {
         session_id: SessionId("s_child".into()),
         job_id: contract::JobId("j_1".into()),
         parent: SessionId("s_parent".into()),
-        model: "fake/m:high".to_owned(),
         prompt: "- also check Y".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
-        resume: true,
-        credential: None,
+        start: jobs::Start::Resume,
     }
 }
 
@@ -577,6 +576,84 @@ fn a_resume_builds_the_resume_argv_with_the_message_whole_and_no_model() {
         ]
     );
     assert!(!argv.iter().any(|arg| arg.starts_with("--model")));
+}
+
+#[test]
+fn a_fork_builds_the_fork_argv_with_no_model_or_credential() {
+    let fork = jobs::Launched {
+        start: jobs::Start::Fresh(jobs::Fresh::Fork {
+            from: jobs::Forking {
+                point: contract::shapes::Point {
+                    session_id: SessionId("s_parent".into()),
+                    seq: contract::Seq(41),
+                },
+                model: "fiber:parent-model".to_owned(),
+            },
+        }),
+        prompt: "-go".to_owned(),
+        ..launched()
+    };
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&fork);
+    assert_eq!(command.get_program(), "/bin/fiber");
+    let argv: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // One `--forked-from` and one `--forked-seq` in `to_argv` order,
+    // with the delegate's ids and no `--model`, `-c` or `--credential`:
+    // a fork continues its point on the parent's build.
+    assert_eq!(
+        argv,
+        [
+            "session",
+            "--id=s_child",
+            "--workspace=/w",
+            "--prompt=-go",
+            "--forked-from=s_parent",
+            "--forked-seq=41",
+            "--parent=s_parent",
+            "--delegate-id=j_1",
+            "--depth=1",
+        ]
+    );
+    // Side by side, the same launch as a spawn carries the model, the
+    // credential pair and the label, none of which the fork emits.
+    let spawned = jobs::Launched {
+        start: jobs::Start::Fresh(jobs::Fresh::Spawn {
+            model: "fake/m:high".to_owned(),
+            credential: Some("work".to_owned()),
+        }),
+        prompt: "scan the tree".to_owned(),
+        ..launched()
+    };
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&spawned)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        argv.iter().any(|arg| arg.starts_with("--model")),
+        "{argv:?}"
+    );
+    assert!(argv.iter().any(|arg| arg == "-c"), "{argv:?}");
+    assert!(
+        argv.iter()
+            .any(|arg| arg == "providers.fake.credential=\"work\""),
+        "{argv:?}"
+    );
+    // And the fork argv carries none of those shapes.
+    let fork_argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&fork)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !fork_argv.iter().any(|arg| arg.starts_with("--model")),
+        "{fork_argv:?}"
+    );
+    assert!(!fork_argv.iter().any(|arg| arg == "-c"), "{fork_argv:?}");
+    assert!(
+        !fork_argv.iter().any(|arg| arg.starts_with("--credential")),
+        "{fork_argv:?}"
+    );
 }
 
 #[test]
@@ -1051,7 +1128,10 @@ fn a_repository_layer_role_credential_is_ignored() {
     // The launch then passes no `-c`: the child reads the provider's
     // configured label.
     let mut launch = launched();
-    launch.credential = (resolve.credential)("fast").unwrap();
+    let jobs::Start::Fresh(jobs::Fresh::Spawn { credential, .. }) = &mut launch.start else {
+        panic!("a new launch is a fresh spawn");
+    };
+    *credential = (resolve.credential)("fast").unwrap();
     let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -1072,7 +1152,10 @@ fn the_catalogue_never_prints_a_role_label() {
 #[test]
 fn a_new_launch_with_a_credential_passes_it_as_a_run_override() {
     let mut launch = launched();
-    launch.credential = Some("work".to_owned());
+    let jobs::Start::Fresh(jobs::Fresh::Spawn { credential, .. }) = &mut launch.start else {
+        panic!("a new launch is a fresh spawn");
+    };
+    *credential = Some("work".to_owned());
     let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -1088,7 +1171,10 @@ fn a_new_launch_with_a_credential_passes_it_as_a_run_override() {
 #[test]
 fn a_label_that_parses_as_json_is_still_a_string() {
     let mut launch = launched();
-    launch.credential = Some("123".to_owned());
+    let jobs::Start::Fresh(jobs::Fresh::Spawn { credential, .. }) = &mut launch.start else {
+        panic!("a new launch is a fresh spawn");
+    };
+    *credential = Some("123".to_owned());
     let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -1102,10 +1188,10 @@ fn a_label_that_parses_as_json_is_still_a_string() {
 
 #[test]
 fn a_resume_launch_passes_no_credential_override() {
-    let mut launch = resumed();
-    // A label the resume carries anyway: the recorded session keeps
-    // it, so no `-c` may travel.
-    launch.credential = Some("work".to_owned());
+    // A resume carries no credential: the type makes one
+    // unrepresentable, so the recorded session keeps its label and no
+    // `-c` may travel.
+    let launch = resumed();
     let command = launcher(std::path::Path::new("/bin/fiber"))(&launch);
     let argv: Vec<_> = command
         .get_args()
@@ -1586,6 +1672,310 @@ fn retain_stops_what_is_no_longer_loaded_and_cancel_counts_true_stops() {
     assert_eq!(HostDelegate::retain(&rig.delegates, &[]), 1);
     await_idle(&rig);
     assert_eq!(HostDelegate::cancel(&rig.delegates, &[id]), 0);
+}
+
+/// One envelope line of a parent's own log for the fork-point reader:
+/// `kind` with `seq`, carrying `action_id` when `action` names one and
+/// `payload` as its body.
+fn point_line(
+    kind: &str,
+    seq: u64,
+    action: Option<&str>,
+    payload: serde_json::Value,
+) -> serde_json::Value {
+    let mut line = json!({
+        "kind": kind,
+        "session_id": "s_parent",
+        "ts": 0,
+        "schema_version": contract::SCHEMA_VERSION,
+        "seq": seq,
+        "payload": payload,
+    });
+    if let Some(action) = action {
+        line["action_id"] = json!(action);
+    }
+    line
+}
+
+/// A `tool_call_requested` line for `name` with `seq` and `action`,
+/// carrying `ran_by` when the call ran inside something else.
+fn call_line(
+    seq: u64,
+    action: &str,
+    name: &str,
+    ran_by: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut payload = json!({"name": name, "arguments": {}});
+    if let Some(ran_by) = ran_by {
+        payload["ran_by"] = ran_by;
+    }
+    point_line("tool_call_requested", seq, Some(action), payload)
+}
+
+/// A model call's `usage_recorded` for message `action`: its `model` is
+/// what the reader reports for the calling message.
+fn usage_line(seq: u64, action: &str, model: &str) -> serde_json::Value {
+    point_line(
+        "usage_recorded",
+        seq,
+        Some(action),
+        json!({
+            "generation_id": "g_1",
+            "model": model,
+            "tokens": {"input": 1, "output": 2},
+            "input_bytes": 10,
+        }),
+    )
+}
+
+/// Writes `lines` as the parent's own log for the fork-point reader.
+fn point_log(sessions: &std::path::Path, lines: &[serde_json::Value]) {
+    write_log(sessions, "s_parent", lines);
+}
+
+/// The reader over `sessions`, whose parent is `s_parent`.
+fn reader(sessions: &std::path::Path) -> jobs::ForkPoint {
+    super::fork_point_reader(sessions, &SessionId("s_parent".into()))
+}
+
+/// Reads the point for `action` from the log in `sessions`.
+fn read_for(
+    sessions: &std::path::Path,
+    action: Option<&str>,
+) -> Result<jobs::Forking, contract::shapes::Failure> {
+    let action = action.map(|action| contract::ActionId(action.to_owned()));
+    reader(sessions)(action.as_ref())
+}
+
+/// A parent log whose first reply calls `delegate_fork`: the call `a_call`
+/// at seq 8, its message `a_msg` at seq 7, and a later message `a_next`
+/// at seq 12 that must not move the point.
+fn fork_call_log() -> Vec<serde_json::Value> {
+    vec![
+        point_line("session_started", 0, None, json!({})),
+        point_line("fiber_started", 1, None, json!({})),
+        point_line("extensions_loaded", 2, None, json!({})),
+        point_line("preamble_built", 3, None, json!({})),
+        point_line("opening_message", 4, None, json!({})),
+        point_line("turn_started", 5, None, json!({})),
+        point_line("step_started", 6, None, json!({})),
+        point_line("assistant_message_started", 7, Some("a_msg"), json!({})),
+        call_line(8, "a_call", "delegate_fork", None),
+        usage_line(9, "a_msg", "fiber:pa/m"),
+        point_line("assistant_message_completed", 10, Some("a_msg"), json!({})),
+        point_line("step_started", 11, None, json!({})),
+        point_line("assistant_message_started", 12, Some("a_next"), json!({})),
+        point_line("text_completed", 13, Some("a_next"), json!({"text": "hi"})),
+        usage_line(14, "a_next", "fiber:pa/m"),
+        point_line("assistant_message_completed", 15, Some("a_next"), json!({})),
+    ]
+}
+
+/// The point is `S - 1`, where `S` is the latest
+/// `assistant_message_started` before the call's own
+/// `tool_call_requested`: the later message leaves it alone, and the
+/// model is the calling message's `usage_recorded.model`.
+#[test]
+fn the_reader_points_just_before_the_calling_message_with_its_model() {
+    let root = fakes::TempDir::new("dm-fork-point");
+    let sessions = root.path().join("sessions");
+    point_log(&sessions, &fork_call_log());
+    let forking = read_for(&sessions, Some("a_call")).unwrap();
+    assert_eq!(
+        forking.point,
+        contract::shapes::Point {
+            session_id: SessionId("s_parent".into()),
+            seq: contract::Seq(6),
+        }
+    );
+    assert_eq!(forking.model, "fiber:pa/m");
+}
+
+/// A parent log where the fork call runs inside an outer model call: the
+/// `outer_action_id` chain resolves through `a_outer` to a root with no
+/// `ran_by`, so the parent keeps its point and its message's model.
+#[test]
+fn the_reader_walks_the_outer_chain_to_its_root_call() {
+    let root = fakes::TempDir::new("dm-fork-outer");
+    let sessions = root.path().join("sessions");
+    point_log(
+        &sessions,
+        &[
+            point_line("assistant_message_started", 7, Some("a_first"), json!({})),
+            call_line(8, "a_outer", "shell", None),
+            usage_line(9, "a_first", "fiber:pa/m"),
+            point_line("assistant_message_started", 12, Some("a_msg"), json!({})),
+            call_line(
+                13,
+                "a_call",
+                "delegate_fork",
+                Some(json!({"extension": "e", "outer_action_id": "a_outer"})),
+            ),
+            usage_line(14, "a_msg", "fiber:pa/m"),
+        ],
+    );
+    let forking = read_for(&sessions, Some("a_call")).unwrap();
+    assert_eq!(forking.point.seq, contract::Seq(11));
+    assert_eq!(forking.model, "fiber:pa/m");
+}
+
+/// A point whose root is a command (`ran_by.command_id`) is refused with
+/// `invalid_arguments`: directly on the call, and through an outer link.
+#[test]
+fn a_command_root_is_refused_as_invalid_arguments() {
+    let root = fakes::TempDir::new("dm-fork-command");
+    let sessions = root.path().join("sessions");
+    point_log(
+        &sessions,
+        &[
+            point_line("assistant_message_started", 7, Some("a_msg"), json!({})),
+            call_line(
+                8,
+                "a_direct",
+                "delegate_fork",
+                Some(json!({"extension": "e", "command_id": "c_1"})),
+            ),
+            usage_line(9, "a_msg", "fiber:pa/m"),
+            point_line("assistant_message_started", 12, Some("a_later"), json!({})),
+            call_line(
+                13,
+                "a_nested",
+                "delegate_fork",
+                Some(json!({"extension": "e", "outer_action_id": "a_outer"})),
+            ),
+            call_line(
+                10,
+                "a_outer",
+                "shell",
+                Some(json!({"extension": "e", "command_id": "c_2"})),
+            ),
+            usage_line(14, "a_later", "fiber:pa/m"),
+        ],
+    );
+    for action in ["a_direct", "a_nested"] {
+        let error = read_for(&sessions, Some(action)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidArguments);
+    }
+}
+
+/// An outer link the log does not hold, and a cycle back to the call,
+/// keep the point and fall back to the calling message's
+/// `usage_recorded.model`: the parent never fails on its ancestry.
+#[test]
+fn an_unreadable_ancestry_keeps_the_point_and_falls_back() {
+    let root = fakes::TempDir::new("dm-fork-ancestry");
+    let sessions = root.path().join("sessions");
+    point_log(
+        &sessions,
+        &[
+            point_line("assistant_message_started", 7, Some("a_msg"), json!({})),
+            call_line(
+                8,
+                "a_dangling",
+                "delegate_fork",
+                Some(json!({"extension": "e", "outer_action_id": "a_gone"})),
+            ),
+            usage_line(9, "a_msg", "fiber:pa/m"),
+            point_line("assistant_message_started", 12, Some("a_loop"), json!({})),
+            call_line(
+                13,
+                "a_cycle",
+                "delegate_fork",
+                Some(json!({"extension": "e", "outer_action_id": "a_cycle"})),
+            ),
+            usage_line(14, "a_loop", "fiber:pa/m"),
+        ],
+    );
+    for action in ["a_dangling", "a_cycle"] {
+        let forking = read_for(&sessions, Some(action)).unwrap();
+        let expected = if action == "a_dangling" { 6 } else { 11 };
+        assert_eq!(forking.point.seq, contract::Seq(expected));
+        assert_eq!(forking.model, "fiber:pa/m");
+    }
+}
+
+/// A failure that reads only the parent's own log is a `tool_error`: a
+/// missing log, a line that does not parse, a call the log does not
+/// hold, a call with no `seq`, a call with no message before it, and a
+/// calling message with no `usage_recorded`.
+#[test]
+fn own_log_failures_are_tool_errors() {
+    let root = fakes::TempDir::new("dm-fork-own-log");
+    let sessions = root.path().join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    // A missing log.
+    let error = read_for(&sessions, Some("a_call")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ToolError);
+    // A line that does not parse.
+    point_log(
+        &sessions,
+        &[point_line("session_started", 0, None, json!({}))],
+    );
+    std::fs::write(sessions.join("s_parent").join("events.jsonl"), "{nope\n").unwrap();
+    let error = read_for(&sessions, Some("a_call")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ToolError);
+    // A call the log does not hold.
+    point_log(&sessions, &fork_call_log());
+    let error = read_for(&sessions, Some("a_gone")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ToolError);
+    // A call with no `seq` reads as absent.
+    let mut no_seq = fork_call_log();
+    no_seq[8].as_object_mut().unwrap().remove("seq");
+    point_log(&sessions, &no_seq);
+    let error = read_for(&sessions, Some("a_call")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ToolError);
+    // A call with no message before it.
+    point_log(&sessions, &[call_line(8, "a_call", "delegate_fork", None)]);
+    let error = read_for(&sessions, Some("a_call")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ToolError);
+    // A calling message with no `usage_recorded`.
+    point_log(
+        &sessions,
+        &[
+            point_line("assistant_message_started", 7, Some("a_msg"), json!({})),
+            call_line(8, "a_call", "delegate_fork", None),
+        ],
+    );
+    let error = read_for(&sessions, Some("a_call")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ToolError);
+}
+
+/// With no calling action, `S` is the latest `assistant_message_started`
+/// in the parent's own log; an empty log is a `tool_error`.
+#[test]
+fn no_calling_action_reads_the_latest_message_in_the_log() {
+    let root = fakes::TempDir::new("dm-fork-no-action");
+    let sessions = root.path().join("sessions");
+    point_log(&sessions, &fork_call_log());
+    let forking = read_for(&sessions, None).unwrap();
+    assert_eq!(forking.point.seq, contract::Seq(11));
+    assert_eq!(forking.model, "fiber:pa/m");
+    point_log(&sessions, &[]);
+    let error = read_for(&sessions, None).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ToolError);
+}
+
+/// The fork tool shares the spawn tool's wiring: depth, registry,
+/// parent, workspace, sessions, clock, bound, cap, launch and watch.
+/// It carries a point reader, not a model resolver.
+#[test]
+fn the_fork_tool_shares_the_spawn_tools_wiring() {
+    use contract::tool::Tool as _;
+    let (delegates, jobs) = message_rig();
+    let forked = delegates.fork();
+    let spawned = delegates.tool();
+    assert_eq!(forked.depth, spawned.depth);
+    assert!(Arc::ptr_eq(&forked.registry, &jobs));
+    assert!(Arc::ptr_eq(&forked.registry, &spawned.registry));
+    assert_eq!(forked.parent, spawned.parent);
+    assert_eq!(forked.workspace, spawned.workspace);
+    assert_eq!(forked.sessions, spawned.sessions);
+    assert!(Arc::ptr_eq(&forked.clock, &spawned.clock));
+    assert_eq!(forked.bound, spawned.bound);
+    assert_eq!(forked.cap, spawned.cap);
+    assert!(Arc::ptr_eq(&forked.launch, &spawned.launch));
+    assert!(Arc::ptr_eq(&forked.watch, &spawned.watch));
+    assert_eq!(forked.definition().name, "delegate_fork");
 }
 
 /// N17: with a stored list that lacks `x`, `start` for `x` returns

@@ -2,15 +2,17 @@
 //! protocol keeps its path, auth header, body and decoder, and builds this
 //! call with them (`docs/model-routing.md`, "Protocols and providers").
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use contract::diag::{DebugLog, ProviderRequest, Purpose, Timing};
+use contract::diag::{DebugLog, PrefixHashes, ProviderRequest, Purpose, Timing};
 use contract::events::CacheLifetime;
 use contract::provider::{CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Reply};
+use contract::shapes::Tokens;
 
 use crate::http::{self, Cancel};
 use crate::redact::Secrets;
@@ -43,6 +45,7 @@ pub struct RequestObservation {
     attempt: NonZeroU32,
     model: Option<String>,
     timing: Option<Timing>,
+    cache_diagnostics: bool,
 }
 
 impl RequestObservation {
@@ -55,6 +58,7 @@ impl RequestObservation {
             attempt,
             model: None,
             timing: None,
+            cache_diagnostics: false,
         }
     }
 
@@ -73,6 +77,23 @@ impl RequestObservation {
     pub fn with_timing(mut self, timing: Timing) -> Self {
         self.timing = Some(timing);
         self
+    }
+
+    /// Asks the encoder for redacted prefix digests and the reported
+    /// cache use: the observation then carries them into the line
+    /// (`docs/prompt-cache.md`, "Cache diagnostics"). Off by default,
+    /// so an unset `cache.diagnostics` changes no line.
+    #[must_use]
+    pub fn with_cache_diagnostics(mut self, on: bool) -> Self {
+        self.cache_diagnostics = on;
+        self
+    }
+
+    /// Whether the encoder hashes the request's cacheable segments: with
+    /// the flag off it performs no digest work, branching before any
+    /// hashing.
+    pub(crate) fn cache_diagnostics(&self) -> bool {
+        self.cache_diagnostics
     }
 
     /// Whether the writer records debug lines: an `info` writer runs the
@@ -100,6 +121,9 @@ pub(crate) struct ObservationFinish {
     status: Option<u16>,
     first_token_at: Option<Instant>,
     bytes: u64,
+    hashes: Option<PrefixHashes>,
+    cache_read: Option<u64>,
+    cache_write: Option<BTreeMap<String, u64>>,
     done: bool,
 }
 
@@ -125,6 +149,9 @@ impl ObservationFinish {
             status: None,
             first_token_at: None,
             bytes: 0,
+            hashes: None,
+            cache_read: None,
+            cache_write: None,
             done: false,
         }
     }
@@ -166,6 +193,22 @@ impl ObservationFinish {
         self.bytes = bytes;
     }
 
+    /// Holds the encoder's redacted prefix digests, once, on the observed
+    /// run path: absent on a send failure, so those lines stay out of a
+    /// miss count.
+    pub(crate) fn set_hashes(&mut self, hashes: PrefixHashes) {
+        self.hashes = Some(hashes);
+    }
+
+    /// Holds what the decoded response reported: its cache read and its
+    /// cache write keyed by lifetime. Called once, after a successful
+    /// decode, so a line carrying usage always carries a 2xx status;
+    /// absent on a send or decode failure.
+    pub(crate) fn set_usage(&mut self, tokens: &Tokens) {
+        self.cache_read = Some(tokens.cache_read);
+        self.cache_write = Some(tokens.cache_write.clone());
+    }
+
     /// Writes the one `provider_request` line, once. A second call writes
     /// nothing: the open reader's error and its drop share this guard.
     pub(crate) fn finish(&mut self) {
@@ -188,6 +231,9 @@ impl ObservationFinish {
             headers_ms: self.headers_at.map(|at| ms_since(self.start, at)),
             first_token_ms: self.first_token_at.map(|at| ms_since(self.start, at)),
             total_ms: ms_since(self.start, total),
+            prefix_hashes: self.hashes.clone(),
+            cache_read: self.cache_read,
+            cache_write: self.cache_write.clone(),
         });
     }
 }
@@ -216,6 +262,7 @@ pub struct Call {
     cancel: Arc<Cancel>,
     secrets: Secrets,
     lifetime: CacheLifetime,
+    hashes: Option<PrefixHashes>,
     decode: Decode,
     on_error: fn(Error) -> Error,
     observation: Option<RequestObservation>,
@@ -240,6 +287,7 @@ impl Call {
             cancel: Arc::default(),
             secrets: endpoint.secrets(),
             lifetime: request.cache_lifetime,
+            hashes: None,
             url,
             headers,
             body,
@@ -247,6 +295,16 @@ impl Call {
             on_error: std::convert::identity,
             observation: None,
         }
+    }
+
+    /// Carries the encoder's redacted prefix digests: the observed run
+    /// path writes them into the line. Only a `call_observed` with the
+    /// setting on builds one, so an unobserved or opted-out call carries
+    /// none.
+    #[must_use]
+    pub(crate) fn with_hashes(mut self, hashes: PrefixHashes) -> Self {
+        self.hashes = Some(hashes);
+        self
     }
 
     /// Runs `hook` over a failed send's error, after `should_retry` is
@@ -337,6 +395,9 @@ impl Call {
                 );
                 finish.sent(sent.headers_at, sent.status);
                 finish.set_redact(self.redact_with(&secrets));
+                if let Some(hashes) = &self.hashes {
+                    finish.set_hashes(hashes.clone());
+                }
                 Ok(OpenBody::observed(Box::new(sent.stream), finish))
             }
             Err(failed) => {
@@ -350,6 +411,11 @@ impl Call {
                     );
                     finish.dispatched(&dispatched);
                     finish.set_redact(self.redact_with(&secrets));
+                    // The bytes went out, so their digests are known even
+                    // though the reply failed; the usage stays absent.
+                    if let Some(hashes) = &self.hashes {
+                        finish.set_hashes(hashes.clone());
+                    }
                     finish.finish();
                 }
                 Err(failed.error)
@@ -489,6 +555,9 @@ impl Call {
                 );
                 record.sent(sent.headers_at, sent.status);
                 record.set_redact(self.redact_with(&secrets));
+                if let Some(hashes) = &self.hashes {
+                    record.set_hashes(hashes.clone());
+                }
                 let mut counted = sent.stream;
                 // The first `Delta` of any kind latches the token stamp
                 // before it is forwarded; every delta reaches the caller
@@ -503,8 +572,16 @@ impl Call {
                     },
                 );
                 // The buffered reader may have read ahead: the count, not
-                // the reader's end, says what came.
+                // the reader's end, says what came. A decoded reply reports
+                // its cache use only with the setting on; a failure or an
+                // unflagged observation leaves it absent, so those lines
+                // stay out of a miss count.
                 record.set_bytes(counted.count());
+                if observation.cache_diagnostics()
+                    && let Ok(reply) = &decoded
+                {
+                    record.set_usage(&reply.tokens);
+                }
                 finish = Some(record);
                 (decoded, sent.should_retry)
             }
@@ -519,6 +596,11 @@ impl Call {
                     );
                     record.dispatched(&dispatched);
                     record.set_redact(self.redact_with(&secrets));
+                    // The bytes went out, so their digests are known even
+                    // though the reply failed; the usage stays absent.
+                    if let Some(hashes) = &self.hashes {
+                        record.set_hashes(hashes.clone());
+                    }
                     finish = Some(record);
                 }
                 let should_retry = failed.error.should_retry();

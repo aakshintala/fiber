@@ -54,6 +54,7 @@ MCP servers:
 Configuration:
   config get <key>                              Print the effective value and the layer it came from
   config set [--project | --repo] <key> <value>  Write one key in one layer's file
+  import <claude-code | codex>                   Copy another harness's configuration into Fiber home, once
 
 The hub:
   hub add [--default] <name> <address>  Add a hub to this client's list
@@ -185,6 +186,12 @@ pub(crate) enum Commands {
     /// Print a configuration value, or write one
     #[command(subcommand, arg_required_else_help = false)]
     Config(ConfigCommands),
+    /// Copy another harness's configuration into Fiber home, once
+    Import {
+        /// The harness to import from: `claude-code` or `codex`.
+        #[arg(value_name = "source")]
+        source: ImportSource,
+    },
     /// Store a provider's key or an extension's secret
     Login(LoginArgs),
     /// Delete a provider's stored key
@@ -575,6 +582,24 @@ pub(crate) struct McpRemoveArgs {
     pub(crate) name: String,
 }
 
+/// The harness `fiber import` copies configuration from. The names are
+/// lowercase and matched exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum ImportSource {
+    #[value(name = "claude-code")]
+    ClaudeCode,
+    Codex,
+}
+
+impl From<ImportSource> for config::ImportSource {
+    fn from(source: ImportSource) -> Self {
+        match source {
+            ImportSource::ClaudeCode => Self::ClaudeCode,
+            ImportSource::Codex => Self::Codex,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 #[command(disable_help_subcommand = true)]
 pub(crate) enum ConfigCommands {
@@ -704,9 +729,40 @@ pub(crate) struct SessionArgs {
         value_name = "session_id",
         value_parser = parse_session_id,
         hide = true,
-        conflicts_with_all = ["resume", "prompt", "model", "overrides", "worktree", "parent", "delegate_id"]
+        conflicts_with_all = ["resume", "prompt", "model", "overrides", "worktree", "parent", "delegate_id", "forked_from", "forked_seq"]
     )]
     pub(crate) rewound_from: Option<String>,
+
+    /// Continue the session this fork names from its point: hidden and
+    /// free to change, passed by the parent that starts a fork's new
+    /// session. Requires its sequence, the parent, the delegate job and
+    /// the prompt, and conflicts with every other way to start.
+    #[arg(
+        long = "forked-from",
+        value_name = "session_id",
+        value_parser = parse_session_id,
+        hide = true,
+        requires = "forked_seq",
+        requires = "parent",
+        requires = "delegate_id",
+        requires = "prompt",
+        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from"]
+    )]
+    pub(crate) forked_from: Option<String>,
+
+    /// The point in the forked session, as a `seq`: hidden and free to
+    /// change, alongside `--forked-from`.
+    #[arg(
+        long = "forked-seq",
+        value_name = "seq",
+        hide = true,
+        requires = "forked_from",
+        requires = "parent",
+        requires = "delegate_id",
+        requires = "prompt",
+        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from"]
+    )]
+    pub(crate) forked_seq: Option<u64>,
 
     /// The parent session: its id. A Fiber delegate records it and its job
     /// id on `session_started` (`docs/delegates.md`, "Events").
@@ -752,6 +808,8 @@ impl From<&SessionArgs> for contract::session_argv::SessionArgv {
             credential: args.credential.clone(),
             worktree: args.worktree,
             rewound_from: args.rewound_from.clone().map(contract::SessionId),
+            forked_from: args.forked_from.clone().map(contract::SessionId),
+            forked_seq: args.forked_seq,
             parent: args.parent.clone().map(contract::SessionId),
             delegate_id: args.delegate_id.clone().map(contract::JobId),
             depth: args.depth,
@@ -851,12 +909,12 @@ pub(crate) fn bare_version() -> String {
     version_text(env!("CARGO_PKG_VERSION"), option_env!("FIBER_COMMIT"))
 }
 
-/// The text after `fiber `: the package version, and the commit when one
-/// was recorded. An empty commit is left out, so the line never contains
-/// an empty `()`.
+/// The text after `fiber `: the package version, and the first 7
+/// characters of the commit when one was recorded. An empty commit is
+/// left out, so the line never contains an empty `()`.
 fn version_text(version: &str, commit: Option<&str>) -> String {
     match commit.filter(|commit| !commit.is_empty()) {
-        Some(commit) => format!("{version} ({commit})"),
+        Some(commit) => format!("{version} ({})", commit.get(..7).unwrap_or(commit)),
         None => version.to_owned(),
     }
 }

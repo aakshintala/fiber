@@ -903,6 +903,28 @@ fn the_acknowledgement_sends_the_branch_query_once() {
 }
 
 #[test]
+fn a_refused_branch_query_drops_its_kept_line() {
+    let mut app = home();
+    let out = opened(&mut app);
+    let lines = ack(&mut app, &out);
+    let id = branch_query(&lines);
+    let query = lines
+        .iter()
+        .find(|line| {
+            serde_json::from_str::<Value>(line)
+                .map(|line| line["command"] == "shell")
+                .unwrap_or(false)
+        })
+        .unwrap_or_else(|| panic!("the query: {lines:?}"));
+    // The loop writes the query: a reconnect would send it again.
+    app.outbox.wrote(query);
+    assert!(app.outbox.is_kept(&id));
+    app.on_line(refused(&id));
+    assert!(!app.outbox.is_kept(&id));
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
 fn no_query_before_the_acknowledgement() {
     let mut app = home();
     linked(&mut app);
@@ -1557,7 +1579,7 @@ fn the_quota_spot_opens_the_view_and_fetches() {
     use crate::app::panel::Spot;
     use crate::mouse::TargetId;
     let mut app = attached();
-    app.link = crate::app::Link::Up;
+    app.outbox.link = crate::app::Link::Up;
     let lines = match app.on_click(TargetId::Panel(Spot::Quota)) {
         Effect::Send(lines) => lines
             .iter()

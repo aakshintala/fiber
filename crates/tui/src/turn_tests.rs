@@ -15,9 +15,12 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 /// A text prompt starting a turn.
 fn prompt(text: &str) -> super::images::Prompt {
-    super::images::prompt_of(&[contract::shapes::ContentPart::Text {
-        text: text.to_owned(),
-    }])
+    super::images::prompt_of(
+        &contract::SessionId(SESSION.to_owned()),
+        &[contract::shapes::ContentPart::Text {
+            text: text.to_owned(),
+        }],
+    )
 }
 
 /// An app attached to [`SESSION`], 60 columns wide.
@@ -2340,6 +2343,7 @@ fn a_completed_call_keeps_its_details_artifact_kept_and_signal() {
         &mut fold,
     );
     assert!(turn.call_completed(
+        &contract::SessionId(SESSION.to_owned()),
         "a_1",
         &ToolCallCompleted {
             status: CallStatus::Completed,
@@ -2436,17 +2440,32 @@ fn call_timing_measures_start_to_completion() {
         turn.call_requested(action, requested("shell"), 0, &mut fold);
     }
     assert!(turn.call_started("a_1", 1_000));
-    assert!(turn.call_completed("a_1", &completed(CallStatus::Completed), 3_500));
+    assert!(turn.call_completed(
+        &contract::SessionId(SESSION.to_owned()),
+        "a_1",
+        &completed(CallStatus::Completed),
+        3_500
+    ));
     assert_eq!(call(&turn, "a_1").duration_ms(), Some(2_500));
     assert!(call(&turn, "a_1").has_started());
     assert!(turn.call_started("a_2", 1_000));
     assert_eq!(call(&turn, "a_2").duration_ms(), None);
     assert!(call(&turn, "a_2").has_started());
-    assert!(turn.call_completed("a_3", &completed(CallStatus::Denied), 3_500));
+    assert!(turn.call_completed(
+        &contract::SessionId(SESSION.to_owned()),
+        "a_3",
+        &completed(CallStatus::Denied),
+        3_500
+    ));
     assert_eq!(call(&turn, "a_3").duration_ms(), None);
     assert!(!call(&turn, "a_3").has_started());
     assert!(turn.call_started("a_4", 3_500));
-    assert!(turn.call_completed("a_4", &completed(CallStatus::Completed), 1_000));
+    assert!(turn.call_completed(
+        &contract::SessionId(SESSION.to_owned()),
+        "a_4",
+        &completed(CallStatus::Completed),
+        1_000
+    ));
     assert_eq!(call(&turn, "a_4").duration_ms(), Some(0));
 }
 

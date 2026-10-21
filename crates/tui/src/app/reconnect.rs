@@ -16,7 +16,6 @@ use serde_json::Value;
 
 use super::{App, Link, Phase};
 use crate::home::Level;
-use crate::link::Line;
 
 /// The delay after the first failure; each later one doubles it.
 const FIRST: Duration = Duration::from_millis(500);
@@ -28,8 +27,7 @@ const CAP: Duration = Duration::from_secs(30);
 /// with.
 pub(super) const UNANSWERED: &str = "No answer before the connection was lost.";
 
-/// The connection's history since the hub was last reached, and the
-/// commands written that have no answer yet.
+/// The connection's history since the hub was last reached.
 #[derive(Debug, Default)]
 pub(crate) struct Reconnect {
     /// Failed connects and ended connections since the hub was last
@@ -37,9 +35,6 @@ pub(crate) struct Reconnect {
     failures: u32,
     /// The hub was reached once in this run.
     was_up: bool,
-    /// Session commands written and not yet answered, in the order they
-    /// went out; no id appears twice.
-    kept: Vec<Kept>,
     /// `sessions` is due on the next outgoing after a reconnect.
     sessions_due: bool,
     /// The `sessions` command waiting for its answer, if one is out.
@@ -49,23 +44,12 @@ pub(crate) struct Reconnect {
     fresh: HashSet<SessionId>,
 }
 
-/// One session command written with no answer yet.
-#[derive(Debug, Clone)]
-struct Kept {
-    /// The command's id.
-    id: String,
-    /// The session it names.
-    session: SessionId,
-    /// The line as written, sent again unchanged.
-    line: String,
-}
-
 impl App {
     /// One more failure: the delay before the next attempt, doubling from
     /// half a second to at most thirty. A hub refused for its schema is
     /// never tried again.
     pub(crate) fn next_retry(&mut self) -> Option<Duration> {
-        if self.link == Link::Refused {
+        if self.outbox.link == Link::Refused {
             return None;
         }
         self.reconnect.failures = self.reconnect.failures.saturating_add(1);
@@ -79,60 +63,10 @@ impl App {
     /// attempt 1, so the first retry is attempt 2.
     pub(crate) fn banner(&self) -> Option<String> {
         let failures = self.reconnect.failures;
-        (self.link == Link::Down && failures >= 1).then(|| {
+        (self.outbox.link == Link::Down && failures >= 1).then(|| {
             let attempt = failures.saturating_add(u32::from(!self.reconnect.was_up));
             format!("Connection lost · reconnecting (attempt {attempt})…")
         })
-    }
-
-    /// A line was written to the hub: a session command other than
-    /// `subscribe` and `commands`, which a reconnect sends afresh, is kept
-    /// until its answer arrives.
-    pub(crate) fn wrote(&mut self, line: &str) {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            return;
-        };
-        let (Some(id), Some(session)) = (
-            value.get("id").and_then(Value::as_str),
-            value.get("session_id").and_then(Value::as_str),
-        ) else {
-            return;
-        };
-        if matches!(
-            value.get("command").and_then(Value::as_str),
-            Some("subscribe" | "commands")
-        ) || self.reconnect.kept.iter().any(|kept| kept.id == id)
-        {
-            return;
-        }
-        self.reconnect.kept.push(Kept {
-            id: id.to_owned(),
-            session: SessionId(session.to_owned()),
-            line: line.to_owned(),
-        });
-    }
-
-    /// Whether `id` is a written command kept for resending: a failed
-    /// resend leaves its pending entry alone, so the next connection sends
-    /// it again (`docs/invocation.md`, "The command line").
-    pub(super) fn is_kept(&self, id: &str) -> bool {
-        self.reconnect.kept.iter().any(|kept| kept.id == id)
-    }
-
-    /// A command's answer, from the hub or a session: its line is no
-    /// longer kept.
-    pub(super) fn answered_line(&mut self, line: &Line) {
-        let (kind, payload) = match line {
-            Line::Hub(hub) => (hub.kind.as_str(), &hub.payload),
-            Line::Session(envelope) => (envelope.kind.as_str(), &envelope.payload),
-        };
-        if !matches!(kind, "command_accepted" | "command_rejected") {
-            return;
-        }
-        let Some(id) = payload.get("command_id").and_then(Value::as_str) else {
-            return;
-        };
-        self.reconnect.kept.retain(|kept| kept.id != id);
     }
 
     /// A session refused command `id`: a `duplicate_command` is a resent
@@ -141,7 +75,7 @@ impl App {
     /// silent with it; any other refusal returns its draft.
     pub(super) fn refused(&mut self, id: &str, code: &ErrorCode, message: String) {
         if *code == ErrorCode::DuplicateCommand {
-            self.pending.remove(id);
+            self.outbox.answered(id);
             // A resent copy the session already holds drops the waits
             // its first answer waits on, but keeps the send's pending
             // notice: the held copy may still apply, so its claim
@@ -155,7 +89,7 @@ impl App {
         } else {
             // The choice belonged to a dropped session: its wait went
             // with its notice, so the row closes with no further notice.
-            self.pending.remove(id);
+            self.outbox.answered(id);
         }
     }
 
@@ -173,12 +107,17 @@ impl App {
     /// The link is not up yet when this runs: a second `hub_hello` on a
     /// live connection reopens nothing.
     pub(super) fn reconnected(&mut self) -> Vec<String> {
-        let again = self.reconnect.was_up && self.link != Link::Up;
+        let again = self.reconnect.was_up && !self.outbox.is_up();
         self.hub_reached();
         self.reconnect.was_up = true;
         if !again {
             return Vec::new();
         }
+        // The connection is back: both connection texts ended with it,
+        // while a search the drop interrupted still waits on the bar or
+        // a rescan.
+        self.notices
+            .clear_code_except("connection_failed", &super::find::search_incomplete_text());
         if let Phase::Pending { command_id } = &self.phase {
             let id = command_id.clone();
             self.rejected(&id, "connection_failed", UNANSWERED.to_owned());
@@ -192,12 +131,12 @@ impl App {
             self.draft = draft;
         }
         let mut subscribed: Vec<SessionId> = Vec::new();
-        for kept in self.reconnect.kept.clone() {
-            if attached.as_ref() != Some(&kept.session) && !subscribed.contains(&kept.session) {
-                lines.push(self.subscribe(&kept.session, Level::Summary));
-                subscribed.push(kept.session);
+        for (session, line) in self.outbox.reconnect_lines() {
+            if attached.as_ref() != Some(&session) && !subscribed.contains(&session) {
+                lines.push(self.subscribe(&session, Level::Summary));
+                subscribed.push(session);
             }
-            lines.push(kept.line);
+            lines.push(line);
         }
         self.reconnect.sessions_due = true;
         lines

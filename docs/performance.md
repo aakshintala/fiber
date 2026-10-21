@@ -75,7 +75,7 @@ a 20-thousand-token one fit the same ceiling.
 | Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |
 | Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured | — | — | — | — | — |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |
-| `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | — | — | — | — | — |
+| `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | 1 ms | 1 ms | 72 ms | 0 % | 0 % |
 | `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | `paging` jig, open pass and first frame | 1,347 ms | Linux x86_64 | measured | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |
 | `paging` jig, slowest frame that loaded pages | 7 ms | Linux x86_64 | measured | 8 ms | 5 ms | 10 ms | 16 % | 4 % |
@@ -150,10 +150,14 @@ millisecond, so it covers every stored sample as well as every per-file
 median. Each tolerance is `100 * (maximum per-file median / minimum per-file
 median - 1)` for the gated model and row, rounded upward to a whole percent:
 fast uses 9V45, slow uses 7763 only, so the advisory 9V74 never widens 7763's
-tolerance. Middle has no tolerance because no middle model gates. The fast
+tolerance. A per-file median under the 1 ms quantum counts as 1 ms,
+so a zero median never divides the tolerance. Middle has no tolerance because no middle model gates. The fast
 attaching ceiling and tolerance are pinned by a test against the 10 MiB
 samples of the fast class's stored files
-(`xtask/tests/class_data/9v45-attach-10mib.json`). `scripts/class-data`
+(`xtask/tests/class_data/9v45-attach-10mib.json`). The fast
+session_list ceiling and tolerance are pinned by a test against the
+plain-number samples of the fast class's stored files
+(`xtask/tests/class_data/9v45-session-list.json`). `scripts/class-data`
 regenerates that file from the `benchmarks-<sha>` artifacts of `main`
 runs; entries whose artifacts have expired, and entries from non-main runs,
 stay in the committed file by hand.

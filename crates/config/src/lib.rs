@@ -15,6 +15,7 @@ mod error;
 mod extension;
 mod extension_settings;
 mod home;
+mod import;
 mod keys;
 mod layout;
 mod mcp_tokens;
@@ -61,6 +62,9 @@ pub use home::{
     ProjectKey, create_fiber_home, fiber_home, fiber_home_from_env, fiber_home_path,
     fiber_home_path_from_env,
 };
+pub use import::{
+    ImportReport, ImportSource, Imported, LeftBehind, import_pending, import_source, source_home,
+};
 pub use layout::{
     crashes_dir, docs_dir, extension_data_dir, extensions_dir, global_config_file,
     images_cache_dir, logs_dir, machine_approvals_dir, mcp_cache_dir, pinned_dir,
@@ -73,7 +77,7 @@ pub use rules::{RuleLine, RulesFiles, RulesListing, RulesScope, list_rules, remo
 pub use secret::{
     CredentialSource, credential_labels, delete_credential, delete_credential_held, delete_secret,
     mcp_secret_name_ok, read_credential, read_secret, store_credential, store_secret,
-    valid_env_key,
+    valid_env_key, valid_server_name,
 };
 pub use settings::{NotesFile, ReviewerNotes, SettingInfo, SettingValue, reviewer_notes};
 pub use startup_check::{
@@ -94,6 +98,7 @@ pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};
 use home::{parse, plain, read, read_bytes};
 
 /// Where to read configuration from.
+#[derive(Debug, Clone)]
 pub struct Sources {
     /// Fiber home ([`fiber_home`]).
     pub home: PathBuf,

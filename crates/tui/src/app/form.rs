@@ -4,7 +4,7 @@
 use contract::Envelope;
 use contract::events::{CommandAccepted, CommandRejected};
 
-use super::{App, Effect, Kind, Link, mint, read, session_command};
+use super::{App, Effect, Kind, mint, read, session_command};
 use crate::approvals::form::Spot;
 use crate::approvals::{PanelKey, Queue};
 use crate::input::Draft;
@@ -36,14 +36,16 @@ impl App {
     /// Sends the `reply` line `make` builds for the shown request under a
     /// new command id, pending until the hub answers it.
     fn reply(&mut self, make: fn(&mut Queue, &str) -> Option<String>) -> Effect {
-        if self.link != Link::Up {
+        if !self.outbox.is_up() {
             return Effect::None;
         }
         let id = mint();
         let Some(line) = make(&mut self.queue, &id) else {
             return Effect::None;
         };
-        self.pending.insert(id, (Kind::Reply, Draft::default()));
+        self.outbox
+            .pending
+            .insert(id, (Kind::Reply, Draft::default()));
         Effect::Send(vec![line])
     }
 
@@ -75,20 +77,21 @@ impl App {
             }
             _ => return Vec::new(),
         };
-        if !matches!(self.pending.get(&id), Some((Kind::Reply, _))) {
+        if !matches!(self.outbox.pending.get(&id), Some((Kind::Reply, _))) {
             return Vec::new();
         }
         if let Some((code, message)) = rejection {
             self.rejected(&id, &code, message);
             return Vec::new();
         }
-        self.pending.remove(&id);
+        self.outbox.pending.remove(&id);
         let Some(session) = self.queue.declined(&id) else {
             return Vec::new();
         };
         let cancel = mint();
         let line = session_command(&cancel, "cancel", &session, None).to_string();
-        self.pending
+        self.outbox
+            .pending
             .insert(cancel, (Kind::Cancel, Draft::default()));
         vec![line]
     }

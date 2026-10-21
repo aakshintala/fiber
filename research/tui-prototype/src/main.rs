@@ -4,6 +4,7 @@
 
 mod cases;
 mod completions;
+mod credential;
 mod failures;
 mod home;
 mod images;
@@ -5438,6 +5439,7 @@ const SURFACES: &[cases::Surface] = &[
     theme::SURFACE,
     failures::SURFACE,
     quota::SURFACE,
+    credential::SURFACE,
 ];
 
 // ============================================================ main
@@ -5473,6 +5475,7 @@ struct Args {
     view_case: Option<String>,
     /// the quota-view case (`--quota-case`), drawn instead of the conversation
     quota_case: Option<String>,
+    credential_case: Option<String>,
     /// the offer and one-question-form case (`--offer-case`), drawn instead of the conversation
     offer_case: Option<String>,
     /// the image and link case (`--image-case`), drawn instead of the conversation
@@ -5552,6 +5555,7 @@ fn args() -> Args {
         rail_case: None,
         view_case: None,
         quota_case: None,
+        credential_case: None,
         offer_case: None,
         image_case: None,
         screen_reader: false,
@@ -5617,6 +5621,7 @@ fn args() -> Args {
             "--rail-case" => a.rail_case = it.next(),
             "--view-case" => a.view_case = it.next(),
             "--quota-case" => a.quota_case = it.next(),
+            "--credential-case" => a.credential_case = it.next(),
             "--offer-case" => a.offer_case = it.next(),
             "--image-case" => a.image_case = it.next(),
             "--screen-reader" => a.screen_reader = true,
@@ -5657,7 +5662,7 @@ fn args() -> Args {
             "--reviewer-setup" => a.reviewer_setup = it.next(),
             "-h" | "--help" => {
                 print!(
-                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--screen-reader] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--quota-case CASE] [--offer-case CASE] [--image-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--login CASE] [--reviewer-setup CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--screen-reader] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--quota-case CASE] [--credential-case CASE] [--offer-case CASE] [--image-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--login CASE] [--reviewer-setup CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
                     cases::help(SURFACES)
                 );
                 std::process::exit(0);
@@ -5859,6 +5864,8 @@ fn main() -> io::Result<()> {
         rail::run_rail(&a, &mut term)
     } else if a.view_case.is_some() {
         views::run_view(&a, &mut term)
+    } else if a.credential_case.is_some() {
+        credential::run_credential(&a, &mut term)
     } else if a.quota_case.is_some() {
         quota::run_quota(&a, &mut term)
     } else if a.offer_case.is_some() {
@@ -5895,6 +5902,7 @@ fn main() -> io::Result<()> {
         && a.reviewer_setup.is_none()
         && a.rail_case.is_none()
         && a.view_case.is_none()
+        && a.credential_case.is_none()
         && a.quota_case.is_none()
         && a.offer_case.is_none()
         && a.image_case.is_none()
@@ -8103,6 +8111,7 @@ mod tests {
                 "--theme light, dark-256, light-256, dark-no-color",
                 "--failure-case retry, failed, auth_failed, nudge, connection_lost, crashed, rewind, rewound",
                 "--quota-case quota, quota-empty",
+                "--credential-case credentials, credentials-reading, credentials-none",
             ]
         );
         let h = cases::help(SURFACES);
@@ -9527,6 +9536,7 @@ mod tests {
             rail_case: None,
             view_case: None,
             quota_case: None,
+            credential_case: None,
             offer_case: None,
             image_case: None,
             theme: None,

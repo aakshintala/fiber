@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use contract::SessionId;
 use contract::shapes::ContentPart;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -18,15 +19,18 @@ use crate::theme::Role;
 /// it (`docs/tui.md`, "Images"). The log never holds its bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Part {
+    /// The segment whose log carried it: the same path in two segments
+    /// draws two images, resolved under different `artifacts/` dirs.
+    pub(crate) session: SessionId,
     pub(crate) path: String,
     pub(crate) width: u32,
     pub(crate) height: u32,
 }
 
 impl Part {
-    /// The image part of `part`; `None` for any other part. A PDF part
-    /// is not an image part: it changes nothing here.
-    pub(crate) fn from_content(part: &ContentPart) -> Option<Part> {
+    /// The image part of `part` in `session`; `None` for any other
+    /// part. A PDF part is not an image part: it changes nothing here.
+    pub(crate) fn from_content(session: &SessionId, part: &ContentPart) -> Option<Part> {
         match part {
             ContentPart::Image {
                 path,
@@ -34,6 +38,7 @@ impl Part {
                 height,
                 ..
             } => Some(Part {
+                session: session.clone(),
                 path: path.clone(),
                 width: *width,
                 height: *height,
@@ -54,9 +59,12 @@ impl Part {
     }
 }
 
-/// Every image part of `content`, in order.
-pub(crate) fn parts(content: &[ContentPart]) -> Vec<Part> {
-    content.iter().filter_map(Part::from_content).collect()
+/// Every image part of `session`'s `content`, in order.
+pub(crate) fn parts(session: &SessionId, content: &[ContentPart]) -> Vec<Part> {
+    content
+        .iter()
+        .filter_map(|part| Part::from_content(session, part))
+        .collect()
 }
 
 /// How an image sizes: text, its one line, until kitty's graphics
@@ -67,33 +75,35 @@ pub(crate) enum Sizing {
     Text,
 }
 
-/// The session's image registry: one id per path, in the order first
-/// seen, for the whole session (`docs/tui.md`, "Images"). Two paths
-/// never share an id, so clicks name one image.
+/// The chain's image registry: one id per `(session, path)`, in the
+/// order first seen (`docs/tui.md`, "Images"). Two paths never share
+/// an id, and neither does one path in two segments, so clicks name
+/// one image.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Layout {
-    pub(crate) ids: BTreeMap<String, u32>,
+    pub(crate) ids: BTreeMap<(SessionId, String), u32>,
     pub(crate) parts: BTreeMap<u32, Part>,
     next: u32,
     pub(crate) sizing: Sizing,
 }
 
 impl Layout {
-    /// The id `path` drew under, when it has drawn.
-    pub(crate) fn id(&self, path: &str) -> Option<u32> {
-        self.ids.get(path).copied()
+    /// The id `path` drew under in `session`, when it has drawn.
+    pub(crate) fn id(&self, session: &SessionId, path: &str) -> Option<u32> {
+        self.ids.get(&(session.clone(), path.to_owned())).copied()
     }
 
-    /// Notes `part`, handing its path the next id when unseen; a path
-    /// already seen keeps its id, so a page dropped and folded again
-    /// draws the same id.
+    /// Notes `part`, handing its `(session, path)` the next id when
+    /// unseen; a pair already seen keeps its id, so a page dropped and
+    /// folded again draws the same id.
     pub(crate) fn note(&mut self, part: &Part) -> u32 {
-        if let Some(id) = self.ids.get(&part.path) {
+        let key = (part.session.clone(), part.path.clone());
+        if let Some(id) = self.ids.get(&key) {
             return *id;
         }
         self.next = self.next.saturating_add(1);
         let id = self.next;
-        self.ids.insert(part.path.clone(), id);
+        self.ids.insert(key, id);
         self.parts.insert(id, part.clone());
         id
     }
@@ -115,7 +125,7 @@ pub(crate) fn rows(part: &Part, layout: &Layout, columns: u16, align: Align, out
     // Text sizing only: the line. Inline rows arrive with kitty's
     // graphics protocol.
     let Sizing::Text = layout.sizing;
-    let target = layout.id(&part.path).map(Target::Image);
+    let target = layout.id(&part.session, &part.path).map(Target::Image);
     let name = format!("▣ {}", part.name());
     match align {
         Align::Left { indent } => {
