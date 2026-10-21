@@ -676,8 +676,22 @@ impl LuaExtension {
     /// session ends"). A push the stop refused answers `Stopped`, which
     /// ends the whole drain, and so does a wait the stop wakes.
     pub(crate) fn drain_watcher(&self, index: usize, arg: Value) -> Result<(), Error> {
-        self.hub.lock().keep_watcher_done = true;
-        let pushed = self.push_watcher(index, arg);
+        // The keep and the push join under one lock hold: a live delivery
+        // finishing between them would otherwise be retained under its own
+        // id with no waiter to collect it, losing its notice.
+        let pushed = {
+            let mut shared = self.hub.lock();
+            if !matches!(shared.phase, Phase::Ready(_)) {
+                None
+            } else {
+                let asked = self.hub.clock().now();
+                let id = shared.push(Target::Watcher { index }, arg, asked);
+                shared.keep_watcher_done = Some(id);
+                drop(shared);
+                self.hub.notify();
+                Some((id, asked))
+            }
+        };
         let result = match pushed {
             None => Err(errors::stopped(&self.name)),
             Some((id, asked)) => {
@@ -700,8 +714,28 @@ impl LuaExtension {
                 }
             }
         };
-        self.hub.lock().keep_watcher_done = false;
+        self.hub.lock().keep_watcher_done = None;
         result
+    }
+
+    /// Waits until none of this extension's watcher deliveries is queued
+    /// or running: the drain's pre-replay wait, so a durable delivery the
+    /// live offer already covered has run before the drain replays past
+    /// it (see `Hub::wait_for_watchers_idle`).
+    pub(crate) fn wait_for_watchers_idle(&self) {
+        self.hub.wait_for_watchers_idle();
+    }
+
+    /// Fires `hook` once when the drain's pre-replay wait parks with a
+    /// watcher delivery still queued or running: the test's proof the wait
+    /// engaged before it releases the parked delivery.
+    #[cfg(test)]
+    pub(crate) fn pause_at_drain_wait(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        self.hub.pause_at_windows(Arc::new(move |_, window| {
+            if matches!(window, hub::Window::DrainWait) {
+                hook();
+            }
+        }));
     }
 
     /// Whether the watcher has a delivery queued or running: the busy bit

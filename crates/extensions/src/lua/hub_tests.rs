@@ -400,3 +400,28 @@ fn finish_watcher_clears_the_abandon_watch_only_for_its_own_id() {
         "its own finish clears the watch"
     );
 }
+
+/// `finish_watcher` keeps only the drain's own result for collection: a
+/// live delivery finishing while the drain keeps its call is forgotten
+/// instead of retained, so its failure still takes the notice path.
+/// Flipping `==` to `!=` would retain the live call and drop the drain's.
+#[test]
+fn finish_watcher_keeps_only_the_drains_result() {
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    {
+        let mut shared = hub.lock();
+        shared.keep_watcher_done = Some(7);
+        shared.calls.insert(7, Progress::Queued);
+        shared.calls.insert(8, Progress::Queued);
+    }
+    hub.finish_watcher("ext", 8, 0, Err(stopped("ext")));
+    assert!(
+        hub.lock().calls.get(&8).is_none(),
+        "the live call is forgotten while the drain keeps its own"
+    );
+    hub.finish_watcher("ext", 7, 0, Err(stopped("ext")));
+    assert!(
+        matches!(hub.lock().calls.get(&7), Some(Progress::Done(_))),
+        "the drain's own call is kept for collection"
+    );
+}

@@ -2862,6 +2862,8 @@ fn a_watcher_refuses_host_tool_but_runs_host_exec() {
 /// A watcher pushed after `seal()` still runs: the seal drops routing, not
 /// the stream. Service calls answer `closing`, local calls succeed, and the
 /// late-bound emitter is gone, so the run reports through the filesystem.
+/// The push goes through the drain's synchronous wait, as production runs
+/// it after `fiber_exited`: no file poll, the wait itself is the barrier.
 #[test]
 fn a_sealed_watchers_run_with_closing_services_and_closed_state() {
     use contract::extension::ExtensionDoor as _;
@@ -2892,34 +2894,18 @@ fn a_sealed_watchers_run_with_closing_services_and_closed_state() {
     let session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     // Production order at session end: the seal drops routing, then the
-    // state close lands with the lines it holds.
+    // state close lands with the lines it holds. The drain's synchronous
+    // push-and-wait runs the post-seal delivery, as `drain_watchers` does:
+    // it returns only after the run finished writing.
     session.seal();
     session.close_state();
-    session.deliver(&noticed("sealed"), Some(contract::Seq(0)));
-    // The write creates the file before its content lands, so the wait
-    // only accepts non-empty content, never a bare existence.
-    let out = Deadline::after(WAIT)
-        .recv(&{
-            let (tx, rx) = mpsc::channel();
-            let probe = probe.with_extension("out");
-            thread::spawn(move || {
-                let deadline = Deadline::after(WAIT);
-                loop {
-                    if let Ok(text) = fs::read_to_string(&probe)
-                        && !text.is_empty()
-                    {
-                        let _ignored = tx.send(text);
-                        return;
-                    }
-                    if deadline.left().is_zero() {
-                        return;
-                    }
-                    thread::yield_now();
-                }
-            });
-            rx
-        })
-        .expect("waited for the sealed watcher to run");
+    let lua = session
+        .lua_extension("fiber.test/sealed")
+        .expect("the watchers-only extension stays loaded");
+    lua.drain_watcher(0, super::watcher_arg(&noticed("sealed")))
+        .expect("the sealed watcher runs");
+    let out = fs::read_to_string(probe.with_extension("out"))
+        .expect("the sealed watcher wrote its report");
     assert!(
         out.contains("model:host.model: the session is closing"),
         "{out:?}"
@@ -3111,6 +3097,186 @@ fn a_signal_during_the_drain_stops_it_at_once() {
     );
     assert!(errors[0].message.contains("pre-signal"), "{errors:?}");
     assert!(!later.exists(), "no later watcher starts after the stop");
+}
+
+/// A durable delivery still queued when the drain starts runs before the
+/// drain replays past it: the live offer advanced the cursor past the only
+/// line, so the drain's range is empty and it returns at once unless the
+/// pre-replay wait holds it for the queued delivery. Without the wait the
+/// drain returns while the delivery is still queued, and the `waiting`
+/// receive below expires naming it.
+#[test]
+fn drain_watchers_waits_for_a_queued_durable_delivery() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
+    let home = Home::new();
+    let ran = home.root.path().join("ran");
+    home.install(
+        "covered",
+        Some(&format!(
+            "fiber.watch({{\"step_started\"}}, {{ timeout = 5000, run = function(ev) host.http({{ url = \"{url}\" }}) host.fs.write({ran:?}, \"ran\") end }})\n",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&stepped(), None, None).unwrap();
+    // The live offer parks on the held server and advances the cursor past
+    // the line, so the drain can replay nothing: only the pre-replay wait
+    // keeps it from returning before the queued delivery runs.
+    session.deliver(&stepped(), Some(contract::Seq(0)));
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for the live delivery to park on host.http"
+    );
+    let lua = session
+        .lua_extension("fiber.test/covered")
+        .expect("the watchers-only extension stays loaded");
+    let (wait_tx, wait_rx) = mpsc::channel();
+    lua.pause_at_drain_wait(Arc::new(move || {
+        let _ignored = wait_tx.send(());
+    }));
+    let draining = Arc::clone(&session);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ignored = done_tx.send(draining.drain_watchers(&log, &dir));
+    });
+    // The wait engaged before any release: the parked delivery is still
+    // queued, so only the wait holds the drain here.
+    Deadline::after(WAIT)
+        .recv(&wait_rx)
+        .expect("waited for the drain to wait for the queued delivery");
+    server.release();
+    let errors = Deadline::after(WAIT)
+        .recv(&done_rx)
+        .expect("waited for the drain after the release");
+    assert!(errors.is_empty(), "{errors:?}");
+    // The queued delivery ran under the wait, before the drain returned:
+    // its seq was already covered, so the drain replayed nothing and the
+    // cursor it advanced at queue time still stands.
+    assert_eq!(fs::read_to_string(&ran).unwrap(), "ran");
+    assert_eq!(
+        *session
+            .cursors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        [(("fiber.test/covered".to_owned(), 0), 0)]
+            .into_iter()
+            .collect()
+    );
+}
+
+/// A log directory the drain cannot open replays nothing and collects the
+/// failure: the drain is the report, since the log is closed to new lines.
+/// Without the collection the drain returns no error for the missing log.
+#[test]
+fn drain_watchers_collects_a_log_it_cannot_open() {
+    let home = Home::new();
+    let ran = home.root.path().join("ran");
+    home.install(
+        "unread",
+        Some(&format!(
+            "fiber.watch({{\"step_started\"}}, {{ timeout = 2000, run = function(ev) host.fs.write({ran:?}, \"ran\") end }})\n",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, _dir) = empty_log();
+    session.set_watermark(log.count());
+    let errors = session.drain_watchers(&log, &home.root.path().join("missing"));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].extension, "log", "{errors:?}");
+    assert_eq!(errors[0].callback, "drain", "{errors:?}");
+    assert!(
+        errors[0].message.contains("could not read the log"),
+        "{errors:?}"
+    );
+    assert!(!ran.exists(), "nothing replays from a log that cannot be read");
+}
+
+/// A log line that does not parse is collected, and the lines before it
+/// still replay: the failure names the line without losing its prefix.
+/// Without the collection the drain drops the bad line silent.
+#[test]
+fn drain_watchers_collects_an_unreadable_line_and_replays_its_prefix() {
+    let home = Home::new();
+    let seen = home.root.path().join("seen");
+    home.install(
+        "prefix",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, old = pcall(host.fs.read, {seen:?}) if not ok or old == nil then old = \"\" end host.fs.write({seen:?}, old .. ev.payload.text .. \"\\n\") end }})\n",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&texted("a"), None, None).unwrap();
+    // The garbage lands after the one good line in the log's file.
+    let events = dir.join("events.jsonl");
+    let mut bytes = fs::read(&events).unwrap();
+    bytes.extend_from_slice(b"not json\n");
+    fs::write(&events, bytes).unwrap();
+    let errors = session.drain_watchers(&log, &dir);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].extension, "log", "{errors:?}");
+    assert!(
+        errors[0].message.contains("unreadable log line"),
+        "{errors:?}"
+    );
+    // The good prefix still replays: only the bad line is skipped.
+    assert_eq!(fs::read_to_string(&seen).unwrap(), "a\n");
+}
+
+/// A log line that parses as JSON but not as its kind's event is
+/// collected, and never delivered: the failure names the line without
+/// offering a half-read event to any watcher. Without the collection the
+/// drain drops the corrupt line silent.
+#[test]
+fn drain_watchers_collects_a_line_it_cannot_read_as_an_event() {
+    let home = Home::new();
+    let seen = home.root.path().join("seen");
+    home.install(
+        "corrupt",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, old = pcall(host.fs.read, {seen:?}) if not ok or old == nil then old = \"\" end host.fs.write({seen:?}, old .. ev.payload.text .. \"\\n\") end }})\n",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&texted("a"), None, None).unwrap();
+    // The corrupt line copies the good one with a payload its kind cannot
+    // read, at a seq the drain's range covers, in the log's file.
+    let events = dir.join("events.jsonl");
+    let mut bytes = fs::read(&events).unwrap();
+    let first: Vec<u8> = bytes
+        .split(|b| *b == b'\n')
+        .next()
+        .unwrap_or_default()
+        .to_vec();
+    let mut bad: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    bad["payload"]["text"] = json!(123);
+    bytes.extend_from_slice(&serde_json::to_vec(&bad).unwrap());
+    bytes.push(b'\n');
+    fs::write(&events, bytes).unwrap();
+    let errors = session.drain_watchers(&log, &dir);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].extension, "log", "{errors:?}");
+    assert_eq!(errors[0].callback, "drain", "{errors:?}");
+    assert!(
+        errors[0].message.contains("could not read as an event"),
+        "{errors:?}"
+    );
+    // Only the good line replays: the corrupt one is never delivered.
+    assert_eq!(fs::read_to_string(&seen).unwrap(), "a\n");
 }
 
 /// A watch refusal surfaces as the registration notice naming the

@@ -64,6 +64,10 @@ pub(super) enum Window {
     Emitting,
     EmitFlushing,
     LoadRecorded,
+    /// The drain's pre-replay wait parked with a watcher delivery still
+    /// queued or running: the test's proof the wait engaged, fired under
+    /// the hub lock — the hook must not take it again.
+    DrainWait,
 }
 
 #[cfg(test)]
@@ -266,8 +270,12 @@ impl Hub {
         // The session-end drain waits on its own delivery, so the result
         // is recorded for its waiter and no notice is emitted: the log is
         // already closed to new lines. A mid-session delivery has no
-        // waiter, so its failure is noticed and the call forgotten.
-        if self.lock().keep_watcher_done {
+        // waiter, so its failure is noticed and the call forgotten — even
+        // while the drain keeps its own call: a live delivery finishing
+        // under the drain still needs its notice, and the drain never
+        // collects another call's result.
+        let kept = self.lock().keep_watcher_done;
+        if kept == Some(id) {
             if let Some(progress) = self.lock().calls.get_mut(&id) {
                 *progress = Progress::Done(result);
             }
@@ -285,7 +293,7 @@ impl Hub {
             shared.abandon = None;
         }
         shared.watcher_busy.remove(&index);
-        if !shared.keep_watcher_done {
+        if shared.keep_watcher_done != Some(id) {
             shared.calls.remove(&id);
         }
         drop(shared);
@@ -344,6 +352,25 @@ impl Hub {
         };
         drop(unsent);
         self.notify();
+    }
+
+    /// Waits until no watcher delivery is queued or running on this hub:
+    /// the drain's pre-replay wait, so a durable delivery the live offer
+    /// already covered has run before the drain treats it as covered. A
+    /// stop wakes it too: what never runs is then refused as `Stopped` by
+    /// the drain's own push, never lost silent.
+    pub(super) fn wait_for_watchers_idle(&self) {
+        let mut shared = self.lock();
+        #[cfg(test)]
+        let mut signalled = false;
+        while !shared.watcher_idle() && !matches!(shared.phase, Phase::Stopped(_)) {
+            #[cfg(test)]
+            if !signalled {
+                signalled = true;
+                self.at_window(Window::DrainWait);
+            }
+            shared = self.wait(shared, None);
+        }
     }
 
     /// Closes admission and waits until every admitted exec has queued its line.
@@ -474,10 +501,13 @@ pub(crate) struct Shared {
     /// thread starts or resumes the delivery, cleared when it finishes.
     /// Durable offers always queue, whatever is here.
     pub(super) watcher_busy: HashSet<usize>,
-    /// While set, a finished watcher delivery keeps its result for the
-    /// drain to collect instead of dropping it. Only the session-end drain
-    /// sets it, when no mid-session delivery waits on anything.
-    pub(super) keep_watcher_done: bool,
+    /// The drain's call id while its finished watcher delivery is kept
+    /// for the drain to collect instead of dropping it. Only the
+    /// session-end drain sets it, when no mid-session delivery waits on
+    /// anything — and only for its own call, so a live delivery finishing
+    /// under it still notices its failure instead of being retained with
+    /// no waiter to collect it.
+    pub(super) keep_watcher_done: Option<u64>,
 }
 
 /// What a waiter drops after it releases the hub lock: the deliveries
@@ -657,6 +687,16 @@ impl Shared {
             Gate::Wait(at) => (Next::Sleep(at.into_iter().chain(until).min()), unsent),
             Gate::Ready(_) => (Next::Sleep(until), unsent),
         }
+    }
+
+    /// No watcher delivery queued or running: what the drain's pre-replay
+    /// wait holds for.
+    fn watcher_idle(&self) -> bool {
+        self.watcher_busy.is_empty()
+            && !self
+                .queue
+                .iter()
+                .any(|job| matches!(&job.target, Target::Watcher { .. }))
     }
 
     /// Queues a call and returns its id.

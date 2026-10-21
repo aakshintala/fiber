@@ -847,6 +847,24 @@ impl SessionExtensions {
         if self.watchers.is_empty() {
             return Vec::new();
         }
+        // A durable delivery the live offer already covered runs before the
+        // drain replays past it: the cursor advanced when it queued, so the
+        // drain's range skips it, and the teardown after the drain would lose
+        // it still queued or running. One wait per extension; the hub wakes
+        // on every finish and on the stop, which ends the wait and is then
+        // refused as `Stopped` by the drain's own push, never lost silent.
+        let mut extensions: Vec<Arc<LuaExtension>> = Vec::new();
+        for watcher in &self.watchers {
+            if !extensions
+                .iter()
+                .any(|held| Arc::ptr_eq(held, &watcher.extension))
+            {
+                extensions.push(Arc::clone(&watcher.extension));
+            }
+        }
+        for extension in &extensions {
+            extension.wait_for_watchers_idle();
+        }
         let offered = self
             .cursors
             .lock()
@@ -856,27 +874,64 @@ impl SessionExtensions {
             .watermark
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        let mut errors = Vec::new();
         let mut replay = Vec::new();
         // The range the drain replays: what the log held when the session
         // ended, so nothing appended after — there is nothing after — can
         // slip in while the drain runs.
         let end = log.count();
-        if let Ok(lines) = log::lines(dir) {
-            for line in lines {
-                let Ok(line) = line else { continue };
-                let Some(seq) = line.seq.map(|seq| seq.0) else {
-                    continue;
-                };
-                if seq >= end {
+        // A log the drain cannot read replays nothing, and the failure is
+        // collected like a watcher failure: the drain is the report, since
+        // the log is closed to new lines.
+        let lines = match log::lines(dir) {
+            Ok(lines) => lines,
+            Err(error) => {
+                errors.push(WatcherError {
+                    extension: "log".to_owned(),
+                    callback: "drain".to_owned(),
+                    message: format!("the session-end drain could not read the log: {error}"),
+                });
+                return errors;
+            }
+        };
+        for line in lines {
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => {
+                    errors.push(WatcherError {
+                        extension: "log".to_owned(),
+                        callback: "drain".to_owned(),
+                        message: format!(
+                            "the session-end drain skipped an unreadable log line: {error}"
+                        ),
+                    });
                     continue;
                 }
-                let Ok(Some(event)) = Event::from_envelope(&line) else {
-                    continue;
-                };
-                replay.push((seq, event));
+            };
+            let Some(seq) = line.seq.map(|seq| seq.0) else {
+                continue;
+            };
+            if seq >= end {
+                continue;
             }
+            let event = match Event::from_envelope(&line) {
+                Ok(Some(event)) => event,
+                // A kind this build does not know is none of this session's
+                // watchers' business (`docs/events.md`, "Versioning").
+                Ok(None) => continue,
+                Err(error) => {
+                    errors.push(WatcherError {
+                        extension: "log".to_owned(),
+                        callback: "drain".to_owned(),
+                        message: format!(
+                            "the session-end drain skipped a line it could not read as an event: {error}"
+                        ),
+                    });
+                    continue;
+                }
+            };
+            replay.push((seq, event));
         }
-        let mut errors = Vec::new();
         let mut advanced = BTreeMap::new();
         'watchers: for watcher in &self.watchers {
             let key = (watcher.name.clone(), watcher.index);
