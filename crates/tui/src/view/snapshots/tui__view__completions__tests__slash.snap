@@ -40,11 +40,11 @@ expression: "screen(&app, 160, 48)"
                                     new           Goes home with the cursor in the input box, to pick the workspace, … command
                                     resume        Goes home, focused on the first exited row.                          command
                                     model         Opens the model picker.                                              command
-                                    thinking      Sets the thinking level, or opens the model picker on it. [<level>]  command
+                                    thinking      /effort Sets the thinking level, or opens the model picke… [<level>] command
                                     credential    Switches the credential label, or opens the credential pi… [<label>] command
                                     scoped-models Chooses which models the model picker shows.                         command
                                     tools         Opens the tools view.                                                command
-                                  1–8 of 48 · ↓ 40 more
+                                  1–8 of 49 · ↓ 41 more
 
                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

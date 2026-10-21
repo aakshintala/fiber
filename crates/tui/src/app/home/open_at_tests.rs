@@ -971,3 +971,39 @@ fn an_open_from_a_held_full_sends_summary_then_the_raise_later() {
     );
     assert!(!app.gated(&id("s_aaaaaaaaaaaaaaaa")));
 }
+
+#[test]
+fn an_openings_commands_answer_fills_the_slash_list_while_its_replay_is_gated() {
+    let mut app = home_at(OpenAt::Home);
+    let lines =
+        commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), Some(Level::Full), None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
+    let answer = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: id("s_aaaaaaaaaaaaaaaa"),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"command_id": send[0]["id"], "result": {"commands": [
+            {"name": "tdd", "description": "Runs tdd.", "tag": "skill"}]}})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
+    assert!(app.on_line(answer).is_empty());
+    // The replay stays gated, and the skill is on the list already.
+    assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+    assert!(
+        app.completion
+            .slash_rows
+            .iter()
+            .any(|row| row.name == "tdd")
+    );
+}
