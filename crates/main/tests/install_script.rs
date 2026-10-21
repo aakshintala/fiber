@@ -939,7 +939,7 @@ impl Setup {
             Ok(status) => status.unwrap(),
             Err(_) => support::expired(self.deadline, group, &finished, "install.sh to exit"),
         };
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         // The reader ends at end of file once the child is gone: the
         // channel's disconnect is the whole output.
         while let Ok(chunk) = self.deadline.cleanup_phase().recv(&chunks) {
