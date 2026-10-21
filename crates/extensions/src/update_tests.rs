@@ -281,6 +281,60 @@ impl Setup {
     }
 }
 
+/// The scratch-to-staged rename crosses filesystems when the installed
+/// binary lives on another mount, so the commit falls back to a copy:
+/// the installed binary sits in a fresh directory on `/dev/shm`, and a
+/// probe rename from the test root there first proves the filesystems
+/// differ. Flipping the `CrossesDevices` comparison to `!=` makes the
+/// commit return `Err` instead of copying, so this test kills that mutant.
+#[cfg(target_os = "linux")]
+#[test]
+fn cross_device_commit_falls_back_to_copy() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    assert!(
+        Path::new("/dev/shm").is_dir(),
+        "`/dev/shm` is absent: the cross-device commit test needs it"
+    );
+    let shm = fakes::TempDir::under(Path::new("/dev/shm"), "fiber-update");
+    // The scratch directory lives under the system temporary directory,
+    // so a probe rename from the test root to `/dev/shm` takes the same
+    // cross-filesystem path the commit's rename takes.
+    let probe_src = setup.root.path().join("probe");
+    fs::write(&probe_src, b"probe").unwrap();
+    let probe_dst = shm.path().join("probe");
+    match fs::rename(&probe_src, &probe_dst) {
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {}
+        Err(err) => panic!("the probe rename failed unexpectedly: {err}"),
+        Ok(()) => panic!("the probe rename succeeded: `/dev/shm` is no separate filesystem"),
+    }
+    let installed = shm.path().join("fiber");
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        Some(&installed),
+    )
+    .unwrap();
+    let binary = staged.commit().unwrap();
+    assert_eq!(fs::read(&binary).unwrap(), b"marker");
+    assert_eq!(binary.parent(), Some(shm.path()));
+}
+
 #[test]
 fn an_update_moves_every_member_and_leaves_a_removed_first_party_absent() {
     let mut setup = Setup::new();
