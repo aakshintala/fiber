@@ -167,8 +167,7 @@ Approving a server declaration also writes a project record at
 `projects/<key>/servers/<content-hash>`, naming this project as one that
 approved that copy. Every approved version is kept until no worktree's files match it, when
 `fiber sessions prune` removes it (`docs/extensions.md`, "Code a repository
-ships"), and a server copy is judged by its project records exactly as an
-extension copy is judged (`docs/invocation.md`, "Deleting and pruning"). `pinned.json` records each declared path's size, modification time
+ships"; `docs/invocation.md`, "Deleting and pruning"). `pinned.json` records each declared path's size, modification time
 and hash, so a session hashes a file again only when one of the first two
 changed. It is an index: deleting it costs a re-hash and nothing else.
 

@@ -1356,9 +1356,7 @@ that hold nothing to lose:
   repository ships"). A server copy is judged exactly as an extension copy
   is: it is a candidate when at least one project record at
   `projects/<key>/servers/<content-hash>` names it and every naming record's
-  project is in scope, and it is kept when no project record names it. A
-  server copy approved before the project record existed has no record, so it
-  stays until it is approved again. The worktrees that count are the repository's
+  project is in scope, and it is kept when no project record names it. The worktrees that count are the repository's
   `git worktree list`. The copy's approval record stays, so the same version
   checked out again is not offered again; its copy is made again from the
   worktree.
