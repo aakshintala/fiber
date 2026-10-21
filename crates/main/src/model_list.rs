@@ -72,6 +72,7 @@ pub(crate) fn catalogue(
             SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks), None)
         },
         &run,
+        clock.as_ref(),
     )
 }
 
@@ -90,9 +91,10 @@ pub(crate) fn read(
     now: SystemTime,
     load: &dyn Fn(&Config) -> SessionExtensions,
     run: config::Runner<'_>,
+    clock: &dyn Clock,
 ) -> Result<tui::Catalogue, cli::ModelListsError> {
     let (providers, config, mut notices) =
-        cli::model_lists(home, workspace, mode(refresh), load, run)?;
+        cli::model_lists(home, workspace, mode(refresh), load, run, clock)?;
     let installable = match extensions::not_installed_providers(home) {
         Ok(names) => names.into_iter().map(str::to_owned).collect(),
         Err(error) => {

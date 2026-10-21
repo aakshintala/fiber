@@ -220,6 +220,7 @@ fn bounded(
             read,
             &load,
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         ) {
             Ok(loaded) => Ok(listed(loaded)),
             Err(error) => Err(error.to_string()),
@@ -301,6 +302,7 @@ fn a_cached_read_lists_every_installed_model_sorted_by_provider() {
             ModelLists::Cached,
             &unloaded(&called),
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap(),
     );
@@ -322,6 +324,7 @@ fn a_cached_list_replaces_the_data_files_models() {
             ModelLists::Cached,
             &unloaded(&called),
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap(),
     );
@@ -342,6 +345,7 @@ fn an_object_role_marks_by_its_model() {
         ModelLists::Cached,
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert_eq!(roles_of(&config, "acme/m1"), ["fast"]);
@@ -361,6 +365,7 @@ fn a_role_of_another_harness_marks_nothing() {
         ModelLists::Cached,
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert!(roles_of(&config, "acme/m1").is_empty());
@@ -394,6 +399,7 @@ fn a_cached_read_loads_no_extension() {
         ModelLists::Cached,
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert!(!called.get());
@@ -494,6 +500,7 @@ fn a_cached_lua_only_provider_lists_without_loading() {
             ModelLists::Cached,
             &unloaded(&called),
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap(),
     );
@@ -514,6 +521,7 @@ fn a_provider_with_a_data_file_is_not_listed_twice() {
             ModelLists::Cached,
             &unloaded(&called),
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap(),
     );
@@ -543,6 +551,7 @@ fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
             ModelLists::Cached,
             &unloaded(&called),
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap(),
     );
@@ -564,6 +573,7 @@ fn the_scripted_provider_is_never_listed() {
             ModelLists::Cached,
             &unloaded(&called),
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap(),
     );
@@ -586,6 +596,7 @@ fn a_skipped_cache_file_is_never_read() {
         ModelLists::Cached,
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     );
     std::fs::set_permissions(&skipped, std::fs::Permissions::from_mode(0o644)).unwrap();
     assert!(result.is_ok(), "a skipped cache file is never read");
@@ -618,6 +629,7 @@ fn load_notices_reach_the_lists() {
             ModelLists::Cached,
             &unloaded(&called),
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap(),
     );
@@ -641,6 +653,7 @@ fn a_load_failure_names_what_todays_read_named() {
         ModelLists::Cached,
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .expect_err("an unreadable configuration reads no list");
     assert!(matches!(error, ModelListsError::Load(_)), "{error:?}");
@@ -662,6 +675,7 @@ fn an_unreadable_cached_list_fails_the_read() {
         ModelLists::Cached,
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .expect_err("an unreadable cached list reads no list");
     assert!(matches!(error, ModelListsError::Config(_)), "{error:?}");
@@ -707,6 +721,7 @@ fn a_cached_read_leaves_out_a_cached_model_at_an_unlisted_url() {
             ModelLists::Cached,
             &unloaded(&called),
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap(),
     );
@@ -737,6 +752,7 @@ fn a_cached_list_no_installed_extension_declares_is_not_listed() {
             ModelLists::Cached,
             &unloaded(&called),
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap(),
     );
@@ -773,6 +789,154 @@ fiber.provider("acme", {{
             .iter()
             .any(|notice| notice.contains("acme/m2")),
         "{:?}",
+        catalogue.notices
+    );
+}
+
+/// A placeholder variable name no test process sets: each hub test reads
+/// its absence first and sets nothing.
+const HUB_ENV_HOST: &str = "FIBER_TEST_MODEL_LISTS_HUB_ENV_HOST";
+
+/// Installs the extension `extension` registering the provider `name`
+/// with one model whose base URL fills `{workspace}` from the
+/// environment variable `var`.
+fn install_placeholder(setup: &Setup, extension: &str, name: &str, var: &str) {
+    let dir = setup.home().join("extensions").join(extension);
+    let data = json!({
+        "name": name,
+        "placeholders": {"workspace": {"env": var}},
+        "models": [{"id": "m", "protocol": "openai-responses",
+                    "base_url": "https://{workspace}/v1", "context_window": 1000}],
+    });
+    let mut manifest = json!({
+        "name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": extensions::API,
+    });
+    manifest["providers"] = Value::Object(
+        [(name.to_owned(), json!(["https://{workspace}/v1"]))]
+            .into_iter()
+            .collect(),
+    );
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
+    std::fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    write_record(&dir);
+    std::fs::write(
+        dir.join("providers").join(format!("{name}.json")),
+        data.to_string(),
+    )
+    .unwrap();
+}
+
+/// A hub on `home`'s `run/hub` for one client: it says `hub_hello`, reads
+/// the one command line and sends it on, then answers the requested names
+/// from `values` and holds the connection until the client closes it.
+fn fake_hub_env(home: &Path, values: Value) -> std::sync::mpsc::Receiver<String> {
+    use std::io::{BufRead, Write};
+    let listener = std::os::unix::net::UnixListener::bind(home.join("run/hub")).unwrap();
+    let (sent, got) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({"kind": "hub_hello", "ts": 1,
+                        "schema_version": contract::SCHEMA_VERSION, "payload": {}})
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(&stream)
+            .read_line(&mut line)
+            .unwrap();
+        sent.send(line).unwrap_or(());
+        stream
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({"kind": "command_accepted", "ts": 1,
+                        "schema_version": contract::SCHEMA_VERSION,
+                        "payload": {"command_id": "c_env",
+                            "result": {"values": values}}})
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut rest = String::new();
+        std::io::BufReader::new(stream)
+            .read_line(&mut rest)
+            .unwrap_or(0);
+    });
+    got
+}
+
+#[test]
+fn a_cached_list_keeps_what_the_hub_holds_though_the_client_lacks_it() {
+    assert!(
+        std::env::var_os(HUB_ENV_HOST).is_none(),
+        "the test process lacks {HUB_ENV_HOST}"
+    );
+    let setup = Setup::new("fiber-model-list-hub-env");
+    install_placeholder(&setup, "acme-ext", "acme", HUB_ENV_HOST);
+    std::fs::create_dir_all(setup.home().join("run")).unwrap();
+    let got = fake_hub_env(&setup.home(), json!({HUB_ENV_HOST: "adb-1.example.test"}));
+    let called = Cell::new(false);
+    let catalogue = listed(
+        model_lists(
+            &setup.home(),
+            &setup.workspace(),
+            ModelLists::Cached,
+            &unloaded(&called),
+            &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(references(&catalogue), ["acme/m"]);
+    assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
+    let request: Value = serde_json::from_str(
+        &fakes::Deadline::after(Duration::from_secs(10))
+            .recv(&got)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        request,
+        json!({"id": "c_env", "command": "placeholder_env",
+            "args": {"names": [HUB_ENV_HOST]}}),
+    );
+}
+
+#[test]
+fn a_cached_list_leaves_out_what_no_hub_answers_when_the_client_lacks_it() {
+    assert!(
+        std::env::var_os(HUB_ENV_HOST).is_none(),
+        "the test process lacks {HUB_ENV_HOST}"
+    );
+    let setup = Setup::new("fiber-model-list-no-hub");
+    install_placeholder(&setup, "acme-ext", "acme", HUB_ENV_HOST);
+    let called = Cell::new(false);
+    let catalogue = listed(
+        model_lists(
+            &setup.home(),
+            &setup.workspace(),
+            ModelLists::Cached,
+            &unloaded(&called),
+            &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
+    assert!(
+        catalogue
+            .notices
+            .iter()
+            .any(|notice| notice.contains(HUB_ENV_HOST) && notice.contains("hub's environment")),
+        "the list names the unconfigured model: {:?}",
         catalogue.notices
     );
 }

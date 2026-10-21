@@ -214,9 +214,12 @@ fn run(
             notices.push(notice);
         }
     }
-    notices
-        .extend(providers.add_session(&extensions, &config, run, &|name| std::env::var(name).ok()));
-    notices.extend(providers.fill_placeholders(&config, &|name| std::env::var(name).ok())?);
+    // Each placeholder value from the hub's captured environment, so the
+    // list agrees with the session the hub would start; no hub answers
+    // and the process environment serves, as before.
+    let lookup = crate::hub_env::placeholder_lookup(home, &providers, clock.as_ref());
+    notices.extend(providers.add_session(&extensions, &config, run, &lookup));
+    notices.extend(providers.fill_placeholders(&config, &lookup)?);
     crate::config::print_notices(err, &notices);
     // A stale list refreshes in the background for the next run: the
     // detached child, never waited on. A spawn that fails is ignored:
@@ -330,11 +333,13 @@ pub fn models(
 /// refresh runs through the locked [`extensions::refresh_lists`] API, so a
 /// refresh beside another process refreshes once.
 fn refresh_named(
+    home: &Path,
     names: &[String],
     providers: &Providers,
     loaded: &SessionExtensions,
     config: &Config,
     run: config::Runner<'_>,
+    clock: &dyn Clock,
 ) {
     let wanted: Vec<Arc<extensions::LuaProvider>> = loaded
         .lua_providers()
@@ -342,13 +347,14 @@ fn refresh_named(
         .filter(|(_, provider)| names.iter().any(|name| name == provider.name()))
         .map(|(_, provider)| Arc::clone(provider))
         .collect();
+    let lookup = crate::hub_env::placeholder_lookup(home, providers, clock);
     for (_, handle) in extensions::refresh_lists(
         &wanted,
         providers,
         config,
         Some(config::refresh_after(config)),
         run,
-        &|name| std::env::var(name).ok(),
+        &lookup,
     ) {
         let _ignored = handle.join();
     }
@@ -371,13 +377,21 @@ fn refresh_run(
         let loaded = SessionExtensions::load_repository(
             home,
             &config,
-            clock,
+            Arc::clone(&clock),
             locks,
             None,
             StateSeed::new(),
             set,
         );
-        refresh_named(names, &providers, &loaded, &config, run);
+        refresh_named(
+            home,
+            names,
+            &providers,
+            &loaded,
+            &config,
+            run,
+            clock.as_ref(),
+        );
     }
 }
 

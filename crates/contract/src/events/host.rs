@@ -1,6 +1,8 @@
 //! Payloads of `docs/events.md`, "MCP servers", "Extensions", "Jobs" and
 //! "Command acknowledgements".
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -418,6 +420,13 @@ pub enum CommandResult {
         clients: usize,
         /// The environment sessions the hub starts now get, as `session_started` carries it.
         variables: Variables,
+    },
+    /// For `placeholder_env`, over the hub: the hub's captured values for
+    /// the requested placeholder variable names. Absent names are omitted,
+    /// never `null`, and the values are never logged.
+    PlaceholderEnv {
+        /// The present values, by requested name.
+        values: BTreeMap<String, String>,
     },
     /// For a nonempty `full` subscribe: the opening fold's boundary.
     Subscribe {
