@@ -132,7 +132,6 @@ jobs:
           ROTATION_DAY: ${{ matrix.day }}
         run: |
           mutant_list="$RUNNER_TEMP/mutants-scheduled-day$ROTATION_DAY-$SHARD-of-$TOTAL.txt"
-          run_log="$RUNNER_TEMP/mutants-run-day$ROTATION_DAY-$SHARD-of-$TOTAL.log"
           cargo mutants --workspace --test-tool nextest --shard "$SHARD/$TOTAL" --sharding round-robin --list >"$mutant_list"
           echo "Rotation day $ROTATION_DAY, shard $SHARD of $TOTAL (--shard $SHARD/$TOTAL, round-robin)." >>"$GITHUB_STEP_SUMMARY"
           if [ ! -s "$mutant_list" ]; then
@@ -164,13 +163,13 @@ jobs:
             --sharding round-robin
           )
           # Guarded by `if` so errexit (-e, which Actions' `bash`
-          # shell sets) does not exit on a non-zero pipeline before the
+          # shell sets) does not exit on a non-zero status before the
           # status capture: a survivors-only shard (status 2) must reach
           # the helper below instead of failing the step here.
-          if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}" 2>&1 | tee "$run_log"; then
+          if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}"; then
             status=0
           else
-            status=${PIPESTATUS[0]}
+            status=$?
           fi
           if [ "$status" -ne 0 ]; then
             last_log=$(find mutants.out/log -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
@@ -181,7 +180,7 @@ jobs:
             else
               echo "No scenario log found in mutants.out/log."
             fi
-            scripts/mutants-shard-finish "$status" "$run_log"
+            scripts/mutants-shard-finish "$status"
           fi
       - name: Upload mutants.out
         if: always()
