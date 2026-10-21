@@ -2446,3 +2446,112 @@ fn a_parked_watcher_holds_a_hook_a_later_watcher_and_a_command() {
         "command-ran"
     );
 }
+
+/// Every `fiber.hook` refusal names the entry when one is declared, and
+/// matches today's string without one.
+#[test]
+fn hook_refusals_name_the_entry_when_given() {
+    // Each refusal as the point expression, the spec's fields and the
+    // reason: emitted once without an entry and once declaring `fmt`.
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "\"after_tool\"",
+            "on_failure = \"blocking\", run = run",
+            "missing `timeout`",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, run = run",
+            "missing `on_failure`",
+        ),
+        (
+            "\"after_call\"",
+            "timeout = 100, on_failure = \"blocking\", run = run",
+            "`after_call` is not a hook point",
+        ),
+        (
+            "7",
+            "timeout = 100, on_failure = \"blocking\", run = run",
+            "`7` is not a hook point",
+        ),
+        (
+            "\"after_tool\"",
+            "phase = \"late\", timeout = 100, on_failure = \"blocking\", run = run",
+            "`phase` must be `sanitize`, `transform` or `check`",
+        ),
+        (
+            "\"after_tool\"",
+            "phase = \"check\", timeout = 100, on_failure = \"blocking\", run = run",
+            "a `check` hook exists only at `before_message`, `before_tool` and `before_model_call`",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = \"blocking\", run = \"no\"",
+            "`run` must be a function",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 0, on_failure = \"blocking\", run = run",
+            "`timeout` must be a whole number of milliseconds above 0",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = -5, on_failure = \"blocking\", run = run",
+            "`timeout` must be a whole number of milliseconds above 0",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 1.5, on_failure = \"blocking\", run = run",
+            "`timeout` must be a whole number of milliseconds above 0",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = \"100\", on_failure = \"blocking\", run = run",
+            "`timeout` must be a whole number of milliseconds above 0",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = \"maybe\", run = run",
+            "`on_failure` must be `blocking` or `non-blocking`",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = 1, run = run",
+            "`on_failure` must be `blocking` or `non-blocking`",
+        ),
+    ];
+    let mut init = String::from("local run = function() end\n");
+    let mut expected = Vec::new();
+    for (point, fields, why) in cases {
+        init.push_str(&format!("fiber.hook({point}, {{ {fields} }})\n"));
+        let name = point.trim_matches('"');
+        expected.push(format!("`{name}` hook not registered: {why}"));
+        init.push_str(&format!(
+            "fiber.hook({point}, {{ entry = \"fmt\", {fields} }})\n"
+        ));
+        expected.push(format!(
+            "`{name}` hook not registered for entry `fmt`: {why}"
+        ));
+    }
+    init.push_str("fiber.hook(\"after_tool\", \"no\")\n");
+    expected.push(
+        "`after_tool` hook not registered: it takes a table of `timeout`, `on_failure` and `run`"
+            .to_owned(),
+    );
+    init.push_str(
+        "fiber.hook(\"before_tool\", { entry = \"fmt\", phase = \"check\", timeout = 1, on_failure = \"blocking\", run = run })\n",
+    );
+    let dir = extension("entry-labeled-refusals", &init);
+    let clock = FakeClock::new();
+    let ext = LuaExtension::new(
+        "ext",
+        dir.path(),
+        PathBuf::from("/nonexistent-fiber-home"),
+        clock,
+    );
+    let declared = ext.hooks().expect("the entry script runs");
+    assert_eq!(declared.problems, expected);
+    // The valid entry-carrying hook registered: the label changes only
+    // refusals.
+    assert_eq!(declared.by_point.get("before_tool").map(Vec::len), Some(1));
+}
