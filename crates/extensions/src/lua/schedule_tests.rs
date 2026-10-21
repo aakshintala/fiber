@@ -429,7 +429,9 @@ fn a_command_that_parks_after_its_caller_answered_ends_at_its_own_deadline() {
     }
     // The clock is already at the deadline, so the parked entry fails at
     // its own deadline.
-    match next("ext", &hub, &mut parked) {
+    let quiet = fakes::TempDir::new("fiber-schedule-quiet");
+    let vm = quiet_vm(&hub, quiet.path());
+    match next("ext", &hub, &vm, &mut parked) {
         Some(Work::Collect) => {}
         _ => panic!("the parked command ends at its own deadline"),
     }
@@ -437,6 +439,13 @@ fn a_command_that_parks_after_its_caller_answered_ends_at_its_own_deadline() {
         matches!(hub.lock().phase, Phase::Ready(_)),
         "the VM stays up"
     );
+}
+
+/// A VM for `next`/`settle` calls whose targets never include a delegate
+/// item: loaded from `dir` with no entry script, so nothing runs. The
+/// delegate teardown clears through it, which these calls never reach.
+fn quiet_vm(hub: &Arc<Hub>, dir: &std::path::Path) -> Vm {
+    Vm::load(hub, &start_in(dir)).expect("a dir without init.lua loads")
 }
 
 /// A thread `Start` for `dir`, outside any session.
@@ -506,6 +515,7 @@ fn a_stopped_extension_starts_no_exec_for_a_suspended_callback() {
     settle(
         &start_in(dir.path()),
         &hub,
+        &quiet_vm(&hub, dir.path()),
         &mut parked,
         id,
         &Target::Tool("t".to_owned()),
@@ -833,6 +843,7 @@ fn an_abandon_before_admission_starts_no_host_work() {
                 | Target::Watcher { .. }
                 | Target::Timer { .. }
                 | Target::Tool(_)
+                | Target::Delegate { .. }
                 | Target::Search(_)
                 | Target::Effects(_) => None,
             };
@@ -852,6 +863,7 @@ fn an_abandon_before_admission_starts_no_host_work() {
     settle(
         &start_in(dir.path()),
         &exec_hub,
+        &quiet_vm(&exec_hub, dir.path()),
         &mut parked,
         exec_id,
         &Target::Tool("race".to_owned()),
@@ -886,6 +898,7 @@ fn an_abandon_before_admission_starts_no_host_work() {
     settle(
         &start_in(dir.path()),
         &drive_hub,
+        &quiet_vm(&drive_hub, dir.path()),
         &mut parked,
         drive_id,
         &Target::Tool("race-drive".to_owned()),
@@ -951,6 +964,7 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
                 | Target::Hook { .. }
                 | Target::Watcher { .. }
                 | Target::Timer { .. }
+                | Target::Delegate { .. }
                 | Target::Effects(_) => None,
             };
             if let Some(id) = name
@@ -1018,6 +1032,7 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
         settle(
             &start_in(dir.path()),
             &hub,
+            &quiet_vm(&hub, dir.path()),
             &mut parked,
             id,
             &target,
@@ -1147,6 +1162,7 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
                 let lua = mlua::Lua::new();
                 let thread = entry(&lua, id).thread;
                 let mut parked = Vec::new();
+                let vm = quiet_vm(&hub, &home);
                 settle(
                     &Start {
                         name: "fiber.test/stopped".to_owned(),
@@ -1160,6 +1176,7 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
                         deps: Default::default(),
                     },
                     &hub,
+                    &vm,
                     &mut parked,
                     id,
                     &target,
@@ -1263,9 +1280,11 @@ fn a_failed_oauth_start_delivers_its_failure_after_releasing_the_lock() {
                 let lua = mlua::Lua::new();
                 let thread = entry(&lua, id).thread;
                 let mut parked = Vec::new();
+                let vm = quiet_vm(&hub, &home);
                 settle(
                     &start_in(&home),
                     &hub,
+                    &vm,
                     &mut parked,
                     id,
                     &target,
@@ -2173,7 +2192,12 @@ fn delegate_rig(
                 Target::Search(name) => {
                     timeouts.search.insert(name.clone(), timeout);
                 }
-                Target::Timer { .. } | Target::Provider { .. } | Target::Watcher { .. } => {}
+                // A delegate run needs no registration: its timeout
+                // comes from the yield.
+                Target::Timer { .. }
+                | Target::Provider { .. }
+                | Target::Watcher { .. }
+                | Target::Delegate { .. } => {}
             }
         } else {
             panic!("not ready");
@@ -2202,6 +2226,7 @@ fn run_delegate_worker(
     let request = crate::host::Request::Delegate {
         arguments: serde_json::Map::new(),
         handle: 7,
+        timeout: Duration::from_millis(100),
     };
     let deliver: crate::oauth::Deliver = Arc::new(move |reply| {
         reply_tx.send(reply).expect("the test waits for the reply");
@@ -2425,6 +2450,7 @@ fn an_abandoned_hub_refuses_a_delegate_start_closed() {
     let request = crate::host::Request::Delegate {
         arguments: serde_json::Map::new(),
         handle: 7,
+        timeout: Duration::from_millis(100),
     };
     let deliver: crate::oauth::Deliver = Arc::new(|_| panic!("no reply is delivered"));
     let shared = hub.lock();
@@ -2494,6 +2520,7 @@ fn delegate_starts_are_refused_from_provider_search_and_effects() {
             let request = crate::host::Request::Delegate {
                 arguments: serde_json::Map::new(),
                 handle: 7,
+                timeout: Duration::from_millis(100),
             };
             let deliver: crate::oauth::Deliver = Arc::new(|_| panic!("no reply is delivered"));
             let shared = hub.lock();
@@ -2653,7 +2680,7 @@ fn bind_delegate_records_its_id_for_a_later_abandon() {
     let (fake, _arrived_rx, _answer_tx) = watch_delegates(&hub);
     hub.lock().delegates.clear();
     let id = contract::JobId("j_bind".to_owned());
-    hub.bind_delegate(id.clone(), 7);
+    hub.bind_delegate(id.clone(), 7, Duration::from_millis(100));
     assert_eq!(
         hub.lock().delegates.get(&id),
         Some(&7),

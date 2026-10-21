@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use contract::JobId;
 use contract::clock::Clock;
 use contract::diag::{DebugLog, Purpose};
 use serde_json::{Value, json};
@@ -753,6 +754,29 @@ impl LuaExtension {
         }));
     }
 
+    /// Holds a delegate's finish for its job, when this extension binds it:
+    /// the completion pushes the `run` item. False when no binding names
+    /// the job, so model-owned delegates pass through.
+    pub(crate) fn hold_delegate_finish(
+        &self,
+        finished: &contract::events::DelegateFinished,
+    ) -> bool {
+        self.hub.hold_delegate_finish(finished)
+    }
+
+    /// Pushes the one stream item for an ended delegate this extension
+    /// still binds, consuming the binding and any held finish. False when
+    /// no binding names the job or the extension stopped: nothing queues.
+    pub(crate) fn push_delegate_run(&self, completed: &contract::events::JobCompleted) -> bool {
+        self.hub.push_delegate_run(self.name(), completed)
+    }
+
+    /// Forgets the delegate bindings for `jobs`, with their held finishes
+    /// and queued-but-unstarted `run` items.
+    pub(crate) fn release_delegates(&self, jobs: &[contract::JobId]) {
+        self.hub.release_delegates(jobs);
+    }
+
     /// Whether the watcher has a delivery queued or running: the busy bit
     /// the thread sets on start and clears on finish, or a queued job the
     /// thread has not started. An ephemeral offer skips while this holds.
@@ -1075,6 +1099,19 @@ pub(crate) enum Target {
     /// The `effects` function of a tool `fiber.tool` registered, in the gaps
     /// of the stream.
     Effects(String),
+    /// One extension-owned delegate's end: its `run` with the completion's
+    /// table, in the ordered stream. The per-call `timeout` rides along
+    /// from the `host.delegate` yield, judged from the push instant.
+    Delegate {
+        /// The extension whose `run` runs.
+        extension: String,
+        /// The delegate job that ended.
+        job_id: JobId,
+        /// The chunk-local `run` handle this start stored.
+        handle: u64,
+        /// The per-call timeout the yield carried.
+        timeout: Duration,
+    },
 }
 
 /// The eligible provider purpose of `target`: the provider's registered
@@ -1130,6 +1167,9 @@ impl std::fmt::Display for Target {
             Self::Tool(name) => f.write_str(name),
             Self::Search(name) => f.write_str(name),
             Self::Effects(name) => write!(f, "{name}.effects"),
+            Self::Delegate {
+                extension, job_id, ..
+            } => write!(f, "{extension}.run {}", job_id.0),
         }
     }
 }
@@ -1145,6 +1185,7 @@ fn timeout_ms(timeout: Duration) -> u64 {
 pub(crate) mod asks;
 mod command_calls;
 mod declared;
+mod delegates;
 mod errors;
 mod host_calls;
 pub(crate) mod hub;
