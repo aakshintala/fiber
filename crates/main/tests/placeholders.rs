@@ -66,7 +66,10 @@ fn an_unconfigured_model_exits_model_unconfigured_naming_the_setting() {
     assert_eq!(
         message,
         "The model `fake/m` needs the setting `workspace` for its base URL, \
-         which has no value, and `FIBER_TEST_1128_UNSET_HOST` has none either."
+         which has no value, and `FIBER_TEST_1128_UNSET_HOST` is not set in the hub's \
+         environment (your login shell). Run `fiber login fake`, \
+         or set `workspace` in `config/fake.json` in Fiber home, \
+         or export it in your shell profile and run `fiber hub refresh`."
     );
     assert!(server.requests().is_empty());
     assert!(!setup.home().join("projects").exists());

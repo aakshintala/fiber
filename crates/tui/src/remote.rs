@@ -17,9 +17,10 @@ mod router;
 use crate::ThemeSetting;
 use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
 use crate::configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, LogoutRow,
-    NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope, RulesSection,
-    Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches,
+    BrowserLogin, Configure, ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginShow,
+    LoginTarget, LogoutRow, NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked,
+    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
+    ToolGroup, ToolSwitches,
 };
 use contract::clock::Clock;
 use contract::{ErrorCode, Secret};
@@ -659,6 +660,22 @@ impl Configure for Remote {
             json!({"name":name,"id":id}),
             Caller::Loop,
             |_| Some(()),
+        )
+    }
+    fn gaps(&self, name: &str) -> Result<Vec<HostGap>, ConfigureError> {
+        self.call(
+            "gaps",
+            json!({"name":name}),
+            Caller::Worker(&Cancel::default()),
+            decode::gaps,
+        )
+    }
+    fn save_host(&self, name: &str, key: &str, value: &str) -> Result<HostSaved, ConfigureError> {
+        self.call(
+            "save_host",
+            json!({"name":name,"key":key,"value":value}),
+            Caller::Loop,
+            decode::host_saved,
         )
     }
     fn reviewer_notes(&self, workspace: &Path) -> Result<ReviewerNotes, ConfigureError> {

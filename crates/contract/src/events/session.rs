@@ -69,7 +69,7 @@ pub struct SessionStarted {
     /// When the session runs in a worktree Fiber created for it: its path,
     /// branch, and repository (the git common directory, absolute). The path
     /// is also `workspace` (`docs/invocation.md`, "Isolation"). A session
-    /// that continues a rewind records the same worktree.
+    /// that continues a rewind, a fork, or a `start` `continues` records the same worktree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<Worktree>,
 }

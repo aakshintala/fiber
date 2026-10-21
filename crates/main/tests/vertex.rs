@@ -173,7 +173,7 @@ fn a_session_without_a_project_names_the_setting() {
     let text = format!("{:?}{}", run.lines, run.stderr);
     assert!(text.contains("model_unconfigured"), "{text}");
     assert!(
-        text.contains("needs the setting `project` for its base URL, which has no value, and `GOOGLE_CLOUD_PROJECT` has none either"),
+        text.contains("needs the setting `project` for its base URL, which has no value, and `GOOGLE_CLOUD_PROJECT` is not set in the hub's environment (your login shell). Run `fiber login"),
         "{text}"
     );
 }

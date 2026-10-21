@@ -32,6 +32,8 @@ pub struct SessionArgv {
     /// Continue the session this rewind names as the session its
     /// `rewound` line points at.
     pub rewound_from: Option<SessionId>,
+    /// The session whose worktree this session continues: its id. Set from `--continues`, beside `--rewound-from`.
+    pub continues: Option<SessionId>,
     /// The parent session the fork continues: the session whose log
     /// holds the point.
     pub forked_from: Option<SessionId>,
@@ -59,6 +61,7 @@ impl Default for SessionArgv {
             credential: None,
             worktree: false,
             rewound_from: None,
+            continues: None,
             forked_from: None,
             forked_seq: None,
             parent: None,
@@ -76,7 +79,7 @@ impl SessionArgv {
     /// travels attached for the same reason. The order is fixed, so a
     /// caller and its test read the same list: `session`, `--id`,
     /// `--workspace`, then `--model`, each `-c`, `--resume`, `--prompt`,
-    /// `--credential`, `--worktree`, `--rewound-from`, `--forked-from`,
+    /// `--credential`, `--worktree`, `--rewound-from`, `--continues`, `--forked-from`,
     /// `--forked-seq`, `--parent`,
     /// `--delegate-id`, `--depth`, `--login-shell`, each only when set.
     #[must_use]
@@ -111,6 +114,9 @@ impl SessionArgv {
         }
         if let Some(rewound_from) = &self.rewound_from {
             argv.push(OsString::from(format!("--rewound-from={}", rewound_from.0)));
+        }
+        if let Some(continues) = &self.continues {
+            argv.push(OsString::from(format!("--continues={}", continues.0)));
         }
         if let Some(forked_from) = &self.forked_from {
             argv.push(OsString::from(format!("--forked-from={}", forked_from.0)));

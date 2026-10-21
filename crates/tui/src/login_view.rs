@@ -6,14 +6,14 @@
 
 use std::fmt;
 
-use contract::Secret;
+use contract::{ErrorCode, Secret};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use crate::configure::{LoginKind, LoginTarget};
+use crate::configure::{HostGap, LoginKind, LoginTarget};
 use crate::format;
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
@@ -168,6 +168,10 @@ enum Mode {
     /// and the provider. The key is already stored; only the choice is
     /// pending, so Esc returns to the rows storing nothing more.
     Preparing(Preparing),
+    /// The host panel: one presence gap at a time on the preparing
+    /// ticket, before the reviewer. Esc returns to the rows storing
+    /// nothing more.
+    Host(Host),
     /// The reviewer picker: the provider's models with the saved pick
     /// preselected. Holds no secret.
     Choices(Choices),
@@ -194,6 +198,34 @@ struct Preparing {
     ticket: LoginTicket,
     /// The provider logging in.
     name: String,
+    /// The host settings saved this login: a gaps read naming one
+    /// never reopens its panel.
+    answered: Vec<String>,
+    /// The project-mask notes the host saves reported, carried to the
+    /// reviewer choices.
+    notices: Vec<String>,
+}
+
+/// One presence gap at a time after a stored credential: the setting
+/// with its declared environment variable, asked on the preparing
+/// ticket before the reviewer. The answer echoes as typed: a host is
+/// not a `Secret`.
+#[derive(Debug)]
+struct Host {
+    /// The gaps read's ticket: only its result opened this panel.
+    ticket: LoginTicket,
+    /// The provider logging in.
+    name: String,
+    /// The unanswered gaps, in order: the head takes typing.
+    gaps: Vec<HostGap>,
+    /// The host settings saved this login.
+    answered: Vec<String>,
+    /// The answer being typed for the head gap.
+    typed: Draft,
+    /// The refused answer's line, until typing replaces it.
+    refused: Option<String>,
+    /// The project-mask notes the host saves reported.
+    notices: Vec<String>,
 }
 
 /// The reviewer picker.
@@ -291,6 +323,15 @@ pub(crate) struct Login {
     said: Vec<String>,
 }
 
+/// The note with the carried mask notes under it.
+fn noted(mut note: String, carried: &[String]) -> String {
+    for line in carried {
+        note.push('\n');
+        note.push_str(line);
+    }
+    note
+}
+
 impl Login {
     /// The view, its rows read.
     pub(crate) fn open(ctx: &Ctx<'_>) -> Self {
@@ -333,6 +374,7 @@ impl Login {
             Mode::Waiting(_)
                 | Mode::Panel(_)
                 | Mode::Preparing(_)
+                | Mode::Host(_)
                 | Mode::Choices(_)
                 | Mode::Ended(_)
         ) {
@@ -482,6 +524,8 @@ impl Login {
                 self.said.clear();
             }
             Act::Stay
+        } else if matches!(self.mode, Mode::Host(_)) {
+            self.host_key(key, ctx)
         } else if matches!(self.mode, Mode::Choices(_)) {
             self.choices_key(key, ctx)
         } else if matches!(self.mode, Mode::Ended(_)) {
@@ -643,6 +687,7 @@ impl Login {
             | Mode::Panel(_)
             | Mode::Waiting(_)
             | Mode::Preparing(_)
+            | Mode::Host(_)
             | Mode::Choices(_)
             | Mode::Ended(_) => drop(worker),
         }
@@ -650,13 +695,24 @@ impl Login {
 
     /// Folds the waiting ticket's progress into the view: an event for
     /// another ticket changes nothing and opens nothing. `Open` returns
-    /// the URL to open; reviewer events return `None`. A successful
-    /// browser `Done` keeps its ticket through preparation into the
-    /// choices; any other end stays as its step until Esc or the ✕.
+    /// the URL to open. Gaps and reviewer results fold on their own
+    /// tickets, never here.
     pub(crate) fn step(&mut self, ticket: LoginTicket, step: LoginStep) -> Option<String> {
-        if let LoginStep::Reviewer(result) = step {
-            return self.step_reviewer(ticket, result);
+        match step {
+            LoginStep::Reviewer(result) => self.step_reviewer(ticket, result),
+            LoginStep::Host(result) => self.step_host(ticket, result),
+            LoginStep::Open(_) | LoginStep::Code { .. } | LoginStep::Done(_) => {
+                self.step_waiting(ticket, step)
+            }
         }
+    }
+
+    /// Folds the waiting ticket's progress into the view: an event for
+    /// another ticket changes nothing and opens nothing. `Open` returns
+    /// the URL to open. A successful browser `Done` keeps its ticket
+    /// through preparation into the choices; any other end stays as its
+    /// step until Esc or the ✕.
+    fn step_waiting(&mut self, ticket: LoginTicket, step: LoginStep) -> Option<String> {
         let Mode::Waiting(waiting) = &mut self.mode else {
             return None;
         };
@@ -675,10 +731,16 @@ impl Login {
             LoginStep::Done(result) => {
                 let name = waiting.name.clone();
                 match result {
-                    // The credential is stored; the reviewer stage ends
-                    // the login, on this same ticket.
+                    // The credential is stored; the host stage asks the
+                    // presence gaps on this same ticket before the
+                    // reviewer.
                     Ok(_) => {
-                        self.mode = Mode::Preparing(Preparing { ticket, name });
+                        self.mode = Mode::Preparing(Preparing {
+                            ticket,
+                            name,
+                            answered: Vec::new(),
+                            notices: Vec::new(),
+                        });
                     }
                     Err(error) => {
                         self.mode = Mode::Ended(Ended {
@@ -689,8 +751,56 @@ impl Login {
                 }
                 None
             }
-            LoginStep::Reviewer(_) => None,
+            LoginStep::Reviewer(_) | LoginStep::Host(_) => {
+                unreachable!("gaps and reviewer results fold before the waiting step")
+            }
         }
+    }
+
+    /// Folds the gaps read into a preparing view on its ticket: gaps
+    /// still unanswered open the host panel, while none, or a failed
+    /// read, leave the reviewer read to land. Any other mode or ticket
+    /// changes nothing: a late result cannot reopen or write.
+    fn step_host(
+        &mut self,
+        ticket: LoginTicket,
+        result: Result<Vec<HostGap>, crate::configure::ConfigureError>,
+    ) -> Option<String> {
+        let (name, answered, notices) = match &self.mode {
+            Mode::Preparing(preparing) if preparing.ticket == ticket => (
+                preparing.name.clone(),
+                preparing.answered.clone(),
+                preparing.notices.clone(),
+            ),
+            Mode::Rows
+            | Mode::Panel(_)
+            | Mode::Waiting(_)
+            | Mode::Preparing(_)
+            | Mode::Host(_)
+            | Mode::Choices(_)
+            | Mode::Ended(_) => return None,
+        };
+        let gaps: Vec<HostGap> = match result {
+            Ok(gaps) => gaps
+                .into_iter()
+                .filter(|gap| !answered.contains(&gap.name))
+                .collect(),
+            // The reviewer error follows into the stored-with-note path.
+            Err(_) => return None,
+        };
+        if gaps.is_empty() {
+            return None;
+        }
+        self.mode = Mode::Host(Host {
+            ticket,
+            name,
+            gaps,
+            answered,
+            typed: Draft::default(),
+            refused: None,
+            notices,
+        });
+        None
     }
 
     /// Folds the read's result into a preparing view on its ticket: the
@@ -708,6 +818,7 @@ impl Login {
             return None;
         }
         let name = preparing.name.clone();
+        let carried = preparing.notices.clone();
         match result {
             Ok(choices) => {
                 if choices.models.is_empty() {
@@ -719,16 +830,18 @@ impl Login {
                     }
                     self.mode = Mode::Ended(Ended {
                         name,
-                        outcome: Outcome::StoredWithNote(note),
+                        outcome: Outcome::StoredWithNote(noted(note, &carried)),
                     });
                 } else {
-                    self.mode = Mode::Choices(Choices::open(name, choices));
+                    let mut opened = Choices::open(name, choices);
+                    opened.notices.extend(carried);
+                    self.mode = Mode::Choices(opened);
                 }
             }
             Err(error) => {
                 self.mode = Mode::Ended(Ended {
                     name,
-                    outcome: Outcome::StoredWithNote(error.message),
+                    outcome: Outcome::StoredWithNote(noted(error.message, &carried)),
                 });
             }
         }
@@ -739,7 +852,12 @@ impl Login {
     /// stored: the panel gives way to the preparing step.
     pub(crate) fn wait_reviewer(&mut self, ticket: LoginTicket, name: String) {
         self.said.clear();
-        self.mode = Mode::Preparing(Preparing { ticket, name });
+        self.mode = Mode::Preparing(Preparing {
+            ticket,
+            name,
+            answered: Vec::new(),
+            notices: Vec::new(),
+        });
     }
 
     /// A key in the panel: type, move between the fields, store, or close
@@ -787,6 +905,107 @@ impl Login {
             }
         }
         Act::Stay
+    }
+
+    /// A key over the host panel: type the head gap's answer, save it
+    /// through the seam, or go back storing nothing more. A refused
+    /// answer stays, with its line, until typing replaces it.
+    fn host_key(&mut self, key: &Key, ctx: &Ctx<'_>) -> Act {
+        if *key == Key::Esc {
+            self.mode = Mode::Rows;
+            self.said.clear();
+            return Act::Stay;
+        }
+        let Mode::Host(host) = &mut self.mode else {
+            return Act::Stay;
+        };
+        if *key == Key::Enter {
+            return self.submit_host(ctx);
+        }
+        if let Key::Char(ch) = key {
+            host.typed.insert(*ch);
+            host.refused = None;
+        } else if *key == Key::Backspace {
+            host.typed.backspace();
+            host.refused = None;
+        }
+        Act::Stay
+    }
+
+    /// Saves the head gap's answer: the answer trimmed, global through
+    /// the seam into the same file `fiber login` writes. A saved gap
+    /// asks the next; the last queues its reviewer read. A refused
+    /// answer is not a host: the Usage refusal names it and asks again,
+    /// anything else ends the stored login with its note. A
+    /// project-layer empty hiding the saved value is masked: its note
+    /// rides to the choices.
+    fn submit_host(&mut self, ctx: &Ctx<'_>) -> Act {
+        let (name, gap, value) = match &mut self.mode {
+            Mode::Host(host) => match host.gaps.first() {
+                Some(gap) => (
+                    host.name.clone(),
+                    gap.clone(),
+                    host.typed.expand().trim().to_owned(),
+                ),
+                None => return Act::Stay,
+            },
+            Mode::Rows
+            | Mode::Waiting(_)
+            | Mode::Preparing(_)
+            | Mode::Panel(_)
+            | Mode::Choices(_)
+            | Mode::Ended(_) => return Act::Stay,
+        };
+        match ctx.seam.save_host(&name, &gap.name, &value) {
+            Ok(saved) => {
+                let Mode::Host(host) = &mut self.mode else {
+                    return Act::Stay;
+                };
+                host.answered.push(gap.name.clone());
+                if let Some(masked) = saved.masked {
+                    // The same one-note text `fiber login` prints, so
+                    // the terminal and the TUI never drift.
+                    host.notices.push(format!(
+                        "fiber: saved `{}` globally, but {} sets it empty and hides it.",
+                        gap.name,
+                        masked.display()
+                    ));
+                }
+                host.gaps.remove(0);
+                host.typed = Draft::default();
+                host.refused = None;
+                if !host.gaps.is_empty() {
+                    return Act::Stay;
+                }
+                let Mode::Host(host) = &self.mode else {
+                    return Act::Stay;
+                };
+                let name = host.name.clone();
+                self.mode = Mode::Preparing(Preparing {
+                    ticket: host.ticket,
+                    name: name.clone(),
+                    answered: host.answered.clone(),
+                    notices: host.notices.clone(),
+                });
+                Act::Reviewer(name)
+            }
+            Err(error) => {
+                if error.code == ErrorCode::Usage {
+                    // Only a not-a-host answer refuses with Usage here:
+                    // the line names the setting, never the value.
+                    let Mode::Host(host) = &mut self.mode else {
+                        return Act::Stay;
+                    };
+                    host.refused = Some(format!("`{}` is not a host; type a host.", gap.name));
+                } else {
+                    self.mode = Mode::Ended(Ended {
+                        name,
+                        outcome: Outcome::StoredWithNote(error.message),
+                    });
+                }
+                Act::Stay
+            }
+        }
     }
 
     /// A key over the reviewer picker: move over the models, save the
@@ -853,6 +1072,7 @@ impl Login {
             Mode::Rows
             | Mode::Waiting(_)
             | Mode::Preparing(_)
+            | Mode::Host(_)
             | Mode::Choices(_)
             | Mode::Ended(_) => {
                 return Act::Stay;
@@ -894,6 +1114,23 @@ impl Login {
     /// clears on a deleted word, ignoring every other edit; the label
     /// field edits as `/settings`' does.
     pub(crate) fn edit_key(&mut self, edit: &Edit) {
+        if let Mode::Host(host) = &mut self.mode {
+            // The host pastes whole like the label: it is not a secret.
+            match edit {
+                Edit::Paste(text) => text.chars().for_each(|ch| host.typed.insert(ch)),
+                Edit::Left
+                | Edit::Right
+                | Edit::ShiftEnter
+                | Edit::CtrlJ
+                | Edit::WordLeft
+                | Edit::WordRight
+                | Edit::DeleteWord
+                | Edit::LineStart
+                | Edit::LineEnd
+                | Edit::Delete => host.typed.edit(edit.clone()),
+            }
+            return;
+        }
         let Mode::Panel(panel) = &mut self.mode else {
             return;
         };
@@ -944,7 +1181,11 @@ impl Login {
                 }
                 if matches!(
                     self.mode,
-                    Mode::Panel(_) | Mode::Waiting(_) | Mode::Preparing(_) | Mode::Ended(_)
+                    Mode::Panel(_)
+                        | Mode::Waiting(_)
+                        | Mode::Preparing(_)
+                        | Mode::Host(_)
+                        | Mode::Ended(_)
                 ) {
                     return Act::Stay;
                 }
@@ -966,6 +1207,7 @@ impl Login {
             Mode::Rows => None,
             Mode::Waiting(waiting) => Some(waiting.name.clone()),
             Mode::Preparing(preparing) => Some(preparing.name.clone()),
+            Mode::Host(host) => Some(host.name.clone()),
             Mode::Choices(choices) => Some(choices.name.clone()),
             Mode::Panel(panel) => self
                 .targets
@@ -1127,6 +1369,24 @@ impl Login {
                 ),
                 overlay::legend(&[("Esc", "back")]),
             ),
+            Mode::Host(host) => {
+                let Some(gap) = host.gaps.first() else {
+                    return;
+                };
+                let prompt = match gap.env.as_deref() {
+                    Some(env) => format!("`{}` (`{env}`):", gap.name),
+                    None => format!("`{}`:", gap.name),
+                };
+                let mut rows = wrapped_rows(&prompt, inner, Style::new());
+                rows.push(host_edit_row(&host.typed, inner));
+                if let Some(refused) = host.refused.as_deref() {
+                    rows.extend(wrapped_rows(refused, inner, Style::new()));
+                }
+                for notice in &host.notices {
+                    rows.extend(wrapped_rows(notice, inner, dim));
+                }
+                (rows, overlay::legend(&[("Enter", "save"), ("Esc", "back")]))
+            }
             Mode::Choices(choices) => {
                 choice_rows(choices, inner, self.body_count(), usize::from(area.height))
             }
@@ -1390,6 +1650,28 @@ fn dots_row(dots: &str, inner: usize, cursor: bool) -> overlay::Row {
 /// The label row while the label takes typing: the caret's cell reversed,
 /// or "█" after the text when the caret is at the end. A label longer
 /// than the room is cut so the caret's cell stays in the shown row.
+/// The host answer's edit row: the typed answer echoes as typed — a
+/// host is not a secret — with the caret, cut to one row.
+fn host_edit_row(typed: &Draft, inner: usize) -> overlay::Row {
+    if inner == 0 {
+        return blank_row();
+    }
+    let text = typed.expand();
+    let chars: Vec<char> = text.chars().collect();
+    let caret = typed.position().min(chars.len());
+    let mut shown = String::new();
+    for (at, ch) in chars.iter().enumerate() {
+        if at == caret {
+            shown.push('█');
+        }
+        shown.push(*ch);
+    }
+    if caret >= chars.len() {
+        shown.push('█');
+    }
+    text_row(tail(&shown, inner), Style::new())
+}
+
 fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let prefix = "Label (--as): ";

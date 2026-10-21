@@ -1,9 +1,7 @@
 ---
 source: crates/tui/src/view/completions_tests.rs
-assertion_line: 179
 expression: "screen(&app, 160, 48)"
 ---
-
 
 
 
@@ -46,6 +44,7 @@ expression: "screen(&app, 160, 48)"
                                        handoff  Starts a handoff. [instructions]                                    command
                                        help     Opens the key map.                                                  command
                                        thinking Sets the thinking level, or opens the model picker on it. [<level>] command
+                                       theme    Opens the theme picker, or sets the named theme. [<name>]           command
 
                                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

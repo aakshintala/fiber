@@ -516,6 +516,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "rail",
     "rules",
     "settings",
+    "theme",
     "keys",
     "skills",
     "rewind",

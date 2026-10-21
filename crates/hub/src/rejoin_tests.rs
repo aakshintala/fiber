@@ -1862,8 +1862,10 @@ impl crate::Starter for GateStarter {
         model: Option<&str>,
         overrides: &[&str],
         worktree: bool,
+        continues: Option<&contract::SessionId>,
     ) -> std::io::Result<Box<dyn crate::Started>> {
-        self.inner.start(id, workspace, model, overrides, worktree)
+        self.inner
+            .start(id, workspace, model, overrides, worktree, continues)
     }
 
     fn resume(
