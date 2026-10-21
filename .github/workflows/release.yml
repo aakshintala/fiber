@@ -308,8 +308,17 @@ jobs:
           [ -n "${VERSION:-}" ] || { printf 'release: %s\n' "no nightly version from nightly-preflight." >&2; exit 1; }
           perl -pi -e 's/^version = ".*"/version = "$ENV{VERSION}"/' crates/main/Cargo.toml
           perl -pi -e 's/^version = ".*"/version = "$ENV{VERSION}"/ if $last; $last = /^name = "main"$/' Cargo.lock
-          grep -q -F "version = \"$VERSION\"" crates/main/Cargo.toml || { printf 'release: %s\n' "crates/main/Cargo.toml holds no $VERSION; refusing to build 0.0.0." >&2; exit 1; }
-          grep -q -F "version = \"$VERSION\"" Cargo.lock || { printf 'release: %s\n' "Cargo.lock holds no $VERSION; refusing to build 0.0.0." >&2; exit 1; }
+          toml_version=$(awk '
+            /^\[package\]/{ package = 1; next }
+            /^\[/{ package = 0 }
+            package && /^version = "/{ gsub(/"/, ""); print $3; exit }
+          ' crates/main/Cargo.toml)
+          [ "$toml_version" = "$VERSION" ] || { printf 'release: %s\n' "crates/main/Cargo.toml holds $toml_version, not $VERSION; refusing to build 0.0.0." >&2; exit 1; }
+          lock_version=$(awk '
+            /^name = "main"$/{ found = 1; next }
+            found && /^version = "/{ gsub(/"/, ""); print $3; exit }
+          ' Cargo.lock)
+          [ "$lock_version" = "$VERSION" ] || { printf 'release: %s\n' "Cargo.lock holds $lock_version for package main, not $VERSION; refusing to build 0.0.0." >&2; exit 1; }
       - name: Build the release binary
         run: cargo build --locked --release --target "${{ matrix.target }}" --bin fiber
       - name: Generate THIRD-PARTY-NOTICES
