@@ -1388,6 +1388,7 @@ fn enter_text(app: &mut App, text: &str) -> Vec<serde_json::Value> {
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
