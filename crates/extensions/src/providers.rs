@@ -916,6 +916,15 @@ impl Providers {
             .cloned()
     }
 
+    /// The loaded candidate's directory for the full extension name:
+    /// the pinned copy for a repository entry, the personal install
+    /// otherwise. `None` when the extension never loaded as a candidate,
+    /// so the caller falls back to the home layout. Only directories the
+    /// load already admitted, never a repository's working files.
+    pub fn extension_source_dir(&self, extension: &str) -> Option<std::path::PathBuf> {
+        self.source_dirs.get(extension).cloned()
+    }
+
     /// The installed data of `name`: the data file's, else one naming only
     /// the provider, as [`LuaProvider::has_credential`] reads it.
     pub fn data(&self, name: &str) -> ProviderData {
