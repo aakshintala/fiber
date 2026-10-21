@@ -41,7 +41,136 @@ pub struct Release {
     pub commit: String,
 }
 
-/// Downloads the release's docs and extensions archives, checks each
+/// Downloads `file` from the release and its `.sha256`, checks the bytes
+/// against the checksum file, and returns the bytes. A download failure
+/// names the file; a mismatch is [`Error::ArchiveChecksum`] naming the
+/// archive.
+pub(crate) fn fetch_verified(release: &Release, file: &str) -> Result<Vec<u8>, Error> {
+    let fetched = fetch(release, file)?;
+    verify(release, file, &fetched)?;
+    Ok(fetched.bytes)
+}
+
+/// Unpacks the release archive `archive` into `into`, an empty directory
+/// the caller made, holding the unpack to [`unpack`]'s limits. A refusal
+/// is [`Error::BadArchive`] naming the archive.
+pub(crate) fn unpack_release_archive(archive: &[u8], into: &Path, name: &str) -> Result<(), Error> {
+    unpack(archive, into, name, &LIMITS)
+}
+
+/// Unpacks the release's docs archive into the scratch directory and
+/// copies it to a fresh staging directory beside `docs/`, returning the
+/// fresh directory. An archive holding no entries is [`Error::BadArchive`]
+/// naming the docs archive, before anything in Fiber home is created.
+pub(crate) fn stage_docs_from(
+    home: &Path,
+    archive: &[u8],
+    scratch: &Path,
+) -> Result<PathBuf, Error> {
+    let into = scratch.join("docs");
+    fs::create_dir(&into).map_err(io(&into))?;
+    unpack(archive, &into, DOCS, &LIMITS)?;
+    if into.read_dir().map_err(io(&into))?.next().is_none() {
+        return Err(bad(DOCS, "holds no entries".into()));
+    }
+    let fresh = home.join(format!("{}.new", unique_name(".docs")));
+    remove(&fresh)?;
+    copy(&into, &fresh)?;
+    Ok(fresh)
+}
+
+/// Swaps staged docs `fresh` into `docs/` in Fiber home, keeping the
+/// previous docs when the swap cannot be finished.
+pub(crate) fn swap_docs_in(home: &Path, fresh: &Path) -> Result<(), Error> {
+    let old = home.join(format!("{}.old", unique_name(".docs")));
+    swap_docs(fresh, &config::docs_dir(home), &old, &|from, to| {
+        fs::rename(from, to)
+    })
+}
+
+/// Puts the release's docs at `docs/` when it is absent: downloads and
+/// checks the docs archive, unpacks it and swaps it in. A present `docs/`
+/// is left alone without any download.
+pub fn install_docs_if_missing(home: &Path, release: &Release) -> Result<(), Error> {
+    if fs::symlink_metadata(config::docs_dir(home)).is_ok() {
+        return Ok(());
+    }
+    let scratch = Scratch::create(&std::env::temp_dir(), "fiber-release-docs", 0o700)?;
+    let archive = fetch_verified(release, DOCS)?;
+    let fresh = stage_docs_from(home, &archive, scratch.path())?;
+    swap_docs_in(home, &fresh)
+}
+
+/// The newest stable release tag: the tag `releases/latest` redirects
+/// to. A fetch failure is [`Error::Download`] naming the URL.
+pub fn latest_stable_tag(web_base: &str) -> Result<String, Error> {
+    use ureq::ResponseExt as _;
+    let url = format!("{}/releases/latest", web_base.trim_end_matches('/'));
+    let fail = |why: String| Error::Download {
+        name: "stable".into(),
+        why: format!("{url}: {why}"),
+    };
+    let agent = net::agent(
+        net::config().proxy(ureq::Proxy::try_from_env()).build(),
+        std::sync::Arc::new(()),
+        ureq::unversioned::resolver::DefaultResolver::default(),
+        net::LIMITS,
+    );
+    let response = agent.get(&url).call().map_err(|e| fail(e.to_string()))?;
+    let tag = response
+        .get_uri()
+        .path()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    Ok(tag.to_owned())
+}
+
+/// The newest nightly release tag the release list names: the maximum
+/// over (base version, date) across entries whose tag matches
+/// `vMAJOR.MINOR.PATCH-nightly.YYYYMMDD` with `prerelease` true and
+/// `draft` false. Anything else in the list is skipped; no match is
+/// [`Error::NoNightly`] naming the channel, and a list that cannot be
+/// fetched or read is [`Error::Download`] naming the nightly list's URL.
+pub fn fetch_nightly_tag(api_base: &str) -> Result<String, Error> {
+    use crate::resolve::nightly_parts;
+    let url = format!("{}/releases?per_page=100", api_base.trim_end_matches('/'));
+    let bytes = download("nightly", &url)?;
+    let list: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|err| Error::Download {
+            name: "nightly".into(),
+            why: format!("{url}: {err}"),
+        })?;
+    let Some(entries) = list.as_array() else {
+        return Err(Error::Download {
+            name: "nightly".into(),
+            why: format!("{url}: the release list is not an array"),
+        });
+    };
+    let mut best: Option<([u64; 3], String, String)> = None;
+    for entry in entries {
+        let (Some(tag), Some(true), Some(false)) = (
+            entry.get("tag_name").and_then(|tag| tag.as_str()),
+            entry.get("prerelease").and_then(|flag| flag.as_bool()),
+            entry.get("draft").and_then(|flag| flag.as_bool()),
+        ) else {
+            continue;
+        };
+        let Ok((base, date)) = nightly_parts(tag) else {
+            continue;
+        };
+        let newer = best.as_ref().is_none_or(|(held_base, held_date, _)| {
+            (base, date.clone()) > (*held_base, held_date.clone())
+        });
+        if newer {
+            best = Some((base, date, tag.to_owned()));
+        }
+    }
+    best.map(|(_, _, tag)| tag).ok_or_else(|| Error::NoNightly {
+        url,
+        why: "the release list holds no matching pre-release".into(),
+    })
+}
 /// SHA-256, unpacks and checks them, then puts each first-party extension
 /// in place under `extensions/` and the docs at `docs/` in Fiber home,
 /// creating Fiber home if it is missing. Returns each extension installed,
@@ -186,7 +315,7 @@ fn bad(archive: &str, why: String) -> Error {
 /// first-party short name whose manifest names that extension, declares no
 /// binaries and no install step, and passes every check staging makes.
 /// Returns the short names, sorted.
-fn layout(dir: &Path, fiber_version: &str) -> Result<Vec<String>, Error> {
+pub(crate) fn layout(dir: &Path, fiber_version: &str) -> Result<Vec<String>, Error> {
     let mut shorts = Vec::new();
     for entry in fs::read_dir(dir).map_err(io(dir))? {
         let entry = entry.map_err(io(dir))?;

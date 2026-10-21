@@ -40,6 +40,14 @@ cmd=$(sub "$@")
 if [ "$cmd" = "ls-remote" ]; then
     for arg in "$@"; do
         case "$arg" in
+            *fake-missing-repo*)
+                echo "fatal: repository 'https://fake-missing-repo/x' not found" >&2
+                exit 1
+                ;;
+            *fake-broken-repo*)
+                echo "fatal: Authentication failed for 'https://fake-broken-repo/x'" >&2
+                exit 1
+                ;;
             *stall-ls-remote*)
                 stall "$@"
                 ;;

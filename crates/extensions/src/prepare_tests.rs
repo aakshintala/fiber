@@ -330,3 +330,170 @@ fn a_missing_install_step_program_is_the_spawn_error() {
         "the spawn error names the program: {err}"
     );
 }
+
+/// A member repository whose manifest carries this platform's binary at
+/// `url` with digest `sha`, committed and tagged `version`.
+fn binary_repo(
+    root: &std::path::Path,
+    name: &str,
+    version: &str,
+    url: &str,
+    sha: &str,
+) -> std::path::PathBuf {
+    let repo = root.join(name.replace('/', "-"));
+    std::fs::create_dir_all(&repo).unwrap();
+    let manifest = serde_json::json!({
+        "name": name,
+        "version": version,
+        "fiber": "0.0.0",
+        "api": 1,
+        "binaries": { platform(): { "url": url, "sha256": sha } },
+    });
+    std::fs::write(
+        repo.join("extension.json"),
+        serde_json::to_string(&manifest).unwrap(),
+    )
+    .unwrap();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "release"]);
+    fakes::git::git(&repo, &["tag", &format!("v{version}")]);
+    repo
+}
+
+fn file_origin(dir: std::path::PathBuf) -> crate::Origin {
+    crate::Origin::new("git", move |_| format!("file://{}", dir.display()))
+}
+
+/// Stages `name` from `repo` for install, as the update's batch plan
+/// stages it before the first rename.
+fn stage_install<'a>(
+    home: &'a std::path::Path,
+    name: &str,
+    repo: &std::path::Path,
+    clock: &'a dyn contract::clock::Clock,
+) -> crate::manage::Plan<'a> {
+    let origin = file_origin(repo.to_owned());
+    crate::manage::plan(
+        home,
+        &crate::manage::Request::Install(name.into()),
+        "0.0.0",
+        &origin,
+        clock,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_binary_checksum_mismatch_in_pre_stage_renames_nothing() {
+    let body = b"#!/bin/sh\necho hi\n";
+    let server =
+        fakes::ProviderServer::start([fakes::Response::status(200, body.to_vec())]).unwrap();
+    let url = format!("{}/tool", server.url());
+    let root = fakes::TempDir::new("fiber-prepare-mismatch");
+    let repo = binary_repo(
+        root.path(),
+        "github.com/acme/widget",
+        "1.0.0",
+        &url,
+        &"0".repeat(64),
+    );
+    let home = root.path().join("home");
+    let clock = FakeClock::new();
+    let plan = stage_install(&home, "github.com/acme/widget", &repo, clock.as_ref());
+    let mut failed = None;
+    for item in plan.items() {
+        if let Err(err) = super::prepare(item.staged(), &item.manifest, clock.as_ref()) {
+            failed = Some(err);
+            break;
+        }
+    }
+    let err = failed.expect("the pre-stage prepare fails");
+    let crate::Error::BinaryChecksum { name, url: got } = err else {
+        panic!("a checksum mismatch fails as its checksum failed: {err}");
+    };
+    assert_eq!(name, "github.com/acme/widget");
+    assert_eq!(got, url);
+    assert!(
+        !home.join("extensions/github.com-acme-widget").exists(),
+        "the mismatch renames nothing into place"
+    );
+    assert!(
+        !home.join("extensions/.commit").exists(),
+        "the mismatch writes no commit journal"
+    );
+}
+
+#[test]
+fn a_prepared_commit_downloads_nothing() {
+    let body = b"#!/bin/sh\necho hi\n";
+    let digest = super::hex(ring::digest::digest(&ring::digest::SHA256, body).as_ref());
+    let server = fakes::ProviderServer::start([
+        fakes::Response::status(200, body.to_vec()),
+        fakes::Response::status(200, body.to_vec()),
+    ])
+    .unwrap();
+    let url = format!("{}/tool", server.url());
+    let root = fakes::TempDir::new("fiber-prepare-no-redownload");
+    let repo = binary_repo(
+        root.path(),
+        "github.com/acme/widget",
+        "1.0.0",
+        &url,
+        &digest,
+    );
+    let home = root.path().join("home");
+    let clock = FakeClock::new();
+    let mut plan = stage_install(&home, "github.com/acme/widget", &repo, clock.as_ref());
+    for item in plan.items() {
+        super::prepare(item.staged(), &item.manifest, clock.as_ref()).unwrap();
+    }
+    let before = server.requests().len();
+    assert_eq!(before, 1, "the pre-stage downloads the binary once");
+    plan.commit_prepared().unwrap();
+    assert_eq!(
+        server.requests().len(),
+        before,
+        "the commit downloads nothing more"
+    );
+    assert_eq!(
+        std::fs::read(home.join("extensions/github.com-acme-widget/bin/widget")).unwrap(),
+        body
+    );
+}
+
+/// The update's pre-stage downloads the member binary but runs no
+/// install step: the step runs once after approval, at the commit.
+#[test]
+fn prepare_binary_downloads_the_binary_but_runs_no_install_step() {
+    let body = b"#!/bin/sh\necho hi\n";
+    let digest = super::hex(ring::digest::digest(&ring::digest::SHA256, body).as_ref());
+    let server =
+        fakes::ProviderServer::start([fakes::Response::status(200, body.to_vec())]).unwrap();
+    let url = format!("{}/tool", server.url());
+    let manifest: config::Manifest = serde_json::from_value(serde_json::json!({
+        "name": "acme",
+        "version": "v1.0.0",
+        "fiber": "0.1.0",
+        "api": 1,
+        "binaries": { platform(): { "url": url, "sha256": digest } },
+        "install": ["sh", "-c", "touch step-ran"],
+    }))
+    .unwrap();
+    let dir = fakes::TempDir::new("fiber-prepare-binary-only");
+    let clock = FakeClock::new();
+    super::prepare_binary(dir.path(), &manifest).unwrap();
+    assert_eq!(
+        std::fs::read(dir.path().join("bin").join("acme")).unwrap(),
+        body
+    );
+    assert!(
+        !dir.path().join("step-ran").exists(),
+        "the pre-stage runs no install step"
+    );
+    super::install_step(dir.path(), &manifest, clock.as_ref()).unwrap();
+    assert!(
+        dir.path().join("step-ran").exists(),
+        "the commit's install step runs the step"
+    );
+}

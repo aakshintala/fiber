@@ -7,8 +7,41 @@ use crate::Error;
 
 /// `0.3.0` or `v0.3.0` as three numbers compared in order
 /// (`docs/dependencies.md`, "Written ourselves").
-pub(crate) fn version(text: &str) -> Result<[u64; 3], Error> {
+pub fn version(text: &str) -> Result<[u64; 3], Error> {
     parse(text, 3)
+}
+
+/// A nightly tag's base version and date: `v0.3.0-nightly.20240101` is
+/// `([0, 3, 0], "20240101"`). The suffix is a literal `-nightly.` plus
+/// exactly 8 ASCII digits; anything else is [`Error::BadVersion`], as is
+/// a base [`version`] refuses.
+pub fn nightly_parts(text: &str) -> Result<([u64; 3], String), Error> {
+    let bad = || Error::BadVersion { text: text.into() };
+    let (base, date) = text.rsplit_once("-nightly.").ok_or_else(bad)?;
+    if date.len() != 8 || !date.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad());
+    }
+    Ok((version(base).map_err(|_| bad())?, date.to_owned()))
+}
+
+/// Whether `have` meets the `need` minimum, nightly-aware: a version
+/// parses as a stable triple, a nightly tag as its base and date; a
+/// nightly sorts below the stable release on its base, and two nightlies
+/// on one base order by date. Anything else is [`Error::BadVersion`].
+pub(crate) fn at_least(need: &str, have: &str) -> Result<bool, Error> {
+    Ok(version_key(need)? <= version_key(have)?)
+}
+
+/// A release version as an orderable key: the base triple, whether the
+/// release is a stable one (stable sorts above a nightly on the same
+/// base), and the nightly date, which orders two nightlies on one base.
+/// A nightly-form version keeps its date, anything else parses as a
+/// stable triple.
+pub fn version_key(text: &str) -> Result<([u64; 3], bool, String), Error> {
+    match nightly_parts(text) {
+        Ok((base, date)) => Ok((base, false, date)),
+        Err(_) => version(text).map(|base| (base, true, String::new())),
+    }
 }
 
 /// A minimum, such as `1.2`, `v1.2` or `v1.2.0`: missing numbers are 0.
