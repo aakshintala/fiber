@@ -1188,8 +1188,7 @@ The text is plain text; a session message carries no images.
 the target's socket, sends the driver command `message`, reads the answer and
 closes the connection at once, so it never keeps the target alive
 (`docs/invocation.md`, "Lifecycle"). The target runs `before_message` before
-it answers, so the call answers `delivered` only once the message is in the
-target's inbox. `delivered` means the message is in the target's inbox. A
+it answers, so the call answers `delivered` only once the target has taken the message and its hook has passed. `delivered` means the target took the message. A
 shutdown or a rewind of the target before it runs the message drops it, as
 it drops queued steers, and so does a `close` that fails the target's run
 while a required repository item is unanswered. Otherwise it fails with one

@@ -1,5 +1,7 @@
 //! A session message from another session (`docs/tools.md`, "Messaging other
-//! sessions"): answered by the door once it is in the inbox, taken as a
+//! sessions"): the `before_message` hook runs on its raw text before the
+//! sender is answered, so a refusal or a blocking failure rejects the
+//! sender and nothing is logged; a passed or replaced text is taken as a
 //! steering message during a turn and as a turn's input between turns. It
 //! never makes an unattended session attended, and it is never the person's
 //! voice.
@@ -15,7 +17,9 @@ use contract::shapes::{ContentPart, Origin, Sender};
 use support::admission::Admission;
 
 use super::TurnInput;
+use super::accept;
 use crate::Loop;
+use crate::before_message::Hooked;
 use crate::jobs::Queued;
 use crate::prompt::{fill, message};
 
@@ -36,36 +40,117 @@ impl Loop {
         self
     }
 
-    /// A session message taken while the loop is idle: its framed text
-    /// joins the turn's input, after `close` too.
-    pub(super) fn admit_message_idle(&mut self, message: SessionMessage, input: &mut TurnInput) {
-        input.pieces.push(Queued::Steer(
-            framed(message),
-            crate::before_message::Hooked::default(),
-        ));
+    /// A session message taken while the loop is idle: the hook runs on
+    /// the raw text before it answers, so a refusal or a blocking failure
+    /// rejects the sender and nothing joins the turn's input; a passed or
+    /// replaced text is framed and joins the input with its verdict, after
+    /// `close` too. Answered exactly once, on every path.
+    pub(super) fn admit_message_idle(
+        &mut self,
+        sent: SessionMessage,
+        ack: contract::inbox::Ack,
+        input: &mut TurnInput,
+    ) -> Result<(), crate::Error> {
+        let Some((passed, hooked, ack)) = self.hooked_message(&sent, ack, None)? else {
+            return Ok(());
+        };
+        input.pieces.push(Queued::Steer(passed, hooked));
+        accept(ack);
+        Ok(())
     }
 
-    /// A session message taken while a turn runs: queued for the next step
-    /// boundary, in an after-`close` turn too, in arrival order. It never
-    /// marks the session attended (`docs/invocation.md`, "Lifecycle").
+    /// A session message taken while a turn runs: the hook runs on the
+    /// raw text before it answers, and the passed or replaced text queues
+    /// for the next step boundary with its verdict, in an after-`close`
+    /// turn too, in arrival order. The verdict's staged metadata rides the
+    /// shared queue entry, so the staged claim keeps the queued holder and
+    /// `changed_by`, context and state reach the apply. It never marks the
+    /// session attended (`docs/invocation.md`, "Lifecycle"). Answered
+    /// exactly once, on every path.
     pub(super) fn admit_message_running(
         &mut self,
-        message: SessionMessage,
+        sent: SessionMessage,
+        ack: contract::inbox::Ack,
         turn: &TurnId,
     ) -> Result<(), crate::Error> {
-        let id = message.command_id.clone();
-        let framed = framed(message);
+        let id = sent.command_id.clone();
+        let Some((passed, hooked, ack)) = self.hooked_message(&sent, ack, Some(turn))? else {
+            return Ok(());
+        };
+        let staged = contract::steering::Staged {
+            state: hooked.state.clone(),
+            changed_by: hooked.changed_by.clone(),
+            context: hooked.context.clone(),
+        };
         let emit = super::TurnEmit {
             log: &self.log,
             turn: Some(turn.clone()),
         };
-        self.steering
-            .admit_message(id, framed.content.clone(), framed.sender.clone(), &emit);
-        self.queued.push_back(Queued::Steer(
-            framed,
-            crate::before_message::Hooked::default(),
-        ));
+        // The entry carries the same post-hook content as the queued
+        // holder, so the staged claim keeps the holder. A same-id entry
+        // from the same sender is already queued: its answer stands and
+        // this ack answers idempotently.
+        if self
+            .steering
+            .admit_session_hooked(
+                id,
+                passed.content.clone(),
+                passed.sender.clone(),
+                staged,
+                &emit,
+            )
+            .is_err()
+        {
+            accept(ack);
+            return Ok(());
+        }
+        self.queued.push_back(Queued::Steer(passed, hooked));
+        accept(ack);
         Ok(())
+    }
+
+    /// Runs the `before_message` hook on the raw text and frames the
+    /// passed or replaced text: the ack travels with the verdict. `None`
+    /// when the hook refused, failed or the loop is closing, with the ack
+    /// already answered.
+    fn hooked_message(
+        &mut self,
+        sent: &SessionMessage,
+        ack: contract::inbox::Ack,
+        turn: Option<&TurnId>,
+    ) -> Result<Option<(Message, Hooked, contract::inbox::Ack)>, crate::Error> {
+        let from = sent.from_session_id.clone();
+        let parent = sent.parent_session_id.clone();
+        let raw = Message {
+            content: vec![ContentPart::Text {
+                text: sent.text.clone(),
+            }],
+            sender: Sender {
+                origin: Origin::Session {
+                    from_session_id: from.clone(),
+                },
+                command_id: Some(sent.command_id.clone()),
+            },
+        };
+        let session = contract::hook::MessageSender {
+            from_session_id: &from,
+            parent_session_id: parent.as_ref(),
+        };
+        let Some((passed, hooked, ack)) = self.admitted(raw, Some(session), ack, turn)? else {
+            return Ok(None);
+        };
+        // The hook sees the raw text as one text part; a replacement is
+        // text-only by construction, so joining its text parts loses
+        // nothing and the model always sees the framed sender id and name.
+        let text: String = passed
+            .content
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { text } => Some(text.as_str()),
+                ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
+            })
+            .collect();
+        Ok(Some((framed(sent, &text), hooked, ack)))
     }
 
     /// An idle wait's last `try_recv`, under `close_unless` when an
@@ -119,7 +204,7 @@ impl Loop {
             || self
                 .deferred
                 .iter()
-                .any(|held| matches!(held, Delivery::Message(_)))
+                .any(|held| matches!(held, Delivery::Message(..)))
             || self.message_waiting
     }
 }
@@ -136,53 +221,54 @@ pub(super) fn is_session(message: &Message) -> bool {
     matches!(message.sender.origin, Origin::Session { .. })
 }
 
-/// `message` as the model sees it: framed with the sender's id and latest
-/// `session_named` name, one text part. The fill runs once, so a name or
-/// text holding a placeholder stays literal.
-fn framed(sent: SessionMessage) -> Message {
+/// `message` as the model sees it: the post-hook `text` framed with the
+/// sender's id and latest `session_named` name, one text part. The fill
+/// runs once, so a name or text holding a placeholder stays literal.
+fn framed(sent: &SessionMessage, text: &str) -> Message {
     let SessionMessage {
         from_session_id,
         command_id,
-        text,
         name,
+        ..
     } = sent;
-    let filled = match &name {
+    let filled = match name {
         Some(name) => fill(
             message("session-message").trim_end(),
             &[
                 ("session_id", from_session_id.0.as_str()),
                 ("name", name),
-                ("text", text.as_str()),
+                ("text", text),
             ],
         ),
         None => fill(
             message("session-message-unnamed").trim_end(),
-            &[
-                ("session_id", from_session_id.0.as_str()),
-                ("text", text.as_str()),
-            ],
+            &[("session_id", from_session_id.0.as_str()), ("text", text)],
         ),
     };
     Message {
         content: vec![ContentPart::Text { text: filled }],
         sender: Sender {
-            origin: Origin::Session { from_session_id },
-            command_id: Some(command_id),
+            origin: Origin::Session {
+                from_session_id: from_session_id.clone(),
+            },
+            command_id: Some(command_id.clone()),
         },
     }
 }
 
-/// Builds a session message for tests: from `from`, named `name`, sent by
-/// `command`, saying `text`.
+/// Builds a session message for tests: from `from` with parent `parent`,
+/// named `name`, sent by `command`, saying `text`.
 #[cfg(test)]
 pub(crate) fn for_test(
     from: &str,
+    parent: Option<&str>,
     name: Option<&str>,
     command: &str,
     text: &str,
 ) -> SessionMessage {
     SessionMessage {
         from_session_id: contract::SessionId(from.to_owned()),
+        parent_session_id: parent.map(|parent| contract::SessionId(parent.to_owned())),
         command_id: CommandId(command.to_owned()),
         text: text.to_owned(),
         name: name.map(str::to_owned),

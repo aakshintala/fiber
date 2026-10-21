@@ -382,7 +382,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `prompt` | `content` |
 | `steer` | `content` |
 | `steer_drop` | `command_id` (string), the `steer` command's id |
-| `message` | `from_session_id` (string), `text` (string) |
+| `message` | `from_session_id` (string), `parent_session_id` (string, optional), the sender's parent session when it has one, `text` (string) |
 | `cancel` | none |
 | `reply` | `request_id` (string) and the answer ("Replying") |
 | `job_stop` | `job_id` (string) |

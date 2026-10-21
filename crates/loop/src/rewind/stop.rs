@@ -174,7 +174,7 @@ impl Loop {
             other @ (Delivery::Prompt(..)
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
-            | Delivery::Message(_)
+            | Delivery::Message(..)
             | Delivery::Model(..)
             | Delivery::Reload(..)
             | Delivery::McpReconnect(..)

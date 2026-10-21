@@ -786,8 +786,12 @@ where
     thread::spawn(move || {
         let from = SessionId(FROM.into());
         let mut io = io;
-        let result =
-            sockets.message_exchange(&path, stream, &from, &text, cancel.as_ref(), &mut io);
+        let message = contract::commands::Message {
+            from_session_id: from,
+            parent_session_id: None,
+            text,
+        };
+        let result = sockets.message_exchange(&path, stream, &message, cancel.as_ref(), &mut io);
         tx.send(result).unwrap();
     });
     rx
@@ -993,7 +997,13 @@ fn send_message(
     let (tx, rx) = mpsc::channel();
     let (to, from) = (to.to_owned(), from.to_owned());
     thread::spawn(move || {
-        let result = client.message(&SessionId(to), &SessionId(from), &text, cancel.as_ref());
+        let result = client.message(
+            &SessionId(to),
+            &SessionId(from),
+            None,
+            &text,
+            cancel.as_ref(),
+        );
         tx.send(result).unwrap();
     });
     rx
@@ -1157,6 +1167,7 @@ fn message_ids_that_are_not_full_session_ids_touch_nothing() {
             home.client().message(
                 &SessionId(id.into()),
                 &SessionId(FROM.into()),
+                None,
                 "hello",
                 cancel.as_ref()
             ),
@@ -1181,6 +1192,7 @@ fn a_live_hub_socket_is_not_a_session() {
         home.client().message(
             &SessionId("hub".into()),
             &SessionId(FROM.into()),
+            None,
             "hello",
             cancel.as_ref()
         ),
@@ -1201,6 +1213,7 @@ fn message_without_a_listener_is_unreachable() {
         home.client().message(
             &SessionId(ID.into()),
             &SessionId(FROM.into()),
+            None,
             "hello",
             &CancelToken::new()
         ),
@@ -1212,6 +1225,7 @@ fn message_without_a_listener_is_unreachable() {
         home.client().message(
             &SessionId(ID.into()),
             &SessionId(FROM.into()),
+            None,
             "hello",
             &CancelToken::new()
         ),
@@ -1226,6 +1240,7 @@ fn message_without_a_listener_is_unreachable() {
         home.client().message(
             &SessionId(ID.into()),
             &SessionId(FROM.into()),
+            None,
             "hello",
             &CancelToken::new()
         ),
@@ -1347,6 +1362,7 @@ fn a_cancelled_call_connects_nowhere() {
         home.client().message(
             &SessionId(ID.into()),
             &SessionId(FROM.into()),
+            None,
             "hello",
             &cancel
         ),

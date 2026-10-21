@@ -54,7 +54,7 @@ fn extension_usage_carries_its_line() {
         crate::inbox::Delivery::Prompt(..)
         | crate::inbox::Delivery::Steer(..)
         | crate::inbox::Delivery::SteerDrop(..)
-        | crate::inbox::Delivery::Message(_)
+        | crate::inbox::Delivery::Message(..)
         | crate::inbox::Delivery::Model(..)
         | crate::inbox::Delivery::Credential(..)
         | crate::inbox::Delivery::Reload(_)

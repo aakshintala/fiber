@@ -49,15 +49,28 @@ impl Queue {
     }
 
     pub(crate) fn take_extension_jobs(&mut self) -> Vec<Delivery> {
-        let mut jobs = Vec::new();
+        self.take_where(|delivery| matches!(delivery, Delivery::ExtensionJob(..)))
+    }
+
+    /// Every delivery waiting now that `keep` selects, holding back
+    /// anything else in arrival order for the next drain.
+    fn take_where(&mut self, keep: fn(&Delivery) -> bool) -> Vec<Delivery> {
+        let mut kept = Vec::new();
         for delivery in self.try_iter() {
-            if matches!(delivery, Delivery::ExtensionJob(..)) {
-                jobs.push(delivery);
+            if keep(&delivery) {
+                kept.push(delivery);
             } else {
                 self.held.push_back(delivery);
             }
         }
-        jobs
+        kept
+    }
+
+    /// Every session message waiting now, holding back anything else in
+    /// arrival order for the next drain: only a message waits for its
+    /// take to be answered, so only a message is taken early.
+    pub(crate) fn take_messages(&mut self) -> Vec<Delivery> {
+        self.take_where(|delivery| matches!(delivery, Delivery::Message(..)))
     }
 }
 

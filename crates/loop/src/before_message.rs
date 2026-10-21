@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use contract::events::{Event, Notice};
-use contract::hook::{BeforeMessage, BeforeMessageOutcome, Context, StateLine};
+use contract::hook::{BeforeMessage, BeforeMessageOutcome, Context, MessageSender, StateLine};
 use contract::inbox::{Ack, Message};
 use contract::shapes::ContentPart;
 use contract::steering;
@@ -58,6 +58,7 @@ impl Loop {
     pub(crate) fn admitted(
         &mut self,
         message: Message,
+        sender: Option<MessageSender<'_>>,
         ack: Ack,
         turn: Option<&TurnId>,
     ) -> Result<Option<(Message, Hooked, Ack)>, Error> {
@@ -70,6 +71,7 @@ impl Loop {
         }
         let answer = hooks.before_message(&BeforeMessage {
             content: &message.content,
+            sender,
         });
         let state = hooks.take_change_state();
         self.drain_state(&hooks, turn)?;
@@ -146,7 +148,7 @@ impl Loop {
         let probe = Ack(Box::new(move |answer| {
             let _sent = probe_tx.send(answer);
         }));
-        let outcome = self.admitted(Message { content, sender }, probe, turn)?;
+        let outcome = self.admitted(Message { content, sender }, None, probe, turn)?;
         let emit = inbox::TurnEmit {
             log: &self.log,
             turn: turn.cloned(),
@@ -205,7 +207,7 @@ impl Loop {
         ack: Ack,
         input: &mut TurnInput,
     ) -> Result<(), Error> {
-        let Some((message, hooked, ack)) = self.admitted(message, ack, None)? else {
+        let Some((message, hooked, ack)) = self.admitted(message, None, ack, None)? else {
             return Ok(());
         };
         // The replacement as the hook returned it, kept from before the
@@ -269,7 +271,7 @@ impl Loop {
                 Ok(())
             }
             _ => {
-                let Some((message, hooked, ack)) = self.admitted(message, ack, None)? else {
+                let Some((message, hooked, ack)) = self.admitted(message, None, ack, None)? else {
                     return Ok(());
                 };
                 self.attended();
@@ -310,7 +312,8 @@ impl Loop {
                 Ok(())
             }
             _ => {
-                let Some((message, hooked, ack)) = self.admitted(message, ack, Some(turn))? else {
+                let Some((message, hooked, ack)) = self.admitted(message, None, ack, Some(turn))?
+                else {
                     return Ok(());
                 };
                 self.attended();

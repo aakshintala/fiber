@@ -370,6 +370,77 @@ fn admit_hooked_rejects_a_second_admit_of_the_same_id() {
 }
 
 #[test]
+fn admit_session_hooked_stages_from_the_start_without_tracking_the_id() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    let (id, sender) = session("c_m", "s_1");
+    queue
+        .admit_session_hooked(
+            id.clone(),
+            text("m"),
+            sender.clone(),
+            Staged::default(),
+            &log,
+        )
+        .expect("a fresh session id admits");
+    assert!(
+        queue.is_staged(&id, &sender.origin),
+        "a session-hooked admit is staged at once"
+    );
+    assert!(
+        queue.unstaged(&id).is_none(),
+        "a session-hooked admit never needs a hook pass"
+    );
+    assert!(
+        !queue.is_admitted(&id),
+        "a session id stays invisible to is_admitted"
+    );
+    let taken = queue.take_staged(&log);
+    assert_eq!(taken.len(), 1, "take_staged drains the session entry");
+    assert!(
+        taken[0].staged.is_some(),
+        "the drained session entry carries its staged verdict"
+    );
+    assert!(
+        !queue.is_admitted(&id),
+        "a drained session id stays invisible to is_admitted"
+    );
+}
+
+#[test]
+fn admit_session_hooked_rejects_a_queued_same_sender_id_but_keeps_a_same_id_steer_live() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    let (id, sender) = driver("c_a");
+    queue
+        .push(id.clone(), text("a"), sender, &log)
+        .expect("the steer push lands");
+    let (same_id, other_sender) = session("c_a", "s_1");
+    queue
+        .admit_session_hooked(
+            same_id.clone(),
+            text("m"),
+            other_sender,
+            Staged::default(),
+            &log,
+        )
+        .expect("a same-id session entry from another sender still admits");
+    let (dup_id, dup_sender) = session("c_a", "s_1");
+    assert_eq!(
+        queue.admit_session_hooked(dup_id, text("again"), dup_sender, Staged::default(), &log),
+        Err(Duplicate),
+        "a second session admit of the same id and sender is a duplicate"
+    );
+    let taken = queue.take_staged(&log);
+    assert_eq!(taken.len(), 1, "only the session entry drains");
+    assert!(
+        queue.is_admitted(&id),
+        "draining a same-id session entry never clears the steer's admission"
+    );
+    assert_eq!(queue.snapshot().len(), 1, "the unstaged steer stays queued");
+}
+
+#[test]
 fn is_staged_ignores_an_id_that_is_not_queued() {
     let log = Recorded::default();
     let queue = Queue::new();
@@ -427,7 +498,9 @@ fn unstaged_skips_session_messages_but_keeps_driver_entries() {
         "a normal driver entry waits for its hook pass"
     );
     let (id, sender) = session("c_m", "s_other");
-    queue.admit_message(id.clone(), text("m"), sender, &log);
+    queue
+        .admit_session_hooked(id.clone(), text("m"), sender, Staged::default(), &log)
+        .expect("a fresh session id admits");
     assert!(
         queue.unstaged(&id).is_none(),
         "a session entry never takes the hook pass"
@@ -539,7 +612,15 @@ fn take_staged_forgets_taken_person_ids() {
         "the person entry stages"
     );
     let (message_id, message_sender) = session("c_m", "s_other");
-    queue.admit_message(message_id.clone(), text("m"), message_sender, &log);
+    queue
+        .admit_session_hooked(
+            message_id.clone(),
+            text("m"),
+            message_sender,
+            Staged::default(),
+            &log,
+        )
+        .expect("a fresh session id admits");
     let mut taken: Vec<CommandId> = queue
         .take_staged(&log)
         .into_iter()
@@ -631,7 +712,9 @@ fn has_session_holds_only_while_a_session_message_waits() {
         "persons-only entries are no session message"
     );
     let (id, sender) = session("c_m", "s_other");
-    queue.admit_message(id, text("m"), sender, &log);
+    queue
+        .admit_session_hooked(id, text("m"), sender, Staged::default(), &log)
+        .expect("a fresh session id admits");
     assert!(queue.has_session(), "an admitted message holds");
 }
 
@@ -640,7 +723,15 @@ fn take_for_ending_keeps_only_session_messages() {
     let log = Recorded::default();
     let queue = Queue::new();
     let (message_id, message_sender) = session("c_m", "s_other");
-    queue.admit_message(message_id, text("m"), message_sender, &log);
+    queue
+        .admit_session_hooked(
+            message_id,
+            text("m"),
+            message_sender,
+            Staged::default(),
+            &log,
+        )
+        .expect("a fresh session id admits");
     queued(&queue, "c_p", "person", &log);
     let taken = queue.take_for_ending(&log);
     assert_eq!(taken.len(), 1, "exactly the session message moves");
