@@ -15,6 +15,7 @@ use crate::rules::RustFile;
 pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/ci.md", "xtask"),
     ("docs/performance.md", "xtask"),
+    (".github/workflows/ci.yml", "xtask"),
     ("crates/tui/assets/logo-mask.bin", "xtask"),
     ("crates/tools/tests/pages/mdn-anchor.md", "tools"),
     ("crates/tools/tests/pages/mdn-code.md", "tools"),
@@ -94,6 +95,10 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/opencode/providers/opencode-go.json", "xtask"),
     (
         "providers/openrouter/tests/models-from-the-recording.json",
+        "main",
+    ),
+    (
+        "crates/provider/tests/recordings/opencode-go-tool-call.sse",
         "main",
     ),
     (
@@ -1063,6 +1068,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "research/opencode-probe/raw/go_stream_tools.json",
         "provider",
     ),
+    ("research/opencode-probe/raw/go_stream_tools_1.sse", "main"),
     ("research/opencode-probe/raw/models.json", "provider"),
     ("research/opencode-probe/raw/usage.json", "provider"),
     ("research/opencode-probe/raw/zen.json", "provider"),
@@ -1565,6 +1571,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "research/pdf-tool-results/raw/responses.in-result-file_id.text.2.json",
         "provider",
     ),
+    ("research/pdf-tool-results/text.pdf", "picture"),
     (
         "research/provider-errors/documented/anthropic.billing-402.json",
         "provider",

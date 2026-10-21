@@ -63,6 +63,7 @@ impl Setup {
             key,
             value,
             &mut std::io::sink(),
+            &*fakes::clock::FakeClock::new(),
         )
         .map(|_| ())
     }
@@ -75,8 +76,16 @@ impl Setup {
         value: &str,
     ) -> (Result<(), CliError>, String) {
         let mut err = Vec::new();
-        let result =
-            run_set(&self.home(), &self.workspace(), layer, key, value, &mut err).map(|_| ());
+        let result = run_set(
+            &self.home(),
+            &self.workspace(),
+            layer,
+            key,
+            value,
+            &mut err,
+            &*fakes::clock::FakeClock::new(),
+        )
+        .map(|_| ());
         (result, String::from_utf8(err).unwrap())
     }
 }
@@ -402,7 +411,12 @@ fn config_set_exits_zero_and_writes_the_file() {
     // Runs in a child with a temporary Fiber home, so the exit code is
     // `config_set`'s own and the write lands in the temporary home.
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(super::config_set(Layer::Global, "handoff.tokens", "200000"));
+        std::process::exit(super::config_set(
+            Layer::Global,
+            "handoff.tokens",
+            "200000",
+            &fakes::clock::SystemClock,
+        ));
     }
     let setup = Setup::new();
     let output = spawn_child(
@@ -643,7 +657,12 @@ fn config_set_of_an_unconfigured_model_warns_and_exits_zero() {
     // child's stderr. The parent checks the code, the line and the write:
     // a code alone would not catch a `set` that returns 0 without warning.
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(super::config_set(Layer::Global, "model", "acme/m"));
+        std::process::exit(super::config_set(
+            Layer::Global,
+            "model",
+            "acme/m",
+            &fakes::clock::SystemClock,
+        ));
     }
     let setup = Setup::new();
     install_placeholder(&setup.home(), "acme", "acme");
@@ -676,6 +695,7 @@ fn config_set_text_writes_and_returns_the_warning_lines() {
         Layer::Global,
         "model",
         "acme/m",
+        &fakes::clock::SystemClock,
     )
     .unwrap();
     assert_eq!(
@@ -708,6 +728,7 @@ fn config_set_text_returns_the_layers_file_for_project_and_repository() {
         Layer::Project,
         "handoff.tokens",
         "100",
+        &fakes::clock::SystemClock,
     )
     .unwrap();
     assert_eq!(project_file_returned, project_file);
@@ -718,6 +739,7 @@ fn config_set_text_returns_the_layers_file_for_project_and_repository() {
         Layer::Repository,
         "handoff.tokens",
         "50",
+        &fakes::clock::SystemClock,
     )
     .unwrap();
     assert_eq!(repository_file_returned, repository_file);
@@ -732,6 +754,7 @@ fn config_set_text_refuses_a_repository_forbidden_key_without_writing() {
         Layer::Repository,
         "tui.hover",
         "false",
+        &fakes::clock::SystemClock,
     )
     .unwrap_err();
     assert_eq!(e.code, ErrorCode::Usage);
@@ -957,5 +980,91 @@ fn outside_the_project_config_reads_only_the_installed_providers() {
             .iter()
             .map(|notice| notice.message.as_str())
             .collect::<Vec<_>>()
+    );
+}
+
+/// A placeholder variable name no test process sets: each hub test reads
+/// its absence first and sets nothing.
+const HUB_ENV_HOST: &str = "FIBER_TEST_CONFIG_HUB_ENV_HOST";
+
+/// A hub on `home`'s `run/hub` for one client: it says `hub_hello`, reads
+/// the one command line and sends it on, then answers the requested names
+/// from `values` and holds the connection until the client closes it.
+fn fake_hub_env(home: &Path, values: serde_json::Value) -> std::sync::mpsc::Receiver<String> {
+    use std::io::{BufRead, Write};
+    let listener = std::os::unix::net::UnixListener::bind(home.join("run/hub")).unwrap();
+    let (sent, got) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({"kind": "hub_hello", "ts": 1,
+                        "schema_version": contract::SCHEMA_VERSION, "payload": {}})
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(&stream)
+            .read_line(&mut line)
+            .unwrap();
+        sent.send(line).unwrap_or(());
+        stream
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({"kind": "command_accepted", "ts": 1,
+                        "schema_version": contract::SCHEMA_VERSION,
+                        "payload": {"command_id": "c_env",
+                            "result": {"values": values}}})
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut rest = String::new();
+        std::io::BufReader::new(stream)
+            .read_line(&mut rest)
+            .unwrap_or(0);
+    });
+    got
+}
+
+#[test]
+fn config_set_accepts_a_model_the_hub_holds_though_the_client_lacks_it() {
+    assert!(
+        std::env::var_os(HUB_ENV_HOST).is_none(),
+        "the test process lacks {HUB_ENV_HOST}"
+    );
+    let setup = Setup::new();
+    install_host(
+        &setup.home(),
+        "acme",
+        "acme",
+        json!({"workspace": {"env": HUB_ENV_HOST}}),
+    );
+    fs::create_dir_all(setup.home().join("run")).unwrap();
+    let got = fake_hub_env(&setup.home(), json!({HUB_ENV_HOST: "adb-1.example.test"}));
+    let (result, err) = setup.set_capturing(Layer::Global, "model", "acme/m");
+    result.unwrap();
+    assert_eq!(err, "", "the hub-held model checks without warning");
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(written, json!({"model": "acme/m"}));
+    let request: serde_json::Value = serde_json::from_str(
+        &fakes::Deadline::after(Duration::from_secs(10))
+            .recv(&got)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        request,
+        json!({"id": "c_env", "command": "placeholder_env",
+            "args": {"names": [HUB_ENV_HOST]}}),
     );
 }
