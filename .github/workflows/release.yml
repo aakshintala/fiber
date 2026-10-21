@@ -137,11 +137,13 @@ jobs:
           version=$(scripts/release-pack nightly-version . "$date")
           tag=v$version
           tags=$(git ls-remote --tags origin 'v*-nightly.*') || { printf 'release: %s\n' "could not list tags at origin." >&2; exit 1; }
+          # A second nightly the same day, scheduled after a manual one,
+          # skips: it would build over the first one's tag.
           if printf '%s' "$tags" | grep -q -F "refs/tags/$tag"; then
-            printf 'release: %s\n' "$tag already exists; refusing to build over it." >&2
-            exit 1
+            decision="skip: $tag already exists"
+          else
+            decision=$(printf '%s' "$tags" | scripts/release-pack nightly-needed "$HEAD")
           fi
-          decision=$(printf '%s' "$tags" | scripts/release-pack nightly-needed "$HEAD")
           echo "the nightly version is $version; $decision."
           echo "nightly-version=$version" >> "$GITHUB_OUTPUT"
           echo "nightly-needed=$decision" >> "$GITHUB_OUTPUT"

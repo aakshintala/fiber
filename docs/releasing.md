@@ -64,7 +64,9 @@ The nightly job runs on a daily schedule, and on a manual dispatch of
 `release.yml` from `main` (`gh workflow run release.yml`) under the same check:
 its preflight computes the next nightly
 version from the `fiber` crate's `Cargo.toml` and skips every later job when
-main is unchanged since the newest nightly tag. A nightly is published as a
+main is unchanged since the newest nightly tag or when that version's tag
+already exists, so a second nightly the same day, scheduled after a manual
+one, skips. A nightly is published as a
 GitHub pre-release, so `releases/latest` and the stable channel never see
 it. The draft is created with `--prerelease` and published last, with the
 same rule as a stable release: publishing is what creates the tag, so a
