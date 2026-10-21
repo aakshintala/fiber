@@ -214,6 +214,12 @@ fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
         let pair = support::pty::open(80, 24);
         (fs::File::from(pair.main), pair.terminal)
     };
+    // The binary runs the slave with no echo, so `wheel`'s writes never
+    // come back through the drain: echoed input would draw over the
+    // held frames below.
+    let mut attrs = rustix::termios::tcgetattr(&terminal).unwrap();
+    attrs.local_modes.remove(rustix::termios::LocalModes::ECHO);
+    rustix::termios::tcsetattr(&terminal, rustix::termios::OptionalActions::Now, &attrs).unwrap();
     let mut run = Run::attach(main, 80, 24, Deadline::start());
     let terminal = std::cell::RefCell::new(terminal);
     /// Holds `rows` as the screen's top rows over whatever drew before.
@@ -228,11 +234,17 @@ fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
     run.wait_screen("the held previous frame", |next| {
         next.rows.iter().take(3).cloned().collect::<Vec<_>>() == prev
     });
-    // Each check short of the goal feeds the next held frame: first the
-    // unrelated change, then the wheel-driven one.
+    // Each check short of the goal stages the next held frame, and only
+    // then: the unrelated frame first, and the wheel-driven one only
+    // after a check has seen the unrelated frame. Batching cannot skip
+    // the unrelated frame, since its bytes do not exist until that
+    // check runs. A single step: the wait itself must skip the
+    // unrelated frame and take the wheel-driven one, with no later
+    // step to rescue an early return.
     let fed = std::cell::Cell::new(0u8);
-    let grid = wheel(&mut run, "one step up", true, 10, |next: &Grid| {
-        if next.rows.iter().take(3).cloned().collect::<Vec<_>>() == wheeled {
+    let grid = wheel(&mut run, "one step up", true, 1, |next: &Grid| {
+        let top: Vec<_> = next.rows.iter().take(3).cloned().collect();
+        if top == wheeled {
             return true;
         }
         match fed.get() {
@@ -240,7 +252,7 @@ fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
                 hold(&terminal, &unrelated);
                 fed.set(1);
             }
-            1 => {
+            1 if top == unrelated => {
                 hold(&terminal, &wheeled);
                 fed.set(2);
             }
