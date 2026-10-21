@@ -504,6 +504,22 @@ fn hostile_git_forms_execute() {
 }
 
 #[test]
+fn find_selection_operators_read() {
+    for command in [
+        "find . -name \"*.py\" -not -path \"./.git/*\"",
+        "find . -path ./.git -prune -o -name \"*.py\" -print",
+    ] {
+        assert_reads(command);
+    }
+    for command in [
+        "find . -name x -delete",
+        "find . \\( -name a -o -name b \\) -exec rm {} \\;",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
 fn echo_reads_text_and_only_n_counts_as_a_flag() {
     for command in [
         "echo ---",
@@ -576,6 +592,18 @@ fn the_four_quoted_commands_read() {
         .paths,
         Some(vec!["/work/crates/".to_owned(), "/work".to_owned()])
     );
+}
+
+#[test]
+fn head_and_tail_count_forms_read() {
+    for command in [
+        "ls src | head -n 5",
+        "ls src | head -5",
+        "grep -rn \"def \" src | head -20",
+        "tail -n +3 f",
+    ] {
+        assert_reads(command);
+    }
 }
 
 #[test]
