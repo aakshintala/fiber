@@ -2605,15 +2605,20 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
     // claims each under the fold lock and forwards both in order. A
     // boundary check that drops past-`after` lines would forward none;
     // a dedup that forgets the first claim would forward the first
-    // twice and drop the second.
+    // twice and drop the second. The shell prints the run's
+    // `fiber_exited` to stdout: the drain folds it before the report,
+    // so the notice is `Completed` whether or not the watcher beat the
+    // reap (see #3005).
     let rig = rig(vec![WatchReply::Exited(vec![
         usage_envelope(2, "g_2", Some(0.1)),
         usage_envelope(3, "g_3", Some(0.2)),
         fiber_exited_line(4, "Done."),
     ])]);
+    let exit = serde_json::to_string(&fiber_exited_line(4, "Done.")).unwrap();
+    let shell = format!("printf '%s\\n' '{exit}'");
     let waited = start_after_with_usage(
         &rig,
-        "exit 0",
+        &shell,
         BOUND,
         1 << 20,
         Some(rig.registry.usage_forward()),
@@ -3118,9 +3123,14 @@ fn a_correction_applies_only_its_delta() {
     rig.registry.install_usage_tap(Some(Arc::new(move |line| {
         tapped.tap(&line);
     })));
+    // The shell prints the run's `fiber_exited` to stdout: the drain
+    // folds it before the report, so the notice is `Completed` whether
+    // or not the watcher beat the reap (see #3005).
+    let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
+    let shell = format!("printf '%s\\n' '{exit}'");
     let waited = start_with_usage(
         &rig,
-        "exit 0",
+        &shell,
         BOUND,
         1 << 20,
         Some(rig.registry.usage_forward()),
@@ -3128,8 +3138,11 @@ fn a_correction_applies_only_its_delta() {
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
     // The second arrival of the same generation adds only its delta, so
-    // the spend holds the latest billed figure once, not twice.
-    assert!((trip.sum() - 0.18).abs() < 1e-9);
+    // the spend holds the latest billed figure once, not twice. The Job
+    // can precede the watcher's forwards, so the tap is read only
+    // after both streamed lines land on the inbox.
+    let usages = drain_streamed_usages(&rig, usages, 2);
+    assert_eq!(trip.sum(), 0.18);
     assert_eq!(trip.stops(), 0);
     assert_eq!(usages.len(), 2);
     assert_eq!(notice.completed.status, Outcome::Completed);
