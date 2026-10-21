@@ -9,8 +9,8 @@ use crate::completion::Shell;
 use super::{
     ApproveArgs, AskArgs, ChannelArg, Commands, ConfigCommands, ExtensionCommands, HubCommands,
     ImportSource, Invocation, LoginArgs, LogoutArgs, MENU, McpAddArgs, McpCommands, McpRemoveArgs,
-    SessionArgs, SessionsArgs, SessionsCommands, TokenCommands, TopLevel, command, parse_from,
-    usage_sentence, version_line,
+    SessionArgs, SessionsArgs, SessionsCommands, SetupArgs, TokenCommands, TopLevel, command,
+    parse_from, usage_sentence, version_line,
 };
 
 #[test]
@@ -1213,6 +1213,86 @@ fn parses_argv_into_its_invocation() {
                 TopLevel::default(),
             ),
         ),
+        (
+            &["fiber", "setup"],
+            Invocation::Run(
+                Some(Commands::Setup(SetupArgs {
+                    provider: Vec::new(),
+                    model: None,
+                    thinking: None,
+                    import: Vec::new(),
+                    completions: None,
+                    no_completions: false,
+                    hub: false,
+                    no_hub: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &[
+                "fiber",
+                "setup",
+                "--provider",
+                "openrouter",
+                "--provider",
+                "codex",
+                "--model",
+                "fake/m",
+                "--thinking",
+                "high",
+                "--import",
+                "claude-code",
+                "--completions",
+                "zsh",
+                "--hub",
+            ],
+            Invocation::Run(
+                Some(Commands::Setup(SetupArgs {
+                    provider: vec!["openrouter".to_owned(), "codex".to_owned()],
+                    model: Some("fake/m".to_owned()),
+                    thinking: Some("high".to_owned()),
+                    import: vec![ImportSource::ClaudeCode],
+                    completions: Some(Shell::Zsh),
+                    no_completions: false,
+                    hub: true,
+                    no_hub: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "setup", "--import", "codex", "--no-completions"],
+            Invocation::Run(
+                Some(Commands::Setup(SetupArgs {
+                    provider: Vec::new(),
+                    model: None,
+                    thinking: None,
+                    import: vec![ImportSource::Codex],
+                    completions: None,
+                    no_completions: true,
+                    hub: false,
+                    no_hub: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "setup", "--no-hub"],
+            Invocation::Run(
+                Some(Commands::Setup(SetupArgs {
+                    provider: Vec::new(),
+                    model: None,
+                    thinking: None,
+                    import: Vec::new(),
+                    completions: None,
+                    no_completions: false,
+                    hub: false,
+                    no_hub: true,
+                })),
+                TopLevel::default(),
+            ),
+        ),
     ];
     for (argv, expected) in &cases {
         let parsed = parse_from(argv.iter().copied());
@@ -1451,6 +1531,58 @@ fn logout_as_conflicts_with_all() {
     assert!(said.contains("cannot be used with"), "{said}");
     assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
     assert_eq!(said.lines().count(), 1, "{said}");
+}
+
+#[test]
+fn setup_flags_conflict_in_pairs() {
+    for args in [
+        &["fiber", "setup", "--completions", "zsh", "--no-completions"][..],
+        &["fiber", "setup", "--hub", "--no-hub"],
+    ] {
+        let said = sentence(args);
+        assert!(said.contains("cannot be used with"), "{said}");
+        assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+        assert_eq!(said.lines().count(), 1, "{said}");
+    }
+}
+
+#[test]
+fn setup_help_names_every_flag() {
+    let help = super::render_help(&["setup"]).unwrap();
+    for flag in [
+        "--provider",
+        "--model",
+        "--thinking",
+        "--import",
+        "--completions",
+        "--no-completions",
+        "--hub",
+        "--no-hub",
+    ] {
+        assert!(help.contains(flag), "{flag}: {help}");
+    }
+    assert!(help.contains("Usage: fiber setup"), "{help}");
+}
+
+#[test]
+fn the_menu_names_setup_with_its_synopsis() {
+    let itself = menu()
+        .split("\n\n")
+        .find(|group| group.starts_with("Fiber itself:"))
+        .unwrap()
+        .to_owned();
+    let row = itself
+        .lines()
+        .find(|line| line.starts_with("  setup "))
+        .unwrap()
+        .to_owned();
+    // The synopsis is the text before the description's gap of two or
+    // more spaces, past the two-space indent.
+    assert_eq!(
+        row[2..].split("  ").next().unwrap_or(""),
+        "setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code | codex>]... [--completions <shell> | --no-completions] [--hub | --no-hub]",
+        "{row}"
+    );
 }
 
 #[test]
@@ -2209,6 +2341,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "config",
             "import",
             "login",
+            "setup",
             "logout",
             "doctor",
             "feedback",
@@ -2281,6 +2414,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "config",
             "import",
             "login",
+            "setup",
             "logout",
             "doctor",
             "feedback",
@@ -3914,5 +4048,5 @@ fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
         "these doc synopses are not in the menu: {missing:?}"
     );
     unbuilt.sort();
-    assert_eq!(unbuilt, ["mcp serve", "setup"]);
+    assert_eq!(unbuilt, ["mcp serve"]);
 }

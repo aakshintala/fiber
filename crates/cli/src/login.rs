@@ -519,6 +519,12 @@ pub fn login_targets(home: &Path) -> Result<Vec<LoginName>, CliError> {
     Ok(targets(&providers_in(home)?))
 }
 
+/// Whether any label is stored for the provider's stored credential
+/// name: the live signed-in mark the setup question shows.
+pub(crate) fn signed_in(home: &Path, data: &ProviderData) -> Result<bool, config::ConfigError> {
+    Ok(!credential_labels(home, stored_name(data))?.is_empty())
+}
+
 /// Stores `key` for `name` as `fiber login <name> [--as <label>]` would,
 /// the key already read. A refusal carries no CLI hint.
 pub fn login_store(
