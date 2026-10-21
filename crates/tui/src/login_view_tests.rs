@@ -2477,6 +2477,28 @@ fn a_label_caret_fills_the_left_room_to_the_cell() {
     );
 }
 
+/// The host edit row's spans for `text` with the caret at `caret`, at
+/// width `inner`: the caret rides its cell, with the end block after
+/// the text.
+fn host_spans(text: &str, caret: usize, inner: usize) -> Vec<String> {
+    let mut typed = crate::input::Draft::default();
+    typed.set(text);
+    for _ in caret..text.chars().count() {
+        typed.edit(Edit::Left);
+    }
+    span_texts(&super::host_edit_row(&typed, inner))
+}
+
+#[test]
+fn a_host_caret_rides_its_cell_with_the_end_block_after_it() {
+    // The caret at the end draws the block after the text; one cell in
+    // draws it on its cell with no trailing block. With `>=` flipped
+    // to `<` the end loses its block while the middle gains one.
+    assert_eq!(host_spans("", 0, 80), ["█"]);
+    assert_eq!(host_spans("ab", 2, 80), ["ab█"]);
+    assert_eq!(host_spans("ab", 1, 80), ["a█b"]);
+}
+
 #[test]
 fn a_secret_only_list_is_as_wide_as_its_heading_or_row() {
     // The heading "Secrets" is 7 cells and the row 5, so the list is 7.
@@ -2725,6 +2747,35 @@ fn a_saved_host_saves_trimmed_and_queues_the_reviewer() {
 }
 
 #[test]
+fn only_backspace_deletes_a_typed_host_answer() {
+    // Backspace drops the last typed cell; any other editing key leaves
+    // the answer alone: with `==` flipped to `!=` Backspace would keep
+    // the cell while the other key deleted it.
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps()[..1].to_vec());
+    typed(&mut login, &fake, "ab");
+    assert!(matches!(login.key(&Key::Backspace, &ctx(&fake)), Act::Stay));
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Reviewer(name) if name == "acme"));
+    assert_eq!(
+        fake.host_saves(),
+        [("acme".to_owned(), "workspace".to_owned(), "a".to_owned())]
+    );
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps()[..1].to_vec());
+    typed(&mut login, &fake, "ab");
+    assert!(matches!(login.key(&Key::Up, &ctx(&fake)), Act::Stay));
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Reviewer(name) if name == "acme"));
+    assert_eq!(
+        fake.host_saves(),
+        [("acme".to_owned(), "workspace".to_owned(), "ab".to_owned())]
+    );
+}
+
+#[test]
 fn each_save_asks_the_next_gap() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
@@ -2860,6 +2911,34 @@ fn reviewer_results_land_only_in_preparing_on_their_ticket() {
         screen.contains("Reading codex's reviewer models"),
         "{screen}"
     );
+}
+
+#[test]
+fn host_results_land_only_in_preparing_on_their_ticket() {
+    // A Host result on another ticket changes nothing: the view stays
+    // preparing, with no panel opened; the right ticket opens the
+    // panel. With the ticket guard stuck true the wrong ticket would
+    // open the panel.
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    assert_eq!(
+        login.step(
+            LoginTicket(2),
+            crate::login_worker::LoginStep::Host(Ok(host_gaps()))
+        ),
+        None
+    );
+    let screen = drawn(&login, 80, 24);
+    assert!(
+        screen.contains("Reading acme's reviewer models"),
+        "{screen}"
+    );
+    assert!(!screen.contains("`workspace`"), "{screen}");
+    fold_gaps(&mut login, LoginTicket(1), host_gaps());
+    assert!(matches!(login.mode, super::Mode::Host(_)));
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("`workspace` (`ACME_HOST`):"), "{screen}");
 }
 
 #[test]

@@ -1951,6 +1951,88 @@ fn end_of_input_at_the_host_prompt_saves_nothing_and_still_ends_zero() {
     assert_eq!(setup.stored("acme", "default").as_deref(), Some(KEY));
 }
 
+#[test]
+fn every_gap_is_asked_before_the_reviewer_runs() {
+    // Two gaps, both answered: with `is_ended` stuck true the loop
+    // would stop after the first answer, so the second prompt and its
+    // save pin the loop continuing on a saved answer.
+    let setup = Setup::new();
+    install_two_gaps(&setup.home());
+    let (result, err) = setup.login(
+        Some("acme"),
+        true,
+        "adb-1.example\nadb-2.example\n1\n",
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert_eq!(err.matches("`other`: ").count(), 1, "{err:?}");
+    assert_eq!(
+        err.matches("`workspace` (`FIBER_TEST_2909_UNSET_HOST`): ")
+            .count(),
+        1,
+        "{err:?}"
+    );
+    assert_eq!(
+        saved_host(&setup),
+        json!({"other": "adb-1.example", "workspace": "adb-2.example"})
+    );
+    assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
+}
+
+#[test]
+fn end_of_input_stops_before_the_next_gap() {
+    // EOF at the first of two gaps ends the questions at once: with
+    // `is_ended` stuck false the loop would ask on, so the missing
+    // second prompt pins the loop ending on end of input.
+    let setup = Setup::new();
+    install_two_gaps(&setup.home());
+    let (result, err) = setup.login(Some("acme"), true, "", &mut Fake::new(KEY));
+    result.unwrap();
+    assert_eq!(err.matches("`other`: ").count(), 1, "{err:?}");
+    assert!(!err.contains("`workspace`"), "{err:?}");
+    assert!(!setup.home().join("config").join("acme.json").exists());
+    assert!(
+        err.contains("fiber: no reviewer was set for acme; the credential stays.\n"),
+        "{err:?}"
+    );
+    assert_eq!(setup.stored("acme", "default").as_deref(), Some(KEY));
+}
+
+#[test]
+fn a_pipe_login_runs_remedies_for_a_provider_but_no_host_step_for_a_secret() {
+    // `!terminal && is_some`: the conjunction holds for a provider, so
+    // the pipe prints its remedy lines before the stored line; it fails
+    // for a secret, so the stored line follows at once with no host
+    // step to fail: a broken project config still stores the secret,
+    // while `||` would route it through the failing host step.
+    let provider = Setup::new();
+    install_host(&provider.home(), json!({"workspace": {}}));
+    let (result, err) = provider.login(
+        Some("acme"),
+        false,
+        &format!("{KEY}\n"),
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert_eq!(
+        err,
+        "fiber: `workspace` has no value and no environment variable fills it; \
+         set it in `config/acme.json` in Fiber home.\n\
+         fiber: stored credentials/acme/default\n",
+        "{err:?}"
+    );
+    let secret = Setup::new();
+    secret.declare("acme", &["api_key"]);
+    let (_, project) =
+        crate::project_of(&secret.home(), &std::env::current_dir().unwrap()).unwrap();
+    let dir = secret.home().join("projects").join(project.as_str());
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("config.json"), "{bad").unwrap();
+    let (result, err) = secret.login(Some("api_key"), false, "", &mut Fake::new("v1"));
+    result.unwrap();
+    assert_eq!(err, "fiber: stored credentials/api_key\n", "{err:?}");
+}
+
 impl Setup {
     /// The installed providers merged with `workspace`'s approved
     /// repository set, as `fiber login` reads them there.
