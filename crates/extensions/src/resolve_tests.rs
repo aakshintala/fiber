@@ -190,3 +190,75 @@ fn newest_within_is_deterministic_in_any_order() {
         newest_within("d", &w, &swapped).unwrap()
     );
 }
+
+#[test]
+fn nightly_parts_splits_the_base_and_the_date() {
+    use super::nightly_parts;
+    assert_eq!(
+        nightly_parts("v0.3.0-nightly.20240101").unwrap(),
+        ([0, 3, 0], "20240101".to_owned())
+    );
+    assert_eq!(
+        nightly_parts("1.2.3-nightly.19991231").unwrap(),
+        ([1, 2, 3], "19991231".to_owned())
+    );
+}
+
+#[test]
+fn nightly_parts_rejects_anything_not_shaped_like_a_nightly() {
+    use super::nightly_parts;
+    for bad in [
+        "v0.3.0",
+        "v0.3.0-nightly.2024010",
+        "v0.3.0-nightly.202401011",
+        "v0.3.0-nightly.2024abcd",
+        "v0.3.0-nightly.",
+        "v0.3-nightly.20240101",
+        "v0.3.0.1-nightly.20240101",
+        "x.y.z-nightly.20240101",
+        "",
+    ] {
+        assert!(
+            matches!(nightly_parts(bad), Err(Error::BadVersion { .. })),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn version_rejects_what_is_not_three_numbers() {
+    use super::version;
+    for bad in ["", "1.2", "1.2.3.4", "a.b.c", "1.2.x", "v1.2.3 "] {
+        assert!(
+            matches!(version(bad), Err(Error::BadVersion { .. })),
+            "{bad}"
+        );
+    }
+    assert_eq!(version("v1.2.3").unwrap(), [1, 2, 3]);
+}
+
+#[test]
+fn meets_orders_stable_and_nightly_forms() {
+    use super::at_least;
+    let cases: [(&str, &str, bool); 8] = [
+        ("0.3.0", "0.3.0", true),
+        ("0.2.0", "0.3.0", true),
+        ("0.3.0", "0.2.0", false),
+        ("0.3.0-nightly.20240101", "0.3.0", true),
+        ("0.3.0", "0.3.0-nightly.20240101", false),
+        ("0.3.0-nightly.20240101", "0.3.0-nightly.20240201", true),
+        ("0.3.0-nightly.20240201", "0.3.0-nightly.20240101", false),
+        ("0.3.0-nightly.20240101", "0.3.0-nightly.20240101", true),
+    ];
+    for (need, have, want) in cases {
+        assert_eq!(at_least(need, have).unwrap(), want, "{need} in {have}");
+    }
+    assert!(matches!(
+        at_least("bogus", "0.3.0"),
+        Err(Error::BadVersion { .. })
+    ));
+    assert!(matches!(
+        at_least("0.3.0", "bogus"),
+        Err(Error::BadVersion { .. })
+    ));
+}

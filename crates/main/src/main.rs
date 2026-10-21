@@ -206,15 +206,19 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers }), _) => {
             refresh_entry(&providers, clock, read_signals::CancelOnSignal::new)
         }
-        cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, base_url }), _) => {
-            ::cli::release_install(
-                &version,
-                base_url.as_deref(),
-                env!("CARGO_PKG_VERSION"),
-                option_env!("FIBER_COMMIT"),
-                clock.as_ref(),
-            )
-        }
+        cli::Invocation::Run(
+            Some(cli::Commands::ReleaseInstall {
+                version,
+                test_base_url,
+            }),
+            _,
+        ) => ::cli::release_install(
+            &version,
+            test_base_url.base_url.as_deref(),
+            env!("CARGO_PKG_VERSION"),
+            option_env!("FIBER_COMMIT"),
+            clock.as_ref(),
+        ),
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd)), _) => match cmd {
             cli::ExtensionCommands::Install {
                 name_or_path,
@@ -282,6 +286,56 @@ fn run() -> i32 {
         }
         cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
             ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
+        }
+        cli::Invocation::Run(
+            Some(cli::Commands::Update {
+                channel,
+                test_base_url,
+            }),
+            _,
+        ) => {
+            let flag = channel.map(|flag| match flag {
+                cli::ChannelArg::Stable => ::cli::Channel::Stable,
+                cli::ChannelArg::Nightly => ::cli::Channel::Nightly,
+            });
+            let channel = match ::cli::resolve_channel(
+                flag,
+                std::env::var("FIBER_CHANNEL").ok().as_deref(),
+            ) {
+                Ok(channel) => channel,
+                Err(error) => {
+                    eprintln!("fiber: {error}");
+                    return 2;
+                }
+            };
+            let home = match config::fiber_home_from_env() {
+                Ok(home) => home,
+                Err(e) => return fail(failed(e.code(), e)),
+            };
+            let stdin = io::stdin();
+            let stderr = io::stderr();
+            // A test seam, not a user control: the binary update tests
+            // point both roots at their fixture server through
+            // `--base-url`. Production runs leave it absent.
+            let mut bases = ::cli::ReleaseBases::production();
+            if let Some(base) = test_base_url.base_url {
+                bases.web = base.clone();
+                bases.api = base;
+            }
+            ::cli::update(
+                &home,
+                env!("CARGO_PKG_VERSION"),
+                env!("FIBER_TARGET"),
+                channel,
+                &bases,
+                clock.as_ref(),
+                ::cli::Io {
+                    terminal: stdin.is_terminal(),
+                    input: &mut stdin.lock(),
+                    err: &mut stderr.lock(),
+                },
+                &::extensions::Origin::github(),
+            )
         }
         cli::Invocation::Run(Some(cli::Commands::Feedback(args)), _) => {
             match cli::ask_parts(&args.prompt) {

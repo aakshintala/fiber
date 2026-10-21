@@ -79,6 +79,7 @@ mod startable;
 mod test_support;
 #[cfg(test)]
 mod timing_tests;
+mod update;
 
 use std::io;
 use std::path::PathBuf;
@@ -108,6 +109,9 @@ pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;
 pub use providers::{Model, Providers, StartedRefresh, leave_out_invalid, refresh_lists};
+pub use release::fetch_nightly_tag;
+pub use release::install_docs_if_missing;
+pub use release::latest_stable_tag;
 pub use release::{Release, install_release};
 pub use repository::{
     ApprovedExtension, ApprovedServer, CopyHold, CopyRemoval, Decision, Fetch, Index, KeptCopy,
@@ -115,7 +119,9 @@ pub use repository::{
     approved_extension, approved_extensions, declared_items, hash, kind_name, mcp_server_item,
     pending, repository_servers,
 };
+pub use resolve::{nightly_parts, version, version_key};
 pub use startable::{context_window, takes, thinking_refusal};
+pub use update::{StagedUpdate, Target, stage_update};
 
 /// The extension API's major version this Fiber speaks
 /// (`docs/extensions.md`, "The extension API version").
@@ -256,6 +262,22 @@ pub enum Error {
     NoTag {
         /// The name.
         name: String,
+    },
+    /// The repository holds no release tag asked for.
+    #[error("`{repo}` does not have the tag `{tag}`.")]
+    MissingTag {
+        /// The repository `git` was asked for.
+        repo: String,
+        /// The tag looked for.
+        tag: String,
+    },
+    /// The nightly channel holds no matching release.
+    #[error("No `nightly` release at {url}: {why}.")]
+    NoNightly {
+        /// The release list read.
+        url: String,
+        /// What was looked for.
+        why: String,
     },
     /// An extension whose install record is missing or unreadable:
     /// `fiber extension reinstall <name>` fixes it (`docs/extensions.md`,
@@ -549,6 +571,7 @@ impl Error {
             Self::NoRepository { .. } | Self::NoTag { .. } | Self::WrongName { .. } => {
                 ErrorCode::ExtensionNotFound
             }
+            Self::MissingTag { .. } | Self::NoNightly { .. } => ErrorCode::ExtensionNotFound,
             Self::NotInstalled { .. } => ErrorCode::ExtensionMissing,
             Self::NothingToRemove { .. } => ErrorCode::ExtensionNotInstalled,
             Self::NeedsNewerFiber { .. } | Self::ApiVersion { .. } => {
