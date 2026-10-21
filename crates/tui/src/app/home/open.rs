@@ -422,11 +422,6 @@ impl App {
     /// note and a notice. A missing-workspace refusal renders the ruled
     /// sentence instead, naming the path. A rejection of an earlier step
     /// changes nothing by itself.
-    //
-    // `vec![]` is exactly `Vec::new()`: no test can tell the spellings
-    // apart, so the empty-vector mutant is exempted here instead of
-    // pinned (`docs/testing/mutants.md`, "Proving a test bites").
-    #[cfg_attr(false, mutants::skip)]
     fn fail_open(&mut self, code: &str, message: String) -> Vec<String> {
         let session = self
             .home
