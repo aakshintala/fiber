@@ -3015,12 +3015,22 @@ impl TripTap {
 
 #[test]
 fn the_trip_calls_stop_once_on_crossing_and_never_before() {
-    let rig = rig(vec![WatchReply::Exited(vec![
-        usage_envelope(1, "g_1", Some(0.1)),
-        usage_envelope(2, "g_2", Some(0.15)),
-        usage_envelope(3, "g_3", Some(0.1)),
-        fiber_exited_line(4, "Done."),
-    ])]);
+    // The socket closes without yielding and the log file below holds
+    // three usage lines crossing the budget: the crossing runs on the
+    // synchronous file-replay path, never on the unjoined watcher
+    // thread, so the sum, the single stop and the three forwards hold
+    // whichever replay wins the claim (see #3005). The reap's replay
+    // runs before the report, so all three lines land first. Streamed
+    // delivery stays covered by the tap tests.
+    let rig = rig(vec![WatchReply::Closed(Vec::new())]);
+    let mut text = String::new();
+    for (seq, generation, cost) in [(1, "g_1", 0.1), (2, "g_2", 0.15), (3, "g_3", 0.1)] {
+        text.push_str(
+            &serde_json::to_string(&usage_envelope(seq, generation, Some(cost))).unwrap(),
+        );
+        text.push('\n');
+    }
+    std::fs::write(&rig.events, text).unwrap();
     let trip = Arc::new(TripTap {
         billed: Mutex::new(std::collections::HashMap::new()),
         sum: Mutex::new(0.0),
@@ -3043,10 +3053,13 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
     let (notice, usages) = reported_with_usage(&rig);
     // Below the budget nothing trips; the crossing trips once; the line
     // after never trips again.
-    assert!((trip.sum() - 0.35).abs() < 1e-9);
+    assert_eq!(trip.sum(), 0.35);
     assert_eq!(trip.stops(), 1);
     assert_eq!(usages.len(), 3);
-    assert_eq!(notice.completed.status, Outcome::Completed);
+    // The bare shell and the closed socket report no `fiber_exited`,
+    // so the job ends without a result; the trip is what this test
+    // proves.
+    assert_eq!(notice.completed.status, Outcome::Failed);
 }
 
 #[test]
