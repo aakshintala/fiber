@@ -4,21 +4,19 @@ Run `fiber doctor` when a session will not start. It prints one line per check, 
 
 ## What each line means
 
-`fiber <version> (<commit>)` names the binary and its commit ([Commands and flags]).
+The version line names the binary you are running ([Commands and flags]).
 
-`model: <choice> (provider <name>)` names the default model and the provider it needs. When no model is chosen, the line says so instead, and a session cannot start ([Commands and flags]).
+The model line names the default model and the provider it needs. When it says none is chosen, choose one before starting a session ([Commands and flags]).
 
-Each installed provider gets one block: one line per credential label, with where its key comes from. `*` marks the selected label. A selected key that is missing, empty, or unreadable carries its fix, such as ``no key for openrouter: run `fiber login openrouter` `` ([Commands and flags]).
+A provider block lists that provider's credentials. A line that carries a fix names the `fiber login` command that stores the key; run it ([Commands and flags]).
 
-`permissions: auto` names the permission mode ([Commands and flags]).
+The permissions and MCP server lines need no action unless a line names a server Fiber cannot use ([Commands and flags]).
 
-`MCP servers: <count>` counts the declared MCP servers. A required server Fiber cannot use adds a line naming it ([Commands and flags]).
+The hub lines say whether the hub is running and, when it is, describe the environment its sessions get ([A session's environment](../invocation.md#a-sessions-environment)).
 
-`hub: running` or `hub: not running` says whether the hub is running. When it is, the next lines describe the environment its sessions get: `hub environment` names the login-shell capture or its fallback, `hub PATH` gives the `PATH`, and `hub variables` names the other variables ([A session's environment](../invocation.md#a-sessions-environment)).
+A missing extension secret never stops a session starting; store it with the `fiber login <name>` the line names when the extension needs it ([Commands and flags]).
 
-A `secret <name> (from <extension>) is not stored` line names an enabled extension's secret with the `fiber login <name>` that stores it. A missing secret never stops a session starting ([Commands and flags]).
-
-`logs:` names the diagnostic log directory. `newest error:` gives the newest `error` line across those logs, with its file, age, code, and message. `newest crash:` gives the newest crash report with its age. Where each lives is [What each part holds](../state.md#what-each-part-holds).
+The log and crash lines say where to look and what the last runs left behind; quote them when you ask for help. Where each lives is [What each part holds](../state.md#what-each-part-holds).
 
 ``user guide not installed: run `fiber update` `` means Fiber home holds no `docs/`, and the update that restores them is [Updating](../releasing.md#updating).
 
