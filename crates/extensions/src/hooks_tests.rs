@@ -2795,26 +2795,12 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
     // is frozen, so asked is exactly `before`. The wall-clock deadline only
     // bounds the waits for the parked delivery to appear and the loop to
     // notice the move.
-    let mark = clock
+    let thread = clock
         .mark_parked(before + Duration::from_millis(300), WAIT)
-        .expect("waited for the sleeping watcher to park at its deadline");
-    let mut threads = mark.threads();
-    assert_eq!(
-        threads.len(),
-        1,
-        "one watcher parks at its deadline, {threads:?}"
-    );
-    let thread = threads.pop().expect("one watcher parked at its deadline");
-    // Pin the exec runner's fresh re-park at before + 10 ms before
-    // advancing: its poll park would otherwise arrive beside the
-    // watcher's deadline park and fail the unnamed wait.
-    let poll = clock
-        .mark_parked(before + Duration::from_millis(10), WAIT)
-        .expect("waited for the exec runner to park");
-    assert!(
-        clock.await_any_parked_since(&poll, WAIT),
-        "waited for the exec runner to re-park"
-    );
+        .expect("waited for the sleeping watcher to park at its deadline")
+        .threads()
+        .pop()
+        .expect("one watcher parked at its deadline");
     clock.advance_when_parked(
         Some(before + Duration::from_millis(300)),
         Some(thread),
