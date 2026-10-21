@@ -39,10 +39,10 @@ h1 { font-size: clamp(34px, 4.5vw, 62px); margin: 0; }
 .annotations { list-style: none; padding: 0; margin: 0; pointer-events: none; }
 .annotations li { position: absolute; background: var(--page); color: var(--ink); border: 1px solid var(--line); border-radius: 2px; padding: 4px 9px; font-size: 11px; white-space: nowrap; }
 .annotations li::after { content: ""; position: absolute; width: 1px; height: 18px; background: var(--muted); left: 16px; top: 100%; }
-.rail-label { left: 1%; top: 48%; }
+.rail-label { left: 1%; top: 93%; }
 .conversation-label { left: 46%; top: 37%; }
-.panel-label { right: 1%; top: 40%; }
-.approval-label { left: 47%; top: 88%; }
+.panel-label { right: 1%; top: 76%; }
+.approval-label { left: 52%; top: 91.5%; }
 figcaption { display: flex; justify-content: space-between; gap: 16px; font-size: 11px; color: var(--muted); margin-top: 17px; }
 .numbers { padding-block: 112px 84px; }
 h2 { font-size: 38px; margin: 0 0 42px; }
