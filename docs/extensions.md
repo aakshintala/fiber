@@ -1226,13 +1226,14 @@ environment. The command's program resolves as follows: a bare name on
 directory), an absolute path as written. The package-relative rule is for
 `host.exec` and `process.program` only. It runs once for each time its hook point or event comes round.
 
-**What the command reads.** Standard input carries one JSON line: the hook
-request a process extension receives for that point ("Process extensions"),
-or, for a watcher, the event.
+**What the command reads.** Standard input carries one JSON line: the table
+a Lua hook's `run` is given at that point ('What a hook is given and returns'),
+with `point` naming the hook point and `schema_version`, or, for a watcher,
+the event.
 
-**How the command answers.** Standard output may carry the reply a process
-extension would send, as one JSON line. Two shorthands keep a shell script
-short:
+**How the command answers.** Standard output may carry, as one JSON line,
+the table a Lua hook may return at that point. Two shorthands keep a shell
+script short:
 
 - Exit 0 with plain text on standard output adds the text as context at the
   points that take context: `session_start`, `before_message` and

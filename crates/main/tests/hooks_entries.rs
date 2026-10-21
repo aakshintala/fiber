@@ -1,0 +1,703 @@
+//! Binary-level pins for the first-party `hooks` extension
+//! (`docs/extensions.md`, "Hooks declared in configuration";
+//! `docs/testing.md`, "Levels"): the built `fiber` runs in its own process
+//! group with its own `FIBER_HOME`, a fake provider, and the real `hooks`
+//! package installed from the repository. No test here waits on a hook's
+//! timeout; those run on the fake clock in `extensions` and in the
+//! package's own session cases.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
+mod extension_harness;
+mod support;
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+
+use extension_harness::{
+    send as session_send, until_session as session_until, until_session_close,
+};
+use fakes::ProviderServer;
+use serde_json::{Value, json};
+use support::{KillGroup, Run, Setup, function_call, hello, is_status, spawn_watched, stream};
+
+/// The first-party package under test.
+const HOOKS_NAME: &str = "github.com/aakshintala/fiber/extensions/hooks";
+
+/// The hook script every entry runs: it appends its standard input to the
+/// capture file named by its first argument, then answers per its second.
+const CAPTURE_SH: &str = "#!/bin/sh\ncat >> \"$1\"\ncase \"$2\" in\n  json) printf '{\"content\":\"hook replaced\"}\\n' ;;\n  text) printf 'plain hook context\\n' ;;\n  refuse) printf 'no writes here\\n' >&2; exit 2 ;;\nesac\n";
+
+/// The repository root: the tests install the package from its source.
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn entry(point: &str, command: &str, args: Value, timeout: u64, on_failure: &str) -> Value {
+    json!({
+        "point": point,
+        "command": command,
+        "args": args,
+        "timeout": timeout,
+        "on_failure": on_failure,
+    })
+}
+
+impl Setup {
+    /// Installs the real `hooks` package from the repository.
+    fn install_hooks(&self) {
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(repo_root().join("extensions/hooks")),
+            "0.0.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+    }
+
+    /// Removes the installed `hooks` package, leaving its settings behind.
+    fn remove_hooks(&self) {
+        let root = self.home().join("extensions");
+        for item in fs::read_dir(&root).unwrap() {
+            let dir = item.unwrap().path();
+            let Ok(text) = fs::read_to_string(dir.join("extension.json")) else {
+                continue;
+            };
+            let Ok(value): Result<Value, _> = serde_json::from_str(&text) else {
+                continue;
+            };
+            if value.get("name").and_then(Value::as_str) == Some(HOOKS_NAME) {
+                fs::remove_dir_all(&dir).unwrap();
+                return;
+            }
+        }
+        panic!("the hooks package was not installed");
+    }
+
+    /// Runs `fiber` in its own process group, waits for it under the
+    /// test's deadline, and asserts that nothing it started is left in the
+    /// group. A watchdog beside it kills that group if this process dies
+    /// first.
+    #[track_caller]
+    fn run(&self, args: &[&str]) -> Run {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
+            .args(args)
+            .current_dir(self.workspace())
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", self.root.path())
+            .env("FIBER_HOME", self.home())
+            .env("FIBER_TEST_FAKE_KEY", "sk-test")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (child, watchdog) = spawn_watched(&mut command);
+        let group = child.id();
+        let guard = KillGroup(group);
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match self.deadline.recv(&finished) {
+            Ok(output) => output.unwrap(),
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
+        };
+        assert!(
+            !support::group_alive(self.deadline, group),
+            "`fiber` left a process in its group behind"
+        );
+        std::mem::forget(guard);
+        watchdog.stand_down(self.deadline.cleanup());
+        Run::from(output)
+    }
+}
+
+fn write(file: &Path, text: &str) {
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(file, text).unwrap();
+}
+
+impl From<std::process::Output> for Run {
+    fn from(output: std::process::Output) -> Self {
+        let lines = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .filter(|l| !is_status(l))
+            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
+            .collect();
+        Self {
+            code: output.status.code(),
+            lines,
+            stderr: String::from_utf8(output.stderr).unwrap(),
+        }
+    }
+}
+
+/// Writes the executable hook script into the workspace's `hooks/`.
+fn write_hook_script(setup: &Setup) {
+    let dir = setup.workspace().join("hooks");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("capture.sh");
+    fs::write(&path, CAPTURE_SH).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// A setup with the fake provider serving `responses`, the `hooks`
+/// package, and `hooks` settings holding `entries`. The caller holds the
+/// server so it stays up for the run.
+fn hooked(responses: Vec<fakes::Response>, entries: &Value) -> (Setup, ProviderServer) {
+    let setup = Setup::new();
+    let server = ProviderServer::start(responses).unwrap();
+    setup.provider(&server);
+    setup.install_hooks();
+    write(
+        &setup.home().join("config").join("hooks.json"),
+        &json!({"hooks": entries}).to_string(),
+    );
+    write_hook_script(&setup);
+    (setup, server)
+}
+
+/// Reads the capture file's lines: one JSON line per run of the entry.
+fn captured(setup: &Setup, name: &str) -> Vec<String> {
+    let text = fs::read_to_string(setup.workspace().join(name)).unwrap();
+    assert!(text.ends_with('\n'), "the capture holds whole lines");
+    text.lines().map(str::to_owned).collect()
+}
+
+/// The loaded extensions' names, from `extensions_loaded`.
+fn loaded_names(run: &Run) -> Vec<String> {
+    run.first("extensions_loaded")["payload"]["extensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_session_start_entry_sees_the_cached_workspace() {
+    let (setup, _server) = hooked(
+        vec![hello()],
+        &json!({
+            "probe": entry("session_start", "hooks/capture.sh", json!(["probe.log"]), 30000, "blocking"),
+        }),
+    );
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
+
+    let lines = captured(&setup, "probe.log");
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(
+        line,
+        json!({
+            "point": "session_start",
+            "reason": "start",
+            "schema_version": 1,
+            "session_id": run.session_id(),
+            "workspace": setup.workspace().canonicalize().unwrap().to_string_lossy(),
+        })
+    );
+}
+
+#[test]
+fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read_1",
+            "read",
+            &json!({"path": "note.txt"}),
+        )]),
+        hello(),
+        stream(&[function_call(
+            "call_read_2",
+            "read",
+            &json!({"path": "note.txt"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    setup.install_hooks();
+    write(
+        &setup.home().join("config").join("hooks.json"),
+        &json!({"hooks": {
+            "start": entry("session_start", "hooks/capture.sh", json!(["start.log"]), 30000, "blocking"),
+            "mark": entry("after_tool", "hooks/capture.sh", json!(["mark.log"]), 30000, "blocking"),
+        }})
+        .to_string(),
+    );
+    write_hook_script(&setup);
+    fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
+
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &["--prompt", "read the note"]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    session_send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    session_until(&client, "the first turn to complete", |line| {
+        line["kind"] == "turn_completed"
+    });
+    session_send(&client, r#"{"id":"c_reload","command":"reload"}"#);
+    session_until(&client, "the reload to land", |line| {
+        line["kind"] == "reloaded"
+    });
+    session_send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"read again"}]}}"#,
+    );
+    session_until(&client, "the second turn to complete", |line| {
+        line["kind"] == "turn_completed"
+    });
+    session_send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let lines = until_session_close(&client);
+    drop(client);
+    let (status, _, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr} lines: {lines:?}");
+
+    let starts = captured(&setup, "start.log");
+    assert_eq!(starts.len(), 1);
+    let first: Value = serde_json::from_str(&starts[0]).unwrap();
+    assert_eq!(first["reason"], "start");
+    let marks = captured(&setup, "mark.log");
+    assert_eq!(marks.len(), 2);
+    for line in &marks {
+        let value: Value = serde_json::from_str(line).unwrap();
+        assert_eq!(value["point"], "after_tool");
+        assert_eq!(value["tool"], "read");
+    }
+}
+
+#[test]
+fn an_after_tool_stdin_line_pins_the_run_table_point_and_schema() {
+    let (setup, _server) = hooked(
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
+        &json!({
+            "mark": entry("after_tool", "hooks/capture.sh", json!(["mark.log"]), 30000, "blocking"),
+        }),
+    );
+    fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    let lines = captured(&setup, "mark.log");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        lines[0],
+        "{\"arguments\":{\"path\":\"note.txt\"},\"content\":\"note text\\n\",\"details\":{\"start_line\":1},\"point\":\"after_tool\",\"schema_version\":1,\"status\":\"completed\",\"tool\":\"read\"}",
+    );
+}
+
+#[test]
+fn an_after_tool_entry_with_tools_runs_for_edits_but_not_reads() {
+    let (setup, _server) = hooked(
+        vec![
+            stream(&[function_call(
+                "call_edit",
+                "edit",
+                &json!({"path": "note.txt", "edits": [{"old_text": "hello\n", "new_text": "hi\n"}]}),
+            )]),
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
+        &json!({
+            "guard": json!({
+                "point": "after_tool",
+                "tools": ["edit"],
+                "command": "hooks/capture.sh",
+                "args": ["filter.log"],
+                "timeout": 30000,
+                "on_failure": "blocking",
+            }),
+        }),
+    );
+    fs::write(setup.workspace().join("note.txt"), "hello\n").unwrap();
+    let run = setup.run(&["ask", "edit the note then read it"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.first("tool_call_completed")["payload"]["status"],
+        "completed"
+    );
+
+    let lines = captured(&setup, "filter.log");
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(line["tool"], "edit");
+}
+
+#[test]
+fn an_entry_without_tools_runs_for_every_tool_call() {
+    let (setup, _server) = hooked(
+        vec![
+            stream(&[function_call(
+                "call_edit",
+                "edit",
+                &json!({"path": "note.txt", "edits": [{"old_text": "hello\n", "new_text": "hi\n"}]}),
+            )]),
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
+        &json!({
+            "audit": entry("after_tool", "hooks/capture.sh", json!(["audit.log"]), 30000, "blocking"),
+        }),
+    );
+    fs::write(setup.workspace().join("note.txt"), "hello\n").unwrap();
+    let run = setup.run(&["ask", "edit the note then read it"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    let lines = captured(&setup, "audit.log");
+    assert_eq!(lines.len(), 2);
+    let tools: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["tool"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(tools, ["edit", "read"]);
+}
+
+#[test]
+fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
+    let (setup, _server) = hooked(
+        vec![hello()],
+        &json!({
+            "quiet": json!({
+                "point": "after_tool",
+                "tools": [],
+                "command": "hooks/capture.sh",
+                "args": ["quiet.log"],
+                "timeout": 30000,
+                "on_failure": "non-blocking",
+            }),
+        }),
+    );
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
+
+    let notices = run.all("notice");
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    let failure = notices
+        .iter()
+        .find(|notice| notice["payload"]["code"] == "extension_failed")
+        .expect("the entry's own notice");
+    let message = failure["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("quiet"), "{message}");
+    assert!(message.contains("tools"), "{message}");
+    let missing = notices
+        .iter()
+        .find(|notice| notice["payload"]["code"] == "extension_missing")
+        .expect("the gate's missing notice");
+    assert_eq!(
+        missing["payload"]["message"],
+        "The `hooks` extension is not installed, so its declared hooks will not run. Run `fiber extension install hooks`.",
+    );
+    assert!(
+        !setup.workspace().join("quiet.log").exists(),
+        "the entry never ran"
+    );
+}
+
+#[test]
+fn a_before_tool_exit_two_refuses_with_the_stderr_reason() {
+    let (setup, _server) = hooked(
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
+        &json!({
+            "guard": entry("before_tool", "hooks/capture.sh", json!(["guard.log", "refuse"]), 30000, "blocking"),
+        }),
+    );
+    fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    let lines = captured(&setup, "guard.log");
+    assert_eq!(lines.len(), 1);
+    let line: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(line["point"], "before_tool");
+    assert_eq!(line["tool"], "read");
+
+    let completed = run.first("tool_call_completed");
+    assert_eq!(completed["payload"]["status"], "denied");
+    assert_eq!(completed["payload"]["reason"], "hook");
+    assert_eq!(
+        completed["payload"]["content"],
+        json!([{"type": "text", "text": "Extension github.com/aakshintala/fiber/extensions/hooks refused this call: no writes here. It did not run."}]),
+    );
+}
+
+#[test]
+fn session_start_plain_text_is_added_as_context() {
+    let (setup, _server) = hooked(
+        vec![hello()],
+        &json!({
+            "ctx": entry("session_start", "hooks/capture.sh", json!(["ctx.log", "text"]), 30000, "blocking"),
+        }),
+    );
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    let added = run.first("context_added");
+    assert_eq!(added["payload"]["text"], "plain hook context");
+    assert_eq!(added["payload"]["extension"], HOOKS_NAME);
+    assert_eq!(added["payload"]["hook"], "session_start");
+}
+
+#[test]
+fn a_json_reply_replaces_the_after_tool_content() {
+    let (setup, _server) = hooked(
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
+        &json!({
+            "rep": entry("after_tool", "hooks/capture.sh", json!(["rep.log", "json"]), 30000, "blocking"),
+        }),
+    );
+    fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    assert_eq!(captured(&setup, "rep.log").len(), 1);
+    assert_eq!(
+        run.first("tool_call_completed")["payload"]["content"],
+        json!([{"type": "text", "text": "hook replaced"}]),
+    );
+}
+
+#[test]
+fn an_entry_missing_timeout_is_not_registered_and_names_the_field() {
+    let (setup, _server) = hooked(
+        vec![hello()],
+        &json!({
+            "bad": json!({
+                "point": "after_tool",
+                "command": "hooks/capture.sh",
+                "args": ["bad.log"],
+                "on_failure": "non-blocking",
+            }),
+        }),
+    );
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
+
+    let notices = run.all("notice");
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0]["payload"]["code"], "extension_failed");
+    assert_eq!(
+        notices[0]["payload"]["message"],
+        "`after_tool` hook not registered for entry `bad`: missing `timeout`",
+    );
+    assert!(
+        !setup.workspace().join("bad.log").exists(),
+        "the entry never ran"
+    );
+}
+
+#[test]
+fn an_on_failure_less_entry_beside_a_blocking_one_fails_closed_when_removed() {
+    let (setup, _server) = hooked(
+        vec![hello()],
+        &json!({
+            "loose": json!({
+                "point": "after_tool",
+                "command": "hooks/capture.sh",
+                "args": ["loose.log"],
+                "timeout": 1000,
+            }),
+            "guard": entry("before_tool", "hooks/capture.sh", json!(["guard.log"]), 1000, "blocking"),
+        }),
+    );
+    setup.remove_hooks();
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(1));
+    assert_eq!(run.kinds(), ["fiber_exited"]);
+    assert_eq!(
+        run.first("fiber_exited")["payload"]["error"]["code"],
+        "extension_missing"
+    );
+    let message = run.first("fiber_exited")["payload"]["error"]["message"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        message,
+        "The `hooks` extension is not installed. Run `fiber extension install hooks`.",
+    );
+    assert_eq!(run.stderr, format!("fiber: {message}\n"));
+}
+
+#[test]
+fn no_hooks_key_loads_no_hooks_vm() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    setup.install_hooks();
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
+    assert!(run.all("notice").is_empty());
+}
+
+#[test]
+fn empty_hooks_settings_load_silently() {
+    let (setup, _server) = hooked(vec![hello()], &json!({}));
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
+    assert!(run.all("notice").is_empty());
+}
+
+#[test]
+fn a_removed_package_with_a_blocking_entry_fails_closed() {
+    let (setup, _server) = hooked(
+        vec![hello()],
+        &json!({
+            "guard": entry("before_tool", "hooks/capture.sh", json!(["guard.log"]), 1000, "blocking"),
+        }),
+    );
+    setup.remove_hooks();
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(1));
+    assert_eq!(run.kinds(), ["fiber_exited"]);
+    assert_eq!(
+        run.first("fiber_exited")["payload"]["error"]["code"],
+        "extension_missing"
+    );
+}
+
+#[test]
+fn the_door_stays_closed_for_a_removed_blocking_guard() {
+    let (setup, _server) = hooked(
+        vec![hello()],
+        &json!({
+            "guard": entry("before_tool", "hooks/capture.sh", json!(["guard.log"]), 1000, "blocking"),
+        }),
+    );
+    setup.remove_hooks();
+    let id = doors::mint("s_");
+    let output = support::run_to_exit(
+        setup.deadline,
+        "fiber session",
+        setup.fiber(&[
+            "session",
+            "--id",
+            &id,
+            "--workspace",
+            setup.workspace().to_str().unwrap(),
+            "--prompt",
+            "hi",
+        ]),
+    );
+    let run = Run::from(output);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), ["fiber_exited"]);
+    assert_eq!(
+        run.first("fiber_exited")["payload"]["error"]["code"],
+        "extension_missing"
+    );
+    let message = run.first("fiber_exited")["payload"]["error"]["message"]
+        .as_str()
+        .unwrap();
+    assert!(
+        message.contains("fiber extension install hooks"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_removed_package_with_only_non_blocking_entries_warns_and_runs() {
+    let (setup, _server) = hooked(
+        vec![hello()],
+        &json!({
+            "note": entry("after_tool", "hooks/capture.sh", json!(["note.log"]), 1000, "non-blocking"),
+        }),
+    );
+    setup.remove_hooks();
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    let notices = run.all("notice");
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0]["payload"]["code"], "extension_missing");
+    assert_eq!(
+        notices[0]["payload"]["message"],
+        "The `hooks` extension is not installed, so its declared hooks will not run. Run `fiber extension install hooks`.",
+    );
+    assert_eq!(notices[0]["payload"]["extension"], HOOKS_NAME);
+}
+
+#[test]
+fn a_removed_package_with_watcher_only_declarations_runs_quietly() {
+    let (setup, _server) = hooked(
+        vec![hello()],
+        &json!({
+            "seen": json!({
+                "watch": ["turn_completed"],
+                "command": "hooks/capture.sh",
+                "args": ["seen.log"],
+                "timeout": 1000,
+            }),
+        }),
+    );
+    setup.remove_hooks();
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        run.all("notice").is_empty(),
+        "no missing notice: {:?}",
+        run.all("notice")
+    );
+}

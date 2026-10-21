@@ -530,7 +530,7 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
         .ok_or_else(|| format!("{prefix}.request: expected an object"))?;
     only(
         request,
-        &["program", "args", "cwd", "env"],
+        &["program", "args", "cwd", "env", "input"],
         &format!("{prefix}.request"),
     )?;
     string(request, "program", &format!("{prefix}.request"))?;

@@ -1,0 +1,7 @@
+{
+  "name": "github.com/aakshintala/fiber/extensions/hooks",
+  "version": "0.0.0",
+  "fiber": "0.0.0",
+  "api": 1,
+  "repo_settings": ["hooks"]
+}
