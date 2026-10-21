@@ -187,7 +187,7 @@ mod tests {
     use contract::events::{Event, Notice};
     use fakes::Deadline;
 
-    use super::subscribe;
+    use super::{Current, subscribe};
     use crate::test_support::{Rig, install_extension, load};
 
     /// One `host.status` line per watcher run, sent on a channel: the
@@ -204,25 +204,19 @@ mod tests {
         }
     }
 
-    /// A session with one watcher on `notice`, subscribed on a real log:
-    /// the rig, the session and the log, each alive for the test. Statuses
-    /// arrive on the returned channel in run order.
-    fn subscribed() -> (
-        Rig,
-        Arc<extensions::SessionExtensions>,
-        Arc<log::Log>,
-        std::sync::mpsc::Receiver<String>,
-    ) {
+    /// A session with one watcher on `notice`: the rig and the session,
+    /// each alive for the test. `prefix` names the watcher's statuses.
+    fn loaded_set(name: &str, prefix: &str) -> (Rig, Arc<extensions::SessionExtensions>) {
         let rig = Rig::new("fiber-watch-subscribe");
         install_extension(
             &rig.home,
-            "extensions/watch",
-            serde_json::json!({"name": "fiber.test/watch", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+            &format!("extensions/{name}"),
+            serde_json::json!({"name": format!("fiber.test/{name}"), "version": "v0.0.0", "fiber": "0.1.0", "api": 1}),
             &[],
         );
         std::fs::write(
-            rig.home.join("extensions/watch/init.lua"),
-            "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('watch:' .. ev.payload.message) end })\n",
+            rig.home.join(format!("extensions/{name}/init.lua")),
+            format!("fiber.watch({{\"notice\"}}, {{ timeout = 2000, run = function(ev) host.status('{prefix}:' .. ev.payload.message) end }})\n"),
         )
         .unwrap();
         let config = load(&rig.home, &rig.workspace, "test", &[] as &[&str]);
@@ -233,6 +227,19 @@ mod tests {
             Arc::new(tools::PathLocks::new()),
             None,
         ));
+        (rig, extensions)
+    }
+
+    /// A session with one watcher on `notice`, subscribed on a real log:
+    /// the rig, the session and the log, each alive for the test. Statuses
+    /// arrive on the returned channel in run order.
+    fn subscribed() -> (
+        Rig,
+        Arc<extensions::SessionExtensions>,
+        Arc<log::Log>,
+        std::sync::mpsc::Receiver<String>,
+    ) {
+        let (rig, extensions) = loaded_set("watch", "watch");
         assert!(
             extensions.notices().is_empty(),
             "{:?}",
@@ -264,7 +271,8 @@ mod tests {
     fn session_extensions_subscribe_fans_every_append_out_to_the_watchers() {
         let (_rig, extensions, log, status_rx) = subscribed();
         let cancel = Arc::new(r#loop::TurnCancel::default());
-        let _subscription = subscribe(&log, &extensions, &cancel);
+        let current = Arc::new(Current::new(extensions));
+        let _subscription = subscribe(&log, &current, &cancel);
         log.append(&noticed("hello"), None, None).unwrap();
         assert_eq!(
             Deadline::after(Duration::from_secs(5))
@@ -279,7 +287,8 @@ mod tests {
         let (_rig, extensions, log, status_rx) = subscribed();
         let cancel = Arc::new(r#loop::TurnCancel::default());
         cancel.shutdown(15);
-        let _subscription = subscribe(&log, &extensions, &cancel);
+        let current = Arc::new(Current::new(extensions));
+        let _subscription = subscribe(&log, &current, &cancel);
         log.append(&noticed("skipped"), None, None).unwrap();
         // The offer closure runs synchronously inside `append`: it queued
         // nothing, so no worker can run it later and the channel stays
@@ -288,6 +297,42 @@ mod tests {
         assert!(
             status_rx.try_recv().is_err(),
             "no watcher runs while a shutdown is set"
+        );
+    }
+
+    #[test]
+    fn session_extensions_subscribe_follows_the_swap_to_the_reloaded_set() {
+        let (_rig, extensions, log, status_rx) = subscribed();
+        let cancel = Arc::new(r#loop::TurnCancel::default());
+        let current = Arc::new(Current::new(extensions));
+        let _subscription = subscribe(&log, &current, &cancel);
+        // Pre-swap positive control: the first set's watcher runs.
+        log.append(&noticed("before"), None, None).unwrap();
+        assert_eq!(
+            Deadline::after(Duration::from_secs(5))
+                .recv(&status_rx)
+                .expect("waited for the first watcher to run"),
+            "watch:before"
+        );
+        // A reload swaps in a set whose extension watches the same kind.
+        let (_rig2, reloaded) = loaded_set("watch2", "watch2");
+        let (status_tx, reloaded_rx) = std::sync::mpsc::channel();
+        reloaded.emit_to(Arc::new(StatusSignal(status_tx)));
+        current.swap(reloaded);
+        log.append(&noticed("after"), None, None).unwrap();
+        assert_eq!(
+            Deadline::after(Duration::from_secs(5))
+                .recv(&reloaded_rx)
+                .expect("waited for the reloaded watcher to run"),
+            "watch2:after"
+        );
+        // The offer resolves the set per event: the swapped-out set's
+        // watcher never runs after the swap, without waiting, while the
+        // reload above proves the rig delivers in milliseconds. A closure
+        // that captured the first set would leave the new channel empty.
+        assert!(
+            status_rx.try_recv().is_err(),
+            "the swapped-out set runs no watcher after the swap"
         );
     }
 }

@@ -188,3 +188,70 @@ fn a_released_completion_queues_nothing_while_a_bound_one_runs_its_run() {
         "no released run logged"
     );
 }
+
+/// A delegate finish for `id`, as the session end writes it: durable, so
+/// the watcher fan-out always queues it.
+fn finished(id: &str) -> Event {
+    Event::DelegateFinished(contract::events::DelegateFinished {
+        job_id: JobId(id.into()),
+        text: "done".into(),
+        artifact: None,
+        questions: None,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        worktree: None,
+        changed_by: None,
+    })
+}
+
+const WATCHER_INIT: &str = r#"
+fiber.watch({"delegate_finished"}, { timeout = 5000, run = function(ev)
+    host.log("saw:" .. ev.payload.job_id)
+  end })
+"#;
+
+#[test]
+fn a_reloaded_watcher_receives_the_kept_running_delegate_finish_exactly_once() {
+    let setup = Setup::new();
+    let dir = install_lua(&setup, "d", &json!({}), DELEGATE_INIT);
+    let clock = FakeClock::new();
+    let first = load(&setup, Arc::clone(&clock));
+    let fake = Arc::new(Fake::new(&["j_1"]));
+    first.delegate_to(Arc::clone(&fake) as Arc<dyn HostDelegate>);
+    let (inbox_tx, inbox_rx) = mpsc::channel();
+    first.deliver_to(inbox_tx);
+    // One delegate binds in the first set's VM.
+    run(&first, "go1");
+    let id = started_id(&next_log(&inbox_rx, "the delegate start"));
+    // A reload drops the first set with its binding and loads a second
+    // set whose watcher registered before the finish below.
+    std::fs::write(dir.join("init.lua"), WATCHER_INIT).unwrap();
+    let second = load(&setup, clock);
+    let (inbox2_tx, inbox2_rx) = mpsc::channel();
+    second.deliver_to(inbox2_tx);
+    drop(first);
+    second.deliver(&finished(&id), None);
+    second.deliver(&completed(&id, Outcome::Completed), None);
+    // The new VM never bound the id, so the queued item is the watcher's:
+    // it ran exactly once, and the old run never logged.
+    assert_eq!(
+        next_log(&inbox2_rx, "the reloaded watcher"),
+        format!("saw:{id}")
+    );
+    assert!(
+        Deadline::after(QUIET).recv(&inbox2_rx).is_err(),
+        "the watcher ran exactly once"
+    );
+    assert!(
+        Deadline::after(QUIET).recv(&inbox_rx).is_err(),
+        "the dropped set ran no old run"
+    );
+}
