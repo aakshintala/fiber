@@ -146,13 +146,26 @@ impl SharedWake {
     /// cleared on waking (`crates/tools/src/shell/drive.rs` `park` does
     /// the same).
     pub(crate) fn park(&self, clock: &dyn Clock, until: Option<Instant>) {
+        self.park_polled(clock, until, None);
+    }
+
+    /// [`park`](SharedWake::park) with a real-time poll cap: the wait ends
+    /// at most `poll` past its start even with no bump and no clock move,
+    /// so a delivery nobody bumps for is re-checked instead of slept
+    /// through.
+    pub(crate) fn park_polled(
+        &self,
+        clock: &dyn Clock,
+        until: Option<Instant>,
+        poll: Option<Duration>,
+    ) {
         // The guard is taken before `wait_until` and held into the
         // condvar wait, so a bump blocks on this lock instead of
         // notifying nobody. The flag is cleared on both paths: taken by
         // the predicate when set, cleared on waking, so one bump asks
         // for exactly one more pass.
         let guard =
-            support::clock::park(clock, until, None, &self.cv, lock(&self.inner), |state| {
+            support::clock::park(clock, until, poll, &self.cv, lock(&self.inner), |state| {
                 std::mem::take(&mut state.set)
             });
         if let Some(mut guard) = guard {

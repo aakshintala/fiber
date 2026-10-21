@@ -7,6 +7,7 @@
     clippy::indexing_slicing,
     reason = "test fixtures and assertions"
 )]
+mod extension_harness;
 mod support;
 
 use fakes::{ProviderServer, Request, Response};
@@ -15,6 +16,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::{Duration, Instant};
 use support::{Setup, Socket, function_call, hello};
 
 /// Installs provider `pa/m` on `openai-responses` at the server, and makes
@@ -449,4 +451,261 @@ fn a_hub_started_session_messages_itself_and_takes_it_as_steering_at_its_next_st
     let hub = hub.lock().unwrap().take().expect("the hub started");
     hub.kill("TERM");
     hub.wait();
+}
+
+/// The fixture gatekeeper extension: driver messages pass, a session
+/// message whose parent is not `target` is refused, and a child's is
+/// rewritten.
+const GATEKEEPER: &str = "fiber.test/gatekeeper";
+const REFUSAL: &str = "only the target's children may write";
+const REWRITE: &str = "rewritten by the target's hook";
+
+fn gatekeeper_lua(target: &str) -> String {
+    format!(
+        "fiber.hook(\"before_message\", {{ timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(msg)\n\
+             if msg.from_session_id == nil then return nil end\n\
+             if msg.parent_session_id ~= \"{target}\" then return {{ refuse = \"{REFUSAL}\" }} end\n\
+             return {{ content = {{{{ type = \"text\", text = \"{REWRITE}\" }}}} }}\n\
+           end }})\n"
+    )
+}
+
+/// A message turn's input item from `from` in `log`, if the session took one.
+fn message_input<'a>(log: &'a [Value], from: &str) -> Option<&'a Value> {
+    log.iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .filter_map(|line| line["payload"]["input"].as_array())
+        .flatten()
+        .find(|item| {
+            item["type"] == "message"
+                && item["source"] == "session"
+                && item["from_session_id"] == from
+        })
+}
+
+#[test]
+fn a_target_hook_refuses_sibling_senders_and_rewrites_its_children() {
+    let setup = Setup::new();
+    let deadline = setup.deadline;
+    let _guard = support::SessionGuard::arm(deadline, &setup.root.path().to_string_lossy());
+    let t_id = doors::mint("s_");
+    let t_prompt = "sit idle and wait for a gated message";
+    let s_prompt = "send one session message to the gated target";
+    let c_prompt = "send one session message to the parent target";
+    let responder_t = t_id.clone();
+    let server = ProviderServer::start_responding(move |request: &Request| {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        // Reviewer requests carry no tools: every send is reviewed and allowed.
+        if body["tools"]
+            .as_array()
+            .is_none_or(|tools| tools.is_empty())
+        {
+            return allow();
+        }
+        let input = body["input"].as_array().unwrap();
+        let text = serde_json::to_string(input).unwrap();
+        if text.contains(t_prompt) {
+            return hello();
+        }
+        if text.contains("function_call_output") {
+            return hello();
+        }
+        if text.contains(s_prompt) {
+            return support::stream(&[message_call("call_s", &responder_t, "sibling says hi")]);
+        }
+        assert!(text.contains(c_prompt), "the child's request: {text}");
+        support::stream(&[message_call("call_c", &responder_t, "child says hi")])
+    })
+    .unwrap();
+    install(&setup, &server);
+    setup.lua("gatekeeper", &gatekeeper_lua(&t_id));
+    // The target serves its session under a fixed id, so the fixture names it.
+    let mut target = setup.start_session(&t_id, &["--prompt", t_prompt]);
+    target.wait_for("turn_completed");
+    // A top-level sibling has no parent: the hook refuses it, and no turn
+    // takes anything from the sibling.
+    let s_run = setup.fiber(&["ask", s_prompt]);
+    let s_out = support::run_to_exit(deadline, "the sibling sends", s_run);
+    assert!(s_out.status.success());
+    let s_lines: Vec<Value> = String::from_utf8(s_out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let s_id = s_lines[0]["session_id"].as_str().unwrap();
+    let (_, _, s_completed) = call_lines(&s_lines, &t_id);
+    let (code, message) = failed_code(&s_completed);
+    assert_eq!(code, "message_refused");
+    assert_eq!(
+        message,
+        format!("Extension {GATEKEEPER} refused the message: {REFUSAL}")
+    );
+    let t_log = read_log(&setup, &t_id);
+    assert!(
+        message_input(&t_log, s_id).is_none(),
+        "no turn takes the refused sibling's message"
+    );
+    // A child names the target as its parent: the hook rewrites it, the
+    // sender is answered delivered, and the target logs the framed
+    // rewrite with changed_by. Only `fiber session` takes a parent, so
+    // the child is a parented fresh session under the target.
+    let c_id = doors::mint("s_");
+    let job = doors::mint("j_");
+    let (mut child, _lifeline) = setup.start_session_stdin(
+        &c_id,
+        &[
+            "--prompt",
+            c_prompt,
+            "--parent",
+            t_id.as_str(),
+            "--delegate-id",
+            job.as_str(),
+            "--depth",
+            "1",
+        ],
+    );
+    child.wait_for("fiber_exited");
+    let (status, c_lines, stderr) = child.wait();
+    assert!(status.success(), "{stderr}");
+    let (_, _, c_completed) = call_lines(&c_lines, &t_id);
+    assert_eq!(completed_text(&c_completed), "delivered");
+    let t_log = read_log(&setup, &t_id);
+    let input = message_input(&t_log, &c_id).expect("the target takes the child's message");
+    let content = input["content"].as_array().unwrap();
+    assert_eq!(content.len(), 1);
+    let framed = content[0]["text"].as_str().unwrap();
+    assert!(
+        framed.contains(REWRITE),
+        "the target logs the framed rewrite: {framed}"
+    );
+    assert!(
+        !framed.contains("child says hi"),
+        "the rewrite replaced the raw text: {framed}"
+    );
+    assert_eq!(input["changed_by"], json!([GATEKEEPER]));
+    // Close the target: its socket, then its process.
+    let t_closer = Socket::connect(deadline, &setup.session_socket(&t_id));
+    support::close_session(&t_closer);
+    let (status, _, stderr) = target.wait();
+    assert!(status.success(), "{stderr}");
+}
+
+#[test]
+fn delivered_is_answered_only_after_the_hook_returns() {
+    let setup = Setup::new();
+    let deadline = setup.deadline;
+    let _guard = support::SessionGuard::arm(deadline, &setup.root.path().to_string_lossy());
+    let t_id = doors::mint("s_");
+    let t_prompt = "sit idle and wait for a held message";
+    let s_prompt = "send one session message to the held target";
+    // The hole: the hook's HTTP parks here, recorded before it is
+    // answered, until the test releases it below.
+    let hole = ProviderServer::start_responding(|_: &Request| Response::status(200, "{}")).unwrap();
+    hole.hold();
+    let hole_url = hole.url();
+    let responder_t = t_id.clone();
+    let server = ProviderServer::start_responding(move |request: &Request| {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        if body["tools"]
+            .as_array()
+            .is_none_or(|tools| tools.is_empty())
+        {
+            return allow();
+        }
+        let input = body["input"].as_array().unwrap();
+        let text = serde_json::to_string(input).unwrap();
+        if text.contains(t_prompt) {
+            return hello();
+        }
+        if text.contains("function_call_output") {
+            return hello();
+        }
+        assert!(text.contains(s_prompt), "the sender's request: {text}");
+        support::stream(&[message_call("call_s", &responder_t, "held says hi")])
+    })
+    .unwrap();
+    install(&setup, &server);
+    setup.lua(
+        "holder",
+        &format!(
+            "fiber.hook(\"before_message\", {{ timeout = 30000, on_failure = \"blocking\",\n\
+               run = function(msg)\n\
+                 if msg.from_session_id == nil then return nil end\n\
+                 host.http({{ url = \"{hole_url}/hold\" }})\n\
+                 return nil\n\
+               end }})\n"
+        ),
+    );
+    let mut target = setup.start_session(&t_id, &["--prompt", t_prompt]);
+    target.wait_for("turn_completed");
+    // The sender runs live, so its lines are watched while it waits.
+    let mut s_command = setup.fiber(&["ask", s_prompt]);
+    let (mut s, s_watchdog) = support::spawn_watched(&mut s_command);
+    let s_group = support::KillGroup(s.id());
+    let s_stdout = s.stdout.take().unwrap();
+    let (s_tx, s_rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(s_stdout).lines() {
+            if s_tx.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    // The hook parked on the hole: the entered request names that signal.
+    assert!(
+        hole.await_requests(1, deadline.left()),
+        "the hook parked on its blocking read"
+    );
+    // While it is parked the sender's answer stays pending: no completion
+    // for the call arrives within the hold.
+    let stop = Instant::now() + Duration::from_secs(2);
+    let mut action = None;
+    loop {
+        let left = stop.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        match support::Deadline::after(left).recv(&s_rx) {
+            Err(_) => break,
+            Ok(text) => {
+                let line: Value = serde_json::from_str(&text).unwrap();
+                if line["kind"] == "tool_call_requested"
+                    && line["payload"]["name"] == "session_message"
+                {
+                    action = Some(line["action_id"].as_str().unwrap().to_owned());
+                }
+                assert!(
+                    line["kind"] != "tool_call_completed",
+                    "the sender waits for the hook: {line}"
+                );
+            }
+        }
+    }
+    hole.release();
+    // Released, the hook answers and the sender is delivered.
+    let call = action.expect("the sender called session_message");
+    let completed = loop {
+        let text: String = deadline.recv_or_fail(&s_rx, "the sender's completion");
+        let line: Value = serde_json::from_str(&text).unwrap();
+        if line["kind"] == "tool_call_completed" && line["action_id"] == call {
+            break line;
+        }
+    };
+    assert_eq!(completed_text(&completed), "delivered");
+    // The sender exits on its own once delivered; then the target closes.
+    loop {
+        let text: String = deadline.recv_or_fail(&s_rx, "the sender to exit");
+        let line: Value = serde_json::from_str(&text).unwrap();
+        if line["kind"] == "fiber_exited" {
+            break;
+        }
+    }
+    support::kill_group(deadline, s_group.0, "TERM").ok();
+    s.wait().unwrap();
+    s_watchdog.stand_down(deadline.cleanup());
+    let t_closer = Socket::connect(deadline, &setup.session_socket(&t_id));
+    support::close_session(&t_closer);
+    let (status, _, stderr) = target.wait();
+    assert!(status.success(), "{stderr}");
 }

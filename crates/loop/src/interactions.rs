@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use contract::clock::Wake;
 use contract::events::{Answer, Event, InteractionRequested, InteractionResolved, ResolvedBy};
@@ -27,6 +27,12 @@ use crate::cancel::SignalState;
 use crate::inbox;
 use crate::progress::{SharedWake, Stream};
 use crate::{Error, Loop, mint};
+
+/// How often a step's wait re-checks the inbox while its calls run: no
+/// bump announces a delivery, so without the cap a sender's message would
+/// sleep through the whole wait. Picked, not measured: a turn takes model
+/// round trips, so a tenth of a second is invisible next to them.
+const INBOX_POLL: Duration = Duration::from_millis(100);
 
 /// The calls of a step without a written completion, in request order,
 /// each with its stream while it runs.
@@ -256,7 +262,22 @@ impl Loop {
         let pending = !self.shutting_down()
             && running(calls).any(|(_, stream)| stream.asking().pending().is_some());
         let Some(target) = self.inbox_wake.clone().filter(|_| pending) else {
-            wake.park(clock.as_ref(), until);
+            // A session message waits for its take to be answered, so one
+            // is taken here rather than at the next drain: a sender blocked
+            // in one, including this session messaging itself mid-turn, is
+            // answered while its call still runs. Anything else stays queued
+            // for the drain, as before.
+            let mut took = false;
+            for delivery in self.inbox.take_messages() {
+                self.admit_running(delivery, turn)?;
+                took = true;
+            }
+            if took {
+                return Ok(false);
+            }
+            // No bump announces a delivery, so the wait re-checks the inbox
+            // past its poll cap instead of sleeping through one.
+            wake.park_polled(clock.as_ref(), until, Some(INBOX_POLL));
             return Ok(false);
         };
         // A reply or `close` held aside before a finishing turn raised its

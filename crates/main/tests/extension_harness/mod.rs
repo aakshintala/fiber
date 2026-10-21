@@ -10,7 +10,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ExitStatus};
+use std::process::{Child, ChildStdin, ExitStatus, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::thread;
 
@@ -60,12 +60,25 @@ impl Setup {
 
     #[track_caller]
     pub(crate) fn start_session(&self, id: &str, extra: &[&str]) -> Running {
+        self.start_session_stdin(id, extra).0
+    }
+
+    /// [`start_session`](Setup::start_session) with stdin piped: a delegate
+    /// child exits when its stdin closes, so the caller holds the lifeline
+    /// until the child exits on its own.
+    pub(crate) fn start_session_stdin(
+        &self,
+        id: &str,
+        extra: &[&str],
+    ) -> (Running, Option<ChildStdin>) {
         let workspace = self.workspace();
         let mut args = vec!["session", "--id", id, "--workspace"];
         args.push(workspace.to_str().unwrap());
         args.extend(extra);
         let mut command = self.fiber(&args);
+        command.stdin(Stdio::piped());
         let mut child = command.spawn().unwrap();
+        let stdin = child.stdin.take();
         let group = child.id();
         let guard = KillGroup(group);
         let watchdog = Watchdog::group(group);
@@ -99,17 +112,20 @@ impl Setup {
                 Ok(()) | Err(mpsc::SendError(_)) => {}
             }
         });
-        Running {
-            child,
-            watchdog,
-            group,
-            guard,
-            lines,
-            stdout_end,
-            stderr: stderr_rx,
-            first: Vec::new(),
-            deadline: self.deadline,
-        }
+        (
+            Running {
+                child,
+                watchdog,
+                group,
+                guard,
+                lines,
+                stdout_end,
+                stderr: stderr_rx,
+                first: Vec::new(),
+                deadline: self.deadline,
+            },
+            stdin,
+        )
     }
 }
 

@@ -59,6 +59,21 @@ impl Queue {
         }
         jobs
     }
+
+    /// Every session message waiting now, holding back anything else in
+    /// arrival order for the next drain: only a message waits for its
+    /// take to be answered, so only a message is taken early.
+    pub(crate) fn take_messages(&mut self) -> Vec<Delivery> {
+        let mut messages = Vec::new();
+        for delivery in self.try_iter() {
+            if matches!(delivery, Delivery::Message(..)) {
+                messages.push(delivery);
+            } else {
+                self.held.push_back(delivery);
+            }
+        }
+        messages
+    }
 }
 
 #[cfg(test)]
