@@ -419,13 +419,9 @@ fn a_project_empty_over_a_global_answer_still_reads_as_no_value() {
     let declared = declared(&[("workspace", Some("ACME_HOST"))]);
     let env = env_of(&[]);
     assert_eq!(
-        value(
-            &config,
-            "acme",
-            &declared,
-            "workspace",
-            &|name| env.get(name).cloned()
-        )
+        value(&config, "acme", &declared, "workspace", &|name| env
+            .get(name)
+            .cloned())
         .unwrap(),
         None
     );
@@ -466,7 +462,13 @@ fn unconfigured_without_a_variable_names_the_login_and_config_remedies() {
 
 #[test]
 fn unconfigured_with_an_absent_variable_names_the_hub_environment_and_both_remedies() {
-    let notice = unconfigured("databricks", "model", "databricks", "workspace", Some("DATABRICKS_HOST"));
+    let notice = unconfigured(
+        "databricks",
+        "model",
+        "databricks",
+        "workspace",
+        Some("DATABRICKS_HOST"),
+    );
     assert_eq!(
         notice.message,
         "The model `databricks/model` needs the setting `workspace` for its base URL, \

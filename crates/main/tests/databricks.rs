@@ -395,7 +395,10 @@ fn unset_workspace_leaves_the_seed_model_out() {
         message,
         "The model `databricks/databricks-claude-opus-5` needs the setting \
          `workspace` for its base URL, which has no value, and \
-         `DATABRICKS_HOST` has none either."
+         `DATABRICKS_HOST` is not set in the hub's environment (your login shell). \
+         Run `fiber login databricks`, or set `workspace` in \
+         `config/databricks.json` in Fiber home, or export it in your shell profile \
+         and run `fiber hub refresh`."
     );
     assert!(server.requests().is_empty());
 }

@@ -861,8 +861,15 @@ impl Providers {
         env: &dyn Fn(&str) -> Option<String>,
         name: &str,
     ) -> Result<Vec<(String, Option<String>)>, Error> {
-        let _ = (config, env, name);
-        todo!("task 2 fills the presence-gap query")
+        let data = self.data(name);
+        let extension = self.extension_of(name).unwrap_or(name);
+        let mut gaps = Vec::new();
+        for (key, declared) in &data.placeholders {
+            if placeholders::value(config, extension, &data.placeholders, key, env)?.is_none() {
+                gaps.push((key.clone(), declared.env.clone()));
+            }
+        }
+        Ok(gaps)
     }
 
     /// `value` stripped as [`placeholders::host`] strips it: at most one
@@ -871,8 +878,7 @@ impl Providers {
     /// never by widening `placeholders::host`, so the prompt and the model
     /// list can never disagree.
     pub fn validate_host(value: &str) -> Option<&str> {
-        let _ = value;
-        todo!("task 2 delegates to placeholders::host")
+        placeholders::host(value)
     }
 
     /// The extension that registered `name`, if a Lua extension did.
