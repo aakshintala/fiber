@@ -3806,19 +3806,30 @@ fn message_and_close_race_in_both_lock_orders() {
                 second.send(r#"{"id":"c_close","command":"close"}"#).unwrap();
                 release_tx.send(()).unwrap();
                 // The message was admitted under the lock the close waited
-                // for: accepted, ahead of the close.
-                let accepted = support::response(&first, "c_m1");
-                assert_eq!(support::kind(&accepted), "command_accepted");
-                Deadline::after(DEADLINE)
-                    .recv(&closed)
-                    .expect("the close took the lock next");
-                let Delivery::Message(message) = Deadline::after(DEADLINE)
+                // for: it reaches the inbox ahead of the close, still
+                // unanswered, and the take's ack answers it.
+                let Delivery::Message(message, ack) = Deadline::after(DEADLINE)
                     .recv(&inbox)
                     .expect("the message is delivered")
                 else {
                     panic!("the message is delivered as a message");
                 };
                 assert_eq!(message.command_id.0, "c_m1");
+                // The take proves admission finished: drain any session
+                // chatter and prove the message itself is still unanswered.
+                while let Some(line) = first.recv(Duration::from_millis(10)) {
+                    assert_ne!(
+                        support::command_id(&line),
+                        Some("c_m1"),
+                        "the door answers nothing at admission"
+                    );
+                }
+                ack.0(Ok(None));
+                let accepted = support::response(&first, "c_m1");
+                assert_eq!(support::kind(&accepted), "command_accepted");
+                Deadline::after(DEADLINE)
+                    .recv(&closed)
+                    .expect("the close took the lock next");
                 let Delivery::Close(ack) = Deadline::after(DEADLINE)
                     .recv(&inbox)
                     .expect("the close is delivered")

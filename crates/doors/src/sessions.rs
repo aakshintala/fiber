@@ -260,6 +260,7 @@ impl Sessions for SessionSockets {
         &self,
         to: &SessionId,
         from: &SessionId,
+        parent: Option<&SessionId>,
         text: &str,
         cancel: &dyn Cancel,
     ) -> Result<(), MessageError> {
@@ -285,8 +286,11 @@ impl Sessions for SessionSockets {
         self.message_exchange(
             &path,
             stream,
-            from,
-            text,
+            &Message {
+                from_session_id: from.clone(),
+                parent_session_id: parent.cloned(),
+                text: text.to_owned(),
+            },
             cancel,
             &mut ExchangeIo {
                 write: |stream: &mut UnixStream, buf: &[u8]| stream.write(buf),
@@ -309,8 +313,7 @@ impl SessionSockets {
         &self,
         path: &Path,
         mut stream: UnixStream,
-        from: &SessionId,
-        text: &str,
+        message: &Message,
         cancel: &dyn Cancel,
         io: &mut ExchangeIo<W, R>,
     ) -> Result<(), MessageError>
@@ -335,10 +338,7 @@ impl SessionSockets {
         out.extend_from_slice(
             &serde_json::to_vec(&CommandLine {
                 id: contract::CommandId(command.clone()),
-                command: Command::Message(Message {
-                    from_session_id: from.clone(),
-                    text: text.to_owned(),
-                }),
+                command: Command::Message(message.clone()),
             })
             .map_err(|e| message_io(path, e))?,
         );
