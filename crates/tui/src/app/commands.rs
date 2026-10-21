@@ -206,6 +206,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_close,
     },
     CommandEntry {
+        name: "feedback",
+        description: "Writes a feedback report and prints its path and the issue link.",
+        hint: Some("<description>"),
+        run: run_feedback,
+    },
+    CommandEntry {
         name: "quit",
         description: "Quits.",
         hint: None,
@@ -291,6 +297,23 @@ fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
 
 fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.close())
+}
+
+/// `/feedback`: with no description, asks for one by leaving the draft
+/// on `/feedback `; with a description, the injected writer (wired in a
+/// later task) writes the report, and the notice carries its path and
+/// link. Without a writer the draft is kept and nothing is sent.
+fn run_feedback(app: &mut App, rest: &str) -> Option<Effect> {
+    if rest.trim().is_empty() {
+        app.push_notice(
+            "feedback",
+            "Describe the feedback after /feedback, then press Enter.".to_owned(),
+        );
+        app.draft.clear();
+        app.draft.paste("/feedback ");
+        return Some(Effect::None);
+    }
+    Some(Effect::None)
 }
 
 fn run_quit(app: &mut App, _rest: &str) -> Option<Effect> {

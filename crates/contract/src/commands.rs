@@ -525,6 +525,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "exit",
     "?",
     "help",
+    "feedback",
 ];
 
 #[cfg(test)]

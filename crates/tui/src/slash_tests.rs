@@ -73,6 +73,7 @@ const DRAWN_ORDER: &[&str] = &[
     "reload",
     "import",
     "close",
+    "feedback",
     "quit",
     "approvals",
     "?",
