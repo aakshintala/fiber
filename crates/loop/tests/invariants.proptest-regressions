@@ -1,9 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc c2a3c0b208cc6b4b7451c9b2f9679f802c86a77f8be1a5e466e4ee150f063053 # shrinks to (calls, perm) = ([Returns, Returns, Returns], [0, 1, 2])
-cc 0bb839f15899d6b8d1307e4edbdefc8afa56d2952187319c9ba74c0089be5f47 # shrinks to plan = [Held { delta: true, control: true }, Held { delta: true, control: true }]
-cc b655f40dd7d664126cf103962d8f9fb93b5bd4f07458fe76db5290ae699c0b4d # shrinks to turns = [TurnPlan { batch: [Steer, Steer, Prompt], during: [Prompt, Steer], cancelled: false }, TurnPlan { batch: [Prompt, Steer], during: [Steer, Prompt], cancelled: true }, TurnPlan { batch: [Steer, Prompt], during: [], cancelled: false }]

@@ -411,6 +411,10 @@ impl ScriptCall {
     /// Parks a held call until the test sends its answer: signals entry,
     /// queues the release, then runs the test's answer as the reply.
     /// A cancel still ends the hold cancelled, as with `Answer::Hold`.
+    /// The block carries no deadline: the channel is the test's own — the
+    /// test pops the sender and sends the answer, and dropping it releases
+    /// the hold too. The test's own deadline on the entry signal and the
+    /// turn's end names a hang.
     #[allow(clippy::result_large_err, reason = "test helper mirroring the seam")]
     fn run_released(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         let (entered, releases) = self
@@ -425,7 +429,7 @@ impl ScriptCall {
                 usage: Box::new(fakes::unnamed_usage()),
             });
         }
-        let answer = fakes::Deadline::after(WAIT).recv_or_fail(&rx, "the test releases the hold");
+        let answer = rx.recv().expect("the test releases the hold");
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(CallError::Cancelled {
                 usage: Box::new(fakes::unnamed_usage()),
@@ -5923,6 +5927,9 @@ fn a_mixed_batch_matches_the_serial_event_stream() {
         sends: usize,
         first_prevs: Vec<Option<usize>>,
         second_prevs: Vec<Option<usize>>,
+        follow_prev: Option<usize>,
+        follow_len: usize,
+        follow_key: String,
     }
 
     fn run(budget: Option<f64>, script: Vec<ReviewReply>) -> Run {
@@ -5951,6 +5958,8 @@ fn a_mixed_batch_matches_the_serial_event_stream() {
                     ("coral", json!({})),
                     0,
                 ),
+                text_answer("Done.", 0),
+                tool_answer("atlas", json!({}), 0),
                 text_answer("Done.", 0),
                 text_answer("Spare.", 0),
             ],
@@ -5985,12 +5994,34 @@ fn a_mixed_batch_matches_the_serial_event_stream() {
             }
         }
         first_prevs.sort();
+        // The next reply's review must chain past the batch exactly as it
+        // chains past the serial path: one more reviewed call proves the
+        // `reviewer_sent` cursor and the cache prefix match, not just the
+        // batch's own ends.
+        prompt(&world, "again");
+        let follow_outcome = turn(&mut world).unwrap();
+        assert_eq!(follow_outcome, Some(TurnOutcome::Completed));
+        let follow = world
+            .reviewer
+            .as_ref()
+            .expect("a reviewer")
+            .requests()
+            .last()
+            .cloned()
+            .expect("the follow-up review sends");
+        assert!(
+            follow.max_output_tokens.is_some(),
+            "the follow-up review is a first stage"
+        );
         Run {
             kinds,
             resolved,
             sends,
             first_prevs,
             second_prevs,
+            follow_prev: follow.previous_end,
+            follow_len: follow.conversation.len(),
+            follow_key: follow.cache_key,
         }
     }
     let check = review_text("check", 1);
@@ -5998,11 +6029,23 @@ fn a_mixed_batch_matches_the_serial_event_stream() {
     let block = review_text("block coral reason", 1);
     let batch = run(
         None,
-        vec![check.clone(), check.clone(), allow.clone(), block.clone()],
+        vec![
+            check.clone(),
+            check.clone(),
+            allow.clone(),
+            block.clone(),
+            allow.clone(),
+        ],
     );
     let serial = run(
         Some(1000.0),
-        vec![check.clone(), allow.clone(), check.clone(), block.clone()],
+        vec![
+            check.clone(),
+            allow.clone(),
+            check.clone(),
+            block.clone(),
+            allow.clone(),
+        ],
     );
     assert_eq!(batch.sends, 4, "the denied call sends nothing");
     assert_eq!(serial.sends, 4);
@@ -6027,6 +6070,18 @@ fn a_mixed_batch_matches_the_serial_event_stream() {
     assert_eq!(
         batch.second_prevs, serial.second_prevs,
         "the pre-sent second stages keep the serial cache chain"
+    );
+    assert_eq!(
+        batch.follow_prev, serial.follow_prev,
+        "the follow-up review chains past the same cursor"
+    );
+    assert_eq!(
+        batch.follow_len, serial.follow_len,
+        "the follow-up review sends the same cached prefix"
+    );
+    assert_eq!(
+        batch.follow_key, serial.follow_key,
+        "the follow-up review keeps the serial cache key"
     );
 }
 
@@ -6199,9 +6254,10 @@ fn hook_notices_come_before_the_fanned_out_usages() {
     let mut watcher = world.log.as_ref().expect("the log is open").watch();
     prompt(&world, "hi");
     assert_eq!(turn(&mut world).unwrap(), Some(TurnOutcome::Completed));
+    let deadline = fakes::Deadline::after(WAIT);
     let mut streamed = Vec::new();
     while let Some(line) = watcher
-        .recv_timeout(WAIT)
+        .recv_timeout(deadline.left())
         .unwrap_or_else(|| panic!("the stream ends after the turn"))
         .expect("no end yet")
     {

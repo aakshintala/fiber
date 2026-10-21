@@ -704,7 +704,7 @@ impl Loop {
         };
         match reply {
             Err(CallError::Failed { failure, .. }) => {
-                self.review_failure(under, failure, Some(stage1_ref(endpoint)))
+                self.review_failure(under, failure, Some(reviewer_ref(endpoint, 1)))
             }
             Err(CallError::Cancelled { .. }) => self.review_cancelled(under.id, under.turn),
             Ok(first) => match read_first(&first.text()) {
@@ -715,7 +715,7 @@ impl Loop {
                 Err(unread) => self.review_failure(
                     under,
                     unreadable(&format!("{unread}, but got {:?}", first.text())),
-                    Some(stage1_ref(endpoint)),
+                    Some(reviewer_ref(endpoint, 1)),
                 ),
             },
         }
@@ -777,7 +777,7 @@ impl Loop {
         };
         match reply {
             Err(CallError::Failed { failure, .. }) => {
-                self.review_failure(under, failure, Some(stage2_ref(endpoint)))
+                self.review_failure(under, failure, Some(reviewer_ref(endpoint, 2)))
             }
             Err(CallError::Cancelled { .. }) => self.review_cancelled(under.id, under.turn),
             Ok(first) => match read_second(&first.text()) {
@@ -788,7 +788,7 @@ impl Loop {
                 Err(unread) => self.review_failure(
                     under,
                     unreadable(&format!("{unread}, but got {:?}", first.text())),
-                    Some(stage2_ref(endpoint)),
+                    Some(reviewer_ref(endpoint, 2)),
                 ),
             },
         }
@@ -1215,18 +1215,10 @@ fn unreadable(why: &str) -> Failure {
     }
 }
 
-/// The stage-1 reviewer a failure or escalation blames.
-fn stage1_ref(endpoint: &ReviewEndpoint) -> ReviewerRef {
+/// The reviewer a failure or escalation blames, at its stage.
+fn reviewer_ref(endpoint: &ReviewEndpoint, stage: u8) -> ReviewerRef {
     ReviewerRef {
         model: endpoint.reference.clone(),
-        stage: 1,
-    }
-}
-
-/// The stage-2 reviewer a failure or escalation blames.
-fn stage2_ref(endpoint: &ReviewEndpoint) -> ReviewerRef {
-    ReviewerRef {
-        model: endpoint.reference.clone(),
-        stage: 2,
+        stage,
     }
 }
