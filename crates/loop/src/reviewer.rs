@@ -219,6 +219,28 @@ impl Loop {
     ///
     /// Public for the `review` jig's replay, which replays a source log's
     /// recorded calls through the same judge (`docs/testing.md`, "Jigs").
+    /// The reviewer's model call inputs snapshotted before a concurrent
+    /// batch fans out: everything its first-stage sends need, while the
+    /// reviewed prefix stays fixed for the batch. `None` when the reviewer
+    /// could not be set up, and the batch falls back to the serial path.
+    pub(crate) fn review_endpoint(&self) -> Option<ReviewEndpoint> {
+        match &self.reviewer {
+            Ok(reviewer) => Some(ReviewEndpoint {
+                provider: Arc::clone(&reviewer.provider),
+                reference: reviewer.model.reference.clone(),
+                cost: reviewer.model.cost.clone(),
+                subscription: reviewer.model.subscription,
+                cache_lifetime: reviewer.cache_lifetime,
+                thinking: request::lowest(&reviewer.thinking_levels),
+            }),
+            Err(_) => None,
+        }
+    }
+
+    /// Judges `call` at step 7 (`docs/permissions.md`, "The reviewer").
+    ///
+    /// Public for the `review` jig's replay, which replays a source log's
+    /// recorded calls through the same judge (`docs/testing.md`, "Jigs").
     pub fn review(
         &mut self,
         call: &ToolCallRequested,
@@ -577,6 +599,18 @@ impl Loop {
             previous_end,
             max_output_tokens,
         );
+        self.send_snapshot(endpoint, reviewer, request, turn)
+    }
+
+    /// Sends one stage request built from the snapshot and records its
+    /// usage inline, as the serial path does.
+    fn send_snapshot(
+        &mut self,
+        endpoint: &ReviewEndpoint,
+        reviewer: ReviewerUse,
+        request: ModelRequest,
+        turn: &TurnId,
+    ) -> Result<Result<Reply, CallError>, Error> {
         let call = start_review_call(&endpoint.provider, self.reviewer_observe.as_ref(), &request);
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
         self.record_review_usage(&reply, endpoint, reviewer, turn)?;
@@ -612,9 +646,9 @@ impl Loop {
 
     /// Records one reviewer reply's usage, marked with what the reviewer
     /// was doing, so the spend ties to the call under review. The serial
-    /// send and the batch write-back share it, so a fanned-out request
-    /// records the same line the serial path would.
-    fn record_review_usage(
+    /// send, the batch write-back and re-classification share it, so a
+    /// fanned-out request records the same line the serial path would.
+    pub(crate) fn record_review_usage(
         &mut self,
         reply: &Result<Reply, CallError>,
         endpoint: &ReviewEndpoint,
@@ -635,6 +669,170 @@ impl Loop {
         recorded.line.reviewer = Some(reviewer);
         let lookup = endpoint.provider.cost_lookup();
         self.write_usage(recorded, lookup, Some(turn), None)
+    }
+
+    /// Applies one call's fanned-out first-stage reply at write-back, in
+    /// request order: then judges exactly as the serial path does — an
+    /// allow applies, a check applies the pre-sent second stage, and
+    /// failures, cancels and unreadable verdicts take their serial
+    /// paths. A grant installed while an earlier call applied moots the
+    /// stored second stage instead of preventing its send.
+    pub(crate) fn apply_stage1(
+        &mut self,
+        under: &UnderReview<'_>,
+        endpoint: &ReviewEndpoint,
+        staged: StagedStage1,
+        turn: &TurnId,
+    ) -> Result<Decided, Error> {
+        let StagedStage1 {
+            reply,
+            resent,
+            second,
+            reviewer_use,
+            cut: _,
+        } = staged;
+        self.record_review_usage(&reply, endpoint, reviewer_use, turn)?;
+        let reply = match resent {
+            Some(resent) => {
+                let reviewer = ReviewerUse::Stage1 {
+                    action_id: under.id.clone(),
+                };
+                self.record_review_usage(&resent, endpoint, reviewer, turn)?;
+                resent
+            }
+            None => reply,
+        };
+        match reply {
+            Err(CallError::Failed { failure, .. }) => {
+                self.review_failure(under, failure, Some(stage1_ref(endpoint)))
+            }
+            Err(CallError::Cancelled { .. }) => self.review_cancelled(under.id, under.turn),
+            Ok(first) => match read_first(&first.text()) {
+                Ok(First::Allow) => self.second_allow(under, endpoint, 1, None),
+                Ok(First::Check) => self.apply_stored_stage2(under, endpoint, second, turn),
+                // A re-ask the pre-send could not read fails here, as the
+                // serial path's second unreadable reply does.
+                Err(unread) => self.review_failure(
+                    under,
+                    unreadable(&format!("{unread}, but got {:?}", first.text())),
+                    Some(stage1_ref(endpoint)),
+                ),
+            },
+        }
+    }
+
+    /// Re-sends one first stage after an unreadable verdict, serially: the
+    /// same note bytes and cursor the serial path's second attempt sends.
+    /// Nothing records here: write-back records the first reply's usage,
+    /// then the re-ask's, in request order.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error is the reviewer call's, returned unchanged"
+    )]
+    pub(crate) fn resend_stage1(
+        &mut self,
+        under: &UnderReview<'_>,
+        endpoint: &ReviewEndpoint,
+        prompt: &Sections,
+        note: &str,
+        cut: usize,
+    ) -> Result<Reply, CallError> {
+        let item = under_item(under.prepared, &under.call.name, &self.workspace_label);
+        let conversation = stage_conversation(&self.reviewed, cut, item, &prompt.first, Some(note));
+        let request = self.review_request(
+            endpoint,
+            &prompt.shared,
+            conversation,
+            Some(cut),
+            Some(request::FIRST_STAGE_OUTPUT_TOKENS),
+        );
+        self.send_only(endpoint, request)
+    }
+
+    /// Applies one call's pre-sent second stage: records its usages in
+    /// send order, then judges exactly as the serial path's second ask
+    /// does. A grant installed while an earlier call applied moots the
+    /// stored reply instead of preventing its send.
+    pub(crate) fn apply_stored_stage2(
+        &mut self,
+        under: &UnderReview<'_>,
+        endpoint: &ReviewEndpoint,
+        second: Option<StagedSecond>,
+        turn: &TurnId,
+    ) -> Result<Decided, Error> {
+        let Some(second) = second else {
+            unreachable!("the pre-send fans out every second stage the first asks for");
+        };
+        let StagedSecond { reply, resent } = second;
+        let reviewer = || ReviewerUse::Stage2 {
+            action_id: under.id.clone(),
+        };
+        self.record_review_usage(&reply, endpoint, reviewer(), turn)?;
+        let reply = match resent {
+            Some(resent) => {
+                self.record_review_usage(&resent, endpoint, reviewer(), turn)?;
+                resent
+            }
+            None => reply,
+        };
+        match reply {
+            Err(CallError::Failed { failure, .. }) => {
+                self.review_failure(under, failure, Some(stage2_ref(endpoint)))
+            }
+            Err(CallError::Cancelled { .. }) => self.review_cancelled(under.id, under.turn),
+            Ok(first) => match read_second(&first.text()) {
+                Ok(Second::Allow { reason }) => self.second_allow(under, endpoint, 2, reason),
+                Ok(Second::Block { reason }) => self.second_block(under, endpoint, reason),
+                // A re-ask the pre-send could not read fails here, as the
+                // serial path's second unreadable reply does.
+                Err(unread) => self.review_failure(
+                    under,
+                    unreadable(&format!("{unread}, but got {:?}", first.text())),
+                    Some(stage2_ref(endpoint)),
+                ),
+            },
+        }
+    }
+
+    /// Sends one second-stage request built from the call's snapshot: the
+    /// transcript cut, the call's effects item, and the second instruction.
+    /// Nothing records here: write-back records the usage in request order.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error is the reviewer call's, returned unchanged"
+    )]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the call under review, the endpoint and prompts, the snapshot item and cut, the re-ask note, and the turn are one send"
+    )]
+    pub(crate) fn send_stage2(
+        &mut self,
+        endpoint: &ReviewEndpoint,
+        prompt: &Sections,
+        item: &Input,
+        cut: usize,
+        note: Option<&str>,
+    ) -> Result<Reply, CallError> {
+        let conversation =
+            stage_conversation(&self.reviewed, cut, item.clone(), &prompt.second, note);
+        let request = self.review_request(endpoint, &prompt.shared, conversation, Some(cut), None);
+        self.send_only(endpoint, request)
+    }
+
+    /// Sends one reviewer request without recording its usage: the
+    /// batch's pre-sends go out before any call applies, and write-back
+    /// records every usage in request order.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error is the reviewer call's, returned unchanged"
+    )]
+    fn send_only(
+        &mut self,
+        endpoint: &ReviewEndpoint,
+        request: ModelRequest,
+    ) -> Result<Reply, CallError> {
+        let call = start_review_call(&endpoint.provider, self.reviewer_observe.as_ref(), &request);
+        crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {})
     }
 
     /// A cancelled review completes `cancelled`, not denied: its resolved
@@ -775,6 +973,34 @@ pub(crate) struct BuiltStage1 {
     pub(crate) cut: usize,
 }
 
+/// One call's fanned-out first-stage reply, waiting for write-back in
+/// request order. A second stage the first stage asked for is sent before
+/// any call applies, in request order, so a later grant moots an already
+/// sent reply instead of preventing its send (`docs/permissions.md`,
+/// "How it runs").
+pub(crate) struct StagedStage1 {
+    /// The first first-stage reply: a re-ask replaces it, and the
+    /// replaced reply's usage records first at write-back.
+    pub(crate) reply: Result<Reply, CallError>,
+    /// The re-asked first-stage reply, when the first could not be read.
+    pub(crate) resent: Option<Result<Reply, CallError>>,
+    /// The pre-sent second stage, when the first stage asked for more.
+    pub(crate) second: Option<StagedSecond>,
+    /// What the usage line marks the reply as.
+    pub(crate) reviewer_use: ReviewerUse,
+    /// Where the shared cursor stood for the batch.
+    pub(crate) cut: usize,
+}
+
+/// One call's pre-sent second-stage reply, stored for write-back.
+pub(crate) struct StagedSecond {
+    /// The first second-stage reply: a re-ask replaces it, and the
+    /// replaced reply's usage records first at write-back.
+    pub(crate) reply: Result<Reply, CallError>,
+    /// The re-asked second-stage reply, when the first could not be read.
+    pub(crate) resent: Option<Result<Reply, CallError>>,
+}
+
 /// What a first-stage worker carries across the thread boundary: cloned
 /// `Arc`s and, per spawn, an owned request. No `&mut Loop`, no log handle
 /// and no rules guard cross, so the deciding thread stays the only writer.
@@ -847,7 +1073,7 @@ fn cut_for(reviewed: &[Reviewed], id: &ActionId) -> usize {
 /// to the stage item. A rewritten call is judged as the call that will run:
 /// its effects item names the rewritten call's declared effects and the
 /// arguments it runs with.
-fn under_item(prepared: &Prepared, name: &str, workspace: &str) -> Input {
+pub(crate) fn under_item(prepared: &Prepared, name: &str, workspace: &str) -> Input {
     // The call stays where it ran: the item after it names it, so the
     // reviewer never counts on it coming last.
     let declared = serde_json::to_string(&prepared.effects.declared).unwrap_or_default();
@@ -986,5 +1212,21 @@ fn unreadable(why: &str) -> Failure {
         message: why.to_owned(),
         retry_after_ms: None,
         provider: None,
+    }
+}
+
+/// The stage-1 reviewer a failure or escalation blames.
+fn stage1_ref(endpoint: &ReviewEndpoint) -> ReviewerRef {
+    ReviewerRef {
+        model: endpoint.reference.clone(),
+        stage: 1,
+    }
+}
+
+/// The stage-2 reviewer a failure or escalation blames.
+fn stage2_ref(endpoint: &ReviewEndpoint) -> ReviewerRef {
+    ReviewerRef {
+        model: endpoint.reference.clone(),
+        stage: 2,
     }
 }

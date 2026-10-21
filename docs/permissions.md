@@ -354,7 +354,10 @@ Two stages. The first asks for one word: `check`, meaning the call goes
 to the reasoning pass, or `allow`. Only a call answered `check` gets the
 reasoning pass. The first-stage requests for the reviewed calls of one reply
 go out concurrently, and all of them share the reply's prefix. Second-stage
-passes run one at a time, in request order. When `budget.usd` is set, the
+passes run one at a time, in request order, before any call is
+applied: a second stage goes out even when a grant installed while an
+earlier call applied moots its reply, so the write-back applies the
+grant instead. When `budget.usd` is set, the
 first-stage requests go out one at a time, as the budget is checked before
 each reviewer request (`docs/loop.md`, "Spending budget"). A call a remembered
 grant decides keeps its already-sent first-stage request's `usage_recorded`:

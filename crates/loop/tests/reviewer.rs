@@ -913,10 +913,10 @@ fn the_session_limit_escalates_with_a_raised_consecutive_limit() {
     let reviewer = session.reviewer_limits(
         vec![
             Scripted::text("check"),
+            Scripted::text("check"),
+            Scripted::text("check"),
             Scripted::text("block one"),
-            Scripted::text("check"),
             Scripted::text("block two"),
-            Scripted::text("check"),
             Scripted::text("block three"),
         ],
         r#loop::BlockLimits {
@@ -1106,8 +1106,8 @@ fn a_headless_session_ends_the_turn_once_the_block_budget_runs_out() {
     let reviewer = session.reviewer_limits(
         vec![
             Scripted::text("check"),
-            Scripted::text("block one"),
             Scripted::text("check"),
+            Scripted::text("block one"),
             Scripted::text("block two"),
         ],
         r#loop::BlockLimits {
@@ -1444,10 +1444,15 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
         None,
         vec![tool.clone() as Arc<dyn Tool>],
     );
+    // Stage 1 fans out, so its replies must be interchangeable: all three
+    // checks pair with any call, and the failures land serially at
+    // stage 2 in request order.
     let reviewer = session.reviewer(vec![
-        failed(),
-        failed(),
         Scripted::text("check"),
+        Scripted::text("check"),
+        Scripted::text("check"),
+        failed(),
+        failed(),
         Scripted::text("block third reason"),
     ]);
     // Swapping in an unrelated sender drops the session's only one: every
@@ -1477,8 +1482,10 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
             "usage_recorded",
             "assistant_message_completed",
             "usage_recorded",
+            "usage_recorded",
             "permission_requested",
             "permission_resolved",
+            "usage_recorded",
             "usage_recorded",
             "permission_requested",
             "permission_resolved",
@@ -1537,7 +1544,7 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
         assert_eq!(done.payload["status"], "denied");
         assert_eq!(done.payload["reason"], "no_person");
     }
-    assert_eq!(reviewer.requests().len(), 4);
+    assert_eq!(reviewer.requests().len(), 6);
     assert!(tool.ran().is_empty());
 }
 
@@ -1559,8 +1566,8 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
     let reviewer = session.reviewer_limits(
         vec![
             Scripted::text("check"),
-            Scripted::text("block first reason"),
             Scripted::text("check"),
+            Scripted::text("block first reason"),
             Scripted::text("block second reason"),
         ],
         r#loop::BlockLimits {
@@ -1928,9 +1935,9 @@ fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
             "tool_call_requested",
             "usage_recorded",
             "assistant_message_completed",
-            "usage_recorded",
-            "usage_recorded",
             "permission_requested",
+            "usage_recorded",
+            "usage_recorded",
             "permission_resolved",
             "permission_resolved",
             "tool_call_completed",
@@ -1950,26 +1957,29 @@ fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
         .filter(|l| l.kind == "permission_requested")
         .collect();
     assert_eq!(requested.len(), 1);
-    assert_eq!(requested[0].payload["step"], "review");
+    assert_eq!(requested[0].payload["step"], "standing_ask");
     let resolved: Vec<&Envelope> = lines
         .iter()
         .filter(|l| l.kind == "permission_resolved")
         .collect();
-    // The close denies the pending escalation itself (`docs/events.md`,
-    // `permission_resolved`).
-    assert_eq!(resolved[0].payload["decided_by"], "cancel");
-    assert_eq!(resolved[0].payload.get("reviewer"), None);
+    // The batch asks the standing ask inline, so the close lands there;
+    // the review-bound call's escalation then finds no one to answer and
+    // the reviewer denies it (`docs/events.md`, `permission_resolved`).
+    assert_eq!(resolved[0].payload["decision"], "deny");
+    assert_eq!(resolved[0].payload["decided_by"], "reviewer");
+    assert_eq!(resolved[0].payload["reason"], "first reason");
+    assert_eq!(resolved[0].payload.get("request_id"), None);
+    assert_eq!(resolved[1].payload["decision"], "deny");
+    assert_eq!(resolved[1].payload["decided_by"], "cancel");
+    assert_eq!(resolved[1].payload.get("reviewer"), None);
     assert_eq!(
-        resolved[0].payload["reason"],
+        resolved[1].payload["reason"],
         "The session closed while waiting for an answer."
     );
     assert_eq!(
-        resolved[0].payload["request_id"],
+        resolved[1].payload["request_id"],
         requested[0].payload["request_id"]
     );
-    assert_eq!(resolved[1].payload["decision"], "deny");
-    assert_eq!(resolved[1].payload["decided_by"], "standing_rule");
-    assert_eq!(resolved[1].payload.get("request_id"), None);
     let done = completed(&lines);
     assert_eq!(done[0].payload["reason"], "reviewer");
     assert_eq!(done[1].payload["status"], "denied");
@@ -2903,8 +2913,6 @@ fn a_reviewer_allow_cancelled_before_its_start_keeps_the_effects() {
             "tool_call_requested",
             "usage_recorded",
             "assistant_message_completed",
-            "usage_recorded",
-            "permission_resolved",
             "permission_requested",
             "permission_resolved",
             "tool_call_completed",
@@ -2912,15 +2920,17 @@ fn a_reviewer_allow_cancelled_before_its_start_keeps_the_effects() {
             "turn_completed",
         ]
     );
-    // The allow keeps the call's effects, and the approved call never started.
-    let allows: Vec<_> = lines
+    // The cancel landed before write-back, so the fanned-out allow is
+    // discarded: no resolution and no usage for the approved call. The
+    // standing ask's round-trip ran inline, so its deny-by-cancel stays.
+    // The approved call never started.
+    let resolved: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved" && l.payload["decision"] == "allow")
+        .filter(|l| l.kind == "permission_resolved")
         .collect();
-    assert_eq!(allows.len(), 1);
-    assert_eq!(allows[0].payload.get("request_id"), None);
-    assert_eq!(allows[0].payload["effects"], json!(["executes"]));
-    assert_eq!(allows[0].payload["reversible"], true);
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["decision"], "deny");
+    assert_eq!(resolved[0].payload["decided_by"], "cancel");
     assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }
