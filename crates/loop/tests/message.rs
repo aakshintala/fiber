@@ -31,14 +31,25 @@ const UNNAMED: &str = "Fiber: a message from session s_0123456789abcdef. Another
 const STALE_STEER: &str = "That steering message was already applied, or was never queued.";
 
 /// A session message from `FROM`, sent by `command`, saying `text`, with
-/// `name` as the sender's latest `session_named` name.
-fn session_message(command: &str, name: Option<&str>, text: &str) -> Delivery {
-    Delivery::Message(SessionMessage {
-        from_session_id: SessionId(FROM.into()),
-        command_id: CommandId(command.into()),
-        text: text.into(),
-        name: name.map(str::to_owned),
-    })
+/// `name` as the sender's latest `session_named` name, `parent` as the
+/// sender's parent, and answered on `ack`.
+fn session_message(
+    command: &str,
+    parent: Option<&str>,
+    name: Option<&str>,
+    text: &str,
+    ack: Ack,
+) -> Delivery {
+    Delivery::Message(
+        SessionMessage {
+            from_session_id: SessionId(FROM.into()),
+            parent_session_id: parent.map(|parent| SessionId(parent.into())),
+            command_id: CommandId(command.into()),
+            text: text.into(),
+            name: name.map(str::to_owned),
+        },
+        ack,
+    )
 }
 
 fn capture() -> (Ack, mpsc::Receiver<Answer>) {
@@ -92,14 +103,17 @@ fn users(request: &contract::provider::ModelRequest) -> Vec<String> {
 #[test]
 fn a_session_message_to_an_idle_loop_starts_a_turn_framed_with_its_senders_name() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    let (ack, answers) = capture();
     session
         .inbox
-        .send(session_message(COMMAND, Some("builder"), TEXT))
+        .send(session_message(COMMAND, None, Some("builder"), TEXT, ack))
         .unwrap();
     assert_eq!(
         session.turn(),
         Some(contract::events::TurnOutcome::Completed)
     );
+    // The take answered the message once it joined the turn's input.
+    assert_eq!(take(&answers), Ok(None));
     let lines = session.lines();
     assert_eq!(kinds(&lines), plain());
     assert_eq!(
@@ -120,14 +134,16 @@ fn a_session_message_to_an_idle_loop_starts_a_turn_framed_with_its_senders_name(
 #[test]
 fn a_session_message_from_an_unnamed_sender_is_framed_by_its_id_alone() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    let (ack, answers) = capture();
     session
         .inbox
-        .send(session_message(COMMAND, None, TEXT))
+        .send(session_message(COMMAND, None, None, TEXT, ack))
         .unwrap();
     assert_eq!(
         session.turn(),
         Some(contract::events::TurnOutcome::Completed)
     );
+    assert_eq!(take(&answers), Ok(None));
     let lines = session.lines();
     assert_eq!(kinds(&lines), plain());
     assert_eq!(
@@ -146,15 +162,18 @@ fn a_session_message_from_an_unnamed_sender_is_framed_by_its_id_alone() {
 
 #[test]
 fn a_session_message_mid_turn_is_applied_as_steering_at_the_next_step() {
+    let (ack, answers) = capture();
     let mut session = Session::injecting(
         vec![Scripted::text("Hi."), Scripted::text("Steered.")],
-        vec![session_message(COMMAND, Some("builder"), TEXT)],
+        vec![session_message(COMMAND, None, Some("builder"), TEXT, ack)],
     );
     session.inbox.send(support::delivery("go")).unwrap();
     assert_eq!(
         session.turn(),
         Some(contract::events::TurnOutcome::Completed)
     );
+    // The running take answered the message once it queued.
+    assert_eq!(take(&answers), Ok(None));
     let lines = session.lines();
     let expected = vec![
         "session_started",
@@ -206,14 +225,16 @@ fn a_session_message_mid_turn_is_applied_as_steering_at_the_next_step() {
 #[test]
 fn a_name_holding_a_placeholder_is_not_expanded() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    let (ack, answers) = capture();
     session
         .inbox
-        .send(session_message(COMMAND, Some("{text}"), TEXT))
+        .send(session_message(COMMAND, None, Some("{text}"), TEXT, ack))
         .unwrap();
     assert_eq!(
         session.turn(),
         Some(contract::events::TurnOutcome::Completed)
     );
+    assert_eq!(take(&answers), Ok(None));
     let lines = session.lines();
     assert_eq!(
         lines[3].payload["input"][0]["content"][0]["text"],
@@ -224,9 +245,10 @@ fn a_name_holding_a_placeholder_is_not_expanded() {
 #[test]
 fn a_steer_drop_naming_a_session_message_while_idle_is_stale_and_the_message_runs() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    let (ack, message_answers) = capture();
     session
         .inbox
-        .send(session_message(COMMAND, Some("builder"), TEXT))
+        .send(session_message(COMMAND, None, Some("builder"), TEXT, ack))
         .unwrap();
     let (drop, answers) = drop_of(COMMAND);
     session.inbox.send(drop).unwrap();
@@ -234,6 +256,7 @@ fn a_steer_drop_naming_a_session_message_while_idle_is_stale_and_the_message_run
         session.turn(),
         Some(contract::events::TurnOutcome::Completed)
     );
+    assert_eq!(take(&message_answers), Ok(None));
     assert_eq!(
         take(&answers),
         rejected(ErrorCode::StaleRequest, STALE_STEER)
@@ -255,10 +278,11 @@ fn a_steer_drop_naming_a_session_message_while_idle_is_stale_and_the_message_run
 #[test]
 fn a_steer_drop_naming_a_queued_session_message_mid_turn_is_stale_and_the_message_applies() {
     let (drop_ack, answers) = capture();
+    let (message_ack, message_answers) = capture();
     let mut session = Session::injecting(
         vec![Scripted::text("Hi."), Scripted::text("Steered.")],
         vec![
-            session_message(COMMAND, Some("builder"), TEXT),
+            session_message(COMMAND, None, Some("builder"), TEXT, message_ack),
             Delivery::SteerDrop(CommandId(COMMAND.into()), drop_ack),
         ],
     );
@@ -267,6 +291,7 @@ fn a_steer_drop_naming_a_queued_session_message_mid_turn_is_stale_and_the_messag
         session.turn(),
         Some(contract::events::TurnOutcome::Completed)
     );
+    assert_eq!(take(&message_answers), Ok(None));
     assert_eq!(
         take(&answers),
         rejected(ErrorCode::StaleRequest, STALE_STEER)

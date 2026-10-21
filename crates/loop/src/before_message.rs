@@ -24,6 +24,17 @@ use crate::{Error, Loop};
 /// acceptance (`docs/state.md`, "Prompt history").
 pub type OnRewrite = Arc<dyn Fn(&CommandId, &[ContentPart]) + Send + Sync>;
 
+/// A session message's sender: who sent it and who sent the sender. A
+/// person's or a driver's message carries neither, so those takes pass
+/// `None` for the whole struct.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SessionIds<'a> {
+    /// The sending session.
+    pub(crate) from: &'a contract::SessionId,
+    /// The sender's parent session, when the sender has one.
+    pub(crate) parent: Option<&'a contract::SessionId>,
+}
+
 /// What the `before_message` chain left on an admitted message: who
 /// replaced its content, and the contexts its hooks added, in run order.
 #[derive(Debug, Default)]
@@ -58,6 +69,7 @@ impl Loop {
     pub(crate) fn admitted(
         &mut self,
         message: Message,
+        session: Option<SessionIds<'_>>,
         ack: Ack,
         turn: Option<&TurnId>,
     ) -> Result<Option<(Message, Hooked, Ack)>, Error> {
@@ -70,6 +82,8 @@ impl Loop {
         }
         let answer = hooks.before_message(&BeforeMessage {
             content: &message.content,
+            from_session_id: session.map(|ids| ids.from),
+            parent_session_id: session.and_then(|ids| ids.parent),
         });
         let state = hooks.take_change_state();
         self.drain_state(&hooks, turn)?;
@@ -146,7 +160,7 @@ impl Loop {
         let probe = Ack(Box::new(move |answer| {
             let _sent = probe_tx.send(answer);
         }));
-        let outcome = self.admitted(Message { content, sender }, probe, turn)?;
+        let outcome = self.admitted(Message { content, sender }, None, probe, turn)?;
         let emit = inbox::TurnEmit {
             log: &self.log,
             turn: turn.cloned(),
@@ -205,7 +219,7 @@ impl Loop {
         ack: Ack,
         input: &mut TurnInput,
     ) -> Result<(), Error> {
-        let Some((message, hooked, ack)) = self.admitted(message, ack, None)? else {
+        let Some((message, hooked, ack)) = self.admitted(message, None, ack, None)? else {
             return Ok(());
         };
         // The replacement as the hook returned it, kept from before the
@@ -269,7 +283,7 @@ impl Loop {
                 Ok(())
             }
             _ => {
-                let Some((message, hooked, ack)) = self.admitted(message, ack, None)? else {
+                let Some((message, hooked, ack)) = self.admitted(message, None, ack, None)? else {
                     return Ok(());
                 };
                 self.attended();
@@ -310,7 +324,8 @@ impl Loop {
                 Ok(())
             }
             _ => {
-                let Some((message, hooked, ack)) = self.admitted(message, ack, Some(turn))? else {
+                let Some((message, hooked, ack)) = self.admitted(message, None, ack, Some(turn))?
+                else {
                     return Ok(());
                 };
                 self.attended();

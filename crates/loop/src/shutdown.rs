@@ -61,7 +61,7 @@ impl Loop {
             Delivery::Job(notice) => self.end_extension_job(notice),
             delivery @ (Delivery::Steer(..)
             | Delivery::SteerDrop(..)
-            | Delivery::Message(_)
+            | Delivery::Message(..)
             | Delivery::Model(..)
             | Delivery::Credential(..)
             | Delivery::Reload(_)
@@ -229,7 +229,7 @@ impl Loop {
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),
             Delivery::JobLine(_)
-            | Delivery::Message(_)
+            | Delivery::Message(..)
             | Delivery::InnerCall(_)
             | Delivery::Cancelled => {}
         }
