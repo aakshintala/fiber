@@ -24,13 +24,16 @@ pub(super) struct FilePanel {
 pub(super) enum Answer {
     /// None asked: home, or a session still opening.
     Unasked,
-    /// Sent with this id; only its answer fills the list.
-    Asked(String),
+    /// Sent with `id`; only its answer fills the list. `stale` once a
+    /// `skills_changed` arrived while it was out: its answer may have
+    /// been built before the change.
+    Asked { id: String, stale: bool },
     /// Answered: the list holds every `/name` the session runs.
     Answered,
-    /// Answered, then a `skills_changed`: the session's skills moved on
-    /// at a turn start, while its `commands` answer stays as it was
-    /// until it reloads, so the list may lack a name the session runs.
+    /// Answered, with a `skills_changed` since or while it was out: the
+    /// session's skills moved on at a turn start, while its `commands`
+    /// answer stays as it was until it reloads, so the list may lack a
+    /// name the session runs.
     Stale,
 }
 
@@ -82,22 +85,22 @@ impl Completion {
         let line = session_command(&id, "commands", session, None).to_string();
         self.slash_rows = slash::rows(&[]);
         self.extensions.clear();
-        self.answer = Answer::Asked(id);
+        self.answer = Answer::Asked { id, stale: false };
         line
     }
 
     /// Whether `id` is the latest `commands` sent, still unanswered.
     pub(super) fn awaits(&self, id: &str) -> bool {
-        matches!(&self.answer, Answer::Asked(asked) if asked == id)
+        matches!(&self.answer, Answer::Asked { id: asked, .. } if asked == id)
     }
 
     /// A `skills_changed`: an answered list may now lack a skill the
-    /// session runs. A question still out stands: a reload writes its
-    /// `skills_changed` after `reloaded`, and the answer to the
-    /// `commands` sent on `reloaded` is built from the reloaded skills.
+    /// session runs, and so may the answer to a question still out.
     pub(super) fn skills_changed(&mut self) {
-        if matches!(self.answer, Answer::Answered) {
-            self.answer = Answer::Stale;
+        match &mut self.answer {
+            Answer::Answered => self.answer = Answer::Stale,
+            Answer::Asked { stale, .. } => *stale = true,
+            Answer::Unasked | Answer::Stale => {}
         }
     }
 
@@ -107,10 +110,15 @@ impl Completion {
         if !self.awaits(&accepted.command_id.0) {
             return;
         }
+        let stale = matches!(self.answer, Answer::Asked { stale: true, .. });
         if let Some(CommandResult::Commands { commands }) = &accepted.result {
             self.slash_rows = slash::rows(commands);
             self.extensions = slash::extensions(commands);
-            self.answer = Answer::Answered;
+            self.answer = if stale {
+                Answer::Stale
+            } else {
+                Answer::Answered
+            };
         }
     }
 }

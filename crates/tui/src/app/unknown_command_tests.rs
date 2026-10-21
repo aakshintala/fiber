@@ -160,18 +160,48 @@ fn after_a_skills_change_an_unlisted_name_goes_out_until_the_next_answer() {
 }
 
 #[test]
-fn a_reloads_skills_change_keeps_the_question_it_follows() {
+fn a_skills_change_while_a_question_is_out_leaves_its_answer_stale() {
     let mut app = answered();
     let asked = app.on_line(reloaded(SESSION));
     assert!(app.on_line(skills_changed()).is_empty());
+    // The answer may have been built before the change: it fills the
+    // list, but an unlisted name still goes out as written.
+    answer(
+        &mut app,
+        &asked,
+        json!([{"name": "tdd", "description": "Runs tdd.", "tag": "skill"}]),
+    );
+    assert_eq!(prompt_text(enter(&mut app, "/fresh")), "/fresh");
+    assert_eq!(app.notice(), None);
+    // The next question was sent after the change: its answer is whole.
+    let asked = app.on_line(reloaded(SESSION));
     answer(
         &mut app,
         &asked,
         json!([{"name": "fresh", "description": "Runs fresh.", "tag": "skill"}]),
     );
-    assert_eq!(prompt_text(enter(&mut app, "/fresh now")), "/fresh now");
     assert_eq!(enter(&mut app, "/hepl"), Effect::None);
     assert_eq!(app.notice(), Some(HEPL));
+}
+
+#[test]
+fn a_template_added_while_the_session_runs_is_refused_until_it_reloads() {
+    // A template is never listed to the model, so adding one writes no
+    // `skills_changed`, and the list stays whole as far as it knows.
+    let mut app = answered();
+    assert_eq!(enter(&mut app, "/newtemplate"), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Unknown command /newtemplate. Type / to see the list.")
+    );
+    app.draft.clear();
+    let asked = app.on_line(reloaded(SESSION));
+    answer(
+        &mut app,
+        &asked,
+        json!([{"name": "newtemplate", "description": "A template.", "tag": "template"}]),
+    );
+    assert_eq!(prompt_text(enter(&mut app, "/newtemplate")), "/newtemplate");
 }
 
 #[test]

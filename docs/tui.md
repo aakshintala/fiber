@@ -1798,13 +1798,16 @@ is refused: nothing is sent, the draft stays for the person to correct, and an
 list." A first word that is `/` alone, or has a second `/` in it, such as a
 path, names no command, and the draft goes out as written. The draft also goes
 out as written wherever the list may lack a name the session runs: on home,
-while a session opens and its answer has not arrived, and after a
-`skills_changed`, since a skill added or switched on at a turn start runs at
-once while the session's `commands` answer stays as it was until it reloads
-(`docs/system-prompt.md`, "Added and removed skills"). The session then runs
-the skill or prompt template the first word names (`docs/invocation.md`,
-"Getting a prompt in"). In a delegate's view the draft steers the delegate,
-whose commands this list does not hold, so nothing there is refused.
+while a session opens and its answer has not arrived, and from a
+`skills_changed` until the answer to a `commands` sent after it, since a skill
+added or switched on at a turn start runs at once while the session's
+`commands` answer stays as it was until it reloads (`docs/system-prompt.md`,
+"Added and removed skills"). The session then runs the skill or prompt
+template the first word names (`docs/invocation.md`, "Getting a prompt in"). A
+prompt template added while the session runs writes no `skills_changed`, so it
+is refused until the session reloads, as with `/reload`. In a delegate's view
+the draft steers the delegate, whose commands this list does not hold, so
+nothing there is refused.
 
 ### Clearing
 
