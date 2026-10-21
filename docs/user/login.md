@@ -20,7 +20,7 @@ codex is a subscription login: the only other login of that kind Fiber ships, an
 
 ## After the key is stored
 
-The login asks which model reviews that provider's calls, with the saved pick preselected, else the package default. The pick is saved per provider. Without a terminal the credential is stored and nothing is asked.
+When the provider serves each account from its own host, the login asks for that host after the key is stored and before the reviewer, and saves it globally. The login asks which model reviews that provider's calls, with the saved pick preselected, else the package default. The pick is saved per provider. Without a terminal the credential is stored and nothing is asked.
 
 ## From inside the terminal
 
