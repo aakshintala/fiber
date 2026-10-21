@@ -240,7 +240,7 @@ fn prepared() -> ReloadPrepared {
         }],
         notices: Vec::new(),
         servers: vec!["kept".into()],
-        kept_servers: Vec::new(),
+        kept_servers: vec!["kept".into()],
         restarted_servers: Vec::new(),
         started_servers: Vec::new(),
         stopped_servers: Vec::new(),

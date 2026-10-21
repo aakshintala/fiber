@@ -121,11 +121,16 @@ pub struct ReloadPrepared {
 }
 
 /// What an installation leaves for its caller to write: the prepared
-/// extensions, notices and servers.
+/// extensions and notices, with the reload's server sync for `reloaded`.
 struct Installed {
     extensions: Vec<LoadedExtension>,
     notices: Vec<Notice>,
-    servers: Vec<String>,
+    kept_servers: Vec<String>,
+    restarted_servers: Vec<String>,
+    started_servers: Vec<String>,
+    stopped_servers: Vec<String>,
+    server_records: Vec<contract::tool::ServerRecord>,
+    server_failures: Vec<contract::events::ReloadFailure>,
 }
 
 impl Loop {
@@ -248,7 +253,12 @@ impl Loop {
         Installed {
             extensions: prepared.extensions,
             notices: prepared.notices,
-            servers: prepared.servers,
+            kept_servers: prepared.kept_servers,
+            restarted_servers: prepared.restarted_servers,
+            started_servers: prepared.started_servers,
+            stopped_servers: prepared.stopped_servers,
+            server_records: prepared.server_records,
+            server_failures: prepared.server_failures,
         }
     }
 
@@ -261,20 +271,33 @@ impl Loop {
         if tests::fail_reload_write() {
             return Err(crate::timing_tests::log_io_error());
         }
+        // The sync's records first, in sync order, then `reloaded`:
+        // program order on the loop thread is the edge for that line order.
+        for record in &installed.server_records {
+            let event = match record {
+                contract::tool::ServerRecord::Failed(failed) => {
+                    Event::McpServerFailed(failed.clone())
+                }
+                contract::tool::ServerRecord::Ready(ready) => Event::McpServerReady(ready.clone()),
+            };
+            self.write(&event, None, None)?;
+        }
+        let failed =
+            (!installed.server_failures.is_empty()).then(|| installed.server_failures.clone());
         self.write(
             &Event::Reloaded(Reloaded {
                 servers: ReloadedServers {
-                    kept: installed.servers,
-                    restarted: Vec::new(),
-                    started: Vec::new(),
-                    stopped: Vec::new(),
+                    kept: installed.kept_servers,
+                    restarted: installed.restarted_servers,
+                    started: installed.started_servers,
+                    stopped: installed.stopped_servers,
                 },
                 extensions: installed
                     .extensions
                     .iter()
                     .map(|extension| extension.name.clone())
                     .collect(),
-                failed: None,
+                failed,
             }),
             None,
             None,

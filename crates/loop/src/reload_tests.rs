@@ -568,3 +568,87 @@ fn take_reconnect_merges_the_registry_and_writes_the_records_before_accepting() 
     assert!(!w.looped.tools.contains_key("db__old"));
     assert!(kinds(&w.looped).contains(&"mcp_server_ready".to_owned()));
 }
+
+#[test]
+fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
+    use contract::events::{McpServerFailed, McpServerReady, ReloadFailure, ServerFailure};
+    let mut w = world();
+    w.looped = w.looped.reloader(Arc::new(|_| {
+        let mut next = prepared();
+        next.kept_servers = vec!["keep".into()];
+        next.restarted_servers = vec!["changed".into()];
+        next.started_servers = vec!["new".into()];
+        next.stopped_servers = vec!["gone".into()];
+        next.server_records = vec![
+            contract::tool::ServerRecord::Ready(McpServerReady {
+                server: "changed".into(),
+            }),
+            contract::tool::ServerRecord::Failed(McpServerFailed {
+                server: "flaky".into(),
+                reason: ServerFailure::StartFailed,
+                will_restart: false,
+                error: Failure {
+                    code: ErrorCode::McpServerUnavailable,
+                    message: "the start failed".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+            }),
+        ];
+        next.server_failures = vec![ReloadFailure {
+            server: "flaky".into(),
+            reason: ServerFailure::StartFailed,
+            error: Failure {
+                code: ErrorCode::McpServerUnavailable,
+                message: "the start failed".into(),
+                retry_after_ms: None,
+                provider: None,
+            },
+        }];
+        Ok(next)
+    }));
+    let (ack, rx) = ack();
+    w.looped.take_reload(ack).unwrap();
+    assert!(Deadline::after(WAIT).recv(&rx).unwrap().is_ok());
+    assert_eq!(
+        kinds(&w.looped),
+        [
+            "session_started",
+            "mcp_server_ready",
+            "mcp_server_failed",
+            "reloaded",
+            "extensions_loaded",
+            "preamble_built"
+        ]
+    );
+    let lines: Vec<_> = log::read(w.looped.log.dir())
+        .unwrap()
+        .into_iter()
+        .map(|line| {
+            contract::events::Event::from_envelope(&line)
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    let mut found = None;
+    for event in &lines {
+        if let contract::events::Event::Reloaded(reloaded) = event {
+            found = Some(reloaded);
+            break;
+        }
+    }
+    let reloaded = found.unwrap();
+    assert_eq!(
+        reloaded.servers,
+        contract::events::ReloadedServers {
+            kept: vec!["keep".into()],
+            restarted: vec!["changed".into()],
+            started: vec!["new".into()],
+            stopped: vec!["gone".into()],
+        }
+    );
+    let failed = reloaded.failed.as_ref().unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].server, "flaky");
+    assert_eq!(failed[0].reason, ServerFailure::StartFailed);
+}
