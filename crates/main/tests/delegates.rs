@@ -30,6 +30,7 @@ use std::time::Duration;
 use extension_harness::{send, until_session, until_session_close};
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
+use support::pty::{Grid, Run};
 use support::{Deadline, KillGroup, SessionGuard, function_call};
 
 /// Installs provider `name` with model `m` on `protocol` at `url`, with
@@ -4265,4 +4266,174 @@ fn a_fork_child_of_a_worktree_parent_holds_the_shared_lock() {
         freed.try_lock().is_ok(),
         "an exclusive take succeeds once the child has exited"
     );
+}
+
+/// The finished Delegates-card row: the `delegate_spawn` description the
+/// scripted parent sends, with the finished glyph.
+const FINISHED_ROW: &str = "✓ scan";
+/// The delegate child's final message: what the replayed transcript shows.
+const CHILD_TEXT: &str = "the scan is done";
+
+/// The first row containing `needle`, or a panic naming it.
+fn row_with(grid: &Grid, needle: &str) -> u16 {
+    u16::try_from(
+        grid.rows
+            .iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} in\n{}", grid.contents)),
+    )
+    .unwrap_or(u16::MAX)
+}
+
+/// The column where `needle` starts on `y`, matching the cells one by
+/// one, so a wide cell before it changes nothing.
+fn col_at(grid: &Grid, y: u16, needle: &str) -> u16 {
+    let want: Vec<char> = needle.chars().collect();
+    let (width, _) = grid.size();
+    for x in 0..width {
+        let mut ok = true;
+        for (dx, want) in want.iter().enumerate() {
+            let Some(xi) = x.checked_add(u16::try_from(dx).unwrap_or(u16::MAX)) else {
+                ok = false;
+                break;
+            };
+            if xi >= width || grid.cell(xi, y).symbol != want.to_string() {
+                ok = false;
+                break;
+            }
+        }
+        if ok && !want.is_empty() {
+            return x;
+        }
+    }
+    panic!("{needle:?} on row {y}")
+}
+
+/// Clicks the cell at `(x, y)`: a press then its release on the same cell.
+fn click(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
+/// The rows holding a reversed cell: navigate mode's focus signature.
+fn focused_rows(grid: &Grid) -> Vec<u16> {
+    let (cols, rows) = grid.size();
+    (0..rows)
+        .filter(|&y| (0..cols).any(|x| grid.cell(x, y).inverse))
+        .collect()
+}
+
+/// Whether `needle`'s row draws focused (reversed): the keyboard twin of
+/// clicking the row.
+fn row_focused(grid: &Grid, needle: &str) -> bool {
+    let Some(y) = grid
+        .rows
+        .iter()
+        .position(|row| row.contains(needle))
+        .and_then(|y| u16::try_from(y).ok())
+    else {
+        return false;
+    };
+    let x = col_at(grid, y, needle);
+    let len = u16::try_from(needle.chars().count()).unwrap_or(u16::MAX);
+    (0..len).all(|dx| grid.cell(x + dx, y).inverse)
+}
+
+/// Tabs through navigate mode until `needle`'s row draws focused
+/// (reversed), so Enter opens it: the keyboard twin of clicking the row.
+/// Shift+Tab focuses the newest conversation item, Tab steps into the
+/// panel's first stop, and Down walks the panel's stops top to bottom.
+fn focus_row(run: &mut Run, needle: &str) {
+    run.write(b"\t");
+    run.wait_screen("the panel takes focus", |grid| {
+        !focused_rows(grid).is_empty()
+    });
+    for _ in 0..60 {
+        let grid = run.screen();
+        if row_focused(&grid, needle) {
+            return;
+        }
+        let before = focused_rows(&grid);
+        // Down steps to the next stop, holding at the panel's end.
+        run.write(b"\x1b[B");
+        run.wait_screen("focus steps down", |grid| {
+            row_focused(grid, needle) || focused_rows(grid) != before
+        });
+    }
+    panic!("{needle:?} never took focus in\n{}", run.screen().contents);
+}
+
+/// Quits the terminal: two interrupts and Enter, then the exit.
+fn quit(run: Run) {
+    let mut run = run;
+    run.write(b"\x03\x03\r");
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+#[test]
+fn a_finished_delegate_opens_its_replayed_view_from_a_click_and_from_enter() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        if text.contains("Started delegate") {
+            return support::hello();
+        }
+        support::stream(&[spawn_call("fiber:pb/m")])
+    })
+    .unwrap();
+    let child = ProviderServer::start_responding(|_: &Request| text_reply(CHILD_TEXT)).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    // The hub exits a second after its last client leaves, so the run's
+    // wait sees it go; the session itself keeps its 30-minute default.
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "hub": {"idle_exit_ms": 1000}}),
+    );
+
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(support::TRUECOLOUR)
+        .collect();
+    let mut run = Run::spawn(&setup, 160, 48, &[], &env);
+    run.ready();
+    run.write(b"scan the tree\r");
+    // The delegate runs to completion: the card keeps its finished row.
+    let grid = run.wait_screen("the finished delegate row", |grid| {
+        grid.contents.contains(FINISHED_ROW)
+    });
+    let card = row_with(&grid, FINISHED_ROW);
+    // The click path: the finished Delegates-card row opens the replayed
+    // transcript, not the parent's conversation.
+    click(&mut run, col_at(&grid, card, FINISHED_ROW) + 2, card);
+    run.wait_screen("the breadcrumb", |grid| grid.contents.contains("› ◆ scan"));
+    run.wait_screen("the replayed transcript", |grid| {
+        grid.contents.contains(CHILD_TEXT)
+    });
+    // Esc returns to the conversation with the finished row still there.
+    run.write(b"\x1b[27u");
+    run.wait_screen("the conversation back", |grid| {
+        grid.contents.contains(FINISHED_ROW) && !grid.contents.contains(CHILD_TEXT)
+    });
+    // The keyboard path: Shift+Tab enters navigate mode, Tab steps to the
+    // finished row, Enter opens it through the same serial seam.
+    run.write(b"\x1b[Z");
+    focus_row(&mut run, FINISHED_ROW);
+    run.write(b"\r");
+    run.wait_screen("the replayed transcript again", |grid| {
+        grid.contents.contains(CHILD_TEXT)
+    });
+    // Esc returns to the conversation before quitting: the first Esc
+    // clears the navigate focus the Enter path leaves, the second
+    // closes the view.
+    run.write(b"\x1b[27u\x1b[27u");
+    run.wait_screen("the conversation back again", |grid| {
+        grid.contents.contains(FINISHED_ROW) && !grid.contents.contains(CHILD_TEXT)
+    });
+    quit(run);
 }

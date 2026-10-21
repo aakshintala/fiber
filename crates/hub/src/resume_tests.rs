@@ -2496,6 +2496,9 @@ fn an_exited_delegate_with_an_open_job_started_does_not_replay() {
     for jobs in [
         vec!["job_started"],
         vec!["job_started", "job_completed", "job_started"],
+        // A delivery naming the job never closes its run: the latest
+        // lifecycle line is still the start.
+        vec!["job_started", "job_line"],
     ] {
         parent_log(&temp, &jobs);
         assert!(!super::exited_delegate(&temp.dir, &sid()), "{jobs:?}");
@@ -2566,6 +2569,27 @@ fn a_full_subscribe_to_an_exited_delegate_replays_its_log() {
     let refused = client.next("the refusal");
     assert_eq!(refused["kind"], "command_rejected", "{refused}");
     assert_eq!(refused["payload"]["command_id"], "c_2");
+    assert_eq!(refused["payload"]["code"], "session_not_found");
+    assert_eq!(refused["payload"]["message"], DELEGATE_REFUSED);
+    assert!(starter.resumed().is_empty(), "no process starts");
+}
+
+#[test]
+fn a_summary_subscribe_to_an_exited_delegate_is_refused_without_a_replay() {
+    // A summary (non-`full`) subscribe never enters the replay branch:
+    // only a `full` subscribe replays the exited run's log, so the `&&`
+    // joining the command and the level in `route` keeps this a delegate
+    // refusal with no accepted fold.
+    let temp = Temp::new();
+    finished_delegate_log(&temp);
+    parent_log(&temp, &["job_started", "job_completed"]);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "summary");
+    let refused = client.next("the refusal");
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["command_id"], "c_1");
     assert_eq!(refused["payload"]["code"], "session_not_found");
     assert_eq!(refused["payload"]["message"], DELEGATE_REFUSED);
     assert!(starter.resumed().is_empty(), "no process starts");

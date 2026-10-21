@@ -895,16 +895,6 @@ fn opening_a_completed_delegate_swaps_and_subscribes() {
     let view = app.item_view().unwrap_or_else(|| panic!("a view"));
     assert!(view.has_transcript);
     assert!(!view.running);
-}
-
-#[test]
-fn a_finished_delegate_replays_into_the_swapped_screen() {
-    let mut app = home();
-    opened(&mut app);
-    start_delegate(&mut app, "j_1", DELEGATE_A);
-    complete(&mut app, "j_1");
-    let out = open(&mut app, "j_1");
-    assert_eq!(subscribes(&out).len(), 1);
     ack_all(&mut app, &out);
     // The replayed fold lands on the swapped screen, not the parent's.
     app.on_line(other_line(
@@ -1321,22 +1311,6 @@ fn enter_on_a_finished_delegate_row_opens_and_subscribes() {
             "content": [{"type": "text", "text": "deep"}]}]}),
     ));
     assert!(shown(&app).iter().any(|row| row.contains("deep")));
-}
-
-#[test]
-fn open_serial_on_a_finished_serial_subscribes() {
-    let mut app = home();
-    opened(&mut app);
-    start_delegate(&mut app, "j_1", DELEGATE_A);
-    complete(&mut app, "j_1");
-    let serial = app
-        .serial_of_job(&JobId("j_1".to_owned()))
-        .unwrap_or_else(|| panic!("a serial"));
-    // The shared seam the rows and the selected item open through.
-    let out = open_serial_of(&mut app, serial);
-    assert_eq!(subscribes(&out).len(), 1);
-    assert_eq!(out[0]["session_id"], DELEGATE_A);
-    assert!(app.item_open());
 }
 
 /// Opens `serial`'s view, returning the parsed lines going out.

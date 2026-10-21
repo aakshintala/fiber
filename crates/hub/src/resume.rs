@@ -120,9 +120,11 @@ fn delegate_job(dir: &Path) -> Option<(SessionId, JobId)> {
     Some((SessionId(session.to_owned()), JobId(job.to_owned())))
 }
 
-/// Whether the parent's log holds an open run for `job`: a `job_started`
-/// naming it with no later `job_completed`. A parent with no log, or one
-/// whose log cannot be read, holds no open run.
+/// Whether the parent's log holds an open run for `job`: the latest
+/// `job_started` or `job_completed` naming it is a start. A parent with
+/// no log, or one whose log cannot be read, holds no open run. Other
+/// lines naming the job (a `job_line` delivery, say) never close a run,
+/// so only the two lifecycle kinds count.
 fn parent_run_open(home: &Path, parent: &SessionId, job: &JobId) -> bool {
     let Some((_, dir)) = crate::recent::lookup_logged(home, parent) else {
         return false;
@@ -130,23 +132,24 @@ fn parent_run_open(home: &Path, parent: &SessionId, job: &JobId) -> bool {
     let Ok(segments) = log::history(&dir) else {
         return false;
     };
-    let mut open = false;
-    for segment in &segments {
+    for segment in segments.iter().rev() {
         let Ok(lines) = segment.lines(0) else {
             return false;
         };
-        for line in &lines {
+        if let Some(started) = lines.iter().rev().find_map(|line| {
             if line.payload.get("job_id").and_then(Value::as_str) != Some(job.0.as_str()) {
-                continue;
+                return None;
             }
-            if line.kind == "job_started" {
-                open = true;
-            } else if line.kind == "job_completed" {
-                open = false;
+            match line.kind.as_str() {
+                "job_started" => Some(true),
+                "job_completed" => Some(false),
+                _ => None,
             }
+        }) {
+            return started;
         }
     }
-    open
+    false
 }
 
 /// One pass of [`reach`]: an answer, or a wait for the exiting process,

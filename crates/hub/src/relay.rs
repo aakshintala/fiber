@@ -427,6 +427,28 @@ pub(crate) fn route(
     );
 }
 
+/// Refuses `id` for `session` when its exited log cannot be replayed:
+/// the freshly cut socket pair, its clone, or the relay thread failed to
+/// start. One `IoFailed` wording for all three, so a transient resource
+/// shortage reads the same wherever the replay fails.
+fn could_not_replay(
+    writer: &Arc<Mutex<UnixStream>>,
+    hub: &Arc<Hub>,
+    relays: &Arc<Mutex<Relays>>,
+    session: &str,
+    id: &CommandId,
+) {
+    crate::retire::refuse(
+        writer,
+        hub,
+        relays,
+        session,
+        id,
+        &ErrorCode::IoFailed,
+        &format!("The hub could not replay session `{session}`."),
+    );
+}
+
 /// Serves a `full` subscribe for a finished delegate from its log: the
 /// replay branch of [`route`] calls this when
 /// [`crate::resume::exited_delegate`] holds, before any opener, relay or
@@ -490,30 +512,14 @@ fn replay_exited_delegate(
     let (hub_end, preload_end) = match UnixStream::pair() {
         Ok(pair) => pair,
         Err(_) => {
-            crate::retire::refuse(
-                writer,
-                hub,
-                relays,
-                session,
-                id,
-                &ErrorCode::IoFailed,
-                &format!("The hub could not replay session `{session}`."),
-            );
+            could_not_replay(writer, hub, relays, session, id);
             return;
         }
     };
     let reader = match hub_end.try_clone() {
         Ok(reader) => reader,
         Err(_) => {
-            crate::retire::refuse(
-                writer,
-                hub,
-                relays,
-                session,
-                id,
-                &ErrorCode::IoFailed,
-                &format!("The hub could not replay session `{session}`."),
-            );
+            could_not_replay(writer, hub, relays, session, id);
             return;
         }
     };
@@ -540,15 +546,7 @@ fn replay_exited_delegate(
     });
     let Ok(thread) = relayed else {
         drop(held);
-        crate::retire::refuse(
-            writer,
-            hub,
-            relays,
-            session,
-            id,
-            &ErrorCode::IoFailed,
-            &format!("The hub could not replay session `{session}`."),
-        );
+        could_not_replay(writer, hub, relays, session, id);
         return;
     };
     held.entries.push(Relay {
