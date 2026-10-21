@@ -1999,9 +1999,10 @@ fn commit_installs_the_keep_lists_back_on_its_slot() {
     )
     .expect("the commit installs");
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
-    // The commit installs the new lists: installing again returns what
-    // the commit installed, and reinstalls the same lists.
-    let held = slot.install_relisted(crate::cache::Cached {
+    // The commit installs the new lists: the slot holds what the
+    // re-list staged, so installing the same lists again holds them
+    // still.
+    slot.install_relisted(crate::cache::Cached {
         tools: vec![
             serde_json::from_value(json!({"name": "echo"})).expect("listed"),
             serde_json::from_value(json!({"name": "plus"})).expect("listed"),
@@ -2009,7 +2010,11 @@ fn commit_installs_the_keep_lists_back_on_its_slot() {
         prompts: Vec::new(),
         resources: false,
     });
-    let held: Vec<String> = held.tools.iter().map(|tool| tool.name.clone()).collect();
+    let held: Vec<String> = slot
+        .listed_tools()
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect();
     assert_eq!(
         held,
         vec!["echo".to_owned(), "plus".to_owned()],
@@ -2054,6 +2059,116 @@ fn commit_writes_no_cache_for_an_unchanged_keep() {
         setup.cache_bytes(),
         cache_before,
         "equal lists leave the file untouched"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn install_relisted_refuses_a_slot_whose_server_died() {
+    // The install-time liveness revalidation: installing staged lists
+    // on a slot whose server died keeps what the slot holds instead of
+    // publishing lists its dead server never served, so the commit
+    // cannot mark a dead keep as kept.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    setup.kill(&started);
+    assert!(slot.is_running(), "the kill moves no slot");
+    slot.install_relisted(crate::cache::Cached {
+        tools: vec![
+            serde_json::from_value(json!({"name": "echo"})).expect("listed"),
+            serde_json::from_value(json!({"name": "plus"})).expect("listed"),
+        ],
+        prompts: Vec::new(),
+        resources: false,
+    });
+    let live: Vec<String> = {
+        let mut names: Vec<String> = slot.live_names().into_iter().collect();
+        names.sort();
+        names
+    };
+    assert_eq!(
+        live,
+        vec!["echo".to_owned()],
+        "a dead slot keeps what it holds"
+    );
+    let listed: Vec<String> = slot
+        .listed_tools()
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect();
+    assert_eq!(listed, vec!["echo".to_owned()]);
+    setup.stop(started.servers);
+}
+
+#[test]
+fn commit_restarts_a_keep_that_died_between_fallback_and_install() {
+    // A keep that dies after the fallback pass checked it but before
+    // the commit installs it restarts: the install revalidates liveness
+    // and routes the dead keep through the replace path, so the new
+    // executable answers under `restarted`, never `kept` (`docs/mcp.md`,
+    // Reload step 3). The hook kills the server between the two passes,
+    // so the window is deterministic.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    setup.running(&started);
+    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
+    assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
+    let images = FakeImages::ok();
+    let staged = stage_sync(
+        rows,
+        &started.servers,
+        &setup.workspace(),
+        &setup.artifacts(),
+        &every(&images),
+        &setup.cache(),
+        &setup.clock(),
+        "test",
+    )
+    .expect("a healthy keep stages");
+    let pid = setup.pid();
+    let slotted = started.servers.slot("fx").expect("the fx slot");
+    crate::sync::on_between_commit_phases(Box::new(move || {
+        fakes::kill_pid(pid, "KILL").expect("the server dies");
+        await_until("the killed server to be gone", move || {
+            if let State::Running { server, .. } = &*super::lock(&slotted.state) {
+                server.is_gone()
+            } else {
+                false
+            }
+        });
+    }));
+    let synced = commit_sync(
+        staged,
+        &started.servers,
+        &setup.cache(),
+        &setup.artifacts(),
+        &every(&images),
+        &setup.workspace(),
+        &setup.clock(),
+        "test",
+    )
+    .expect("the commit installs");
+    assert!(
+        crate::sync::take_between_commit_phases().is_none(),
+        "the commit ran its between-phases hook"
+    );
+    assert!(synced.servers.kept.is_empty(), "a dead keep is never kept");
+    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
+    assert_ne!(
+        setup.pid(),
+        pid,
+        "the replacement answers from its own server"
+    );
+    assert!(
+        matches!(
+            synced.records.as_slice(),
+            [ServerRecord::Failed(failed), ServerRecord::Ready(_)]
+            if failed.reason == ServerFailure::Died
+        ),
+        "the detected death rides before the ready"
     );
     setup.stop(started.servers);
 }

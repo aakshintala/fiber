@@ -380,15 +380,8 @@ impl State {
             }
         }
         // The carried sources answer the new rows through the same path
-        // as a startup row: `loop` routes the new tags to this fetch.
-        let prompt_fetch: Option<r#loop::FetchPrompt> = if new_prompts.is_empty() {
-            None
-        } else {
-            let sources = synced.prompt_sources.clone();
-            Some(Arc::new(move |server, prompt, text, cancel| {
-                sources.get(server, prompt, text, cancel)
-            }))
-        };
+        // as a startup row: `loop` routes the new tags to the fetch the
+        // sync bundles with the rows below.
         let mut prompt_rows = baseline;
         prompt_rows.extend(new_prompts.clone());
         let listed = r#loop::commands(
@@ -533,8 +526,20 @@ impl State {
                 servers: synced.servers,
                 server_records: synced.records,
                 server_failures: synced.failed,
-                new_prompts,
-                prompt_fetch,
+                // Rows and fetch travel as one value, so new rows
+                // without their fetch cannot be represented: `None`
+                // when the sync carried no new rows.
+                new_prompts: if new_prompts.is_empty() {
+                    None
+                } else {
+                    let sources = synced.prompt_sources.clone();
+                    Some((
+                        new_prompts,
+                        Arc::new(move |server, prompt, text, cancel| {
+                            sources.get(server, prompt, text, cancel)
+                        }),
+                    ))
+                },
             },
             hooks: Some(hooks),
             reviewer,

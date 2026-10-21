@@ -1625,16 +1625,17 @@ fn reload_appends_a_started_servers_prompts_while_keeping_every_startup_row() {
         fixture.state.prompt_rows.lock().unwrap().is_empty(),
         "prepare keeps every startup row"
     );
-    assert_eq!(prepared.server_sync.new_prompts.len(), 1);
-    assert_eq!(prepared.server_sync.new_prompts[0].name, "greet");
-    assert_eq!(prepared.server_sync.new_prompts[0].tag, "new");
+    let carried = prepared
+        .server_sync
+        .new_prompts
+        .as_ref()
+        .expect("the sync carries the new rows with their fetch");
+    assert_eq!(carried.0.len(), 1);
+    assert_eq!(carried.0[0].name, "greet");
+    assert_eq!(carried.0[0].tag, "new");
     // The appended row fetches through the carried sources, as a
     // startup row fetches through the startup ones.
-    let fetch = prepared
-        .server_sync
-        .prompt_fetch
-        .as_ref()
-        .expect("the sync carries the new sources");
+    let fetch = &carried.1;
     struct NoCancel;
     impl contract::tool::Cancel for NoCancel {
         fn is_cancelled(&self) -> bool {
@@ -1692,7 +1693,7 @@ fn a_second_reload_retains_the_first_reloads_prompt_rows_for_kept_servers() {
     let second = fixture.prepare();
     assert_eq!(second.server_sync.servers.kept, ["fx", "new"]);
     assert!(
-        second.server_sync.new_prompts.is_empty(),
+        second.server_sync.new_prompts.is_none(),
         "nothing new on the second reload"
     );
     (second.installed)();

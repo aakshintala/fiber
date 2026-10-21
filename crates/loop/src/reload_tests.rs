@@ -684,8 +684,10 @@ fn an_appended_prompt_row_fetches_through_the_carried_sources() {
     });
     w.looped = w.looped.reloader(Arc::new(move |_| {
         let mut p = prepared();
-        p.server_sync.new_prompts = vec![row("new", "greet")];
-        p.server_sync.prompt_fetch = Some(Arc::clone(&extra));
+        // Rows and fetch travel as one value: new rows without their
+        // fetch cannot be represented, so appended rows always answer
+        // through the carried sources.
+        p.server_sync.new_prompts = Some((vec![row("new", "greet")], Arc::clone(&extra)));
         Ok(p)
     }));
     let (ack, rx) = ack();
@@ -709,5 +711,50 @@ fn an_appended_prompt_row_fetches_through_the_carried_sources() {
     assert_eq!(
         kept.error.map(|error| error.code),
         Some(ErrorCode::InvalidArguments)
+    );
+}
+
+#[test]
+fn a_sync_without_new_prompts_keeps_every_row_and_its_fetch() {
+    // `None` carries no rows and no fetch: the old type allowed rows
+    // without their fetch, but the bundled `Option` makes that
+    // mismatch unrepresentable, so there is nothing to install here.
+    let old: crate::FetchPrompt = Arc::new(|_, _, _, _| contract::tool::Output {
+        error: Some(Failure {
+            code: ErrorCode::InvalidArguments,
+            message: "the startup fetch".into(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        ..contract::tool::Output::default()
+    });
+    let mut w = world();
+    w.looped = w.looped.server_prompts(crate::ServerPrompts {
+        rows: vec![CommandInfo {
+            name: "before".into(),
+            description: "A prompt.".into(),
+            argument_hint: None,
+            tag: "old".into(),
+            extension: false,
+        }],
+        fetch: Arc::clone(&old),
+    });
+    w.looped = w.looped.reloader(Arc::new(|_| {
+        let mut p = prepared();
+        p.server_sync.new_prompts = None;
+        Ok(p)
+    }));
+    let (ack, rx) = ack();
+    w.looped.take_reload(ack).unwrap();
+    assert!(Deadline::after(WAIT).recv(&rx).unwrap().unwrap().is_none());
+    let prompts = w
+        .looped
+        .server_prompts
+        .as_ref()
+        .expect("prompts stay installed");
+    assert_eq!(prompts.rows.len(), 1, "no carried rows join");
+    assert!(
+        Arc::ptr_eq(&prompts.fetch, &old),
+        "no carried fetch replaces the startup one"
     );
 }

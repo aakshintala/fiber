@@ -99,15 +99,12 @@ pub struct ServerSync {
     pub server_records: Vec<contract::tool::ServerRecord>,
     /// Each non-required server failure, for `reloaded`'s `failed` entry.
     pub server_failures: Vec<ReloadFailure>,
-    /// The shadow-started servers' runnable prompt rows, for servers
-    /// with no startup rows; `install` appends them, keeping every
-    /// startup row.
-    pub new_prompts: Vec<CommandInfo>,
-    /// Answers the carried new-server prompts through the same path as
-    /// a startup row: `install` routes the new tags here, keeping every
-    /// startup row and its fetch. `None` when the sync carried no new
-    /// rows.
-    pub prompt_fetch: Option<crate::FetchPrompt>,
+    /// The shadow-started servers' runnable prompt rows with the fetch
+    /// answering them, for servers with no startup rows; `install`
+    /// appends them, keeping every startup row. Rows and fetch travel
+    /// as one value, so new rows without their fetch cannot be
+    /// represented: `None` when the sync carried no new rows.
+    pub new_prompts: Option<(Vec<CommandInfo>, crate::FetchPrompt)>,
 }
 
 /// A complete reload ready for an infallible field swap and installation.
@@ -265,22 +262,20 @@ impl Loop {
         // carried fetch, so an appended row answers through the same
         // path as a startup row, while every startup tag keeps its own.
         let mut sync = prepared.server_sync;
-        if !sync.new_prompts.is_empty()
+        if let Some((mut rows, extra)) = sync.new_prompts.take()
+            && !rows.is_empty()
             && let Some(prompts) = self.server_prompts.as_mut()
         {
-            let tags: HashSet<String> =
-                sync.new_prompts.iter().map(|row| row.tag.clone()).collect();
-            prompts.rows.append(&mut sync.new_prompts);
-            if let Some(extra) = sync.prompt_fetch.take() {
-                let old = Arc::clone(&prompts.fetch);
-                prompts.fetch = Arc::new(move |server, prompt, text, cancel| {
-                    if tags.contains(server) {
-                        extra(server, prompt, text, cancel)
-                    } else {
-                        old(server, prompt, text, cancel)
-                    }
-                });
-            }
+            let tags: HashSet<String> = rows.iter().map(|row| row.tag.clone()).collect();
+            prompts.rows.append(&mut rows);
+            let old = Arc::clone(&prompts.fetch);
+            prompts.fetch = Arc::new(move |server, prompt, text, cancel| {
+                if tags.contains(server) {
+                    extra(server, prompt, text, cancel)
+                } else {
+                    old(server, prompt, text, cancel)
+                }
+            });
         }
         (prepared.installed)();
         Installed {
