@@ -284,6 +284,7 @@ fn a_configured_server_declares_and_runs_its_tools() {
         tool_names(&requests[0].body),
         [
             "ask_user",
+            "delegate_fork",
             "delegate_message",
             "delegate_models",
             "delegate_spawn",
@@ -538,6 +539,7 @@ fn disabled_hides_a_tool() {
         tool_names(&requests[0].body),
         [
             "ask_user",
+            "delegate_fork",
             "delegate_message",
             "delegate_models",
             "delegate_spawn",

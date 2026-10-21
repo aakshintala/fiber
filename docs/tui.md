@@ -79,10 +79,13 @@ line says so: "Connecting 2 MCP servers…".
 
 On the first interactive run, with no import receipt yet
 (`docs/configuration.md`, "Importing"), home offers a one-time import of
-another harness's configuration: Claude Code's or Codex's. (Built in P2.)
+another harness's configuration: Claude Code's or Codex's.
 The offer runs the same shared import `fiber import` runs, and imported
 items apply on the next `/reload` with the reload's usual cache cost
-(`docs/mcp.md`, "Reload"). The offer fires once: answering it, or running
+(`docs/mcp.md`, "Reload"). A `1` or `2` pressed before the hub connects
+still imports once it does, so an early press is never lost. Over a
+remote hub connection the receipts are the hub machine's, where that
+import runs (`docs/configuration.md`, "Importing"). The offer fires once: answering it, or running
 `fiber import` first, writes the receipt, and the offer never shows again.
 
 **The workspace chip** names the workspace in use: the one last picked, else
@@ -1118,6 +1121,10 @@ right-aligned. Clicking a notice shows the whole text in an overlay.
 - The "N approvals waiting" row (see "An approval") sits above the notices, and on a screen too short for both it drops first.
 - A notice that arrives during a drag waits for the release.
 - In the screen-reader mode notices are lines in reading order.
+
+An accepted `/import` answer is one notice per `fiber import` line,
+naming what the import copied and left behind, plus a `/reload` reminder
+(`docs/configuration.md`, "Importing").
 
 When the hub sends `stream_closed` for the open session (it cannot read
 the session's log to serve this terminal), the conversation keeps every line

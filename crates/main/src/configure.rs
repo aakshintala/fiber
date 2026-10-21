@@ -201,6 +201,10 @@ fn row(config: &Config, info: config::SettingInfo) -> SettingRow {
 }
 
 impl tui::Configure for Seam {
+    fn import_pending(&self) -> bool {
+        config::import_pending(&self.home)
+    }
+
     fn install_provider(
         &self,
         workspace: &Path,

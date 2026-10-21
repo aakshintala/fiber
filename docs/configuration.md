@@ -689,7 +689,9 @@ One receipt file per source sits at the top of Fiber home,
 time and counts (`docs/state.md`, "What each part holds"). A completed
 receipt short-circuits the command for that source: with a completed
 receipt the command succeeds without reading the source at all. The receipt
-is written last, and only on full success.
+is written last, and only on full success. Over a remote hub connection
+the import runs on that machine: `/import` in the terminal imports the
+hub machine's `~/.claude` or `~/.codex`, never the terminal's own home.
 
 A provider with a `models()` function returns a list in exactly the shape of
 `models`. Fiber caches it at `cache/models/<name>.json`.

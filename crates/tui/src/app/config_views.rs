@@ -157,7 +157,7 @@ impl App {
     }
 
     /// The seam the views and the model picker write through, if any.
-    pub(in crate::app) fn configure_seam(&self) -> Option<Arc<dyn Configure>> {
+    pub(crate) fn configure_seam(&self) -> Option<Arc<dyn Configure>> {
         self.config_views.seam.clone()
     }
 
