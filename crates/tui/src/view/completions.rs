@@ -150,11 +150,6 @@ fn name_spans(name: &str, query: &str, wide: usize) -> Vec<Span<'static>> {
     spans
 }
 
-/// One `/` row: the gutter, the name in its column, the alias dim
-/// after it (` /exit` on the quit row, with the query's match bold),
-/// the description dim and cut so the tag always fits, the hint in
-/// `attention`, and the tag dim at the right end. The focused row
-/// sits on the bar.
 /// The spans for a row's alias (` /exit`), dim with the query's first
 /// case-folded occurrence bold: the column width stays the primary
 /// names' own, so the alias shifts only its row's description.
@@ -176,6 +171,11 @@ fn alias_spans(alias: Option<&str>, query: &str) -> Vec<Span<'static>> {
     ]
 }
 
+/// One `/` row: the gutter, the name in its column, the alias dim
+/// after it (` /exit` on the quit row, with the query's match bold),
+/// the description dim and cut so the hint and the tag always fit, the
+/// hint in `attention`, and the tag dim at the right end. The focused
+/// row sits on the bar.
 fn slash_row(row: &slash::Row, query: &str, name_w: usize, room: usize, focused: bool) -> Row {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let dim = Style::new().add_modifier(Modifier::DIM);
@@ -190,7 +190,8 @@ fn slash_row(row: &slash::Row, query: &str, name_w: usize, room: usize, focused:
         .hint
         .as_deref()
         .map_or_else(String::new, |hint| format!(" {hint}"));
-    let fixed = 2 + name_w + 1 + cells(&hint) + 1 + cells(&row.tag);
+    let alias = row.alias.as_deref().map_or(0, |alias| cells(alias) + 2);
+    let fixed = 2 + name_w + alias + 1 + cells(&hint) + 1 + cells(&row.tag);
     spans.push(Span::styled(
         dot_cut(&row.description, room.saturating_sub(fixed)),
         dim,

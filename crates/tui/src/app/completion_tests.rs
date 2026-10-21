@@ -33,6 +33,7 @@ fn typing_filters_prefix_matches_first() {
         shown(&app),
         [
             "/resume  Goes home, focused on the first exited row.  command",
+            "/name /rename <text>  Names the session.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
             "/credential [<label>]  Switches the credential label, or opens the credential picker.  command",
             "/areview  Runs areview.  skill",
@@ -520,7 +521,7 @@ fn slash_completions_carry_their_window() {
     type_text(&mut app, "/re");
     let completions = app.completions().expect("the panel shows");
     assert_eq!(completions.query, "re");
-    assert_eq!(completions.total, 4);
+    assert_eq!(completions.total, 5);
     assert_eq!(completions.start, 0);
     assert_eq!(completions.selected, Some(0));
     let names: Vec<&str> = match &completions.rows {
@@ -529,11 +530,12 @@ fn slash_completions_carry_their_window() {
             panic!("a slash window, not {:?}", completions.rows)
         }
     };
-    assert_eq!(names, ["resume", "reload", "credential", "areview"]);
+    assert_eq!(names, ["resume", "name", "reload", "credential", "areview"]);
     assert_eq!(
         completions.lines(),
         [
             "/resume  Goes home, focused on the first exited row.  command",
+            "/name /rename <text>  Names the session.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
             "/credential [<label>]  Switches the credential label, or opens the credential picker.  command",
             "/areview  Runs areview.  skill",
