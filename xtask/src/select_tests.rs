@@ -1655,6 +1655,15 @@ pub(super) fn members_with_tools() -> Members {
             library: true,
         },
     );
+    members.insert(
+        "picture".to_owned(),
+        Member {
+            dir: "crates/picture".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+        },
+    );
     members
 }
 
