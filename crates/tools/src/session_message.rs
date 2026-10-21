@@ -50,7 +50,7 @@ impl Tool for SessionMessage {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "session_message".to_owned(),
-            description: "Sends a plain-text message to one running Fiber session by its full id from session_list. It arrives there as steering during a turn, or starts a turn. Answers \"delivered\" once the target takes it, after its before_message hook ran; fails unreachable when no running session has the id, closing when the target is closing, message_refused when the target's hook refused it, and hook_failed when the target's hook failed.".into(),
+            description: "Sends a plain-text message to one running Fiber session by its full id from session_list. It arrives there as steering during a turn, or starts a turn. Answers \"delivered\" once the target takes it; fails unreachable, closing, message_refused, or hook_failed.".into(),
             input_schema: json!({"type":"object","properties":{"id":{"type":"string","description":"The target session's full id, as session_list gives it."},"text":{"type":"string","description":"The message, plain text."}},"required":["id","text"],"additionalProperties":false}),
             deferred: false,
             hosted: None,
