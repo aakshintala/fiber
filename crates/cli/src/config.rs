@@ -217,11 +217,8 @@ fn check_model(
     .map_err(CliError::from)?;
     notices.extend(config.notices().iter().cloned());
     let mut providers = providers;
-    let answered =
-        crate::hub_env::hub_env(home, &crate::hub_env::declared_names(&providers), clock);
-    let _notices = providers.fill_placeholders(&config, &|name| {
-        crate::hub_env::lookup(&answered, &|name| std::env::var(name).ok(), name)
-    })?;
+    let lookup = crate::hub_env::placeholder_lookup(home, &providers, clock);
+    let _notices = providers.fill_placeholders(&config, &lookup)?;
     match providers.resolve(typed) {
         Ok(_) => Ok(notices),
         Err(e @ extensions::Error::Unconfigured { .. }) => {

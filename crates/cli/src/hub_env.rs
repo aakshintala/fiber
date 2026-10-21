@@ -79,6 +79,21 @@ pub fn declared_names(providers: &extensions::Providers) -> Vec<String> {
     names
 }
 
+/// One placeholder lookup for `fill_placeholders` and `add_session`: the
+/// hub's captured environment for the providers' declared names, falling
+/// back to the process environment when no hub answers
+/// (`docs/invocation.md`, "A session's environment"). The lookup owns
+/// the hub answer, so callers pass it by reference wherever a
+/// `&dyn Fn(&str) -> Option<String>` fits.
+pub fn placeholder_lookup(
+    home: &Path,
+    providers: &extensions::Providers,
+    clock: &dyn Clock,
+) -> impl Fn(&str) -> Option<String> + use<> {
+    let answered = hub_env(home, &declared_names(providers), clock);
+    move |name| lookup(&answered, &|name| std::env::var(name).ok(), name)
+}
+
 /// One placeholder value for `fill_placeholders`: the hub's answer when
 /// one arrived, else the process environment. A name the hub answered
 /// without stays a gap even when the process environment holds it, so a

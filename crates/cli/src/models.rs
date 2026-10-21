@@ -217,13 +217,7 @@ fn run(
     // Each placeholder value from the hub's captured environment, so the
     // list agrees with the session the hub would start; no hub answers
     // and the process environment serves, as before.
-    let answered = crate::hub_env::hub_env(
-        home,
-        &crate::hub_env::declared_names(&providers),
-        clock.as_ref(),
-    );
-    let lookup =
-        |name: &str| crate::hub_env::lookup(&answered, &|name| std::env::var(name).ok(), name);
+    let lookup = crate::hub_env::placeholder_lookup(home, &providers, clock.as_ref());
     notices.extend(providers.add_session(&extensions, &config, run, &lookup));
     notices.extend(providers.fill_placeholders(&config, &lookup)?);
     crate::config::print_notices(err, &notices);
@@ -353,9 +347,7 @@ fn refresh_named(
         .filter(|(_, provider)| names.iter().any(|name| name == provider.name()))
         .map(|(_, provider)| Arc::clone(provider))
         .collect();
-    let answered = crate::hub_env::hub_env(home, &crate::hub_env::declared_names(providers), clock);
-    let lookup =
-        |name: &str| crate::hub_env::lookup(&answered, &|name| std::env::var(name).ok(), name);
+    let lookup = crate::hub_env::placeholder_lookup(home, providers, clock);
     for (_, handle) in extensions::refresh_lists(
         &wanted,
         providers,

@@ -82,10 +82,7 @@ pub fn model_lists(
     // Each placeholder value from the hub's captured environment, so the
     // list agrees with the session the hub would start; no hub answers
     // and the process environment serves, as before.
-    let answered =
-        crate::hub_env::hub_env(home, &crate::hub_env::declared_names(&providers), clock);
-    let lookup =
-        |name: &str| crate::hub_env::lookup(&answered, &|name| std::env::var(name).ok(), name);
+    let lookup = crate::hub_env::placeholder_lookup(home, &providers, clock);
     match read {
         ModelLists::Cached => {
             cached_lists(home, &mut providers, &mut notices)?;
