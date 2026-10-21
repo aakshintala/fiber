@@ -28,6 +28,9 @@ pub(crate) struct ExecRequest {
     /// Variables added to the inherited environment, overriding a
     /// same-named variable; empty keeps today's behaviour.
     pub env: BTreeMap<String, String>,
+    /// Bytes piped to the child's standard input, then EOF (`None` keeps
+    /// today's null stdin; `Some` with no bytes streams empty then EOF).
+    pub input: Option<Vec<u8>>,
     /// Each stream's bound in bytes: the extension's memory cap.
     pub cap: usize,
     /// Whether the program runs in its own process group. `host.exec`
@@ -233,7 +236,13 @@ pub(crate) fn run(
     cmd.args(&req.args)
         .current_dir(&req.cwd)
         .envs(&req.env)
-        .stdin(Stdio::null())
+        // Piped stdin carries `input`, then EOF; null stdin is today's
+        // behaviour when no input was given.
+        .stdin(if req.input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if req.own_group {
@@ -322,6 +331,23 @@ pub(crate) fn run(
             source,
         ));
     }
+    // The stdin writer starts after the readers and before the waiter
+    // handoff below moves the child: only the waiter arms and the two
+    // supervising tails below own its teardown.
+    let stdin_writer = match start_stdin_writer(req, &mut child) {
+        Ok(writer) => writer,
+        Err(source) => {
+            return Err(abort_startup(
+                req,
+                listing.take(),
+                child,
+                &shared,
+                clock,
+                [true, true],
+                source,
+            ));
+        }
+    };
     if req.own_group {
         // The waiter takes the child through a handoff, so a spawn failure
         // keeps it here for the stop and the reap instead of dropping it in
@@ -336,6 +362,7 @@ pub(crate) fn run(
                 }
             })
         {
+            finish_stdin_writer(stdin_writer);
             return Err(abort_startup(
                 req,
                 listing.take(),
@@ -347,6 +374,7 @@ pub(crate) fn run(
             ));
         }
         if let Err(send) = wait_tx.send(child) {
+            finish_stdin_writer(stdin_writer);
             return Err(abort_startup(
                 req,
                 listing.take(),
@@ -357,8 +385,9 @@ pub(crate) fn run(
                 std::io::Error::other("host.exec waiter gone"),
             ));
         }
-
-        return supervise(
+        // The stdin writer started before the handoff above moved the
+        // child, so only the two supervising tails below own its teardown.
+        let outcome = supervise(
             req,
             &shared,
             clock,
@@ -368,11 +397,15 @@ pub(crate) fn run(
             StopTarget::Group(pgid),
             listing.take(),
         );
+        finish_stdin_writer(stdin_writer);
+        return outcome;
     }
     // Without its own group no waiter thread starts: the supervising thread
     // below reaps the child itself, so a reaped pid, which the system may
     // reuse, is never signalled.
     let mut child = child;
+    // The child stays here in pid mode, but the writer started above, so
+    // this tail owns its teardown as the group tail does.
     let outcome = supervise(
         req,
         &shared,
@@ -386,6 +419,7 @@ pub(crate) fn run(
     // The child is reaped, or dead or dying after the stop: `wait` returns
     // at once then, instead of leaving a zombie.
     let _reaped = child.wait();
+    finish_stdin_writer(stdin_writer);
     outcome
 }
 
@@ -782,6 +816,109 @@ fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
         lock(&shared.inner),
         |guard| guard.seq != seen,
     );
+}
+
+/// The stdin writer's end of the run: dropping `stop` tells the writer
+/// the run ended, and `done` fires when the writer stopped.
+struct StdinWriter {
+    stop: mpsc::Sender<()>,
+    done: mpsc::Receiver<()>,
+}
+
+/// Starts the thread streaming `req`'s input to the child's stdin, then
+/// closing it (EOF). `None` when no input was given: stdin stays null.
+/// The writer owns the child's stdin and touches no shared state. A
+/// thread that cannot start is a post-spawn failure like a reader that
+/// cannot start: the group stops and the run is still logged.
+fn start_stdin_writer(
+    req: &ExecRequest,
+    child: &mut Child,
+) -> Result<Option<StdinWriter>, std::io::Error> {
+    let Some(input) = req.input.clone() else {
+        return Ok(None);
+    };
+    let Some(stdin) = child.stdin.take() else {
+        return Err(std::io::Error::other("host.exec pipes missing"));
+    };
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    match std::thread::Builder::new()
+        .name("exec stdin".into())
+        .spawn(move || {
+            write_input(stdin, &input, &stop_rx);
+            let _sent = done_tx.send(());
+        }) {
+        Ok(_) => Ok(Some(StdinWriter {
+            stop: stop_tx,
+            done: done_rx,
+        })),
+        Err(source) => {
+            // The closure never ran: dropping it closes stdin (EOF), and
+            // no writer exists, so the run's teardown waits on nothing.
+            Err(source)
+        }
+    }
+}
+
+/// Ends the stdin writer: the run is over, so the writer closes stdin
+/// and stops whether or not an escaped descendant still holds the pipe.
+/// The join is bounded by [`support::group::DRAIN`] on the process clock:
+/// the group was signalled before the drain, so a writer parked on a full
+/// pipe wakes when the holders die and exits on its next poll; an
+/// untimely writer is left to its stop, never waited past the bound.
+fn finish_stdin_writer(writer: Option<StdinWriter>) {
+    if let Some(writer) = writer {
+        drop(writer.stop);
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "a bounded teardown join within the existing DRAIN bound; the writer exits on its stop, so this never waits past it"
+        )]
+        let _answered = writer.done.recv_timeout(support::group::DRAIN);
+    }
+}
+
+/// Streams `input` to `stdin`, then closes it (EOF). The pipe is
+/// non-blocking, so a full pipe never parks the writer: the loop polls
+/// writable and stops when the input is written, the pipe breaks, or the
+/// run ends (`stop` drops). Bytes already written are kept; a broken pipe
+/// just ends the write, since the child is gone.
+fn write_input(stdin: std::process::ChildStdin, input: &[u8], stop: &mpsc::Receiver<()>) {
+    use std::os::fd::AsFd as _;
+    let fd = stdin.as_fd();
+    if rustix::fs::fcntl_setfl(fd, rustix::fs::OFlags::NONBLOCK).is_err() {
+        return;
+    }
+    let mut written = 0;
+    while written < input.len() {
+        if matches!(
+            stop.try_recv(),
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected)
+        ) {
+            return;
+        }
+        let slice = support::group::GROUP_POLL;
+        let timeout = rustix::event::Timespec::try_from(slice).unwrap_or_default();
+        let mut fds = [rustix::event::PollFd::new(
+            &fd,
+            rustix::event::PollFlags::OUT,
+        )];
+        match rustix::event::poll(&mut fds, Some(&timeout)) {
+            Ok(0) => {}
+            Ok(_) => {
+                let Some(rest) = input.get(written..) else {
+                    return;
+                };
+                match rustix::io::write(fd, rest) {
+                    Ok(0) => return,
+                    Ok(n) => written = written.saturating_add(n),
+                    Err(rustix::io::Errno::AGAIN) => {}
+                    Err(_) => return,
+                }
+            }
+            Err(rustix::io::Errno::INTR) => {}
+            Err(_) => return,
+        }
+    }
 }
 
 fn read_into(

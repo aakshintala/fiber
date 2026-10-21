@@ -106,3 +106,64 @@ fn finish_model_removes_the_registration() {
     hub.lock().end_model(7);
     assert!(!cancel.is_cancelled());
 }
+
+/// Scripted `host.exec` entries match `input` when the case names it.
+/// Matching is a subset: a case without `input` matches any run, a case
+/// with `input` matches only that stdin, and a mismatch consumes nothing.
+#[test]
+fn scripted_exec_matches_input_when_given() {
+    use crate::host::exec::ExecRequest;
+    use crate::host::script::{ExecEnd, ExecEntry, ExecReply, HostScript};
+    use serde_json::{Value, json};
+
+    fn run(input: Option<&[u8]>) -> Value {
+        ExecRequest {
+            program: "sh".to_owned(),
+            args: vec!["-c".to_owned(), "cat".to_owned()],
+            cwd: std::path::PathBuf::from("/workspace"),
+            env: std::collections::BTreeMap::new(),
+            input: input.map(|bytes| bytes.to_vec()),
+            cap: 1024,
+            own_group: true,
+            #[cfg(test)]
+            stdout_read: None,
+        }
+        .case_value()
+    }
+
+    fn entry(request: Value) -> ExecEntry {
+        ExecEntry {
+            request,
+            reply: Ok(ExecReply::Completed {
+                end: ExecEnd::Code(0),
+                stdout: String::new(),
+                stderr: String::new(),
+            }),
+        }
+    }
+
+    // A case without `input` matches any run, as today.
+    let script = HostScript::new(
+        vec![],
+        vec![entry(json!({"program": "sh", "cwd": "/workspace"}))],
+        vec![],
+    );
+    assert!(script.exec(run(Some(b"abc"))).1.is_ok());
+    assert_eq!(script.unmet().len(), 0, "the entry was consumed");
+
+    // A case with `input` matches only that stdin.
+    let script = HostScript::new(
+        vec![],
+        vec![entry(json!({
+            "program": "sh",
+            "cwd": "/workspace",
+            "input": "abc",
+        }))],
+        vec![],
+    );
+    let miss = script.exec(run(Some(b"xyz")));
+    assert!(miss.1.is_err(), "other stdin is a miss");
+    assert!(script.exec(run(None)).1.is_err(), "null stdin is a miss");
+    assert!(script.exec(run(Some(b"abc"))).1.is_ok());
+    assert_eq!(script.unmet().len(), 2, "only the two misses remain");
+}

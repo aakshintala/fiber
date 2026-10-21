@@ -486,6 +486,15 @@ impl ExecRequest {
                         .collect(),
                 ),
             ),
+            (
+                // A case that names no `input` matches as today: the
+                // subset match ignores this key, so null stdin needs no
+                // new expectation in old cases.
+                "input".to_owned(),
+                self.input.as_ref().map_or(Value::Null, |input| {
+                    Value::String(String::from_utf8_lossy(input).into_owned())
+                }),
+            ),
         ]))
     }
 }
