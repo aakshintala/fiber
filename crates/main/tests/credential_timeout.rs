@@ -1,6 +1,6 @@
 //! Binary-level tests of a `command` credential source's `timeout`
 //! (`docs/testing.md`, "Levels"): a command still running at its timeout
-//! fails the read, and a signal while one runs kills it and writes nothing.
+//! fails the read, and a signal while one runs kills it and writes nothing to stdout or stderr.
 
 #![allow(
     clippy::unwrap_used,

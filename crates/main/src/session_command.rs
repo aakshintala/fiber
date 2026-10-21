@@ -611,7 +611,7 @@ pub(crate) fn run_new(
     session.mcp_servers(providers.refresh);
     session.mcp_login(providers.login);
     let cancel = Arc::new(r#loop::TurnCancel::default());
-    // A signal while armed: nothing was written, so nothing more is.
+    // A signal while armed: nothing was written to the session log, so nothing more is.
     let reads = switching.reads();
     if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
         servers.stop();
@@ -797,7 +797,7 @@ pub(crate) fn run_new_with(
 
 /// Prints a startup failure, asking about a recorded signal first: a
 /// signal that arrived before `fiber_started` exits with its code and
-/// writes nothing (`docs/invocation.md`, "Shutdown").
+/// writes nothing to the session log (`docs/invocation.md`, "Shutdown").
 pub(crate) fn report(signals: &doors::Signals, failure: Failure) -> i32 {
     signals.recorded().unwrap_or_else(|| ask_failed(failure))
 }
