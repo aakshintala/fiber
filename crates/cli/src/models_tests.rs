@@ -1426,83 +1426,93 @@ fn repo_lua(name: &str, models_body: &str) -> String {
 
 #[test]
 fn repository_provider_models_list_inside_the_project_but_not_outside() {
-    fakes::within("repository models list", Duration::from_secs(30), || {
-        let setup = Setup::new();
-        let manifest = repo_manifest(
-            "fiber.test/acme",
-            &json!({"acme": ["http://127.0.0.1:1/v1"]}),
-        );
-        let data = repo_data("acme", "http://127.0.0.1:1/v1", &["repo-model"]);
-        declare_repo(
-            &setup.workspace(),
-            &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
-        );
-        approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
-        let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
-        assert!(result.is_ok(), "{result:?} {err}");
-        assert!(out.contains("acme/repo-model"), "{out:?}");
-        // Outside the project the approved provider is invisible: no
-        // personal install serves it, so the run says so.
-        let elsewhere = setup.root.path().join("elsewhere");
-        fs::create_dir(&elsewhere).unwrap();
-        let (result, out, err) = setup.run_in(
-            &elsewhere,
-            None,
-            false,
-            &no_spawn,
-            fakes::clock::FakeClock::new(),
-        );
-        assert!(result.is_ok(), "{result:?} {err}");
-        assert!(!out.contains("acme/repo-model"), "{out:?}");
-        assert!(err.contains("No provider is installed"), "{err:?}");
-    });
+    fakes::within(
+        "repository models list",
+        Deadline::after(Duration::from_secs(30)),
+        || {
+            let setup = Setup::new();
+            let manifest = repo_manifest(
+                "fiber.test/acme",
+                &json!({"acme": ["http://127.0.0.1:1/v1"]}),
+            );
+            let data = repo_data("acme", "http://127.0.0.1:1/v1", &["repo-model"]);
+            declare_repo(
+                &setup.workspace(),
+                &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
+            );
+            approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
+            let (result, out, err) =
+                setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+            assert!(result.is_ok(), "{result:?} {err}");
+            assert!(out.contains("acme/repo-model"), "{out:?}");
+            // Outside the project the approved provider is invisible: no
+            // personal install serves it, so the run says so.
+            let elsewhere = setup.root.path().join("elsewhere");
+            fs::create_dir(&elsewhere).unwrap();
+            let (result, out, err) = setup.run_in(
+                &elsewhere,
+                None,
+                false,
+                &no_spawn,
+                fakes::clock::FakeClock::new(),
+            );
+            assert!(result.is_ok(), "{result:?} {err}");
+            assert!(!out.contains("acme/repo-model"), "{out:?}");
+            assert!(err.contains("No provider is installed"), "{err:?}");
+        },
+    );
 }
 
 #[test]
 fn repository_lua_provider_models_run_without_a_cached_list() {
-    fakes::within("repository Lua models", Duration::from_secs(30), || {
-        let setup = Setup::new();
-        let manifest = repo_manifest(
-            "fiber.test/acme",
-            &json!({"acme": ["http://127.0.0.1:1/v1"]}),
-        );
-        let script = repo_lua(
-            "acme",
-            "{ { id = \"live-model\", protocol = \"openai-responses\", \
+    fakes::within(
+        "repository Lua models",
+        Deadline::after(Duration::from_secs(30)),
+        || {
+            let setup = Setup::new();
+            let manifest = repo_manifest(
+                "fiber.test/acme",
+                &json!({"acme": ["http://127.0.0.1:1/v1"]}),
+            );
+            let script = repo_lua(
+                "acme",
+                "{ { id = \"live-model\", protocol = \"openai-responses\", \
              base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 } }",
-        );
-        declare_repo(
-            &setup.workspace(),
-            &[("repo", manifest, &[("providers/acme.lua", script.as_str())])],
-        );
-        approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
-        // No cached list: the one-shot run serves the Lua `models()`.
-        assert!(
-            !setup.home().join("cache/models/acme.json").exists(),
-            "no cached list stands in for the Lua models()"
-        );
-        let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
-        assert!(result.is_ok(), "{result:?} {err}");
-        assert!(out.contains("acme/live-model"), "{out:?} {err:?}");
-        let elsewhere = setup.root.path().join("elsewhere");
-        fs::create_dir(&elsewhere).unwrap();
-        let (result, out, _) = setup.run_in(
-            &elsewhere,
-            None,
-            false,
-            &no_spawn,
-            fakes::clock::FakeClock::new(),
-        );
-        assert!(result.is_ok(), "{result:?}");
-        assert!(!out.contains("acme/live-model"), "{out:?}");
-    });
+            );
+            declare_repo(
+                &setup.workspace(),
+                &[("repo", manifest, &[("providers/acme.lua", script.as_str())])],
+            );
+            approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
+            // No cached list: the one-shot run serves the Lua `models()`.
+            assert!(
+                !setup.home().join("cache/models/acme.json").exists(),
+                "no cached list stands in for the Lua models()"
+            );
+            let (result, out, err) =
+                setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+            assert!(result.is_ok(), "{result:?} {err}");
+            assert!(out.contains("acme/live-model"), "{out:?} {err:?}");
+            let elsewhere = setup.root.path().join("elsewhere");
+            fs::create_dir(&elsewhere).unwrap();
+            let (result, out, _) = setup.run_in(
+                &elsewhere,
+                None,
+                false,
+                &no_spawn,
+                fakes::clock::FakeClock::new(),
+            );
+            assert!(result.is_ok(), "{result:?}");
+            assert!(!out.contains("acme/live-model"), "{out:?}");
+        },
+    );
 }
 
 #[test]
 fn unapproved_and_never_repository_providers_never_load() {
     fakes::within(
         "unapproved repository models",
-        Duration::from_secs(30),
+        Deadline::after(Duration::from_secs(30)),
         || {
             let setup = Setup::new();
             let ghost = repo_manifest(
@@ -1544,7 +1554,7 @@ fn unapproved_and_never_repository_providers_never_load() {
 fn a_shadowed_personal_provider_prints_one_notice() {
     fakes::within(
         "shadowed repository models",
-        Duration::from_secs(60),
+        Deadline::after(Duration::from_secs(60)),
         || {
             let setup = Setup::new();
             setup.install(

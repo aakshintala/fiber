@@ -752,7 +752,7 @@ fn fiber_in(setup: &Setup, dir: &Path, args: &[&str]) -> Output {
         "`fiber` left a process behind"
     );
     std::mem::forget(guard);
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     output
 }
 
