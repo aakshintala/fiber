@@ -40,6 +40,13 @@ pub fn project_approvals_dir(home: &Path, project: &ProjectKey) -> PathBuf {
         .join("approvals")
 }
 
+/// `<home>/projects/<key>/servers`: one project's records of the MCP
+/// server copies it approved, one file per content hash, mirroring the
+/// per-machine approval.
+pub fn project_servers_dir(home: &Path, project: &ProjectKey) -> PathBuf {
+    home.join("projects").join(project.as_str()).join("servers")
+}
+
 /// `<home>/projects/<key>/data/<slug>`: one extension's per-project data
 /// directory.
 pub fn project_data_dir(home: &Path, project: &ProjectKey, slug: &str) -> PathBuf {

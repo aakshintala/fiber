@@ -65,6 +65,7 @@ pub use home::{
 pub use import::{
     ImportReport, ImportSource, Imported, LeftBehind, import_pending, import_source, source_home,
 };
+pub use layout::project_servers_dir;
 pub use layout::{
     crashes_dir, docs_dir, extension_data_dir, extensions_dir, global_config_file,
     images_cache_dir, logs_dir, machine_approvals_dir, mcp_cache_dir, pinned_dir,
