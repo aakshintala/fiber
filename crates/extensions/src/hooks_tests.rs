@@ -3169,6 +3169,37 @@ fn drain_watchers_waits_for_a_queued_durable_delivery() {
     );
 }
 
+/// A live-covered line never replays at the drain: the cursor names the
+/// last covered `seq`, so the drain starts one past it. Without the `+ 1`
+/// the covered line redelivers (`* 1` stays on it) or the bound moves the
+/// wrong way (`- 1` underflows past the range in release, panics in debug).
+#[test]
+fn drain_watchers_replays_only_past_the_live_covered_seq() {
+    let home = Home::new();
+    let seen = home.root.path().join("seen");
+    home.install(
+        "covered",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, old = pcall(host.fs.read, {seen:?}) if not ok or old == nil then old = \"\" end host.fs.write({seen:?}, old .. ev.payload.text .. \"\\n\") end }})\n",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&texted("a"), None, None).unwrap();
+    log.append(&texted("b"), None, None).unwrap();
+    // The live offer covers seq 0: the cursor advances at queue time, and
+    // the drain's pre-replay wait holds it until that delivery ran, so the
+    // live run wrote "a" before the drain replays.
+    session.deliver(&texted("a"), Some(contract::Seq(0)));
+    let errors = session.drain_watchers(&log, &dir);
+    assert!(errors.is_empty(), "{errors:?}");
+    // The drain replays only "b": "a" was already covered live.
+    assert_eq!(fs::read_to_string(&seen).unwrap(), "a\nb\n");
+}
+
 /// A log directory the drain cannot open replays nothing and collects the
 /// failure: the drain is the report, since the log is closed to new lines.
 /// Without the collection the drain returns no error for the missing log.
