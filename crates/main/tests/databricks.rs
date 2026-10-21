@@ -80,6 +80,8 @@ fn assert_fingerprint(request: &Request, header: &str, value: &str) {
 fn install(setup: &Setup, server: &ProviderServer) -> String {
     let to = setup.root.path().join("pkg-databricks");
     support::package::copy_package("databricks", &to, "https://", "http://");
+    // The committed thinking table, compiled in: `copy_package` only
+    // copies `extension.json` and `providers/`.
     std::fs::write(
         to.join("thinking.lua"),
         include_str!("../../../providers/databricks/thinking.lua"),
