@@ -73,16 +73,18 @@ fn accepted(id: &str, result: Value) -> Line {
 
 /// A hub `command_rejected` for `id` with `message`.
 fn refused(id: &str, message: &str) -> Line {
+    refused_code(id, "invalid_arguments", message)
+}
+
+/// A hub `command_rejected` for `id` with `code` and `message`.
+fn refused_code(id: &str, code: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
         kind: "command_rejected".to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
             ("command_id".to_owned(), Value::String(id.to_owned())),
-            (
-                "code".to_owned(),
-                Value::String("invalid_arguments".to_owned()),
-            ),
+            ("code".to_owned(), Value::String(code.to_owned())),
             ("message".to_owned(), Value::String(message.to_owned())),
         ]
         .into_iter()
@@ -970,6 +972,93 @@ fn an_open_from_a_held_full_sends_summary_then_the_raise_later() {
             .is_empty()
     );
     assert!(!app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+}
+
+#[test]
+fn a_missing_workspace_refusal_names_the_path_with_no_rail_card() {
+    // The hub sends one exact shape for the confirmed case, from its
+    // guard and from a starter failure on an already-missing target:
+    // no trailing period. The race keeps the wrapper's period and
+    // renders verbatim, as the near-miss test pins.
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(refused_code(first, "io_failed", message))
+            .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    let ruled = "Cannot resume: /w no longer exists. Delete removes the session.";
+    assert_eq!(app.notice(), Some(ruled), "{message}");
+    let sessions = &app.home.as_ref().unwrap_or_else(|| panic!("home")).sessions;
+    let row = sessions
+        .row(&id("s_aaaaaaaaaaaaaaaa"))
+        .unwrap_or_else(|| panic!("the row stays: {message}"));
+    assert!(
+        matches!(row.left, Some(crate::home::Left::Exited)),
+        "the row stays under exited: {message}"
+    );
+    assert_eq!(
+        row.note.as_deref(),
+        Some(ruled),
+        "the row's note: {message}"
+    );
+    assert!(sessions.cards().is_empty(), "no rail card: {message}");
+}
+
+#[test]
+fn a_near_miss_io_failed_refusal_renders_verbatim() {
+    for (code, message) in [
+        (
+            "io_failed",
+            "Session s_aaaaaaaaaaaaaaaa could not resume: boom.",
+        ),
+        ("io_failed", "it did not bind its socket."),
+        (
+            "io_failed",
+            "Session  could not resume: /w no longer exists",
+        ),
+        (
+            "io_failed",
+            "Session s_aaaaaaaaaaaaaaaa could not resume:  no longer exists",
+        ),
+        // The race keeps the starter-error wrapper's trailing period,
+        // so it renders verbatim like any other refusal.
+        (
+            "io_failed",
+            "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists.",
+        ),
+        (
+            "session_not_found",
+            "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists",
+        ),
+    ] {
+        let mut app = home_with_row();
+        let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+        let first = lines[0]["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("first id"));
+        assert!(app.on_line(refused_code(first, code, message)).is_empty());
+        assert!(app.session().is_none());
+        assert!(app.on_home());
+        assert_eq!(app.notice(), Some(message), "{code}: {message}");
+        let row = app
+            .home
+            .as_ref()
+            .unwrap_or_else(|| panic!("home"))
+            .sessions
+            .row(&id("s_aaaaaaaaaaaaaaaa"))
+            .unwrap_or_else(|| panic!("the row stays: {code}: {message}"));
+        assert_eq!(
+            row.note.as_deref(),
+            Some(message),
+            "the row's note renders verbatim: {code}: {message}"
+        );
+    }
 }
 
 #[test]

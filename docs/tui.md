@@ -266,7 +266,9 @@ then from the hub's paged query for older ones, grouped by the `project` on
 each row.
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
-the hub. A ✕ on a live row stops that session ("Quit"). Delete on a
+the hub. A resume the hub refuses because the workspace is gone shows
+"Cannot resume: <path> no longer exists. Delete removes the session.": it
+adds no rail card, and the row stays under "exited". A ✕ on a live row stops that session ("Quit"). Delete on a
 selected exited row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
 "Deleting and pruning"). A row whose
