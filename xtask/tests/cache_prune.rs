@@ -284,13 +284,10 @@ fn build_generations_keep_only_the_newest_of_each_group() {
     assert_eq!(fixture.deleted(&log), ["21", "22"], "{out}");
 }
 
-/// The superseded-generation case from #2984: rust-cache keys end in
-/// `-<env hash>-<lock hash>`, so entries of one lock generation share a
-/// ref and a key minus its last two dash segments. Within each such group
-/// every entry on the newest entry's lock hash stays (including distinct
-/// env hashes of the current lock) and the rest are deleted. Grouping by
-/// one segment instead leaves the env hash in the group key, so each
-/// generation stands alone and nothing is ever deleted.
+/// Superseded generations share a ref and a key minus its last two dash
+/// segments (`-<env hash>-<lock hash>`). Within each such group every
+/// entry on the newest entry's lock hash stays, including distinct env
+/// hashes of the current lock, and the rest are deleted.
 #[test]
 fn build_generations_delete_the_superseded_lock() {
     let fixture = Fixture::new();
