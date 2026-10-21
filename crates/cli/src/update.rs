@@ -192,6 +192,7 @@ fn run(
         origin,
         clock,
         stage_docs,
+        (!already).then_some(binary),
     )?;
     // The plan's damaged directories are named before approval, so a
     // declined or failed update still names them.
