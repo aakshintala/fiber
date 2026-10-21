@@ -234,7 +234,12 @@ fn before_message(
     content: Vec<ContentPart>,
 ) -> BeforeMessageAnswer {
     let session = Arc::clone(session);
-    bounded(move || session.before_message(&BeforeMessage { content: &content }))
+    bounded(move || {
+        session.before_message(&BeforeMessage {
+            content: &content,
+            sender: None,
+        })
+    })
 }
 
 fn passed(answer: &BeforeMessageAnswer) -> (Option<Vec<ContentPart>>, Vec<Context>) {

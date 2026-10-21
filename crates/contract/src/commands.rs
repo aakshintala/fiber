@@ -210,6 +210,9 @@ pub struct SteerDrop {
 pub struct Message {
     /// The sending session.
     pub from_session_id: SessionId,
+    /// The sender's parent session, when the sender has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<SessionId>,
     /// The message.
     pub text: String,
 }

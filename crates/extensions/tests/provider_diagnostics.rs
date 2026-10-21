@@ -229,7 +229,12 @@ fn dispatch_all(session: &Arc<SessionExtensions>) {
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let session = Arc::clone(session);
-            move || session.before_message(&BeforeMessage { content: &content })
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
         },
     );
     fakes::within(
@@ -369,7 +374,12 @@ fn a_nil_hook_runs_once_per_dispatch() {
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let session = Arc::clone(&session);
-            move || session.before_message(&BeforeMessage { content: &content })
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
         },
     );
     assert!(matches!(
@@ -407,7 +417,12 @@ fn refusal_and_failure_return_inside_the_scope() {
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let session = Arc::clone(&session);
-            move || session.before_message(&BeforeMessage { content: &content })
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
         },
     );
     assert!(matches!(refused.outcome, BeforeMessageOutcome::Refused(_)));
@@ -477,7 +492,12 @@ fn before_model_call_refusal_and_nonblocking_error_keep_their_scopes() {
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let session = Arc::clone(&session);
-            move || session.before_message(&BeforeMessage { content: &content })
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
         },
     );
     // A non-blocking failure drops the change, keeps a notice and passes.
@@ -692,7 +712,10 @@ fn a_suspended_dispatch_spans_the_whole_call() {
         std::thread::spawn(move || {
             let _sent = id_tx.send(std::thread::current().id());
             let content = vec![ContentPart::Text { text: "hi".into() }];
-            let answer = session.before_message(&BeforeMessage { content: &content });
+            let answer = session.before_message(&BeforeMessage {
+                content: &content,
+                sender: None,
+            });
             let _sent = tx.send(answer);
         })
     };
@@ -775,7 +798,10 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
         std::thread::spawn(move || {
             let _sent = id_tx.send(std::thread::current().id());
             let content = vec![ContentPart::Text { text: "hi".into() }];
-            let answer = session.before_message(&BeforeMessage { content: &content });
+            let answer = session.before_message(&BeforeMessage {
+                content: &content,
+                sender: None,
+            });
             let _sent = tx.send(answer);
         })
     };
@@ -1255,7 +1281,12 @@ fn hook_http_sends_unobserved_with_a_sink_installed() {
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let session = Arc::clone(&session);
-            move || session.before_message(&BeforeMessage { content: &content })
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
         },
     );
     assert_eq!(server.requests().len(), 1);
@@ -1972,7 +2003,12 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let session = Arc::clone(&session);
-            move || session.before_message(&BeforeMessage { content: &content })
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
         },
     );
     match answer.outcome {

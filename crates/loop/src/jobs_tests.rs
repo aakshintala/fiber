@@ -185,14 +185,19 @@ fn message(text: &str, command: &str) -> Message {
 /// saying `Tests pass on main.` renders as once framed.
 const FRAMED: &str = "Fiber: a message from session s_0123456789abcdef, named \"builder\". Another session wrote it, not the person.\n\nTests pass on main.";
 
-/// A session message from another session, sent by `command`.
-fn session_message(command: &str) -> Delivery {
-    Delivery::Message(SessionMessage {
-        from_session_id: SessionId("s_0123456789abcdef".into()),
-        command_id: CommandId(command.into()),
-        text: "Tests pass on main.".into(),
-        name: Some("builder".into()),
-    })
+/// A session message from another session, sent by `command` with parent
+/// `parent`, answered on `ack`.
+fn session_message(command: &str, parent: Option<&str>, ack: Ack) -> Delivery {
+    Delivery::Message(
+        SessionMessage {
+            from_session_id: SessionId("s_0123456789abcdef".into()),
+            parent_session_id: parent.map(|parent| SessionId(parent.into())),
+            command_id: CommandId(command.into()),
+            text: "Tests pass on main.".into(),
+            name: Some("builder".into()),
+        },
+        ack,
+    )
 }
 
 /// `turn_started`'s input for one session message sent by `command`.
@@ -1423,7 +1428,7 @@ fn a_session_message_turn_without_close_still_takes_a_steer() {
         )]],
         |_| Vec::new(),
     );
-    world.send(session_message("c_message"));
+    world.send(session_message("c_message", None, ignore()));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     assert_eq!(Deadline::after(DEADLINE).recv(&steer_answer), Ok(true));
     let requests = world.requests();
@@ -1438,7 +1443,7 @@ fn a_steer_drop_naming_a_session_message_leaves_it_queued() {
     // message's command, but the message stays and starts its turn.
     let (dropped, drop_answer) = mpsc::channel();
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
-    world.send(session_message("c_message"));
+    world.send(session_message("c_message", None, ignore()));
     world.send(Delivery::SteerDrop(
         CommandId("c_message".into()),
         reported(dropped),
@@ -1831,7 +1836,9 @@ fn a_session_message_kept_by_a_cancelled_turn_runs_after_close_with_no_jobs() {
         move |_| {
             // The message queues while the approval waits; the cancel ends
             // the turn with it still queued.
-            inbox.send(session_message("c_message")).unwrap();
+            inbox
+                .send(session_message("c_message", None, ignore()))
+                .unwrap();
             assert!(cancel.cancel());
             inbox.send(Delivery::Cancelled).unwrap();
         }
@@ -2515,7 +2522,7 @@ fn a_session_message_while_idle_does_not_arm_the_check_again() {
     assert_check(&world.next_turn(), &id);
     // A session message is neither a prompt nor a steer, so it leaves the
     // check given (`docs/invocation.md`, "Lifecycle").
-    world.send(session_message("c_message"));
+    world.send(session_message("c_message", None, ignore()));
     let turn = world.next_turn();
     assert_eq!(kinds(&turn), one_step_with(&[]));
     assert_eq!(turn[0].payload["input"], message_input("c_message"));
@@ -2551,7 +2558,7 @@ fn a_session_message_in_the_check_turn_does_not_arm_the_check_again() {
             Scripted::text("Noted."),
             Scripted::text("Seen."),
         ],
-        vec![vec![session_message("c_message")]],
+        vec![vec![session_message("c_message", None, ignore())]],
         |_| Vec::new(),
     );
     let jobs = FakeJobs::new(world.home());
@@ -3047,7 +3054,7 @@ fn the_turn_in_flight_when_close_arrives_still_takes_a_steer() {
 #[test]
 fn a_session_message_taken_with_close_in_one_idle_batch_runs_its_turn() {
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
-    world.send(session_message("c_message"));
+    world.send(session_message("c_message", None, ignore()));
     world.send(Delivery::Close(ignore()));
     let finished = world.spawn_run();
     let wait = Deadline::after(DEADLINE);
@@ -3066,7 +3073,7 @@ fn a_session_message_queued_before_close_is_applied_by_the_turn_in_flight() {
     let world = World::new(
         vec![Scripted::text("Hi."), Scripted::text("Steered.")],
         vec![vec![
-            session_message("c_message"),
+            session_message("c_message", None, ignore()),
             Delivery::Close(ignore()),
         ]],
         |_| Vec::new(),

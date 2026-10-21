@@ -310,7 +310,10 @@ fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
         out.stdout.is_empty(),
         "neither the hook nor a line may reach stdout"
     );
-    assert!(out.stderr.is_empty(), "a recorded signal writes nothing");
+    assert!(
+        out.stderr.is_empty(),
+        "a recorded signal writes nothing to stderr"
+    );
     assert!(
         fakes::group_empties(hook_group, setup.deadline),
         "the hook's group is gone"
@@ -938,7 +941,10 @@ fn a_signal_during_the_recreating_add_leaves_nothing() {
         out.stdout.is_empty(),
         "neither the hook nor a line may reach stdout"
     );
-    assert!(out.stderr.is_empty(), "a recorded signal writes nothing");
+    assert!(
+        out.stderr.is_empty(),
+        "a recorded signal writes nothing to stderr"
+    );
     assert!(
         fakes::group_empties(hook_group, setup.deadline),
         "the hook's group is gone"

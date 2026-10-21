@@ -22,13 +22,16 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{Decision, TurnOutcome};
-use contract::inbox::{Ack, Delivery, Message, SessionMessage};
+use contract::hook::{
+    BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, Context, Hooks, Replaced,
+};
+use contract::inbox::{Ack, Answer, Delivery, Message, SessionMessage};
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::repository::{Decided, RepositoryCode, Unapproved};
 use contract::rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
 use contract::tool::{Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
-use contract::{CommandId, Envelope, RequestId, SessionId};
+use contract::{CommandId, Envelope, ErrorCode, RequestId, SessionId, TurnId};
 use fakes::Deadline;
 use fakes::clock::{FakeClock, Mark};
 use fakes::{Scripted, ScriptedProvider};
@@ -43,23 +46,272 @@ const DEADLINE: Duration = Duration::from_secs(5);
 const IDLE: Duration = Duration::from_secs(60);
 
 const FROM: &str = "s_0123456789abcdef";
+const PARENT: &str = "s_parent00000001";
 const COMMAND: &str = "c_m1";
 const TEXT: &str = "Tests pass on main.";
 const NAMED: &str = "Fiber: a message from session s_0123456789abcdef, named \"builder\". Another session wrote it, not the person.\n\nTests pass on main.";
 const UNNAMED: &str = "Fiber: a message from session s_0123456789abcdef. Another session wrote it, not the person.\n\nTests pass on main.";
 
-/// A session message from `FROM`, named `builder`, sent by `COMMAND`.
+/// A session message from `FROM` with parent `PARENT`, named `builder`,
+/// sent by `COMMAND`.
 fn named() -> SessionMessage {
-    super::for_test(FROM, Some("builder"), COMMAND, TEXT)
+    super::for_test(FROM, Some(PARENT), Some("builder"), COMMAND, TEXT)
 }
 
-/// The `Delivery` for `message`, as the door sends it.
-fn delivery(message: SessionMessage) -> Delivery {
-    Delivery::Message(message)
+/// The `Delivery` for `message`, answered on `ack`, as the door sends it.
+fn delivery(message: SessionMessage, ack: Ack) -> Delivery {
+    Delivery::Message(message, ack)
 }
 
 fn ignore() -> Ack {
     Ack(Box::new(|_| {}))
+}
+
+/// An acknowledgement recording its answer on the returned channel. A send
+/// after the test dropped the receiver is ignored, as a dropped
+/// delivery's is.
+fn capture() -> (Ack, mpsc::Receiver<Answer>) {
+    let (tx, rx) = mpsc::channel();
+    (
+        Ack(Box::new(move |answer| {
+            drop(tx.send(answer));
+        })),
+        rx,
+    )
+}
+
+/// The answer `rx` carries, waited under one [`DEADLINE`] naming `what`.
+#[track_caller]
+fn answered(rx: &mpsc::Receiver<Answer>, what: &str) -> Answer {
+    Deadline::after(DEADLINE)
+        .recv(rx)
+        .unwrap_or_else(|_| panic!("{what}"))
+}
+
+/// The rejection `answer` carries, panicking on an acceptance.
+#[track_caller]
+fn rejected(answer: Answer) -> contract::inbox::Rejection {
+    match answer {
+        Err(rejection) => rejection,
+        Ok(_) => panic!("an acceptance is no rejection: {answer:?}"),
+    }
+}
+
+/// A hook run parked until the test frees it: the test is told on
+/// `entered`, moves the clock past the registered timeout, then frees
+/// the run on `release`.
+struct Park {
+    entered: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
+/// A scripted `Hooks` fake: seen raw texts and sender ids, a queue of
+/// answers, and an optional one-shot park inside `before_message`.
+struct FakeHooks {
+    seen: Mutex<Vec<String>>,
+    seen_ids: Mutex<Vec<(Option<String>, Option<String>)>>,
+    answers: Mutex<VecDeque<BeforeMessageAnswer>>,
+    park: Mutex<Option<Park>>,
+}
+
+impl FakeHooks {
+    fn new() -> Self {
+        Self {
+            seen: Mutex::new(Vec::new()),
+            seen_ids: Mutex::new(Vec::new()),
+            answers: Mutex::new(VecDeque::new()),
+            park: Mutex::new(None),
+        }
+    }
+
+    fn answer(&self, answer: BeforeMessageAnswer) {
+        self.answers.lock().unwrap().push_back(answer);
+    }
+
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+
+    fn seen_ids(&self) -> Vec<(Option<String>, Option<String>)> {
+        self.seen_ids.lock().unwrap().clone()
+    }
+}
+
+fn passed() -> BeforeMessageAnswer {
+    BeforeMessageAnswer {
+        outcome: BeforeMessageOutcome::Passed {
+            replaced: None,
+            context: Vec::new(),
+        },
+        notices: Vec::new(),
+    }
+}
+
+fn replaced(text: &str, by: &str) -> BeforeMessageAnswer {
+    BeforeMessageAnswer {
+        outcome: BeforeMessageOutcome::Passed {
+            replaced: Some(Replaced {
+                content: vec![ContentPart::Text {
+                    text: text.to_owned(),
+                }],
+                changed_by: vec![by.to_owned()],
+            }),
+            context: Vec::new(),
+        },
+        notices: Vec::new(),
+    }
+}
+
+fn refused(by: &str, reason: &str) -> BeforeMessageAnswer {
+    BeforeMessageAnswer {
+        outcome: BeforeMessageOutcome::Refused(contract::hook::Refusal {
+            extension: by.to_owned(),
+            reason: reason.to_owned(),
+        }),
+        notices: Vec::new(),
+    }
+}
+
+fn failed(by: &str, message: &str) -> BeforeMessageAnswer {
+    BeforeMessageAnswer {
+        outcome: BeforeMessageOutcome::Failed(contract::hook::HookFailure {
+            extension: by.to_owned(),
+            message: message.to_owned(),
+        }),
+        notices: Vec::new(),
+    }
+}
+
+fn passed_with_context(extension: &str, text: &str) -> BeforeMessageAnswer {
+    BeforeMessageAnswer {
+        outcome: BeforeMessageOutcome::Passed {
+            replaced: None,
+            context: vec![Context {
+                state: Vec::new(),
+                extension: extension.to_owned(),
+                text: text.to_owned(),
+            }],
+        },
+        notices: Vec::new(),
+    }
+}
+
+fn noticed(code: ErrorCode, extension: &str) -> BeforeMessageAnswer {
+    BeforeMessageAnswer {
+        outcome: BeforeMessageOutcome::Passed {
+            replaced: None,
+            context: Vec::new(),
+        },
+        notices: vec![contract::events::Notice {
+            code,
+            message: format!("extension {extension} failed softly"),
+            extension: Some(extension.to_owned()),
+        }],
+    }
+}
+
+impl Hooks for FakeHooks {
+    fn after_tool(
+        &self,
+        _call: &contract::hook::AfterToolCall<'_>,
+    ) -> contract::hook::AfterToolAnswer {
+        contract::hook::AfterToolAnswer {
+            outcome: contract::hook::AfterToolOutcome::Unchanged,
+            changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::BeforeToolAnswer {
+        contract::hook::BeforeToolAnswer {
+            outcome: contract::hook::BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(&self, message: &BeforeMessage<'_>) -> BeforeMessageAnswer {
+        self.seen
+            .lock()
+            .unwrap()
+            .push(crate::conversation::text(message.content));
+        self.seen_ids.lock().unwrap().push((
+            message
+                .sender
+                .map(|sender| sender.from_session_id.0.clone()),
+            message
+                .sender
+                .and_then(|sender| sender.parent_session_id.map(|id| id.0.clone())),
+        ));
+        if let Some(park) = self.park.lock().unwrap().take() {
+            // Parked: the test moves the fake clock past the registered
+            // timeout, then releases the run.
+            let _sent = park.entered.send(());
+            Deadline::after(DEADLINE)
+                .recv(&park.release)
+                .expect("the test releases the parked hook");
+        }
+        self.answers
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(passed)
+    }
+
+    fn session_start(
+        &self,
+        _start: &contract::hook::SessionStart<'_>,
+    ) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_start(&self, _turn: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_model_call(
+        &self,
+        _call: &contract::hook::BeforeModelCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_end(&self, _end: &contract::hook::TurnEnd<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
+    fn deliver_to(&self, _inbox: mpsc::Sender<Delivery>) {}
 }
 
 fn close() -> Delivery {
@@ -439,6 +691,11 @@ impl World {
         self
     }
 
+    /// Wires `hooks` as the loop's `before_message` chain.
+    fn hook_with(&mut self, hooks: Arc<FakeHooks>) {
+        self.looped = Some(self.looped.take().unwrap().hooks(hooks as Arc<dyn Hooks>));
+    }
+
     /// Runs the loop's idle wait around `offer`: `window` sees `Before`
     /// and, when nothing is found, `After`.
     fn hook(&mut self, window: impl FnMut(Window) + Send + 'static) {
@@ -575,7 +832,7 @@ fn a_message_sent_just_before_the_last_idle_check_is_run() {
             }
             admitted.store(true, Ordering::SeqCst);
             // The door admits under the same lock the check closes under.
-            let done = admission.admit(|| inbox.send(delivery(named())).is_ok());
+            let done = admission.admit(|| inbox.send(delivery(named(), ignore())).is_ok());
             sent.store(done.is_some(), Ordering::SeqCst);
         });
     }
@@ -675,7 +932,13 @@ fn an_idle_message_frames_an_unnamed_sender_by_its_id_alone() {
     let mut world = World::new(Vec::new(), Vec::new());
     let mut looped = world.looped.take().unwrap();
     let mut input = crate::inbox::TurnInput::of(Vec::new());
-    looped.admit_message_idle(super::for_test(FROM, None, COMMAND, TEXT), &mut input);
+    looped
+        .admit_message_idle(
+            super::for_test(FROM, None, None, COMMAND, TEXT),
+            ignore(),
+            &mut input,
+        )
+        .unwrap();
     assert_eq!(input.pieces.len(), 1);
     let crate::jobs::Queued::Steer(message, _) = &input.pieces[0] else {
         panic!("an idle message joins the input as a steer");
@@ -707,7 +970,7 @@ fn a_message_accepted_before_a_close_that_lands_ahead_of_the_last_idle_check_is_
             admitted.store(true, Ordering::SeqCst);
             // The door admits the message, then another door closes: the
             // check finds the flag already set and still reads.
-            let done = admission.admit(|| inbox.send(delivery(named())).is_ok());
+            let done = admission.admit(|| inbox.send(delivery(named(), ignore())).is_ok());
             message_in.store(done.is_some(), Ordering::SeqCst);
             admission.close();
             let (ack, rx) = mpsc::channel();
@@ -799,12 +1062,10 @@ fn a_question_wait_with_a_session_message_queued_does_not_end_idle() {
             }
         },
     );
-    world.send(delivery(super::for_test(
-        FROM,
-        Some("builder"),
-        COMMAND,
-        TEXT,
-    )));
+    world.send(delivery(
+        super::for_test(FROM, None, Some("builder"), COMMAND, TEXT),
+        ignore(),
+    ));
     let mark = world.clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
     // Past the delay the wait holds no deadline and writes nothing more.
@@ -888,12 +1149,10 @@ fn an_approval_wait_with_a_session_message_queued_does_not_end_idle() {
             }
         },
     );
-    world.send(delivery(super::for_test(
-        FROM,
-        Some("builder"),
-        COMMAND,
-        TEXT,
-    )));
+    world.send(delivery(
+        super::for_test(FROM, None, Some("builder"), COMMAND, TEXT),
+        ignore(),
+    ));
     let mark = world.clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
     assert!(
@@ -938,11 +1197,152 @@ fn an_approval_wait_with_a_session_message_queued_does_not_end_idle() {
 }
 
 #[test]
+fn a_session_message_during_an_approval_wait_is_answered_at_once() {
+    // While the loop waits on a permission approval, a session message
+    // is taken and answered at once (`docs/loop.md`, "One step"): the
+    // delivery itself wakes the wait, so no reply, cancel or clock move
+    // lands first. The approval still waits afterwards.
+    let mut world = World::with_tools(
+        vec![calls("gated"), Scripted::text("Done.")],
+        Vec::new(),
+        vec![Arc::new(Gated)],
+        Arc::new(AskGated),
+    );
+    let finished = world.spawn_turn();
+    world.send(Delivery::Prompt(
+        contract::inbox::Message {
+            content: vec![ContentPart::Text { text: "go".into() }],
+            sender: From {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_prompt".into())),
+            },
+        },
+        ignore(),
+    ));
+    let (watcher, lines) = read_until(
+        world.watched.take().unwrap(),
+        "a permission_requested line",
+        |line| line.kind == "permission_requested",
+    );
+    world.watched = Some(watcher);
+    let request = RequestId(
+        lines.last().unwrap().payload["request_id"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    );
+    let parked = Arc::clone(&world.clock);
+    fakes::within(
+        "the approval wait parked",
+        Deadline::after(DEADLINE),
+        move || {
+            while parked.parked().is_empty() {
+                thread::yield_now();
+            }
+        },
+    );
+    let (ack, rx) = capture();
+    world.send(delivery(
+        super::for_test(FROM, None, Some("builder"), COMMAND, TEXT),
+        ack,
+    ));
+    // Answered while the approval is still pending: nothing else lands
+    // in between, and the clock never moves.
+    let answer = answered(&rx, "the approval wait answers the session message at once");
+    assert!(answer.is_ok(), "the message is accepted: {answer:?}");
+    match finished.try_recv() {
+        Err(mpsc::TryRecvError::Empty) => {}
+        Err(mpsc::TryRecvError::Disconnected) => panic!("the turn thread ended early"),
+        Ok(_) => panic!("the turn ended early"),
+    }
+    world.send(Delivery::Reply(
+        Reply {
+            request_id: request,
+            answer: ReplyAnswer::Approval {
+                decision: Decision::Allow,
+                feedback: None,
+                remember: None,
+            },
+        },
+        ignore(),
+    ));
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
+    world.looped = Some(looped);
+    assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    let applied: Vec<&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "steering_applied")
+        .collect();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].payload["source"], "session");
+    assert_eq!(applied[0].payload["command_id"], COMMAND);
+}
+
+#[test]
+fn a_session_message_during_a_question_wait_is_answered_at_once() {
+    // While the loop waits on an interaction answer, a session message
+    // is taken and answered at once: the delivery itself wakes the
+    // wait, so no reply, cancel or clock move lands first. The question
+    // still waits afterwards.
+    let mut world = World::with_tools(
+        vec![calls("asks"), Scripted::text("Done.")],
+        Vec::new(),
+        vec![Arc::new(Asks)],
+        Arc::new(AskGated),
+    )
+    .woken();
+    let finished = world.spawn_turn();
+    world.send(Delivery::Prompt(
+        contract::inbox::Message {
+            content: vec![ContentPart::Text { text: "go".into() }],
+            sender: From {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_prompt".into())),
+            },
+        },
+        ignore(),
+    ));
+    let (watcher, _) = read_until(
+        world.watched.take().unwrap(),
+        "an interaction_requested line",
+        |line| line.kind == "interaction_requested",
+    );
+    world.watched = Some(watcher);
+    let parked = Arc::clone(&world.clock);
+    fakes::within(
+        "the question wait parked",
+        Deadline::after(DEADLINE),
+        move || {
+            while parked.parked().is_empty() {
+                thread::yield_now();
+            }
+        },
+    );
+    let (ack, rx) = capture();
+    world.send(delivery(
+        super::for_test(FROM, None, Some("builder"), COMMAND, TEXT),
+        ack,
+    ));
+    // Answered while the question is still pending: nothing else lands
+    // in between, and the clock never moves.
+    let answer = answered(&rx, "the question wait answers the session message at once");
+    assert!(answer.is_ok(), "the message is accepted: {answer:?}");
+    match finished.try_recv() {
+        Err(mpsc::TryRecvError::Empty) => {}
+        Err(mpsc::TryRecvError::Disconnected) => panic!("the turn thread ended early"),
+        Ok(_) => panic!("the turn ended early"),
+    }
+}
+
+#[test]
 fn an_offer_wait_with_a_session_message_in_the_input_does_not_end_idle() {
     let code = FakeRepo::server("mcp-x");
     let mut world = World::new(vec![Scripted::text("Done.")], Vec::new()).offered(code);
     let finished = world.spawn_turn();
-    world.send(delivery(named()));
+    world.send(delivery(named(), ignore()));
     let (watcher, lines) = read_until(
         world.watched.take().unwrap(),
         "a repository_code_offered line",
@@ -1040,7 +1440,7 @@ fn an_offer_wait_holding_a_session_message_that_arrived_during_it_does_not_end_i
             }
         },
     );
-    world.send(delivery(named()));
+    world.send(delivery(named(), ignore()));
     let mark = world.clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
     assert!(
@@ -1078,7 +1478,7 @@ fn an_offer_wait_with_a_session_message_in_the_input_ends_on_close_and_runs_it()
     let code = FakeRepo::server("mcp-x");
     let mut world = World::new(vec![Scripted::text("Done.")], Vec::new()).offered(code);
     let finished = world.spawn_run();
-    world.send(delivery(named()));
+    world.send(delivery(named(), ignore()));
     let (_watcher, _) = read_until(
         world.watched.take().unwrap(),
         "a repository_code_offered line",
@@ -1122,7 +1522,7 @@ fn a_required_offer_failure_with_a_held_message_fails_the_run() {
     let code = FakeRepo::required("mcp-x");
     let mut world = World::new(vec![Scripted::text("Done.")], Vec::new()).offered(code);
     let finished = world.spawn_run();
-    world.send(delivery(named()));
+    world.send(delivery(named(), ignore()));
     let (_watcher, _) = read_until(
         world.watched.take().unwrap(),
         "a repository_code_offered line",
@@ -1236,5 +1636,354 @@ fn a_session_message_queued_as_a_steer_keeps_the_session_from_idle() {
         looped.holds_message(),
         "a queued session steer alone waits to join a turn"
     );
+    world.looped = Some(looped);
+}
+
+/// The framed rewrite of `text` for the named sender `FROM`.
+fn framed_rewrite(text: &str) -> String {
+    format!(
+        "Fiber: a message from session {FROM}, named \"builder\". Another session wrote it, not the person.\n\n{text}"
+    )
+}
+
+#[test]
+fn a_refused_session_message_answers_message_refused_and_queues_nothing() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(refused("e", "no"));
+    let mut world = World::new(vec![Scripted::text("Done.")], Vec::new());
+    world.hook_with(Arc::clone(&hooks));
+    let mut looped = world.looped.take().unwrap();
+    let (ack, answers) = capture();
+    let mut input = crate::inbox::TurnInput::of(Vec::new());
+    looped
+        .admit_idle(delivery(named(), ack), &mut input)
+        .unwrap();
+    let rejection = rejected(answered(&answers, "the refusal"));
+    assert_eq!(rejection.code, ErrorCode::MessageRefused);
+    assert_eq!(rejection.message, "Extension e refused the message: no");
+    assert!(input.pieces.is_empty(), "a refusal queues nothing");
+    assert!(
+        looped.steering.snapshot().is_empty(),
+        "a refusal leaves no queue entry"
+    );
+    assert!(answers.try_recv().is_err(), "the ack fires exactly once");
+    assert_eq!(
+        hooks.seen(),
+        vec![TEXT.to_owned()],
+        "the hook saw the raw text"
+    );
+    assert_eq!(
+        hooks.seen_ids(),
+        vec![(Some(FROM.to_owned()), Some(PARENT.to_owned()))],
+        "the hook saw the sender and its parent"
+    );
+    assert_eq!(world.durable_kinds(), ["session_started"]);
+    world.looped = Some(looped);
+}
+
+#[test]
+fn a_blocking_hook_failure_answers_hook_failed_and_queues_nothing() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(failed("e", "boom"));
+    let mut world = World::new(vec![Scripted::text("Done.")], Vec::new());
+    world.hook_with(Arc::clone(&hooks));
+    let mut looped = world.looped.take().unwrap();
+    let (ack, answers) = capture();
+    let mut input = crate::inbox::TurnInput::of(Vec::new());
+    looped
+        .admit_idle(delivery(named(), ack), &mut input)
+        .unwrap();
+    let rejection = rejected(answered(&answers, "the failure"));
+    assert_eq!(rejection.code, ErrorCode::HookFailed);
+    assert_eq!(
+        rejection.message,
+        "The `before_message` hook of extension e failed, so the message was not sent: boom"
+    );
+    assert!(input.pieces.is_empty(), "a failure queues nothing");
+    assert!(
+        looped.steering.snapshot().is_empty(),
+        "a failure leaves no queue entry"
+    );
+    assert!(answers.try_recv().is_err(), "the ack fires exactly once");
+    assert_eq!(world.durable_kinds(), ["session_started"]);
+    world.looped = Some(looped);
+}
+
+#[test]
+fn a_hook_parked_past_its_registered_timeout_answers_hook_failed() {
+    // The registered timeout the parked run outlives.
+    const TIMEOUT: Duration = Duration::from_secs(30);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let hooks = Arc::new(FakeHooks::new());
+    *hooks.park.lock().unwrap() = Some(Park {
+        entered: entered_tx,
+        release: release_rx,
+    });
+    hooks.answer(failed("e", "timed out"));
+    let mut world = World::new(vec![Scripted::text("Done.")], Vec::new());
+    world.hook_with(hooks);
+    let looped = world.looped.take().unwrap();
+    let (ack, answers) = capture();
+    let taken = thread::spawn(move || {
+        let mut input = crate::inbox::TurnInput::of(Vec::new());
+        let mut looped = looped;
+        let outcome = looped.admit_idle(delivery(named(), ack), &mut input);
+        (looped, outcome, input.pieces.is_empty())
+    });
+    Deadline::after(DEADLINE)
+        .recv(&entered_rx)
+        .expect("the hook parked");
+    assert!(
+        answers.try_recv().is_err(),
+        "the sender waits while the hook runs"
+    );
+    // Only after the parked signal does the clock move past the timeout.
+    world.clock.advance(TIMEOUT + Duration::from_secs(1));
+    release_tx.send(()).unwrap();
+    let rejection = rejected(answered(&answers, "the timeout failure"));
+    assert_eq!(rejection.code, ErrorCode::HookFailed);
+    assert_eq!(
+        rejection.message,
+        "The `before_message` hook of extension e failed, so the message was not sent: timed out"
+    );
+    let (looped, outcome, empty) = taken.join().expect("the take ended");
+    outcome.unwrap();
+    assert!(empty, "a timed-out hook queues nothing");
+    assert!(answers.try_recv().is_err(), "the ack fires exactly once");
+    world.looped = Some(looped);
+}
+
+#[test]
+fn a_non_blocking_hook_failure_still_delivers_and_logs_its_notice() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(noticed(ErrorCode::HookFailed, "e"));
+    let mut world = World::new(vec![Scripted::text("Done.")], Vec::new());
+    world.hook_with(Arc::clone(&hooks));
+    let finished = world.spawn_turn();
+    let (ack, answers) = capture();
+    world.send(delivery(named(), ack));
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
+    world.looped = Some(looped);
+    assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(
+        answered(&answers, "the acceptance"),
+        Ok(None),
+        "a non-blocking failure still delivers"
+    );
+    assert!(answers.try_recv().is_err(), "the ack fires exactly once");
+    let (watcher, streamed) = read_until(
+        world.watched.take().unwrap(),
+        "a turn_completed line",
+        |line| line.kind == "turn_completed",
+    );
+    world.watched = Some(watcher);
+    let notice = streamed
+        .iter()
+        .find(|line| line.kind == "notice")
+        .expect("the soft failure is logged as a notice");
+    assert!(notice.turn_id.is_none(), "an idle notice names no turn");
+    assert_eq!(notice.payload["code"], "hook_failed");
+    assert_eq!(notice.payload["extension"], "e");
+    let lines = world.turn_lines();
+    assert_eq!(
+        lines[0].payload["input"],
+        json!([{
+            "type": "message",
+            "source": "session",
+            "from_session_id": FROM,
+            "command_id": COMMAND,
+            "content": [{"type": "text", "text": NAMED}],
+        }])
+    );
+}
+
+#[test]
+fn a_rewritten_session_message_frames_its_replacement_with_changed_by() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(replaced("Say cheese.", "e"));
+    let mut world = World::new(vec![Scripted::text("Done.")], Vec::new());
+    world.hook_with(Arc::clone(&hooks));
+    let finished = world.spawn_turn();
+    let (ack, answers) = capture();
+    world.send(delivery(named(), ack));
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
+    world.looped = Some(looped);
+    assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(answered(&answers, "the acceptance"), Ok(None));
+    assert!(answers.try_recv().is_err(), "the ack fires exactly once");
+    assert_eq!(
+        hooks.seen(),
+        vec![TEXT.to_owned()],
+        "the hook saw the raw text"
+    );
+    let lines = world.turn_lines();
+    assert_eq!(
+        lines[0].payload["input"],
+        json!([{
+            "type": "message",
+            "source": "session",
+            "from_session_id": FROM,
+            "command_id": COMMAND,
+            "content": [{"type": "text", "text": framed_rewrite("Say cheese.")}],
+            "changed_by": ["e"],
+        }])
+    );
+    let requests = world.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        users(&requests[0]).last(),
+        Some(&framed_rewrite("Say cheese."))
+    );
+}
+
+#[test]
+fn a_session_message_context_joins_the_turn_as_context_added() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(passed_with_context("e", "Remember this."));
+    let mut world = World::new(vec![Scripted::text("Done.")], Vec::new());
+    world.hook_with(Arc::clone(&hooks));
+    let finished = world.spawn_turn();
+    let (ack, answers) = capture();
+    world.send(delivery(named(), ack));
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
+    world.looped = Some(looped);
+    assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
+    assert_eq!(answered(&answers, "the acceptance"), Ok(None));
+    assert!(answers.try_recv().is_err(), "the ack fires exactly once");
+    let lines = world.turn_lines();
+    let added: Vec<&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "context_added")
+        .collect();
+    assert_eq!(added.len(), 1, "the hook's context is logged");
+    assert_eq!(added[0].payload["hook"], "before_message");
+    assert_eq!(added[0].payload["extension"], "e");
+    assert_eq!(added[0].payload["text"], "Remember this.");
+}
+
+#[test]
+fn a_running_rewrite_stages_its_verdict_on_the_shared_queue_entry() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(replaced("Say cheese.", "e"));
+    let mut world = World::new(vec![Scripted::text("Done.")], Vec::new());
+    world.hook_with(Arc::clone(&hooks));
+    let mut looped = world.looped.take().unwrap();
+    let (ack, answers) = capture();
+    let turn = TurnId("t_1".into());
+    looped.admit_message_running(named(), ack, &turn).unwrap();
+    assert_eq!(answered(&answers, "the acceptance"), Ok(None));
+    assert!(answers.try_recv().is_err(), "the ack fires exactly once");
+    let id = CommandId(COMMAND.into());
+    let origin = Origin::Session {
+        from_session_id: SessionId(FROM.into()),
+    };
+    assert!(
+        looped.steering.is_staged(&id, &origin),
+        "the session entry stages from the start"
+    );
+    assert!(
+        !looped.steering.is_admitted(&id),
+        "the session id stays stale to is_admitted"
+    );
+    // The staged claim drains the entry while the id stays stale.
+    struct Discard;
+    impl Emit for Discard {
+        fn emit(&self, _event: &contract::events::Event) {}
+    }
+    let taken = looped.steering.take_staged(&Discard);
+    assert_eq!(taken.len(), 1, "take_staged drains the session entry");
+    assert_eq!(
+        taken[0]
+            .staged
+            .as_ref()
+            .and_then(|staged| staged.changed_by.clone()),
+        Some(vec!["e".to_owned()]),
+        "the verdict's staged metadata rides the entry"
+    );
+    assert!(
+        !looped.steering.is_admitted(&id),
+        "the drained session id stays stale"
+    );
+    // The queued holder carries the same post-hook content.
+    assert_eq!(looped.queued.len(), 1);
+    let crate::jobs::Queued::Steer(message, hooked) = &looped.queued[0] else {
+        panic!("a running message queues its holder");
+    };
+    assert_eq!(
+        message.content,
+        vec![ContentPart::Text {
+            text: framed_rewrite("Say cheese."),
+        }]
+    );
+    assert_eq!(hooked.changed_by, Some(vec!["e".to_owned()]));
+    world.looped = Some(looped);
+}
+
+#[test]
+fn a_running_refusal_answers_message_refused_and_queues_nothing() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(refused("e", "no"));
+    let mut world = World::new(vec![Scripted::text("Done.")], Vec::new());
+    world.hook_with(Arc::clone(&hooks));
+    let mut looped = world.looped.take().unwrap();
+    let (ack, answers) = capture();
+    let turn = TurnId("t_1".into());
+    looped.admit_message_running(named(), ack, &turn).unwrap();
+    let rejection = rejected(answered(&answers, "the refusal"));
+    assert_eq!(rejection.code, ErrorCode::MessageRefused);
+    assert_eq!(rejection.message, "Extension e refused the message: no");
+    assert!(looped.queued.is_empty(), "a refusal queues no holder");
+    assert!(
+        looped.steering.snapshot().is_empty(),
+        "a refusal leaves no queue entry"
+    );
+    assert!(answers.try_recv().is_err(), "the ack fires exactly once");
+    world.looped = Some(looped);
+}
+
+#[test]
+fn a_shutdown_before_the_hook_runs_answers_closing() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(passed());
+    let mut world = World::new(vec![Scripted::text("Done.")], Vec::new());
+    world.hook_with(Arc::clone(&hooks));
+    let mut looped = world.looped.take().unwrap();
+    looped.cancel.shutdown(143);
+    let (ack, answers) = capture();
+    let mut input = crate::inbox::TurnInput::of(Vec::new());
+    looped
+        .admit_idle(delivery(named(), ack), &mut input)
+        .unwrap();
+    let rejection = rejected(answered(&answers, "the closing rejection"));
+    assert_eq!(rejection.code, ErrorCode::Closing);
+    assert!(input.pieces.is_empty(), "a closing take queues nothing");
+    assert_eq!(hooks.seen().len(), 0, "no hook ran");
+    assert!(answers.try_recv().is_err(), "the ack fires exactly once");
+    world.looped = Some(looped);
+}
+
+#[test]
+fn a_running_shutdown_before_the_hook_runs_answers_closing() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(passed());
+    let mut world = World::new(vec![Scripted::text("Done.")], Vec::new());
+    world.hook_with(Arc::clone(&hooks));
+    let mut looped = world.looped.take().unwrap();
+    looped.cancel.shutdown(143);
+    let (ack, answers) = capture();
+    let turn = TurnId("t_1".into());
+    looped.admit_message_running(named(), ack, &turn).unwrap();
+    let rejection = rejected(answered(&answers, "the closing rejection"));
+    assert_eq!(rejection.code, ErrorCode::Closing);
+    assert!(looped.queued.is_empty(), "a closing take queues no holder");
+    assert_eq!(hooks.seen().len(), 0, "no hook ran");
+    assert!(answers.try_recv().is_err(), "the ack fires exactly once");
     world.looped = Some(looped);
 }
