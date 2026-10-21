@@ -259,17 +259,10 @@ pub(crate) struct Setup {
 impl Setup {
     /// Starts the test's deadline before any setup work.
     pub(crate) fn new() -> Self {
-        let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fh");
-        fs::create_dir_all(root.path().join("h")).unwrap();
-        fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { root, deadline }
+        Self::new_under(&std::env::temp_dir())
     }
 
-    /// Starts the test's deadline before any setup work, rooting the
-    /// temporary directories under `parent`: a root holding live
-    /// session sockets must sit under a short parent such as `/tmp`,
-    /// since socket paths are limited to SUN_LEN bytes.
+    /// As [`Setup::new`], rooted under `parent` for a short socket path.
     pub(crate) fn new_under(parent: &Path) -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::under(parent, "fh");
