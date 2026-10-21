@@ -1,0 +1,155 @@
+{
+  "claude-fable-5 global": {
+    "error": {
+      "code": 403,
+      "message": "Access to this model requires data sharing to be enabled for publisher 'anthropic'. Please set `PublisherModelConfig.data_sharing_enabled_provider` to 'anthropic' via the setPublisherModelConfig API to use this model.",
+      "status": "PERMISSION_DENIED"
+    },
+    "shape": "list",
+    "status": 403
+  },
+  "claude-fable-5-1 global": {
+    "error": {
+      "code": 403,
+      "message": "Access to this model requires data sharing to be enabled for publisher 'anthropic'. Please set `PublisherModelConfig.data_sharing_enabled_provider` to 'anthropic' via the setPublisherModelConfig API to use this model.",
+      "status": "PERMISSION_DENIED"
+    },
+    "shape": "list",
+    "status": 403
+  },
+  "claude-haiku-4-5@20251001 europe-west1": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/europe-west1/publishers/anthropic/models/claude-haiku-4-5@20251001` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-haiku-4-5@20251001 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-haiku-4-5@20251001` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-haiku-4-5@20251001 us-east5": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/us-east5/publishers/anthropic/models/claude-haiku-4-5@20251001` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-haiku-5-5 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-haiku-5-5` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-haiku-5-5@default global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-haiku-5-5@default` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-opus-4-5@20251101 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-opus-4-5@20251101` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-opus-4-6 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-opus-4-6` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-opus-4-7 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-opus-4-7` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-opus-4-8 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-opus-4-8` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-opus-5 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-opus-5` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-opus-5-5 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-opus-5-5` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-sonnet-4-5@20250929 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-sonnet-4-5@20250929` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-sonnet-4-6 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-sonnet-5 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-sonnet-5` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  },
+  "claude-sonnet-5-5 global": {
+    "error": {
+      "code": 404,
+      "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-sonnet-5-5` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+      "status": "NOT_FOUND"
+    },
+    "shape": "list",
+    "status": 404
+  }
+}

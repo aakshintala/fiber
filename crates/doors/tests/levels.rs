@@ -131,18 +131,6 @@ fn take_prompt(inbox: &mpsc::Receiver<Delivery>) -> contract::inbox::Ack {
     }
 }
 
-/// Takes the next inbox delivery, which is a steer, and holds its
-/// acknowledgement.
-#[track_caller]
-fn take_steer(inbox: &mpsc::Receiver<Delivery>) -> contract::inbox::Ack {
-    let delivery = Deadline::after(DEADLINE).recv(inbox).expect("a delivery");
-    if let Delivery::Steer(_, ack) = delivery {
-        ack
-    } else {
-        panic!("a steer delivery, not {delivery:?}")
-    }
-}
-
 /// Reads the client to EOF: every line still arriving after the session
 /// closed. Empty when the test consumed everything it was owed.
 fn drain(client: &Client) -> Vec<Value> {
@@ -535,15 +523,16 @@ fn an_acknowledgement_pending_across_a_change_reaches_the_client() {
                 ],
                 "{lowered:?}"
             );
-            // Lower with the steer unanswered: its acknowledgement arrives
-            // after the prelude.
+            // Lower with the prompt unanswered: its acknowledgement arrives
+            // after the prelude. A steer cannot hold this place anymore:
+            // the reader answers it at once.
             send(
                 &client,
                 r#"{"id":"c_a_up2","command":"subscribe","args":{"level":"full"}}"#,
             );
             let _ = until(&client, |line| kind(line) == "clients");
-            send(&client, &prompt_line("c_a_s", "steer"));
-            let ack = take_steer(&inbox);
+            send(&client, &prompt_line("c_a_s", "prompt"));
+            let ack = take_prompt(&inbox);
             send(
                 &client,
                 r#"{"id":"c_a_down2","command":"subscribe","args":{"level":"summary"}}"#,
@@ -560,8 +549,8 @@ fn an_acknowledgement_pending_across_a_change_reaches_the_client() {
                 "{steered:?}"
             );
             // Answered first, it arrives at full level, before the change.
-            send(&client, &prompt_line("c_a_t", "steer"));
-            let ack = take_steer(&inbox);
+            send(&client, &prompt_line("c_a_t", "prompt"));
+            let ack = take_prompt(&inbox);
             (ack.0)(Ok(None));
             let steered_ack = until(&client, |line| command_id(line) == Some("c_a_t"));
             assert_eq!(kinds(&steered_ack), ["command_accepted"], "{steered_ack:?}");

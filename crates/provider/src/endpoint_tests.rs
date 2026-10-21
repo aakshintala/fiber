@@ -56,6 +56,18 @@ fn compat_flags_are_read_from_data_with_thinking_budget_unset_when_absent() {
             "{data}"
         );
     }
+    assert!(!Compat::from_data(&serde_json::Map::new()).vertex_raw_predict);
+    for (data, want) in [
+        (json!({"vertex_raw_predict": true}), true),
+        (json!({"vertex_raw_predict": false}), false),
+        (json!({"vertex_raw_predict": 1}), false),
+    ] {
+        assert_eq!(
+            Compat::from_data(data.as_object().unwrap()).vertex_raw_predict,
+            want,
+            "{data}"
+        );
+    }
 }
 
 #[test]

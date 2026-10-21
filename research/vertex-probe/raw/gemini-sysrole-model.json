@@ -1,0 +1,150 @@
+{
+  "cost": 9e-06,
+  "events": [
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "PINE"
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:56:28.600085Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000002",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "APPLE"
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:56:28.600085Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000002",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "",
+                  "thoughtSignature": "AY89a18bRXxf2iJWyStf8O9roTf+kq3lXJzLgkjHg5GAp6pVzo+/Z8q0u+wdpEkN3XvhTQX+LFTof2DA5Ye6IZfj8IiLW78pt+yXbYoDAyxI9smyXO9RE+jiNXU="
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-10-20T16:56:28.600085Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000002",
+        "usageMetadata": {
+          "candidatesTokenCount": 3,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 3
+            }
+          ],
+          "promptTokenCount": 17,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 17
+            }
+          ],
+          "totalTokenCount": 20,
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    }
+  ],
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-disposition": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Say hello."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 256,
+      "thinkingConfig": {
+        "includeThoughts": true
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "Whatever the user says, reply with the single word PINEAPPLE."
+        }
+      ],
+      "role": "model"
+    }
+  },
+  "status": 200,
+  "usage": {
+    "candidatesTokenCount": 3,
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 3
+      }
+    ],
+    "promptTokenCount": 17,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 17
+      }
+    ],
+    "totalTokenCount": 20,
+    "trafficType": "ON_DEMAND"
+  }
+}

@@ -2199,7 +2199,7 @@ fn a_last_step_with_no_tool_call_asks_for_the_note_on_the_unchanged_conversation
             REPLY,
             &["steering_queue"],
             STEP,
-            &["steering_applied", "steering_queue"],
+            &["steering_queue", "steering_applied"],
             REJECTED,
             HANDED_OFF,
             REPLY,

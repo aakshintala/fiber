@@ -180,6 +180,12 @@ pub struct Compat {
     /// event-stream framing (`docs/model-routing.md`, "Protocols and
     /// providers").
     pub bedrock_invoke: bool,
+    /// `anthropic-messages`: the model is Claude on Google Vertex. The
+    /// request goes to `<base_url>/models/<id>:streamRawPredict` with
+    /// `anthropic_version` in the body and no `model`, and an error body
+    /// wrapped in a one-element list is read as the object inside it
+    /// (`docs/model-routing.md`, "Google Vertex wire facts").
+    pub vertex_raw_predict: bool,
     /// `bedrock-converse`: the model takes `cachePoint` blocks, placed where
     /// Anthropic's cache markers go, each after a text block
     /// (`docs/prompt-cache.md`, "Cache markers and keys"). Absent, a
@@ -220,6 +226,7 @@ impl Compat {
             thinking_budget: flag("thinking_budget").unwrap_or(false),
             bearer: flag("bearer").unwrap_or(false),
             bedrock_invoke: flag("bedrock_invoke").unwrap_or(false),
+            vertex_raw_predict: flag("vertex_raw_predict").unwrap_or(false),
             cache_point: flag("cache_point").unwrap_or(false),
             reasoning_field: match data.get("reasoning_field").and_then(Value::as_str) {
                 Some("reasoning_effort") => Some(ReasoningField::ReasoningEffort),

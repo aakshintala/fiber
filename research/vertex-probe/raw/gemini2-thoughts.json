@@ -1,0 +1,69 @@
+{
+  "body": {
+    "error": {
+      "code": 400,
+      "message": "Unable to submit request because Thinking_config.include_thoughts is only enabled when thinking is enabled.. Learn more: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/gemini",
+      "status": "INVALID_ARGUMENT"
+    }
+  },
+  "cost": 0.0,
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-length": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Look at the image the tool returns, then name its colour in one word."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 256,
+      "thinkingConfig": {
+        "includeThoughts": true
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    },
+    "toolConfig": {
+      "functionCallingConfig": {
+        "mode": "ANY"
+      }
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "Weather for a city.",
+            "name": "get_image",
+            "parametersJsonSchema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 400,
+  "usage": {}
+}

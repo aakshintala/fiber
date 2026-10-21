@@ -437,8 +437,9 @@ pub(crate) fn target(url: &str) -> String {
 /// ID", a `not_found_error` whose message names the model (Anthropic, muse
 /// on messages; the same type with "Not found" is a wrong path), Gemini's
 /// `NOT_FOUND` for a `models/` name (`research/provider-errors`, "Unknown
-/// model" and "Wrong path"), or Bedrock's "The provided model identifier is
-/// invalid." (`research/bedrock-invoke-probe`, `raw/bad-model.json`).
+/// model" and "Wrong path"), Bedrock's "The provided model identifier is
+/// invalid." (`research/bedrock-invoke-probe`, `raw/bad-model.json`), or
+/// Vertex's `NOT_FOUND` for a `Publisher model` (`research/vertex-probe`).
 fn unknown_model(body: &str) -> bool {
     let value: Option<Value> = serde_json::from_str(body).ok();
     let field = |pointer: &str| {
@@ -453,7 +454,8 @@ fn unknown_model(body: &str) -> bool {
         || message.contains("The provided model identifier is invalid")
         || (field("/error/type") == "not_found_error"
             && message.to_ascii_lowercase().contains("model"))
-        || (field("/error/status") == "NOT_FOUND" && message.starts_with("models/"))
+        || (field("/error/status") == "NOT_FOUND"
+            && (message.starts_with("models/") || message.starts_with("Publisher model")))
 }
 
 /// The code for a failure inside a 200 stream: from the provider's own code,
