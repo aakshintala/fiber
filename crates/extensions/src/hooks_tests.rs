@@ -2801,6 +2801,16 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
         .threads()
         .pop()
         .expect("one watcher parked at its deadline");
+    // Pin the exec runner's fresh re-park at before + 10 ms before
+    // advancing: its poll park would otherwise arrive beside the
+    // watcher's deadline park and fail the unnamed wait.
+    let poll = clock
+        .mark_parked(before + Duration::from_millis(10), WAIT)
+        .expect("waited for the exec runner to park");
+    assert!(
+        clock.await_any_parked_since(&poll, WAIT),
+        "waited for the exec runner to re-park"
+    );
     clock.advance_when_parked(
         Some(before + Duration::from_millis(300)),
         Some(thread),
