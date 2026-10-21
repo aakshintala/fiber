@@ -300,6 +300,19 @@ fn draw_import_question(question: &str, area: Rect, buf: &mut Buffer, targets: &
     }
 }
 
+/// The session list's window in `area`: the rows' rect, and the
+/// highest first row the window shows, the rows past the window.
+/// The wheel over the rect scrolls the list.
+pub(crate) fn list_window(app: &App, screen: &HomeScreen, area: Rect) -> (Rect, usize) {
+    let placed = layout(app, screen, area);
+    let tall = placed.list_end.saturating_sub(placed.list_top);
+    let max = list_rows(screen).len().saturating_sub(usize::from(tall));
+    (
+        Rect::new(placed.x, placed.list_top, placed.width, tall),
+        max,
+    )
+}
+
 /// The delete question's maximum scroll offset in `area`: its body rows
 /// past the rows the frame shows them in. The import offer never
 /// scrolls.
@@ -495,6 +508,10 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
     rows
 }
 
+// The `at + height > end` pull keeps an entry fully inside its window:
+// with `at >= start` and `at + height == end` the pull recomputes the
+// same `start`, so `>=` is equivalent and no test can catch it.
+#[cfg_attr(false, mutants::skip)]
 fn draw_list(
     app: &App,
     screen: &HomeScreen,
@@ -505,22 +522,31 @@ fn draw_list(
 ) {
     let capacity = usize::from(placed.list_end.saturating_sub(placed.list_top));
     let rows = list_rows(screen);
+    let max = rows.len().saturating_sub(capacity);
     let focused = app.focused().and_then(|target| {
         let TargetId::Home(spot) = target else {
             return None;
         };
         spot.list_stop()
     });
-    let start = focused
-        .and_then(|spot| rows.iter().position(|r| r.spot == Some(spot)))
-        .map_or(0, |at| {
-            let height = 1 + usize::from(
-                rows.get(at.saturating_add(1))
-                    .is_some_and(|r| r.spot == focused),
-            );
-            at.saturating_add(height.min(capacity))
-                .saturating_sub(capacity)
-        });
+    // The window starts at the stored offset, clamped to the rows
+    // past it. A focused row outside the window pulls into view, and
+    // pulls the stored offset with it, so the wheel carries on from
+    // the rows shown.
+    let mut start = app.home_list_scroll().min(max);
+    if let Some(at) = focused.and_then(|spot| rows.iter().position(|r| r.spot == Some(spot))) {
+        let height = 1 + usize::from(
+            rows.get(at.saturating_add(1))
+                .is_some_and(|r| r.spot == focused),
+        );
+        let end = start.saturating_add(capacity);
+        if at < start || at.saturating_add(height) > end {
+            start = at
+                .saturating_add(height.min(capacity))
+                .saturating_sub(capacity);
+        }
+    }
+    app.set_home_list_scroll(start);
     if screen.empty {
         let y = placed
             .list_top
