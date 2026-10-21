@@ -495,7 +495,7 @@ fn setup_entry(
     let completions = if args.no_completions {
         ::cli::Completions::No
     } else if let Some(shell) = args.completions {
-        ::cli::Completions::Yes(setup_shell(shell))
+        ::cli::Completions::Yes(shell.name().to_owned())
     } else {
         ::cli::Completions::Unset
     };
@@ -524,15 +524,6 @@ fn setup_entry(
         Arc::new(tools::PathLocks::new()),
         &runner,
     )
-}
-
-/// The shell name the setup completions line names: the parser's spelling.
-fn setup_shell(shell: crate::completion::Shell) -> String {
-    match shell {
-        crate::completion::Shell::Bash => "bash".to_owned(),
-        crate::completion::Shell::Zsh => "zsh".to_owned(),
-        crate::completion::Shell::Fish => "fish".to_owned(),
-    }
 }
 
 /// `fiber refresh-model-lists`: refreshes the named providers' cached
