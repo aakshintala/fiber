@@ -3340,3 +3340,257 @@ fn a_watch_refusal_surfaces_as_the_registration_notice() {
         "{notices:?}"
     );
 }
+
+/// Task 4 (see #564): the load gate and the removed-extension check. The
+/// first-party `hooks` package itself ships in Task 3; these tests install a
+/// stand-in under its full name and pin the gate around it.
+/// Installs the package named `github.com/aakshintala/fiber/extensions/hooks`
+/// with `init` as its entry script: the stand-in for the first-party package
+/// until it ships.
+fn install_hooks(home: &Home, init: &str) {
+    let name = config::full_name("hooks");
+    let src = home.root.path().join("src").join("hooks-first-party");
+    fs::create_dir_all(&src).unwrap();
+    let manifest = json!({"name": name, "version": "v1.2.3", "fiber": "0.1.0", "api": 1});
+    fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
+    fs::write(src.join("init.lua"), init).unwrap();
+    plan(
+        &home.home(),
+        &Request::Path(src),
+        "0.1.0",
+        &Origin::github(),
+        &*FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// One `extensions."<hooks>".settings.hooks=<entries>` override.
+fn hooks_override(entries: &str) -> String {
+    format!(
+        "extensions.\"{}\".settings.hooks={entries}",
+        config::full_name("hooks")
+    )
+}
+
+/// Loads the session with `entries` as the declared `hooks` settings.
+fn load_with_hooks(home: &Home, entries: &str) -> Arc<SessionExtensions> {
+    let setting = hooks_override(entries);
+    home.load(&[setting.as_str()])
+}
+
+fn loaded_names(session: &Arc<SessionExtensions>) -> Vec<String> {
+    session
+        .loaded()
+        .iter()
+        .map(|loaded| loaded.name.clone())
+        .collect()
+}
+
+fn hooks_config(home: &Home, entries: &str) -> Config {
+    let setting = hooks_override(entries);
+    home.config(&[setting.as_str()])
+}
+
+const BLOCKING_ENTRY: &str =
+    r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#;
+const NON_BLOCKING_ENTRY: &str = r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"non-blocking"}}"#;
+const NO_ON_FAILURE_ENTRY: &str =
+    r#"{"audit":{"point":"after_tool","command":"true","timeout":1000}}"#;
+const UNKNOWN_ON_FAILURE_ENTRY: &str =
+    r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"sometimes"}}"#;
+const NON_STRING_ON_FAILURE_ENTRY: &str =
+    r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":5}}"#;
+const WATCHER_ENTRY: &str =
+    r#"{"ping":{"watch":["turn_completed"],"command":"true","timeout":1000}}"#;
+
+#[test]
+fn hooks_without_a_hooks_key_does_not_load() {
+    let home = Home::new();
+    install_hooks(&home, "-- no hooks registered\n");
+    let session = home.load(&[]);
+    assert!(
+        !loaded_names(&session).contains(&config::full_name("hooks")),
+        "{:?}",
+        loaded_names(&session)
+    );
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    assert_eq!(
+        super::hooks_state(&home.config(&[]), &[]),
+        super::HooksState::Ready
+    );
+}
+
+#[test]
+fn hooks_with_a_hooks_key_loads() {
+    let home = Home::new();
+    install_hooks(&home, "-- no hooks registered\n");
+    let session = load_with_hooks(&home, BLOCKING_ENTRY);
+    assert!(
+        loaded_names(&session).contains(&config::full_name("hooks")),
+        "{:?}",
+        loaded_names(&session)
+    );
+}
+
+#[test]
+fn hooks_with_an_empty_hooks_key_loads_silently() {
+    let home = Home::new();
+    install_hooks(&home, "-- no hooks registered\n");
+    let session = load_with_hooks(&home, "{}");
+    assert!(
+        loaded_names(&session).contains(&config::full_name("hooks")),
+        "{:?}",
+        loaded_names(&session)
+    );
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, "{}"), &loaded_names(&session)),
+        super::HooksState::Ready
+    );
+}
+
+#[test]
+fn hooks_state_is_ready_without_declarations() {
+    let home = Home::new();
+    assert_eq!(
+        super::hooks_state(&home.config(&[]), &[]),
+        super::HooksState::Ready
+    );
+}
+
+#[test]
+fn hooks_state_is_ready_when_the_extension_loaded() {
+    let home = Home::new();
+    let loaded = vec![config::full_name("hooks")];
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, BLOCKING_ENTRY), &loaded),
+        super::HooksState::Ready
+    );
+}
+
+#[test]
+fn hooks_state_is_missing_blocking_for_a_lone_on_failure_less_entry() {
+    let home = Home::new();
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, NO_ON_FAILURE_ENTRY), &[]),
+        super::HooksState::MissingBlocking
+    );
+}
+
+#[test]
+fn hooks_state_is_missing_blocking_beside_a_blocking_entry() {
+    let home = Home::new();
+    let entries = r#"{"plain":{"point":"after_tool","command":"true","timeout":1000},"guard":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#;
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, entries), &[]),
+        super::HooksState::MissingBlocking
+    );
+}
+
+#[test]
+fn hooks_state_is_missing_blocking_for_an_unknown_on_failure() {
+    let home = Home::new();
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, UNKNOWN_ON_FAILURE_ENTRY), &[]),
+        super::HooksState::MissingBlocking
+    );
+}
+
+#[test]
+fn hooks_state_is_missing_blocking_for_a_non_string_on_failure() {
+    let home = Home::new();
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, NON_STRING_ON_FAILURE_ENTRY), &[]),
+        super::HooksState::MissingBlocking
+    );
+}
+
+#[test]
+fn hooks_state_skips_watcher_entries() {
+    let home = Home::new();
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, WATCHER_ENTRY), &[]),
+        super::HooksState::Ready
+    );
+}
+
+#[test]
+fn hooks_state_is_ready_for_an_empty_hooks_key() {
+    let home = Home::new();
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, "{}"), &[]),
+        super::HooksState::Ready
+    );
+}
+
+#[test]
+fn hooks_state_is_missing_notice_for_unloaded_non_blocking_hooks() {
+    let home = Home::new();
+    match super::hooks_state(&hooks_config(&home, NON_BLOCKING_ENTRY), &[]) {
+        super::HooksState::MissingNotice { notice } => {
+            assert_eq!(notice.code, ErrorCode::ExtensionMissing);
+            assert_eq!(
+                notice.extension.as_deref(),
+                Some(config::full_name("hooks").as_str())
+            );
+            assert!(
+                notice.message.contains("fiber extension install hooks"),
+                "{}",
+                notice.message
+            );
+        }
+        state @ (super::HooksState::Ready | super::HooksState::MissingBlocking) => {
+            panic!("expected MissingNotice, got {state:?}");
+        }
+    }
+}
+
+#[test]
+fn declared_non_blocking_hooks_without_the_package_leave_one_notice() {
+    let home = Home::new();
+    let session = load_with_hooks(&home, NON_BLOCKING_ENTRY);
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionMissing);
+    assert_eq!(
+        notices[0].extension.as_deref(),
+        Some(config::full_name("hooks").as_str())
+    );
+}
+
+#[test]
+fn declared_blocking_hooks_without_the_package_stay_silent_until_the_gate() {
+    let home = Home::new();
+    let session = load_with_hooks(&home, BLOCKING_ENTRY);
+    assert!(
+        !loaded_names(&session).contains(&config::full_name("hooks")),
+        "{:?}",
+        loaded_names(&session)
+    );
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, BLOCKING_ENTRY), &[]),
+        super::HooksState::MissingBlocking
+    );
+}
+
+#[test]
+fn unreadable_hooks_settings_skip_the_load_and_fail_closed() {
+    let home = Home::new();
+    install_hooks(&home, "-- no hooks registered\n");
+    let file = home.home().join("config").join("hooks.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "{not json").unwrap();
+    let session = home.load(&[]);
+    assert!(
+        !loaded_names(&session).contains(&config::full_name("hooks")),
+        "{:?}",
+        loaded_names(&session)
+    );
+    assert_eq!(
+        super::hooks_state(&home.config(&[]), &[]),
+        super::HooksState::MissingBlocking
+    );
+}

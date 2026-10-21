@@ -349,6 +349,24 @@ impl SessionExtensions {
         // unloaded.
         let mut started: Vec<Started> = Vec::new();
         for candidate in merged {
+            // The first-party `hooks` extension loads only when the
+            // configuration declares a `hooks` key (`docs/extensions.md`,
+            // "Hooks declared in configuration"): without one there is
+            // nothing for it to run, so it is skipped silently. Unreadable
+            // settings skip the load and fail closed at the gate.
+            if candidate.name == config::full_name("hooks") {
+                match config
+                    .extensions()
+                    .get(&candidate.name, &["hooks"], "hooks")
+                {
+                    Ok(None) => continue,
+                    Err(error) => {
+                        session.failed(&candidate.name, &Error::Config(error));
+                        continue;
+                    }
+                    Ok(Some(_)) => {}
+                }
+            }
             let slug = match crate::install::slug(&candidate.name) {
                 Ok(slug) => slug,
                 Err(e) => {
@@ -621,6 +639,19 @@ impl SessionExtensions {
         session
             .watchers
             .sort_by(|a, b| (&a.name, a.index).cmp(&(&b.name, b.index)));
+        // Declared hooks with no extension to run them are not silently
+        // dropped: all-`non-blocking` leaves one notice naming the
+        // extension (`MissingBlocking` fails the start at the gate).
+        if let HooksState::MissingNotice { notice } = hooks_state(
+            config,
+            &session
+                .loaded
+                .iter()
+                .map(|loaded| loaded.name.clone())
+                .collect::<Vec<_>>(),
+        ) {
+            session.notices.push(notice);
+        }
         session
     }
 
@@ -1445,6 +1476,83 @@ fn notice(code: ErrorCode, message: String, extension: Option<&str>) -> Notice {
         message,
         extension: extension.map(str::to_owned),
     }
+}
+
+/// What the session owes declared hooks when the `hooks` extension did
+/// not load (`docs/extensions.md`, "Hooks declared in configuration"):
+/// nothing, a notice, or a failed start, so a guard never fails open.
+/// Entries with `watch` keys are watcher entries (#565) and never trip
+/// this gate.
+pub fn hooks_state(config: &Config, loaded: &[String]) -> HooksState {
+    let name = config::full_name("hooks");
+    let declared = match config.extensions().get(&name, &["hooks"], "hooks") {
+        Ok(declared) => declared,
+        // Unreadable settings fail closed: the guard's fate is unknown.
+        Err(_) => return HooksState::MissingBlocking,
+    };
+    let Some(declared) = declared else {
+        return HooksState::Ready;
+    };
+    let Value::Object(entries) = declared else {
+        return HooksState::MissingBlocking;
+    };
+    if entries.is_empty() {
+        return HooksState::Ready;
+    }
+    let mut blocking = false;
+    let mut hooks = false;
+    for entry in entries.values() {
+        let Value::Object(entry) = entry else {
+            return HooksState::MissingBlocking;
+        };
+        if entry.contains_key("watch") {
+            continue;
+        }
+        hooks = true;
+        // A missing or invalid `on_failure` counts as `blocking`: a
+        // forgotten guard must not fail open as `non-blocking` would.
+        if entry.get("on_failure").and_then(Value::as_str) != Some("non-blocking") {
+            blocking = true;
+            break;
+        }
+    }
+    if !hooks {
+        return HooksState::Ready;
+    }
+    if loaded.contains(&name) {
+        return HooksState::Ready;
+    }
+    if blocking {
+        return HooksState::MissingBlocking;
+    }
+    HooksState::MissingNotice {
+        notice: notice(
+            ErrorCode::ExtensionMissing,
+            "The `hooks` extension is not installed, so its declared hooks will not run. Run `fiber extension install hooks`."
+                .to_owned(),
+            Some(&name),
+        ),
+    }
+}
+
+/// What a session with declared hooks owes them when the `hooks`
+/// extension did not load (`docs/extensions.md`, "Hooks declared in
+/// configuration").
+#[derive(Debug, PartialEq)]
+pub enum HooksState {
+    /// No hook declarations, an empty `hooks` key, watcher-only
+    /// declarations, or the extension loaded: the session goes on.
+    Ready,
+    /// Declared-but-unloaded non-empty all-`non-blocking` hooks: the
+    /// session starts and one notice names the missing extension.
+    MissingNotice {
+        /// The notice the load pushes, naming the missing extension.
+        notice: Notice,
+    },
+    /// Declared-but-unloaded hooks with any `blocking` entry, a missing
+    /// or invalid `on_failure`, or unreadable settings: the start fails
+    /// with `extension_missing`.
+    MissingBlocking,
 }
 
 #[cfg(test)]

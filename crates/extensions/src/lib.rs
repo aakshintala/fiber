@@ -90,6 +90,7 @@ pub use contract::hook::StateSeed;
 pub use extension_tools::LuaTool;
 pub use first_party::{not_installed_providers, serving_package};
 pub use git::{Origin, SHORT_NAMES, full_name, is_path};
+pub use hooks::{HooksState, hooks_state};
 pub use hooks::{SessionExtensions, WatcherError};
 pub use host::Session;
 pub use host::script::{ExecEnd, ExecEntry, ExecReply, HostScript, HttpEntry, json_matches};

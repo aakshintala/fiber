@@ -1205,7 +1205,9 @@ entries instead of replacing the list:
   missing field, as for any hook ("When a hook fails").
 - **`tools`** lists exact tool names, with no patterns, on a `before_tool` or
   `after_tool` hook. The command runs only for those tools, so a formatter
-  does not start a process on every `read`.
+  does not start a process on every `read`. Without `tools`, the command runs
+  for every tool call; an entry whose `tools` is empty is not registered, and
+  a `notice` names the entry and the field.
 - **A watcher entry** names `watch`, the event kinds it wants
   (`docs/events.md`), its `command` and `args`, and a `timeout`. It has no
   `on_failure`: a watcher changes nothing, so its failure only gives a

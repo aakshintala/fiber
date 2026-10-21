@@ -81,6 +81,33 @@ pub(crate) fn required(
     ))
 }
 
+/// `extension_missing` naming `fiber extension install hooks` when declared
+/// hooks have no extension to run them and any entry is `blocking` (or its
+/// `on_failure` is missing, invalid, or unreadable), so a guard never fails
+/// open (`docs/extensions.md`, "Hooks declared in configuration").
+pub(crate) fn missing_hooks(
+    config: &config::Config,
+    extensions: &extensions::SessionExtensions,
+) -> Result<(), contract::shapes::Failure> {
+    use crate::failed;
+
+    let loaded: Vec<String> = extensions
+        .loaded()
+        .iter()
+        .map(|loaded| loaded.name.clone())
+        .collect();
+    if !matches!(
+        extensions::hooks_state(config, &loaded),
+        extensions::HooksState::MissingBlocking
+    ) {
+        return Ok(());
+    }
+    Err(failed(
+        contract::ErrorCode::ExtensionMissing,
+        "The `hooks` extension is not installed. Run `fiber extension install hooks`.",
+    ))
+}
+
 /// Registers the session's one watcher fan-out on `log`: every event
 /// appended from now on — durable and ephemeral, from every source — is
 /// offered to `extensions.deliver` with its seq, in the one place all
@@ -276,5 +303,114 @@ mod tests {
             status_rx.try_recv().is_err(),
             "no watcher runs while a shutdown is set"
         );
+    }
+}
+
+#[cfg(test)]
+mod hooks_gate_tests {
+    //! Task 4 (see #564): `missing_hooks` fails the start closed when
+    //! declared hooks have no extension to run them and any entry is
+    //! `blocking` (or its `on_failure` is missing, invalid, or unreadable).
+
+    #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
+
+    use super::missing_hooks;
+    use crate::test_support::{Rig, install_extension, load};
+    use std::sync::Arc;
+
+    fn hooks_setting(entries: &str) -> String {
+        format!(
+            "extensions.\"{}\".settings.hooks={entries}",
+            config::full_name("hooks")
+        )
+    }
+
+    fn session_extensions(rig: &Rig, config: &config::Config) -> extensions::SessionExtensions {
+        extensions::SessionExtensions::load(
+            &rig.home,
+            config,
+            fakes::clock::FakeClock::new(),
+            Arc::new(tools::PathLocks::new()),
+            None,
+        )
+    }
+
+    /// Installs a data-only package under the first-party `hooks` name: the
+    /// stand-in for the package until it ships.
+    fn install_hooks_package(rig: &Rig) {
+        install_extension(
+            &rig.home,
+            "extensions/hooks",
+            serde_json::json!({"name": config::full_name("hooks"), "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+            &[],
+        );
+    }
+
+    const BLOCKING: &str = r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#;
+    const NON_BLOCKING: &str = r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"non-blocking"}}"#;
+
+    #[test]
+    fn missing_hooks_is_ok_without_declarations() {
+        let rig = Rig::new("fiber-hooks-gate-none");
+        let config = load(&rig.home, &rig.workspace, "test", &[] as &[&str]);
+        let extensions = session_extensions(&rig, &config);
+        assert!(missing_hooks(&config, &extensions).is_ok());
+    }
+
+    #[test]
+    fn missing_hooks_is_ok_when_the_package_loaded() {
+        let rig = Rig::new("fiber-hooks-gate-loaded");
+        install_hooks_package(&rig);
+        let setting = hooks_setting(BLOCKING);
+        let config = load(&rig.home, &rig.workspace, "test", [setting.as_str()]);
+        let extensions = session_extensions(&rig, &config);
+        assert!(missing_hooks(&config, &extensions).is_ok());
+    }
+
+    #[test]
+    fn missing_hooks_is_ok_for_unloaded_non_blocking_hooks() {
+        let rig = Rig::new("fiber-hooks-gate-notice");
+        let setting = hooks_setting(NON_BLOCKING);
+        let config = load(&rig.home, &rig.workspace, "test", [setting.as_str()]);
+        let extensions = session_extensions(&rig, &config);
+        assert!(missing_hooks(&config, &extensions).is_ok());
+    }
+
+    #[test]
+    fn missing_hooks_fails_closed_for_a_blocking_entry() {
+        let rig = Rig::new("fiber-hooks-gate-blocking");
+        let setting = hooks_setting(BLOCKING);
+        let config = load(&rig.home, &rig.workspace, "test", [setting.as_str()]);
+        let extensions = session_extensions(&rig, &config);
+        let failure = missing_hooks(&config, &extensions).unwrap_err();
+        assert_eq!(failure.code, contract::ErrorCode::ExtensionMissing);
+        assert!(
+            failure.message.contains("fiber extension install hooks"),
+            "{}",
+            failure.message
+        );
+    }
+
+    #[test]
+    fn missing_hooks_fails_closed_for_a_missing_on_failure() {
+        let rig = Rig::new("fiber-hooks-gate-no-on-failure");
+        let setting =
+            hooks_setting(r#"{"audit":{"point":"after_tool","command":"true","timeout":1000}}"#);
+        let config = load(&rig.home, &rig.workspace, "test", [setting.as_str()]);
+        let extensions = session_extensions(&rig, &config);
+        let failure = missing_hooks(&config, &extensions).unwrap_err();
+        assert_eq!(failure.code, contract::ErrorCode::ExtensionMissing);
+    }
+
+    #[test]
+    fn missing_hooks_fails_closed_for_unreadable_settings() {
+        let rig = Rig::new("fiber-hooks-gate-unreadable");
+        let file = rig.home.join("config").join("hooks.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "{not json").unwrap();
+        let config = load(&rig.home, &rig.workspace, "test", &[] as &[&str]);
+        let extensions = session_extensions(&rig, &config);
+        let failure = missing_hooks(&config, &extensions).unwrap_err();
+        assert_eq!(failure.code, contract::ErrorCode::ExtensionMissing);
     }
 }
