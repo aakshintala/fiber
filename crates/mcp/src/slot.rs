@@ -135,6 +135,21 @@ pub(crate) enum Served {
     Failed(Box<RunFailed>),
 }
 
+/// What [`Slot::relist`] found: fresh lists, or the signal to take the
+/// replace path, whose records carry the death and the ready.
+pub(crate) enum Relisted {
+    /// The server answered with fresh lists; the caller stages them.
+    Up { listed: Cached },
+    /// The server died, expired, stopped or missed the re-list deadline:
+    /// shadow-start its replacement instead. The death outcome the shared
+    /// path already yields, built without moving the slot: expired and
+    /// refused lists carry none.
+    Replace {
+        /// The death records the commit writes before the ready.
+        records: Vec<ServerRecord>,
+    },
+}
+
 impl Slot {
     /// One slot from its parts, in `state`: `resources` is fixed here
     /// from the lists the slot was declared from and never changes after.
@@ -260,6 +275,17 @@ impl Slot {
     /// the per-server commands").
     pub(crate) fn is_running(&self) -> bool {
         matches!(*lock(&self.state), State::Running { .. })
+    }
+
+    /// Whether the slot answers a re-list: running with a live, unexpired
+    /// server. A server that died or expired while idle replaces: the
+    /// classification reads this, so a dead slot never takes the keep
+    /// path.
+    pub(crate) fn is_live(&self) -> bool {
+        match &*lock(&self.state) {
+            State::Running { server, .. } => !server.is_gone() && !server.is_expired(),
+            State::NotStarted { .. } | State::Down { .. } | State::Dead { .. } => false,
+        }
     }
 
     /// The bare tool names live now: the running server's list, else
@@ -464,6 +490,249 @@ impl Slot {
                     Run::Removed(records)
                 }
             }
+        }
+    }
+
+    /// A fresh `tools/list` (`prompts/list` only for the cache write)
+    /// against the running server, under the slot lease, bounded by the
+    /// spec's `startup_timeout`, the same bound as the handshake's listing
+    /// it repeats. Returns declare-ready lists and touches nothing: the
+    /// caller stages the outcome. Any transport failure (a timeout, a
+    /// death mid-reload, an expiry, or a `tools/list` that errors) signals
+    /// the replace path, carrying the death outcome the shared path
+    /// already yields, built here without moving the slot: dead, expired,
+    /// wedged (timeout), and gone servers all return the replace path
+    /// with no state change. The prompt payload feeds the cache write
+    /// only, never the session.
+    pub(crate) fn relist(&self) -> Relisted {
+        // The lease, held across the RPCs as `serve` holds it across a
+        // launch: the edge against a concurrent serve or stop.
+        let _flight = self.acquire();
+        let (server, restarted, list_tools, list_prompts) = {
+            let state = lock(&self.state);
+            match &*state {
+                State::Running {
+                    server,
+                    restarted,
+                    listed,
+                    ..
+                } if !server.is_gone() && !server.is_expired() => {
+                    // The handshake lists only advertised capabilities, and
+                    // the slot remembers no advertisement flags: a section
+                    // whose last list came back empty is not listed again.
+                    // A server that advertised an empty section re-lists it
+                    // on its next restart, when the handshake sees the
+                    // advertisement. Listing an unadvertised section would
+                    // hang a server that answers it with malformed JSON.
+                    (
+                        Arc::clone(server),
+                        *restarted,
+                        !listed.tools.is_empty(),
+                        !listed.prompts.is_empty(),
+                    )
+                }
+                State::Running {
+                    server, restarted, ..
+                } if server.is_gone() => {
+                    // It died while idle: this re-list is the first to see
+                    // it, as the entry of `serve` is for a call.
+                    let death = died(&self.spec.name, !*restarted, self.spec.remote());
+                    return Relisted::Replace {
+                        records: vec![ServerRecord::Failed(death.record)],
+                    };
+                }
+                State::Running { .. }
+                | State::NotStarted { .. }
+                | State::Down { .. }
+                | State::Dead { .. } => {
+                    return Relisted::Replace {
+                        records: Vec::new(),
+                    };
+                }
+            }
+        };
+        let timeout = self.spec.startup_timeout;
+        let bound = crate::wait::deadline(self.clock.as_ref(), timeout);
+        // The missed-deadline record, shared by the bound check and the
+        // timed-out RPC: one deadline, one record, either path.
+        let missed = || self.deadline_death();
+        let mut tools = Vec::new();
+        let mut cursor: Option<String> = None;
+        if list_tools {
+            loop {
+                if self.clock.now() >= bound {
+                    return Relisted::Replace {
+                        records: vec![missed()],
+                    };
+                }
+                let remaining = bound
+                    .checked_duration_since(self.clock.now())
+                    .unwrap_or_default();
+                let params = match &cursor {
+                    Some(cursor) => serde_json::json!({"cursor": cursor}),
+                    None => serde_json::json!({}),
+                };
+                let page =
+                    match server.call("tools/list", &params, remaining, &crate::wait::NoCancel) {
+                        Ok(value) => value,
+                        Err(CallError::Timeout) => {
+                            return Relisted::Replace {
+                                records: vec![missed()],
+                            };
+                        }
+                        Err(CallError::Gone) => {
+                            let death = died(&self.spec.name, !restarted, self.spec.remote());
+                            return Relisted::Replace {
+                                records: vec![ServerRecord::Failed(death.record)],
+                            };
+                        }
+                        Err(_) => {
+                            return Relisted::Replace {
+                                records: Vec::new(),
+                            };
+                        }
+                    };
+                let object = match page.as_object() {
+                    Some(object) => object,
+                    None => {
+                        return Relisted::Replace {
+                            records: Vec::new(),
+                        };
+                    }
+                };
+                let Some(found) = object.get("tools").and_then(Value::as_array) else {
+                    return Relisted::Replace {
+                        records: Vec::new(),
+                    };
+                };
+                tools.extend(crate::server_json::entries(found.clone()));
+                cursor = object
+                    .get("nextCursor")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                if cursor.is_none() {
+                    break;
+                }
+            }
+        }
+        let mut prompts = Vec::new();
+        let mut cursor: Option<String> = None;
+        if list_prompts {
+            loop {
+                if self.clock.now() >= bound {
+                    return Relisted::Replace {
+                        records: vec![missed()],
+                    };
+                }
+                let remaining = bound
+                    .checked_duration_since(self.clock.now())
+                    .unwrap_or_default();
+                let params = match &cursor {
+                    Some(cursor) => serde_json::json!({"cursor": cursor}),
+                    None => serde_json::json!({}),
+                };
+                let page =
+                    match server.call("prompts/list", &params, remaining, &crate::wait::NoCancel) {
+                        Ok(value) => value,
+                        Err(CallError::Timeout) => {
+                            return Relisted::Replace {
+                                records: vec![missed()],
+                            };
+                        }
+                        Err(CallError::Gone) => {
+                            let death = died(&self.spec.name, !restarted, self.spec.remote());
+                            return Relisted::Replace {
+                                records: vec![ServerRecord::Failed(death.record)],
+                            };
+                        }
+                        // A prompts list that errors leaves no prompts while the
+                        // re-list goes on, as at startup; only a missed deadline,
+                        // a death or an expiry falls back to the replace path.
+                        Err(CallError::JsonRpc { .. })
+                        | Err(CallError::Http(_))
+                        | Err(CallError::Login(_)) => break,
+                        Err(_) => {
+                            return Relisted::Replace {
+                                records: Vec::new(),
+                            };
+                        }
+                    };
+                let object = match page.as_object() {
+                    Some(object) => object,
+                    None => break,
+                };
+                let Some(found) = object.get("prompts").and_then(Value::as_array) else {
+                    break;
+                };
+                prompts.extend(crate::server_json::entries(found.clone()));
+                cursor = object
+                    .get("nextCursor")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                if cursor.is_none() {
+                    break;
+                }
+            }
+        }
+        Relisted::Up {
+            listed: Cached {
+                tools,
+                prompts,
+                resources: self.resources,
+            },
+        }
+    }
+
+    /// The missed-deadline record for a re-list the bound outlived: the
+    /// startup deadline the handshake's listing shares, restartable as a
+    /// death the next call would restart. Built without moving the slot.
+    fn deadline_death(&self) -> ServerRecord {
+        let error = McpError::StartDeadline {
+            server: self.spec.name.clone(),
+            required: self.spec.required,
+            startup_ms: self.spec.startup_timeout.as_millis(),
+        };
+        ServerRecord::Failed(McpServerFailed {
+            server: self.spec.name.clone(),
+            reason: ServerFailure::Deadline,
+            will_restart: true,
+            error: Failure::from(&error),
+        })
+    }
+
+    /// The death this check is the first to see, as the entry of `serve`
+    /// is for a call: a running server that exited while idle, built
+    /// without moving the slot. Nothing for an expiry, which restarts
+    /// with no record, or a live server: the stage reads this to carry
+    /// the old death into the replacement's records.
+    pub(crate) fn idle_death(&self) -> Option<ServerRecord> {
+        let state = lock(&self.state);
+        let State::Running {
+            server, restarted, ..
+        } = &*state
+        else {
+            return None;
+        };
+        if !server.is_gone() {
+            return None;
+        }
+        let death = died(&self.spec.name, !*restarted, self.spec.remote());
+        Some(ServerRecord::Failed(death.record))
+    }
+
+    /// Installs re-listed `listed` on a still-running slot, refreshing the
+    /// live set the removed-tool check reads. A slot that died, stopped or
+    /// was replaced between the re-list and the commit keeps what it has:
+    /// the commit's replace path owns it. Holds only the state lock, never
+    /// the lease, so it cannot wedge against a concurrent serve or stop.
+    pub(crate) fn install_relisted(&self, listed: Cached) {
+        let mut state = lock(&self.state);
+        if let State::Running {
+            live, listed: held, ..
+        } = &mut *state
+        {
+            *live = names(&listed.tools);
+            *held = listed;
         }
     }
 
