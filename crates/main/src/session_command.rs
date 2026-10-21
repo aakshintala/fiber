@@ -119,10 +119,14 @@ pub(crate) fn run(
         );
     }
     if let Some(old) = args.continues {
+        // The original spelling rides along for the identity compare:
+        // `current_dir` above already normalized slashes and symlinks
+        // away, while the hub enforced the exact string.
         return crate::continue_session::session_continues(
             SessionId(args.id),
             SessionId(old),
             crate::per_run(args.model, args.overrides),
+            &args.workspace,
             clock,
             &signals,
             fiber,

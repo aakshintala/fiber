@@ -181,6 +181,64 @@ fn worktree_path_is_none_unless_an_object_with_a_string_path() {
 }
 
 #[test]
+fn worktree_record_is_none_when_absent_or_null() {
+    for payload in [
+        json!({"workspace": "/w"}),
+        json!({"workspace": "/w", "worktree": Value::Null}),
+    ] {
+        let first = json!({"kind": "session_started", "payload": payload}).to_string();
+        let view = SessionStarted::parse(first.as_bytes()).expect("a session_started");
+        assert_eq!(view.worktree_record().unwrap(), None, "{payload}");
+    }
+}
+
+#[test]
+fn worktree_record_carries_a_valid_record() {
+    let home = fakes::TempDir::new("log-scan-record-valid");
+    let dir = home.path().join("s");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("events.jsonl"),
+        json!({"kind": "session_started", "payload": {
+            "workspace": "/wt-1",
+            "worktree": {"path": "/wt-1", "branch": "fiber/s", "repository": "/r"},
+        }})
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let record = started_first(&dir)
+        .unwrap()
+        .worktree_record()
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.path, "/wt-1");
+    assert_eq!(record.branch, "fiber/s");
+    assert_eq!(record.repository.as_deref(), Some("/r"));
+}
+
+#[test]
+fn worktree_record_is_malformed_unless_a_record_with_an_absolute_repository() {
+    for worktree in [
+        json!([]),
+        json!("/wt-1"),
+        json!(7),
+        json!({}),
+        json!({"branch": "fiber/s", "repository": "/r"}),
+        json!({"path": "/wt-1", "repository": "/r"}),
+        json!({"path": "/wt-1", "branch": "fiber/s"}),
+        json!({"path": 7, "branch": "fiber/s", "repository": "/r"}),
+        json!({"path": "/wt-1", "branch": "fiber/s", "repository": "relative/r"}),
+        json!({"path": "/wt-1", "branch": "fiber/s", "repository": Value::Null}),
+    ] {
+        let payload = json!({"workspace": "/w", "worktree": worktree});
+        let first = json!({"kind": "session_started", "payload": payload}).to_string();
+        let view = SessionStarted::parse(first.as_bytes()).expect("a session_started");
+        assert!(view.worktree_record().is_err(), "{worktree}");
+    }
+}
+
+#[test]
 fn a_missing_projects_gives_an_empty_list() {
     let home = fakes::TempDir::new("log-scan-none");
     assert!(started_sessions(home.path()).is_empty());

@@ -6,6 +6,7 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use contract::shapes::Worktree;
 use contract::{Envelope, Seq, SessionId};
 use serde_json::Value;
 
@@ -96,6 +97,8 @@ pub struct SessionStarted {
     /// `payload.forked_from`, raw: the two pointer policies read it
     /// differently.
     forked_from: Option<Value>,
+    /// `payload.worktree`, raw: the tri-state policy reads it strictly.
+    worktree_raw: Option<Value>,
 }
 
 impl SessionStarted {
@@ -120,6 +123,7 @@ impl SessionStarted {
                 .get("parent")
                 .is_some_and(|parent| !parent.is_null()),
             forked_from: payload.get("forked_from").cloned(),
+            worktree_raw: payload.get("worktree").cloned(),
         }
     }
 
@@ -144,6 +148,29 @@ impl SessionStarted {
             .map(|id| SessionId(id.to_owned()))
     }
 
+    /// The recorded worktree: the strict policy the hub and the session
+    /// continuation walk by. Absent (missing or null) is `Ok(None)`; a
+    /// record with string `path` and `branch` and a present absolute-path
+    /// `repository` is `Ok(Some)`; any other present value is malformed.
+    /// Public because the hub and the session process both validate
+    /// through it.
+    pub fn worktree_record(&self) -> Result<Option<Worktree>, MalformedWorktree> {
+        match &self.worktree_raw {
+            None | Some(Value::Null) => Ok(None),
+            Some(raw) => match serde_json::from_value::<Worktree>(raw.clone()) {
+                Ok(record)
+                    if record
+                        .repository
+                        .as_deref()
+                        .is_some_and(|repository| Path::new(repository).is_absolute()) =>
+                {
+                    Ok(Some(record))
+                }
+                _ => Err(MalformedWorktree),
+            },
+        }
+    }
+
     /// What the first line forks from: the strict policy history walks
     /// by. Absent is `Ok(None)`; any present value without a string
     /// `session_id` and a `u64` `seq` is malformed.
@@ -164,6 +191,13 @@ impl SessionStarted {
 /// A `forked_from` that is present but names no session and `seq`.
 #[derive(Debug)]
 pub(crate) struct MalformedFork;
+
+/// A `worktree` value that is present but is not a record with string
+/// `path` and `branch` and a present absolute-path `repository`.
+/// Public because the hub and the session process both refuse it as
+/// `log_corrupt`; only named in this crate's signatures.
+#[derive(Debug)]
+pub struct MalformedWorktree;
 
 /// The [`SessionStarted`] of the session in `dir`: the strict policy
 /// history walks by. A missing log is [`Error::NotFound`]; anything else

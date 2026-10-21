@@ -417,17 +417,36 @@ fn check_continues(
             }));
         }
     };
-    let Some(worktree) = recorded.worktree else {
-        return Err(invalid(&format!(
-            "Session `{}` runs in no worktree to continue.",
-            old.0
-        )));
-    };
-    if worktree != workspace {
-        return Err(invalid(&format!(
-            "Session `{}` runs in a worktree that is not the workspace.",
-            old.0
-        )));
+    match recorded.worktree_record() {
+        Ok(None) => {
+            return Err(invalid(&format!(
+                "Session `{}` runs in no worktree to continue.",
+                old.0
+            )));
+        }
+        Err(_) => {
+            hub.diag.line(
+                Severity::Warn,
+                Some(old),
+                "log_corrupt",
+                &format!("Session {} has an unreadable log.", old.0),
+            );
+            return Err(Outcome::Rejected(Refused {
+                code: ErrorCode::LogCorrupt,
+                message: format!(
+                    "The log of session `{}` does not start with its workspace.",
+                    old.0
+                ),
+            }));
+        }
+        Ok(Some(record)) => {
+            if record.path != workspace {
+                return Err(invalid(&format!(
+                    "Session `{}` runs in a worktree that is not the workspace.",
+                    old.0
+                )));
+            }
+        }
     }
     Ok(())
 }

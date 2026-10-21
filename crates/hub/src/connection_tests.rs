@@ -735,6 +735,48 @@ fn start_with_continues_and_an_unreadable_log_is_log_corrupt() {
 }
 
 #[test]
+fn start_with_continues_and_a_non_object_worktree_is_log_corrupt() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let dir = temp.dir.join("projects/-w/sessions").join(OLD);
+    fs::create_dir_all(&dir).unwrap();
+    let first = json!({"kind": "session_started", "payload": {
+        "workspace": workspace,
+        "worktree": [],
+    }})
+    .to_string()
+        + "\n";
+    fs::write(dir.join("events.jsonl"), first).unwrap();
+    refused_start(
+        &temp,
+        json!({"workspace": workspace, "continues": OLD}),
+        "log_corrupt",
+    );
+}
+
+#[test]
+fn start_with_continues_and_a_worktree_without_repository_is_log_corrupt() {
+    let temp = Temp::new();
+    let worktree = temp.dir.join("wt");
+    fs::create_dir_all(&worktree).unwrap();
+    let worktree = worktree.to_string_lossy().into_owned();
+    let dir = temp.dir.join("projects/-w/sessions").join(OLD);
+    fs::create_dir_all(&dir).unwrap();
+    let first = json!({"kind": "session_started", "payload": {
+        "workspace": worktree,
+        "worktree": {"path": worktree, "branch": format!("fiber/{OLD}")},
+    }})
+    .to_string()
+        + "\n";
+    fs::write(dir.join("events.jsonl"), first).unwrap();
+    refused_start(
+        &temp,
+        json!({"workspace": worktree, "continues": OLD}),
+        "log_corrupt",
+    );
+}
+
+#[test]
 fn start_with_continues_naming_a_session_with_no_worktree_is_invalid_arguments() {
     let temp = Temp::new();
     let workspace = temp.workspace();

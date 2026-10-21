@@ -1,9 +1,10 @@
 //! `fiber session --continues <old>`: starts the session where the named
 //! session's recorded worktree is (`docs/invocation.md`, "`start`
 //! `continues`"). The old log's first line must be `session_started`
-//! recording a worktree that identifies the current directory, the
-//! workspace the hub applied; the new session runs through `run_new`
-//! with that worktree, the `per_run` layer the dispatch passes, and no
+//! recording a worktree that identifies `workspace`, the original
+//! `args.workspace` spelling the dispatch passes; the new session runs
+//! through `run_new` with that worktree, the `per_run` layer the
+//! dispatch passes, and no
 //! `Isolation`, so its process never removes the worktree. The
 //! continuing process holds the shared lock for its life. A failure
 //! before `fiber_started` deletes its directory,
@@ -14,7 +15,6 @@ use std::sync::Arc;
 
 use contract::shapes::{Failure, Worktree};
 use contract::{ErrorCode, SessionId};
-use serde_json::Value;
 
 use crate::{ask_failed, failed};
 
@@ -22,16 +22,16 @@ use crate::{ask_failed, failed};
 /// `old` ran. A session continuing itself is `invalid_arguments`. A
 /// missing old log, or a first line still being written, is
 /// `session_not_found`, as a rewind names a missing session; an
-/// unreadable, unparseable, not-`session_started`, or workspace-less
-/// first line, and a worktree record the session cannot read, is
-/// `log_corrupt`; no recorded worktree, or one that is not the current
-/// directory, is `invalid_arguments`; a worktree removed after the
-/// shared hold is taken names the old session `session_not_found`.
+/// unreadable first line is `log_corrupt`; no recorded worktree, or one
+/// that is not `workspace`, is `invalid_arguments`, while a present but
+/// malformed worktree record is `log_corrupt`; a worktree removed after
+/// the shared hold is taken names the old session `session_not_found`.
 /// Every refusal answers before any session line is written.
 pub(crate) fn session_continues(
     new: SessionId,
     old: SessionId,
     overrides: Vec<String>,
+    workspace: &Path,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
@@ -44,8 +44,12 @@ pub(crate) fn session_continues(
         Ok(home) => home,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let workspace = match std::env::current_dir() {
-        Ok(workspace) => workspace,
+    // The sessions dir comes from the entered directory, as every entry
+    // does; the identity compare below uses the passed-in original
+    // spelling, before `set_current_dir` normalized slashes and symlinks
+    // away.
+    let current = match std::env::current_dir() {
+        Ok(current) => current,
         Err(e) => {
             return ask_failed(failed(
                 ErrorCode::IoFailed,
@@ -53,8 +57,8 @@ pub(crate) fn session_continues(
             ));
         }
     };
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
-    let recorded = match resolve(&new, &old, &sessions.join(&old.0), &workspace) {
+    let sessions = log::sessions_dir(&home, &doors::project(&current));
+    let recorded = match resolve(&new, &old, &sessions.join(&old.0), workspace) {
         Ok(recorded) => recorded,
         Err(e) => return ask_failed(e),
     };
@@ -99,15 +103,15 @@ pub(crate) fn session_continues(
 
 /// Checks the `continues` session `old` names in `old_dir` for the new
 /// session `new`: naming itself is `invalid_arguments`, before any log
-/// is read. Past that its log must open on `session_started` with a worktree identifying `workspace`. The
-/// mapping mirrors the hub's scan (`crates/hub/src/start.rs`): a missing
-/// log or a first line still being written reads as missing, an
-/// unreadable or unparseable first line as corrupt. Past the first line
-/// the session needs the whole worktree record, not the scan's path, so
-/// this reads the line once itself: a worktree that is absent, or whose
-/// path is not a string, is no worktree to continue; a worktree record
-/// the session cannot read is corrupt; a worktree that is not the
-/// workspace refuses, aliases accepted.
+/// is read. Past that the first line goes through the shared scan
+/// (`log::started_first`, as the hub reads it): still being written
+/// reads as missing, anything else unreadable as corrupt, and the
+/// workspace is guaranteed. Past the first line the session needs the
+/// whole worktree record, not the scan's path, so the record goes
+/// through the scan's tri-state: absent is no worktree to continue, a
+/// present but malformed record (including one without an absolute
+/// `repository`) is corrupt; a record that is not `workspace` refuses,
+/// aliases refused.
 fn resolve(
     new: &SessionId,
     old: &SessionId,
@@ -120,75 +124,24 @@ fn resolve(
             format!("Session `{}` cannot continue itself.", new.0),
         ));
     }
-    if !old_dir.is_dir() {
-        return Err(not_found(old));
-    }
-    let bytes = match std::fs::read(old_dir.join("events.jsonl")) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(not_found(old)),
-        Err(_) => return Err(corrupt(old)),
+    // The first line through the shared scan, exactly as the hub reads
+    // it: the workspace is guaranteed by `started_first`.
+    let recorded = match log::started_first(old_dir) {
+        Ok(recorded) => recorded,
+        Err(log::FirstLineError::Incomplete) => return Err(not_found(old)),
+        Err(log::FirstLineError::Corrupt) => return Err(corrupt(old)),
     };
-    // A first line still being written reads as missing, as the scan's
-    // `Incomplete` does: an empty log ends here too. Only the first
-    // line is read, as the scan does: later lines are the old session's
-    // still-arriving writes, never this check's.
-    let Some(end) = bytes.iter().position(|byte| *byte == b'\n') else {
-        return Err(not_found(old));
-    };
-    let prefix = match bytes.get(..end) {
-        Some(prefix) => prefix,
-        // `end` indexes `bytes` by construction.
-        None => return Err(corrupt(old)),
-    };
-    let line: Value = match serde_json::from_slice(prefix) {
-        Ok(line) => line,
-        Err(_) => return Err(corrupt(old)),
-    };
-    if line.get("kind").and_then(Value::as_str) != Some("session_started") {
-        return Err(corrupt(old));
-    }
-    let payload = line.get("payload");
-    if payload
-        .and_then(|payload| payload.get("workspace"))
-        .and_then(Value::as_str)
-        .is_none()
-    {
-        return Err(corrupt(old));
-    }
-    let worktree = payload.and_then(|payload| payload.get("worktree"));
-    let path = worktree
-        .and_then(|worktree| worktree.get("path"))
-        .and_then(Value::as_str);
-    let Some(path) = path else {
-        return Err(failed(
-            ErrorCode::InvalidArguments,
-            format!("Session `{}` runs in no worktree to continue.", old.0),
-        ));
-    };
-    let recorded: Worktree = match worktree.cloned().map(serde_json::from_value) {
-        Some(Ok(recorded)) => recorded,
-        _ => {
+    let recorded = match recorded.worktree_record() {
+        Ok(Some(recorded)) => recorded,
+        Ok(None) => {
             return Err(failed(
-                ErrorCode::LogCorrupt,
-                format!(
-                    "The log of session `{}` has a worktree record the session cannot read.",
-                    old.0
-                ),
+                ErrorCode::InvalidArguments,
+                format!("Session `{}` runs in no worktree to continue.", old.0),
             ));
         }
+        Err(_) => return Err(corrupt(old)),
     };
-    // The schema requires the repository's absolute path: a record
-    // without one cannot be continued (`docs/events.md`,
-    // `session_started`), so it reads as corrupt, before any session
-    // line is written.
-    if !recorded
-        .repository
-        .as_deref()
-        .is_some_and(|repository| Path::new(repository).is_absolute())
-    {
-        return Err(corrupt(old));
-    }
-    if path != workspace.to_string_lossy() {
+    if recorded.path != workspace.to_string_lossy() {
         return Err(failed(
             ErrorCode::InvalidArguments,
             format!(

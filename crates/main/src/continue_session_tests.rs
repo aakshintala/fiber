@@ -277,12 +277,31 @@ fn no_recorded_worktree_is_invalid() {
 }
 
 #[test]
-fn non_object_worktree_is_invalid() {
+fn non_object_worktree_is_corrupt() {
+    // Absent (missing or null) is no worktree to continue; a present
+    // value that is not a record is corrupt.
     let (_home, old_dir, workspace) = fixture("main-continues-worktree-shape", None);
     let first = started(&workspace, Some(json!("/wt")));
     std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
     let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
-    assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+    assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
+}
+
+#[test]
+fn array_worktree_is_corrupt_with_no_new_log() {
+    let (_home, old_dir, workspace) = fixture("main-continues-worktree-array", None);
+    let first = started(&workspace, Some(json!([])));
+    std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
+    assert!(
+        !old_dir
+            .parent()
+            .unwrap()
+            .join("s_bbbbbbbbbbbbbbbb")
+            .exists(),
+        "no new session log was created"
+    );
 }
 
 #[test]

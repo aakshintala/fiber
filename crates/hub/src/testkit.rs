@@ -144,7 +144,7 @@ pub(crate) fn write_log_with_worktree(home: &Path, id: &str, workspace: &str, wo
     fs::create_dir_all(&dir).unwrap();
     let payload = json!({
         "workspace": workspace,
-        "worktree": {"path": worktree, "branch": format!("fiber/{id}")},
+        "worktree": {"path": worktree, "branch": format!("fiber/{id}"), "repository": "/repo"},
     });
     let line = json!({
         "kind": "session_started", "session_id": id, "ts": 1, "schema_version": 1,
