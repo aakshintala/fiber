@@ -40,10 +40,6 @@ impl Gate {
         message: SessionMessage,
         ack: Ack,
     ) -> Result<(), (Shut, Ack)> {
-        enum Sent {
-            Delivered,
-            Gone(Option<Ack>),
-        }
         // Held outside the lock's closure: a closed admission never runs
         // it, so the ack comes back uncalled.
         let mut ack = Some(ack);
@@ -57,14 +53,14 @@ impl Gate {
             };
             let inbox = super::lock(&self.inbox);
             match inbox.as_ref() {
-                None => Sent::Gone(Some(ack)),
+                None => Err(ack),
                 Some(inbox) => match inbox.send(contract::inbox::Delivery::Message(message, ack)) {
-                    Ok(()) => Sent::Delivered,
+                    Ok(()) => Ok(()),
                     Err(failed) => {
                         let contract::inbox::Delivery::Message(_, ack) = failed.0 else {
                             unreachable!("the send returns the message just sent");
                         };
-                        Sent::Gone(Some(ack))
+                        Err(ack)
                     }
                 },
             }
@@ -76,13 +72,8 @@ impl Gate {
                 };
                 Err((Shut::Closed, ack))
             }
-            Some(Sent::Delivered) => Ok(()),
-            Some(Sent::Gone(ack)) => {
-                let Some(ack) = ack else {
-                    unreachable!("a gone inbox answers through the ack");
-                };
-                Err((Shut::Ended, ack))
-            }
+            Some(Ok(())) => Ok(()),
+            Some(Err(ack)) => Err((Shut::Ended, ack)),
         }
     }
 }

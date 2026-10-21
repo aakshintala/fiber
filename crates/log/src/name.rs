@@ -2,10 +2,37 @@
 //! the latest `session_named` in its log, read from the end backwards.
 
 use std::io::BufRead as _;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use contract::SessionId;
 use serde_json::Value;
+
+/// The session directories for `id` under `home`: one per project, in
+/// `read_dir` order, keeping only real directories. `None` when the id
+/// is not one normal path component, so a path never leaves `sessions/`,
+/// or when the projects directory cannot be read.
+fn session_dirs<'a>(
+    home: &'a Path,
+    id: &'a SessionId,
+) -> Option<impl Iterator<Item = PathBuf> + 'a> {
+    // Checked before any path is built from it, so a path never leaves
+    // `sessions/`.
+    let mut parts = Path::new(&id.0).components();
+    if !matches!(parts.next(), Some(Component::Normal(_))) || parts.next().is_some() {
+        return None;
+    }
+    let projects = std::fs::read_dir(home.join("projects")).ok()?;
+    Some(
+        projects
+            .flatten()
+            .map(|project| project.path().join("sessions").join(&id.0))
+            .filter(|dir| {
+                // `symlink_metadata` does not follow a link: a linked directory is
+                // not a session.
+                std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_dir())
+            }),
+    )
+}
 
 /// The latest `session_named` name in session `id`'s log under `home`,
 /// read from the end backwards (`docs/tools.md`, "Messaging other
@@ -13,22 +40,7 @@ use serde_json::Value;
 /// directory is missing or a symlink, the log has no `session_named`, the
 /// latest one cleared the name, or the log cannot be read.
 pub fn session_name(home: &Path, id: &SessionId) -> Option<String> {
-    // Checked before any path is built from it, so a path never leaves
-    // `sessions/`.
-    let mut parts = Path::new(&id.0).components();
-    if !matches!(parts.next(), Some(Component::Normal(_))) || parts.next().is_some() {
-        return None;
-    }
-    let Ok(projects) = std::fs::read_dir(home.join("projects")) else {
-        return None;
-    };
-    for project in projects.flatten() {
-        let dir = project.path().join("sessions").join(&id.0);
-        // `symlink_metadata` does not follow a link: a linked directory is
-        // not a session.
-        if !std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_dir()) {
-            continue;
-        }
+    for dir in session_dirs(home, id)? {
         if let found @ Some(_) = crate::scan::last_line_where(&dir, |line| {
             let event: Value = serde_json::from_slice(line).ok()?;
             if event.get("kind")?.as_str()? != "session_named" {
@@ -57,22 +69,7 @@ pub fn session_name(home: &Path, id: &SessionId) -> Option<String> {
 /// covers fresh delegates, resumed delegates and top-level sessions
 /// uniformly.
 pub fn session_parent(home: &Path, id: &SessionId) -> Option<SessionId> {
-    // Checked before any path is built from it, so a path never leaves
-    // `sessions/`.
-    let mut parts = Path::new(&id.0).components();
-    if !matches!(parts.next(), Some(Component::Normal(_))) || parts.next().is_some() {
-        return None;
-    }
-    let Ok(projects) = std::fs::read_dir(home.join("projects")) else {
-        return None;
-    };
-    for project in projects.flatten() {
-        let dir = project.path().join("sessions").join(&id.0);
-        // `symlink_metadata` does not follow a link: a linked directory is
-        // not a session.
-        if !std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_dir()) {
-            continue;
-        }
+    for dir in session_dirs(home, id)? {
         if let found @ Some(_) = first_parent(&dir) {
             return found.flatten();
         }
