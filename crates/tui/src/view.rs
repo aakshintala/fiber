@@ -290,6 +290,24 @@ pub(crate) fn render(
     if app.quit_open() {
         quit::draw(app, area, buf, &mut targets);
     }
+    // The import report draws over the conversation when open, above
+    // every other overlay: one overlay with both counts, no notices
+    // (`docs/tui.md`, "Overlays"). The conversation's own targets go
+    // away under it, as under the notices overlay.
+    if app.import_report_open() {
+        targets.retain(|target| {
+            !matches!(
+                target.id,
+                TargetId::Line(_)
+                    | TargetId::Link { .. }
+                    | TargetId::FindResult(_)
+                    | TargetId::NewBelow
+                    | TargetId::Turn(_)
+                    | TargetId::Offer(_)
+            )
+        });
+        crate::import_report::draw_report(app, conversation, buf, &mut targets);
+    }
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             lift_hover(buf, target.rect);

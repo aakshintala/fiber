@@ -108,8 +108,20 @@ fn import_sends_its_source_when_named() {
     assert_eq!(lines[0]["args"], json!({"source": "codex"}));
 }
 
+/// The open import report's title and item counts.
+fn report_summary(app: &App) -> (String, usize, usize) {
+    let report = app
+        .import_report()
+        .expect("an accepted import opens the report");
+    (
+        report.title().to_owned(),
+        report.copied_count(),
+        report.left_count(),
+    )
+}
+
 #[test]
-fn an_accepted_import_reports_every_line_with_a_reload_reminder() {
+fn an_accepted_import_opens_one_report_and_adds_no_notices() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import codex"));
     let id = lines[0]["id"].clone();
@@ -129,28 +141,145 @@ fn an_accepted_import_reports_every_line_with_a_reload_reminder() {
         }),
     );
     assert!(app.on_line(accepted).is_empty());
-    // At most three notices show: the first three report lines, then the
-    // count of the rest.
     assert_eq!(
-        notice_texts(&app),
-        [
-            "imported imported skill lint",
-            "imported imported command plan",
-            "imported imported instruction AGENTS.md",
-            "+3 more",
-        ]
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 4, 1)
     );
-    assert_eq!(
-        app.notice(),
-        Some("Run /reload to apply the imported items.")
-    );
+    assert!(app.notices().is_empty());
+    // Esc closes the report and leaves no notices behind.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
 }
 
 #[test]
-fn an_accepted_import_without_cuts_shows_every_line() {
+fn a_bare_accepted_import_reports_the_generic_title() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import"));
     let id = lines[0]["id"].clone();
+    let accepted = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha", "beta"],
+                    "skills": ["lint"],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    // A bare `/import` covers both sources, so the title names neither.
+    assert_eq!(report_summary(&app), ("Imported".to_owned(), 3, 0));
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn an_empty_accepted_import_still_opens_the_report() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let accepted = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": [],
+                    "skills": [],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 0, 0)
+    );
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn a_second_accept_for_the_same_import_changes_nothing() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let accepted = || {
+        session_line(
+            "command_accepted",
+            json!({
+                "command_id": id,
+                "result": {
+                    "imported": {
+                        "mcp_servers": ["alpha"],
+                        "skills": [],
+                        "commands": [],
+                        "instructions": [],
+                    },
+                    "left_behind": [],
+                },
+            }),
+        )
+    };
+    assert!(app.on_line(accepted()).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    // The source entry is consumed by the first answer, so a late or
+    // duplicate answer finds nothing: the report stays as it was, even
+    // when the late answer carries a different report.
+    let late = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": [],
+                    "skills": ["other", "another"],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(late).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    assert!(app.notices().is_empty());
+    // An answer arriving after Esc changes nothing either.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.on_line(accepted()).is_empty());
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn a_rejected_import_adds_one_notice_and_opens_no_report() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let rejected = session_line(
+        "command_rejected",
+        json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    // A failed import is one notice, as any failed command is.
+    assert!(app.import_report().is_none());
+    assert_eq!(app.notice(), Some("No."));
+    // The rejection drops the source entry, so a late accept for the
+    // id changes nothing.
     let accepted = session_line(
         "command_accepted",
         json!({
@@ -162,31 +291,12 @@ fn an_accepted_import_without_cuts_shows_every_line() {
                     "commands": [],
                     "instructions": [],
                 },
-                "left_behind": [{"item": "auth.json", "reason": "credentials are never imported"}],
+                "left_behind": [],
             },
         }),
     );
     assert!(app.on_line(accepted).is_empty());
-    assert_eq!(
-        notice_texts(&app),
-        [
-            "imported imported server alpha",
-            "imported left behind auth.json: credentials are never imported",
-            "imported Run /reload to apply the imported items.",
-        ]
-    );
-}
-
-/// Every notice showing, oldest first, each with its code: what the
-/// person reads after an accepted import.
-fn notice_texts(app: &App) -> Vec<String> {
-    app.notices()
-        .iter()
-        .map(|line| match line {
-            crate::app::NoticeLine::Notice { code, text, .. } => format!("{code} {text}"),
-            crate::app::NoticeLine::More(n) => format!("+{n} more"),
-        })
-        .collect()
+    assert!(app.import_report().is_none());
 }
 
 #[test]

@@ -926,6 +926,21 @@ pub(super) fn render(
             draw_delete_question(question, screen.question_scroll, area, buf, &mut targets);
         }
     }
+    // The import report draws over home when open, above the offer and
+    // delete frames: one overlay with both counts, no notices
+    // (`docs/tui.md`, "Overlays"). The slab swallows the clicks landing
+    // on it, as the question frames do.
+    let before = targets.len();
+    let slab = crate::import_report::draw_report(app, area, buf, &mut targets);
+    if !slab.is_empty() {
+        targets.insert(
+            before.min(targets.len()),
+            Target {
+                id: TargetId::Home(Spot::Question),
+                rect: slab,
+            },
+        );
+    }
     if app.quit_open() {
         super::quit::draw(app, area, buf, &mut targets);
     }

@@ -21,6 +21,7 @@ use serde_json::{Map, Value};
 use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::ext::{Handle, Renderer};
 use crate::home::Level;
+use crate::import_report::ImportReport;
 use crate::input::Draft;
 use crate::keys::Key;
 use crate::link::Line;
@@ -204,6 +205,14 @@ pub(crate) struct App {
     /// on, the lines held until the hub connects, and the written lines
     /// a reconnect sends again.
     pub(crate) outbox: outbox::Outbox,
+    /// The accepted-import report, while open on home or over a
+    /// session (`docs/tui.md`, "Notices").
+    pub(crate) import_report: Option<ImportReport>,
+    /// Every sent `import`'s source by command id: the named source,
+    /// or `None` for a bare `/import` covering both. The answer folds
+    /// the entry: an acceptance opens the report with it, any other
+    /// fold drops it, so a late answer finds nothing.
+    import_sources: HashMap<String, Option<String>>,
     /// The attached session's image fetches and queued viewer opens
     /// (`docs/tui.md`, "Images").
     images: images::Images,
@@ -313,6 +322,8 @@ impl App {
             phase: Phase::Starting,
             outbox: outbox::Outbox::default(),
             images: images::Images::default(),
+            import_report: None,
+            import_sources: HashMap::new(),
             notices: Notices::default(),
             screen: Screen::new(),
             handle: Handle::default(),
@@ -399,6 +410,14 @@ impl App {
                 | Key::CtrlR
         ) {
             self.screen.pages_mut().clear_anchor();
+        }
+        // The import report owns its keys while open, ahead of every
+        // other key path: Esc closes it, arrows and pages scroll it,
+        // Ctrl+C passes through to quit, and anything else is
+        // swallowed so nothing reaches the draft, list or conversation
+        // behind it.
+        if let Some(effect) = self.report_key(&key) {
+            return effect;
         }
         // The key map opens above the picker: Esc closes whatever is
         // on top, so its keys never reach the picker underneath.
@@ -1098,6 +1117,12 @@ impl App {
         self.settle();
     }
 
+    /// The terminal's size in columns and rows: what full-screen
+    /// overlays clamp against.
+    pub(crate) fn screen_size(&self) -> (u16, u16) {
+        (self.screen.width(), self.screen.height())
+    }
+
     /// Sets the zone the time of day under a prompt bubble shows
     /// (`docs/tui.md`, "Turns").
     pub(crate) fn set_zone(&mut self, zone: TimeZone) {
@@ -1522,10 +1547,12 @@ impl App {
         self.outbox.answered(id);
     }
 
-    /// An accepted `import`: one notice per report line, as `fiber import`
-    /// prints them, plus a `/reload` reminder, since imported items apply
-    /// on the next reload. A rejection folds through `refused` unchanged.
-    fn import_answered(&mut self, accepted: &CommandAccepted) {
+    /// An accepted `import`: one report overlay naming what the import
+    /// copied and left behind, and no notices, since imported items
+    /// apply on the next reload. A late or duplicate answer finds no
+    /// source entry and changes nothing. A rejection drops the entry
+    /// through `refused` unchanged.
+    fn import_answered(&mut self, source: Option<String>, accepted: &CommandAccepted) {
         let Some(CommandResult::Import {
             imported,
             left_behind,
@@ -1533,28 +1560,7 @@ impl App {
         else {
             return;
         };
-        for name in &imported.skills {
-            self.push_notice("imported", format!("imported skill {name}"));
-        }
-        for name in &imported.commands {
-            self.push_notice("imported", format!("imported command {name}"));
-        }
-        for name in &imported.instructions {
-            self.push_notice("imported", format!("imported instruction {name}"));
-        }
-        for name in &imported.mcp_servers {
-            self.push_notice("imported", format!("imported server {name}"));
-        }
-        for left in left_behind {
-            self.push_notice(
-                "imported",
-                format!("left behind {}: {}", left.item, left.reason),
-            );
-        }
-        self.push_notice(
-            "imported",
-            "Run /reload to apply the imported items.".to_owned(),
-        );
+        self.open_import_report(source, imported.clone(), left_behind.clone());
     }
 
     /// Drops a pending command, returning its draft to an empty box.
@@ -1679,7 +1685,12 @@ impl App {
                 if let Some(accepted) = read!(envelope, CommandAccepted) {
                     let sent = self.outbox.answered(&accepted.command_id.0);
                     self.commands_answered(&accepted);
-                    self.import_answered(&accepted);
+                    // The accepted import's source entry is consumed by
+                    // its answer: a late or duplicate answer finds
+                    // nothing and changes nothing.
+                    if let Some(source) = self.import_sources.remove(&accepted.command_id.0) {
+                        self.import_answered(source, &accepted);
+                    }
                     changed |= self.offer.file_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell
@@ -1701,6 +1712,9 @@ impl App {
                 {
                     self.offer
                         .file_refused(&id.0, &rejected.code, &rejected.message);
+                    // A refused import drops its source entry with its
+                    // answer, as an accepted one consumes it.
+                    self.import_sources.remove(&id.0);
                     self.refused(&id.0, &rejected.code, rejected.message);
                 }
             }

@@ -81,7 +81,13 @@ impl App {
                 Effect::None
             }
             TargetId::CloseOverlay => {
-                self.close_overlay();
+                // The import report's ✕ closes the report: the generic
+                // close below stays for every other overlay.
+                if self.import_report_open() {
+                    self.close_import_report();
+                } else {
+                    self.close_overlay();
+                }
                 Effect::None
             }
             TargetId::Home(spot) => self.home_click(spot),
@@ -127,6 +133,12 @@ impl App {
             }
         };
         let at = Position::new(mouse.col, mouse.row);
+        // The open report owns the wheel, ahead of the panel, the
+        // conversation, home and the rail.
+        if self.import_report_open() {
+            self.scroll_report_rows(!up, WHEEL_ROWS);
+            return;
+        }
         if self
             .chrome()
             .layout()

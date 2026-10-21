@@ -5223,7 +5223,7 @@ fn the_offer_sends_nothing_with_the_link_down() {
 }
 
 #[test]
-fn an_accepted_offer_answer_notices_every_line_and_closes_the_offer() {
+fn an_accepted_offer_answer_opens_the_report_and_closes_the_offer() {
     let seam = Arc::new(Fake::new(Vec::new()));
     if let Ok(mut pending) = seam.pending.lock() {
         *pending = true;
@@ -5234,24 +5234,52 @@ fn an_accepted_offer_answer_notices_every_line_and_closes_the_offer() {
     let line = press(&mut app, Key::Char('2'));
     let id = line["id"].as_str().unwrap().to_owned();
     assert!(app.on_line(hub_accepted(&id, import_result())).is_empty());
-    // The capped shape Task 3 pins for the same report: the first
-    // three lines, the count of the rest, and the reload reminder
-    // newest.
-    assert_eq!(
-        offer_notices(&app),
-        [
-            "imported imported skill lint",
-            "imported imported command plan",
-            "imported imported instruction AGENTS.md",
-            "+3 more",
-        ]
-    );
-    assert_eq!(
-        app.notice(),
-        Some("Run /reload to apply the imported items.")
-    );
+    // The offer closes with no notices, and the report names the
+    // source the offer sent with both counts.
+    let report = app
+        .import_report()
+        .expect("the offer's accept opens the report");
+    assert_eq!(report.title(), "Imported from Codex");
+    assert_eq!((report.copied_count(), report.left_count()), (4, 1));
+    assert!(app.notices().is_empty());
     assert!(!app.home_screen().unwrap().question_import);
     assert!(!app.home.as_ref().unwrap().import_offer);
+    // Esc closes the report and leaves no notices behind.
+    let now = fakes::clock::FakeClock::new().now();
+    assert!(matches!(app.on_key(Key::Esc, now), Effect::None));
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn a_malformed_offer_answer_notices_and_leaves_the_offer_open() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let _ = linked(&mut app);
+    let line = press(&mut app, Key::Char('1'));
+    let id = line["id"].as_str().unwrap().to_owned();
+    // The hub answers what the terminal cannot read as a command
+    // answer: the refused path with the offer open.
+    assert!(
+        app.on_line(hub_accepted(&id, json!({"bogus": true})))
+            .is_empty()
+    );
+    assert!(app.import_report().is_none());
+    assert_eq!(app.notice(), Some("rejected"));
+    assert_eq!(offer_notices(&app), ["malformed rejected"]);
+    assert!(app.home_screen().unwrap().question_import);
+    // The malformed answer drops the source entry, so a second answer
+    // for the id changes nothing.
+    assert!(app.on_line(hub_accepted(&id, import_result())).is_empty());
+    assert!(app.import_report().is_none());
+    assert_eq!(offer_notices(&app), ["malformed rejected"]);
+    // The taken ask is gone, so the offer sends again for a retry.
+    let retry = press(&mut app, Key::Char('1'));
+    assert_ne!(retry["id"], line["id"]);
 }
 
 #[test]
@@ -5309,9 +5337,13 @@ fn a_receipt_landing_mid_run_neither_retracts_nor_blocks_the_offer() {
     let line = press(&mut app, Key::Char('1'));
     let id = line["id"].as_str().unwrap().to_owned();
     assert!(app.on_line(hub_accepted(&id, import_result())).is_empty());
-    assert_eq!(
-        app.notice(),
-        Some("Run /reload to apply the imported items.")
-    );
+    // The answer still folds: the offer closes into the report naming
+    // the pressed source, with no notices.
+    let report = app
+        .import_report()
+        .expect("the offer's accept opens the report");
+    assert_eq!(report.title(), "Imported from Claude Code");
+    assert_eq!((report.copied_count(), report.left_count()), (4, 1));
+    assert!(app.notices().is_empty());
     assert!(!app.home_screen().unwrap().question_import);
 }

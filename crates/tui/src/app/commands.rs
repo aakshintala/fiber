@@ -301,10 +301,22 @@ fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
     // A bare `/import` imports both sources; anything else goes out as
-    // `source`, and the session refuses what it does not take.
+    // `source`, and the session refuses what it does not take. The
+    // source rides beside the pending entry under the command's id, so
+    // the accepted answer's report names it; a bare import reports the
+    // generic title.
+    let Some((session, _)) = app.command_session() else {
+        return Some(Effect::None);
+    };
     let rest = rest.trim();
+    let id = mint();
     let args = (!rest.is_empty()).then(|| json!({"source": rest}));
-    Some(app.send_command("import", args))
+    let line = session_command(&id, "import", &session, args).to_string();
+    let draft = std::mem::take(&mut app.draft);
+    app.outbox.insert(id.clone(), Kind::Command, draft);
+    app.import_sources
+        .insert(id, (!rest.is_empty()).then(|| rest.to_owned()));
+    Some(Effect::Send(vec![line]))
 }
 
 fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
