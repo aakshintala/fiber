@@ -809,6 +809,89 @@ fn the_late_preparer_drops_written_notices_and_keeps_new_ones() {
     );
 }
 
+#[test]
+fn the_late_preparer_skips_the_mcp_sync() {
+    // A late preparation never syncs MCP servers: a cached,
+    // not-yet-started personal server stays unstarted, no cache is
+    // written, and the grouping, records, failures and carried prompt
+    // sources stay empty.
+    let mut fixture = Fixture::with_servers(&[("late1", json!([{"name": "echo"}]))]);
+    // Stopping the eager start and relaunching leaves the valid cache
+    // behind, so the next start goes lazy: the slot is cached but has
+    // no server.
+    fixture.relaunch();
+    assert!(
+        fixture.state.servers.has_slot("late1"),
+        "the cached slot stays"
+    );
+    assert!(
+        !fixture.state.servers.running("late1"),
+        "the relaunched slot never started"
+    );
+    // The eager start's `pid.txt` is the spawn signal: removing it
+    // means any later spawn shows up again.
+    std::fs::remove_file(fixture.servers[0].dir.join("pid.txt")).expect("pid.txt");
+    let cache_dir = config::mcp_cache_dir(&fixture.state.sources.home);
+    let cache_before: Vec<(String, Vec<u8>)> = {
+        let mut files: Vec<_> = std::fs::read_dir(&cache_dir)
+            .expect("the cache dir")
+            .map(|entry| {
+                let entry = entry.expect("a cache entry");
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    std::fs::read(entry.path()).expect("cache bytes"),
+                )
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let servers = Arc::clone(&fixture.state.servers);
+    let state =
+        Arc::try_unwrap(fixture.state).unwrap_or_else(|_| panic!("only the test holds the state"));
+    let (_reload, late) = state.preparers(Vec::new());
+    let prepared = fakes::within("late preparation", fakes::MUST_SUCCEED_WITHIN, move || {
+        late(&r#loop::ReloadRoute {
+            model: "scripted/s.json".into(),
+            credential: None,
+        })
+        .unwrap()
+    });
+    assert!(prepared.server_sync.servers.kept.is_empty());
+    assert!(prepared.server_sync.servers.restarted.is_empty());
+    assert!(prepared.server_sync.servers.started.is_empty());
+    assert!(prepared.server_sync.servers.stopped.is_empty());
+    assert!(prepared.server_sync.server_records.is_empty());
+    assert!(prepared.server_sync.server_failures.is_empty());
+    assert!(
+        prepared.server_sync.new_prompts.is_none(),
+        "no prompt source is carried"
+    );
+    assert!(
+        !fixture.servers[0].dir.join("pid.txt").exists(),
+        "the late preparation starts nothing"
+    );
+    let mut cache_after: Vec<(String, Vec<u8>)> = std::fs::read_dir(&cache_dir)
+        .expect("the cache dir")
+        .map(|entry| {
+            let entry = entry.expect("a cache entry");
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                std::fs::read(entry.path()).expect("cache bytes"),
+            )
+        })
+        .collect();
+    cache_after.sort();
+    assert_eq!(
+        cache_after, cache_before,
+        "the late preparation writes nothing"
+    );
+    assert!(
+        servers.has_slot("late1") && !servers.running("late1"),
+        "the cached slot stays exactly as the session holds it"
+    );
+}
+
 /// A startup notice of the kind `mcp_servers_started` writes.
 fn startup_notice(text: &str) -> contract::events::Notice {
     contract::events::Notice {

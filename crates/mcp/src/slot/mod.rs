@@ -328,7 +328,7 @@ impl Slot {
         } = &mut *state
         {
             // Revalidated under the same lock: a keep that died after
-            // the commit's fallback check keeps what it has.
+            // the commit's liveness check keeps what it has.
             if server.is_gone() || server.is_expired() {
                 return;
             }

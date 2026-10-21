@@ -18,20 +18,20 @@ pub use commit::{Synced, commit_sync};
 pub use rows::{SyncRow, classify_sync};
 pub use stage::{StagedSync, stage_sync};
 
-/// One sync's startup inputs, as at session start: the private stage and
-/// commit helpers thread this instead of seven arguments each. The public
-/// stage and commit entries keep their flat shapes, which `main` drives.
-pub(super) struct SyncInputs<'a> {
+/// One sync's startup inputs, as at session start: the public stage and
+/// commit entries thread this instead of one argument each, and `main`
+/// builds it at the call site.
+pub struct SyncInputs<'a> {
     /// The session workspace the servers run in.
-    pub(super) workspace: &'a Path,
+    pub workspace: &'a Path,
     /// The artifacts directory binary content declares through.
-    pub(super) artifacts: &'a Path,
+    pub artifacts: &'a Path,
     /// The image child shadow starts load through.
-    pub(super) images: &'a Arc<dyn Images>,
+    pub images: &'a Arc<dyn Images>,
     /// The cache directory session starts write through.
-    pub(super) cache: &'a Path,
+    pub cache: &'a Path,
     /// The clock every bound reads.
-    pub(super) clock: &'a Arc<dyn Clock>,
+    pub clock: &'a Arc<dyn Clock>,
     /// The session version shadow slots carry.
-    pub(super) version: &'a str,
+    pub version: &'a str,
 }

@@ -1,15 +1,12 @@
 //! The reload's commit: stop and remove old slots, install the new ones,
-//! write caches, and declare. The fallback pass stages every fallible
-//! replacement before anything is installed; the install itself stages
-//! nothing, so the commit cannot fail after the first install.
+//! write caches, and declare. The install itself stages nothing and cannot
+//! fail: every fallible required staging ran before the first install.
 
 use std::sync::{Arc, PoisonError};
 
-use contract::clock::Clock;
 use contract::events::{
     CommandInfo, McpServerFailed, McpServerReady, ReloadedServers, ServerFailure, ToolInfo,
 };
-use contract::images::Images;
 use contract::tool::{ServerRecord, Tool};
 
 use crate::cache::{self, Cached};
@@ -18,7 +15,7 @@ use crate::slot::Slot;
 use crate::start::{Declaration, ServerSpec, Servers, resources_info};
 
 use super::SyncInputs;
-use super::stage::{KeepFallback, ShadowStaged, StagedRow, fallback_dead_keeps};
+use super::stage::{ShadowStaged, StagedRow};
 
 /// What the commit installs: the new MCP tool set, the records to write
 /// before `reloaded`, the non-required failures for its `failed` entry,
@@ -147,49 +144,27 @@ fn install_failed(
 }
 
 /// Commits the staged sync: stops and removes old slots, installs the new
-/// ones, writes caches, and declares. The fallback pass stages every
-/// fallible replacement before anything is installed: a kept slot that
-/// died (or left) after its re-list takes the replacement path here
-/// instead of declaring its stale tools as kept (`docs/mcp.md`, "Reload"
-/// step 3), shadow-started through the same helper the stage loop uses.
-/// Only once every required shadow start has succeeded does the install
-/// run (stop/remove old slots, install the new ones, write caches,
-/// declare), so no two slots for one name ever serve at once and no stale
-/// spec survives. A required fallback failure stops every shadow and
-/// rejects with the start's code, leaving every slot, tool and cache byte
-/// as the stage left them.
+/// ones, writes caches, and declares. Only once every required shadow start
+/// has succeeded does the install run (stop/remove old slots, install the
+/// new ones, write caches, declare), so no two slots for one name ever serve
+/// at once and no stale spec survives.
 ///
 /// The install itself stages nothing and cannot fail: a keep that died
-/// after the sweep installs its staged outcome as kept — its slot and
-/// cache stay as the stage left them, its staged tools still declare, and
-/// the next call restarts it. Failing there instead would return an error
-/// after earlier rows already installed slots or wrote caches, changing
-/// what the plan's change-nothing rule keeps.
+/// after its re-list installs its staged outcome as kept — the install
+/// writes nothing for it, so its slot and cache stay as the stage left
+/// them, its staged tools still declare, and the next call restarts it.
+/// Failing there instead would return an error after earlier rows already
+/// installed slots or wrote caches, changing what the plan's change-nothing
+/// rule keeps.
 ///
-/// The startup inputs stay flat here: `main` drives this entry with the
-/// same arguments as the session start, so its shape matches.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the public commit shape matches the session start"
-)]
+/// Revalidated at install: a keep whose slot is still alive installs the
+/// staged re-list, while a keep that died after its re-list installs its
+/// staged outcome as kept.
 pub fn commit_sync(
     staged: super::stage::StagedSync,
     servers: &Servers,
-    cache: &std::path::Path,
-    artifacts: &std::path::Path,
-    images: &Arc<dyn Images>,
-    workspace: &std::path::Path,
-    clock: &Arc<dyn Clock>,
-    version: &str,
-) -> Result<Synced, contract::shapes::Failure> {
-    let inputs = SyncInputs {
-        workspace,
-        artifacts,
-        images,
-        cache,
-        clock,
-        version,
-    };
+    inputs: &SyncInputs,
+) -> Synced {
     let mut installing = Synced {
         tools: Vec::new(),
         records: Vec::new(),
@@ -203,20 +178,6 @@ pub fn commit_sync(
         prompts: Vec::new(),
         prompt_sources: Prompts::default(),
     };
-    // The fallback pass: every kept slot that died (or left) after its
-    // re-list shadow-starts its replacement now, while no slot or cache
-    // has changed. Its old death rides the carried records and the fresh
-    // shadow installs as `restarted`.
-    let mut fallbacks: std::collections::HashMap<String, KeepFallback> =
-        std::collections::HashMap::new();
-    let mut extra_shadows: Vec<Arc<Slot>> = Vec::new();
-    fallback_dead_keeps(
-        &staged,
-        &mut fallbacks,
-        &mut extra_shadows,
-        servers,
-        &inputs,
-    )?;
     // The install runs now that every required shadow start has
     // succeeded: stop/remove old slots, install the new ones, write
     // caches, declare.
@@ -227,52 +188,17 @@ pub fn commit_sync(
         match row {
             StagedRow::Keep { spec, listed, used } => {
                 let name = spec.name.clone();
-                match fallbacks.remove(&name) {
-                    Some(KeepFallback::Replaced {
-                        slot,
-                        listed,
-                        used,
-                        carried,
-                        sources,
-                    }) => {
-                        install_opened(
-                            &mut installing,
-                            servers,
-                            Installed {
-                                spec,
-                                slot,
-                                listed,
-                                used,
-                                carried,
-                                sources,
-                                restarted: true,
-                            },
-                            &mut all_sources,
-                            &inputs,
-                        );
+                match servers.slot(&name) {
+                    Some(slot) if slot.is_live() => {
+                        slot.install_relisted(listed.clone());
+                        cache::write(inputs.cache, &name, &spec.key(), &listed);
+                        installing.tools.extend(used);
+                        installing.servers.kept.push(name);
                     }
-                    Some(KeepFallback::Failed { carried, failure }) => {
-                        install_failed(&mut installing, servers, &spec, carried, failure, true);
+                    _ => {
+                        installing.tools.extend(used);
+                        installing.servers.kept.push(name);
                     }
-                    // Revalidated at install: a keep whose slot is still
-                    // alive installs the staged re-list, while a keep that
-                    // died after the sweep installs its staged outcome as
-                    // kept — the install writes nothing for it, so its
-                    // slot and cache stay as the stage left them. The
-                    // commit stages nothing here and cannot fail: failing
-                    // would leave earlier rows installed.
-                    None => match servers.slot(&name) {
-                        Some(slot) if slot.is_live() => {
-                            slot.install_relisted(listed.clone());
-                            cache::write(cache, &name, &spec.key(), &listed);
-                            installing.tools.extend(used);
-                            installing.servers.kept.push(name);
-                        }
-                        _ => {
-                            installing.tools.extend(used);
-                            installing.servers.kept.push(name);
-                        }
-                    },
                 }
             }
             StagedRow::Shadow(ShadowStaged::Replaced {
@@ -297,7 +223,7 @@ pub fn commit_sync(
                         restarted: replaces,
                     },
                     &mut all_sources,
-                    &inputs,
+                    inputs,
                 );
             }
             StagedRow::Shadow(ShadowStaged::Failed {
@@ -334,12 +260,12 @@ pub fn commit_sync(
         let definition = crate::resources_definition();
         let tool: Arc<dyn Tool> = Arc::new(crate::resources::Resources::new(
             &servers.slots,
-            artifacts,
-            images,
+            inputs.artifacts,
+            inputs.images,
         ));
         installing
             .tools
             .push(("builtin".to_owned(), tool, resources_info(&definition)));
     }
-    Ok(installing)
+    installing
 }

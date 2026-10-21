@@ -5,10 +5,7 @@
 
 use std::sync::Arc;
 
-use contract::clock::Clock;
 use contract::events::McpServerFailed;
-use contract::images::Images;
-use contract::tool::ServerRecord;
 
 use crate::cache::Cached;
 use crate::prompt::PromptSource;
@@ -44,8 +41,7 @@ pub struct StagedSync {
 
 /// What one shadow start staged: only a replacement or a failure, so
 /// the callers' matches need no unreachable arm. The stage loop files
-/// each as its commit row; the fallback pass files each as the dead
-/// keep's replacement.
+/// each as its commit row.
 pub(super) enum ShadowStaged {
     /// The shadow-started replacement with its staged tools, cache
     /// payload and prompt sources.
@@ -57,8 +53,7 @@ pub(super) enum ShadowStaged {
         /// The old death the commit writes before the ready.
         records: Vec<contract::tool::ServerRecord>,
         /// Whether the commit files the shadow under `restarted` (a
-        /// replacement, or a fallback for a slot that left) or
-        /// `started` (a fresh start).
+        /// replacement) or `started` (a fresh start).
         restarted: bool,
         /// The shadow's prompt sources, carried for servers with
         /// no startup rows.
@@ -92,8 +87,7 @@ fn required_failed(failure: &McpServerFailed) -> contract::shapes::Failure {
 /// quadrant the commit files it under, and the failure stages the old
 /// deaths beside the start failure when the shadow fails. A required
 /// failure stops every shadow started so far and propagates, so no
-/// replacement child outlives the rejected reload. The stage loop and the
-/// fallback pass stage through here, so the paths cannot drift apart.
+/// replacement child outlives the rejected reload.
 fn stage_shadow(
     shadows: &mut Vec<Arc<Slot>>,
     servers: &Servers,
@@ -150,30 +144,11 @@ fn stage_shadow(
 /// propagates: the old slots keep serving and the old caches stay
 /// byte-identical.
 ///
-/// The startup inputs stay flat here: `main` drives this entry with the
-/// same arguments as the session start, so its shape matches.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the public stage shape matches the session start"
-)]
 pub fn stage_sync(
     rows: Vec<SyncRow>,
     servers: &Servers,
-    workspace: &std::path::Path,
-    artifacts: &std::path::Path,
-    images: &Arc<dyn Images>,
-    cache: &std::path::Path,
-    clock: &Arc<dyn Clock>,
-    version: &str,
+    inputs: &SyncInputs,
 ) -> Result<StagedSync, contract::shapes::Failure> {
-    let inputs = SyncInputs {
-        workspace,
-        artifacts,
-        images,
-        cache,
-        clock,
-        version,
-    };
     let mut staged = Vec::new();
     let mut shadows: Vec<Arc<Slot>> = Vec::new();
     for row in rows {
@@ -188,7 +163,7 @@ pub fn stage_sync(
                         spec,
                         Vec::new(),
                         true,
-                        &inputs,
+                        inputs,
                     )?));
                     continue;
                 };
@@ -206,7 +181,7 @@ pub fn stage_sync(
                             spec,
                             records,
                             true,
-                            &inputs,
+                            inputs,
                         )?));
                     }
                 }
@@ -226,7 +201,7 @@ pub fn stage_sync(
                     spec,
                     records,
                     true,
-                    &inputs,
+                    inputs,
                 )?));
             }
             SyncRow::Start { spec } => {
@@ -236,7 +211,7 @@ pub fn stage_sync(
                     spec,
                     Vec::new(),
                     false,
-                    &inputs,
+                    inputs,
                 )?));
             }
             SyncRow::Remove { name } => {
@@ -245,116 +220,4 @@ pub fn stage_sync(
         }
     }
     Ok(StagedSync { rows: staged })
-}
-
-/// One kept row's fallback, staged before the commit installs anything:
-/// a slot that died (or left) after its re-list shadow-starts its
-/// replacement through the same helper the stage loop uses, so the
-/// commit installs no stale lists as kept.
-pub(super) enum KeepFallback {
-    /// The slot died or left: install the fresh shadow as `restarted`.
-    Replaced {
-        slot: Arc<Slot>,
-        listed: Cached,
-        used: Vec<Declaration>,
-        carried: Vec<ServerRecord>,
-        sources: Vec<PromptSource>,
-    },
-    /// The slot died or left and its replacement failed without
-    /// `required`: the old death rides beside the failure.
-    Failed {
-        carried: Vec<ServerRecord>,
-        failure: McpServerFailed,
-    },
-}
-
-/// Stages one kept row's fallback: a slot that died (or left) after
-/// its re-list shadow-starts its replacement through the same helper
-/// the stage loop uses, carrying the old death the commit writes before
-/// the ready.
-fn stage_keep_fallback(
-    extra_shadows: &mut Vec<Arc<Slot>>,
-    servers: &Servers,
-    spec: ServerSpec,
-    inputs: &SyncInputs,
-) -> Result<KeepFallback, contract::shapes::Failure> {
-    // The old death the commit writes before the ready, when this check
-    // is the first to see it: nothing for a live or expired slot, whose
-    // stop writes no record.
-    let carried: Vec<ServerRecord> = servers
-        .slot(&spec.name)
-        .and_then(|slot| slot.idle_death())
-        .into_iter()
-        .collect();
-    match stage_shadow(extra_shadows, servers, spec, carried, true, inputs)? {
-        ShadowStaged::Replaced {
-            slot,
-            listed,
-            used,
-            records: carried,
-            sources,
-            ..
-        } => Ok(KeepFallback::Replaced {
-            slot,
-            listed,
-            used,
-            carried,
-            sources,
-        }),
-        ShadowStaged::Failed {
-            failure,
-            records: carried,
-            ..
-        } => Ok(KeepFallback::Failed { carried, failure }),
-    }
-}
-
-/// Stops every shadow the sync started: the fallback extras with the
-/// staged replacements. On a required failure nothing installs, so every
-/// earlier row's slot, tools and cache stay as the stage left them.
-pub(super) fn stop_shadows(extra_shadows: &[Arc<Slot>], rows: &[StagedRow]) {
-    for shadow in extra_shadows {
-        shadow.stop();
-    }
-    for row in rows {
-        if let StagedRow::Shadow(ShadowStaged::Replaced { slot, .. }) = row {
-            slot.stop();
-        }
-    }
-}
-
-/// One fallback pass over the staged keeps: every keep whose slot died
-/// (or left) shadow-starts its replacement now, while no slot or cache
-/// has changed. Its old death rides the carried records and the fresh
-/// shadow installs as `restarted`. A required fallback failure stops
-/// every shadow and rejects with the start's code, leaving every slot,
-/// tool and cache byte as the stage left them.
-pub(super) fn fallback_dead_keeps(
-    staged: &StagedSync,
-    fallbacks: &mut std::collections::HashMap<String, KeepFallback>,
-    extra_shadows: &mut Vec<Arc<Slot>>,
-    servers: &Servers,
-    inputs: &SyncInputs,
-) -> Result<(), contract::shapes::Failure> {
-    for row in &staged.rows {
-        let StagedRow::Keep { spec, .. } = row else {
-            continue;
-        };
-        if fallbacks.contains_key(&spec.name) {
-            continue;
-        }
-        if servers.slot(&spec.name).is_some_and(|slot| slot.is_live()) {
-            continue;
-        }
-        match stage_keep_fallback(extra_shadows, servers, spec.clone(), inputs) {
-            Ok(fallback) => {
-                fallbacks.insert(spec.name.clone(), fallback);
-            }
-            Err(failure) => {
-                stop_shadows(extra_shadows, &staged.rows);
-                return Err(failure);
-            }
-        }
-    }
-    Ok(())
 }

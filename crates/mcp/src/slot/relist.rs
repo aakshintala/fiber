@@ -126,11 +126,8 @@ pub(super) fn relist(slot: &Slot) -> Relisted {
         Vec::new()
     };
     let prompts = if list_prompts {
-        // A prompts list that is refused or errors leaves no prompts
-        // while the re-list goes on, as at startup; a missed
-        // deadline, a death, an expiry, or a login failure falls
-        // back to the replace path, so a failed listing never
-        // writes a cache from an empty list.
+        // Any prompts/list error falls back to the replace path: a
+        // failed listing never writes a cache from an empty list.
         match crate::server::list_pages::<ListedPrompt, Relisted>(
             &server,
             &slot.clock,
@@ -138,10 +135,7 @@ pub(super) fn relist(slot: &Slot) -> Relisted {
             "prompts",
             bound,
             &crate::wait::NoCancel,
-            |error| match error {
-                Some(CallError::JsonRpc { .. } | CallError::Http(_)) => Ok(Vec::new()),
-                error => Err(fail(error)),
-            },
+            |error| Err(fail(error)),
         ) {
             Ok(prompts) => prompts,
             Err(relisted) => return relisted,

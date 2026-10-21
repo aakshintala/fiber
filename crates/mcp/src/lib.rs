@@ -41,5 +41,5 @@ pub use start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, Program, Restarted, SecretError, SecretReader,
     ServerSpec, Servers, Started, StdioSpec, Transport, restart, start, start_observed,
 };
-pub use sync::{StagedSync, SyncRow, Synced, classify_sync, commit_sync, stage_sync};
+pub use sync::{StagedSync, SyncInputs, SyncRow, Synced, classify_sync, commit_sync, stage_sync};
 pub use token::{Token, TokenError, store_token, token_key, url_has_userinfo};

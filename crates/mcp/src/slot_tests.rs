@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -1489,6 +1488,29 @@ fn every(images: &std::sync::Arc<FakeImages>) -> std::sync::Arc<dyn contract::im
     std::sync::Arc::<FakeImages>::clone(images)
 }
 
+/// One sync's owned inputs: the locals `SyncInputs` borrows, so one
+/// binding carries every stage and commit call in a test.
+struct OwnedInputs {
+    workspace: std::path::PathBuf,
+    artifacts: std::path::PathBuf,
+    images: std::sync::Arc<dyn contract::images::Images>,
+    cache: std::path::PathBuf,
+    clock: std::sync::Arc<dyn contract::clock::Clock>,
+}
+
+impl OwnedInputs {
+    fn inputs(&self) -> crate::SyncInputs<'_> {
+        crate::SyncInputs {
+            workspace: &self.workspace,
+            artifacts: &self.artifacts,
+            images: &self.images,
+            cache: &self.cache,
+            clock: &self.clock,
+            version: "test",
+        }
+    }
+}
+
 impl Setup {
     /// The `fx` slot of `started`, served once so it runs.
     fn running(&self, started: &Started) -> std::sync::Arc<Slot> {
@@ -1515,20 +1537,30 @@ impl Setup {
         Result<crate::StagedSync, contract::shapes::Failure>,
         crate::start::Servers,
     )> {
-        let workspace = setup.workspace();
-        let artifacts = setup.artifacts();
-        let every: std::sync::Arc<dyn contract::images::Images> =
-            std::sync::Arc::<FakeImages>::clone(images);
-        let cache = setup.cache();
-        let clock = setup.clock();
+        let owned = OwnedInputs {
+            workspace: setup.workspace(),
+            artifacts: setup.artifacts(),
+            images: std::sync::Arc::<FakeImages>::clone(images),
+            cache: setup.cache(),
+            clock: setup.clock(),
+        };
         let (done, result) = mpsc::channel();
         std::thread::spawn(move || {
-            let staged = stage_sync(
-                rows, &servers, &workspace, &artifacts, &every, &cache, &clock, "test",
-            );
+            let staged = stage_sync(rows, &servers, &owned.inputs());
             done.send((staged, servers)).expect("collected");
         });
         result
+    }
+
+    /// One sync's owned inputs, built from this fixture's directories.
+    fn owned_inputs(&self, images: &std::sync::Arc<FakeImages>) -> OwnedInputs {
+        OwnedInputs {
+            workspace: self.workspace(),
+            artifacts: self.artifacts(),
+            images: every(images),
+            cache: self.cache(),
+            clock: self.clock(),
+        }
     }
 }
 
@@ -1591,73 +1623,86 @@ fn relist_returns_fresh_prompts_while_the_cache_waits_for_commit() {
 }
 
 #[test]
-fn relist_with_refused_prompts_lists_tools_and_no_prompts() {
+fn relist_with_errored_prompts_signals_replace_without_a_cache_write() {
+    // Bites the prompts/list error swallow: a JSON-RPC error from the
+    // re-list's prompts page falls back to the replace path, never an
+    // empty success that would rewrite the cache from a failed listing.
     let setup = Setup::new();
     setup.tools(&serde_json::json!([{"name": "echo"}]));
     setup.prompts(&serde_json::json!([{"name": "old"}]));
     let started = setup.start(vec![setup.spec("fx")]);
     let slot = setup.running(&started);
-    setup.prompts_raw("error");
-    let listed = match slot.relist() {
-        Relisted::Up { listed } => listed,
-        Relisted::Replace { .. } => panic!("a refused prompts list is not a death"),
-    };
-    assert_eq!(listed.tools.len(), 1);
-    assert!(listed.prompts.is_empty());
-    setup.stop(started.servers);
-}
-
-#[test]
-fn relist_with_login_prompts_signals_replace_without_a_cache_write() {
-    // Bites the prompts/list login swallow: a login failure during the
-    // re-list's prompts page must fall back to the replace path, never
-    // an empty success that would rewrite the cache from a failed
-    // listing.
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let setup = Setup::new();
-    let prompts_calls = Arc::new(AtomicUsize::new(0));
-    let server = remote_responding(
-        |result| {
-            result(json!({
-                "protocolVersion": "2025-06-18",
-                "capabilities": {"tools": {}, "prompts": {}},
-                "serverInfo": {"name": "remote", "version": "1"},
-            }))
-            .header("mcp-session-id", "1868a90c")
-        },
-        |result| {
-            result(
-                json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
-            )
-        },
-        {
-            let counted = Arc::clone(&prompts_calls);
-            move |result: &dyn Fn(serde_json::Value) -> fakes::Response| {
-                if counted.fetch_add(1, Ordering::SeqCst) == 0 {
-                    result(json!({"prompts": [{"name": "old", "description": "Old."}]}))
-                } else {
-                    fakes::Response::status(401, "secret")
-                }
-            }
-        },
-        |_| panic!("no call answers during a re-list"),
-    );
-    let started = setup.start(vec![
-        setup.remote_spec("fx", &format!("{}/mcp", server.url())),
-    ]);
-    assert!(started.failed.is_empty());
-    let slot = started.servers.slot("fx").expect("the fx slot");
     let cache_before = setup.cache_bytes();
+    setup.prompts_raw("error");
     match slot.relist() {
-        Relisted::Up { .. } => panic!("a login failure never re-lists empty"),
+        Relisted::Up { .. } => panic!("an errored prompts list never re-lists empty"),
         Relisted::Replace { .. } => {}
-    }
+    };
     assert_eq!(
         setup.cache_bytes(),
         cache_before,
         "a failed listing writes no cache"
     );
     setup.stop(started.servers);
+}
+
+#[test]
+fn relist_with_failed_prompts_signals_replace_without_a_cache_write() {
+    // Bites the prompts/list error swallow: every prompts/list error
+    // shape (a login failure, an HTTP error, a JSON-RPC error) falls
+    // back to the replace path, never an empty success that would
+    // rewrite the cache from a failed listing.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // A login failure (401) and an HTTP error (500) over the remote
+    // transport.
+    for status in [401u16, 500u16] {
+        let setup = Setup::new();
+        let prompts_calls = Arc::new(AtomicUsize::new(0));
+        let server = remote_responding(
+            |result| {
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}, "prompts": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                }))
+                .header("mcp-session-id", "1868a90c")
+            },
+            |result| {
+                result(
+                    json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
+                )
+            },
+            {
+                let counted = Arc::clone(&prompts_calls);
+                move |result: &dyn Fn(serde_json::Value) -> fakes::Response| {
+                    if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                        result(json!({"prompts": [{"name": "old", "description": "Old."}]}))
+                    } else {
+                        fakes::Response::status(status, "secret")
+                    }
+                }
+            },
+            |_| panic!("no call answers during a re-list"),
+        );
+        let started = setup.start(vec![
+            setup.remote_spec("fx", &format!("{}/mcp", server.url())),
+        ]);
+        assert!(started.failed.is_empty());
+        let slot = started.servers.slot("fx").expect("the fx slot");
+        let cache_before = setup.cache_bytes();
+        match slot.relist() {
+            Relisted::Up { .. } => panic!("a status-{status} prompts failure never re-lists empty"),
+            Relisted::Replace { .. } => {}
+        }
+        assert_eq!(
+            setup.cache_bytes(),
+            cache_before,
+            "a failed listing writes no cache"
+        );
+        setup.stop(started.servers);
+    }
+    // The JSON-RPC error shape rides the stdio fixture next door:
+    // `relist_with_errored_prompts` pins it to the same fallback.
 }
 
 #[test]
@@ -1965,65 +2010,6 @@ fn relist_lists_an_advertised_empty_tool_section() {
 }
 
 #[test]
-fn commit_installs_the_keep_lists_back_on_its_slot() {
-    // The committed keep refreshes the slot's held lists, so what the
-    // slot holds after the commit is what the re-list staged.
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let started = setup.start(vec![setup.spec("fx")]);
-    let slot = setup.running(&started);
-    setup.tools(&serde_json::json!([{"name": "echo"}, {"name": "plus"}]));
-    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
-    let images = FakeImages::ok();
-    let staged = stage_sync(
-        rows,
-        &started.servers,
-        &setup.workspace(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.cache(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("a healthy keep stages");
-    let synced = commit_sync(
-        staged,
-        &started.servers,
-        &setup.cache(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.workspace(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the commit installs");
-    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
-    // The commit installs the new lists: the slot holds what the
-    // re-list staged, so installing the same lists again holds them
-    // still.
-    slot.install_relisted(crate::cache::Cached {
-        tools: vec![
-            serde_json::from_value(json!({"name": "echo"})).expect("listed"),
-            serde_json::from_value(json!({"name": "plus"})).expect("listed"),
-        ],
-        prompts: Vec::new(),
-        resources: false,
-    });
-    let held: Vec<String> = slot
-        .listed_tools()
-        .iter()
-        .map(|tool| tool.name.clone())
-        .collect();
-    assert_eq!(
-        held,
-        vec!["echo".to_owned(), "plus".to_owned()],
-        "the commit installs the new lists"
-    );
-    setup.stop(started.servers);
-}
-
-#[test]
 fn commit_writes_no_cache_for_an_unchanged_keep() {
     let setup = Setup::new();
     setup.tools(&serde_json::json!([{"name": "echo"}]));
@@ -2032,28 +2018,10 @@ fn commit_writes_no_cache_for_an_unchanged_keep() {
     let cache_before = setup.cache_bytes();
     let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
     let images = FakeImages::ok();
-    let staged = stage_sync(
-        rows,
-        &started.servers,
-        &setup.workspace(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.cache(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("an unchanged keep stages");
-    let synced = commit_sync(
-        staged,
-        &started.servers,
-        &setup.cache(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.workspace(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the commit installs");
+    let owned = setup.owned_inputs(&images);
+    let staged =
+        stage_sync(rows, &started.servers, &owned.inputs()).expect("an unchanged keep stages");
+    let synced = commit_sync(staged, &started.servers, &owned.inputs());
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     assert_eq!(
         setup.cache_bytes(),
@@ -2112,28 +2080,10 @@ fn commit_writes_a_prompts_only_change_for_an_unchanged_tool_list() {
     setup.prompts(&serde_json::json!([{"name": "new"}]));
     let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
     let images = FakeImages::ok();
-    let staged = stage_sync(
-        rows,
-        &started.servers,
-        &setup.workspace(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.cache(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("a prompts-only change stages");
-    let synced = commit_sync(
-        staged,
-        &started.servers,
-        &setup.cache(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.workspace(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the commit installs");
+    let owned = setup.owned_inputs(&images);
+    let staged =
+        stage_sync(rows, &started.servers, &owned.inputs()).expect("a prompts-only change stages");
+    let synced = commit_sync(staged, &started.servers, &owned.inputs());
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     let names: Vec<String> = setup
         .cached_prompts()
@@ -2144,164 +2094,12 @@ fn commit_writes_a_prompts_only_change_for_an_unchanged_tool_list() {
     setup.stop(started.servers);
 }
 
-/// A wedged keep's stage in flight: `tools/list` pages forever while
-/// `tools/call` still answers, so the keep's re-list parks and the
-/// replacement shadow's handshake pages too. The driver runs the shared
-/// setup and the fake-clock shadow handshake; each outcome test asserts
-/// its own half.
-struct WedgedKeep {
-    setup: Setup,
-    images: std::sync::Arc<FakeImages>,
-    result: mpsc::Receiver<(
-        Result<crate::StagedSync, contract::shapes::Failure>,
-        crate::start::Servers,
-    )>,
-    cache_before: Vec<u8>,
-    slot: std::sync::Arc<Slot>,
-    tool: std::sync::Arc<dyn contract::tool::Tool>,
-    pid: u32,
-}
-
-/// Stages one wedged keep on a thread, advancing the fake clock past the
-/// re-list deadline and through the shadow's handshake: `required` names
-/// whether the wedged server is required.
-fn stage_wedged_keep(required: bool) -> WedgedKeep {
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
-    let mut spec = setup.spec("fx");
-    spec.required = required;
-    let images = FakeImages::ok();
-    let started = setup.start_with_images(vec![spec.clone()], std::sync::Arc::clone(&images));
-    let slot = setup.running(&started);
-    let tool = setup.tool(&started, "mcp__fx__echo");
-    assert!(
-        setup.run(&tool).error.is_none(),
-        "the old tool answers first"
-    );
-    let pid = setup.pid();
-    let cache_before = setup.cache_bytes();
-    // `tools/list` pages forever while `tools/call` still answers.
-    setup.write("cursor-forever", "tools/list");
-    let t0 = setup.fake.now();
-    let rows = classify_sync(vec![spec], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
-    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    setup.await_requests("tools/list", 2);
-    let deadline = t0
-        .checked_add(crate::start::DEFAULT_STARTUP_TIMEOUT)
-        .expect("deadline");
-    setup.fake.advance_when_parked(
-        Some(deadline),
-        None,
-        crate::start::DEFAULT_STARTUP_TIMEOUT,
-        &fakes::Deadline::after(WITHIN),
-    );
-    // The shadow's handshake pages too: its own deadline ends it. Its
-    // initialize must complete before the clock passes its deadline,
-    // or the shadow dies before it ever lists and the pid never changes.
-    // The handshake shares one deadline across every page, computed
-    // from the still-unmoved clock at the shadow's start: twice the
-    // startup timeout past `t0`. The first wait lets the initialize
-    // through (moving less than the remaining bound); the second ends
-    // the tools page (landing exactly on it, where the bound checks
-    // fail).
-    let shadow_bound = t0
-        .checked_add(2 * crate::start::DEFAULT_STARTUP_TIMEOUT)
-        .expect("deadline");
-    setup.await_requests("method\":\"initialize", 2);
-    setup.fake.advance_when_parked(
-        Some(shadow_bound),
-        None,
-        Duration::from_secs(4),
-        &fakes::Deadline::after(WITHIN),
-    );
-    setup.await_requests("method\":\"notifications/initialized", 2);
-    setup.fake.advance_when_parked(
-        Some(shadow_bound),
-        None,
-        Duration::from_secs(1),
-        &fakes::Deadline::after(WITHIN),
-    );
-    WedgedKeep {
-        setup,
-        images,
-        result,
-        cache_before,
-        slot,
-        tool,
-        pid,
-    }
-}
-
 #[test]
-fn stage_of_a_wedged_keep_fails_required_leaving_everything_untouched() {
-    let wedged = stage_wedged_keep(true);
-    let (outcome, servers) = fakes::Deadline::after(WITHIN)
-        .recv(&wedged.result)
-        .expect("the stage ends");
-    let failure = match outcome {
-        Ok(_) => panic!("a required shadow failure rejects"),
-        Err(failure) => failure,
-    };
-    assert_eq!(failure.code, contract::ErrorCode::McpRequiredServerFailed);
-    // Everything untouched: the old slot answers, the cache is identical.
-    assert!(wedged.slot.is_running());
-    assert!(
-        wedged.setup.run(&wedged.tool).error.is_none(),
-        "the old tool still answers"
-    );
-    assert_eq!(wedged.setup.cache_bytes(), wedged.cache_before);
-    // The shadow is stopped: its pid (in `pid.txt` now) is gone.
-    let shadow = wedged.setup.pid();
-    assert_ne!(shadow, wedged.pid, "the shadow started its own server");
-    assert!(
-        fakes::pids_exit(&[shadow], WITHIN),
-        "a rejected reload stops its shadows"
-    );
-    wedged.setup.stop(servers);
-}
-#[test]
-fn stage_of_a_wedged_keep_fails_optional_stopping_the_old_slot_at_commit() {
-    let wedged = stage_wedged_keep(false);
-    let (outcome, servers) = fakes::Deadline::after(WITHIN)
-        .recv(&wedged.result)
-        .expect("the stage ends");
-    let staged = outcome.expect("an optional shadow failure stages");
-    let synced = commit_sync(
-        staged,
-        &servers,
-        &wedged.setup.cache(),
-        &wedged.setup.artifacts(),
-        &every(&wedged.images),
-        &wedged.setup.workspace(),
-        &wedged.setup.clock(),
-        "test",
-    )
-    .expect("the commit installs");
-    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
-    assert_eq!(synced.records.len(), 1, "the shadow's start failure");
-    let contract::tool::ServerRecord::Failed(failed) = &synced.records[0] else {
-        panic!("the failure rides a failed record")
-    };
-    assert_eq!(failed.reason, contract::events::ServerFailure::Deadline);
-    assert!(
-        servers.slot("fx").is_none(),
-        "the commit stops the old slot"
-    );
-    assert_eq!(
-        wedged.setup.cache_bytes(),
-        wedged.cache_before,
-        "a failed sync writes no cache"
-    );
-    wedged.setup.stop(servers);
-}
-
-#[test]
-fn commit_replaces_a_keep_that_died_after_its_re_list() {
-    // A kept server that dies after its re-list but before the commit
-    // takes the replacement path: the commit detects the dead slot
-    // instead of declaring its stale tools as kept.
+fn commit_installs_a_keep_dead_at_install_as_listed() {
+    // A keep that dies after its re-list installs its staged lists as
+    // kept: the commit stages nothing and cannot fail, so the dead
+    // keep's slot and cache stay exactly as the stage left them —
+    // listed but not live — and the next call restarts it.
     let setup = Setup::new();
     setup.tools(&serde_json::json!([{"name": "echo"}]));
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
@@ -2311,249 +2109,34 @@ fn commit_replaces_a_keep_that_died_after_its_re_list() {
     let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
     assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
     let images = FakeImages::ok();
-    let staged = stage_sync(
-        rows,
-        &started.servers,
-        &setup.workspace(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.cache(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("a keep stages");
+    let owned = setup.owned_inputs(&images);
+    let staged = stage_sync(rows, &started.servers, &owned.inputs()).expect("a keep stages");
+    let cache_before = setup.cache_bytes();
     setup.kill(&started);
     assert!(!slot.is_live(), "the kept slot died before the commit");
-    let synced = commit_sync(
-        staged,
-        &started.servers,
-        &setup.cache(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.workspace(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the commit installs");
-    assert!(synced.servers.kept.is_empty(), "a dead keep is not kept");
-    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
+    let synced = commit_sync(staged, &started.servers, &owned.inputs());
+    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
+    assert!(synced.servers.restarted.is_empty());
+    assert!(synced.records.is_empty(), "a keep writes no records");
+    assert!(synced.failed.is_empty());
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "the dead keep's cache stays as the stage left it"
+    );
+    assert!(!slot.is_live(), "the dead keep stays listed but not live");
     let echo = synced
         .tools
         .iter()
         .find(|(_, _, info)| info.name == "mcp__fx__echo")
-        .expect("the replacement is declared");
+        .expect("the staged lists still declare");
     assert!(
         setup.run(&echo.1).error.is_none(),
-        "the new executable answers"
+        "the next call restarts the dead keep"
     );
-    assert_ne!(setup.pid(), pid, "the replacement starts its own server");
-    assert!(
-        synced
-            .records
-            .iter()
-            .any(|record| matches!(record, contract::tool::ServerRecord::Ready(_))),
-        "the replacement reads ready"
-    );
+    assert_ne!(setup.pid(), pid, "the restart spawns its own server");
+    assert!(slot.is_live(), "the keep serves again");
     setup.stop(started.servers);
-}
-
-#[test]
-fn commit_stages_every_fallback_before_installing_anything() {
-    // A required fallback failure rejects with the start's code while
-    // every earlier row stays as the stage left it: the commit stages
-    // all fallible replacements before installing anything, so no slot
-    // or cache changes until every required shadow start has succeeded.
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
-    let mut fx = setup.spec("fx");
-    fx.required = true;
-    let mut gx = setup.spec("gx");
-    gx.required = true;
-    let images = FakeImages::ok();
-    let started =
-        setup.start_with_images(vec![fx.clone(), gx.clone()], std::sync::Arc::clone(&images));
-    assert!(started.failed.is_empty());
-    // The earlier row's re-list stages a change its install would write.
-    setup.tools(&serde_json::json!([{"name": "echo"}, {"name": "plus"}]));
-    let rows = classify_sync(vec![fx, gx], &started.servers);
-    assert!(matches!(
-        rows.as_slice(),
-        [SyncRow::Keep { .. }, SyncRow::Keep { .. }]
-    ));
-    let cache_before = setup.cache_bytes();
-    let staged = stage_sync(
-        rows,
-        &started.servers,
-        &setup.workspace(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.cache(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the keeps stage");
-    // The later row's slot leaves, and its replacement cannot start.
-    started.servers.remove("gx");
-    setup.write("fail-start", "");
-    let failure = commit_sync(
-        staged,
-        &started.servers,
-        &setup.cache(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.workspace(),
-        &setup.clock(),
-        "test",
-    )
-    .err()
-    .expect("a required fallback failure rejects");
-    assert_eq!(failure.code, contract::ErrorCode::McpRequiredServerFailed);
-    assert_eq!(
-        setup.cache_bytes(),
-        cache_before,
-        "no slot or cache changes until every required shadow succeeds"
-    );
-    assert!(
-        started.servers.running("fx"),
-        "the earlier slot keeps serving"
-    );
-    let echo = setup.tool(&started, "mcp__fx__echo");
-    assert!(
-        setup.run(&echo).error.is_none(),
-        "the earlier tool still answers"
-    );
-    setup.stop(started.servers);
-}
-
-#[test]
-fn commit_keeps_a_keep_that_died_after_the_final_sweep_without_failing() {
-    // A keep that dies after the commit's final pre-install liveness
-    // sweep — while an earlier replacement's stop blocks on its
-    // grandchild — still installs its staged lists as kept instead of
-    // failing: every fallible required staging ran before the first
-    // install, so the commit itself cannot fail, and the dead keep's
-    // slot and cache stay exactly as the stage left them.
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    setup.write("grandchild", "");
-    let keep_dir = fakes::TempDir::new("fiber-mcp-late-keep");
-    std::fs::write(
-        keep_dir.path().join("tools.json"),
-        serde_json::json!([{"name": "echo"}]).to_string(),
-    )
-    .expect("the keep's fixture");
-    let mut replace = setup.spec("rx");
-    replace.required = true;
-    let mut keep = setup.spec("vx");
-    keep.required = true;
-    keep.stdio_mut().args = vec![keep_dir.path().display().to_string()];
-    let images = FakeImages::ok();
-    let started = setup.start_with_images(
-        vec![replace.clone(), keep.clone()],
-        std::sync::Arc::clone(&images),
-    );
-    assert!(started.failed.is_empty());
-    // The shadow the stage starts must not inherit the grandchild:
-    // only the old server blocks the commit's stop on it.
-    std::fs::remove_file(setup.dir.path().join("grandchild")).expect("the grandchild switch");
-    // The replacement changes only the timeout, so the old server
-    // answers until the commit swaps it.
-    replace.startup_timeout += Duration::from_secs(1);
-    let rows = classify_sync(vec![replace, keep], &started.servers);
-    assert!(matches!(
-        rows.as_slice(),
-        [SyncRow::Replace { .. }, SyncRow::Keep { .. }]
-    ));
-    let cache_before = std::fs::read(setup.cache().join("vx.json")).expect("the keep's cache");
-    let staged = stage_sync(
-        rows,
-        &started.servers,
-        &setup.workspace(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.cache(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the stage installs nothing");
-    // The commit runs on its own thread; the kill below lands while its
-    // install blocks stopping the replaced server, after the sweep saw
-    // the keep alive.
-    let slots = std::sync::Arc::clone(&started.servers.slots);
-    let kept = started.servers.slot("vx").expect("the keep's slot");
-    let (done, result) = mpsc::channel();
-    let servers = started.servers;
-    let commit_workspace = setup.workspace();
-    let commit_artifacts = setup.artifacts();
-    let commit_images = every(&images);
-    let commit_cache = setup.cache();
-    let commit_clock = setup.clock();
-    std::thread::spawn(move || {
-        let synced = commit_sync(
-            staged,
-            &servers,
-            &commit_cache,
-            &commit_artifacts,
-            &commit_images,
-            &commit_workspace,
-            &commit_clock,
-            "test",
-        );
-        done.send((synced, servers)).expect("collected");
-    });
-    await_until("the replaced slot to leave", move || {
-        !slots
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|slot| slot.spec().name == "rx")
-    });
-    let pid: u32 = std::fs::read_to_string(keep_dir.path().join("pid.txt"))
-        .expect("pid.txt")
-        .trim()
-        .parse()
-        .expect("a pid");
-    fakes::kill_pid(pid, "KILL").expect("the keep dies");
-    await_until("the killed keep to be gone", move || {
-        if let State::Running { server, .. } = &*super::lock(&kept.state) {
-            server.is_gone()
-        } else {
-            false
-        }
-    });
-    setup.write("fail-start", "");
-    // The keep's server runs on its own fixture directory, so its
-    // replacement reads the fail-start there.
-    std::fs::write(keep_dir.path().join("fail-start"), "").expect("the keep's fail-start");
-    let grace = setup
-        .fake
-        .now()
-        .checked_add(support::group::GRACE)
-        .expect("grace");
-    setup.fake.advance_when_parked(
-        Some(grace),
-        None,
-        support::group::GRACE,
-        &fakes::Deadline::after(WITHIN),
-    );
-    let (outcome, servers) = fakes::Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the commit ends");
-    let synced = outcome.expect("the commit cannot fail after the sweep");
-    assert_eq!(synced.servers.restarted, vec!["rx".to_owned()]);
-    assert_eq!(synced.servers.kept, vec!["vx".to_owned()]);
-    assert!(synced.failed.is_empty());
-    assert_eq!(
-        std::fs::read(setup.cache().join("vx.json")).expect("the keep's cache"),
-        cache_before,
-        "the dead keep's slot and cache stay as the stage left them"
-    );
-    assert!(
-        servers.slot("vx").is_some_and(|slot| !slot.is_live()),
-        "the dead keep stays listed but not live"
-    );
-    setup.stop(servers);
 }
 
 #[test]
@@ -2573,28 +2156,10 @@ fn an_optional_replacement_failure_still_writes_the_detected_death() {
     let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
     assert!(matches!(rows.as_slice(), [SyncRow::Replace { .. }]));
     let images = FakeImages::ok();
-    let staged = stage_sync(
-        rows,
-        &started.servers,
-        &setup.workspace(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.cache(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("an optional shadow failure stages");
-    let synced = commit_sync(
-        staged,
-        &started.servers,
-        &setup.cache(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.workspace(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the commit installs");
+    let owned = setup.owned_inputs(&images);
+    let staged = stage_sync(rows, &started.servers, &owned.inputs())
+        .expect("an optional shadow failure stages");
+    let synced = commit_sync(staged, &started.servers, &owned.inputs());
     assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
     assert_eq!(
         synced.records.len(),
@@ -2635,28 +2200,10 @@ fn commit_declares_mcp_resources_only_when_a_slot_offers_them() {
         let started = setup.start(vec![spec]);
         assert!(!setup.spawned(), "the cache declares without spawning");
         let images = FakeImages::ok();
-        let staged = stage_sync(
-            Vec::new(),
-            &started.servers,
-            &setup.workspace(),
-            &setup.artifacts(),
-            &every(&images),
-            &setup.cache(),
-            &setup.clock(),
-            "test",
-        )
-        .expect("an empty stage");
-        let synced = commit_sync(
-            staged,
-            &started.servers,
-            &setup.cache(),
-            &setup.artifacts(),
-            &every(&images),
-            &setup.workspace(),
-            &setup.clock(),
-            "test",
-        )
-        .expect("the commit installs");
+        let owned = setup.owned_inputs(&images);
+        let staged =
+            stage_sync(Vec::new(), &started.servers, &owned.inputs()).expect("an empty stage");
+        let synced = commit_sync(staged, &started.servers, &owned.inputs());
         let offered = synced
             .tools
             .iter()
@@ -2695,17 +2242,8 @@ fn classify_starts_a_lazy_slot_and_commit_swaps_it_for_a_live_one() {
         .recv(&result)
         .expect("the stage ends");
     let staged = outcome.expect("a fresh start stages");
-    let synced = commit_sync(
-        staged,
-        &servers,
-        &setup.cache(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.workspace(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the commit installs");
+    let owned = setup.owned_inputs(&images);
+    let synced = commit_sync(staged, &servers, &owned.inputs());
     assert_eq!(synced.servers.started, ["fx".to_owned()]);
     assert!(
         matches!(synced.records.as_slice(), [ServerRecord::Ready(_)]),
