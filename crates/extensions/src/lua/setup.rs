@@ -62,9 +62,10 @@ pub(crate) fn install(
         // remainder, or no prefix match is the same backtick-file error
         // the loader already reports, naming the unknown dependency. The
         // serving root is the mapped directory canonicalized per read,
-        // so a symlinked home or root still serves; a missing directory
-        // fails here, naming the dependency, without reaching the file
-        // loader.
+        // so a symlinked home still serves through the same link; a
+        // missing directory fails here, naming the dependency, without
+        // reaching the file loader. A root whose canonical target leaves
+        // the managed extensions root is refused below.
         if name.is_empty() {
             return Ok((None, Some("`dependency '' not installed`".to_owned())));
         }
@@ -105,6 +106,24 @@ pub(crate) fn install(
                 }
             };
             let file = format!("{}.lua", module.replace('.', "/"));
+            // The canonical serving root stays inside the managed
+            // extensions root the map was built under: the lexical
+            // parent of the mapped directory, canonicalized so a
+            // symlinked home passes on both sides. A root whose link
+            // target leaves that tree is refused here, before the file
+            // loader runs, with the same outside-directory error it
+            // reports. The root re-resolves on every require, so a link
+            // retargeted mid-run serves or refuses its new target.
+            let confined = mapped
+                .parent()
+                .and_then(|parent| parent.canonicalize().ok())
+                .is_some_and(|parent| root.starts_with(&parent));
+            if !confined {
+                return Ok((
+                    None,
+                    Some(format!("`{file}` is outside the extension's directory")),
+                ));
+            }
             return Ok(match load_file(lua, &root, &file, memory_cap)? {
                 Ok(chunk) => (Some(chunk), None),
                 Err(message) => (None, Some(message)),
