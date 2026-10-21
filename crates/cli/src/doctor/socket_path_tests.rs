@@ -9,19 +9,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use contract::ErrorCode;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::clean;
-use super::startup::startup;
+use super::startup::{LONGEST_SESSION_ID, startup};
 use crate::hub_status::{Diagnostic, diagnose};
 
-/// The session-start socket limit, by platform: `sun_path` less its
-/// terminating byte. The padding below is computed from it at runtime so
-/// the home fails past the limit on every platform.
-const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
-
-/// The longest session id the code mints: `s_` plus 16 hex.
-const LONGEST_SESSION_ID: &str = "s_aaaaaaaaaaaaaaaa";
+// The session-start socket limit is `doors::SOCKET_PATH_MAX`: `sun_path`
+// less its terminating byte. The padding below is computed from it at
+// runtime so the home fails past the limit on every platform.
 
 /// A home with a workspace under it, ready to start a session.
 struct Setup {
@@ -77,7 +73,8 @@ impl Setup {
 fn expected_sentence() -> String {
     format!(
         "FIBER_HOME is too long: a session's socket path must fit in \
-         {SOCKET_PATH_MAX} bytes. Set FIBER_HOME to a shorter path."
+         {} bytes. Set FIBER_HOME to a shorter path.",
+        doors::SOCKET_PATH_MAX
     )
 }
 
@@ -85,15 +82,24 @@ fn expected_sentence() -> String {
 /// is past it too.
 fn overlong_home(root: &Path) -> PathBuf {
     let base = root.to_string_lossy().len();
-    let pad = SOCKET_PATH_MAX - base - "/run/hub".len() + 1;
-    root.join("p".repeat(pad))
+    // `root` + `/` + pad + `/run/hub` lands past the limit.
+    let pad = doors::SOCKET_PATH_MAX - base - 1 - "/run/hub".len() + 1;
+    let home = root.join("p".repeat(pad));
+    assert!(home.join("run").join("hub").as_os_str().len() > doors::SOCKET_PATH_MAX);
+    home
 }
 
 /// A home whose longest session socket is exactly the limit.
 fn at_limit_home(root: &Path) -> PathBuf {
     let base = root.to_string_lossy().len();
-    let pad = SOCKET_PATH_MAX - base - "/run/".len() - LONGEST_SESSION_ID.len();
-    root.join("q".repeat(pad))
+    // `root` + `/` + pad + `/run/` + the longest session id == the limit.
+    let pad = doors::SOCKET_PATH_MAX - base - 1 - "/run/".len() - LONGEST_SESSION_ID.len();
+    let home = root.join("q".repeat(pad));
+    assert_eq!(
+        home.join("run").join(LONGEST_SESSION_ID).as_os_str().len(),
+        doors::SOCKET_PATH_MAX
+    );
+    home
 }
 
 #[test]

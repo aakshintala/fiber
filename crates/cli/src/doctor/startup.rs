@@ -32,6 +32,11 @@ pub(crate) struct Blocker {
     pub key: bool,
 }
 
+/// The longest session id the code mints: `s_` plus 16 hex
+/// (`support::mint`). Doctor checks this form, so any home it passes
+/// binds every session id it could mint.
+pub(crate) const LONGEST_SESSION_ID: &str = "s_aaaaaaaaaaaaaaaa";
+
 /// The report's middle: the model, providers, permissions and MCP lines,
 /// the first blocker, and the loaded configuration and providers.
 pub(crate) struct Startup {
@@ -56,6 +61,21 @@ pub(crate) fn startup(
     env: &dyn Fn(&str) -> Option<String>,
     has_userinfo: &dyn Fn(&str) -> bool,
 ) -> Startup {
+    // A `FIBER_HOME` too long for a session socket stops every session
+    // regardless of configuration, so it is the first blocker.
+    if let Err(failure) = doors::check_socket_path(home, LONGEST_SESSION_ID) {
+        let line = clean(&failure.message);
+        return Startup {
+            lines: vec![line.clone()],
+            blocker: Some(Blocker {
+                code: failure.code,
+                line,
+                key: false,
+            }),
+            secrets: Vec::new(),
+            notices: Vec::new(),
+        };
+    }
     let (_, project) = match project_of(home, workspace) {
         Ok(found) => found,
         Err(failure) => {

@@ -14,16 +14,13 @@ use crate::failure;
 
 /// The longest socket path the platform binds: `sun_path` less its
 /// terminating byte (`docs/state.md`, "Sockets").
-const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
+pub const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
 
-/// Binds the session's socket at `run/<session_id>`, mode 0600 in a 0700
-/// directory (`docs/state.md`, "Sockets"). A socket a connect reaches is
-/// live: fail `session_held` and leave it alone; a refusal, a missing path,
-/// or a regular file is removed before binding. Any other error
-/// may hide a live session, so the path stays and this fails `io_failed`.
-pub(crate) fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), Failure> {
-    let run = home.join("run");
-    let socket = run.join(dir.file_name().unwrap_or_default());
+/// Fails with the session's `FIBER_HOME` sentence when `run/<file_name>`
+/// under `home` is too long to bind. Sessions and doctor share it, so the
+/// report names the same cause a session start would fail with.
+pub fn check_socket_path(home: &Path, file_name: &str) -> Result<(), Failure> {
+    let socket = home.join("run").join(file_name);
     if socket.as_os_str().len() > SOCKET_PATH_MAX {
         return Err(failure(
             ErrorCode::Usage,
@@ -33,6 +30,21 @@ pub(crate) fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), F
             ),
         ));
     }
+    Ok(())
+}
+
+/// Binds the session's socket at `run/<session_id>`, mode 0600 in a 0700
+/// directory (`docs/state.md`, "Sockets"). A socket a connect reaches is
+/// live: fail `session_held` and leave it alone; a refusal, a missing path,
+/// or a regular file is removed before binding. Any other error
+/// may hide a live session, so the path stays and this fails `io_failed`.
+pub(crate) fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), Failure> {
+    let name = dir.file_name().unwrap_or_default();
+    // One length check for every session socket: doctor reuses it, so the
+    // report names the same cause a session start would fail with.
+    check_socket_path(home, &name.to_string_lossy())?;
+    let run = home.join("run");
+    let socket = run.join(name);
     DirBuilder::new()
         .recursive(true)
         .mode(0o700)
