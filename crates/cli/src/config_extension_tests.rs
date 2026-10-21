@@ -440,7 +440,12 @@ fn non_object_settings_file_is_refused_leaving_the_file_unchanged() {
         "extensions.\"acme\".settings.region",
         "example.com",
     );
-    assert!(matches!(result, Err(CliError::Config(_))), "{result:?}");
+    match result {
+        Err(CliError::Config(ConfigError::WrongType { expected, .. })) => {
+            assert_eq!(expected, "an object");
+        }
+        other => panic!("a non-object root fails the shape check: {other:?}"),
+    }
     assert_eq!(fs::read_to_string(&file).unwrap(), "[]");
 }
 
