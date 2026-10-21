@@ -1,0 +1,97 @@
+{
+  "body": {
+    "error": {
+      "code": 429,
+      "message": "Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.",
+      "status": "RESOURCE_EXHAUSTED"
+    }
+  },
+  "cost": 0.0,
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-length": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "What is the weather in Paris in celsius for today? Use the tool."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 1024,
+      "thinkingConfig": {
+        "includeThoughts": true,
+        "thinkingLevel": "LOW"
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "Weather for a city.",
+            "name": "get_weather",
+            "parametersJsonSchema": {
+              "$defs": {
+                "unit": {
+                  "enum": [
+                    "c",
+                    "f"
+                  ],
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "days": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                }
+              },
+              "required": [
+                "city",
+                "unit",
+                "days"
+              ],
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 429,
+  "usage": {}
+}

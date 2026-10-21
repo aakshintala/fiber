@@ -1,0 +1,9 @@
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": "The latest"}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-3.1-flash-lite","createTime": "2026-10-20T17:19:00.225210Z","responseId": "00000000000000000000002"}
+
+{
+  "error": {
+    "code": 429,
+    "message": "Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.",
+    "status": "RESOURCE_EXHAUSTED"
+  }
+}

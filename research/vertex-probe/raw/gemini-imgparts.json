@@ -1,0 +1,183 @@
+{
+  "cost": 0.00029,
+  "events": [
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "Blue."
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:57:43.441054Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000002",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "",
+                  "thoughtSignature": "AY89a18wR1T9y+THEfdBEWswvTQlYD4mabn8QR2sL/VY5GoezShIBSqdvOlhv5PPhS3oqfB2P8WSWYVjdG8eC/NSneaYSFigiWqVkKyxubZUjoyXNGd1qtufrFo="
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-10-20T16:57:43.441054Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000002",
+        "usageMetadata": {
+          "candidatesTokenCount": 2,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 2
+            }
+          ],
+          "promptTokenCount": 1148,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 59
+            },
+            {
+              "modality": "IMAGE",
+              "tokenCount": 1089
+            }
+          ],
+          "totalTokenCount": 1150,
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    }
+  ],
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-disposition": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Look at the image the tool returns, then name its colour in one word."
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "functionCall": {
+              "args": {},
+              "id": "call_6274632",
+              "name": "get_image"
+            },
+            "thoughtSignature": "AY89a19jsGjmpT93HQX447eegxEqvGxr6ORembNcZ5OcUTqr0lxMc0++FqbqsjdsmU7XzvEzoV95LPX21h0hkCS1X7SiCGd0xqFh0F4awRHBv8D4LdDm8O3ly4Q="
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "functionResponse": {
+              "id": "call_6274632",
+              "name": "get_image",
+              "parts": [
+                {
+                  "inlineData": {
+                    "data": "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR42mNgYPhPIhrVMKph2GoAAJLb/wHQPqPSAAAAAElFTkSuQmCC",
+                    "mimeType": "image/png"
+                  }
+                }
+              ],
+              "response": {
+                "output": "The image is attached."
+              }
+            }
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 256,
+      "thinkingConfig": {
+        "includeThoughts": true
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "Weather for a city.",
+            "name": "get_image",
+            "parametersJsonSchema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "usage": {
+    "candidatesTokenCount": 2,
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 2
+      }
+    ],
+    "promptTokenCount": 1148,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 59
+      },
+      {
+        "modality": "IMAGE",
+        "tokenCount": 1089
+      }
+    ],
+    "totalTokenCount": 1150,
+    "trafficType": "ON_DEMAND"
+  }
+}

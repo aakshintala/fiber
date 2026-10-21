@@ -169,6 +169,12 @@ pub struct Compat {
     /// `x-api-key`, as the Databricks gateway's Anthropic route takes it
     /// (`docs/configuration.md`, "A provider's data").
     pub bearer: bool,
+    /// `anthropic-messages`: the model is Claude on Google Vertex. The
+    /// request goes to `<base_url>/models/<id>:streamRawPredict` with
+    /// `anthropic_version` in the body and no `model`, and an error body
+    /// wrapped in a one-element list is read as the object inside it
+    /// (`docs/model-routing.md`, "Google Vertex wire facts").
+    pub vertex_raw_predict: bool,
 }
 
 impl Compat {
@@ -187,6 +193,7 @@ impl Compat {
                 .map(str::to_owned),
             thinking_budget: flag("thinking_budget").unwrap_or(false),
             bearer: flag("bearer").unwrap_or(false),
+            vertex_raw_predict: flag("vertex_raw_predict").unwrap_or(false),
         }
     }
 }

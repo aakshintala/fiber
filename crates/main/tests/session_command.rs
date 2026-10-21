@@ -1911,18 +1911,18 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
         ),
     );
     // The turn stays open on the held reply while the reader stores
-    // the image and queues the steer. `tools` is answered on the reader
-    // thread, in line order, so its answer proves the steer - image and
-    // all - was processed and queued before the release lets the reply
-    // through: the hold and the `tools` answer force the order.
-    // (Waiting for the steer's own acceptance here would
-    // deadlock: the loop answers it at the next step boundary, which
-    // needs the held reply.)
+    // the image and queues the steer. The steer is answered at once,
+    // before the `tools` probe on the same connection is even read, so
+    // its answer is waited for first: it proves the image was stored
+    // and the steer queued, and the `tools` answer after it proves the
+    // reader moved on in line order. The hold and the release order
+    // force it: the release lets the reply through only after both
+    // answers are in.
     send(&client, r#"{"id":"c_tools","command":"tools"}"#);
-    let _queued = answer(&client, "c_tools");
-    server.release();
     let accepted = answer(&client, "c_steer");
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    let _queued = answer(&client, "c_tools");
+    server.release();
 
     let mut saw_applied = false;
     let rest = until_session(

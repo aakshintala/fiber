@@ -1,0 +1,144 @@
+{
+  "cost": 7e-06,
+  "events": [
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "functionCall": {
+                    "args": {},
+                    "name": "get_image"
+                  }
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:57:44.939803Z",
+        "modelVersion": "gemini-2.5-flash-lite",
+        "responseId": "00000000000000000000003",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": ""
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-10-20T16:57:44.939803Z",
+        "modelVersion": "gemini-2.5-flash-lite",
+        "responseId": "00000000000000000000003",
+        "usageMetadata": {
+          "candidatesTokenCount": 10,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 10
+            }
+          ],
+          "promptTokenCount": 28,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 28
+            }
+          ],
+          "totalTokenCount": 38,
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    }
+  ],
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-disposition": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Look at the image the tool returns, then name its colour in one word."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 256
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    },
+    "toolConfig": {
+      "functionCallingConfig": {
+        "mode": "ANY"
+      }
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "Weather for a city.",
+            "name": "get_image",
+            "parametersJsonSchema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "usage": {
+    "candidatesTokenCount": 10,
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 10
+      }
+    ],
+    "promptTokenCount": 28,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 28
+      }
+    ],
+    "totalTokenCount": 38,
+    "trafficType": "ON_DEMAND"
+  }
+}

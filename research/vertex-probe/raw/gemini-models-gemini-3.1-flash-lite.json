@@ -1,0 +1,183 @@
+{
+  "cost": 0.000178,
+  "events": [
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "functionCall": {
+                    "args": {
+                      "city": "Paris",
+                      "days": 1,
+                      "unit": "c"
+                    },
+                    "id": "call_280600",
+                    "name": "get_weather"
+                  },
+                  "thoughtSignature": "AY89a1/c4oacx1DMIjSo1SusE1lYFXnvvqo1tSVqf/DbVd2k6SZAUwU29DCO/nXABd0ZiDcLW2XVarFvG6if7VGovRpLJH2/HglVIX2e4GYJ72uHLE52o8yp7+U+31mK3GmS4N2rnOOtjuwRiPWQBEJoMC9eMOUcJM2uYWrIdh4jivJ7faBJc01wqikyYYJStqtu+Agn4xdesaQGU1/G1W6DobBKYDqqBh5CUnE8PeKmHN23yFa8CoFnPOOk81mpIItXQK1rjsz81i14WCzf/c7EvUfrrgKvwNQWzmuZ/kUkh1gBk3FFlxRWIDnmk5ztrJBdCZ3lmevnkfv0bIzYLUbtWYv9HJ38rczy9v43XEnhUpKqbHoEjjWPRAQ/ElCCzV5CaI8gmJ9JK5lzaqTAHYRD3nC3gEfPGpn4zn0tk8XaQ1/x3Or2Uzoq+E6GehFtjNbAHz5f4b2t/WQw49L3oNS8KXNWzJYfPpRxEWwnDmNYmwaTNU7KvoO+fFZlhUn0OfmyaRPQIJGAh/u20o7XZLZid0FIkgXtXTsBd5B17YnxVK+Q/LX/bA3QmbI="
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:58:37.379912Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000004",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": ""
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-10-20T16:58:37.379912Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000004",
+        "usageMetadata": {
+          "candidatesTokenCount": 26,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 26
+            }
+          ],
+          "promptTokenCount": 58,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 58
+            }
+          ],
+          "thoughtsTokenCount": 83,
+          "totalTokenCount": 167,
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    }
+  ],
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-disposition": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "What is the weather in Paris in celsius for today? Use the tool."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 1024,
+      "thinkingConfig": {
+        "includeThoughts": true,
+        "thinkingLevel": "LOW"
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "Weather for a city.",
+            "name": "get_weather",
+            "parametersJsonSchema": {
+              "$defs": {
+                "unit": {
+                  "enum": [
+                    "c",
+                    "f"
+                  ],
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "days": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                }
+              },
+              "required": [
+                "city",
+                "unit",
+                "days"
+              ],
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "usage": {
+    "candidatesTokenCount": 26,
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 26
+      }
+    ],
+    "promptTokenCount": 58,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 58
+      }
+    ],
+    "thoughtsTokenCount": 83,
+    "totalTokenCount": 167,
+    "trafficType": "ON_DEMAND"
+  }
+}
