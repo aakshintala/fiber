@@ -15,6 +15,7 @@ pub mod emit;
 mod envelope;
 pub mod events;
 pub mod extension;
+pub mod feedback;
 pub mod files;
 pub mod hook;
 mod ids;

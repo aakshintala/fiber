@@ -209,6 +209,43 @@ pub fn doctor(
     }
 }
 
+/// Runs the production report into a buffer and returns it with
+/// whether a session can start: what `doctor` prints on stdout,
+/// through the same `run` and `probe` seams with the production
+/// `has_userinfo` wiring. The caller decides what the text is for.
+pub fn capture(
+    home: &Path,
+    workspace: &Path,
+    version: &str,
+    clock: &dyn contract::clock::Clock,
+    remote: &dyn contract::McpRemote,
+) -> Result<(String, bool), CliError> {
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let can_start = run(
+        &Inputs {
+            home,
+            workspace,
+            version,
+            now: clock.wall(),
+            env: &|name| std::env::var(name).ok(),
+            has_userinfo: &|url| remote.has_userinfo(url),
+            hub: &probe,
+            clock,
+        },
+        &mut out,
+        &mut err,
+    )?;
+    // Every line reaches the buffer through `writeln!` of a `str`, so
+    // the bytes are UTF-8 by construction; the mapping only types the
+    // impossible.
+    String::from_utf8(out)
+        .map(|report| (report, can_start))
+        .map_err(|error| {
+            CliError::DoctorReport(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+        })
+}
+
 /// Annotates a fresh session's failure with the doctor line for the same
 /// cause: `<line>\n<original>`, keeping code, provider and retry. Only a
 /// key blocker whose code matches, with no provider detail, annotates.
