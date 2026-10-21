@@ -524,6 +524,64 @@ fn home_list_wheel_carries_on_from_the_focused_rows_shown() {
     assert!(!after.contains("s_00000000000000000"), "{after}");
 }
 
+/// Up from the entry bar focuses the last session, then Up again the
+/// one above it: a row strictly inside the window needs no pull, so
+/// the window stays where the wheel left it.
+#[test]
+fn focusing_a_row_inside_home_list_window_keeps_the_window() {
+    let mut lp = home_list(60, 16, &["one", "two", "three"]);
+    feed(&mut lp, vec![wheel_down(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 2);
+    // The last session draws strictly inside the window, needing no
+    // pull: the window stays at the wheel's offset.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[A".to_vec())]);
+    assert!(lp.app.focused().is_some());
+    assert_eq!(lp.app.home_list_scroll(), 2);
+    let before = shown(&lp);
+    assert!(before.contains("✓ three"), "{before}");
+    // The session above it is strictly inside the window too, its
+    // entry fully within it: the next frame keeps the window.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[A".to_vec())]);
+    assert!(lp.app.focused().is_some());
+    assert_eq!(lp.app.home_list_scroll(), 2);
+    assert_eq!(shown(&lp), before);
+}
+
+/// Up walks the focus to the window's top row through pulls, then the
+/// wheel lands the window on it: the focused entry fits, so the next
+/// frame keeps the window.
+#[test]
+fn focusing_home_list_window_top_row_keeps_the_window() {
+    use crate::keys::{Mouse, MouseKind};
+    let mut lp = home_list(60, 16, &["one", "two", "three", "four"]);
+    feed(&mut lp, vec![wheel_down(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 3);
+    // Up focuses the last session, pulling the window to its end,
+    // then walks up to the first: each pull stores its offset.
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[A".to_vec())]);
+    assert_eq!(lp.app.home_list_scroll(), 4);
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[A".to_vec())]);
+    assert_eq!(lp.app.home_list_scroll(), 4);
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[A".to_vec())]);
+    assert!(lp.app.focused().is_some());
+    assert_eq!(lp.app.home_list_scroll(), 0);
+    // One wheel-down with no frame between lands the window's top
+    // row on the focused entry, which fits it.
+    lp.app.on_wheel(&Mouse {
+        kind: MouseKind::WheelDown,
+        col: 10,
+        row: 5,
+    });
+    assert_eq!(lp.app.home_list_scroll(), 3);
+    // The next frame keeps the window: the head stays out of it.
+    feed(&mut lp, vec![motion(10, 5)]);
+    assert!(lp.app.focused().is_some());
+    assert_eq!(lp.app.home_list_scroll(), 3);
+    let after = shown(&lp);
+    assert!(after.contains("✓ four"), "{after}");
+    assert!(!after.contains("4 live"), "{after}");
+}
+
 /// An attached 60x12 loop showing [`long_session`], scrolled up one
 /// wheel step... by PageUp, which the wheel must leave alone under an
 /// overlay: the top it pages to.
