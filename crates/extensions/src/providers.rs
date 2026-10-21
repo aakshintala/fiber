@@ -741,13 +741,14 @@ impl Providers {
                     ProviderData {
                         name,
                         models,
-                        credential: None,
+                        credential_from: config::CredentialFrom::Stored {
+                            credential: None,
+                            login: None,
+                        },
                         credential_name: None,
                         headers: BTreeMap::new(),
                         placeholders: BTreeMap::new(),
                         reviewer_model: None,
-                        login: None,
-                        credential_label: None,
                     },
                 );
             }
@@ -822,7 +823,7 @@ impl Providers {
                 .unwrap_or_default();
             let mut left_out = Vec::new();
             if let Some(data) = self.by_name.get_mut(&provider_name) {
-                let login = data.credential_label.is_none();
+                let login = !matches!(data.credential_from, config::CredentialFrom::Function(_));
                 let mut kept = Vec::new();
                 for mut model in data.models.drain(..) {
                     let template = model.base_url.clone();
@@ -925,13 +926,14 @@ impl Providers {
         self.by_name.get(name).cloned().unwrap_or(ProviderData {
             name: name.to_owned(),
             models: Vec::new(),
-            credential: None,
+            credential_from: config::CredentialFrom::Stored {
+                credential: None,
+                login: None,
+            },
             credential_name: None,
             headers: BTreeMap::new(),
             placeholders: BTreeMap::new(),
             reviewer_model: None,
-            login: None,
-            credential_label: None,
         })
     }
 

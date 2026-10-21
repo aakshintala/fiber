@@ -2131,14 +2131,15 @@ fn the_missing_label_check_reads_selected_at_read_time() {
 fn fake_data() -> config::ProviderData {
     config::ProviderData {
         name: "fake".into(),
-        credential: None,
+        credential_from: config::CredentialFrom::Stored {
+            credential: None,
+            login: None,
+        },
         credential_name: None,
         headers: Default::default(),
         placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
-        login: None,
-        credential_label: None,
     }
 }
 

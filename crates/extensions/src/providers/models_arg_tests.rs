@@ -40,14 +40,15 @@ fn models_arg_returns_a_credential_read_failure() {
         "p".to_owned(),
         ProviderData {
             name: "p".to_owned(),
-            credential: Some(CredentialSource::File(unreadable)),
+            credential_from: config::CredentialFrom::Stored {
+                credential: Some(CredentialSource::File(unreadable)),
+                login: None,
+            },
             credential_name: None,
             headers: BTreeMap::new(),
             placeholders: BTreeMap::new(),
             models: Vec::new(),
             reviewer_model: None,
-            login: None,
-            credential_label: None,
         },
     );
     let providers = Providers {

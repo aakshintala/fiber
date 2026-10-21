@@ -55,14 +55,15 @@ impl Providers {
             .entry(SCRIPTED.to_owned())
             .or_insert_with(|| ProviderData {
                 name: SCRIPTED.to_owned(),
-                credential: None,
+                credential_from: config::CredentialFrom::Stored {
+                    credential: None,
+                    login: None,
+                },
                 credential_name: None,
                 headers: BTreeMap::new(),
                 placeholders: BTreeMap::new(),
                 models: Vec::new(),
                 reviewer_model: None,
-                login: None,
-                credential_label: None,
             });
         if data.models.iter().any(|model| model.id == id) {
             return;

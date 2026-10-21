@@ -42,14 +42,15 @@ fn a_path_that_cannot_be_canonicalised_is_never_read() {
     let path = root.path().join("key");
     let provider = ProviderData {
         name: "acme".into(),
-        credential: Some(CredentialSource::File(path.clone())),
+        credential_from: crate::CredentialFrom::Stored {
+            credential: Some(CredentialSource::File(path.clone())),
+            login: None,
+        },
         credential_name: None,
         headers: Default::default(),
         placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
-        login: None,
-        credential_label: None,
     };
     // Canonicalising fails, and before it returns another process points
     // the path at a key file.

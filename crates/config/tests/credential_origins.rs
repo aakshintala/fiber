@@ -23,28 +23,30 @@ use contract::ErrorCode;
 fn fake(credential: Option<CredentialSource>) -> ProviderData {
     ProviderData {
         name: "fake".into(),
-        credential,
         credential_name: None,
         headers: Default::default(),
         placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
-        login: None,
-        credential_label: None,
+        credential_from: config::CredentialFrom::Stored {
+            credential,
+            login: None,
+        },
     }
 }
 
 fn shared(name: &str, stored: &str, credential: Option<CredentialSource>) -> ProviderData {
     ProviderData {
         name: name.into(),
-        credential,
         credential_name: Some(stored.into()),
         headers: Default::default(),
         placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
-        login: None,
-        credential_label: None,
+        credential_from: config::CredentialFrom::Stored {
+            credential,
+            login: None,
+        },
     }
 }
 

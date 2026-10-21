@@ -10,14 +10,15 @@ use super::{Labels, no_label, session_credential, switch_credential};
 fn provider(name: &str) -> ProviderData {
     ProviderData {
         name: name.into(),
-        credential: None,
+        credential_from: config::CredentialFrom::Stored {
+            credential: None,
+            login: None,
+        },
         credential_name: None,
         headers: Default::default(),
         placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
-        login: None,
-        credential_label: None,
     }
 }
 
@@ -117,8 +118,12 @@ fn a_switch_read_maps_a_config_error_to_its_code() {
     assert_eq!(read.secret.expose(), "acme-cfg");
     assert_eq!(read.file, None);
     let mut command = provider("acme");
-    command.credential =
-        Some(serde_json::from_value(serde_json::json!({"command": ["false"]})).unwrap());
+    command.credential_from = config::CredentialFrom::Stored {
+        credential: Some(
+            serde_json::from_value(serde_json::json!({"command": ["false"]})).unwrap(),
+        ),
+        login: None,
+    };
     let failure = switch_credential(
         &config,
         &command,

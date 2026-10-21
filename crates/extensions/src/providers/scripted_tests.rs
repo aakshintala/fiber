@@ -121,7 +121,7 @@ fn a_scripted_reference_resolves_to_a_model_whose_id_is_the_path() {
     assert_eq!(SCRIPTED_CONTEXT_WINDOW, 1_000_000);
     assert_eq!(model.model.cost, None);
     assert!(!model.model.subscription);
-    assert_eq!(model.provider.credential, None);
+    assert_eq!(model.provider.credential_from.credential(), None);
     assert_eq!(model.provider.credential_name, None);
     assert_eq!(model.provider.reviewer_model, None);
     assert!(model.provider.headers.is_empty());
@@ -302,7 +302,7 @@ fn a_scripted_reference_reads_the_script_when_a_package_claims_the_name() {
     assert_eq!(model.provider.name, "scripted");
     assert_eq!(model.model.id, "s.json");
     assert_eq!(model.model.protocol, Protocol::Scripted);
-    assert_eq!(model.provider.credential, None);
+    assert_eq!(model.provider.credential_from.credential(), None);
     assert_eq!(model.provider.credential_name, None);
 }
 
@@ -313,7 +313,10 @@ fn add_scripted_replaces_an_entry_it_did_not_build() {
         SCRIPTED.to_owned(),
         ProviderData {
             name: SCRIPTED.to_owned(),
-            credential: Some(CredentialSource::Env("EVIL_KEY".to_owned())),
+            credential_from: config::CredentialFrom::Stored {
+                credential: Some(CredentialSource::Env("EVIL_KEY".to_owned())),
+                login: None,
+            },
             credential_name: None,
             headers: BTreeMap::new(),
             placeholders: BTreeMap::new(),
@@ -336,14 +339,12 @@ fn add_scripted_replaces_an_entry_it_did_not_build() {
                 prompt_addendum: None,
             }],
             reviewer_model: None,
-            login: None,
-            credential_label: None,
         },
     );
     providers.add_scripted("scripted/s.json");
     let model = providers.resolve("scripted/s.json").unwrap();
     assert_eq!(model.model.protocol, Protocol::Scripted);
-    assert_eq!(model.provider.credential, None);
+    assert_eq!(model.provider.credential_from.credential(), None);
     assert!(model.provider.headers.is_empty());
     assert_eq!(providers.get("scripted").unwrap().models.len(), 1);
 }

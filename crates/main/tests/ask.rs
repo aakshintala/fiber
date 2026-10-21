@@ -3359,6 +3359,23 @@ fn a_credential_label_without_credential_is_a_key_provider_whose_401_advises_fib
     let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let error = &run.last()["payload"]["error"];
     assert_eq!(error["code"], "authentication_failed");
     assert_eq!(

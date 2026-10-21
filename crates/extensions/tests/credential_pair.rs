@@ -107,14 +107,15 @@ fn token(provider: &Arc<LuaProvider>, credential: &str, label: &str) -> String {
 fn data(name: &str, credential_name: Option<&str>) -> config::ProviderData {
     config::ProviderData {
         name: name.to_owned(),
-        credential: None,
+        credential_from: config::CredentialFrom::Stored {
+            credential: None,
+            login: None,
+        },
         credential_name: credential_name.map(str::to_owned),
         headers: BTreeMap::new(),
         placeholders: BTreeMap::new(),
         models: Vec::new(),
         reviewer_model: None,
-        login: None,
-        credential_label: None,
     }
 }
 

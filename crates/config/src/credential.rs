@@ -209,7 +209,7 @@ impl Credentials {
             .find(|(configured, _)| configured == label)
             .map(|(_, source)| source);
         let own = (label == DEFAULT_LABEL)
-            .then(|| provider.credential.clone())
+            .then(|| provider.credential_from.credential().cloned())
             .flatten();
         let Some(source) = from_config.or(own) else {
             let listed = Self::listed(&self.labels(provider));
@@ -278,7 +278,7 @@ impl Credentials {
                 .into_iter()
                 .map(|(label, _)| label),
         );
-        if provider.credential.is_some() {
+        if provider.credential_from.credential().is_some() {
             labels.insert(DEFAULT_LABEL.into());
         }
         labels.into_iter().collect()
@@ -318,7 +318,9 @@ impl Credentials {
         let labelled = names
             .flat_map(|name| sources_in(&self.providers, name))
             .map(|(_, declared)| declared);
-        let own = providers.into_iter().filter_map(|p| p.credential.clone());
+        let own = providers
+            .into_iter()
+            .filter_map(|p| p.credential_from.credential().cloned());
         let files: BTreeSet<PathBuf> = labelled
             .chain(own)
             .filter_map(|source| match source {

@@ -271,14 +271,15 @@ fn gap_providers(placeholders: BTreeMap<String, Placeholder>) -> Providers {
         "acme".to_owned(),
         ProviderData {
             name: "acme".to_owned(),
-            credential: None,
+            credential_from: config::CredentialFrom::Stored {
+                credential: None,
+                login: None,
+            },
             credential_name: None,
             headers: BTreeMap::new(),
             placeholders,
             models: Vec::new(),
             reviewer_model: None,
-            login: None,
-            credential_label: None,
         },
     );
     let mut extension_of = BTreeMap::new();
