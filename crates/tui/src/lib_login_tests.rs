@@ -187,6 +187,16 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
     // Done success prepares on its ticket; the worker's reviewer read
     // follows on the same ticket, and Enter on its highlighted row
     // saves through the seam.
+    // The worker reads the gaps before the choices: none for the
+    // fixture, and the view still ignores the step.
+    let (_, gaps) = next(&rx, &Deadline::after(WAIT));
+    assert!(
+        matches!(
+            gaps,
+            crate::login_worker::LoginStep::Host(Ok(ref gaps)) if gaps.is_empty()
+        ),
+        "{gaps:?}"
+    );
     let (_, step) = next(&rx, &Deadline::after(WAIT));
     let step = match step {
         crate::login_worker::LoginStep::Reviewer(Ok(choices)) => {
@@ -196,7 +206,8 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
         crate::login_worker::LoginStep::Open(_)
         | crate::login_worker::LoginStep::Code { .. }
         | crate::login_worker::LoginStep::Done(_)
-        | crate::login_worker::LoginStep::Reviewer(Err(_)) => {
+        | crate::login_worker::LoginStep::Reviewer(Err(_))
+        | crate::login_worker::LoginStep::Host(_) => {
             panic!("the worker posted something else: {step:?}")
         }
     };
@@ -279,6 +290,16 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
             })),
         }],
     );
+    // The worker reads the gaps before the choices: none for the
+    // fixture, and the view still ignores the step.
+    let (_, gaps) = next(&rx, &Deadline::after(WAIT));
+    assert!(
+        matches!(
+            gaps,
+            crate::login_worker::LoginStep::Host(Ok(ref gaps)) if gaps.is_empty()
+        ),
+        "{gaps:?}"
+    );
     let (_, step) = next(&rx, &Deadline::after(WAIT));
     let step = match step {
         crate::login_worker::LoginStep::Reviewer(Ok(choices)) => {
@@ -288,7 +309,8 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
         crate::login_worker::LoginStep::Open(_)
         | crate::login_worker::LoginStep::Code { .. }
         | crate::login_worker::LoginStep::Done(_)
-        | crate::login_worker::LoginStep::Reviewer(Err(_)) => {
+        | crate::login_worker::LoginStep::Reviewer(Err(_))
+        | crate::login_worker::LoginStep::Host(_) => {
             panic!("the worker posted something else: {step:?}")
         }
     };
@@ -370,6 +392,16 @@ fn a_key_login_asks_its_reviewer_after_the_worker_and_saves_it() {
     feed(&mut lp, vec![Input::Bytes(b"sk-a".to_vec())]);
     feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
     assert_eq!(seam.stores(), [("acme".to_owned(), None)]);
+    // The worker reads the gaps before the choices: none for the key
+    // fixture, and the view still ignores the step.
+    let (_, gaps) = next(&rx, &Deadline::after(WAIT));
+    assert!(
+        matches!(
+            gaps,
+            crate::login_worker::LoginStep::Host(Ok(ref gaps)) if gaps.is_empty()
+        ),
+        "{gaps:?}"
+    );
     // The worker reads the choices off the loop thread: Enter on the
     // highlighted preselection saves it through the seam.
     let (_, step) = next(&rx, &Deadline::after(WAIT));
@@ -381,7 +413,8 @@ fn a_key_login_asks_its_reviewer_after_the_worker_and_saves_it() {
         crate::login_worker::LoginStep::Open(_)
         | crate::login_worker::LoginStep::Code { .. }
         | crate::login_worker::LoginStep::Done(_)
-        | crate::login_worker::LoginStep::Reviewer(Err(_)) => {
+        | crate::login_worker::LoginStep::Reviewer(Err(_))
+        | crate::login_worker::LoginStep::Host(_) => {
             panic!("the worker posted something else: {step:?}")
         }
     };

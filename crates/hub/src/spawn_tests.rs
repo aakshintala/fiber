@@ -201,6 +201,7 @@ fn the_session_command_starts_with_a_model_and_never_a_prompt() {
         false,
         false,
         None,
+        None,
         false,
     );
     assert_eq!(command.get_program(), "/bin/fiber");
@@ -226,6 +227,7 @@ fn the_session_command_passes_worktree_only_when_set() {
         true,
         false,
         None,
+        None,
         false,
     );
     assert!(args_of(&with).contains(&"--worktree".to_owned()));
@@ -236,6 +238,7 @@ fn the_session_command_passes_worktree_only_when_set() {
         None,
         false,
         false,
+        None,
         None,
         false,
     );
@@ -252,6 +255,7 @@ fn the_session_command_resumes_with_the_recorded_workspace_and_no_model() {
         None,
         false,
         true,
+        None,
         None,
         false,
     );
@@ -359,6 +363,7 @@ fn start_runs_the_recorded_path() {
         None,
         &[],
         false,
+        None,
     )
     .unwrap();
     assert_eq!(exit_of(started).message, "recorded start");
@@ -374,6 +379,7 @@ fn start_command_passes_each_override_as_its_own_dash_c_in_order() {
         Some("fake/m"),
         &["retry.attempts=2", "model=fake/m2"],
         false,
+        None,
         false,
     );
     assert_eq!(command.get_program(), "/bin/fiber");
@@ -397,6 +403,7 @@ fn start_command_passes_each_override_as_its_own_dash_c_in_order() {
         None,
         &[],
         false,
+        None,
         false,
     );
     assert_eq!(
@@ -481,6 +488,7 @@ fn start_runs_with_the_published_environment_and_the_flag() {
         None,
         &[],
         false,
+        None,
     )
     .unwrap();
     assert_eq!(exit_of(started).message, "recorded");
@@ -582,6 +590,7 @@ fn an_inherited_environment_runs_without_the_flag() {
         None,
         &[],
         false,
+        None,
     )
     .unwrap();
     assert_eq!(exit_of(started).message, "recorded");
@@ -602,6 +611,7 @@ fn the_session_command_rewinds_with_the_old_session_and_no_model() {
         false,
         false,
         Some(&from),
+        None,
         false,
     );
     assert_eq!(
@@ -630,6 +640,46 @@ fn resume_spawns_with_the_given_workspace() {
 }
 
 #[test]
+fn start_command_passes_continues_only_when_set() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let old = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let with = start_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        &[],
+        false,
+        Some(&old),
+        false,
+    );
+    assert_eq!(
+        args_of(&with),
+        [
+            "session",
+            "--id=s_0123456789abcdef",
+            "--workspace=/w",
+            "--continues=s_aaaaaaaaaaaaaaaa"
+        ]
+    );
+    let without = start_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        &[],
+        false,
+        None,
+        false,
+    );
+    assert!(
+        !args_of(&without)
+            .iter()
+            .any(|arg| arg.starts_with("--continues"))
+    );
+}
+
+#[test]
 fn start_command_passes_worktree_only_when_set() {
     let id = SessionId("s_0123456789abcdef".to_owned());
     let with = start_command(
@@ -639,6 +689,7 @@ fn start_command_passes_worktree_only_when_set() {
         None,
         &[],
         true,
+        None,
         false,
     );
     assert!(args_of(&with).contains(&"--worktree".to_owned()));
@@ -649,7 +700,50 @@ fn start_command_passes_worktree_only_when_set() {
         None,
         &[],
         false,
+        None,
         false,
     );
     assert!(!args_of(&without).contains(&"--worktree".to_owned()));
+}
+
+#[test]
+fn session_command_passes_continues_only_when_set() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let old = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let with = session_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        false,
+        false,
+        None,
+        Some(&old),
+        false,
+    );
+    assert_eq!(
+        args_of(&with),
+        [
+            "session",
+            "--id=s_0123456789abcdef",
+            "--workspace=/w",
+            "--continues=s_aaaaaaaaaaaaaaaa"
+        ]
+    );
+    let without = session_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        false,
+        false,
+        None,
+        None,
+        false,
+    );
+    assert!(
+        !args_of(&without)
+            .iter()
+            .any(|arg| arg.starts_with("--continues"))
+    );
 }

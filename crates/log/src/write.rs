@@ -24,10 +24,23 @@ use crate::rate::{Rate, RateFold};
 use crate::read::{Queue, Watcher};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 
+/// One extension-watcher delivery fan-out: what a subscriber is offered
+/// for every appended event. A plain callback, not a second `Queue`: an
+/// extension watcher needs per-kind matching, the busy-bit ephemeral skip
+/// with durable re-queue through the hub stream, and cursor-tracked
+/// drain — none of which a draining reader provides.
+type Subscriber = dyn Fn(&Event, &Envelope) + Send + Sync;
+
 /// A session's log, open for writing. Only one exists per session at a time,
 /// across every process: the lock on `session.lock` is held until it is
 /// dropped. It is shared by whoever emits events, behind one lock
 /// (`docs/architecture.md`, "The threads").
+///
+/// Besides the draining `Queue` watchers above, the log holds one
+/// extension-watcher subscriber list: each live subscriber is offered
+/// every appended event, durable and ephemeral, as `(&Event, &Envelope)`,
+/// after the log lock is released, so the log lock is never held with the
+/// hub or cursor locks.
 ///
 /// A failed write or fsync stops it: every later append returns
 /// [`Error::Poisoned`], and every watcher ends with it. Reopening the session
@@ -42,6 +55,15 @@ pub struct Log {
     diag: OnceLock<Arc<Diag>>,
 }
 
+/// An extension-watcher subscription: dropping it unregisters the
+/// subscriber, once an append prunes the dead entry. Holds the subscriber
+/// alive until then, so an offer cannot outlive the session that
+/// registered it only through a dead weak entry.
+pub struct Subscription {
+    #[allow(dead_code, reason = "held only for its drop, which unregisters")]
+    held: Arc<Subscriber>,
+}
+
 struct Inner {
     session_id: SessionId,
     dir: PathBuf,
@@ -54,6 +76,10 @@ struct Inner {
     offsets: Arc<Offsets>,
     fsyncs: u64,
     watchers: Vec<Weak<Queue>>,
+    /// The extension-watcher subscribers, weak-held and pruned on append:
+    /// dropping the [`Subscription`] guard unregisters, once an append
+    /// prunes the dead entry.
+    subscribers: Vec<Weak<Subscriber>>,
     /// The newest line of each latest-wins kind. A subscriber reads it after
     /// registering, so a lagging connection cannot hide it.
     latest: BTreeMap<String, Envelope>,
@@ -201,6 +227,22 @@ impl Log {
             }
             None => false,
         });
+        // The extension-watcher subscribers, collected under the log lock
+        // and pruned with it, then offered after the lock is released: a
+        // subscriber takes the hub and cursor locks, which must never meet
+        // the log lock.
+        let mut subscribers = Vec::new();
+        inner.subscribers.retain(|s| match s.upgrade() {
+            Some(sub) => {
+                subscribers.push(sub);
+                true
+            }
+            None => false,
+        });
+        drop(inner);
+        for subscriber in &subscribers {
+            subscriber(event, &line);
+        }
         Ok(line)
     }
 
@@ -239,6 +281,16 @@ impl Log {
     pub fn watch(&self) -> Watcher {
         let armed = self.arm(false, |_, _| {});
         Watcher::new(armed.queue, armed.offsets, armed.next)
+    }
+
+    /// Registers an extension-watcher subscriber: every event appended
+    /// from now on — durable and ephemeral, from every source — is offered
+    /// to it as `(&Event, &Envelope)` after the log lock is released.
+    /// Dropping the returned guard unregisters, once an append prunes the
+    /// dead entry.
+    pub fn subscribe(&self, subscriber: Arc<Subscriber>) -> Subscription {
+        self.lock().subscribers.push(Arc::downgrade(&subscriber));
+        Subscription { held: subscriber }
     }
 
     /// A watcher that receives every durable line from `seq` 0, then
@@ -475,6 +527,7 @@ impl Inner {
             offsets: Arc::new(offsets),
             fsyncs: 0,
             watchers: Vec::new(),
+            subscribers: Vec::new(),
             latest: BTreeMap::new(),
             rate: RateFold::default(),
             failed: None,

@@ -1488,6 +1488,22 @@ code `closing`. A process extension then has its manifest's
 `exit_timeout_ms` to finish, and after that gets the shutdown sequence every
 child gets: SIGTERM, 800 ms, then SIGKILL (`docs/invocation.md`, "Shutdown").
 
+Before replaying, the drain waits until no watcher delivery is still
+queued or running: a durable delivery the live fan-out already covered
+runs first, so tearing the session down after the drain cannot lose it.
+The drain replays each watcher's `(cursor, end]` log range — every line at
+or after the registration end the live fan-out did not already offer — in
+extension-name order, then watcher registration order. Each watcher runs
+once per line within its declared timeout; one past it fails, and the
+stream continues with the next watcher. A failure never becomes a `notice`:
+the log already holds `fiber_exited`, so it is printed on stderr under it,
+in every session, naming the watcher and its failure. A log the drain
+cannot read, or a line it cannot read, is collected and printed the same
+way, naming the drain instead of a watcher. `host.fs` and
+`host.data_dir` keep working through the drain; `host.model` and
+`host.drive` answer `closing`, and `host.delegate` stays refused to
+watchers, as ever.
+
 When a signal stops Fiber, no extension code runs, as no hook does. The
 5-second shutdown bound has no room for it.
 

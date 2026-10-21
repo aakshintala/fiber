@@ -158,6 +158,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_settings,
     },
     CommandEntry {
+        name: "theme",
+        description: "Opens the theme picker, or sets the named theme.",
+        hint: Some("[<name>]"),
+        run: run_theme,
+    },
+    CommandEntry {
         name: "keys",
         description: "Opens the rebinding screen.",
         hint: None,
@@ -336,6 +342,14 @@ fn run_approvals(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_settings(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Settings))
+}
+
+fn run_theme(app: &mut App, rest: &str) -> Option<Effect> {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Some(app.open_config_view(super::ConfigView::Theme));
+    }
+    Some(app.theme_command(rest))
 }
 
 fn run_keys(app: &mut App, _rest: &str) -> Option<Effect> {

@@ -830,6 +830,7 @@ fn an_abandon_before_admission_starts_no_host_work() {
                 Target::Command(_)
                 | Target::Provider { .. }
                 | Target::Hook { .. }
+                | Target::Watcher { .. }
                 | Target::Timer { .. }
                 | Target::Tool(_)
                 | Target::Search(_)
@@ -948,6 +949,7 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
                 Target::Provider { name, .. } => Some(name.as_str()),
                 Target::Command(_)
                 | Target::Hook { .. }
+                | Target::Watcher { .. }
                 | Target::Timer { .. }
                 | Target::Effects(_) => None,
             };
@@ -2171,7 +2173,7 @@ fn delegate_rig(
                 Target::Search(name) => {
                     timeouts.search.insert(name.clone(), timeout);
                 }
-                Target::Timer { .. } | Target::Provider { .. } => {}
+                Target::Timer { .. } | Target::Provider { .. } | Target::Watcher { .. } => {}
             }
         } else {
             panic!("not ready");

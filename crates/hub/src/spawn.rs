@@ -46,6 +46,7 @@ impl Starter for SpawnStarter {
         model: Option<&str>,
         overrides: &[&str],
         worktree: bool,
+        continues: Option<&SessionId>,
     ) -> std::io::Result<Box<dyn Started>> {
         let environment = self.environments.get();
         let mut command = start_command(
@@ -55,6 +56,7 @@ impl Starter for SpawnStarter {
             model,
             overrides,
             worktree,
+            continues,
             login_shell(&environment),
         );
         apply(&mut command, &environment);
@@ -96,6 +98,7 @@ impl Starter for SpawnStarter {
             false,
             false,
             Some(from),
+            None,
             login_shell(&environment),
         );
         apply(&mut command, &environment);
@@ -119,6 +122,10 @@ fn login_shell(environment: &Environment) -> bool {
 /// The session command a `start` spawns: one `-c` per override, in
 /// order. An override travels through `to_argv`, which keeps a value
 /// starting with `-` attached to its flag.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the spawn call takes each launch option once"
+)]
 fn start_command(
     exe: &Path,
     id: &SessionId,
@@ -126,6 +133,7 @@ fn start_command(
     model: Option<&str>,
     overrides: &[&str],
     worktree: bool,
+    continues: Option<&SessionId>,
     login_shell: bool,
 ) -> Command {
     session_command_from(
@@ -136,6 +144,7 @@ fn start_command(
             model: model.map(str::to_owned),
             overrides: overrides.iter().map(|text| (*text).to_owned()).collect(),
             worktree,
+            continues: continues.cloned(),
             login_shell,
             ..SessionArgv::default()
         },
@@ -156,8 +165,9 @@ fn session_command_from(exe: &Path, args: SessionArgv) -> Command {
 }
 
 /// `exe session --id <id> --workspace <workspace>`, with `--model` when
-/// one is named, `--worktree` for a new worktree, `--resume` for a resume
-/// and `--rewound-from` for a rewind's new session, in its own process
+/// one is named, `--worktree` for a new worktree, `--resume` for a resume,
+/// `--rewound-from` for a rewind's new session and `--continues` for a
+/// session continuing another's worktree, in its own process
 /// group with stdout piped for the drain.
 #[allow(
     clippy::too_many_arguments,
@@ -171,6 +181,7 @@ fn session_command(
     worktree: bool,
     resume: bool,
     rewound_from: Option<&SessionId>,
+    continues: Option<&SessionId>,
     login_shell: bool,
 ) -> Command {
     session_command_from(
@@ -182,6 +193,7 @@ fn session_command(
             resume,
             worktree,
             rewound_from: rewound_from.cloned(),
+            continues: continues.cloned(),
             login_shell,
             ..SessionArgv::default()
         },
