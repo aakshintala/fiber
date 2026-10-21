@@ -60,6 +60,8 @@ pub(crate) struct Hub {
     conns: Mutex<Conns>,
     /// Woken on every clock move, every change to `conns` and every signal.
     pub(crate) tick: Arc<Tick>,
+    /// Set by a local `stop`: the idle wait ends the hub as SIGTERM does.
+    stop: AtomicBool,
     /// `tick` as the clock's subscriber: kept alive so advances wake the
     /// idle wait.
     wake: Arc<dyn Wake>,
@@ -138,6 +140,8 @@ pub(crate) enum Closer {
 pub(crate) enum Idle {
     /// A signal arrived: its number.
     Signal(i32),
+    /// A local `stop` arrived: ends the hub as SIGTERM does.
+    Stop,
     /// No client for the whole `idle_exit`: the exit is claimed.
     Expired,
     /// Woken by a clock move or a change: check again.
@@ -171,6 +175,7 @@ impl Hub {
             pairing: crate::pairing::Pairing::new(),
             machine: None,
             next_client: AtomicU64::new(0),
+            stop: AtomicBool::new(false),
             conns: Mutex::new(Conns {
                 open: Vec::new(),
                 zero_since,
@@ -243,7 +248,10 @@ impl Hub {
     /// fails: count nothing, serve nothing, and continue accepting.
     pub(crate) fn poll_accept(&self, stream: &UnixStream, stop: &AtomicBool) -> Accept {
         let mut conns = lock(&self.conns);
-        if stop.load(Ordering::SeqCst) {
+        // Either flag ends the hub: the run loop sets its own once it
+        // observes the hub flag, and an accept racing the exit is dropped
+        // unanswered under this lock, EOF with no `hub_hello`.
+        if stop.load(Ordering::SeqCst) || self.stop.load(Ordering::SeqCst) {
             return Accept::Exiting;
         }
         let counted = self.register_with(|| stream.try_clone().map(Closer::Local), &mut conns);
@@ -274,7 +282,7 @@ impl Hub {
     /// `hub_hello`, and the client retries.
     pub(crate) fn poll_accept_web(&self, web: &Arc<crate::port::Web>, stop: &AtomicBool) -> Accept {
         let mut conns = lock(&self.conns);
-        if stop.load(Ordering::SeqCst) {
+        if stop.load(Ordering::SeqCst) || self.stop.load(Ordering::SeqCst) {
             return Accept::Exiting;
         }
         let counted = self.register_with(|| Ok(Closer::Web(Arc::clone(web))), &mut conns);
@@ -353,6 +361,11 @@ impl Hub {
         // signal that lands in between blocks in `Tick::wake` until this
         // thread waits, instead of waking nobody.
         let guard = self.tick.hold();
+        // A local `stop` ends the hub as a signal does, checked before
+        // the signal so the order of arrival decides nothing.
+        if self.stop.load(Ordering::SeqCst) {
+            return Idle::Stop;
+        }
         let signal = got.swap(0, Ordering::SeqCst);
         if signal != 0 {
             return Idle::Signal(signal);
@@ -375,6 +388,16 @@ impl Hub {
         // checks wakes this thread instead of nobody.
         self.tick.park(self.clock.as_ref(), guard, until);
         Idle::Woken
+    }
+
+    /// Records a local `stop`: under the tick hold, so a waiter that has
+    /// checked and not yet parked blocks until the store lands instead of
+    /// missing it. Returns unwoken: the `stop` arm wakes after writing the
+    /// acknowledgement, so the client always reads the acceptance before
+    /// the exit closes its socket. Joins as a waker, never as a waiter.
+    pub(crate) fn request_stop(&self) {
+        let _held = self.tick.hold();
+        self.stop.store(true, Ordering::SeqCst);
     }
 
     /// Shuts down every client connection: each session sees its clients
@@ -694,6 +717,9 @@ fn on_command(
             &line.id,
             crate::environment::refresh(hub, &line.args),
         ),
+        "stop" if matches!(who, crate::pairing::Who::Local) => {
+            on_stop(&line.id, &line.args, hub, writer)
+        }
         "prompt_history" => answer(
             writer,
             hub,
@@ -904,6 +930,35 @@ fn on_status(
         id,
         serde_json::to_value(&result).unwrap_or(Value::Null),
     );
+}
+
+/// Ends the hub as SIGTERM does (`docs/invocation.md`, "What the hub
+/// speaks"): the local socket only, with no arguments. A port sender
+/// falls through to the unknown-command rejection. The store runs under
+/// the tick hold before the acknowledgement is written, and the wake
+/// after it, so the client always reads the acceptance before the exit
+/// closes its socket, and a waiter that has checked and not yet parked
+/// cannot miss the store.
+fn on_stop(
+    id: &CommandId,
+    args: &Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+) {
+    if !args.is_empty() {
+        reject(
+            writer,
+            hub,
+            Some(id),
+            &ErrorCode::InvalidArguments,
+            "The arguments do not fit this command.",
+        );
+        return;
+    }
+    hub.request_stop();
+    let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
+    send(writer, hub, "command_accepted", payload);
+    hub.tick.wake();
 }
 
 /// `start`'s `args`: `workspace` (required string), `model` (optional

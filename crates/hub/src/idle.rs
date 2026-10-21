@@ -138,6 +138,16 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
                     .peak_memory_then_info("hub_stopped", "The hub stopped: signal.");
                 return Exit::Signal(signal);
             }
+            Idle::Stop => {
+                // The exact signal sequence: a local `stop` ends the
+                // hub as SIGTERM does.
+                stop.store(true, Ordering::SeqCst);
+                hub.shutdown_clients();
+                hub.environments.close();
+                hub.diag
+                    .peak_memory_then_info("hub_stopped", "The hub stopped: signal.");
+                return Exit::Signal(signal_hook::consts::SIGTERM);
+            }
             Idle::Expired => {
                 hub.environments.close();
                 hub.diag
