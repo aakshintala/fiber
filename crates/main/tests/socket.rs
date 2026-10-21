@@ -880,14 +880,54 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         |line| line["kind"] == "turn_completed",
     ));
     // The complete, ordered kinds, setting aside `clients` and
-    // `session_status`, which the contract writes on their own trigger
-    // (`docs/testing.md`, "Event streams").
+    // `session_status`, which the contract writes on their own trigger,
+    // and the `c_msg` take's own pair, which has no fixed position
+    // relative to `tool_call_completed`: the take races the `true` tool
+    // subprocess (20-run census on this head: 15 takes after the
+    // completion, 5 during it). Per `docs/testing.md`, "Event streams",
+    // the pair is pinned on its own below instead of placed in the order.
     let settled: Vec<&Value> = lines
         .iter()
         .filter(|line| !matches!(line["kind"].as_str(), Some("clients" | "session_status")))
         .collect();
+    let is_c_msg_take = |line: &Value| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_msg"
+            || line["kind"] == "steering_queue"
+                && line["payload"]["messages"]
+                    .as_array()
+                    .is_some_and(|messages| {
+                        messages
+                            .iter()
+                            .any(|message| message["command_id"] == "c_msg")
+                    })
+    };
+    let framed = "Fiber: a message from session s_0123456789abcdef. Another session wrote it, not the person.\n\nTests pass on main.";
+    let queued: Vec<&Value> = settled
+        .iter()
+        .filter(|line| is_c_msg_take(line))
+        .copied()
+        .collect();
+    assert_eq!(
+        queued.len(),
+        2,
+        "the take writes one queued row and one accept: {lines:?}"
+    );
+    let row = queued
+        .iter()
+        .find(|line| line["kind"] == "steering_queue")
+        .expect("the take queues c_msg");
+    assert_eq!(
+        row["payload"]["messages"],
+        json!([{"command_id": "c_msg", "content": [{"type": "text", "text": framed}], "from_session_id": id, "source": "session"}]),
+        "the queued row carries the framed sender text: {lines:?}"
+    );
+    assert!(
+        queued.iter().any(|line| line["kind"] == "command_accepted"),
+        "the take answers c_msg: {lines:?}"
+    );
     let kinds: Vec<&str> = settled
         .iter()
+        .filter(|line| !is_c_msg_take(line))
         .map(|line| line["kind"].as_str().unwrap())
         .collect();
     assert_eq!(
@@ -909,8 +949,6 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
             "tool_call_started",
             "tool_call_completed",
             "step_started",
-            "steering_queue",
-            "command_accepted",
             "steering_queue",
             "steering_applied",
             "assistant_message_started",
@@ -949,7 +987,6 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         .iter()
         .find(|line| line["kind"] == "steering_applied")
         .expect("the message was applied");
-    let framed = "Fiber: a message from session s_0123456789abcdef. Another session wrote it, not the person.\n\nTests pass on main.";
     assert_eq!(applied["payload"]["source"], "session");
     assert_eq!(applied["payload"]["from_session_id"], id);
     assert_eq!(applied["payload"]["command_id"], "c_msg");

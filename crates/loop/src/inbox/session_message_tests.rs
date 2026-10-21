@@ -1179,6 +1179,139 @@ fn an_approval_wait_with_a_session_message_queued_does_not_end_idle() {
 }
 
 #[test]
+fn a_session_message_during_an_approval_wait_is_answered_at_once() {
+    // While the loop waits on a permission approval, a session message
+    // is taken and answered at once (`docs/loop.md`, "One step"): the
+    // delivery itself wakes the wait, so no reply, cancel or clock move
+    // lands first. The approval still waits afterwards.
+    let mut world = World::with_tools(
+        vec![calls("gated"), Scripted::text("Done.")],
+        Vec::new(),
+        vec![Arc::new(Gated)],
+        Arc::new(AskGated),
+    );
+    let finished = world.spawn_turn();
+    world.send(Delivery::Prompt(
+        contract::inbox::Message {
+            content: vec![ContentPart::Text { text: "go".into() }],
+            sender: From {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_prompt".into())),
+            },
+        },
+        ignore(),
+    ));
+    let (watcher, lines) = read_until(
+        world.watched.take().unwrap(),
+        "a permission_requested line",
+        |line| line.kind == "permission_requested",
+    );
+    world.watched = Some(watcher);
+    let request = RequestId(
+        lines.last().unwrap().payload["request_id"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    );
+    let parked = Arc::clone(&world.clock);
+    fakes::within("the approval wait parked", DEADLINE, move || {
+        while parked.parked().is_empty() {
+            thread::yield_now();
+        }
+    });
+    let (ack, rx) = capture();
+    world.send(delivery(
+        super::for_test(FROM, None, Some("builder"), COMMAND, TEXT),
+        ack,
+    ));
+    // Answered while the approval is still pending: nothing else lands
+    // in between, and the clock never moves.
+    let answer = answered(&rx, "the approval wait answers the session message at once");
+    assert!(answer.is_ok(), "the message is accepted: {answer:?}");
+    match finished.try_recv() {
+        Err(mpsc::TryRecvError::Empty) => {}
+        Err(mpsc::TryRecvError::Disconnected) => panic!("the turn thread ended early"),
+        Ok(_) => panic!("the turn ended early"),
+    }
+    world.send(Delivery::Reply(
+        Reply {
+            request_id: request,
+            answer: ReplyAnswer::Approval {
+                decision: Decision::Allow,
+                feedback: None,
+                remember: None,
+            },
+        },
+        ignore(),
+    ));
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
+    world.looped = Some(looped);
+    assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    let applied: Vec<&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "steering_applied")
+        .collect();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].payload["source"], "session");
+    assert_eq!(applied[0].payload["command_id"], COMMAND);
+}
+
+#[test]
+fn a_session_message_during_a_question_wait_is_answered_at_once() {
+    // While the loop waits on an interaction answer, a session message
+    // is taken and answered at once: the delivery itself wakes the
+    // wait, so no reply, cancel or clock move lands first. The question
+    // still waits afterwards.
+    let mut world = World::with_tools(
+        vec![calls("asks"), Scripted::text("Done.")],
+        Vec::new(),
+        vec![Arc::new(Asks)],
+        Arc::new(AskGated),
+    )
+    .woken();
+    let finished = world.spawn_turn();
+    world.send(Delivery::Prompt(
+        contract::inbox::Message {
+            content: vec![ContentPart::Text { text: "go".into() }],
+            sender: From {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_prompt".into())),
+            },
+        },
+        ignore(),
+    ));
+    let (watcher, _) = read_until(
+        world.watched.take().unwrap(),
+        "an interaction_requested line",
+        |line| line.kind == "interaction_requested",
+    );
+    world.watched = Some(watcher);
+    let parked = Arc::clone(&world.clock);
+    fakes::within("the question wait parked", DEADLINE, move || {
+        while parked.parked().is_empty() {
+            thread::yield_now();
+        }
+    });
+    let (ack, rx) = capture();
+    world.send(delivery(
+        super::for_test(FROM, None, Some("builder"), COMMAND, TEXT),
+        ack,
+    ));
+    // Answered while the question is still pending: nothing else lands
+    // in between, and the clock never moves.
+    let answer = answered(&rx, "the question wait answers the session message at once");
+    assert!(answer.is_ok(), "the message is accepted: {answer:?}");
+    match finished.try_recv() {
+        Err(mpsc::TryRecvError::Empty) => {}
+        Err(mpsc::TryRecvError::Disconnected) => panic!("the turn thread ended early"),
+        Ok(_) => panic!("the turn ended early"),
+    }
+}
+
+#[test]
 fn an_offer_wait_with_a_session_message_in_the_input_does_not_end_idle() {
     let code = FakeRepo::server("mcp-x");
     let mut world = World::new(vec![Scripted::text("Done.")], Vec::new()).offered(code);
