@@ -14,7 +14,7 @@
 mod support;
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -41,6 +41,14 @@ fn fixture() -> PathBuf {
 /// The checked-in stub binary each fixture archive holds.
 fn stub() -> Vec<u8> {
     fs::read(fixture().join("fiber")).unwrap()
+}
+
+/// Whether `haystack` holds `needle` as bytes.
+fn contains(haystack: &[u8], needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 /// The operating system and CPU the stubs report.
@@ -843,17 +851,23 @@ fn a_nightly_fiber_version_is_refused() {
 
 impl Setup {
     /// Runs install.sh with stdio on a new pseudo-terminal the child
-    /// controls, typing `typed`: `/dev/tty` opens, so the directory and
-    /// `PATH` questions are asked. Returns the exit and everything the
-    /// run printed.
+    /// controls, answering each question once its prompt arrives:
+    /// `/dev/tty` opens, so the directory and `PATH` questions are
+    /// asked. Returns the exit and everything the run printed.
     #[track_caller]
     fn install_on_tty(
         &self,
         host: &Host,
         args: &[&str],
         env: &[(&str, &str)],
-        typed: &str,
+        answers: &[&str],
     ) -> (Option<i32>, String) {
+        const PROMPTS: [&str; 2] = ["install to [", "to PATH in"];
+        assert_eq!(
+            answers.len(),
+            PROMPTS.len(),
+            "one answer per question install.sh asks on a terminal"
+        );
         let terminal = support::pty::open(120, 32);
         let slave = terminal.terminal;
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/install.sh");
@@ -888,8 +902,37 @@ impl Setup {
         drop(slave);
         let group = child.id();
         let watchdog = Watchdog::group(group);
-        let mut main = fs::File::from(terminal.main);
-        main.write_all(typed.as_bytes()).unwrap();
+        // The master drains on a thread from the spawn to end of file,
+        // publishing each chunk over `chunks`: the run's output never
+        // waits for the test to read it (`docs/testing/screens.md`).
+        let (send, chunks) = mpsc::channel();
+        let mut writer = fs::File::from(terminal.main.try_clone().unwrap());
+        fakes::pty::read_to_eof(fs::File::from(terminal.main), move |bytes| {
+            send.send(bytes.to_vec()).unwrap_or(());
+        });
+        let mut seen = Vec::new();
+        // Each answer is typed only after its prompt arrives: pasted
+        // input must not precede the read.
+        for (prompt, answer) in PROMPTS.iter().zip(answers.iter()) {
+            loop {
+                if contains(&seen, prompt) {
+                    break;
+                }
+                match self.deadline.recv(&chunks) {
+                    Ok(chunk) => seen.extend_from_slice(&chunk),
+                    Err(_) => panic!("waited until the deadline for the {prompt} prompt"),
+                }
+            }
+            let line = format!("{answer}\n");
+            writer = support::bounded(
+                self.deadline,
+                "typing the answer on the terminal",
+                move || {
+                    writer.write_all(line.as_bytes()).unwrap();
+                    writer
+                },
+            );
+        }
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
         let status = match self.deadline.recv(&finished) {
@@ -897,23 +940,18 @@ impl Setup {
             Err(_) => support::expired(self.deadline, group, &finished, "install.sh to exit"),
         };
         watchdog.stand_down(self.deadline.cleanup());
-        let mut text = Vec::new();
-        loop {
-            let mut chunk = [0u8; 4096];
-            match main.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => text.extend_from_slice(chunk.get(..n).unwrap_or_default()),
-                // The terminal ends with a read error once the child is
-                // gone: that end is the whole output.
-                Err(_) => break,
-            }
+        // The reader ends at end of file once the child is gone: the
+        // channel's disconnect is the whole output.
+        while let Ok(chunk) = self.deadline.cleanup_phase().recv(&chunks) {
+            seen.extend_from_slice(&chunk);
         }
+        let text = String::from_utf8_lossy(&seen).into_owned();
         assert_eq!(
             fs::read_dir(self.path("tmp")).unwrap().count(),
             0,
             "install.sh left its temporary directory"
         );
-        (status.code(), String::from_utf8_lossy(&text).into_owned())
+        (status.code(), text)
     }
 }
 
@@ -1088,10 +1126,14 @@ fn the_terminal_answers_put_the_binary_where_typed_and_path_on_the_line() {
     let setup = Setup::new_with_stub_version("0.0.9");
     setup.publish("latest/download", &TARGETS);
     let custom = setup.path("custom");
-    let typed = format!("{}\ny\n", custom.display());
+    let dir = custom.display().to_string();
     for _ in 0..2 {
-        let (code, text) =
-            setup.install_on_tty(&LINUX_X86_64, &[], &[("SHELL", "/bin/zsh")], &typed);
+        let (code, text) = setup.install_on_tty(
+            &LINUX_X86_64,
+            &[],
+            &[("SHELL", "/bin/zsh")],
+            &[dir.as_str(), "y"],
+        );
         assert_eq!(code, Some(0), "{text}");
         assert!(
             text.find("install to [").unwrap() < text.find("to PATH in").unwrap(),
@@ -1112,8 +1154,13 @@ fn answering_no_to_path_prints_the_line_to_add() {
     let setup = Setup::new_with_stub_version("0.0.9");
     setup.publish("latest/download", &TARGETS);
     let custom = setup.path("custom");
-    let typed = format!("{}\nn\n", custom.display());
-    let (code, text) = setup.install_on_tty(&LINUX_X86_64, &[], &[("SHELL", "/bin/zsh")], &typed);
+    let dir = custom.display().to_string();
+    let (code, text) = setup.install_on_tty(
+        &LINUX_X86_64,
+        &[],
+        &[("SHELL", "/bin/zsh")],
+        &[dir.as_str(), "n"],
+    );
     assert_eq!(code, Some(0), "{text}");
     setup.assert_installed(&custom);
     let line = format!("export PATH='{}':$PATH", custom.display());
