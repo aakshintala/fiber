@@ -117,6 +117,18 @@ fn listen(home: &std::path::Path, id: &SessionId) -> UnixListener {
 }
 
 #[test]
+fn steering_returns_the_shared_queue() {
+    let opened = Opened::open(vec![]);
+    let first = opened.session.steering();
+    let second = opened.session.steering();
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "both handles share the one queue the connection thread admits into"
+    );
+    opened.close();
+}
+
+#[test]
 fn an_accepted_steer_answers_at_once_and_is_still_delivered() {
     let opened = Opened::open(vec![]);
     let home = opened.home.clone();

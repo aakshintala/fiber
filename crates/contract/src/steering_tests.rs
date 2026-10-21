@@ -500,6 +500,142 @@ fn take_staged_drains_only_staged_entries() {
 }
 
 #[test]
+fn an_admitted_id_drops_only_through_forget() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    queued(&queue, "c_a", "a", &log);
+    assert!(
+        queue.is_admitted(&CommandId("c_a".into())),
+        "a pushed entry is admitted at once"
+    );
+    // The entry already left through the reader drop, which keeps its
+    // id so the loop's follow-up delivery is a no-op; only `forget`
+    // drops the id itself, emitting nothing.
+    assert!(queue.remove(&CommandId("c_a".into()), &log));
+    assert!(
+        queue.is_admitted(&CommandId("c_a".into())),
+        "a removed entry keeps its id"
+    );
+    queue.forget(&CommandId("c_a".into()));
+    assert!(
+        !queue.is_admitted(&CommandId("c_a".into())),
+        "forget drops the id the entry left behind"
+    );
+    assert!(queue.snapshot().is_empty(), "forget touches no entry");
+}
+
+#[test]
+fn take_staged_forgets_taken_person_ids() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    queued(&queue, "c_p", "person", &log);
+    assert!(
+        queue.stage(
+            &CommandId("c_p".into()),
+            text("person"),
+            Staged::default(),
+            &log
+        ),
+        "the person entry stages"
+    );
+    let (message_id, message_sender) = session("c_m", "s_other");
+    queue.admit_message(message_id.clone(), text("m"), message_sender, &log);
+    let mut taken: Vec<CommandId> = queue
+        .take_staged(&log)
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect();
+    taken.sort_by(|left, right| left.0.cmp(&right.0));
+    assert_eq!(
+        taken,
+        [CommandId("c_m".into()), CommandId("c_p".into())],
+        "staged person and session entries both drain"
+    );
+    assert!(
+        !queue.is_admitted(&CommandId("c_p".into())),
+        "a drained person entry forgets its id, so a later drop is stale"
+    );
+    assert!(
+        !queue.is_admitted(&message_id),
+        "a session id was never admitted"
+    );
+}
+
+#[test]
+fn stage_emits_only_on_replacement() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    queued(&queue, "c_a", "a", &log);
+    assert_eq!(messages(&log).len(), 1, "the push emits once");
+    assert!(
+        queue.stage(&CommandId("c_a".into()), text("a"), Staged::default(), &log),
+        "staging the unchanged entry still applies"
+    );
+    assert_eq!(
+        messages(&log).len(),
+        1,
+        "an unchanged staging re-emits nothing"
+    );
+    assert!(
+        queue.stage(
+            &CommandId("c_a".into()),
+            text("changed"),
+            Staged::default(),
+            &log
+        ),
+        "staging the replacement still applies"
+    );
+    assert_eq!(messages(&log).len(), 2, "a replacement re-emits the queue");
+    assert_eq!(
+        messages(&log).last().expect("the replacement emits"),
+        &queue.snapshot(),
+        "the last event matches the final queue"
+    );
+}
+
+#[test]
+fn move_out_keeps_the_id_admitted() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    queued(&queue, "c_a", "a", &log);
+    let moved = queue.move_out(&CommandId("c_a".into()), &log);
+    assert_eq!(
+        moved.map(|entry| entry.id),
+        Some(CommandId("c_a".into())),
+        "move_out returns the queued entry"
+    );
+    assert!(queue.snapshot().is_empty(), "the entry leaves the queue");
+    assert!(
+        queue.is_admitted(&CommandId("c_a".into())),
+        "the id stays admitted, so a same-wait drop still finds it"
+    );
+    assert_eq!(
+        messages(&log).last().expect("the move emits"),
+        &[],
+        "the move emits the queue as it stands"
+    );
+}
+
+#[test]
+fn has_session_holds_only_while_a_session_message_waits() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    assert!(
+        !queue.has_session(),
+        "an empty queue holds no session message"
+    );
+    queued(&queue, "c_a", "a", &log);
+    queued(&queue, "c_b", "b", &log);
+    assert!(
+        !queue.has_session(),
+        "persons-only entries are no session message"
+    );
+    let (id, sender) = session("c_m", "s_other");
+    queue.admit_message(id, text("m"), sender, &log);
+    assert!(queue.has_session(), "an admitted message holds");
+}
+
+#[test]
 fn take_for_ending_keeps_only_session_messages() {
     let log = Recorded::default();
     let queue = Queue::new();
