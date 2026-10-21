@@ -133,7 +133,8 @@ fn opened(app: &mut App) {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("opening sends"),
     };
     let id = out
         .iter()
@@ -223,7 +224,8 @@ fn open_job(app: &mut App, job: &str) {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends or nothing"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("opening sends or nothing"),
     }
 }
 

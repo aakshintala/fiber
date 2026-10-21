@@ -98,8 +98,9 @@ const REDIRECTING_ENV: [&str; 4] = [
 
 /// Lists the pinned copies in scope with no worktree match: inside a git
 /// repository the repository's project, outside one every project. A copy
-/// another project also approved is kept and not listed, as is a copy
-/// with a per-machine record or none at all.
+/// another project also approved is kept and not listed, as is a copy no
+/// project record names at all. A per-machine record alone keeps a copy;
+/// it never lists one its project records name.
 pub(super) fn select(
     home: &Path,
     started: &[log::Started],
@@ -151,8 +152,9 @@ fn select_with(
     select_candidates(home, started, workspace, clock, list, &scope, &kept)
 }
 
-/// Lists the candidates among `kept`: a copy with at least one owner, no
-/// per-machine record, and every owner in scope.
+/// Lists the candidates among `kept`: a copy with at least one
+/// project-record owner and every owner in scope. A copy with no
+/// project-record owner is kept, and a per-machine record changes nothing.
 fn select_candidates(
     home: &Path,
     started: &[log::Started],
@@ -165,9 +167,7 @@ fn select_candidates(
     let candidates: Vec<&extensions::KeptCopy> = kept
         .iter()
         .filter(|kept| {
-            !kept.owners.is_empty()
-                && !kept.machine_wide
-                && kept.owners.iter().all(|owner| scope.contains(owner))
+            !kept.owners.is_empty() && kept.owners.iter().all(|owner| scope.contains(owner))
         })
         .collect();
     // Every recorded identity by its session's project key.

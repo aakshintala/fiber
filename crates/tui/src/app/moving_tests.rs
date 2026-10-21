@@ -217,6 +217,7 @@ fn clicking_interrupt_sends_cancel() {
         | Effect::FindPause { .. }
         | Effect::OpenLink(_)
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::OpenFile(_) => panic!("interrupt sent nothing"),
     }
 }

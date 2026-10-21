@@ -135,6 +135,9 @@ pub(crate) fn run_with(
         app.set_configure(seams.seam);
     }
     app.set_models(models.clone());
+    // The feedback writer `main` injected: taken out before home keeps
+    // the launch description, as the model lists are.
+    app.set_feedback(std::mem::take(&mut launch.feedback));
     // With no model configured the picker opens on home, before the
     // first frame: saving the choice writes the config default. It stays
     // shut when attaching to a session.
@@ -546,6 +549,17 @@ impl<B: Backend> Loop<B> {
                         self.app.on_image(ticket, Err(notice));
                     }
                 }
+                Effect::Feedback { description } => {
+                    if let Some(notice) = crate::feedback::start(
+                        self.app.feedback_writer(),
+                        self.files_out.as_ref(),
+                        description,
+                    ) {
+                        // Nothing started, so no answer can arrive:
+                        // landing the failure shows the notice.
+                        self.app.on_feedback(Err(notice));
+                    }
+                }
                 Effect::FindPause { generation, after } => {
                     if let Some(out) = &self.files_out {
                         let clock = Arc::clone(&self.clock);
@@ -656,6 +670,7 @@ impl<B: Backend> Loop<B> {
                 }
             }
             Input::Image { ticket, result } => self.app.on_image(ticket, result),
+            Input::Feedback(result) => self.app.on_feedback(result),
             Input::Viewed {
                 id,
                 name,

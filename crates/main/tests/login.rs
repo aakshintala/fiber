@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use support::repo_provider::{declare_repo_provider, git_init};
 use support::write_record;
 
 use fakes::{ProviderServer, Response, Watchdog};
@@ -1651,4 +1652,55 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
             .is_some_and(|provider| provider.contains_key("reviewer_model")),
         "no reviewer was written"
     );
+}
+
+#[test]
+fn login_stores_a_key_for_an_approved_repository_provider() {
+    let setup = Setup::new_with_fl_root();
+    git_init(&setup.workspace());
+    declare_repo_provider(
+        &setup.workspace(),
+        "fiber.test/acme",
+        "acme",
+        &json!([{"id": "m", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]),
+    );
+    let approved = setup.run_with_input(&["approve", "--yes"], "");
+    assert_eq!(approved.code, Some(0), "{}", approved.stderr);
+    let login = setup.run_with_input(&["login", "acme"], &format!("{KEY}\n"));
+    assert_eq!(login.code, Some(0), "{}", login.stderr);
+    assert_eq!(login.stdout, "");
+    assert_eq!(login.stderr, "fiber: stored credentials/acme/default\n");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/acme/default")).unwrap(),
+        KEY
+    );
+}
+
+#[test]
+fn login_outside_the_project_finds_no_repository_provider() {
+    let setup = Setup::new_with_fl_root();
+    git_init(&setup.workspace());
+    declare_repo_provider(
+        &setup.workspace(),
+        "fiber.test/acme",
+        "acme",
+        &json!([{"id": "m", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]),
+    );
+    let approved = setup.run_with_input(&["approve", "--yes"], "");
+    assert_eq!(approved.code, Some(0), "{}", approved.stderr);
+    let outside = fakes::TempDir::new("fl-outside");
+    // The workspace run's command anywhere else: the approved provider is
+    // no login target there.
+    let mut command = setup.command(&["login", "acme"]);
+    command
+        .current_dir(outside.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let login = setup.run_piped(&mut command, &["login", "acme"], &format!("{KEY}\n"));
+    assert_ne!(login.code, Some(0), "{}", login.stderr);
+    assert!(!login.stderr.contains("stored"), "{}", login.stderr);
+    assert!(!setup.home().join("credentials/acme/default").exists());
 }
