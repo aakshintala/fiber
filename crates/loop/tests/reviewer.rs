@@ -444,6 +444,11 @@ fn a_second_call_is_reviewed_with_the_first_as_history() {
 
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 2);
+    // The two first stages fan out, so their arrival order varies: the
+    // shorter conversation is the first call's, cut before the second
+    // call's item.
+    let mut requests = requests;
+    requests.sort_by_key(|request| request.conversation.len());
     assert_eq!(requests[0].conversation.len(), 4);
     assert_eq!(requests[1].conversation.len(), 5);
     // The second request holds the first call as history and ends with
