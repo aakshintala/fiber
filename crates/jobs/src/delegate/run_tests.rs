@@ -2746,9 +2746,14 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     rig.registry.install_usage_tap(Some(Arc::new(move |line| {
         tapped.lock().unwrap().push(line.generation_id.0.clone());
     })));
+    // The shell prints the run's `fiber_exited` to stdout: the drain
+    // folds it before the report, so the notice is `Completed` whether
+    // or not the watcher beat the reap (see #3005).
+    let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
+    let shell = format!("printf '%s\\n' '{exit}'");
     let waited = start_with_usage(
         &rig,
-        "exit 0",
+        &shell,
         BOUND,
         1 << 20,
         Some(rig.registry.usage_forward()),
