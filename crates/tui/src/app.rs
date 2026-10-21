@@ -1639,14 +1639,22 @@ impl App {
                     if let Some(accepted) = read!(envelope, CommandAccepted) {
                         // No `commands_answered`: a `commands` answer from
                         // another session is ignored, and a resent command
-                        // needs only its pending entry closed.
+                        // needs only its pending entry closed. A background
+                        // import drops its source entry with it, silently:
+                        // no report opens off screen, and a later
+                        // duplicate finds nothing.
                         self.outbox.answered(&accepted.command_id.0);
+                        self.import_sources.remove(&accepted.command_id.0);
                     }
                 }
                 "command_rejected" => {
                     if let Some(rejected) = read!(envelope, CommandRejected)
                         && let Some(id) = rejected.command_id
                     {
+                        // A refused background import drops its source
+                        // entry beside its pending entry, so a later
+                        // accept for the id opens no stale report.
+                        self.import_sources.remove(&id.0);
                         self.refused(&id.0, &rejected.code, rejected.message);
                     }
                 }

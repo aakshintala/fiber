@@ -268,6 +268,53 @@ fn a_second_accept_for_the_same_import_changes_nothing() {
     assert!(app.notices().is_empty());
 }
 
+/// One session envelope from a session other than [`SESSION`]: its
+/// answers settle silently, never touching the screen.
+fn other_session_line(kind: &str, payload: Value) -> Line {
+    let mut line = session_line(kind, payload);
+    if let Line::Session(envelope) = &mut line {
+        envelope.session_id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    }
+    line
+}
+
+#[test]
+fn an_accept_for_another_session_settles_the_import_silently() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let report = || {
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha"],
+                    "skills": [],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        })
+    };
+    // An accept arriving after leaving the session opens no report
+    // and adds no notice; its source entry goes with its pending
+    // entry, so a later duplicate back in the session changes
+    // nothing either.
+    assert!(
+        app.on_line(other_session_line("command_accepted", report()))
+            .is_empty()
+    );
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
+    assert!(
+        app.on_line(session_line("command_accepted", report()))
+            .is_empty()
+    );
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
+}
+
 #[test]
 fn a_rejected_import_adds_one_notice_and_opens_no_report() {
     let mut app = attached();
@@ -300,6 +347,43 @@ fn a_rejected_import_adds_one_notice_and_opens_no_report() {
     );
     assert!(app.on_line(accepted).is_empty());
     assert!(app.import_report().is_none());
+}
+
+#[test]
+fn a_reject_for_another_session_drops_the_import_source() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    // A reject arriving after leaving the session opens no report.
+    // Its source entry goes with its pending entry through the
+    // unchanged refused path, so a later accept back in the session
+    // opens no stale report.
+    let rejected = other_session_line(
+        "command_rejected",
+        json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert!(app.import_report().is_none());
+    assert_eq!(app.notice(), Some("No."));
+    let accepted = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha"],
+                    "skills": [],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert!(app.import_report().is_none());
+    // The late accept adds nothing to the refusal's one notice.
+    assert_eq!(app.notices().len(), 1);
 }
 
 #[test]
