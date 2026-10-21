@@ -178,9 +178,11 @@ impl App {
         code.map_or(Effect::None, |copy| Effect::Copy(copy.code))
     }
 
-    /// Hides "Copied": a left press, on a target or not, starts a click.
+    /// Hides "Copied" and drops a `/copy` still waiting on a pass: a
+    /// left press, on a target or not, starts a click.
     pub(crate) fn clear_copied(&mut self) {
         self.copied = false;
+        self.copy_owed = false;
     }
 
     /// Whether "Copied" shows.

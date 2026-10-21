@@ -389,6 +389,10 @@ impl App {
     /// then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
+        // A `/copy` waiting on a pass copies only what was on screen
+        // when it was asked: the next key drops it, and the Enter that
+        // runs `/copy` sets it again below.
+        self.copy_owed = false;
         if matches!(
             key,
             Key::PageUp
@@ -1031,6 +1035,9 @@ impl App {
     /// says why.
     pub(crate) fn disconnected(&mut self) {
         self.passes.clear();
+        // The pass ends here without folding: a `/copy` waiting on it
+        // has nothing new to copy.
+        self.copy_owed = false;
         self.abandoned_history.clear();
         self.end_overlay();
         if self.outbox.is_up() {

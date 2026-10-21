@@ -1,7 +1,7 @@
 //! Tests for `/copy` (#3013): the newest reply in the conversation on
 //! screen goes out through the copy path, as the model wrote it.
 
-use super::commands_testkit::{attached, connected, enter, session_line, turn_starts};
+use super::commands_testkit::{attached, connected, enter, now, session_line, turn_starts};
 use crate::app::copy::{LastReply, last_reply};
 use crate::app::{App, Effect};
 use crate::link::Line;
@@ -194,4 +194,40 @@ fn closing_or_opening_a_view_drops_a_copy_waiting_on_a_pass() {
     assert_eq!(app.take_owed_copy(), None);
     assert!(!app.copied());
     assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn a_key_a_click_or_a_lost_connection_drops_a_copy_waiting_on_a_pass() {
+    let session = contract::SessionId(super::commands_testkit::SESSION.to_owned());
+    // A key.
+    let mut app = attached();
+    turn_starts(&mut app);
+    message(&mut app, "a_1", &["the reply"]);
+    app.reopen_pending(session.clone());
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    assert_eq!(app.on_key(crate::keys::Key::End, now()), Effect::None);
+    app.passes.clear();
+    assert_eq!(app.take_owed_copy(), None);
+    assert_eq!(app.notice(), None);
+    // A click: the loop hides "Copied" on every left press.
+    app.reopen_pending(session.clone());
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    app.clear_copied();
+    app.passes.clear();
+    assert_eq!(app.take_owed_copy(), None);
+    // An edit.
+    app.reopen_pending(session.clone());
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    app.on_edit(crate::keys::Edit::Paste("x".to_owned()));
+    app.passes.clear();
+    assert_eq!(app.take_owed_copy(), None);
+    // A lost connection.
+    app.draft.clear();
+    app.reopen_pending(session);
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    app.disconnected();
+    assert_eq!(app.take_owed_copy(), None);
+    assert!(!app.copied());
+    // Only the connection's own notice shows.
+    assert_eq!(app.notice(), Some("Connection lost."));
 }

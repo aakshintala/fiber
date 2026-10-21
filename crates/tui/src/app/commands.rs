@@ -455,6 +455,7 @@ impl App {
     /// no more.
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
+        self.copy_owed = false;
         self.history.cancel();
         // The open picker owns every edit but Ctrl+C, which never
         // arrives as one.
