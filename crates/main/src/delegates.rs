@@ -11,9 +11,10 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::UNIX_EPOCH;
 
-use contract::SessionId;
 use contract::clock::{Clock, utc_time};
 use contract::events::VariablesSource;
+use contract::shapes::{Failure, Point};
+use contract::{ActionId, ErrorCode, Seq, SessionId};
 use extensions::{Quota, QuotaEntry, Window, WindowUse};
 
 use crate::switch::quota::{ModelQuotaRead, QuotaView};
@@ -119,6 +120,26 @@ impl Delegates {
         Self {
             quota: Some(quota),
             ..self
+        }
+    }
+
+    /// The `delegate_fork` tool this session declares: the same wiring
+    /// `tool()` hands `delegate_spawn`, minus the model resolver a fork
+    /// never uses, plus the point reader below. A fork carries the
+    /// calling message's model, so nothing resolves here.
+    pub(crate) fn fork(&self) -> jobs::DelegateFork {
+        jobs::DelegateFork {
+            depth: self.depth,
+            registry: Arc::clone(&self.jobs),
+            parent: self.parent.clone(),
+            workspace: self.workspace.clone(),
+            sessions: self.sessions.clone(),
+            clock: Arc::clone(&self.clock),
+            bound: doors::SHUTDOWN_BOUND,
+            cap: OUTPUT_CAP,
+            point: fork_point_reader(&self.sessions, &self.parent),
+            launch: Arc::clone(&self.launch),
+            watch: Arc::clone(&self.watch),
         }
     }
 
@@ -556,23 +577,39 @@ pub(crate) fn launcher(fiber: &Path) -> jobs::Launch {
 }
 
 fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
-    // A role naming a credential label runs the child under it: the
-    // label travels as a run override, so the child's `preamble_built`
-    // records it. The value is a JSON string, so a label that parses
-    // as JSON still arrives as a string. Nothing for no label, and
-    // nothing on a resume, which continues the recorded session.
-    let overrides = match launched.credential.as_deref() {
-        Some(label) if !launched.resume => {
-            let provider = launched.model.split('/').next().unwrap_or_default();
-            let key = config::path::display(&[
-                "providers".to_owned(),
-                provider.to_owned(),
-                "credential".to_owned(),
-            ]);
-            let value = serde_json::Value::String(label.to_owned());
-            vec![format!("{key}={value}")]
+    // What the child runs as: a spawn carries its resolved model and an
+    // optional credential override, a fork carries its point and neither
+    // a model nor a credential, and a resume carries neither, continuing
+    // the recorded session.
+    let (model, overrides, resume, forked_from, forked_seq) = match &launched.start {
+        jobs::Start::Fresh(jobs::Fresh::Spawn { model, credential }) => {
+            // A role naming a credential label runs the child under it: the
+            // label travels as a run override, so the child's `preamble_built`
+            // records it. The value is a JSON string, so a label that parses
+            // as JSON still arrives as a string.
+            let overrides = match credential.as_deref() {
+                Some(label) => {
+                    let provider = model.split('/').next().unwrap_or_default();
+                    let key = config::path::display(&[
+                        "providers".to_owned(),
+                        provider.to_owned(),
+                        "credential".to_owned(),
+                    ]);
+                    let value = serde_json::Value::String(label.to_owned());
+                    vec![format!("{key}={value}")]
+                }
+                None => Vec::new(),
+            };
+            (Some(model.clone()), overrides, false, None, None)
         }
-        _ => Vec::new(),
+        jobs::Start::Fresh(jobs::Fresh::Fork { from }) => (
+            None,
+            Vec::new(),
+            false,
+            Some(from.point.session_id.clone()),
+            Some(from.point.seq.0),
+        ),
+        jobs::Start::Resume => (None, Vec::new(), true, None, None),
     };
     // A delegate carries its parent's environment, so it carries the
     // parent's source too (`docs/invocation.md`, "A session's
@@ -580,13 +617,15 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
     let args = contract::session_argv::SessionArgv {
         id: launched.session_id.clone(),
         workspace: launched.workspace.clone(),
-        model: (!launched.resume).then(|| launched.model.clone()),
+        model,
         overrides,
         prompt: Some(launched.prompt.clone()),
-        resume: launched.resume,
+        resume,
         credential: None,
         worktree: false,
         rewound_from: None,
+        forked_from,
+        forked_seq,
         parent: Some(launched.parent.clone()),
         delegate_id: Some(launched.job_id.clone()),
         depth: Some(launched.depth),
@@ -625,6 +664,127 @@ fn steerer(home: &Path) -> jobs::Steer {
             }
         },
     )
+}
+
+/// Reads the point a fork continues from: the parent's own log holds the
+/// calling message, the call and the chain they ran inside
+/// (`docs/delegates.md`, "Forks"). `S` is the latest
+/// `assistant_message_started` before the calling action's
+/// `tool_call_requested`, or the latest in the log when no call runs;
+/// the point is `S - 1`, with the calling message's
+/// `usage_recorded.model`. The `outer_action_id` chain walks to the root
+/// call: a root anchored at a command (`ran_by.command_id`) is refused
+/// with `invalid_arguments`, while a link the log does not hold keeps the
+/// point and the message's model instead of failing the parent. A failure
+/// that reads only the parent's own log is a `tool_error`.
+pub(crate) fn fork_point_reader(sessions: &Path, parent: &SessionId) -> jobs::ForkPoint {
+    let dir = sessions.join(&parent.0);
+    let parent = parent.clone();
+    Arc::new(move |action: Option<&ActionId>| read_fork_point(&dir, &parent, action))
+}
+
+/// The reader's read: the parent's own log to the point and model above.
+fn read_fork_point(
+    dir: &Path,
+    parent: &SessionId,
+    action: Option<&ActionId>,
+) -> Result<jobs::Forking, Failure> {
+    // The parent's own log through the `log` crate, so the session path
+    // stays there: a reader stops at the last complete line.
+    let unreadable = |detail: String| {
+        doors::failure(
+            ErrorCode::ToolError,
+            format!(
+                "Cannot fork from the session log `{}`: {detail}",
+                dir.display()
+            ),
+        )
+    };
+    let lines = log::read(dir).map_err(|error| unreadable(error.to_string()))?;
+    // The calling message and its `seq`, from the call's own
+    // `tool_call_requested` or from the log's latest message.
+    let calling = match action {
+        Some(action) => {
+            let call_seq = lines
+                .iter()
+                .filter(|line| {
+                    line.kind == "tool_call_requested" && line.action_id.as_ref() == Some(action)
+                })
+                .filter_map(|line| line.seq)
+                .max()
+                .map(|seq| seq.0)
+                .ok_or_else(|| unreadable("no `tool_call_requested` for the call".to_owned()))?;
+            lines
+                .iter()
+                .filter(|line| {
+                    line.kind == "assistant_message_started"
+                        && line.seq.is_some_and(|seq| seq.0 < call_seq)
+                })
+                .max_by_key(|line| line.seq.map(|seq| seq.0))
+                .ok_or_else(|| {
+                    unreadable("no `assistant_message_started` before the call".to_owned())
+                })?
+        }
+        None => lines
+            .iter()
+            .filter(|line| line.kind == "assistant_message_started" && line.seq.is_some())
+            .max_by_key(|line| line.seq.map(|seq| seq.0))
+            .ok_or_else(|| unreadable("no `assistant_message_started`".to_owned()))?,
+    };
+    let point = calling
+        .seq
+        .map(|seq| seq.0.saturating_sub(1))
+        .ok_or_else(|| unreadable("no `assistant_message_started` before the call".to_owned()))?;
+    // The calling message's own usage, written with the message's action
+    // before the message completes, so it is on disk when the call runs.
+    let model = lines
+        .iter()
+        .find(|line| {
+            line.kind == "usage_recorded" && line.action_id.as_ref() == calling.action_id.as_ref()
+        })
+        .and_then(|line| line.payload.get("model"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| unreadable("no `usage_recorded` for the calling message".to_owned()))?;
+    let model = model.to_owned();
+    // The root the call ran inside, if any: a command root refuses the
+    // call, while a link the log does not hold keeps the point and model.
+    if let Some(action) = action {
+        let mut current = action.clone();
+        let mut seen = vec![current.clone()];
+        while let Some(line) = lines.iter().find(|line| {
+            line.kind == "tool_call_requested" && line.action_id.as_ref() == Some(&current)
+        }) {
+            let ran_by = line.payload.get("ran_by");
+            let command = ran_by
+                .and_then(|ran_by| ran_by.get("command_id"))
+                .and_then(serde_json::Value::as_str);
+            if let Some(command) = command {
+                return Err(doors::failure(
+                    ErrorCode::InvalidArguments,
+                    format!("Cannot fork from a command: the call's root is command `{command}`."),
+                ));
+            }
+            let outer = ran_by
+                .and_then(|ran_by| ran_by.get("outer_action_id"))
+                .and_then(serde_json::Value::as_str);
+            let Some(outer) = outer else {
+                break;
+            };
+            let next = ActionId(outer.to_owned());
+            if seen.contains(&next) {
+                break;
+            }
+            seen.push(next.clone());
+            current = next;
+        }
+    }
+    Ok(jobs::Forking {
+        point: Point {
+            session_id: parent.clone(),
+            seq: Seq(point),
+        },
+        model,
+    })
 }
 
 /// Reads the child's log boundary for a resume: the `seq` of the last

@@ -448,7 +448,7 @@ For each model:
 - output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
 
-A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
+A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. A `databricks` model found by discovery takes the `thinking` row of the vendor model its bare service name matches, looked up by the same match key discovery routes it with; a service the table names no row for keeps no levels. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.
@@ -908,11 +908,16 @@ The label is part of the request settings, so `preamble_built` records it
 records `model_changed`, as a switch does.
 
 A person switches credential with `/credential <label>`, and a driver with the
-`credential` command (`docs/invocation.md`). The switch applies at the next
+`credential` command (`docs/invocation.md`). A credential switch accepted
+while a model switch is queued applies to the queued model's provider.
+The `credentials` query lists that provider's labels and the label it uses now.
+With no label, `/credential` opens the credential picker (`docs/tui.md`,
+"Swapped views"): Enter chooses a label and saves it; Ctrl+S chooses it for
+this session only and saves nothing. The switch applies at the next
 turn boundary and rebuilds the prompt cache, because a vendor holds the cache
 per account or workspace (`docs/prompt-cache.md`, "Switching model"). The
 terminal saves the label to the global `providers."<name>".credential`, unless
-the person marks the switch as this session only. A per-project file can pin a
+the person chooses it with Ctrl+S in the credential picker. A per-project file can pin a
 label for one project. Saving the label never changes another session that
 is already running.
 

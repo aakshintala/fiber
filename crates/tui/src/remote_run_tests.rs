@@ -66,6 +66,9 @@ fn answer(line: &Value, global_answered: &mut bool) -> Option<Value> {
             *global_answered = true;
             serde_json::json!({"file": GLOBAL})
         }
+        // The offer resolve asks first on every hello; denied keeps
+        // the offer down without touching the start pick.
+        "import_pending" => serde_json::json!({"pending": false}),
         "directories" => serde_json::json!({"directories": [], "path": "/"}),
         "settings" => serde_json::json!({"rows": [
             {"key": "scoped_models", "shown": "value",

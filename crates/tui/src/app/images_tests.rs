@@ -315,3 +315,109 @@ fn disconnect_drops_the_fetch() {
     // Only the dropped connection shows: the late answer changed nothing.
     assert_eq!(app.notice(), Some("Connection lost."));
 }
+
+/// A fetch blocks only its own `(session, path)`: the same path in
+/// another segment, and another path in the same session, still ask.
+/// Kills the `&&` to `||` mutant on the in-flight check, which would
+/// refuse either half-match.
+#[test]
+fn a_fetch_blocks_only_its_own_session_and_path() {
+    let mut app = app();
+    ancestor_image(&mut app, "artifacts/a.png");
+    started_with_image(&mut app, "artifacts/a.png");
+    started_with_image(&mut app, "artifacts/b.png");
+    // The own fetch for `a.png` is out: ids are per segment path, so
+    // the ancestor's `a.png` is 1, the own run's `a.png` is 2 and its
+    // `b.png` is 3.
+    let _ = sent(app.view_image(2));
+    // The ancestor's same path is another segment's fetch: it asks
+    // under the ancestor's session.
+    let lines = sent(app.view_image(1));
+    let value: Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": OTHER, "path": "artifacts/a.png"}))
+    );
+    // The own run's other path is another fetch: it asks too.
+    let lines = sent(app.view_image(3));
+    let value: Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": SESSION, "path": "artifacts/b.png"}))
+    );
+    // While both are out, the same session and path asks nothing.
+    assert_eq!(app.view_image(1), Effect::None);
+    assert_eq!(app.view_image(2), Effect::None);
+}
+
+/// Folds an ancestor turn whose prompt carried an image at `path`.
+/// The ancestor never streams live, so it applies straight to the
+/// pages, as paged history would.
+fn ancestor_image(app: &mut App, path: &str) {
+    let envelope = contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(OTHER.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [
+                {"type": "text", "text": "look back"},
+                {"type": "image", "path": path,
+                    "mime_type": "image/png",
+                    "width": 1280, "height": 800},
+            ],
+        }]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    };
+    app.attached_screen_mut().pages_mut().apply(&envelope);
+}
+
+#[test]
+fn an_ancestor_image_read_runs_under_its_session() {
+    let mut app = app();
+    ancestor_image(&mut app, "artifacts/shot.png");
+    started_with_image(&mut app, "artifacts/shot.png");
+    // The ancestor's click reads under the ancestor's session, not the
+    // attached one: the same path notes twice, the ancestor first.
+    let lines = sent(app.view_image(1));
+    assert_eq!(lines.len(), 1);
+    let value: Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(value.get("command"), Some(&json!("read_file")));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": OTHER, "path": "artifacts/shot.png"}))
+    );
+}
+
+#[test]
+fn a_refusal_in_one_segment_still_asks_in_the_other() {
+    let mut app = app();
+    ancestor_image(&mut app, "artifacts/shot.png");
+    started_with_image(&mut app, "artifacts/shot.png");
+    let line = sent(app.view_image(1));
+    let id = serde_json::from_str::<Value>(&line[0])
+        .ok()
+        .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+        .unwrap_or_default();
+    assert!(reject(&mut app, &id, "no such file.").is_empty());
+    assert_eq!(app.notice(), Some("Could not open shot.png: no such file."));
+    // The ancestor's refusal stands, but the own segment's same path
+    // still asks: the refusal lands per (session, path).
+    assert_eq!(app.view_image(1), Effect::None);
+    let lines = sent(app.view_image(2));
+    let value: Value =
+        serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": SESSION, "path": "artifacts/shot.png"}))
+    );
+}

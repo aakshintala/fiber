@@ -111,7 +111,8 @@ fn serve() -> fakes::ProviderServer {
     .unwrap()
 }
 
-/// The commit `fiber --version` shows, if the build recorded one.
+/// The commit `fiber --version` shows, if the build recorded one: the
+/// recorded commit's first 7 characters.
 #[track_caller]
 fn commit(setup: &Setup) -> Option<String> {
     let run = setup.run_in_root(&["--version"]);
@@ -119,6 +120,14 @@ fn commit(setup: &Setup) -> Option<String> {
     let line = run.stdout.trim();
     let open = line.find('(')?;
     Some(line.get(open + 1..line.len() - 1).unwrap().to_owned())
+}
+
+/// Whether `text` is a full commit SHA: 40 lowercase hex digits.
+fn is_full_sha(text: &str) -> bool {
+    text.len() == 40
+        && text
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 #[test]
@@ -147,11 +156,30 @@ fn the_step_installs_what_extension_list_reads_as_healthy() {
     );
     let listed = setup.run_in_root(&["extension", "list"]);
     assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    // The records hold the full SHA; `--version` shows its first 7.
+    let mut full: Option<String> = None;
+    for line in listed.stdout.lines() {
+        let mut fields = line.split_whitespace();
+        fields.next();
+        fields.next();
+        let record = fields.next().unwrap_or("missing").to_owned();
+        assert!(is_full_sha(&record), "{line:?} records no full SHA");
+        assert!(
+            record.starts_with(&commit),
+            "{record:?} is not the commit --version shows"
+        );
+        assert!(
+            full.as_ref().is_none_or(|seen| seen == &record),
+            "the records disagree"
+        );
+        full = Some(record);
+    }
+    let full = full.unwrap();
     assert_eq!(
         listed.stdout.lines().collect::<Vec<_>>(),
         [
-            format!("github.com/aakshintala/fiber/extensions/memory {VERSION} {commit}"),
-            format!("github.com/aakshintala/fiber/providers/anthropic {VERSION} {commit}"),
+            format!("github.com/aakshintala/fiber/extensions/memory {VERSION} {full}"),
+            format!("github.com/aakshintala/fiber/providers/anthropic {VERSION} {full}"),
         ],
         "{}",
         listed.stderr

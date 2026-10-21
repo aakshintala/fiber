@@ -109,8 +109,16 @@ pub enum Command {
     Background,
     /// Re-reads configuration and declares the tool set again.
     Reload,
+    /// Copies another harness's configuration into Fiber home, once.
+    Import(ImportArgs),
     /// Answers with every declared tool.
     Tools,
+    /// Answers with every configured MCP server and its state.
+    McpServers,
+    /// Runs the OAuth login flow for one MCP server, then starts it.
+    McpLogin(McpServerArgs),
+    /// Restarts one failed MCP server.
+    McpReconnect(McpServerArgs),
     /// Answers with every `/name` the session runs.
     Commands,
     /// Answers with every skill discovery found, switched-off and shadowed ones included.
@@ -326,6 +334,14 @@ pub struct JobInput {
     pub text: String,
 }
 
+/// The `args` of `mcp_login` and `mcp_reconnect`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerArgs {
+    /// The server's name.
+    pub server: String,
+}
+
 /// The `args` of `history`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -369,6 +385,15 @@ pub struct ModelArgs {
 pub struct CredentialArgs {
     /// A credential label of the session model's provider.
     pub label: String,
+}
+
+/// The `args` of `import`: `claude-code` or `codex`; absent means both.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportArgs {
+    /// The source to import; absent means both sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// The `args` of `quota`.
@@ -481,6 +506,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "usage",
     "quota",
     "tools",
+    "mcp",
     "panel",
     "rail",
     "rules",
@@ -496,6 +522,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "import",
     "close",
     "quit",
+    "exit",
     "?",
     "help",
 ];

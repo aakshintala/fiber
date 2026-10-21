@@ -19,12 +19,12 @@ pub(crate) struct Prompt {
     pub(crate) images: Vec<image::Part>,
 }
 
-/// The prompt `content` started: its text, and every image part it
-/// carried, in order.
-pub(crate) fn prompt_of(content: &[ContentPart]) -> Prompt {
+/// The prompt `content` started in `session`: its text, and every image
+/// part it carried, in order.
+pub(crate) fn prompt_of(session: &contract::SessionId, content: &[ContentPart]) -> Prompt {
     Prompt {
         text: text_of(content),
-        images: image::parts(content),
+        images: image::parts(session, content),
     }
 }
 

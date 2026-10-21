@@ -23,7 +23,11 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -89,14 +93,16 @@ fn providers(setup: &support::Setup, parent: &ProviderServer, child: &ProviderSe
     providers_url(setup, &parent.url(), &child.url(), "openai-responses");
 }
 
-/// A standing allow for `delegate_spawn` and `delegate_message`:
-/// `always_reviewed` skips it, so the reviewer is still asked.
+/// A standing allow for `delegate_spawn`, `delegate_fork` and
+/// `delegate_message`: `always_reviewed` skips it, so the reviewer is
+/// still asked.
 fn standing_allow(setup: &support::Setup) {
     fs::write(
         setup.home().join("rules"),
         format!(
-            "{}\n{}\n",
+            "{}\n{}\n{}\n",
             json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
+            json!({"decision": "allow", "tool": "delegate_fork", "prefix": ""}),
             json!({"decision": "allow", "tool": "delegate_message", "prefix": ""})
         ),
     )
@@ -139,6 +145,15 @@ fn text_reply(text: &str) -> Response {
     support::stream(&[json!({"type": "response.output_item.done", "item": {
         "type": "message", "content": [{"type": "output_text", "text": text}]
     }})])
+}
+
+/// A `delegate_fork` call with `prompt`: the parent's first reply.
+fn fork_call(prompt: &str) -> Value {
+    function_call(
+        "call_fork",
+        "delegate_fork",
+        &json!({"description": "scan", "prompt": prompt}),
+    )
 }
 
 /// A `delegate_spawn` call for `model`: the parent's first reply.
@@ -528,7 +543,7 @@ fn a_depth_one_delegate_starts_depth_two_with_the_same_tools_but_no_grandchild()
     let started = one(&lines, "delegate_started");
     let child_id = started["delegate_session_id"].as_str().unwrap();
     let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
-    assert_depth_refusal(&child_lines, false, "delegate_spawn");
+    assert_depth_refusal(&child_lines, false, false, "delegate_spawn");
     let requests = child.requests();
     let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     let mut names: Vec<_> = body["tools"]
@@ -545,7 +560,10 @@ fn a_depth_one_delegate_starts_depth_two_with_the_same_tools_but_no_grandchild()
     );
 }
 
-fn assert_depth_refusal(lines: &[Value], resumed: bool, tool: &str) {
+/// `forked` names a fork's refusal: the fork sends the logged preamble
+/// verbatim, so its log holds no `preamble_built` and no
+/// `opening_message`, unlike a spawned delegate's.
+fn assert_depth_refusal(lines: &[Value], resumed: bool, forked: bool, tool: &str) {
     let mut expected = vec![
         "session_started",
         "fiber_started",
@@ -570,6 +588,10 @@ fn assert_depth_refusal(lines: &[Value], resumed: bool, tool: &str) {
         "turn_completed",
         "fiber_exited",
     ];
+    if forked {
+        expected.remove(4);
+        expected.remove(3);
+    }
     if resumed {
         expected.remove(4);
         expected.remove(0);
@@ -638,7 +660,7 @@ fn a_resumed_depth_two_session_still_refuses_delegate_spawn() {
         let (status, _lines, stderr) = running.wait();
         assert_eq!(status.code(), Some(0), "{stderr}");
         let lines = read_lines(&log);
-        assert_depth_refusal(&lines[before..], resume, "delegate_spawn");
+        assert_depth_refusal(&lines[before..], resume, false, "delegate_spawn");
     }
     assert!(child.requests().is_empty());
     let lines = read_lines(&ask_sessions(&setup).join(&id).join("events.jsonl"));
@@ -3643,7 +3665,7 @@ fn a_depth_two_session_refuses_delegate_message() {
     let (status, _lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "{stderr}");
     let lines = read_lines(&ask_sessions(&setup).join(&id).join("events.jsonl"));
-    assert_depth_refusal(&lines, false, "delegate_message");
+    assert_depth_refusal(&lines, false, false, "delegate_message");
     let completed = completed_for(&lines, "delegate_message");
     assert_eq!(
         completed["payload"]["error"]["message"],
@@ -3869,4 +3891,668 @@ fn an_extension_command_reaches_host_delegate_in_a_new_and_a_resumed_session() {
     // The new session's prompt turn, and nothing else: the resume runs no
     // turn, and no delegate child ran one of its own against the server.
     assert_eq!(server.requests().len(), 1);
+}
+
+/// A `fiber session` answering text on every model call: what a fork
+/// child's one turn reads as.
+fn fork_text(_request: &Request) -> Response {
+    text_reply("forked hello")
+}
+
+/// Starts a fork child of `parent` directly, continuing `from` at `seq`:
+/// the argv `command` builds for a `Fresh(Fork)` launch, with `stdin`.
+fn start_fork_child(
+    setup: &support::Setup,
+    new: &str,
+    from: &str,
+    seq: u64,
+    parent: &str,
+    job: &str,
+    stdin: Stdio,
+) -> (Running, Option<std::process::ChildStdin>) {
+    let seq = seq.to_string();
+    let workspace = setup.workspace().to_str().unwrap().to_owned();
+    Running::spawn_stdin(
+        setup,
+        &[
+            "session",
+            "--id",
+            new,
+            "--workspace",
+            &workspace,
+            "--prompt",
+            "check it",
+            "--forked-from",
+            from,
+            "--forked-seq",
+            &seq,
+            "--parent",
+            parent,
+            "--delegate-id",
+            job,
+            "--depth",
+            "1",
+        ],
+        stdin,
+    )
+}
+
+/// The new session holds no log: a fork that writes `session_started`
+/// first fails this.
+fn assert_no_fork_log(setup: &support::Setup, new: &str) {
+    let log = sessions_in(&setup.home(), &setup.workspace())
+        .join(new)
+        .join("events.jsonl");
+    assert!(
+        !log.is_file(),
+        "a fork that cannot start writes no session log"
+    );
+}
+
+/// A parent session with one completed turn: the setup the fork tests
+/// share, its armed watchdog guard, the responding providers that must
+/// stay alive while the fork child runs, the parent id, its sessions
+/// directory and its log lines. Both fork tests start from this parent
+/// and then pick the seq they fork from.
+struct ForkParent {
+    setup: support::Setup,
+    _guard: SessionGuard,
+    _servers: (ProviderServer, ProviderServer),
+    parent_id: String,
+    sessions: PathBuf,
+    parent_lines: Vec<Value>,
+}
+
+/// Starts the parent both fork tests share: one turn on `pa/m`, closed
+/// once the turn completes, so the log holds a preamble before its last
+/// line. A plain session idles after its turn, so this closes it once
+/// the turn completes.
+#[track_caller]
+fn fork_parent() -> ForkParent {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(fork_text).unwrap();
+    let child = ProviderServer::start_responding(fork_text).unwrap();
+    providers(&setup, &parent, &child);
+    let parent_id = doors::mint("s_");
+    let mut parent_running = Running::start(
+        &setup,
+        &parent_id,
+        &["--model", "pa/m", "--prompt", "say hello"],
+    );
+    parent_running.wait_line("the parent's turn completes", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let client = parent_running.connect(&setup, &parent_id);
+    subscribe(&client);
+    close_now(&client);
+    let _tail = support::until_close(&client);
+    drop(client);
+    let (parent_status, _, parent_stderr) = parent_running.wait();
+    assert_eq!(parent_status.code(), Some(0), "{parent_stderr}");
+    let sessions = sessions_in(&setup.home(), &setup.workspace());
+    let parent_lines = read_lines(&sessions.join(&parent_id).join("events.jsonl"));
+    ForkParent {
+        setup,
+        _guard,
+        _servers: (parent, child),
+        parent_id,
+        sessions,
+        parent_lines,
+    }
+}
+
+#[test]
+fn a_fork_child_that_cannot_start_fails_before_any_session_log() {
+    let fork = fork_parent();
+    let setup = &fork.setup;
+    let parent_id = &fork.parent_id;
+    let parent_lines = &fork.parent_lines;
+    assert_eq!(parent_lines.first().unwrap()["kind"], "session_started");
+    let first_seq = parent_lines.first().unwrap()["seq"].as_u64().unwrap();
+    assert!(
+        parent_lines
+            .iter()
+            .any(|line| line["kind"] == "preamble_built"),
+        "the parent built its preamble"
+    );
+    // Case (a): `--forked-from` names a missing session.
+    let missing = doors::mint("s_");
+    let new_a = doors::mint("s_");
+    let (failed_a, _) = start_fork_child(
+        setup,
+        &new_a,
+        &missing,
+        3,
+        &missing,
+        &doors::mint("j_"),
+        Stdio::null(),
+    );
+    let (status, lines, stderr) = failed_a.wait();
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        one(&lines, "fiber_exited")["error"]["code"],
+        "session_not_found",
+        "{lines:?}"
+    );
+    assert_no_fork_log(setup, &new_a);
+    // Case (b): `--forked-from` names a corrupt log.
+    let corrupt = doors::mint("s_");
+    let corrupt_dir = fork.sessions.join(&corrupt);
+    fs::create_dir_all(&corrupt_dir).unwrap();
+    fs::write(corrupt_dir.join("events.jsonl"), "this is not a log line\n").unwrap();
+    let new_b = doors::mint("s_");
+    let (failed_b, _) = start_fork_child(
+        setup,
+        &new_b,
+        &corrupt,
+        1,
+        &corrupt,
+        &doors::mint("j_"),
+        Stdio::null(),
+    );
+    let (status, lines, stderr) = failed_b.wait();
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        one(&lines, "fiber_exited")["error"]["code"],
+        "log_corrupt",
+        "{lines:?}"
+    );
+    assert_no_fork_log(setup, &new_b);
+    // Case (c): the point precedes any `preamble_built`, so there is no
+    // build to fork from.
+    let new_c = doors::mint("s_");
+    let (failed_c, _) = start_fork_child(
+        setup,
+        &new_c,
+        parent_id,
+        first_seq,
+        parent_id,
+        &doors::mint("j_"),
+        Stdio::null(),
+    );
+    let (status, lines, stderr) = failed_c.wait();
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        one(&lines, "fiber_exited")["error"]["code"],
+        "invalid_arguments",
+        "{lines:?}"
+    );
+    assert_no_fork_log(setup, &new_c);
+    // Case (d): the point's session directory cannot be listed at all.
+    // A self-looping link fails the metadata read with an error other
+    // than missing, so the failure is `io_failed`, not
+    // `session_not_found`.
+    let looped = doors::mint("s_");
+    let looped_link = fork.sessions.join(&looped);
+    std::os::unix::fs::symlink(&looped_link, &looped_link).unwrap();
+    let new_d = doors::mint("s_");
+    let (failed_d, _) = start_fork_child(
+        setup,
+        &new_d,
+        &looped,
+        1,
+        &looped,
+        &doors::mint("j_"),
+        Stdio::null(),
+    );
+    let (status, lines, stderr) = failed_d.wait();
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        one(&lines, "fiber_exited")["error"]["code"],
+        "io_failed",
+        "{lines:?}"
+    );
+    assert_no_fork_log(setup, &new_d);
+    // Case (e): a file where the point's session directory belongs is
+    // no session either: `session_not_found`, as a missing one.
+    let filed = doors::mint("s_");
+    fs::write(fork.sessions.join(&filed), "not a session\n").unwrap();
+    let new_e = doors::mint("s_");
+    let (failed_e, _) = start_fork_child(
+        setup,
+        &new_e,
+        &filed,
+        1,
+        &filed,
+        &doors::mint("j_"),
+        Stdio::null(),
+    );
+    let (status, lines, stderr) = failed_e.wait();
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        one(&lines, "fiber_exited")["error"]["code"],
+        "session_not_found",
+        "{lines:?}"
+    );
+    assert_no_fork_log(setup, &new_e);
+}
+
+#[test]
+fn a_fork_child_of_a_worktree_parent_holds_the_shared_lock() {
+    let fork = fork_parent();
+    let setup = &fork.setup;
+    let parent_id = &fork.parent_id;
+    let parent_log = fork.sessions.join(parent_id).join("events.jsonl");
+    let parent_lines = read_lines(&parent_log);
+    let last_seq = parent_lines.last().unwrap()["seq"].as_u64().unwrap();
+    // The parent ran in a worktree: its `session_started` names one at
+    // a directory that exists, so the child can share it.
+    let worktree = setup.root.path().join("wt");
+    fs::create_dir(&worktree).unwrap();
+    let text = fs::read_to_string(&parent_log).unwrap();
+    let mut rewritten = String::new();
+    for (index, line) in text.lines().enumerate() {
+        if index == 0 {
+            let mut first: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(first["kind"], "session_started");
+            first["payload"]["worktree"] = json!({
+                "path": worktree.to_str().unwrap(),
+                "branch": "fork-test",
+                "repository": setup.root.path().to_str().unwrap(),
+            });
+            rewritten.push_str(&serde_json::to_string(&first).unwrap());
+        } else {
+            rewritten.push_str(line);
+        }
+        rewritten.push('\n');
+    }
+    fs::write(&parent_log, rewritten).unwrap();
+    // The lock file sits beside the worktree, as `doors` lays it out:
+    // an exclusive take fails while a share is held, and succeeds
+    // once every hold is dropped.
+    let lock = worktree.with_file_name(format!(
+        "{}.lock",
+        worktree.file_name().unwrap().to_str().unwrap()
+    ));
+    let job = doors::mint("j_");
+    let new = doors::mint("s_");
+    // Stdin held open: it is the delegate's lifeline.
+    let (mut running, lifeline) = start_fork_child(
+        setup,
+        &new,
+        parent_id,
+        last_seq,
+        parent_id,
+        &job,
+        Stdio::piped(),
+    );
+    running.wait_line("the fork child starts", |line| {
+        line["kind"] == "fiber_started"
+    });
+    let probe = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    assert!(
+        matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "an exclusive take fails while the child shares the worktree"
+    );
+    drop(probe);
+    // The child names its parent and its point, and no rewind.
+    let started = one(
+        &read_lines(&fork.sessions.join(&new).join("events.jsonl")),
+        "session_started",
+    );
+    assert_eq!(
+        started["parent"],
+        json!({"session_id": parent_id, "delegate_id": job})
+    );
+    assert_eq!(
+        started["forked_from"],
+        json!({"session_id": parent_id, "seq": last_seq})
+    );
+    assert!(started.get("rewind").is_none(), "{started}");
+    assert_eq!(started["worktree"]["path"], worktree.to_str().unwrap());
+    // Its run ended on its own: one turn and out, with no idle wait.
+    running.wait_line("the fork child exits", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    drop(lifeline);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    assert!(
+        lines.iter().any(|line| line["kind"] == "turn_completed"),
+        "the child ran its prompt as one turn: {:?}",
+        lines.iter().map(|line| &line["kind"]).collect::<Vec<_>>()
+    );
+    // The lock releases with the child.
+    let freed = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    assert!(
+        freed.try_lock().is_ok(),
+        "an exclusive take succeeds once the child has exited"
+    );
+}
+
+/// Answers a session tree on one provider server: `spawn` answers
+/// the root's first request, `reviewer` every reviewer request,
+/// `delegate_first` the depth-1 delegate's first request (named by the
+/// spawn prompt that started it), `forked` the depth-2 fork's first
+/// request, and `rest` every request carrying a receipt and every later
+/// fork request. A refused `delegate_fork` completes as failed with no
+/// receipt text, so only the fork's first request takes `forked`.
+fn tree_answering(
+    spawn: Response,
+    reviewer: Response,
+    delegate_first: Response,
+    forked: Response,
+    rest: Response,
+) -> impl Fn(&Request) -> Response + Send + Sync + 'static {
+    let forked_taken = Arc::new(AtomicBool::new(false));
+    move |request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        // The reviewer sends an empty tools array, like the depth test's
+        // router: only a session request carries tools.
+        if !text.contains("\"tools\":[") || text.contains("\"tools\":[]") {
+            return reviewer.clone();
+        }
+        if text.contains("Started delegate") {
+            return rest.clone();
+        }
+        if text.contains("you are a fork of session") {
+            if !forked_taken.swap(true, Ordering::SeqCst) {
+                return forked.clone();
+            }
+            return rest.clone();
+        }
+        if text.contains("run the fork") {
+            return delegate_first.clone();
+        }
+        spawn.clone()
+    }
+}
+
+/// Installs the parent's model `pa/m` with a thinking default, so the
+/// fork's first request must carry the same thinking level as the
+/// parent's. The fork runs on the parent's build, on this same server.
+fn fork_providers(setup: &support::Setup, server: &ProviderServer) {
+    install_url(
+        setup,
+        "pa",
+        &server.url(),
+        "openai-responses",
+        &json!({"thinking_levels": ["low", "high"], "thinking_default": "low"}),
+    );
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"}}),
+    );
+}
+
+/// The `seq` just before the calling assistant message: the latest
+/// `assistant_message_started` before the log's one `delegate_fork`
+/// `tool_call_requested` line, minus one.
+fn fork_point(lines: &[Value]) -> u64 {
+    let requested = lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "tool_call_requested" && line["payload"]["name"] == "delegate_fork"
+        })
+        .expect("the parent called delegate_fork");
+    let call_seq = requested["seq"].as_u64().unwrap();
+    lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "assistant_message_started"
+                && line["seq"].as_u64().is_some_and(|seq| seq < call_seq)
+        })
+        .map(|line| line["seq"].as_u64().unwrap())
+        .max()
+        .expect("a message before the call")
+        - 1
+}
+
+/// The fork's first request on `server`: the first request carrying the
+/// fork-task text, which only the fork's requests hold.
+fn fork_first(server: &ProviderServer) -> Value {
+    let requests = server.requests();
+    requests
+        .iter()
+        .map(|request| serde_json::from_slice::<Value>(&request.body).unwrap())
+        .find(|body| body.to_string().contains("you are a fork of session"))
+        .expect("the fork made its first request")
+}
+
+/// The request whose reply carries the `delegate_fork` call for `prompt`:
+/// the grandparent's own first request carries the tool too, so the
+/// calling prompt names the calling session's request. The receipt and
+/// the fork-task exclude the requests after the call.
+fn fork_call_request(server: &ProviderServer, prompt: &str) -> Value {
+    server
+        .requests()
+        .iter()
+        .map(|request| serde_json::from_slice::<Value>(&request.body).unwrap())
+        .find(|body| {
+            // The fork keeps the tool declared, so its requests carry
+            // it too; the reviewer sends an empty tools array.
+            let declares_fork = body["tools"]
+                .as_array()
+                .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "delegate_fork"));
+            declares_fork
+                && body.to_string().contains(prompt)
+                && !body.to_string().contains("Started delegate")
+                && !body.to_string().contains("you are a fork of session")
+        })
+        .expect("the parent asked for the fork")
+}
+
+/// The fork continues its parent's request: its first request matches the
+/// parent's last request up to the new content, keyed on the chain's root
+/// with the parent's thinking level. It hands the two inputs back for the
+/// fork-task checks below.
+fn assert_continues<'a>(
+    parent_body: &'a Value,
+    fork_body: &'a Value,
+    key: &str,
+) -> (&'a Vec<Value>, &'a Vec<Value>) {
+    let parent_input = parent_body["input"].as_array().unwrap();
+    let fork_input = fork_body["input"].as_array().unwrap();
+    assert!(
+        fork_input.len() > parent_input.len(),
+        "the fork's request adds its first-turn items and fork-task"
+    );
+    for (position, item) in parent_input.iter().enumerate() {
+        assert_eq!(
+            serde_json::to_string(&fork_input[position]).unwrap(),
+            serde_json::to_string(item).unwrap(),
+            "the inherited prefix is byte-identical at item {position}"
+        );
+    }
+    let mut prefix_only = fork_body.clone();
+    prefix_only["input"] = Value::Array(parent_input.clone());
+    assert_eq!(prefix_only, *parent_body);
+    assert_eq!(fork_body["prompt_cache_key"], json!(key));
+    assert_eq!(fork_body["reasoning"], json!({"effort": "low"}));
+    (parent_input, fork_input)
+}
+
+/// The fork's durable kinds, in order, pinned from a real run: one reply
+/// completing, then the turn ends. The fork sends the logged preamble
+/// verbatim, so its log holds no `preamble_built` and no
+/// `opening_message`, unlike a spawned delegate's.
+const FORK_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// A parent's `delegate_fork` call starts a fork of its calling turn: the
+/// fork's `session_started` carries `forked_from` with the parent and the
+/// point just before the calling message, and its log holds no event
+/// copied from the parent's. The fork's first request matches the
+/// parent's last request up to the new content, and its first user
+/// message is the call's `fork-task`. The standing allow still asks the
+/// reviewer.
+#[test]
+fn a_delegate_fork_starts_a_fork_of_the_calling_turn() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let server = ProviderServer::start_responding(tree_answering(
+        support::stream(&[fork_call("say hello")]),
+        text_reply("allow"),
+        // No `run the fork` prompt at depth 0, so this never answers.
+        support::hello(),
+        support::hello(),
+        support::hello(),
+    ))
+    .unwrap();
+    fork_providers(&setup, &server);
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    let running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    // The reviewer was asked, despite the standing allow: `delegate_fork`
+    // declares `always_reviewed`, as `delegate_spawn` does.
+    let resolved = one(&lines, "permission_resolved");
+    assert_eq!(resolved["decision"], "allow");
+    assert_eq!(resolved["decided_by"], "reviewer");
+    let completed = completed_for(&lines, "delegate_fork");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let parent_id = lines[0]["session_id"].as_str().unwrap();
+    let parent_lines = read_lines(&ask_sessions(&setup).join(parent_id).join("events.jsonl"));
+    let expected_seq = fork_point(&parent_lines);
+    // The fork's `session_started` names its point: the parent and the
+    // `seq` just before the calling message.
+    let started = one(&lines, "delegate_started");
+    let fork_id = started["delegate_session_id"].as_str().unwrap();
+    let fork_lines = read_lines(&ask_sessions(&setup).join(fork_id).join("events.jsonl"));
+    let fork_started = one(&fork_lines, "session_started");
+    assert_eq!(
+        fork_started["forked_from"],
+        json!({"session_id": parent_id, "seq": expected_seq})
+    );
+    // Nothing copied: every fork line belongs to the fork, and the
+    // parent's call and its review leave no line behind.
+    assert!(
+        fork_lines.iter().all(|line| line["session_id"] == fork_id),
+        "every fork line belongs to the fork"
+    );
+    for kind in [
+        "tool_call_requested",
+        "tool_call_completed",
+        "permission_requested",
+        "permission_resolved",
+        "job_started",
+        "delegate_started",
+    ] {
+        assert!(
+            fork_lines.iter().all(|line| line["kind"] != kind),
+            "no {kind} in the fork's log"
+        );
+    }
+    // The fork's log holds one completed turn and nothing else, in
+    // order: a missing, duplicated or reordered event fails here.
+    assert_eq!(durable_kinds(&fork_lines), FORK_DURABLE);
+    // The fork's first request matches the parent's last request up to
+    // the new content: preamble, model, thinking level and cache key.
+    let parent_body = fork_call_request(&server, "scan the tree");
+    let fork_body = fork_first(&server);
+    let (parent_input, fork_input) = assert_continues(&parent_body, &fork_body, parent_id);
+    // The new content ends with the call's `fork-task` as the first user
+    // message, carrying the call's prompt.
+    let new_content = &fork_input[parent_input.len()..];
+    let task = new_content.last().unwrap();
+    assert_eq!(task["role"], json!("user"));
+    let text = task["content"].as_str().unwrap().to_owned();
+    for part in [
+        format!("you are a fork of session {parent_id}"),
+        "started at delegate depth 1".to_owned(),
+        "say hello".to_owned(),
+    ] {
+        assert!(
+            text.contains(&part),
+            "the fork-task carries {part:?}: {text}"
+        );
+    }
+}
+
+/// A depth-1 delegate's `delegate_fork` call starts a depth-2 fork whose
+/// first request matches the delegate's last request up to the new
+/// content, keyed on the delegate session. The depth-2 fork's own
+/// `delegate_fork` call is refused, as a depth-2 spawn is.
+#[test]
+fn a_depth_one_delegates_fork_starts_depth_two_on_the_root_key() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let server = ProviderServer::start_responding(tree_answering(
+        support::stream(&[function_call(
+            "call_delegate",
+            "delegate_spawn",
+            &json!({"description": "scan", "prompt": "run the fork", "model": "fiber:pa/m"}),
+        )]),
+        text_reply("allow"),
+        support::stream(&[fork_call("go deep")]),
+        support::stream(&[fork_call("go deeper")]),
+        support::hello(),
+    ))
+    .unwrap();
+    fork_providers(&setup, &server);
+    standing_allow(&setup);
+    slow_idle(&setup);
+    // The root session spawns the depth-1 delegate; the delegate forks
+    // to depth 2. All three run on this one server.
+    let running = Running::spawn(&setup, &["ask", "run the tree"]);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        completed_for(&lines, "delegate_spawn")["payload"]["status"],
+        "completed"
+    );
+    let spawned = one(&lines, "delegate_started");
+    let id = spawned["delegate_session_id"].as_str().unwrap();
+    let parent_lines = read_lines(&ask_sessions(&setup).join(id).join("events.jsonl"));
+    let expected_seq = fork_point(&parent_lines);
+    assert_eq!(
+        completed_for(&parent_lines, "delegate_fork")["payload"]["status"],
+        "completed"
+    );
+    let started = one(&parent_lines, "delegate_started");
+    assert_eq!(
+        started["forked_from"],
+        json!({"session_id": id, "seq": expected_seq})
+    );
+    let fork_id = started["delegate_session_id"].as_str().unwrap();
+    // The fork's first request matches the delegate's last request up to
+    // the new content. The fork continues the delegate's prefix, so its
+    // cache key is the delegate's id, the fork chain's root
+    // (`docs/prompt-cache.md`, "Cache markers and keys").
+    let parent_body = fork_call_request(&server, "run the fork");
+    let fork_body = fork_first(&server);
+    let (_, fork_input) = assert_continues(&parent_body, &fork_body, id);
+    // The `fork-task` names the delegate depth the fork runs at.
+    let task = fork_input.last().unwrap();
+    let text = task["content"].as_str().unwrap().to_owned();
+    for part in [
+        format!("you are a fork of session {id}"),
+        "started at delegate depth 2".to_owned(),
+        "go deep".to_owned(),
+    ] {
+        assert!(
+            text.contains(&part),
+            "the fork-task carries {part:?}: {text}"
+        );
+    }
+    let fork_lines = read_lines(&ask_sessions(&setup).join(fork_id).join("events.jsonl"));
+    assert!(
+        fork_lines.iter().all(|line| line["session_id"] == fork_id),
+        "every fork line belongs to the fork"
+    );
+    // At depth 2 the fork's own `delegate_fork` call is refused: no
+    // grandchild starts.
+    assert_depth_refusal(&fork_lines, false, true, "delegate_fork");
 }

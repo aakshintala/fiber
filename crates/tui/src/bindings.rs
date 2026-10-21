@@ -69,7 +69,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         when: "twice within about a second on an empty box",
         description: "Clear the draft, then quit",
         keys: "Ctrl+C, twice within about a second on an empty box",
-        other_paths: "/quit",
+        other_paths: "/quit, /exit",
         contexts: Contexts::ALL,
         defaults: &["ctrl+c"],
         events: &[Canon::Key(Key::CtrlC)],

@@ -295,7 +295,7 @@ impl App {
     /// Home's arrows read it through `home_owns_arrows`.
     pub(super) fn key_context(&self) -> Context {
         if self.quit_open()
-            || self.config_view_open()
+            || (self.config_view_open() && !self.credential_view_open())
             || self.session_view_open()
             || self.home_modal()
             || self.keymap_top().is_some()
@@ -304,7 +304,7 @@ impl App {
             || self.search_panel().is_some()
         {
             Context::Overlay
-        } else if self.model_picker_open() {
+        } else if self.model_picker_open() || self.credential_view_open() {
             Context::Picker
         } else if self.find_open() {
             Context::Search
@@ -329,6 +329,9 @@ impl App {
     /// checklist as `scoped_models`. Anything else does nothing.
     fn on_action(&mut self, id: &'static str) -> Effect {
         if id == "session_only" {
+            if self.credential_view_open() {
+                return self.credential_session_only();
+            }
             return self.model_picker_session_only();
         }
         if !matches!(id, "new_session" | "go_home") {

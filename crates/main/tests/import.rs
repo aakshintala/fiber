@@ -15,10 +15,18 @@
 mod support;
 
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
+use std::process::Child;
+use std::sync::mpsc;
+use std::thread;
 
+use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{Output, Setup, files_holding, run_to_exit};
+use support::{
+    KillGroup, Output, Setup, Socket, files_holding, first_line, group_alive, hello, run_to_exit,
+    spawn_watched, until, until_close,
+};
 
 /// Runs `fiber import` with `args` to exit, reaping its process group on
 /// the test's deadline.
@@ -253,4 +261,215 @@ fn missing_source_home_imports_nothing() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.stdout, "");
     assert!(setup.home().join("import-codex.json").exists());
+}
+
+/// A session driven only for `import`: start, subscribe, and wait for the
+/// startup every command needs. No provider: the import answers on the
+/// reader thread and never reaches the loop.
+struct Driven {
+    child: Child,
+    guard: KillGroup,
+    watchdog: Watchdog,
+    stderr: mpsc::Receiver<String>,
+    client: Socket,
+    deadline: fakes::Deadline,
+}
+
+impl Driven {
+    /// Starts `fiber session` on the setup's home: the person's home
+    /// stays the setup's root, so both import runs below read identical
+    /// source fixtures.
+    fn start(setup: &Setup) -> Self {
+        let session = doors::mint("s_");
+        let workspace = setup.workspace();
+        let mut command = setup.fiber(&[
+            "session",
+            "--id",
+            &session,
+            "--workspace",
+            workspace.to_str().unwrap(),
+        ]);
+        let (mut child, watchdog) = spawn_watched(&mut command);
+        let guard = KillGroup(child.id());
+        let stdout = child.stdout.take().unwrap();
+        let stderr_pipe = child.stderr.take().unwrap();
+        let (tx, lines) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if tx.send(line.unwrap()).is_err() {
+                    break;
+                }
+            }
+        });
+        let (tx, stderr) = mpsc::channel();
+        thread::spawn(move || {
+            let mut text = String::new();
+            stderr_pipe
+                .take(u64::MAX)
+                .read_to_string(&mut text)
+                .unwrap();
+            tx.send(text).unwrap();
+        });
+        let deadline = setup.deadline;
+        first_line(deadline, &lines);
+        let client = Socket::connect(deadline, &setup.session_socket(&session));
+        client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);
+        // The startup every command needs: `clients` for the subscribe
+        // and `extensions_loaded`, in any order.
+        let mut seen_clients = false;
+        let mut seen_extensions = false;
+        until(&client, "startup", |line| {
+            if line["kind"] == "clients" {
+                seen_clients = true;
+            }
+            if line["kind"] == "extensions_loaded" {
+                seen_extensions = true;
+            }
+            seen_clients && seen_extensions
+        });
+        Self {
+            child,
+            guard,
+            watchdog,
+            stderr,
+            client,
+            deadline,
+        }
+    }
+
+    /// The driver's accepted `result` for `import`: the session socket
+    /// speaks the driver protocol, where the session is the connection
+    /// itself and carries no `session_id`.
+    fn import(&self, source: Option<&str>) -> Value {
+        let id = doors::mint("c_");
+        let line = match source {
+            None => json!({"id": id, "command": "import"}),
+            Some(source) => json!({"id": id, "command": "import", "args": {"source": source}}),
+        };
+        self.client.send(&line.to_string());
+        let answers = until(&self.client, "the import answer", |line| {
+            line["kind"] == "command_accepted"
+                && line["payload"]["command_id"].as_str() == Some(id.as_str())
+        });
+        let answer = answers.into_iter().next_back().unwrap();
+        answer["payload"]["result"].clone()
+    }
+
+    fn finish(self) {
+        self.client.send(r#"{"id":"close","command":"close"}"#);
+        until_close(&self.client);
+        let Driven {
+            mut child,
+            guard,
+            watchdog,
+            stderr,
+            client: _,
+            deadline,
+        } = self;
+        let group = child.id();
+        let (tx, done) = mpsc::channel();
+        thread::spawn(move || {
+            tx.send(child.wait()).unwrap();
+        });
+        let status = deadline.recv(&done).unwrap().unwrap();
+        let text = deadline.recv(&stderr).unwrap();
+        assert!(status.success(), "{text}");
+        assert!(!group_alive(deadline, group));
+        std::mem::forget(guard);
+        watchdog.stand_down(deadline.cleanup());
+    }
+}
+
+/// Every import-landed file under `home` but the receipts, as relative
+/// paths with bytes, in order: the session home's own durable files
+/// under `projects/` and its log are the harness's, not the import's.
+fn tree(home: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut pending = vec![home.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        if path.is_dir() && !path.is_symlink() {
+            for entry in fs::read_dir(&path).unwrap() {
+                pending.push(entry.unwrap().path());
+            }
+            continue;
+        }
+        if path.is_file() {
+            let rel = path.strip_prefix(home).unwrap().display().to_string();
+            if rel == "import-claude-code.json"
+                || rel == "import-codex.json"
+                || rel.starts_with("projects/")
+                || rel.starts_with("logs/")
+            {
+                continue;
+            }
+            out.push((rel, fs::read(&path).unwrap()));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Copies one directory tree: the binary's Fiber home starts from the
+/// same provider harness the session's home holds.
+fn copy_dir(source: &Path, target: &Path) {
+    fs::create_dir_all(target).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let target = target.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+/// `fiber import` lands the same files and left-behind list the driver
+/// command answers: the session imports into the setup's home first,
+/// then the binary imports into a second Fiber home seeded with the same
+/// provider harness, both reading the same fake person home.
+#[test]
+fn fiber_import_matches_the_driver_command() {
+    let setup = Setup::new();
+    claude_home(setup.root.path());
+    codex_home(setup.root.path());
+    // The session needs a model to start, though the import never
+    // reaches the loop; the fake server sees no request.
+    let provider = ProviderServer::start_with_fallback([], hello()).unwrap();
+    setup.provider(&provider);
+    let driven = Driven::start(&setup);
+    let claude_result = driven.import(Some("claude-code"));
+    let codex_result = driven.import(Some("codex"));
+    driven.finish();
+    let binary_home = setup.root.path().join("binary-home");
+    fs::create_dir_all(&binary_home).unwrap();
+    fs::copy(
+        setup.home().join("config.json"),
+        binary_home.join("config.json"),
+    )
+    .unwrap();
+    copy_dir(
+        &setup.home().join("extensions"),
+        &binary_home.join("extensions"),
+    );
+    for source in ["claude-code", "codex"] {
+        let mut command = setup.fiber(&["import", source]);
+        command.env("FIBER_HOME", &binary_home);
+        let run = Output::from(run_to_exit(setup.deadline, "fiber import", command));
+        assert_eq!(run.code, Some(0), "stdout: {}", run.stdout);
+    }
+    for (result, name) in [
+        (claude_result, "import-claude-code.json"),
+        (codex_result, "import-codex.json"),
+    ] {
+        let receipt = receipt(&binary_home, name);
+        assert_eq!(
+            result,
+            json!({"imported": receipt["imported"].clone(), "left_behind": receipt["left_behind"].clone()}),
+            "{name}",
+        );
+        assert!(setup.home().join(name).is_file());
+        assert!(binary_home.join(name).is_file());
+    }
+    assert_eq!(tree(&setup.home()), tree(&binary_home));
 }

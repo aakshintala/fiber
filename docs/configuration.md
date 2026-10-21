@@ -404,7 +404,8 @@ Fiber writes configuration in these places:
 - ⌥R, `/rail`, or dragging the rail below its floor saves the global
   `tui.rail.shown` (`docs/tui.md`, "The rail")
 - `/credential` saves the global `providers."<name>".credential`, unless the
-  switch is marked as this session only, and `fiber login`, or the terminal's
+  label is chosen with Ctrl+S in the credential picker (`docs/tui.md`,
+  "Swapped views"), and `fiber login`, or the terminal's
   `/login`, writes it when it stores a provider's first label
   (`docs/model-routing.md`, "Credentials")
 - `/scoped-models` saves the global `scoped_models`, and the `/keys` screen
@@ -698,7 +699,9 @@ One receipt file per source sits at the top of Fiber home,
 time and counts (`docs/state.md`, "What each part holds"). A completed
 receipt short-circuits the command for that source: with a completed
 receipt the command succeeds without reading the source at all. The receipt
-is written last, and only on full success.
+is written last, and only on full success. Over a remote hub connection
+the import runs on that machine: `/import` in the terminal imports the
+hub machine's `~/.claude` or `~/.codex`, never the terminal's own home.
 
 A provider with a `models()` function returns a list in exactly the shape of
 `models`. Fiber caches it at `cache/models/<name>.json`.

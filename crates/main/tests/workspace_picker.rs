@@ -54,7 +54,7 @@ fn started_workspace(setup: &Setup) -> String {
 
 #[test]
 fn the_picker_completes_a_typed_path_and_starts_there() {
-    let setup = Setup::new();
+    let setup = Setup::new_under(std::path::Path::new("/tmp"));
     let server = ProviderServer::start([support::hello()]).unwrap();
     setup.provider(&server);
     support::write_json(
@@ -87,10 +87,14 @@ fn the_picker_completes_a_typed_path_and_starts_there() {
     // Backspace past the launch directory's path empties the typed row,
     // whatever the platform's temporary root; extra presses do nothing.
     run.write(&[0x7f; 512]);
-    // The `~/` listing answers with the root's `tree` directory.
+    // The `~/` listing answers with the root's `tree` directory. The
+    // wait holds for the focused completion (`› tree`), not the bare
+    // name: the recents below still show the launch directory, whose
+    // path can itself hold the name, and Tabbing on that lookalike
+    // drops the keystroke before the listing lands, with no recovery.
     run.write(b"~/tr");
     run.wait_screen("the tree completion", |screen| {
-        shows(screen, "› ~/tr") && shows(screen, "tree")
+        shows(screen, "› ~/tr") && shows(screen, "› tree")
     });
     // Tab completes it; the `~/tree/` listing answers with the real
     // tree's subdirectories.

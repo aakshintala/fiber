@@ -1,0 +1,336 @@
+#!/usr/bin/env bash
+# Packs the release archives and drives the draft-publish-last release flow
+# (docs/releasing.md, "What a release publishes" and "Cutting a release").
+# Every archive is plain ustar (`tar --format=ustar`), holding only files,
+# directories and relative symlinks that stay inside their directory, with
+# owner `rw` files and owner `rwx` directories. Each archive carries a
+# beside-it `.sha256` file as `sha256sum` writes it; `install.sh` ships
+# beside the archives with none, as a verbatim copy of the tree's
+# `scripts/install.sh` at the tag.
+#
+# The extensions archive holds every directory under `providers/` and
+# `extensions/` at the release tag, one top-level directory per extension,
+# and the run fails when the packed set is empty or two top-level names
+# collide. The docs archive holds the contents of `docs/` at its top level,
+# without `docs/agents/` and `docs/workflow.md`. A target archive holds the
+# `fiber` binary and `THIRD-PARTY-NOTICES`.
+#
+# Publishing never creates a tag step of its own: the draft is created
+# targeting the release commit, every asset is uploaded to it, and the
+# draft is published last, which is what creates `v<version>`. Creating the
+# draft makes the tag as a side effect, so deleting a draft always removes
+# its tag too (`--cleanup-tag`): a failed run ends with no tag and no
+# published Release, and a re-run deletes any leftover draft first. A
+# published `v<version>` refuses before anything builds.
+#
+# `parse-time-l` reads a `/usr/bin/time -l` report (macOS) and prints the
+# maximum resident set size in bytes, the figure its line names, such as
+# `  1234567  maximum resident set size`. `parse-footprint` reads
+# `footprint` output (macOS) and prints the largest physical-footprint
+# figure in bytes; it accepts lines such as
+# `Physical footprint: 15360K`, with `K`, `M` or `G` (1024-based) or a
+# bare byte count, and fails when no such line exists. Both quarantine the
+# macOS measures from the Linux GNU-time path. Archive size bounds live
+# in the shipped code (`unpack`), never here: the
+# release gate installs the built archives through that code, so a breach
+# fails the release there.
+#
+# Usage: scripts/release-pack <command> [args]
+#   pack-target <bindir> <target> <outdir>
+#   pack-docs <tree> <outdir>
+#   pack-extensions <tree> <outdir>
+#   stage-installer <tree> <outdir>
+#   draft-begin <version> <commit> <notes-file>
+#   draft-upload <version> <file>...
+#   draft-publish <version>
+#   draft-delete <version>
+#   parse-time-l <file>
+#   parse-footprint <file>
+set -euo pipefail
+
+fail() {
+  printf 'release-pack: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+# Prints $1 as an absolute path, resolving it against the current
+# directory when it is relative. Archive steps run `tar` from inside a
+# staging directory, so a relative output directory would land there.
+absolute() {
+  case $1 in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s\n' "$PWD/$1" ;;
+  esac
+}
+
+# The numeric mode of $1 as three digits, owner first. `stat` spells it
+# differently on Linux and macOS; `uname` picks the spelling.
+mode() {
+  if [ "$(uname -s)" = Darwin ]; then
+    stat -f %Lp "$1"
+  else
+    stat -c %a "$1"
+  fi
+}
+
+# Fails unless $1 names an owner-`rw` file or, when $2 is `dir`, an
+# owner-`rwx` directory.
+check_mode() {
+  digits=$(mode "$1")
+  owner=${digits#"${digits%???}"}
+  case $2,$owner in
+    file,[67]*) ;;
+    dir,7*) ;;
+    *) fail "$1 mode $digits carries no owner $2 bits." ;;
+  esac
+}
+
+# Fails unless $1, a path relative to an archive root, fits ustar's name
+# fields: a 100-byte name, or a 155-byte prefix joined to one.
+check_name() {
+  case $1 in
+    /* | ../* | */../* | */.. | ..) fail "$1 is absolute or holds .." ;;
+  esac
+  base=${1##*/}
+  [ "${#base}" -le 100 ] || fail "$1 names a file longer than 100 bytes."
+  if [ "$1" != "$base" ]; then
+    dir=${1%/*}
+    [ "${#dir}" -le 155 ] || fail "$1 prefixes longer than 155 bytes."
+  fi
+}
+
+# Fails unless the tree at $1 holds only files, directories and relative
+# symlinks with no `..` that stay inside it, with owner `rw` files and
+# owner `rwx` directories. A hard-linked file would pack as a hard-link
+# entry, which the shipped unpacker refuses (`unpack.rs` takes only file,
+# directory and symlink typeflags), so the tree must hold none.
+check_tree() {
+  hard=$(find "$1" -type f -links +1 -print -quit)
+  [ -z "$hard" ] || fail "${hard#"$1"/} shares its contents by hard link."
+  while IFS= read -r path; do
+    rel=${path#"$1"/}
+    check_name "$rel"
+    if [ -L "$path" ]; then
+      # A relative target with no `..` component cannot escape the root
+      # it is joined to, so the component check is the containment
+      # check.
+      target=$(readlink "$path")
+      case $target in
+        /*) fail "$rel links to absolute $target." ;;
+      esac
+      case /$target/ in
+        */../*) fail "$rel links through .. to $target." ;;
+      esac
+    elif [ -f "$path" ]; then
+      check_mode "$path" file
+    elif [ -d "$path" ]; then
+      check_mode "$path" dir
+    else
+      fail "$rel is neither a file, a directory nor a symlink."
+    fi
+  done < <(find "$1" -mindepth 1 -print)
+}
+
+# Copies the directory $2 to $1/$3, keeping symlinks as symlinks and modes
+# as stored, so the archive step sees what the tree holds.
+stage_copy() {
+  mkdir -p "$1/$3"
+  (cd "$2" && tar -cf - .) | (cd "$1/$3" && tar -xpf -)
+}
+
+# Writes $1.tar.gz from the staging directory $2 holding the positional
+# names, with plain ustar, then its `.sha256` as `sha256sum` writes it.
+write_archive() {
+  archive=$1
+  stage=$2
+  shift 2
+  (cd "$stage" && tar --format=ustar -czf "$archive" "$@")
+  (cd "${archive%/*}" && if command -v sha256sum > /dev/null 2>&1; then
+    sha256sum "${archive##*/}" > "${archive##*/}.sha256"
+  else
+    shasum -a 256 "${archive##*/}" > "${archive##*/}.sha256"
+  fi)
+}
+
+# Packs $1/fiber and $1/THIRD-PARTY-NOTICES into
+# $3/fiber-$2.tar.gz with its `.sha256`.
+pack_target() {
+  [ -f "$1/fiber" ] || fail "$1 holds no fiber binary."
+  [ -f "$1/THIRD-PARTY-NOTICES" ] || fail "$1 holds no THIRD-PARTY-NOTICES."
+  [ -n "$2" ] || fail "pack-target needs a target triple."
+  outdir=$(absolute "$3")
+  mkdir -p "$outdir"
+  stage=$(mktemp -d)
+  # shellcheck disable=SC2064 # the stage is fixed when the trap is set
+  trap "rm -rf '$stage'" EXIT
+  cp -p "$1/fiber" "$1/THIRD-PARTY-NOTICES" "$stage/"
+  check_tree "$stage"
+  write_archive "$outdir/fiber-$2.tar.gz" "$stage" fiber THIRD-PARTY-NOTICES
+  trap - EXIT
+  rm -rf "$stage"
+}
+
+# Packs the contents of $1/docs, without `agents/` and `workflow.md`,
+# into $2/fiber-docs.tar.gz with its `.sha256`.
+pack_docs() {
+  [ -d "$1/docs" ] || fail "$1 holds no docs/."
+  tree=$1
+  outdir=$(absolute "$2")
+  mkdir -p "$outdir"
+  stage=$(mktemp -d)
+  # shellcheck disable=SC2064 # the stage is fixed when the trap is set
+  trap "rm -rf '$stage'" EXIT
+  (cd "$1" && tar -cf - --exclude=docs/agents --exclude=docs/workflow.md docs) |
+    (cd "$stage" && tar -xpf -)
+  check_tree "$stage/docs"
+  set --
+  for entry in "$stage"/docs/*; do
+    [ -e "$entry" ] || fail "$tree/docs holds no entries."
+    set -- "$@" "${entry##*/}"
+  done
+  write_archive "$outdir/fiber-docs.tar.gz" "$stage/docs" "$@"
+  trap - EXIT
+  rm -rf "$stage"
+}
+
+# Packs every directory under $1/providers and $1/extensions, one
+# top-level directory per extension, into $2/fiber-extensions.tar.gz with
+# its `.sha256`. An empty set or two colliding top-level names fails the
+# run.
+pack_extensions() {
+  tree=$1
+  outdir=$(absolute "$2")
+  mkdir -p "$outdir"
+  stage=$(mktemp -d)
+  # shellcheck disable=SC2064 # the stage is fixed when the trap is set
+  trap "rm -rf '$stage'" EXIT
+  names=
+  nl='
+'
+  set --
+  for dir in "$tree"/providers/*/ "$tree"/extensions/*/; do
+    [ -d "$dir" ] || continue
+    name=${dir%/}
+    name=${name##*/}
+    case $nl$names in
+      *"$nl$name$nl"*) fail "two extensions install as $name." ;;
+    esac
+    names=$names$name$nl
+    stage_copy "$stage" "$dir" "$name"
+    set -- "$@" "$name"
+  done
+  [ "$#" -gt 0 ] || fail "no directory under providers/ or extensions/."
+  check_tree "$stage"
+  write_archive "$outdir/fiber-extensions.tar.gz" "$stage" "$@"
+  trap - EXIT
+  rm -rf "$stage"
+}
+
+# Stages a verbatim copy of $1/scripts/install.sh as $2/install.sh, which
+# carries no checksum file of its own.
+stage_installer() {
+  [ -f "$1/scripts/install.sh" ] || fail "$1 holds no scripts/install.sh."
+  outdir=$(absolute "$2")
+  mkdir -p "$outdir"
+  cp -p "$1/scripts/install.sh" "$outdir/install.sh"
+}
+
+# Prints `true` when `v$1` is a draft, `false` when it is published, and
+# fails when no release carries the name.
+release_state() {
+  gh release view "v$1" --json isDraft --jq .isDraft 2> /dev/null
+}
+
+# Refuses before building when published `v$1` already exists, deletes any
+# leftover draft for the version first, then creates the Release as a
+# draft targeting $2 with the notes in $3. Publishing later is what
+# creates `v$1`; no tag step exists.
+draft_begin() {
+  if state=$(release_state "$1"); then
+    case $state in
+      true) gh release delete "v$1" --cleanup-tag -y ;;
+      *) fail "v$1 is already published; refusing to build over it." ;;
+    esac
+  fi
+  gh release create "v$1" --draft --target "$2" --title "v$1" --notes-file "$3"
+}
+
+# Uploads every asset file to the draft `v$1`.
+draft_upload() {
+  version=$1
+  shift
+  gh release upload "v$version" "$@" --clobber
+}
+
+# Publishes the draft `v$1` with the notes it was created with: this last
+# step is what creates `v$1`.
+draft_publish() {
+  gh release edit "v$1" --draft=false
+}
+
+# Deletes the draft `v$1` and the tag its creation made, for the failure
+# step and before a re-run. Nothing to delete is success; a published
+# release is never touched.
+draft_delete() {
+  if state=$(release_state "$1"); then
+    case $state in
+      true) gh release delete "v$1" --cleanup-tag -y ;;
+      *) fail "v$1 is published; refusing to delete it." ;;
+    esac
+  fi
+}
+
+# Prints the maximum resident set size in bytes from a `/usr/bin/time -l`
+# report, the figure its line names.
+parse_time_l() {
+  [ -f "$1" ] || fail "$1 is not a time report."
+  peak=$(grep -i "maximum resident set size" "$1" | head -n 1 | awk '{print $1}' || true)
+  case ${peak:-} in
+    '' | *[!0-9]*) fail "$1 holds no maximum resident set size." ;;
+  esac
+  printf '%s\n' "$peak"
+}
+
+# Prints the largest physical-footprint figure in bytes from `footprint`
+# output: each matching line names a figure such as `15360K`, with `K`,
+# `M` or `G` (1024-based) or a bare byte count.
+parse_footprint() {
+  [ -f "$1" ] || fail "$1 is not a footprint report."
+  peak=$(grep -i footprint "$1" | awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^[0-9][0-9.]*[KMG]?(:)?$/ && $(i-1) ~ /:$/) {
+          figure = $i
+          sub(/:$/, "", figure)
+          if (figure ~ /K$/) { value = figure; sub(/K$/, "", value); bytes = value * 1024 }
+          else if (figure ~ /M$/) { value = figure; sub(/M$/, "", value); bytes = value * 1048576 }
+          else if (figure ~ /G$/) { value = figure; sub(/G$/, "", value); bytes = value * 1073741824 }
+          else bytes = figure
+          bytes = int(bytes + 0.5)
+          if (bytes > max) max = bytes
+        }
+      }
+    }
+    END { if (max > 0) print max }' || true)
+  case ${peak:-} in
+    '' | *[!0-9]*) fail "$1 holds no footprint figure." ;;
+  esac
+  printf '%s\n' "$peak"
+}
+
+command=${1:-}
+[ -n "$command" ] || fail "usage: release-pack <command> [args]." 2
+shift
+case $command in
+  pack-target) pack_target "$@" ;;
+  pack-docs) pack_docs "$@" ;;
+  pack-extensions) pack_extensions "$@" ;;
+  stage-installer) stage_installer "$@" ;;
+  draft-begin) draft_begin "$@" ;;
+  draft-upload) draft_upload "$@" ;;
+  draft-publish) draft_publish "$@" ;;
+  draft-delete) draft_delete "$@" ;;
+  parse-time-l) parse_time_l "$@" ;;
+  parse-footprint) parse_footprint "$@" ;;
+  *) fail "unknown command $command." 2 ;;
+esac

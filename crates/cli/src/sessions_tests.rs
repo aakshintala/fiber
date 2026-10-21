@@ -16,12 +16,13 @@ use std::os::unix::net::UnixStream;
 use contract::HubLine;
 use serde_json::{Map, Value, json};
 
-use super::{Ask, answer_of, delete, delete_run, export, run};
+use super::{Ask, delete, delete_run, export, matched, run};
+use crate::CliError;
 use fakes::Deadline;
 
-#[test]
-fn hub_failure_preserves_local_text_and_listed_error_codes() {
-    for (error, code) in [
+/// One hub failure per `doors::Error` shape, with its listed code.
+fn hub_cases() -> Vec<(doors::Error, ErrorCode)> {
+    vec![
         (
             doors::Error::Local(io::Error::other("down")),
             ErrorCode::IoFailed,
@@ -52,7 +53,12 @@ fn hub_failure_preserves_local_text_and_listed_error_codes() {
             },
             ErrorCode::AuthenticationFailed,
         ),
-    ] {
+    ]
+}
+
+#[test]
+fn hub_failure_preserves_local_text_and_listed_error_codes() {
+    for (error, code) in hub_cases() {
         let expected = if matches!(error, doors::Error::Local(_)) {
             "the hub: down".into()
         } else {
@@ -61,6 +67,16 @@ fn hub_failure_preserves_local_text_and_listed_error_codes() {
         let failure = super::hub_failure(error);
         assert_eq!(failure.code, code);
         assert_eq!(failure.message, expected);
+    }
+    for (error, code) in hub_cases() {
+        let expected = if matches!(error, doors::Error::Local(_)) {
+            "the hub: down".to_owned()
+        } else {
+            error.to_string()
+        };
+        let error = CliError::from(error);
+        assert_eq!(error.code(), code);
+        assert_eq!(error.to_string(), expected);
     }
 }
 
@@ -193,7 +209,7 @@ fn an_explicit_relative_path_lands_under_the_workspace() {
 fn an_unknown_id_is_not_found() {
     let setup = Setup::new();
     setup.session("s_exportdd01");
-    let e = run(
+    let error = run(
         &setup.home(),
         &setup.workspace(),
         "s_missing",
@@ -201,7 +217,11 @@ fn an_unknown_id_is_not_found() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert_eq!(e.code, ErrorCode::SessionNotFound);
+    assert!(
+        matches!(&error, CliError::Log(log::Error::NotFound(_))),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::SessionNotFound);
 }
 
 #[test]
@@ -209,7 +229,7 @@ fn an_ambiguous_prefix_names_both_matches() {
     let setup = Setup::new();
     setup.session("s_amb11111");
     setup.session("s_amb22222");
-    let e = run(
+    let error = run(
         &setup.home(),
         &setup.workspace(),
         "s_amb",
@@ -217,9 +237,11 @@ fn an_ambiguous_prefix_names_both_matches() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert_eq!(e.code, ErrorCode::Usage);
-    assert!(e.message.contains("s_amb11111"), "{}", e.message);
-    assert!(e.message.contains("s_amb22222"), "{}", e.message);
+    assert_eq!(error.code(), ErrorCode::Usage);
+    let CliError::Log(log::Error::Ambiguous { matches, .. }) = &error else {
+        panic!("expected an ambiguous log error, got {error:?}");
+    };
+    assert_eq!(matches, &["s_amb11111".to_owned(), "s_amb22222".to_owned()]);
 }
 
 /// The child's marker: set, the test runs `export` and exits with its code.
@@ -355,39 +377,59 @@ impl BufRead for Unread {
     fn consume(&mut self, _: usize) {}
 }
 
-/// Runs `delete_run` for `selector` against `hub`: its stdout, its
-/// stderr, and the result.
+/// Runs `delete_run` for `selector` against a fake hub answering `answers`,
+/// on a worker thread (edge: `thread::spawn`): its stdout, its stderr, its
+/// outcome, how often it connected, and the command the hub read when it
+/// connected. The test thread receives the outcome under `HUB_DEADLINE`.
 fn run_delete(
     setup: &Setup,
-    hub: &mut FakeHub,
+    answers: &[Value],
     selector: &str,
     cascade: bool,
     yes: bool,
     terminal: bool,
-    input: &mut dyn BufRead,
-) -> (String, String, Result<(), contract::shapes::Failure>) {
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let ask = Ask {
-        yes,
-        terminal,
-        input,
-        err: &mut err,
-    };
-    let got = delete_run(
-        &setup.home(),
-        &setup.workspace(),
-        selector,
-        cascade,
-        ask,
-        &mut out,
-        &mut || hub.connect(),
-    );
-    (
-        String::from_utf8(out).unwrap(),
-        String::from_utf8(err).unwrap(),
-        got,
-    )
+    input: impl BufRead + Send + 'static,
+) -> (String, String, Result<(), CliError>, usize, Option<Value>) {
+    let home = setup.home();
+    let workspace = setup.workspace();
+    let answers = answers.to_owned();
+    let selector = selector.to_owned();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut hub = FakeHub::new(&answers);
+        let mut input = input;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let ask = Ask {
+            yes,
+            terminal,
+            input: &mut input,
+            err: &mut err,
+        };
+        let got = delete_run(
+            &home,
+            &workspace,
+            &selector,
+            cascade,
+            ask,
+            &mut out,
+            &mut || hub.connect(),
+        );
+        let sent = if hub.connects > 0 {
+            Some(hub.sent())
+        } else {
+            None
+        };
+        tx.send((
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+            got,
+            hub.connects,
+            sent,
+        ))
+        .unwrap_or(());
+    });
+    Deadline::after(HUB_DEADLINE).recv(&rx).unwrap()
 }
 
 #[test]
@@ -444,24 +486,23 @@ fn yes_sends_one_delete_for_the_full_id_and_prints_it() {
     setup.started(ROOT, None);
     // A line for another command comes first, and is skipped.
     let other = json!({"kind": "command_accepted", "ts": 1, "schema_version": 1, "payload": {"command_id": "c_other"}});
-    let mut hub = FakeHub::new(&[other, accepted()]);
-    let (out, err, got) = run_delete(
+    let (out, err, got, connects, sent) = run_delete(
         &setup,
-        &mut hub,
+        &[other, accepted()],
         "s_00000000000000a",
         false,
         true,
         false,
-        &mut Unread,
+        Unread,
     );
     got.unwrap();
     assert_eq!(
-        hub.sent(),
+        sent.unwrap(),
         json!({"id": "c_delete", "command": "delete", "args": {"session": ROOT}})
     );
     assert_eq!(out, format!("{ROOT}\n"));
     assert_eq!(err, "");
-    assert_eq!(hub.connects, 1);
+    assert_eq!(connects, 1);
 }
 
 #[test]
@@ -469,11 +510,10 @@ fn cascade_sends_cascade_and_lists_the_dependents() {
     let setup = Setup::new();
     setup.started(ROOT, None);
     setup.started(FORK, Some(ROOT));
-    let mut hub = FakeHub::new(&[accepted()]);
-    let (out, _, got) = run_delete(&setup, &mut hub, ROOT, true, true, false, &mut Unread);
+    let (out, _, got, _, sent) = run_delete(&setup, &[accepted()], ROOT, true, true, false, Unread);
     got.unwrap();
     assert_eq!(
-        hub.sent(),
+        sent.unwrap(),
         json!({"id": "c_delete", "command": "delete", "args": {"session": ROOT, "cascade": true}})
     );
     assert_eq!(out, format!("{ROOT}\n{FORK}\n"));
@@ -484,14 +524,20 @@ fn a_terminal_lists_then_asks_and_yes_deletes() {
     let setup = Setup::new();
     setup.started(ROOT, None);
     setup.started(FORK, Some(ROOT));
-    let mut hub = FakeHub::new(&[accepted()]);
-    let mut input = io::Cursor::new(b"y\n".to_vec());
-    let (out, err, got) = run_delete(&setup, &mut hub, ROOT, true, false, true, &mut input);
+    let (out, err, got, _, sent) = run_delete(
+        &setup,
+        &[accepted()],
+        ROOT,
+        true,
+        false,
+        true,
+        io::Cursor::new(b"y\n".to_vec()),
+    );
     got.unwrap();
     // The list before the question, then each id sent once accepted.
     assert_eq!(out, format!("{ROOT}\n{FORK}\n{ROOT}\n{FORK}\n"));
     assert_eq!(err, "delete? [y/N] ");
-    assert_eq!(hub.sent()["args"]["session"], ROOT);
+    assert_eq!(sent.unwrap()["args"]["session"], ROOT);
 }
 
 #[test]
@@ -499,9 +545,15 @@ fn without_cascade_the_list_is_only_the_session() {
     let setup = Setup::new();
     setup.started(ROOT, None);
     setup.started(FORK, Some(ROOT));
-    let mut hub = FakeHub::new(&[accepted()]);
-    let mut input = io::Cursor::new(b"n\n".to_vec());
-    let (out, _, got) = run_delete(&setup, &mut hub, ROOT, false, false, true, &mut input);
+    let (out, _, got, _, _) = run_delete(
+        &setup,
+        &[accepted()],
+        ROOT,
+        false,
+        false,
+        true,
+        io::Cursor::new(b"n\n".to_vec()),
+    );
     got.unwrap();
     assert_eq!(out, format!("{ROOT}\n"));
 }
@@ -510,25 +562,32 @@ fn without_cascade_the_list_is_only_the_session() {
 fn a_declined_answer_sends_nothing() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    let mut hub = FakeHub::new(&[accepted()]);
-    let mut input = io::Cursor::new(b"n\n".to_vec());
-    let (_, err, got) = run_delete(&setup, &mut hub, ROOT, false, false, true, &mut input);
+    let (_, err, got, connects, _) = run_delete(
+        &setup,
+        &[accepted()],
+        ROOT,
+        false,
+        false,
+        true,
+        io::Cursor::new(b"n\n".to_vec()),
+    );
     got.unwrap();
     assert!(err.ends_with("nothing deleted\n"), "{err}");
-    assert_eq!(hub.connects, 0);
+    assert_eq!(connects, 0);
 }
 
 #[test]
 fn no_terminal_without_yes_is_usage_and_neither_reads_nor_connects() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    let mut hub = FakeHub::new(&[accepted()]);
-    let (out, _, got) = run_delete(&setup, &mut hub, ROOT, false, false, false, &mut Unread);
-    let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("--yes"), "{}", failure.message);
+    let (out, _, got, connects, _) =
+        run_delete(&setup, &[accepted()], ROOT, false, false, false, Unread);
+    let error = got.unwrap_err();
+    assert!(matches!(&error, CliError::DeleteNobody), "{error:?}");
+    assert_eq!(error.code(), ErrorCode::Usage);
+    assert!(error.to_string().contains("--yes"), "{error:?}");
     assert_eq!(out, "");
-    assert_eq!(hub.connects, 0);
+    assert_eq!(connects, 0);
 }
 
 #[test]
@@ -538,11 +597,20 @@ fn a_rejection_is_a_failure_with_its_code_and_message() {
     let rejected = json!({"kind": "command_rejected", "ts": 1, "schema_version": 1, "payload": {
         "command_id": "c_delete", "code": "session_has_dependents", "message": "It has forks.",
     }});
-    let mut hub = FakeHub::new(&[rejected]);
-    let (out, _, got) = run_delete(&setup, &mut hub, ROOT, false, true, false, &mut Unread);
-    let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::SessionHasDependents);
-    assert_eq!(failure.message, "It has forks.");
+    let (out, _, got, _, _) = run_delete(&setup, &[rejected], ROOT, false, true, false, Unread);
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::SessionHasDependents,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::SessionHasDependents);
+    assert_eq!(error.to_string(), "It has forks.");
     assert_eq!(out, "", "nothing is printed as deleted");
 }
 
@@ -550,12 +618,15 @@ fn a_rejection_is_a_failure_with_its_code_and_message() {
 fn the_hub_closing_before_answering_is_io_failed() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    let mut hub = FakeHub::new(&[]);
-    let (out, _, got) = run_delete(&setup, &mut hub, ROOT, false, true, false, &mut Unread);
-    let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::IoFailed);
+    let (out, _, got, _, _) = run_delete(&setup, &[], ROOT, false, true, false, Unread);
+    let error = got.unwrap_err();
+    assert!(
+        matches!(&error, CliError::HubClosed { command } if command == "delete"),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::IoFailed);
     assert_eq!(
-        failure.message,
+        error.to_string(),
         "the hub closed the connection before answering `delete`"
     );
     assert_eq!(out, "");
@@ -568,21 +639,64 @@ fn a_rejection_without_a_message_through_delete_names_delete() {
     let rejected = json!({"kind": "command_rejected", "ts": 1, "schema_version": 1, "payload": {
         "command_id": "c_delete", "code": "busy",
     }});
-    let mut hub = FakeHub::new(&[rejected]);
-    let (_, _, got) = run_delete(&setup, &mut hub, ROOT, false, true, false, &mut Unread);
-    let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Busy);
-    assert_eq!(failure.message, "the hub refused `delete`");
+    let (_, _, got, _, _) = run_delete(&setup, &[rejected], ROOT, false, true, false, Unread);
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::Busy,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::Busy);
+    assert_eq!(error.to_string(), "the hub refused `delete`");
+}
+
+#[test]
+fn a_delete_rejection_without_a_usable_code_is_io_failed() {
+    let setup = Setup::new();
+    setup.started(ROOT, None);
+    for payload in [
+        json!({"kind": "command_rejected", "ts": 1, "schema_version": 1, "payload": {
+            "command_id": "c_delete", "message": "m",
+        }}),
+        json!({"kind": "command_rejected", "ts": 1, "schema_version": 1, "payload": {
+            "command_id": "c_delete", "code": 7, "message": "m",
+        }}),
+    ] {
+        let (_, _, got, _, _) = run_delete(&setup, &[payload], ROOT, false, true, false, Unread);
+        let error = got.unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                CliError::Rejected {
+                    code: ErrorCode::IoFailed,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(error.code(), ErrorCode::IoFailed);
+        assert_eq!(error.to_string(), "m");
+    }
 }
 
 #[test]
 fn an_unknown_selector_is_not_found_and_never_connects() {
     let setup = Setup::new();
     setup.started(ROOT, None);
-    let mut hub = FakeHub::new(&[accepted()]);
-    let (_, _, got) = run_delete(&setup, &mut hub, "s_zz", false, true, false, &mut Unread);
-    assert_eq!(got.unwrap_err().code, ErrorCode::SessionNotFound);
-    assert_eq!(hub.connects, 0);
+    let (_, _, got, connects, _) =
+        run_delete(&setup, &[accepted()], "s_zz", false, true, false, Unread);
+    let error = got.unwrap_err();
+    assert!(
+        matches!(&error, CliError::Log(log::Error::NotFound(_))),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::SessionNotFound);
+    assert_eq!(connects, 0);
 }
 
 fn hub_answer(kind: &str, payload: Value) -> HubLine {
@@ -600,7 +714,7 @@ fn an_answer_for_another_command_id_is_no_answer() {
         "command_accepted",
         json!({"command_id": "c_other", "result": 1}),
     );
-    assert_eq!(answer_of(&line, "c_1", "delete"), None);
+    assert!(matched(line, "c_1", || "delete".to_owned()).is_none());
 }
 
 #[test]
@@ -610,15 +724,20 @@ fn an_accepted_answer_carries_its_result() {
         json!({"command_id": "c_1", "result": {"token": "t"}}),
     );
     assert_eq!(
-        answer_of(&line, "c_1", "pair"),
-        Some(Ok(json!({"token": "t"})))
+        matched(line, "c_1", || "pair".to_owned()).unwrap().unwrap(),
+        json!({"token": "t"})
     );
 }
 
 #[test]
 fn an_accepted_answer_without_a_result_is_null() {
     let line = hub_answer("command_accepted", json!({"command_id": "c_1"}));
-    assert_eq!(answer_of(&line, "c_1", "refresh"), Some(Ok(Value::Null)));
+    assert_eq!(
+        matched(line, "c_1", || "refresh".to_owned())
+            .unwrap()
+            .unwrap(),
+        Value::Null
+    );
 }
 
 #[test]
@@ -627,9 +746,21 @@ fn a_rejected_answer_carries_its_code_and_message() {
         "command_rejected",
         json!({"command_id": "c_1", "code": "busy", "message": "run"}),
     );
-    let failure = answer_of(&line, "c_1", "delete").unwrap().unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Busy);
-    assert_eq!(failure.message, "run");
+    let error = matched(line, "c_1", || "delete".to_owned())
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::Busy,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::Busy);
+    assert_eq!(error.to_string(), "run");
 }
 
 #[test]
@@ -638,8 +769,14 @@ fn an_unknown_rejection_code_is_other() {
         "command_rejected",
         json!({"command_id": "c_1", "code": "future", "message": "m"}),
     );
-    let failure = answer_of(&line, "c_1", "delete").unwrap().unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Other("future".into()));
+    let error = matched(line, "c_1", || "delete".to_owned())
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        matches!(&error, CliError::Rejected { code: ErrorCode::Other(code), .. } if code == "future"),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::Other("future".into()));
 }
 
 #[test]
@@ -648,10 +785,23 @@ fn a_rejection_without_a_usable_code_is_io_failed() {
         json!({"command_id": "c_1", "message": "m"}),
         json!({"command_id": "c_1", "code": 7, "message": "m"}),
     ] {
-        let failure = answer_of(&hub_answer("command_rejected", payload), "c_1", "delete")
-            .unwrap()
-            .unwrap_err();
-        assert_eq!(failure.code, ErrorCode::IoFailed);
+        let error = matched(hub_answer("command_rejected", payload), "c_1", || {
+            "delete".to_owned()
+        })
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                CliError::Rejected {
+                    code: ErrorCode::IoFailed,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(error.code(), ErrorCode::IoFailed);
+        assert_eq!(error.to_string(), "m");
     }
 }
 
@@ -661,12 +811,73 @@ fn a_rejection_without_a_message_names_the_command() {
         "command_rejected",
         json!({"command_id": "c_1", "code": "busy"}),
     );
-    let failure = answer_of(&line, "c_1", "delete").unwrap().unwrap_err();
-    assert_eq!(failure.message, "the hub refused `delete`");
+    let error = matched(line, "c_1", || "delete".to_owned())
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::Busy,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "the hub refused `delete`");
 }
 
 #[test]
 fn another_kind_with_the_matching_id_is_no_answer() {
     let line = hub_answer("session_left", json!({"command_id": "c_1"}));
-    assert_eq!(answer_of(&line, "c_1", "delete"), None);
+    assert!(matched(line, "c_1", || "delete".to_owned()).is_none());
+}
+
+/// A writer that always fails.
+struct FailWrite;
+
+impl io::Write for FailWrite {
+    fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+        Err(io::Error::other("closed"))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn an_accepted_delete_with_a_failing_writer_is_io_failed_and_stays_deleted() {
+    let setup = Setup::new();
+    setup.started(ROOT, None);
+    let home = setup.home();
+    let workspace = setup.workspace();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut hub = FakeHub::new(&[accepted()]);
+        let mut unread = Unread;
+        let mut err = Vec::new();
+        let ask = Ask {
+            yes: true,
+            terminal: false,
+            input: &mut unread,
+            err: &mut err,
+        };
+        let mut out = FailWrite;
+        let got = delete_run(&home, &workspace, ROOT, false, ask, &mut out, &mut || {
+            hub.connect()
+        });
+        let sent = hub.sent();
+        tx.send((got, sent, hub.connects)).unwrap_or(());
+    });
+    let (got, sent, connects): (Result<(), CliError>, Value, usize) =
+        Deadline::after(HUB_DEADLINE).recv(&rx).unwrap();
+    let error = got.unwrap_err();
+    assert!(matches!(&error, CliError::Forwarded(_)), "{error:?}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert_eq!(
+        sent,
+        json!({"id": "c_delete", "command": "delete", "args": {"session": ROOT}})
+    );
+    assert_eq!(connects, 1);
 }
