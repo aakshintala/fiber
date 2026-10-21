@@ -355,7 +355,7 @@ fn thinking_row<'a>(
 
 /// The generated Databricks thinking module, from the repository root:
 /// `cargo xtask models-dev` writes it beside the provider files.
-pub(crate) const DATABRICKS_THINKING: &str = "providers/databricks/providers/thinking.lua";
+pub(crate) const DATABRICKS_THINKING: &str = "providers/databricks/thinking.lua";
 
 /// The match key of a Databricks service or catalog name, mirroring Lua
 /// `model_key` in `providers/databricks/providers/databricks.lua`:

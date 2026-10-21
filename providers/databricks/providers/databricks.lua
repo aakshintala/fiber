@@ -302,7 +302,9 @@ end
 -- `openai-responses`, else `openai-completions`. The window is the row's
 -- `max_input`, except the pair 922000/128000 which reads as 1,050,000; a
 -- service with no row, or a row with no numeric `max_input`, has no window.
-local function entry_for(service, catalog, image_keys)
+-- A service takes the thinking row its bare name's match key names in the
+-- generated thinking table; a service with no row keeps no levels.
+local function entry_for(service, catalog, image_keys, thinking)
   if type(service) ~= "table" or type(service.name) ~= "string" then
     return nil
   end
@@ -370,6 +372,13 @@ local function entry_for(service, catalog, image_keys)
       entry.cost = cost
     end
   end
+  local thought = thinking[model_key(bare)]
+  if type(thought) == "table" and type(thought.levels) == "table" then
+    entry.thinking_levels = thought.levels
+    if type(thought.default) == "string" then
+      entry.thinking_default = thought.default
+    end
+  end
   return entry
 end
 
@@ -397,9 +406,16 @@ fiber.provider("databricks", {
           image_keys[model_key(row.model_name)] = true
         end
       end
+      -- The generated thinking table, read as empty when absent so an
+      -- older copy of the package still lists its models without levels.
+      local ok, module = pcall(require, "thinking")
+      local thinking = {}
+      if ok and type(module) == "table" then
+        thinking = module
+      end
       local list = {}
       for _, service in ipairs(services) do
-        local entry = entry_for(service, catalog, image_keys)
+        local entry = entry_for(service, catalog, image_keys, thinking)
         if entry ~= nil then
           list[#list + 1] = entry
         end

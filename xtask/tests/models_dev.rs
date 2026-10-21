@@ -27,7 +27,7 @@ const GENERATED: [&str; 9] = [
     "providers/muse/providers/muse.json",
     "providers/opencode/providers/opencode-go.json",
     "providers/opencode/providers/opencode-zen.json",
-    "providers/databricks/providers/thinking.lua",
+    "providers/databricks/thinking.lua",
     "xtask/tests/models-dev.json",
 ];
 

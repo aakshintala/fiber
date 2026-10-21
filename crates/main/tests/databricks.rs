@@ -74,10 +74,17 @@ fn assert_fingerprint(request: &Request, header: &str, value: &str) {
 
 /// Copies the `databricks` package with its origin rewritten to the fake
 /// server and installs it with `fiber extension install` on closed stdin,
-/// returning the fake host and port.
+/// returning the fake host and port. The copy also carries the committed
+/// thinking table, which `copy_package` does not copy: it only copies
+/// `extension.json` and `providers/`.
 fn install(setup: &Setup, server: &ProviderServer) -> String {
     let to = setup.root.path().join("pkg-databricks");
     support::package::copy_package("databricks", &to, "https://", "http://");
+    std::fs::write(
+        to.join("thinking.lua"),
+        include_str!("../../../providers/databricks/thinking.lua"),
+    )
+    .unwrap();
     let installed = run(setup, &["extension", "install", to.to_str().unwrap()], &[]);
     assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
     assert!(
@@ -469,7 +476,7 @@ fn discovered_default_level_sends_without_a_suffix() {
     let to = setup.root.path().join("pkg-databricks");
     support::package::copy_package("databricks", &to, "https://", "http://");
     std::fs::write(
-        to.join("providers/thinking.lua"),
+        to.join("thinking.lua"),
         "return {[\"claude-opus-5\"]={levels={\"low\",\"medium\",\"high\"},default=\"medium\"}}\n",
     )
     .unwrap();
