@@ -658,20 +658,20 @@ impl Watcher {
             // Taps each well-formed `usage_recorded` envelope in stream
             // order, outside the fold lock: malformed lines never reach
             // the loop, as the fold already ignores every non-`fiber_exited`
-            // kind, and neither the stream nor the file backfill below
-            // forwards a `seq` at or before the last one sent. The send
-            // runs after the tap returns, still with no lock held
-            // across it.
+            // kind. The claim and the send are split: the claim runs
+            // under the fold lock, so a file replay racing this stream
+            // never forwards the same `seq` twice, whichever runs first.
+            // The send runs after the claim returns, still with no lock
+            // held across it.
             if envelope.kind == "usage_recorded"
                 && let Some(forward) = &self.on_usage
                 && let Ok(line) = serde_json::from_value::<contract::events::UsageRecorded>(
                     serde_json::Value::Object(envelope.payload.clone()),
                 )
                 && let Some(seq) = envelope.seq.map(|seq| seq.0)
-                && Self::fresh_usage(&self.fold, after, seq)
+                && Self::claim_usage(&self.fold, after, seq)
             {
                 forward(self.job_id.clone(), self.session_id.clone(), line);
-                lock(&self.fold).usage_seq = Some(seq);
             }
             // The cap is stat'ed at most once per poll interval, read
             // from the session clock: envelopes inside one interval share
@@ -719,14 +719,20 @@ impl Watcher {
 
     /// Whether `seq` is a usage line the loop has not seen: past the
     /// run's boundary and past the last usage either path forwarded.
-    /// Checked under the fold lock; the forward runs outside it, then
-    /// claims the `seq` under the same lock.
-    fn fresh_usage(fold: &Mutex<Fold>, after: Option<u64>, seq: u64) -> bool {
+    /// The check and the mark share one fold-lock hold, so two replays
+    /// racing on two threads never both win the same `seq`: the first
+    /// claim forwards it, the second sees it as sent. The forward runs
+    /// outside the lock, after this returns true.
+    fn claim_usage(fold: &Mutex<Fold>, after: Option<u64>, seq: u64) -> bool {
         if after.is_some_and(|bound| seq <= bound) {
             return false;
         }
-        let fold = lock(fold);
-        fold.usage_seq.is_none_or(|sent| seq > sent)
+        let mut fold = lock(fold);
+        if fold.usage_seq.is_some_and(|sent| seq <= sent) {
+            return false;
+        }
+        fold.usage_seq = Some(seq);
+        true
     }
 
     /// Replays the delegate's log file for `usage_recorded` lines the
@@ -749,8 +755,11 @@ impl Watcher {
     /// runner (after reaping the child) share: past `after` and the last
     /// forwarded `seq` in the shared fold, in `seq` order. The runner's
     /// call covers a delegate that exits before the first subscribe
-    /// connects, when no watch ever ends; either path never forwards a
-    /// `seq` twice.
+    /// connects, when no watch ever ends. One fold-lock hold decides the
+    /// whole file's fresh `seq`s and marks them sent before any forward,
+    /// so two replays racing on two threads never forward one twice:
+    /// the first hold wins every fresh `seq`, the second wins none, and
+    /// the forwards run outside the lock in `seq` order.
     fn replay_usage(
         output_path: &std::path::Path,
         after: Option<u64>,
@@ -786,12 +795,20 @@ impl Watcher {
             pending.push((seq, line));
         }
         pending.sort_by_key(|(seq, _)| *seq);
-        for (seq, line) in pending {
-            if !Self::fresh_usage(fold, after, seq) {
-                continue;
+        let fresh: Vec<(u64, contract::events::UsageRecorded)> = {
+            let mut fold = lock(fold);
+            let mut fresh = Vec::new();
+            for (seq, line) in pending {
+                if fold.usage_seq.is_some_and(|sent| seq <= sent) {
+                    continue;
+                }
+                fold.usage_seq = Some(seq);
+                fresh.push((seq, line));
             }
+            fresh
+        };
+        for (_, line) in fresh {
             forward(job_id.clone(), session_id.clone(), line);
-            lock(fold).usage_seq = Some(seq);
         }
     }
 }

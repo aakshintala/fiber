@@ -13,7 +13,7 @@ use std::io;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
 use std::sync::{
-    Arc, Condvar, Mutex,
+    Arc, Barrier, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
@@ -2821,6 +2821,119 @@ fn the_reap_replays_file_usage_the_socket_never_saw() {
     // The bare shell reports no `fiber_exited`, so the job ends without
     // a result; the forward is what this test proves.
     let _ = notice;
+}
+
+/// Runs two file replays sharing one fold against a pre-written two-line
+/// usage file, forcing the loser's claim inside the winner's forward:
+/// the winner's first forward signals `entered`, then parks at the
+/// barrier until the test has run the loser to completion and released
+/// it. Later forwards pass through, so the barrier sees exactly two
+/// parties on old and new code alike. The `entered` receive is the
+/// signal the winner is waiting (docs/testing.md, "Waits and timeouts");
+/// the barrier release is the loser's completion. Returns the forwarded
+/// generations in forward order.
+fn raced_replays() -> Vec<String> {
+    let dir = TempDir::new("fiber-replay-race");
+    let path = dir.path().join("events.jsonl");
+    let mut text = String::new();
+    for seq in [9, 10] {
+        text.push_str(
+            &serde_json::to_string(&usage_envelope(seq, &format!("g_{seq}"), Some(0.5))).unwrap(),
+        );
+        text.push('\n');
+    }
+    std::fs::write(&path, text).unwrap();
+    let fold = Arc::new(Mutex::new(Fold::default()));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (entered_tx, entered_rx) = mpsc::channel::<String>();
+    let release = Arc::new(Barrier::new(2));
+    let parked = Arc::new(AtomicBool::new(false));
+    let job = crate::registry::mint_job_id();
+    let session = SessionId("s_child".into());
+    let on_usage: super::UsageForward = {
+        let seen = Arc::clone(&seen);
+        let release = Arc::clone(&release);
+        let parked = Arc::clone(&parked);
+        Arc::new(
+            move |_job: JobId, _session: SessionId, line: contract::events::UsageRecorded| {
+                seen.lock().unwrap().push(line.generation_id.0.clone());
+                let _sent = entered_tx.send(line.generation_id.0.clone());
+                if !parked.swap(true, Ordering::SeqCst) {
+                    release.wait();
+                }
+            },
+        )
+    };
+    let first = {
+        let path = path.clone();
+        let fold = Arc::clone(&fold);
+        let job = job.clone();
+        let session = session.clone();
+        let on_usage = on_usage.clone();
+        thread::spawn(move || {
+            Watcher::replay_usage(&path, None, &fold, &job, &session, &Some(on_usage));
+        })
+    };
+    // The winner is parked inside its forward; the loser now runs to
+    // completion on this thread, so the order is forced, never raced.
+    let entered = Deadline::after(DEADLINE).recv(&entered_rx);
+    assert!(entered.is_ok(), "the first replay forwards");
+    Watcher::replay_usage(
+        &path,
+        None,
+        &fold,
+        &job,
+        &session,
+        &Some(Arc::clone(&on_usage)),
+    );
+    release.wait();
+    first.join().unwrap();
+    let forwarded = seen.lock().unwrap().clone();
+    assert_eq!(
+        forwarded,
+        ["g_9", "g_10"],
+        "the file lines forward once: {forwarded:?}"
+    );
+    // A third replay past the race still forwards nothing: the claim
+    // holds, so neither a smaller `seq` nor a repeat slips through.
+    Watcher::replay_usage(
+        &path,
+        None,
+        &fold,
+        &job,
+        &session,
+        &Some(Arc::clone(&on_usage)),
+    );
+    seen.lock().unwrap().clone()
+}
+
+#[test]
+fn the_watch_replay_wins_when_it_runs_first() {
+    // The spawned thread stands for the watch-end backfill, this thread
+    // for the reap-end replay: the watch claims the line before the reap
+    // runs, the reap finds it sent and forwards nothing, so the line
+    // forwards exactly once. Flipping the claim back to check-then-act
+    // lets the reap claim inside the watch's forward and forwards twice.
+    let seen = raced_replays();
+    assert_eq!(
+        seen,
+        ["g_9", "g_10"],
+        "the file lines forward once: {seen:?}"
+    );
+}
+
+#[test]
+fn the_reap_replay_wins_when_it_runs_first() {
+    // The spawned thread stands for the reap-end replay, this thread for
+    // the watch-end backfill: the reap claims the line before the watch
+    // runs, the backfill finds it sent and forwards nothing, so the lines
+    // forward exactly once. Both orders land on the one shared claim.
+    let seen = raced_replays();
+    assert_eq!(
+        seen,
+        ["g_9", "g_10"],
+        "the file lines forward once: {seen:?}"
+    );
 }
 
 /// The tripwire the tap drives: per-generation billed spend, a budget,
