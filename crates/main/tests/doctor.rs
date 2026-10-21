@@ -216,16 +216,17 @@ fn a_userinfo_url_is_refused_without_naming_credentials() {
     assert!(!said.contains("example.invalid"), "{said}");
 }
 
-#[test]
-fn bedrock_s_aws_profile_is_its_source_and_never_a_missing_key() {
-    let setup = Setup::new();
-    let to = setup.root.path().join("pkg-bedrock");
-    support::package::copy_package(
-        "bedrock",
-        &to,
-        "https://bedrock-runtime.{region}.amazonaws.com",
-        "http://127.0.0.1:1",
-    );
+/// Installs the first-party `package` with its endpoint `origin` pointed
+/// at a closed port, writes `config`, and runs `fiber doctor` with `env`.
+fn doctor_with_package(
+    setup: &Setup,
+    package: &str,
+    origin: &str,
+    config: &serde_json::Value,
+    env: &[(&str, &str)],
+) -> Output {
+    let to = setup.root.path().join(format!("pkg-{package}"));
+    support::package::copy_package(package, &to, origin, "http://127.0.0.1:1");
     let installed = run_to_exit(
         setup.deadline,
         "extension install",
@@ -237,16 +238,34 @@ fn bedrock_s_aws_profile_is_its_source_and_never_a_missing_key() {
         "stderr: {}",
         stderr_text(&installed)
     );
-    write_json(
-        &setup.home().join("config.json"),
+    write_json(&setup.home().join("config.json"), config);
+    let mut doctor = setup.fiber(&["doctor"]);
+    doctor.envs(env.iter().copied());
+    run_to_exit(setup.deadline, &format!("doctor with {package}"), doctor)
+}
+
+#[test]
+fn bedrock_s_aws_profile_is_its_source_and_never_a_missing_key() {
+    let setup = Setup::new();
+    // A key stored under the label, as `fiber login bedrock --as work`
+    // writes one, is never what Bedrock reads.
+    config::store_credential(
+        &setup.home(),
+        "bedrock",
+        "work",
+        &config::Secret::new("not-a-key".into()),
+    )
+    .unwrap();
+    let output = doctor_with_package(
+        &setup,
+        "bedrock",
+        "https://bedrock-runtime.{region}.amazonaws.com",
         &json!({
             "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
             "providers": {"bedrock": {"credential": "work"}},
         }),
+        &[("AWS_REGION", "us-east-1")],
     );
-    let mut doctor = setup.fiber(&["doctor"]);
-    doctor.env("AWS_REGION", "us-east-1");
-    let output = run_to_exit(setup.deadline, "doctor with an AWS profile", doctor);
 
     // Bedrock's `credential()` reads the AWS profile, which doctor cannot
     // check without running it, so nothing blocks (#3020).
@@ -261,5 +280,34 @@ fn bedrock_s_aws_profile_is_its_source_and_never_a_missing_key() {
         text.contains("bedrock:\n  * work  AWS profile work, read by credential() (not checked)\n"),
         "{text}"
     );
+    assert!(!text.contains("credentials/bedrock"), "{text}");
     assert!(!text.contains("fiber login bedrock"), "{text}");
+}
+
+#[test]
+fn vertex_s_default_label_is_its_source_and_never_a_missing_key() {
+    let setup = Setup::new();
+    let output = doctor_with_package(
+        &setup,
+        "vertex",
+        "https://aiplatform.googleapis.com",
+        &json!({"model": "vertex/gemini-3.1-flash-lite"}),
+        &[("GOOGLE_CLOUD_PROJECT", "example-project")],
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_text(&output)
+    );
+    let text = stdout_text(&output);
+    assert!(
+        text.contains(
+            "vertex:\n  * default  the active gcloud configuration, or Application Default \
+             Credentials, read by credential() (not checked)\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("fiber login vertex"), "{text}");
 }
