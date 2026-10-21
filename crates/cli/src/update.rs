@@ -192,6 +192,9 @@ fn run(
         origin,
         clock,
         stage_docs,
+        // An already-newest run replaces no binary, so it stages none
+        // beside it and keeps the home staging as before.
+        (!already).then_some(binary),
     )?;
     // The plan's damaged directories are named before approval, so a
     // declined or failed update still names them.

@@ -51,14 +51,17 @@ pub struct Target {
 /// The staged update: every installed extension resolved, the release's
 /// archives unpacked and checked, the docs fresh beside `docs/`, the
 /// staged binary in the scratch directory. Commit puts the extensions in
-/// place and swaps the docs, then the caller renames the staged binary
-/// last. Dropping it installs nothing and removes what was staged.
+/// place and swaps the docs, stages the binary beside the installed one
+/// when its path was given (so the caller's final rename stays on one
+/// filesystem), then the caller renames the staged binary last. Dropping
+/// it installs nothing and removes what was staged.
 pub struct StagedUpdate<'c> {
     plan: Plan<'c>,
     _scratch: Scratch,
     home: PathBuf,
     docs_fresh: Option<PathBuf>,
     binary: PathBuf,
+    binary_dir: Option<PathBuf>,
 }
 
 impl<'c> StagedUpdate<'c> {
@@ -69,18 +72,31 @@ impl<'c> StagedUpdate<'c> {
 
     /// Puts every staged extension in place with no download inside, swaps
     /// the staged docs in, and returns the staged `fiber` binary's path:
-    /// the caller renames it into place last. The lock is released before
-    /// the docs swap.
+    /// the caller renames it into place last. The staged binary sits
+    /// beside the installed one when its path was given, so that rename
+    /// is same-filesystem and atomic; otherwise it sits in the home as
+    /// before. The lock is released before the docs swap.
     pub fn commit(mut self) -> Result<PathBuf, Error> {
         self.plan.commit_prepared()?;
         self.plan.unlock();
         if let Some(fresh) = &self.docs_fresh {
             swap_docs_in(&self.home, fresh)?;
         }
-        let staged = self
-            .home
-            .join(format!("{}.new", unique_name(".fiber-update")));
-        fs::rename(&self.binary, &staged).map_err(io(&staged))?;
+        let staged = match &self.binary_dir {
+            Some(dir) => dir.join(format!("{}.new", unique_name(".fiber-update"))),
+            None => self
+                .home
+                .join(format!("{}.new", unique_name(".fiber-update"))),
+        };
+        // The scratch directory can sit on another filesystem than the
+        // staged path, so a rename across devices falls back to a copy.
+        if let Err(rename) = fs::rename(&self.binary, &staged) {
+            if rename.kind() == std::io::ErrorKind::CrossesDevices {
+                fs::copy(&self.binary, &staged).map_err(io(&staged))?;
+            } else {
+                return Err(io(&staged)(rename));
+            }
+        }
         Ok(staged)
     }
 }
@@ -101,13 +117,17 @@ impl Drop for StagedUpdate<'_> {
 /// archive-covered members from the release, and prepares every staged
 /// member, so the commit downloads nothing. A removed first-party
 /// extension stays removed: only installed names are adopted from the
-/// archives, keeping their requested and floor.
+/// archives, keeping their requested and floor. The installed binary's
+/// path stages the new binary beside it, so the caller's final rename
+/// never crosses filesystems; without one the staged binary sits in the
+/// home as before.
 pub fn stage_update<'c>(
     home: &Path,
     release: &Target,
     origin: &Origin,
     clock: &'c dyn Clock,
     stage_docs: bool,
+    installed_binary: Option<&Path>,
 ) -> Result<StagedUpdate<'c>, Error> {
     let scratch = Scratch::create(&std::env::temp_dir(), "fiber-update", 0o700)?;
     let archives = Release {
@@ -173,6 +193,8 @@ pub fn stage_update<'c>(
         home: home.into(),
         docs_fresh,
         binary,
+        binary_dir: installed_binary
+            .map(|binary| binary.parent().unwrap_or(Path::new("/")).to_path_buf()),
     })
 }
 

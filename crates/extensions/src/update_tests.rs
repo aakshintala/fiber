@@ -249,6 +249,7 @@ impl Setup {
             &self.origin(),
             clock.as_ref(),
             true,
+            None,
         ) {
             Ok(_) => panic!("the staged update was expected to fail"),
             Err(err) => err,
@@ -300,19 +301,25 @@ fn an_update_moves_every_member_and_leaves_a_removed_first_party_absent() {
         "[]",
     );
     let clock = fakes::clock::FakeClock::new();
+    // The installed binary lives in its own directory, so the staged
+    // binary sits beside it rather than in the home.
+    let bindir = setup.root.path().join("bin");
+    fs::create_dir(&bindir).unwrap();
+    let installed = bindir.join("fiber");
     let staged = stage_update(
         &setup.home(),
         &setup.target(&server),
         &setup.origin(),
         clock.as_ref(),
         true,
+        Some(&installed),
     )
     .unwrap();
     let names: Vec<String> = staged.plan().items().map(|i| i.name.clone()).collect();
     assert_eq!(names, ["github.com/acme/widget"]);
     let binary = staged.commit().unwrap();
     assert_eq!(fs::read(&binary).unwrap(), b"marker");
-    assert_eq!(binary.parent(), Some(setup.home().as_path()));
+    assert_eq!(binary.parent(), Some(bindir.as_path()));
     assert_eq!(
         fs::read_to_string(setup.home().join("docs/v")).unwrap(),
         "new"
@@ -371,6 +378,7 @@ fn fresh_names_hold_only_members_not_yet_installed() {
         &setup.origin(),
         clock.as_ref(),
         true,
+        None,
     )
     .unwrap();
     let mut fresh: Vec<&str> = staged.plan().fresh_names().collect();
@@ -413,6 +421,7 @@ fn an_archive_member_keeps_its_requested_and_floor() {
         &setup.origin(),
         clock.as_ref(),
         true,
+        None,
     )
     .unwrap();
     staged.commit().unwrap();
@@ -449,6 +458,7 @@ fn docs_are_installed_when_absent() {
         &setup.origin(),
         clock.as_ref(),
         true,
+        None,
     )
     .unwrap()
     .commit()
@@ -495,6 +505,7 @@ fn an_install_step_runs_at_the_commit_not_the_stage() {
         &setup.origin(),
         clock.as_ref(),
         true,
+        None,
     )
     .unwrap();
     for item in staged.plan().items() {
@@ -539,6 +550,7 @@ fn a_stageless_docs_stage_leaves_docs_alone() {
         &setup.origin(),
         clock.as_ref(),
         false,
+        None,
     )
     .unwrap()
     .commit()
@@ -575,6 +587,7 @@ fn dropping_a_staged_update_removes_the_staged_docs_and_installs_nothing() {
         &setup.origin(),
         clock.as_ref(),
         true,
+        None,
     )
     .unwrap();
     // The docs sit staged beside `docs/`, not yet swapped in.
