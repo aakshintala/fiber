@@ -55,7 +55,7 @@ impl Setup {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
-            root: fakes::TempDir::new("fiber-ext-damaged"),
+            root: fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-ext-damaged"),
         };
         fs::create_dir_all(setup.home()).unwrap();
         setup.source("healthy", "acme");

@@ -1437,12 +1437,14 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
             send(&sender, r#"{"id":"c_noargs","command":"handoff"}"#);
             send(&sender, r#"{"id":"c_close","command":"close"}"#);
             let wait = Deadline::after(DEADLINE);
+            // The drop is answered at once and never delivered: the reader
+            // took its entry off the shared queue, so the drain has
+            // nothing to reconcile.
             assert_eq!(
-                (0..8).map(|_| take(&inbox, &wait)).collect::<Vec<_>>(),
+                (0..7).map(|_| take(&inbox, &wait)).collect::<Vec<_>>(),
                 vec![
                     "prompt hi".to_owned(),
                     "steer more".to_owned(),
-                    "drop c_steer".to_owned(),
                     "reply r_1".to_owned(),
                     "handoff c_handoff Some(\"focus on tests\")".to_owned(),
                     "handoff c_bare None".to_owned(),
@@ -1452,18 +1454,21 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
             );
             log.append(&step(), None, None).unwrap();
             let own = until(&sender, |line| line["seq"].as_u64() == Some(0));
-            let ids: Vec<&str> = own.iter().filter_map(command_id).collect();
+            let mut ids: Vec<&str> = own.iter().filter_map(command_id).collect();
+            // The at-once steer and drop answers race the answers the
+            // stand-in takes, so the acknowledgement order is not pinned.
+            ids.sort();
             assert_eq!(
                 ids,
                 vec![
-                    "c_prompt",
-                    "c_steer",
-                    "c_drop",
-                    "c_reply",
-                    "c_handoff",
                     "c_bare",
+                    "c_close",
+                    "c_drop",
+                    "c_handoff",
                     "c_noargs",
-                    "c_close"
+                    "c_prompt",
+                    "c_reply",
+                    "c_steer"
                 ]
             );
             assert!(own.iter().all(|line| kind(line) != "command_rejected"));
@@ -5823,4 +5828,505 @@ fn shell_unsaved_left_removal_failure_without_log_rejects_io_failed() {
         })
         .unwrap();
     close_within(session, reopened_log(sessions, id, timed));
+}
+
+#[test]
+fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
+    let opened = Opened::open(vec![]);
+    let work = Temp::new();
+    let workspace = work.0.clone();
+    // A git workspace whose remote URL carries userinfo, with one CI file.
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    git(&["init", "--quiet"]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://user:token@github.com/acme/fiber.git",
+    ]);
+    fs::write(
+        workspace.join(".gitlab-ci.yml"),
+        "job:\n  script: make lint\n",
+    )
+    .unwrap();
+    // One seeded session in this session's project records the workspace
+    // and holds one escalation answered allow.
+    let seed = opened
+        .home
+        .join("projects")
+        .join("p")
+        .join("sessions")
+        .join("s_seed00000001");
+    fs::create_dir_all(&seed).unwrap();
+    let mut log = serde_json::json!({"kind": "session_started",
+        "payload": {"workspace": workspace.to_str().unwrap()}})
+    .to_string();
+    log.push('\n');
+    for (seq, kind, payload) in [
+        (
+            1,
+            "permission_requested",
+            serde_json::json!({"request_id": "r1", "step": "review",
+                "escalation": {"cause": "consecutive_blocks", "reason": "blocked"},
+                "rule": {"subject": "gh pr merge", "prefix": "gh pr merge"}}),
+        ),
+        (
+            2,
+            "permission_resolved",
+            serde_json::json!({"request_id": "r1", "decision": "allow",
+                "decided_by": "person"}),
+        ),
+    ] {
+        log.push_str(
+            &serde_json::json!({"kind": kind, "session_id": "s_seed00000001",
+                "ts": seq, "schema_version": 1, "seq": seq, "payload": payload})
+            .to_string(),
+        );
+        log.push('\n');
+    }
+    fs::write(seed.join("events.jsonl"), log).unwrap();
+    opened.session.notes_workspace(workspace);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"propose_notes","args":{"topic":"routine_actions","answer":"I merge my own PRs"}}"#,
+            );
+            match Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("propose_notes is delivered")
+            {
+                Delivery::ProposeNotes(ask, ack) => {
+                    assert_eq!(ask.args.topic, contract::notes::Topic::RoutineActions);
+                    assert_eq!(ask.args.answer.as_deref(), Some("I merge my own PRs"));
+                    assert!(ask.args.earlier.is_empty());
+                    assert_eq!(ask.evidence.len(), 3);
+                    match &ask.evidence[0] {
+                        contract::notes::Evidence::Files { text } => {
+                            assert_eq!(
+                                text,
+                                "git remote origin: https://github.com/acme/fiber.git"
+                            );
+                        }
+                        contract::notes::Evidence::Session(_)
+                        | contract::notes::Evidence::Answer { .. } => {
+                            panic!("the remote item arrives first")
+                        }
+                    }
+                    match &ask.evidence[1] {
+                        contract::notes::Evidence::Files { text } => {
+                            assert!(
+                                text.starts_with("CI configuration .gitlab-ci.yml:"),
+                                "{text}"
+                            );
+                        }
+                        contract::notes::Evidence::Session(_)
+                        | contract::notes::Evidence::Answer { .. } => {
+                            panic!("the CI item arrives second")
+                        }
+                    }
+                    match &ask.evidence[2] {
+                        contract::notes::Evidence::Session(tally) => {
+                            assert_eq!(tally.prefix(), "gh pr merge");
+                            assert_eq!(tally.count(), 1);
+                            assert_eq!(tally.here(), 1);
+                        }
+                        contract::notes::Evidence::Files { .. }
+                        | contract::notes::Evidence::Answer { .. } => {
+                            panic!("session evidence arrives as a session item")
+                        }
+                    }
+                    ack.0(Ok(None));
+                }
+                Delivery::Prompt(..)
+                | Delivery::Steer(..)
+                | Delivery::SteerDrop(..)
+                | Delivery::Name(..)
+                | Delivery::Handoff(..)
+                | Delivery::Credential(..)
+                | Delivery::Reload(..)
+                | Delivery::McpReconnect(..)
+                | Delivery::Reply(..)
+                | Delivery::Rewind(..)
+                | Delivery::Close(_)
+                | Delivery::Job(_)
+                | Delivery::JobLine(_)
+                | Delivery::Interaction(_)
+                | Delivery::Resolved(..)
+                | Delivery::ExtensionExec(_)
+                | Delivery::Message(_)
+                | Delivery::InnerCall(_)
+                | Delivery::ExtensionLog(_)
+                | Delivery::ExtensionJob(..)
+                | Delivery::ExtensionUsage(_)
+                | Delivery::Model(..)
+                | Delivery::Shell(..)
+                | Delivery::Cancelled => panic!("propose_notes arrives as itself"),
+            }
+            let accepted = response(&client, "c_1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+    // Without a wired workspace the same command is unknown.
+    let bare = Opened::open(vec![]);
+    let bare_socket = bare.socket.clone();
+    bare.session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&bare_socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"propose_notes","args":{"topic":"never"}}"#,
+            );
+            let line = response(&client, "c_1");
+            assert_eq!(
+                rejection(&line),
+                (
+                    "unknown_command",
+                    "`propose_notes` is not built in this Fiber yet."
+                )
+            );
+            Ok(())
+        })
+        .unwrap();
+    bare.close();
+}
+
+#[test]
+fn an_undelivered_ack_answers_after_the_inbox_guard_releases() {
+    // R42: dropping an undeliverable delivery answers `closing` only after
+    // the inbox guard releases, so an answer that delivers again on the
+    // same thread cannot deadlock on it.
+    let opened = Opened::open(vec![]);
+    let work = Temp::new();
+    opened.session.notes_workspace(work.0.clone());
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            // Only the receiver is gone: the slot stays `Some`, and the
+            // connections are not yet stopped.
+            drop(inbox);
+            let (notes_tx, notes_rx) = mpsc::channel();
+            let (model_tx, model_rx) = mpsc::channel();
+            let mut args = Map::new();
+            args.insert("topic".to_owned(), Value::String("never".to_owned()));
+            let inner = Arc::clone(&driver);
+            driver.drive(
+                "fiber.test/a",
+                "propose_notes",
+                args,
+                Ack(Box::new(move |answer| {
+                    // From inside the answer, `model` delivers again on
+                    // this same thread: under the old `deliver` this
+                    // deadlocked on the inbox guard.
+                    let mut model = Map::new();
+                    model.insert("model".to_owned(), Value::String("fake/n".to_owned()));
+                    inner.drive(
+                        "fiber.test/a",
+                        "model",
+                        model,
+                        Ack(Box::new(move |answer| match model_tx.send(answer) {
+                            Ok(()) | Err(_) => {}
+                        })),
+                    );
+                    match notes_tx.send(answer) {
+                        Ok(()) | Err(_) => {}
+                    }
+                })),
+            );
+            let notes = Deadline::after(DEADLINE).recv_or_fail(&notes_rx, "the notes answer");
+            assert_eq!(notes.unwrap_err().code, ErrorCode::Closing);
+            let model = Deadline::after(DEADLINE).recv_or_fail(&model_rx, "the model answer");
+            assert_eq!(model.unwrap_err().code, ErrorCode::Closing);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+/// The `import` driver command answers what a direct shared import
+/// reports: the same files plus the same left-behind items, on identical
+/// fixtures (`docs/testing.md`, "Levels"). The child re-run carries a
+/// private `HOME`, since the dispatch reads the person's home from the
+/// environment exactly as `fiber import` does.
+mod import_sameness {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde_json::{Map, Value, json};
+
+    use super::support::{Opened, kind, response, send, subscribe};
+
+    /// The child's case marker: set, the test runs the named case in the
+    /// child and returns, so the parent proves the sameness against a
+    /// private `HOME`.
+    const CHILD: &str = "FIBER_DOORS_SOCKET_IMPORT_CHILD";
+
+    /// How long a re-run child may run: opening a session and importing
+    /// local files only. Twice it stays inside half of nextest's per-test
+    /// timeout (`docs/testing.md`, "Waits and timeouts").
+    const CHILD_WITHIN: Duration = Duration::from_secs(30);
+
+    fn child_name() -> String {
+        module_path!().split_once("::").unwrap().1.to_owned()
+    }
+
+    /// Writes `content` to `rel` under `root`, creating parents.
+    fn write(root: &Path, rel: &str, content: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    /// A fake `~/.claude` mirroring the probed layout: a skill, a flat
+    /// command, instruction content, two mapped servers, and unmapped
+    /// entries including a secret.
+    fn claude_home(root: &Path) {
+        write(
+            root,
+            ".claude/skills/review/SKILL.md",
+            "---\nname: review\ndescription: Reviews code.\n---\n\nBody.\n",
+        );
+        write(root, ".claude/commands/greet.md", "Hello there.\n");
+        write(root, ".claude/CLAUDE.md", "Be kind.\n");
+        write(
+            root,
+            ".claude/settings.json",
+            &json!({
+                "model": "opus",
+                "mcpServers": {
+                    "notes": {"command": "notes-server", "args": ["--fast"]},
+                    "remote": {"url": "https://mcp.example.com/x"},
+                },
+            })
+            .to_string(),
+        );
+        write(root, ".claude/agents/worker.md", "worker\n");
+        write(root, ".claude/auth.json", "{\"token\": \"x\"}\n");
+    }
+
+    /// A fake `~/.codex` mirroring the probed layout: a skill, a flat
+    /// prompt, instruction content, two mapped servers, and a secret.
+    fn codex_home(root: &Path) {
+        write(
+            root,
+            ".codex/skills/lint/SKILL.md",
+            "---\nname: lint\ndescription: Lints.\n---\n\nLint body.\n",
+        );
+        write(root, ".codex/prompts/plan.md", "Plan it.\n");
+        write(root, ".codex/AGENTS.md", "Be thorough.\n");
+        write(
+            root,
+            ".codex/config.toml",
+            "[mcp_servers.alpha]\n\
+             command = \"alpha-server\"\n\
+             \n\
+             [mcp_servers.beta]\n\
+             url = \"https://beta.example.com/mcp\"\n",
+        );
+        write(root, ".codex/auth.json", "{\"token\": \"x\"}\n");
+    }
+
+    /// Every import-landed file under `home` but the receipts, as relative
+    /// paths with bytes, in order: the opened session's own durable files
+    /// under `projects/` are the harness's, not the import's.
+    fn tree(home: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut pending = vec![home.to_path_buf()];
+        while let Some(path) = pending.pop() {
+            if path.is_dir() && !path.is_symlink() {
+                for entry in std::fs::read_dir(&path).unwrap() {
+                    pending.push(entry.unwrap().path());
+                }
+                continue;
+            }
+            if path.is_file() {
+                let rel = path.strip_prefix(home).unwrap().display().to_string();
+                if rel == "import-claude-code.json"
+                    || rel == "import-codex.json"
+                    || rel.starts_with("projects/")
+                {
+                    continue;
+                }
+                out.push((rel, std::fs::read(&path).unwrap()));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Runs the shared import directly, as `fiber import` does: the same
+    /// code path the driver command runs.
+    fn direct(home: &Path, person: &Path, source: config::ImportSource) -> config::ImportReport {
+        let clock = fakes::clock::FakeClock::new();
+        let source_home = config::source_home(person, source);
+        config::import_source(home, &source_home, source, clock.as_ref()).unwrap()
+    }
+
+    /// The driver's accepted `result` for the `import` line with `id`.
+    fn drive(client: &fakes::Client, line: &str, id: &str) -> Value {
+        send(client, line);
+        let answer = response(client, id);
+        assert_eq!(kind(&answer), "command_accepted", "{answer}");
+        answer["payload"]["result"].clone()
+    }
+
+    /// Two reports back to back, Claude Code's lists then Codex's, as the
+    /// bare driver command aggregates them.
+    fn combined(first: &config::ImportReport, second: &config::ImportReport) -> Value {
+        let first = serde_json::to_value(first).unwrap();
+        let second = serde_json::to_value(second).unwrap();
+        let mut imported = Map::new();
+        for key in ["mcp_servers", "skills", "commands", "instructions"] {
+            let mut names = first["imported"][key].as_array().unwrap().clone();
+            names.extend(second["imported"][key].as_array().unwrap().clone());
+            imported.insert(key.to_owned(), Value::Array(names));
+        }
+        let mut left = first["left_behind"].as_array().unwrap().clone();
+        left.extend(second["left_behind"].as_array().unwrap().clone());
+        json!({"imported": imported, "left_behind": left})
+    }
+
+    /// A bare `import` matches two direct shared imports, one per source:
+    /// the accepted report, the landed files, and both receipts.
+    fn bare(person: &Path) {
+        let direct_home = fakes::TempDir::new("fiber-import-direct");
+        let opened = Opened::open(Vec::new());
+        let socket = opened.socket.clone();
+        let home = opened.home.clone();
+        let direct_root = direct_home.path().to_path_buf();
+        let person = person.to_path_buf();
+        opened
+            .session
+            .run(Vec::new(), Arc::new(|| false), move |_| {
+                let client = fakes::Client::connect(&socket).unwrap();
+                subscribe(&client, "sub", "summary");
+                let result = drive(&client, r#"{"id":"imp","command":"import"}"#, "imp");
+                let claude = direct(&direct_root, &person, config::ImportSource::ClaudeCode);
+                let codex = direct(&direct_root, &person, config::ImportSource::Codex);
+                assert_eq!(result, combined(&claude, &codex), "{result}");
+                assert_eq!(tree(&home), tree(&direct_root));
+                for receipt in ["import-claude-code.json", "import-codex.json"] {
+                    assert!(home.join(receipt).is_file(), "driver writes {receipt}");
+                    assert!(
+                        direct_root.join(receipt).is_file(),
+                        "direct writes {receipt}"
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+        opened.close();
+    }
+
+    /// A sourced `import` matches the direct shared import for that
+    /// source: no Claude receipt, no Claude files.
+    fn one(person: &Path) {
+        let direct_home = fakes::TempDir::new("fiber-import-direct");
+        let opened = Opened::open(Vec::new());
+        let socket = opened.socket.clone();
+        let home = opened.home.clone();
+        let direct_root = direct_home.path().to_path_buf();
+        let person = person.to_path_buf();
+        opened
+            .session
+            .run(Vec::new(), Arc::new(|| false), move |_| {
+                let client = fakes::Client::connect(&socket).unwrap();
+                subscribe(&client, "sub", "summary");
+                let result = drive(
+                    &client,
+                    r#"{"id":"imp","command":"import","args":{"source":"codex"}}"#,
+                    "imp",
+                );
+                let codex = direct(&direct_root, &person, config::ImportSource::Codex);
+                assert_eq!(result, serde_json::to_value(&codex).unwrap(), "{result}");
+                assert_eq!(tree(&home), tree(&direct_root));
+                assert!(!home.join("import-claude-code.json").exists());
+                assert!(!direct_root.join("import-claude-code.json").exists());
+                Ok(())
+            })
+            .unwrap();
+        opened.close();
+    }
+
+    /// The child's entry: the parent's `HOME` holds the fake person home
+    /// the case reads.
+    fn run_child(case: &str) {
+        let person = PathBuf::from(std::env::var_os("HOME").unwrap());
+        match case {
+            "bare" => bare(&person),
+            "one" => one(&person),
+            other => panic!("unknown import case {other}"),
+        }
+    }
+
+    /// Re-runs the current test in a child with `HOME` pointing at
+    /// `person`: the child's exit code proves the case.
+    #[track_caller]
+    fn parent(test: &str, case: &str, person: &Path) {
+        let output = fakes::rerun_prepared(
+            &format!("{}::{test}", child_name()),
+            &[(CHILD, case)],
+            CHILD_WITHIN,
+            |command| {
+                command.env("HOME", person);
+            },
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "child {case} failed: stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bare_import_matches_a_direct_shared_import() {
+        if let Some(case) = std::env::var_os(CHILD) {
+            run_child(case.to_str().unwrap());
+            return;
+        }
+        let person = fakes::TempDir::new("fiber-import-person");
+        claude_home(person.path());
+        codex_home(person.path());
+        parent(
+            "bare_import_matches_a_direct_shared_import",
+            "bare",
+            person.path(),
+        );
+    }
+
+    #[test]
+    fn sourced_import_matches_a_direct_shared_import() {
+        if let Some(case) = std::env::var_os(CHILD) {
+            run_child(case.to_str().unwrap());
+            return;
+        }
+        let person = fakes::TempDir::new("fiber-import-person");
+        claude_home(person.path());
+        codex_home(person.path());
+        parent(
+            "sourced_import_matches_a_direct_shared_import",
+            "one",
+            person.path(),
+        );
+    }
 }

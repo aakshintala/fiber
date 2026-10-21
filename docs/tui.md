@@ -79,10 +79,13 @@ line says so: "Connecting 2 MCP servers…".
 
 On the first interactive run, with no import receipt yet
 (`docs/configuration.md`, "Importing"), home offers a one-time import of
-another harness's configuration: Claude Code's or Codex's. (Built in P2.)
+another harness's configuration: Claude Code's or Codex's.
 The offer runs the same shared import `fiber import` runs, and imported
 items apply on the next `/reload` with the reload's usual cache cost
-(`docs/mcp.md`, "Reload"). The offer fires once: answering it, or running
+(`docs/mcp.md`, "Reload"). A `1` or `2` pressed before the hub connects
+still imports once it does, so an early press is never lost. Over a
+remote hub connection the receipts are the hub machine's, where that
+import runs (`docs/configuration.md`, "Importing"). The offer fires once: answering it, or running
 `fiber import` first, writes the receipt, and the offer never shows again.
 
 **The workspace chip** names the workspace in use: the one last picked, else
@@ -549,7 +552,11 @@ a click on it returns too. The views are:
   `error`. The input box's hint reads "steering goes to ◆ <description>",
   dim. A delegate that has not bound its socket yet answers
   `session_not_found`; while its parent lists it running, the terminal asks
-  again every 500 ms.
+  again every 500 ms. A delegate or job that has finished opens the same
+  view read-only: its status row shows the outcome (`completed`, `failed`
+  or `cancelled`) where the stop target would be, the transcript is the
+  replay of its log, and Enter keeps the finished notice instead of
+  steering.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box sends `job_input` to type into it as raw keys, as `jobs write`
   does for the model, so the person can finish an interactive step the model
@@ -1114,6 +1121,10 @@ right-aligned. Clicking a notice shows the whole text in an overlay.
 - The "N approvals waiting" row (see "An approval") sits above the notices, and on a screen too short for both it drops first.
 - A notice that arrives during a drag waits for the release.
 - In the screen-reader mode notices are lines in reading order.
+
+An accepted `/import` answer is one notice per `fiber import` line,
+naming what the import copied and left behind, plus a `/reload` reminder
+(`docs/configuration.md`, "Importing").
 
 When the hub sends `stream_closed` for the open session (it cannot read
 the session's log to serve this terminal), the conversation keeps every line
@@ -1751,6 +1762,7 @@ later release still applies.
 | `/handoff [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
+| `/logout` | Logs out ("Logging out"). |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/close` | Stops the session on screen ("Quit"). |
@@ -1833,6 +1845,29 @@ widening it. Esc goes back to the provider list.
   login with a note naming the provider; a failed save keeps it with an
   error naming the key. Footer: "↑↓ move · Enter save · Esc back". Esc
   returns to the provider list writing nothing.
+
+### Logging out
+
+`/logout` logs out from the terminal with the same delete steps as `fiber logout`. It
+opens an overlay ("Look", "Overlays") titled "Log out" with a ✕: the providers under
+"Providers", one row per stored or configured label with the default marked,
+then the extension credentials under "Secrets", the first deletable row focused.
+A row whose key comes from an environment variable, a file or a command is dim
+with its source, and Enter on it does nothing, as on a heading or the note.
+
+Enter on a deletable row asks for confirmation, naming the provider and the label,
+and, when other providers read the same stored directory, naming them: "Delete
+acme/work?" with "Also used by: beta" below it. The confirm keeps the list's
+height and shares its width, so the overlay does not jump between the steps.
+Footer: "Enter confirm · Esc back"; Esc goes back to the list deleting nothing.
+
+Confirming deletes the stored file only, leaving `providers."<name>".credential` as
+is, then re-lists the rows with the overlay still open: the deleted row is gone,
+and "Removed credentials/acme/work." shows below the list, with ", which beta also
+reads" when siblings share the stored directory. When a configured source covers
+the deleted label its dim row remains, and later sessions use that source. A
+failed delete keeps the row with the seam's message below the list. Footer on the
+list: "↑↓ move · Enter delete · Esc close".
 
 ### Quit
 

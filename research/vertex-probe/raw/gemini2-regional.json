@@ -1,0 +1,122 @@
+{
+  "cost": 2e-06,
+  "events": [
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "hello"
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:56:49.215054Z",
+        "modelVersion": "gemini-2.5-flash-lite",
+        "responseId": "00000000000000000000008",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": ""
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-10-20T16:56:49.215054Z",
+        "modelVersion": "gemini-2.5-flash-lite",
+        "responseId": "00000000000000000000008",
+        "usageMetadata": {
+          "candidatesTokenCount": 1,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 1
+            }
+          ],
+          "promptTokenCount": 11,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 11
+            }
+          ],
+          "totalTokenCount": 12,
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    }
+  ],
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-disposition": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/us-central1/publishers/google/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Reply with the single word: hello"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 256
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "usage": {
+    "candidatesTokenCount": 1,
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 1
+      }
+    ],
+    "promptTokenCount": 11,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 11
+      }
+    ],
+    "totalTokenCount": 12,
+    "trafficType": "ON_DEMAND"
+  }
+}

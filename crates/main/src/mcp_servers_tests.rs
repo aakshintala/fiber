@@ -252,6 +252,8 @@ fn a_ready_after_a_failure_clears_the_failure() {
     let servers = empty_servers(&setup.rig, &clock);
     let waiting = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let refresh = super::servers_refresh(
+        std::collections::HashMap::new(),
+        0,
         sources_of(&setup.rig),
         servers.clone(),
         std::sync::Arc::downgrade(&log),
@@ -267,6 +269,198 @@ fn a_ready_after_a_failure_clears_the_failure() {
         "{rows:?}"
     );
     servers.stop();
+}
+
+#[test]
+fn a_settled_failure_reads_needs_login_before_its_line_is_written() {
+    // The pre-commit gap: the startup settles every server before the
+    // door's commit writes their failure lines, and the door serves
+    // queries from before that commit, so a query in the gap reads the
+    // settled row, never the `connecting` of a start still in flight.
+    // The seed carries the settled failure the commit is about to
+    // write (`docs/mcp.md`, "Servers, their state and the per-server
+    // commands").
+    // No failure line yet: the startup commit has not run.
+    let rows = seeded_rows(
+        seed_of(contract::events::ServerFailure::NotLoggedIn),
+        &[],
+        &[],
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "remote");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::NeedsLogin,
+        "{rows:?}"
+    );
+}
+
+/// The startup's settled failures carrying one failure for the remote
+/// server with `reason`: what the commit writes and the reader's seed
+/// carries together.
+fn seed_of(
+    reason: contract::events::ServerFailure,
+) -> std::collections::HashMap<String, contract::events::McpServerFailed> {
+    std::collections::HashMap::from([("remote".to_owned(), settled_failure(reason))])
+}
+
+/// The startup's settled failure for the remote server with `reason`:
+/// what the commit writes and the reader's seed carries together.
+fn settled_failure(reason: contract::events::ServerFailure) -> contract::events::McpServerFailed {
+    contract::events::McpServerFailed {
+        server: "remote".into(),
+        reason,
+        will_restart: false,
+        error: contract::shapes::Failure {
+            code: contract::ErrorCode::McpServerUnavailable,
+            message: "The MCP server `remote` failed to start: it needs a login.".into(),
+            retry_after_ms: None,
+            provider: None,
+        },
+    }
+}
+
+/// The `mcp_servers` rows for the remote server with `seed` settled,
+/// `history` already in the log when the reader is built and `later`
+/// written after: history stands for the resume's old lines, later for
+/// this startup's commit and restarts. The pre-commit gap holds no later
+/// lines, and the commit's lines fold over the seed.
+fn seeded_rows(
+    seed: std::collections::HashMap<String, contract::events::McpServerFailed>,
+    history: &[contract::events::Event],
+    later: &[contract::events::Event],
+) -> Vec<contract::events::McpServerRow> {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"remote": {"url": "https://example.com/mcp"}}}}));
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let sessions = setup.rig.root.path().join("sessions");
+    let log = std::sync::Arc::new(
+        log::Log::create(
+            &sessions,
+            contract::SessionId("s_seed".into()),
+            clock.clone(),
+        )
+        .expect("the log opens"),
+    );
+    for line in history {
+        log.append(line, None, None).expect("the line appends");
+    }
+    // The reader is built here: history is the resume's old lines, and
+    // everything appended after is this startup's own.
+    let boundary = log.count();
+    let servers = empty_servers(&setup.rig, &clock);
+    let waiting = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let refresh = super::servers_refresh(
+        seed,
+        boundary,
+        sources_of(&setup.rig),
+        servers.clone(),
+        std::sync::Arc::downgrade(&log),
+        clock,
+        waiting,
+    );
+    for line in later {
+        log.append(line, None, None).expect("the line appends");
+    }
+    let rows = refresh(Vec::new()).expect("the refresh reads");
+    servers.stop();
+    rows
+}
+
+#[test]
+fn a_seeded_start_failure_reads_failed() {
+    // The seed keeps the failure's own reason: a start that failed
+    // reads `failed`, never the `needs-login` of a failure that wants
+    // a login. A mutant mapping every seed to one state fails here.
+    let seed = seed_of(contract::events::ServerFailure::StartFailed);
+    let rows = seeded_rows(seed, &[], &[]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "remote");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::Failed,
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_ready_line_clears_the_seed() {
+    // A restart's ready arrives after the reader is built and folds
+    // after the seed, so it supersedes the startup's failure: without
+    // the removal the restarted server would read failed. A mutant that
+    // keeps seeded entries past a ready fails here.
+    let seed = seed_of(contract::events::ServerFailure::NotLoggedIn);
+    let ready = contract::events::Event::McpServerReady(contract::events::McpServerReady {
+        server: "remote".into(),
+    });
+    let rows = seeded_rows(seed, &[], &[ready]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "remote");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::Connecting,
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_written_failure_line_agrees_with_the_seed() {
+    // The commit writes the same failures the seed carries: folding
+    // the lines over the seed leaves the settled row, so readers
+    // before and after the commit agree. A mutant that lets the lines
+    // drop a seeded entry fails here.
+    let seed = seed_of(contract::events::ServerFailure::NotLoggedIn);
+    let failed = contract::events::Event::McpServerFailed(settled_failure(
+        contract::events::ServerFailure::NotLoggedIn,
+    ));
+    let rows = seeded_rows(seed, &[], &[failed]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "remote");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::NeedsLogin,
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn an_old_ready_does_not_clear_the_seed() {
+    // A resume inherits the old session's ready, then this startup
+    // settles the same server as not-logged-in: the seed supersedes
+    // the history, so the row reads `needs-login`, never the
+    // `connecting` an old ready folded over the seed would leave. A
+    // mutant that folds the whole log over the seed fails here.
+    let seed = seed_of(contract::events::ServerFailure::NotLoggedIn);
+    let ready = contract::events::Event::McpServerReady(contract::events::McpServerReady {
+        server: "remote".into(),
+    });
+    let rows = seeded_rows(seed, &[ready], &[]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "remote");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::NeedsLogin,
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_logged_failure_without_a_seed_reads_failed() {
+    // A mid-session death lands in the log with no seed entry: the fold
+    // still records its row, so the server reads `failed`, never the
+    // `connecting` of a start with nothing settled. A mutant that drops
+    // the failure arm of the fold fails here.
+    let failed = contract::events::Event::McpServerFailed(settled_failure(
+        contract::events::ServerFailure::StartFailed,
+    ));
+    let rows = seeded_rows(std::collections::HashMap::new(), &[], &[failed]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "remote");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::Failed,
+        "{rows:?}"
+    );
 }
 
 #[test]

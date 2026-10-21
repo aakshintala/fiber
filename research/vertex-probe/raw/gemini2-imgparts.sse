@@ -1,0 +1,6 @@
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": "The image is"}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-2.5-flash-lite","createTime": "2026-10-20T16:57:45.858415Z","responseId": "00000000000000000000004"}
+
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": " not available."}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-2.5-flash-lite","createTime": "2026-10-20T16:57:45.858415Z","responseId": "00000000000000000000004"}
+
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": ""}]},"finishReason": "STOP"}],"usageMetadata": {"promptTokenCount": 298,"candidatesTokenCount": 6,"totalTokenCount": 304,"trafficType": "ON_DEMAND","promptTokensDetails": [{"modality": "TEXT","tokenCount": 40},{"modality": "IMAGE","tokenCount": 258}],"candidatesTokensDetails": [{"modality": "TEXT","tokenCount": 6}]},"modelVersion": "gemini-2.5-flash-lite","createTime": "2026-10-20T16:57:45.858415Z","responseId": "00000000000000000000004"}
+

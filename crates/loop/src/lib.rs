@@ -22,6 +22,7 @@ use contract::inbox::Delivery;
 use contract::provider::{Cost, Input, Provider, ToolDefinition};
 use contract::shapes::Failure;
 use contract::shapes::Worktree;
+use contract::steering;
 use contract::tool::Tool;
 use log::Log;
 use serde_json::{Map, Value};
@@ -194,6 +195,12 @@ pub struct Loop {
     /// the end-of-turn check, or taken in the drain that is about to apply
     /// them.
     pub(crate) queued: VecDeque<jobs::Queued>,
+    /// The steering queue the door and this loop share
+    /// (`docs/architecture.md`, "One inbox"): a reader admits into it
+    /// at once, and this loop reconciles each delivery against it at the
+    /// drain. A loop built without one shares nothing: its own queue
+    /// admits direct-inbox senders exactly as before.
+    pub(crate) steering: Arc<steering::Queue>,
     /// The turn of each call this loop started whose output has not
     /// reached `finish`, so a resumed run's start that the call queued is
     /// written under that call's turn, whichever taker writes it
@@ -600,6 +607,7 @@ impl Loop {
             reviewer_key: format!("{session_id}:reviewer"),
             notes_key: format!("{session_id}:notes"),
             queued: VecDeque::new(),
+            steering: Arc::new(steering::Queue::new()),
             call_turns: BTreeMap::new(),
             closing: false,
             rewound: false,
@@ -665,6 +673,15 @@ impl Loop {
             #[cfg(test)]
             window: None,
         })
+    }
+
+    /// Shares the door's steering queue: a reader admits into it at once,
+    /// and this loop reconciles each delivery against it at the drain
+    /// (`docs/architecture.md`, "One inbox"). Without it the loop
+    /// shares nothing, exactly as unwired admission does today.
+    pub fn steering(mut self, queue: Arc<steering::Queue>) -> Self {
+        self.steering = queue;
+        self
     }
 
     /// The signal that cancels this loop's running turn

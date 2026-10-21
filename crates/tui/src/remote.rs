@@ -17,9 +17,9 @@ mod router;
 use crate::ThemeSetting;
 use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
 use crate::configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, NotesSaved,
-    NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope, RulesSection, Saved,
-    SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches,
+    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, LogoutRow,
+    NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope, RulesSection,
+    Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches,
 };
 use contract::clock::Clock;
 use contract::{ErrorCode, Secret};
@@ -341,6 +341,14 @@ impl Remote {
     pub(crate) fn local_global_file(&self) -> PathBuf {
         self.local.global_file()
     }
+    /// Reads the first-run offer's pending state from the hub
+    /// machine's home: the receipts live where the hub's `import`
+    /// writes them, never under the terminal's own home.
+    pub(crate) fn import_pending_hub(&self) -> Result<bool, ConfigureError> {
+        self.call("import_pending", json!({}), Caller::Loop, |value| {
+            value.get("pending")?.as_bool()
+        })
+    }
 
     fn hub_global(&self) -> Result<PathBuf, ConfigureError> {
         if let Some(file) = self.router.cached_global() {
@@ -586,6 +594,21 @@ impl Configure for Remote {
     fn login_targets(&self) -> Result<Vec<LoginTarget>, ConfigureError> {
         self.call("login_targets", json!({}), Caller::Loop, decode::targets)
     }
+    fn logout_rows(&self) -> Result<Vec<LogoutRow>, ConfigureError> {
+        self.call("logout_rows", json!({}), Caller::Loop, decode::logout_rows)
+    }
+    fn delete_stored(&self, name: &str, label: Option<String>) -> Result<String, ConfigureError> {
+        let mut args = Map::from_iter([("name".into(), json!(name))]);
+        if let Some(label) = label {
+            drop(args.insert("label".into(), json!(label)));
+        }
+        self.call(
+            "delete_stored",
+            Value::Object(args),
+            Caller::Loop,
+            decode::deleted,
+        )
+    }
     fn store_key(
         &self,
         name: &str,
@@ -714,6 +737,13 @@ impl Configure for Remote {
         on: bool,
     ) -> Result<(), ConfigureError> {
         self.call("switch_skill",json!({"workspace":self.workspace(workspace)?,"name":name,"scope":scope_name(scope),"on":on}),Caller::Loop,|_| Some(()))
+    }
+    /// The offer asks about the person's own sources: the hub command
+    /// it sends imports the same machine's home, so pending reads
+    /// there too. Without the link the read fails and the offer stays
+    /// down until the link is up and the hub answers.
+    fn import_pending(&self) -> bool {
+        matches!(self.import_pending_hub(), Ok(true))
     }
     fn skill_text(&self, path: &Path) -> Result<String, ConfigureError> {
         self.call(

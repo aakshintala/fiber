@@ -1,0 +1,207 @@
+{
+  "case": "strict-false-ministral",
+  "model": "mistral.ministral-3-8b-instruct",
+  "region": "ap-south-1",
+  "url_path": "/model/mistral.ministral-3-8b-instruct/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "What is the weather in Paris and in Rome? Call the tool once per city, both in this reply."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 256
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ],
+    "toolConfig": {
+      "tools": [
+        {
+          "toolSpec": {
+            "name": "get_weather",
+            "description": "Weather for a city.",
+            "inputSchema": {
+              "json": {
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "strict": false
+          }
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": ""
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "start": {
+          "toolUse": {
+            "name": "get_weather",
+            "toolUseId": "tooluse_5nAJCxIOI9z3Kc3Z5gW6Sx"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "toolUse": {
+            "input": "{\"city\": \"Paris\"}"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 2,
+        "start": {
+          "toolUse": {
+            "name": "get_weather",
+            "toolUseId": "tooluse_k8JJGzMQIugKidqXnUfp1G"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 2,
+        "delta": {
+          "toolUse": {
+            "input": "{\"city\": \"Rome\"}"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 2
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "tool_use"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 181
+        },
+        "usage": {
+          "inputTokens": 96,
+          "outputTokens": 23,
+          "serverToolUsage": {},
+          "totalTokens": 119
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 96,
+    "outputTokens": 23,
+    "serverToolUsage": {},
+    "totalTokens": 119
+  },
+  "cost_usd": 1.8e-05
+}

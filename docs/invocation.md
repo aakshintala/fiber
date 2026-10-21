@@ -401,14 +401,16 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `handoff` | `instructions` (string, optional) |
 | `rewind` | `from_session_id` (string, optional), `seq` (integer, optional), `summarise` (boolean, default false) |
 | `shell` | `command` (string); `send` (boolean, default false) |
+| `propose_notes` | `topic` (string: `source_control`, `internal_hosts`, `internal_tools`, `routine_actions` or `never`), `answer` (string, optional), `earlier` (array of strings, optional) |
 | `command` | `name` (string); `text` (string, optional), what the person typed after the name |
 | `close` | `now` (boolean, default false) |
+| `import` | `source` (string, optional), `claude-code` or `codex`; absent means both sources |
 
 ### What each command does
 
 | Command | What it does |
 |---|---|
-| `subscribe` | The first command on every connection to a session, and on a connection to the hub the first command for each session. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command for that session before it is rejected `not_subscribed`. A later `subscribe` at the other level changes the connection's level: raising it to `full` folds the stream from the log as a first `full` subscribe does; lowering it to `summary` ends the connection's count in `clients`, sends every durable line written before the change, then stops the stream and sends the latest `session_status` and `extensions_loaded`. Its acknowledgement is the first line at the new level. At `full`, its `command_accepted` carries `result.last_seq`, the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log. A rejected change leaves the level as it was. A `subscribe` at the level the connection already holds is rejected `invalid_arguments`. Through the hub, a session that resumes is subscribed at the level the connection last held. At `full`, the client then receives `stream_reopened` (`docs/events.md`) before the new fold. When the session cannot read its log to serve a connection, a line that does not parse or a failed read, it closes that connection: the client receives every line before the one that failed, then end of file. The session keeps running. Through the hub, the client receives `stream_closed` (`docs/events.md`) where a direct client receives end of file, and its next command for that session is rejected `not_subscribed` until it subscribes again. With `credential`, a subscribe that resumes an exited session starts it on that label, as `--credential` on a resume does (`docs/model-routing.md`, "Which credential a session uses"). On a running session it switches the label as the `credential` command does. A credential switch accepted while a model switch is queued applies to the queued model's provider, else the session model's provider. It applies to that subscribe only. A later subscribe, or a reconnect, carries no label unless it names one. A subscribe on a running session is accepted with one `command_accepted`, carrying only `last_seq` at `full`, even when its requested switch fails; the failure follows as an ephemeral `notice` (`docs/events.md`, "Usage and notices") carrying the switch rejection's code and message, and the session keeps its old label. |
+| `subscribe` | The first command on every connection to a session, and on a connection to the hub the first command for each session. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command for that session before it is rejected `not_subscribed`. A later `subscribe` at the other level changes the connection's level: raising it to `full` folds the stream from the log as a first `full` subscribe does; lowering it to `summary` ends the connection's count in `clients`, sends every durable line written before the change, then stops the stream and sends the latest `session_status` and `extensions_loaded`. Its acknowledgement is the first line at the new level. At `full`, its `command_accepted` carries `result.last_seq`, the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log. A rejected change leaves the level as it was. A `subscribe` at the level the connection already holds is rejected `invalid_arguments`. Through the hub, a session that resumes is subscribed at the level the connection last held. At `full`, the client then receives `stream_reopened` (`docs/events.md`) before the new fold. Through the hub, a `full` subscribe naming a delegate whose run has finished replays that run's log instead of opening the session: `command_accepted` carries `last_seq`, then the fold follows, with no live tail after it; the kept subscription follows the delegate into its resumed run on a later `delegate_message` (`docs/delegates.md`, "Talking to a delegate"). A log that vanished is refused `session_not_found`; one that cannot be read or serialised `log_corrupt`. A `summary` subscribe, and one whose parent still runs the job, are refused as a delegate that is not running ("Lifecycle"). When the session cannot read its log to serve a connection, a line that does not parse or a failed read, it closes that connection: the client receives every line before the one that failed, then end of file. The session keeps running. Through the hub, the client receives `stream_closed` (`docs/events.md`) where a direct client receives end of file, and its next command for that session is rejected `not_subscribed` until it subscribes again. With `credential`, a subscribe that resumes an exited session starts it on that label, as `--credential` on a resume does (`docs/model-routing.md`, "Which credential a session uses"). On a running session it switches the label as the `credential` command does. A credential switch accepted while a model switch is queued applies to the queued model's provider, else the session model's provider. It applies to that subscribe only. A later subscribe, or a reconnect, carries no label unless it names one. A subscribe on a running session is accepted with one `command_accepted`, carrying only `last_seq` at `full`, even when its requested switch fails; the failure follows as an ephemeral `notice` (`docs/events.md`, "Usage and notices") carrying the switch rejection's code and message, and the session keeps its old label. |
 | `prompt` | Starts a turn. Rejected `busy` if a turn is running. Rejected `invalid_arguments` or `mcp_prompt_failed` when its `/name` runs an MCP server's prompt Fiber cannot get (`docs/mcp.md`, "Prompts and resources"). |
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. |
 | `steer_drop` | Removes a queued steering message, so nothing is applied. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
@@ -436,15 +438,16 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `handoff` | Starts a handoff: the model's context restarts from a note the model, or an extension's `before_handoff` hook, writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
 | `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id, or the code the new session's start failed with, when its process could not start. Takes an optional `from_session_id`, default this session: this session or one its `forked_from` chain passes through, the session whose log `seq` counts in, and any other is rejected `invalid_arguments`, since it is rewound through the hub; an optional `seq`, default the start of the latest turn that is not a summary's (`docs/events.md`, `turn_started`, `rewind`); and whether to summarise, which first runs the old session's model in a turn of its own (`docs/events.md`, "Rewind"). Every job still running stops (`docs/events.md`, "Rewind"). Rejected `busy` if a turn is running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, `delegate_session` if it is a delegate, and `summary_failed` if it asked for a summary that could not be made. |
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
+| `propose_notes` | Proposes reviewer-note lines for one topic on the session's model, in a request of its own with no conversation, from the evidence `docs/permissions.md` "Setting up the notes" lists, with user names and passwords removed from every URL; answers `evidence`, `proposed` and `error`; when it sends the request, writes one `usage_recorded` with no turn and no action, and no configuration; rejected `busy` while a turn runs or an approval waits, and `closing` after `close`. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands and screens"). Rejected `unknown_command` for a name no extension registered. |
 | `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. With `now`, it starts a shutdown instead ("Shutdown"): the turn in flight ends, every job and delegate stops, and the session exits 0. A `close` with `now` is accepted also after `close`. |
-| `import` | (Built in P2.) Runs the same one-time import `fiber import` runs (`docs/configuration.md`, "Importing"), and reports the same imported and left-behind lists. |
+| `import` | Runs the same one-time import `fiber import` runs (`docs/configuration.md`, "Importing"), and reports the same imported and left-behind lists. |
 
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
 `duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
-`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `protocol_unsupported`, `session_has_dependents`, `usage`, `version_conflict`.
+`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`.
 
 A prompt or steer that a hook refuses is rejected `message_refused`, with the
 hook's reason and extension in the message. One whose blocking hook failed is
@@ -613,8 +616,7 @@ because its conversation is its log.
 parent (`docs/delegates.md`, "Talking to a delegate"). A command for a delegate
 that is not running is refused `session_not_found`, "A delegate resumes only
 through its parent." A delegate whose log ends in `fiber_exited` is refused at
-once, without the shutdown wait below. A running delegate is reached as any
-session.
+once, without the shutdown wait below — except a `full` `subscribe`, which replays the finished run's log instead: `command_accepted` carries `last_seq`, then the fold follows, with no live tail after it. A log that vanished is refused `session_not_found`; one that cannot be read or serialised `log_corrupt`. A `summary` subscribe, and a `full` one whose parent still runs the job, are refused as a delegate that is not running. A running delegate is reached as any session.
 
 A session whose log ends in `fiber_exited` has exited, even while its process
 is still shutting down. The hub does not pass on a `closing` answer from it: it
@@ -1276,7 +1278,12 @@ git library is linked in. `git worktree add` runs the repository's hooks, so
 a `post-checkout` hook can set up the new tree. Every other git command the
 `worktree` module runs, including those of `fiber sessions prune`, runs with
 the repository's hooks off (`-c core.hooksPath=/dev/null`), so removing a
-worktree can't hang on a hook. A supervisor that wants its own tree still makes it
+worktree can't hang on a hook. Every git `fiber sessions prune` runs, discovery
+and worktree reads alike, carries the scrubbed environment as well:
+`core.fsmonitor` off (`-c core.fsmonitor=false`), `GIT_OPTIONAL_LOCKS` and
+`GIT_TERMINAL_PROMPT` pinned to `0`, and `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_COMMON_DIR` and `GIT_INDEX_FILE` removed, so a redirected environment
+cannot move the prune to another repository. A supervisor that wants its own tree still makes it
 and passes the path.
 
 ## Deleting and pruning
@@ -1348,7 +1355,10 @@ that hold nothing to lose:
   is never removed.
 - **Pinned copies.** It removes each copy in `pinned/` of this repository's
   code that no worktree's files match any more (`docs/extensions.md`, "Code a
-  repository ships"). The worktrees that count are the repository's
+  repository ships"). A server copy is judged exactly as an extension copy
+  is: it is a candidate when at least one project record at
+  `projects/<key>/servers/<content-hash>` names it and every naming record's
+  project is in scope, and it is kept when no project record names it. The worktrees that count are the repository's
   `git worktree list`. The copy's approval record stays, so the same version
   checked out again is not offered again; its copy is made again from the
   worktree.

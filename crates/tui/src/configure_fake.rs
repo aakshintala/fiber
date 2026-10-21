@@ -12,10 +12,10 @@ use contract::clock::Clock;
 
 use crate::ThemeSetting;
 use crate::configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, NotesFile,
-    NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope, RulesSection,
-    Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists,
-    ToolSwitches, WriteScope,
+    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, LogoutRow,
+    NotesFile, NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope,
+    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup,
+    ToolLists, ToolSwitches, WriteScope,
 };
 
 /// One notes save the view asked for: the workspace and each sent layer.
@@ -93,6 +93,18 @@ pub(crate) type Revoke = (PathBuf, RulesScope, usize, String);
 /// One write the view asked for: the workspace, layer, key and text.
 pub(crate) type Write = (PathBuf, Layer, String, String);
 
+/// A fresh directory `delete_stored` removes files from, plain
+/// `std::fs`: unique per `Fake`, gone on drop, so a screen test can
+/// assert the file is gone from the fake home. Setup is best-effort:
+/// the tests assert the files they need.
+fn fresh_home() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("fiber-tui-fake-home-{}-{n}", std::process::id()));
+    drop(std::fs::create_dir_all(&dir));
+    dir
+}
+
 /// One switch the view asked for: the group, tool, scope and whether on.
 pub(crate) type Switched = (ToolGroup, String, SwitchScope, bool);
 
@@ -124,6 +136,9 @@ pub(crate) struct Fake {
     pub(crate) skill_switched: Mutex<Vec<SkillSwitched>>,
     /// What `skill_text` answers.
     pub(crate) texts: Mutex<Result<String, ConfigureError>>,
+    /// What `import_pending` answers: false keeps existing tests'
+    /// homes offer-free.
+    pub(crate) pending: Mutex<bool>,
     /// Every `/keys` save asked for, in order.
     pub(crate) keys_saved: Mutex<Vec<Vec<KeyEdit>>>,
     /// The theme files `themes` lists.
@@ -138,6 +153,14 @@ pub(crate) struct Fake {
     pub(crate) revoked: Mutex<Result<Revoked, ConfigureError>>,
     /// What `login_targets` answers.
     pub(crate) targets: Mutex<Result<Vec<LoginTarget>, ConfigureError>>,
+    /// What `logout_rows` answers.
+    pub(crate) logout: Mutex<Result<Vec<LogoutRow>, ConfigureError>>,
+    /// Every delete asked for, in order: the name and the label.
+    pub(crate) deletes: Mutex<Vec<(String, Option<String>)>>,
+    /// What `delete_stored` answers.
+    pub(crate) deleted: Mutex<Result<String, ConfigureError>>,
+    /// The fake home `delete_stored` removes files from, gone on drop.
+    home: PathBuf,
     /// Every key asked to store, in order: the name, the label and the key.
     pub(crate) stores: Mutex<Vec<(String, Option<String>, Secret)>>,
     /// What `store_key` answers.
@@ -180,6 +203,7 @@ impl Fake {
     /// A seam answering `rows`, saving every write.
     pub(crate) fn new(rows: Vec<SettingRow>) -> Self {
         Self {
+            pending: Mutex::new(false),
             rows: Mutex::new(Ok(rows)),
             reads: Mutex::new(Vec::new()),
             writes: Mutex::new(Vec::new()),
@@ -207,6 +231,10 @@ impl Fake {
             revokes: Mutex::new(Vec::new()),
             revoked: Mutex::new(Ok(Revoked::Removed)),
             targets: Mutex::new(Ok(Vec::new())),
+            logout: Mutex::new(Ok(Vec::new())),
+            deletes: Mutex::new(Vec::new()),
+            deleted: Mutex::new(Ok("credentials/acme/default".to_owned())),
+            home: fresh_home(),
             stores: Mutex::new(Vec::new()),
             stored: Mutex::new(Ok(Stored {
                 path: "credentials/acme/default".to_owned(),
@@ -344,12 +372,25 @@ impl Fake {
             .unwrap_or_default()
     }
 
+    /// The fake home `delete_stored` removes files from: a test stores
+    /// the credential files under it with plain `std::fs`.
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
     /// The `/keys` saves asked for so far.
     pub(crate) fn keys_saved(&self) -> Vec<Vec<KeyEdit>> {
         self.keys_saved
             .lock()
             .map(|saved| saved.clone())
             .unwrap_or_default()
+    }
+}
+
+impl Drop for Fake {
+    fn drop(&mut self) {
+        // Best-effort cleanup: litter on failure is harmless.
+        drop(std::fs::remove_dir_all(&self.home));
     }
 }
 
@@ -481,6 +522,56 @@ impl Configure for Fake {
             },
             |targets| targets.clone(),
         )
+    }
+
+    fn logout_rows(&self) -> Result<Vec<LogoutRow>, ConfigureError> {
+        self.logout.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |rows| rows.clone(),
+        )
+    }
+
+    fn delete_stored(&self, name: &str, label: Option<String>) -> Result<String, ConfigureError> {
+        if let Ok(mut deletes) = self.deletes.lock() {
+            deletes.push((name.to_owned(), label.clone()));
+        }
+        let answer = self.deleted.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |deleted| deleted.clone(),
+        );
+        if answer.is_ok() {
+            // The hub lists what is on disk: the file goes through
+            // plain `std::fs`, and the scripted rows lose the deleted
+            // A refused delete removes nothing.
+            let file = match &label {
+                Some(label) => self.home.join(format!("credentials/{name}/{label}")),
+                None => self.home.join(format!("credentials/{name}")),
+            };
+            // Best-effort: the tests assert the file they need.
+            drop(std::fs::remove_file(file));
+            if let Ok(mut rows) = self.logout.lock()
+                && let Ok(rows) = rows.as_mut()
+                && let Some(at) = rows.iter().position(|row| match row {
+                    LogoutRow::Provider {
+                        name: n, label: l, ..
+                    } => n == name && Some(l.as_str()) == label.as_deref(),
+                    LogoutRow::Secret { name: n, .. } => n == name && label.is_none(),
+                })
+            {
+                rows.remove(at);
+            }
+        }
+        answer
     }
 
     fn browser_login(
@@ -692,6 +783,9 @@ impl Configure for Fake {
         Ok(())
     }
 
+    fn import_pending(&self) -> bool {
+        self.pending.lock().is_ok_and(|pending| *pending)
+    }
     fn skill_text(&self, path: &Path) -> Result<String, ConfigureError> {
         let _ = path;
         self.texts.lock().map_or_else(

@@ -188,10 +188,22 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_login,
     },
     CommandEntry {
+        name: "logout",
+        description: "Logs out.",
+        hint: None,
+        run: run_logout,
+    },
+    CommandEntry {
         name: "reload",
         description: "Reloads configuration, MCP servers and extensions.",
         hint: None,
         run: run_reload,
+    },
+    CommandEntry {
+        name: "import",
+        description: "Copies another harness's configuration into Fiber home, once.",
+        hint: Some("[<source>]"),
+        run: run_import,
     },
     CommandEntry {
         name: "close",
@@ -275,6 +287,14 @@ fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.send_command("reload", None))
 }
 
+fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
+    // A bare `/import` imports both sources; anything else goes out as
+    // `source`, and the session refuses what it does not take.
+    let rest = rest.trim();
+    let args = (!rest.is_empty()).then(|| json!({"source": rest}));
+    Some(app.send_command("import", args))
+}
+
 fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.close())
 }
@@ -333,6 +353,10 @@ fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_login(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Login))
+}
+
+fn run_logout(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Logout))
 }
 
 fn run_keymap(app: &mut App, _rest: &str) -> Option<Effect> {

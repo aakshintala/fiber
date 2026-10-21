@@ -304,8 +304,9 @@ impl App {
         self.items.jobs.get(job).map(|record| record.started_ts)
     }
 
-    /// Opens `job`'s view: a running fiber delegate swaps a fresh screen
-    /// in and subscribes at `full`; any other item opens without a swap.
+    /// Opens `job`'s view: a fiber delegate, running or finished,
+    /// swaps a fresh screen in and subscribes at `full`; any other item
+    /// opens without a swap.
     /// Opening closes the other views and search first, so drawing,
     /// scrolling and focus act on the shown transcript with no per-call
     /// routing.
@@ -361,9 +362,6 @@ impl App {
         else {
             return Effect::None;
         };
-        if record.outcome.is_some() {
-            return Effect::None;
-        }
         self.want_full(&delegate.session)
     }
 
@@ -590,6 +588,21 @@ impl App {
                     // new run clears the previous outcome: the row is
                     // clickable again and an open view runs again.
                     record.outcome = None;
+                    let resumed = record.delegate.clone();
+                    // A resume turns the replay live again: the open
+                    // view of this job re-wants `full` for its session.
+                    if let Some(delegate) = resumed
+                        && delegate.harness == "fiber"
+                        && self
+                            .items
+                            .open
+                            .as_ref()
+                            .is_some_and(|open| open.job_id == started.job_id)
+                    {
+                        self.items
+                            .wants
+                            .insert(delegate.session, retry::Want::full());
+                    }
                 }
             }
             "delegate_started" => {
@@ -703,19 +716,11 @@ impl App {
         self.session()
     }
 
-    /// Opens the delegate holding `serial`, when it still runs.
+    /// Opens the delegate holding `serial`, running or finished.
     pub(super) fn open_serial(&mut self, serial: u64) -> Effect {
         let Some(job) = self.job_of_serial(serial) else {
             return Effect::None;
         };
-        let running = self
-            .items
-            .jobs
-            .get(&job)
-            .is_some_and(|record| record.outcome.is_none());
-        if !running {
-            return Effect::None;
-        }
         self.open_item(&job)
     }
 

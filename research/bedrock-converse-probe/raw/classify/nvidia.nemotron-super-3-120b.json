@@ -1,0 +1,9 @@
+{
+  "case": "classify/nvidia.nemotron-super-3-120b",
+  "model": "nvidia.nemotron-super-3-120b",
+  "region": "ap-south-1",
+  "url_path": "/model/nvidia.nemotron-super-3-120b/converse-stream",
+  "status": "timeout",
+  "headers": {},
+  "note": "no response head within 300 seconds; the run stopped here, before the probe caught timeouts"
+}

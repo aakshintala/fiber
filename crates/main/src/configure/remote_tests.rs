@@ -21,6 +21,78 @@ fn result(seam: &Seam, operation: &str, args: Value) -> Value {
     call(seam, operation, args).unwrap().unwrap()
 }
 
+/// A fake `~/.claude` under `person`: one skill, one instruction, and
+/// one credential the import must name but never read.
+fn claude_person(person: &Path) {
+    for (rel, content) in [
+        (
+            ".claude/skills/review/SKILL.md",
+            "---\nname: review\ndescription: Reviews code.\n---\n\nBody.\n",
+        ),
+        (".claude/CLAUDE.md", "Be kind.\n"),
+        (".claude/auth.json", "{\"token\": \"x\"}\n"),
+    ] {
+        let path = person.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+}
+
+fn import(seam: &Seam, person: &Path, source: Option<&str>) -> Result<Option<Value>, Failure> {
+    seam.import(person, source, fakes::clock::FakeClock::new())
+}
+
+#[test]
+fn seam_import_runs_the_shared_import_into_the_seam_home() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let person = dirs.workspace("person");
+    claude_person(&person);
+    let seam = Seam::new(home.clone());
+    let result = import(&seam, &person, None).unwrap().unwrap();
+    assert_eq!(result["imported"]["skills"], json!(["review"]));
+    assert_eq!(result["imported"]["instructions"], json!(["CLAUDE.md"]));
+    assert!(
+        result["left_behind"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|left| left["item"] == "auth.json"),
+        "{result}"
+    );
+    assert!(home.join("import-claude-code.json").is_file());
+    assert!(home.join("skills/review/SKILL.md").is_file());
+    // A named source imports that source only.
+    let result = import(&seam, &person, Some("claude-code"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(result["imported"]["skills"], json!(["review"]));
+    // An unknown source is refused naming the two sources.
+    let error = import(&seam, &person, Some("vim")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArguments);
+    assert!(error.message.contains("claude-code") && error.message.contains("codex"));
+}
+
+/// The pending operation answers from the seam's own home: on the
+/// hub machine that home holds the receipts `import` writes, so a
+/// remote terminal's offer follows the hub's state, never the
+/// terminal's.
+#[test]
+fn import_pending_reads_the_seam_homes_receipts() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let seam = Seam::new(home.clone());
+    assert_eq!(
+        result(&seam, "import_pending", json!({})),
+        json!({"pending": true})
+    );
+    write(&home.join("import-claude-code.json"), "{}");
+    assert_eq!(
+        result(&seam, "import_pending", json!({})),
+        json!({"pending": false})
+    );
+}
+
 fn install(home: &Path) {
     crate::test_support::install_extension(
         home,
@@ -1249,5 +1321,58 @@ fn remote_operation_documentation_lists_the_complete_wire_surface() {
             "switch_skill",
             "skill_text"
         ]
+    );
+}
+
+#[test]
+fn logout_operations_answer_their_wire_shapes() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let seam = Seam::new(home.clone());
+    install(&home);
+    crate::test_support::install_extension(
+        &home,
+        "extensions/acme-secrets",
+        json!({"name":"acme-secrets","version":"v0.0.0","fiber":"0.0.0","api":1,"secrets":["acme.api_key"]}),
+        &[],
+    );
+    assert_eq!(
+        result(
+            &seam,
+            "store_key",
+            json!({"name":"acme","key":"sk-test","label":"work"})
+        ),
+        json!({"path":"credentials/acme/work","replaced":false})
+    );
+    assert_eq!(
+        result(
+            &seam,
+            "store_key",
+            json!({"name":"acme.api_key","key":"sk-secret"})
+        ),
+        json!({"path":"credentials/acme.api_key","replaced":false})
+    );
+    // Flipping a variant arm breaks the shape: the provider row carries
+    // its label and default mark, the secret row neither.
+    assert_eq!(
+        result(&seam, "logout_rows", json!({})),
+        json!({"rows":[
+            {"row":"provider","name":"acme","label":"work","default":true,"deletable":true,"siblings":[]},
+            {"row":"secret","name":"acme.api_key","deletable":true},
+        ]})
+    );
+    assert_eq!(
+        result(
+            &seam,
+            "delete_stored",
+            json!({"name":"acme","label":"work"})
+        ),
+        json!({"path":"credentials/acme/work"})
+    );
+    assert_eq!(
+        result(&seam, "logout_rows", json!({})),
+        json!({"rows":[
+            {"row":"secret","name":"acme.api_key","deletable":true},
+        ]})
     );
 }

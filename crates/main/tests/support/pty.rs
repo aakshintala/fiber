@@ -602,6 +602,32 @@ pub(crate) struct Exited {
 }
 
 impl Run {
+    /// Spawns without seeding import receipts: the first-run offer
+    /// test's fresh home.
+    #[track_caller]
+    pub(crate) fn spawn_unseeded(
+        setup: &Setup,
+        cols: u16,
+        rows: u16,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Self {
+        Self::spawn_inner(setup, cols, rows, args, env, false)
+    }
+
+    /// Spawns with seeding import receipts: every other test's
+    /// home, where the offer stays down.
+    #[track_caller]
+    pub(crate) fn spawn(
+        setup: &Setup,
+        cols: u16,
+        rows: u16,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Self {
+        Self::spawn_inner(setup, cols, rows, args, env, true)
+    }
+
     /// Spawns `fiber` with `args` on a `cols` by `rows` pty: standard
     /// input, output and error all on the terminal side, as on a real
     /// terminal. Each run starts from a cleared environment with only
@@ -611,13 +637,27 @@ impl Run {
     /// slave is dropped after the spawn, and the master is CLOEXEC, so
     /// no hub `fiber` starts holds it open.
     #[track_caller]
-    pub(crate) fn spawn(
+    fn spawn_inner(
         setup: &Setup,
         cols: u16,
         rows: u16,
         args: &[&str],
         env: &[(&str, &str)],
+        seed_receipts: bool,
     ) -> Self {
+        // A seeded pty run starts with the import already done: the
+        // first-run offer would cover the pinned frames these tests
+        // assert. The files are empty, so a run that really imports
+        // still reads its sources: only a parsed receipt short-
+        // circuits. The offer itself has its own binary test.
+        if seed_receipts {
+            for name in ["import-claude-code.json", "import-codex.json"] {
+                let receipt = setup.home().join(name);
+                if !receipt.is_file() {
+                    fs::write(&receipt, "{}\n").unwrap();
+                }
+            }
+        }
         let terminal = open(cols, rows);
         let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));

@@ -27,8 +27,9 @@ A sixth, `scripted`, speaks to no vendor: it reads a script file
 ("The scripted provider").
 
 AWS event-stream framing is a per-model flag, not a protocol. `anthropic-messages`
-reads it for Claude on Bedrock, which Bedrock serves through its Invoke API, and
-`bedrock-converse` reads it too.
+reads it for Claude on Bedrock, which Bedrock serves through its Invoke API: a
+model whose data declares `compat.bedrock_invoke` ("Bedrock Invoke wire
+facts"). `bedrock-converse` always reads it ("Bedrock Converse wire facts").
 
 ChatGPT/codex speaks `openai-responses` with two compatibility flags its
 extension declares on each model, `store: false` and
@@ -71,7 +72,9 @@ and its limits are in
 [research/strict-nullable-probe](../research/strict-nullable-probe/README.md).
 
 So Fiber sends `strict` on every tool, on every protocol that has strict mode,
-and decides it per tool. It sends `true` only when the tool's schema already
+and decides it per tool, except on `bedrock-converse`, which sends no
+`strict`: Nova refuses the field whether it is `true` or `false` ("Bedrock
+Converse wire facts"). It sends `true` only when the tool's schema already
 fits the vendor's strict subset, and `false` otherwise. Fiber never rewrites a
 schema to fit, and never moves keywords into the description. Fiber's built-in
 tools are written to fit the strict subset, except a tool whose section in
@@ -105,7 +108,76 @@ A first-party provider is one Fiber can probe and re-record. There are eleven:
 The protocols are the ones each provider serves and Fiber speaks for it. A
 package's shipped models may use only some of them, and a model on another
 one is added once it is probed. The OpenAI provider sends `store: false` on every request. Google Vertex's
-flags and URLs are data, like any provider's.
+flags and URLs are data, like any provider's. AWS Bedrock ships its Claude
+models under a geography's inference profile, such as
+`global.anthropic.claude-haiku-4-5-20251001-v1:0`, on `anthropic-messages`.
+Its other models speak `bedrock-converse`: each model that answered a probe's
+ConverseStream request with a tool config, under its on-demand id and every
+geography's profile models.dev lists for it, such as `openai.gpt-oss-20b-1:0`
+or `global.amazon.nova-2-lite-v1:0` ("Bedrock Converse wire facts"). Google Vertex ships its Gemini 3
+and later models only, at the `global` location: no Claude model answered on
+the project it was probed with ("Google Vertex wire facts"), so its Claude
+models are added once one is probed.
+
+AWS Bedrock's `credential()` returns a Bedrock API key, sent as
+`authorization: Bearer`, or AWS credentials, with which its `sign()` signs each
+request with SigV4 in place of that header. The session's credential label
+is the AWS profile name. Under any label but `default` it runs `aws configure
+export-credentials --profile <label> --format process`, so a profile, SSO or an
+assumed role works without an AWS SDK. A person picks the profile as any
+label is picked ("Which credential a session uses"), such as in the global
+file:
+
+```json
+{ "providers": { "bedrock": { "credential": "my-profile" } } }
+```
+
+and switches it mid-session with `/credential <profile>`, which gets that
+profile's own credentials. Under `default` it takes the first of:
+a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`; AWS keys in
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with `AWS_SESSION_TOKEN`
+when set; and the AWS CLI's own default chain, which reads `AWS_PROFILE`.
+Credentials with an `Expiration` are refreshed before it, as any token is
+("Keys, tokens and OAuth"). With none of these, the call fails with
+`credential_failed`, and the message says to set `AWS_BEARER_TOKEN_BEDROCK`
+or name a profile. `fiber login bedrock` is not supported: it stores a key,
+and a provider with `credential()` reads none ("Which credential a session
+uses"), so a Bedrock API key comes from the environment only. The AWS region is the package's `region` setting,
+the per-account host its base URL names, read from `AWS_REGION` when unset
+("A per-account host").
+
+Google Vertex's `credential()` returns an OAuth access token from the Google
+Cloud CLI, sent as `authorization: Bearer`. The session's credential label
+names a gcloud configuration. Under any label but `default` it runs
+`gcloud config config-helper --configuration <label>`, which prints that
+configuration's account's token and its expiry; a person picks the
+configuration as any label is picked ("Which credential a session uses"),
+such as in the global file:
+
+```json
+{ "providers": { "vertex": { "credential": "work" } } }
+```
+
+and switches it mid-session with `/credential <configuration>`. Under
+`default` it takes the active configuration's token. Only when gcloud has no
+account selected at all, saying "You do not currently have an active account
+selected", does it take Application Default Credentials' token instead:
+`gcloud auth application-default print-access-token`. Any other failure, such
+as a login that needs reauthentication or a selected account with no
+credentials, fails with `credential_failed` and says to run `gcloud auth
+login`, so a session never switches to the account Application Default
+Credentials hold. Each command's `--format` prints the token and its expiry
+and no other field. The token is refreshed before its expiry, as any token is
+("Keys, tokens and OAuth"). With no account selected and no Application
+Default Credentials, the call fails with `credential_failed`, and the message
+says to run `gcloud auth login` or `gcloud auth application-default login`,
+or name a configuration. The failure keeps gcloud's own reason, with an
+address shown as `[account]` and any run of 20 or more token-like characters
+as `[redacted]`.
+`fiber login vertex` is not supported: it stores a key, and a provider with
+`credential()` reads none. The Google Cloud project is the package's
+`project` setting, which its base URL names, read from
+`GOOGLE_CLOUD_PROJECT` when unset ("A per-account host").
 
 A provider Fiber cannot probe is left to the community: a vendor whose
 subscription Fiber does not hold, or a key vendor such as Groq, Mistral,
@@ -207,9 +279,66 @@ The Gemini API answers HTTP 404 "no longer available to new users" for
 `gemini-2.5-flash-lite`, `gemini-2.5-flash` and `gemini-2.5-pro` on a key created
 in September 2026.
 
-Fiber targets Gemini 3 and later on `google-generative-ai`. How Gemini 2.x
-models treat function-call ids and images in `functionResponse.parts` is not
-measured, and is settled when Fiber adds them.
+Fiber targets Gemini 3 and later on `google-generative-ai`. Google Vertex
+serves `gemini-2.5-flash-lite`, and there it emitted no id on a call, took a
+made-up id on replay, and did not read an image in `functionResponse.parts`.
+It also refuses the `includeThoughts` Fiber sends on every request while no
+thinking level is set ("Google Vertex wire facts").
+
+### Google Vertex wire facts
+
+Measured on October 20, 2026 against `aiplatform.googleapis.com`, mostly with
+`gemini-3.1-flash-lite`, and one tool call to each Gemini 3 and later model
+(`research/vertex-probe`).
+
+- Gemini's base URL is
+  `https://aiplatform.googleapis.com/v1/projects/<project>/locations/global/publishers/google`,
+  and `google-generative-ai` appends the Gemini API's own
+  `/models/<id>:streamGenerateContent?alt=sse`. The stream is the Gemini
+  API's, with `modelVersion`, `createTime` and `usageMetadata.trafficType`
+  added. The token goes in `authorization: Bearer`; `x-goog-api-key` answered
+  401 "API keys are not supported by this API".
+- Every Gemini API fact above held for `gemini-3.1-flash-lite`:
+  `systemInstruction.role` `user`, `model` or left out was obeyed;
+  `parametersJsonSchema` took `$defs`, `$ref` and `anyOf` under `VALIDATED`,
+  and `parameters` refused them with 400; a replayed `functionCall` without
+  its `thoughtSignature` failed with 400, and the three odd ids were
+  accepted; an image in `functionResponse.parts` was read. Calls carried an
+  id on every model but `gemini-3.1-pro-preview-customtools`, whose call had
+  none. A `thinkingLevel` streamed a `thought` part, the text, then an empty
+  part carrying the signature.
+- Function tools beside the hosted `google_search` were accepted without
+  `includeServerSideToolInvocations`. With or without it the search came only
+  as the last chunk's `groundingMetadata`, never as `toolCall` and
+  `toolResponse` parts, so no Vertex model declares `web_search`. One of two
+  requests with the flag ended after its first chunk with no finish reason.
+- Implicit caching reports reads: a session's later call counted 3,167 of its
+  3,590 input tokens as `cachedContentTokenCount`.
+- `global` is served from `aiplatform.googleapis.com` and a region from
+  `<region>-aiplatform.googleapis.com`; `global-aiplatform.googleapis.com`
+  answered 404. `gemini-3.1-flash-lite` answered 404 at `us-central1` and
+  `asia-south1`: Gemini 3 is served at `global` only, so every Vertex model's
+  base URL names `global`.
+- Claude's base URL is the same with `publishers/anthropic`. A model that
+  declares `compat.vertex_raw_predict` posts the `anthropic-messages` body to
+  `<base_url>/models/<id>:streamRawPredict`, with
+  `anthropic_version: vertex-2023-10-16` in place of `model`. No Claude model
+  answered on the probe's project, so this rests on Google's and Anthropic's
+  documentation: each answered 404 "not found or your project does not have
+  access to it", and `claude-fable-5` 403 "requires data sharing to be
+  enabled for publisher 'anthropic'".
+- Every `streamRawPredict` failure came as a list holding one error object,
+  `[{"error": {...}}]`. Under `vertex_raw_predict` the object inside is read,
+  as any provider's error body is (`docs/errors.md`).
+- An unknown model, or one the project cannot call, answered 404
+  `NOT_FOUND` with "Publisher model `projects/.../models/<id>` was not found";
+  a garbage token and an expired one the same 401 `UNAUTHENTICATED`, reason
+  `ACCESS_TOKEN_TYPE_UNSUPPORTED`; a 429 `RESOURCE_EXHAUSTED` "Resource
+  exhausted. Please try again later." with no `Retry-After` and no
+  `RetryInfo`. `gemini-4-argon` answered one call and then refused every
+  request with 403 "Request rejected in accordance with our terms of use and
+  policies", so it is not shipped. Gemini's error bodies arrived as
+  `content-type: text/event-stream`.
 
 ### OpenCode wire facts
 
@@ -246,6 +375,135 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
 - Go sends `store: false` on its `openai-responses` and
   `openai-completions` requests, as the OpenAI provider does on every
   request; its `anthropic-messages` requests carry no `store` key.
+
+### Bedrock Invoke wire facts
+
+Measured on October 20, 2026 against `bedrock-runtime.ap-south-1.amazonaws.com`
+with `global.anthropic.claude-haiku-4-5-20251001-v1:0`, and one request to
+`global.anthropic.claude-haiku-5-5` (`research/bedrock-invoke-probe`).
+
+- A model with `compat.bedrock_invoke` posts to
+  `<base_url>/model/<id>/invoke-with-response-stream`, with the id
+  percent-encoded (`:` as `%3A`) and `accept: application/vnd.amazon.eventstream`.
+  The body is the `anthropic-messages` body with no `model` and no `stream`,
+  and `anthropic_version: bedrock-2023-05-31` where Anthropic takes the
+  `anthropic-version` header. A model's beta flags go in the body's
+  `anthropic_beta` list, through its `extra_body`; Fiber sends no
+  `anthropic-beta` header.
+- The reply is AWS event-stream framing. Each message is a prelude (its total
+  length and its headers' length, big-endian 32-bit, then the prelude's
+  CRC-32), string headers, a payload and the CRC-32 of the rest of the
+  message. Each `:event-type` `chunk` message's JSON payload holds `bytes`,
+  one Anthropic stream event in base64, beside a `p` field of padding. The
+  events are Anthropic's own, `message_start` to `message_stop`, and
+  `message_stop` also carries `amazon-bedrock-invocationMetrics`. No stream
+  probed sent `ping`. A message whose checksum fails, or whose lengths are out
+  of range, fails the call with `stream_incomplete`, since nothing after it
+  can be trusted.
+- `message_start` splits cache writes by lifetime in `cache_creation`, as
+  Anthropic's does. Prompt caching wrote and read with a 5-minute marker, a
+  1-hour `ttl` was accepted, and Fiber's own sessions recorded 1-hour writes
+  and later reads, a resumed turn's included.
+- `thinking: {type: "enabled", budget_tokens}` streamed a signed thinking
+  block on Haiku 4.5, and a signed thinking block sent back in the next
+  request was accepted. Adaptive thinking with `output_config.effort` was
+  accepted on Haiku 5.5.
+- A thinking block's signature carries the AWS account id in clear inside its
+  base64, so a recording's signatures are scrubbed before it is checked in.
+- A failure before the stream is a JSON body, `{"message": ...}`, or
+  `{"Message": ...}` for a malformed API key, and names its exception only in
+  the `X-Amzn-ErrorType` header, as
+  `ValidationException:http://internal.amazon.com/coral/com.amazon.bedrock/`
+  (`docs/errors.md`, "Recognising an AWS exception"). An unknown model id, and
+  a geography's profile used from a region outside it, answered 400
+  `ValidationException` "The provided model identifier is invalid.".
+- A failure during the stream is a message whose `:message-type` is
+  `exception`, naming itself in camel case in `:exception-type`, such as
+  `throttlingException`, with its text in the payload's `message`. The probe
+  reached none.
+
+### Bedrock Converse wire facts
+
+Measured on October 20, 2026 against `bedrock-runtime.ap-south-1.amazonaws.com`
+with gpt-oss 20B and 120B, Ministral 3 8B, Qwen3 32B and VL, DeepSeek V3.2,
+Nova Micro, Lite, Pro and 2 Lite and Grok 4.7, and with Claude Haiku 4.5 for a
+signed reasoning block (`research/bedrock-converse-probe`).
+
+- A request posts to `<base_url>/model/<id>/converse-stream`, the id
+  percent-encoded as on Invoke, with `accept:
+  application/vnd.amazon.eventstream`. A Bedrock API key goes in
+  `authorization: Bearer`, and `sign()` replaces it with SigV4 ("Protocols
+  and providers"). The body holds `system`, one text block, left out when the
+  system prompt is empty; `messages`; `inferenceConfig.maxTokens`, the output
+  limit (`docs/errors.md`, "Output tokens"); `toolConfig` when the request has
+  tools; and `additionalModelRequestFields` for a thinking level
+  ("Thinking").
+- Consecutive inputs of one role fold into one `user` or `assistant` message,
+  as on `anthropic-messages`. A person's text is a `text` block, and each
+  image an `image` block, `{format, source: {bytes}}`, after it. A tool call
+  is `toolUse` with `toolUseId` (the provider's id when it ends in nine
+  letters and digits, else the action id),
+  `name` and `input`. A result is `toolResult` with that `toolUseId` and
+  `content: [{text}]`, plus `status: "error"` when the call failed: AWS
+  documents the field for Nova and Claude only, and five other models
+  accepted it. A result's images, and a PDF's pages rendered as images,
+  follow it as `image` blocks in the same user message: Ministral 3 8B and
+  Qwen3 VL refused an image inside `toolResult`, and took it beside.
+- Each tool is `{toolSpec: {name, description, inputSchema: {json}}}`, in
+  name order, with no `description` when it is empty, as AWS documents one of
+  at least one character, and no `strict`: Nova Micro refused the field, `true` or
+  `false`, where gpt-oss and Ministral took both. `toolChoice` is left out
+  for `auto`, Converse's default, and for `none`, which Converse lacks; `any`
+  sends `{any: {}}`, and a tool's name `{tool: {name}}`.
+- A request whose messages hold a `toolUse` or `toolResult` block and that
+  has no `toolConfig` answered 400. Fiber's requests without tools hold
+  neither: the reviewer, a note request and an extension's `host.model` call
+  send text.
+- A Mistral model reads the last nine characters of a replayed `toolUseId`,
+  and refuses them unless they are letters and digits. An id Bedrock issued
+  passes, and so does an action id; another provider's id, such as
+  `functions.read:0`, may not, so Fiber sends the action id in its place.
+- The reply is AWS event-stream framing. Each message's `:event-type` names
+  its event and its JSON payload is the event, beside a `p` field of padding:
+  `messageStart`; per content block an optional `contentBlockStart`, its
+  `contentBlockDelta`s and `contentBlockStop`, each with
+  `contentBlockIndex`; `messageStop` with `stopReason`; then `metadata` with
+  `usage`, the last event of every stream probed. A stream that ends before
+  `metadata` fails with `stream_incomplete`. Only a tool call's block has a
+  start, carrying its id and name; its input arrives as JSON text in
+  `delta.toolUse.input`. A text or reasoning block opens with its first
+  delta.
+- Reasoning arrives in `delta.reasoningContent` as `text`, a `signature`
+  (Claude only), or `redactedContent` (Grok). Fiber logs it in the form
+  Converse takes back, `reasoningContent` holding `reasoningText` with its
+  text and signature, or `redactedContent`, and sends it back unchanged to
+  the model that produced it (`docs/loop.md`, "What the model is sent"). All
+  three forms were accepted back. Nova 2 Lite's text is the literal
+  `[REDACTED]`. A Claude signature carries the AWS account id inside its
+  base64, as on Invoke.
+- `stopReason` `end_turn`, `tool_use` and `stop_sequence` complete the reply,
+  and `max_tokens` cuts it off at the output limit. `guardrail_intervened` and
+  `content_filtered` fail the call with `refused`,
+  `model_context_window_exceeded` with `context_overflow`, and
+  `malformed_model_output` and `malformed_tool_use` with `stream_incomplete`,
+  so the retry asks again. The probe reached `end_turn`, `tool_use` and
+  `max_tokens`.
+- `usage.inputTokens` excludes cache reads and writes: Nova Micro reported 4
+  input beside 2,121 read. `cacheReadInputTokens` is the call's `cache_read`,
+  and `cacheWriteInputTokens` a write under `"5m"`, the lifetime of a
+  `cachePoint` sent without `ttl` (`docs/prompt-cache.md`, "Cache markers and
+  keys"). No reply carried the `cacheDetails` AWS documents.
+- Converse names no generation in its stream. Fiber takes the response's
+  `x-amzn-RequestId` header, AWS's id for the call, as the generation id, so
+  the model's declared prices apply ("Cost"). A 200 stream and a 400 error
+  both carried one, a UUID. A response without it, or with an empty one,
+  leaves the generation unnamed: Fiber mints its id, and the call is
+  unpriced.
+- A failure before the stream names its exception in `X-Amzn-ErrorType`, and
+  one during it is an `exception` message, as on Invoke (`docs/errors.md`,
+  "Recognising an AWS exception"). An unknown model id answered 400
+  `ValidationException` "The provided model identifier is invalid.", and a
+  model the account may not use 403 `AccessDeniedException`.
 
 ### The scripted provider
 
@@ -355,7 +613,7 @@ For each model:
 - output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
 
-A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
+A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. A `databricks` model found by discovery takes the `thinking` row of the vendor model its bare service name matches, looked up by the same match key discovery routes it with; a service the table names no row for keeps no levels. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models; `bedrock` keeps its Claude models' inference profiles and the other models that answered a probe through ConverseStream, "Protocols and providers"), names a model's protocol where models.dev cannot (`bedrock`'s Claude models speak `anthropic-messages`, its others `bedrock-converse`), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.
@@ -376,7 +634,10 @@ what Fiber records, or that Fiber relies on to read the reply:
 | `bedrock-converse` | `system`, `messages`, `toolConfig` |
 
 `google-generative-ai` and `bedrock-converse` carry the model and streaming
-in the URL, not the body. `cache_control` is reserved because cache markers
+in the URL, not the body. On `bedrock-converse`, `extra_body`'s
+`inferenceConfig` and `additionalModelRequestFields` are laid over Fiber's own
+key by key, so a model can add a field beside the output limit and the
+thinking level; the output limit still caps a `maxTokens` it names. `cache_control` is reserved because cache markers
 are Fiber's alone (`docs/prompt-cache.md`, "Cache markers and keys").
 
 A model whose `extra_body` names one of these is left out of the model list,
@@ -398,12 +659,16 @@ any other type is left out of the model list, with the notice
 ### A per-account host
 
 Some providers serve each account from its own host, such as a Databricks
-workspace, an Azure resource or a Vertex region. A model's `base_url` names
-that part with a placeholder, `{name}`:
+workspace or an Azure resource, or from its own path, such as a Google Cloud
+project on Vertex. A model's `base_url` names that part with a placeholder,
+`{name}`:
 
 ```json
 "base_url": "https://{workspace}/ai-gateway/anthropic/v1"
 ```
+
+A placeholder in the path is filled and checked the same way, so its value
+must have a host's shape, as a Google Cloud project id does.
 
 The extension's manifest lists the same pattern under `providers`
 (`docs/extensions.md`, "What a package holds"), so an install or an offer
@@ -466,6 +731,7 @@ Each protocol reads cache reads and writes from these usage fields:
 | `anthropic-messages` | `cache_read_input_tokens` | `cache_creation.ephemeral_5m_input_tokens` under `"5m"`, `cache_creation.ephemeral_1h_input_tokens` under `"1h"` |
 | `openai-completions` | `prompt_tokens_details.cached_tokens` | `prompt_tokens_details.cache_write_tokens`, under the request's cache lifetime |
 | `openai-responses` | `input_tokens_details.cached_tokens` | `input_tokens_details.cache_write_tokens`, under the request's cache lifetime |
+| `bedrock-converse` | `cacheReadInputTokens` | `cacheWriteInputTokens`, under `"5m"` |
 
 OpenAI keeps one 30-minute lifetime and Responses sends no lifetime, so a
 Responses write lands under the lifetime the request carried; the price is the
@@ -527,8 +793,10 @@ and OAuth"), and `cost()` only after a call has ended ("Cost").
 ### Signing a request
 
 A provider may declare a Lua `sign()` function for a scheme that signs each
-request, such as AWS SigV4. It receives the method, the URL, the headers and
-the SHA-256 of the body, and returns headers to add. It cannot change the body. If `sign()` fails or
+request, such as AWS SigV4. It receives the method, the URL, the headers, the
+SHA-256 of the body and the time, in whole Unix seconds from the extension's
+clock, since SigV4 signs over the time and Lua has no clock of its own. It
+returns headers to add. It cannot change the body. If `sign()` fails or
 returns headers Fiber cannot use, the call fails with `credential_failed`, and
 is not retried.
 SigV4's chain of HMACs uses the `host.hmac_sha256` host call
@@ -718,6 +986,15 @@ budget-tier model sends the level as
 none, the level's budget is sent; at or below 1024, no `thinking` key is
 sent; otherwise the budget is capped so at least 1024 tokens stay for the
 reply, and is never below 1024.
+
+On `bedrock-converse` a model takes a level only through the field its data
+names in `compat.reasoning_field`, sent in `additionalModelRequestFields`:
+`reasoning_effort` sends `{reasoning_effort: <level>}`, as gpt-oss takes it,
+and `reasoningConfig` sends `{reasoningConfig: {type: "enabled",
+maxReasoningEffort: <level>}}`, as Nova 2 Lite takes it. At `high` the second
+sends no `maxTokens`, because Nova 2 Lite refuses it beside that level.
+`off` sends neither field. A model without the flag is sent no level, so the
+`bedrock` package declares none for it ("Bedrock Converse wire facts").
 
 ## Choosing the model
 
@@ -940,8 +1217,9 @@ The saved responses had statuses 200, 400, 401, 403, 404, 405 and 429; no 409,
 The wait a provider asks for, in seconds, becomes the error's `retry_after_ms`, in milliseconds rounded up.
 Fiber reads it from `retry-after`. On `google-generative-ai`, Fiber reads
 `Retry-After` or the error body's `RetryInfo.retryDelay`, whichever is present.
-That is the shape Google documents, and it is unprobed: no Gemini 429 was
-reached (`research/retry-signals/`).
+That is the shape Google documents, and no Gemini API 429 was reached
+(`research/retry-signals/`). The one 429 Google Vertex sent carried neither,
+so Fiber waits its own backoff for one ("Google Vertex wire facts").
 
 The defaults are 3 retries with exponential backoff: 2 seconds, then 4, then
 8, with each delay capped at 60 seconds. If the server asks Fiber to wait longer

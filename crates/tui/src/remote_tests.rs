@@ -1,5 +1,5 @@
 use super::*;
-use crate::configure::{LoginKind, Shown, WriteScope};
+use crate::configure::{LoginKind, LogoutRow, Shown, WriteScope};
 use crate::configure_fake::Fake;
 use fakes::Deadline;
 use serde_json::json;
@@ -176,6 +176,56 @@ fn provider_install_preserves_rejection_code_and_message() {
     assert_eq!(error.message, "source unavailable");
 }
 
+/// The offer's pending state reads the hub machine's home, never the
+/// terminal's: the `configure` operation answers from the hub's own
+/// Fiber home, where its `import` writes the receipts.
+#[test]
+fn import_pending_forwards_the_hubs_answer() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    assert!(
+        hub.call("import_pending", json!({}), json!({"pending": true}), |r| {
+            r.import_pending_hub()
+        })
+        .unwrap()
+    );
+    assert!(
+        !hub.call(
+            "import_pending",
+            json!({}),
+            json!({"pending": false}),
+            |r| r.import_pending_hub()
+        )
+        .unwrap()
+    );
+}
+
+/// A refused or unreadable pending answer fails closed: the offer
+/// stays down rather than showing on a guess about the hub's home.
+#[test]
+fn import_pending_without_a_pending_answer_stays_down() {
+    for script in [
+        Err(("invalid_arguments", "no such operation")),
+        Ok(json!({})),
+        Ok(json!({"pending": "soon"})),
+    ] {
+        let hub = Hub::new(Arc::new(Fake::new(vec![])));
+        let deadline = Deadline::start();
+        let (tx, rx) = mpsc::channel();
+        let remote = Arc::clone(&hub.remote);
+        thread::spawn(move || {
+            tx.send(remote.import_pending()).unwrap_or(());
+        });
+        let line = deadline.recv_or_fail(&hub.lines, "import pending request");
+        assert_eq!(line["command"], "configure");
+        assert_eq!(line["args"], json!({"operation": "import_pending"}));
+        match script {
+            Err((code, message)) => hub.reject(&line, code, message),
+            Ok(answer) => hub.reply(&line, answer),
+        }
+        assert!(!deadline.recv_or_fail(&rx, "seam answer"));
+    }
+}
+
 #[test]
 fn each_configure_operation_uses_the_hub_wire_shape() {
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
@@ -336,6 +386,54 @@ fn each_configure_operation_uses_the_hub_wire_shape() {
         )
         .unwrap(),
         "skill\n"
+    );
+}
+
+#[test]
+fn logout_rows_returns_the_hubs_decoded_rows() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let rows = hub
+        .call(
+            "logout_rows",
+            json!({}),
+            json!({"rows":[
+                {"row":"provider","name":"acme","label":"work","default":true,"deletable":true,"siblings":["beta"]},
+                {"row":"secret","name":"acme.api_key","deletable":true},
+            ]}),
+            |r| r.logout_rows(),
+        )
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            LogoutRow::Provider {
+                name: "acme".into(),
+                label: "work".into(),
+                default: true,
+                deletable: true,
+                origin: None,
+                siblings: vec!["beta".into()],
+            },
+            LogoutRow::Secret {
+                name: "acme.api_key".into(),
+                deletable: true,
+            },
+        ]
+    );
+}
+
+#[test]
+fn delete_stored_returns_the_hubs_path() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    assert_eq!(
+        hub.call(
+            "delete_stored",
+            json!({"name":"acme","label":"work"}),
+            json!({"path":"credentials/acme/work"}),
+            |r| r.delete_stored("acme", Some("work".to_owned())),
+        )
+        .unwrap(),
+        "credentials/acme/work"
     );
 }
 

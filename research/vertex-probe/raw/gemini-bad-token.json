@@ -1,0 +1,61 @@
+{
+  "body": {
+    "error": {
+      "code": 401,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "metadata": {
+            "method": "google.cloud.aiplatform.v1.PredictionService.StreamGenerateContent",
+            "service": "aiplatform.googleapis.com"
+          },
+          "reason": "ACCESS_TOKEN_TYPE_UNSUPPORTED"
+        }
+      ],
+      "message": "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+      "status": "UNAUTHENTICATED"
+    }
+  },
+  "cost": 0.0,
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-length": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "vary": null,
+    "www-authenticate": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "hi"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 256,
+      "thinkingConfig": {
+        "includeThoughts": true
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    }
+  },
+  "status": 401,
+  "usage": {}
+}

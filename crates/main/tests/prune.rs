@@ -426,10 +426,11 @@ fn branch_exists(setup: &Setup, id: &str) -> bool {
         .success()
 }
 
-/// A session `id` whose workspace is `workspace`: its log and an unheld
-/// lock file, like `session` but working anywhere.
-fn wt_session(setup: &Setup, id: &str, workspace: &Path) -> PathBuf {
-    let dir = project(setup).join("sessions").join(id);
+/// A session `id` whose workspace is `workspace` in the project at
+/// `project_dir`: its log and an unheld lock file, like `session` but
+/// working anywhere.
+fn wt_session(id: &str, workspace: &Path, project_dir: &Path) -> PathBuf {
+    let dir = project_dir.join("sessions").join(id);
     fs::create_dir_all(dir.join("artifacts")).unwrap();
     let first = json!({"kind": "session_started", "seq": 0, "payload": {"workspace": workspace}});
     let last = json!({"kind": "x", "ts": 0});
@@ -551,7 +552,7 @@ fn a_running_session_keeps_its_worktree_under_force() {
     let setup = setup();
     repo(&setup);
     let wt = kept(&setup, "s_00000000000000e1");
-    let user = wt_session(&setup, "s_00000000000000a1", &wt);
+    let user = wt_session("s_00000000000000a1", &wt, &project(&setup));
     let held = match log::try_hold(&user) {
         Ok(log::Hold::Held(held)) => held,
         Ok(log::Hold::Busy) | Err(_) => panic!("the user's lock is held"),
@@ -608,15 +609,16 @@ fn approve_in(setup: &Setup, dir: &Path) -> std::process::Output {
     run_to_exit(setup.deadline, "fiber approve", command)
 }
 
-/// The hash prefix the approval run approved for hook `fmt`.
+/// The hash prefix the approval run approved for `label`, such as
+/// `hook fmt` or `mcp_server shared`.
 #[track_caller]
-fn approved_prefix(output: &std::process::Output) -> String {
+fn approved_prefix(output: &std::process::Output, label: &str) -> String {
     let stderr = text(&output.stderr);
     assert!(output.status.success(), "fiber approve: {stderr}");
     stderr
         .lines()
-        .find_map(|line| line.strip_prefix("approved hook fmt "))
-        .expect("one hook approval")
+        .find_map(|line| line.strip_prefix(&format!("approved {label} ")))
+        .expect("one approval")
         .to_owned()
 }
 
@@ -673,9 +675,15 @@ fn approved_repo(setup: &Setup) -> (String, String, String) {
     linked(setup, "a", "wa", "a\n");
     linked(setup, "b", "wb", "b\n");
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    let main = approved_prefix(&approve_in(setup, &workspace));
-    let a = approved_prefix(&approve_in(setup, &setup.root.path().join("wa")));
-    let b = approved_prefix(&approve_in(setup, &setup.root.path().join("wb")));
+    let main = approved_prefix(&approve_in(setup, &workspace), "hook fmt");
+    let a = approved_prefix(
+        &approve_in(setup, &setup.root.path().join("wa")),
+        "hook fmt",
+    );
+    let b = approved_prefix(
+        &approve_in(setup, &setup.root.path().join("wb")),
+        "hook fmt",
+    );
     (main, a, b)
 }
 
@@ -803,4 +811,222 @@ fn prune_keeps_a_held_pinned_copy() {
         !setup.home().join("pinned").join(&hash_a).exists(),
         "removed"
     );
+}
+
+#[test]
+fn prune_under_a_git_redirect_judges_the_workspace_repository() {
+    let setup = setup();
+    repo(&setup);
+    let old = session(&setup, ROOT, None, 0);
+    // A decoy repository elsewhere, with one old exited session in its own
+    // project and one approved copy.
+    let decoy = setup.root.path().join("decoy");
+    fs::create_dir_all(&decoy).unwrap();
+    git_in_dir(setup.deadline, &decoy, &["init", "--quiet"]);
+    fs::write(decoy.join("file.txt"), "x").unwrap();
+    git_in_dir(setup.deadline, &decoy, &["add", "."]);
+    git_in_dir(
+        setup.deadline,
+        &decoy,
+        &["commit", "--quiet", "-m", "first"],
+    );
+    let decoy_canon = fs::canonicalize(&decoy).unwrap();
+    let decoy_project = log::sessions_dir(&setup.home(), &doors::project(&decoy_canon))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let decoy_session = wt_session("s_00000000000000e5", &decoy_canon, &decoy_project);
+    declare_hook(&decoy_canon, "decoy\n");
+    git_in_dir(setup.deadline, &decoy_canon, &["add", "."]);
+    git_in_dir(
+        setup.deadline,
+        &decoy_canon,
+        &["commit", "--quiet", "-m", "hook"],
+    );
+    let approved = approve_in(&setup, &decoy_canon);
+    assert!(
+        approved.status.success(),
+        "fiber approve: {}",
+        text(&approved.stderr)
+    );
+    let decoy_copy = copies(&setup)
+        .into_iter()
+        .find(|name| {
+            fs::read_to_string(
+                setup
+                    .home()
+                    .join("pinned")
+                    .join(name)
+                    .join("scripts/fmt.sh"),
+            )
+            .unwrap()
+                == "decoy\n"
+        })
+        .expect("one decoy copy");
+    // Prune with the git environment redirected at the decoy repository.
+    let mut command = setup.fiber(&["sessions", "prune", "--older-than", "30d", "--yes"]);
+    command.current_dir(setup.workspace());
+    command.env("GIT_DIR", decoy_canon.join(".git"));
+    command.env("GIT_WORK_TREE", &decoy_canon);
+    let output = run_to_exit(setup.deadline, "fiber sessions prune", command);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(!old.exists(), "the workspace session is gone");
+    assert!(
+        decoy_session.join("events.jsonl").is_file(),
+        "the decoy session stays"
+    );
+    assert!(
+        setup.home().join("pinned").join(&decoy_copy).is_dir(),
+        "the decoy copy stays"
+    );
+    assert_eq!(
+        pinned_lines(&out),
+        ["pinned  skipped: GIT_DIR is set, so git may read another repository"],
+        "{out}"
+    );
+}
+
+/// Another git repository at `other` beside the workspace, declaring only
+/// the `shared` server with the same bytes, committed. Returned
+/// canonicalized: a different project from the workspace's.
+#[track_caller]
+fn other_repo(setup: &Setup) -> PathBuf {
+    let dir = setup.root.path().join("other");
+    fs::create_dir_all(dir.join("srv")).unwrap();
+    fs::create_dir_all(dir.join(".fiber")).unwrap();
+    fs::write(dir.join("srv/shared.js"), "shared\n").unwrap();
+    fs::write(
+        dir.join(".fiber/config.json"),
+        r#"{"mcp":{"servers":{"shared":{"command":"node","args":["srv/shared.js"]}}}}"#,
+    )
+    .unwrap();
+    git_in_dir(setup.deadline, &dir, &["init", "--quiet"]);
+    fs::write(dir.join("file.txt"), "x").unwrap();
+    git_in_dir(setup.deadline, &dir, &["add", "."]);
+    git_in_dir(setup.deadline, &dir, &["commit", "--quiet", "-m", "first"]);
+    fs::canonicalize(&dir).unwrap()
+}
+
+/// The content hash the per-machine approval for server `name` holds.
+#[track_caller]
+fn server_hash(setup: &Setup, name: &str) -> String {
+    fs::read_dir(setup.home().join("approvals"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find_map(|path| {
+            let body: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            (body.get("name").and_then(|name| name.as_str()) == Some(name))
+                .then(|| path.file_name().unwrap().to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| panic!("no machine approval for server {name}"))
+}
+
+#[test]
+fn prune_lists_and_removes_a_server_copy_no_project_record_names() {
+    let setup = setup();
+    repo(&setup);
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    // Three servers declared in the workspace, each with its own file.
+    fs::create_dir_all(workspace.join("srv")).unwrap();
+    fs::create_dir_all(workspace.join(".fiber")).unwrap();
+    for name in ["gone", "shared", "legacy"] {
+        fs::write(
+            workspace.join("srv").join(format!("{name}.js")),
+            format!("{name}\n"),
+        )
+        .unwrap();
+    }
+    fs::write(
+        workspace.join(".fiber/config.json"),
+        r#"{"mcp":{"servers":{
+            "gone":{"command":"node","args":["srv/gone.js"]},
+            "shared":{"command":"node","args":["srv/shared.js"]},
+            "legacy":{"command":"node","args":["srv/legacy.js"]}}}}"#,
+    )
+    .unwrap();
+    git_in_dir(setup.deadline, &workspace, &["add", "."]);
+    git_in_dir(
+        setup.deadline,
+        &workspace,
+        &["commit", "--quiet", "-m", "servers"],
+    );
+    // Another repository approves the same `shared` declaration first:
+    // its project record names the copy, from another project.
+    let other = other_repo(&setup);
+    let other_project = log::sessions_dir(&setup.home(), &doors::project(&other))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    assert_ne!(other_project, project(&setup));
+    let approved_other = approve_in(&setup, &other);
+    // The same declaration is the same copy, whichever project approves
+    // it first.
+    let shared_prefix = approved_prefix(&approved_other, "mcp_server shared");
+    let approved = approve_in(&setup, &workspace);
+    for server in ["gone", "legacy"] {
+        approved_prefix(&approved, &format!("mcp_server {server}"));
+    }
+    // `shared` is already approved machine-wide, so this repository is
+    // not asked about it again and holds no project record for it.
+    assert!(
+        !text(&approved.stderr).contains("shared"),
+        "{}",
+        text(&approved.stderr)
+    );
+    let gone = server_hash(&setup, "gone");
+    let shared = server_hash(&setup, "shared");
+    let legacy = server_hash(&setup, "legacy");
+    assert!(shared.starts_with(&shared_prefix));
+    assert_ne!(gone, shared);
+    assert_ne!(gone, legacy);
+    assert_ne!(shared, legacy);
+    // `legacy` keeps its machine record but loses its project record: a
+    // copy approved before project records existed.
+    fs::remove_file(project(&setup).join("servers").join(&legacy)).unwrap();
+    // Every declaration changes, so no worktree matches an approved copy.
+    for name in ["gone", "shared", "legacy"] {
+        fs::write(
+            workspace.join("srv").join(format!("{name}.js")),
+            format!("{name} changed\n"),
+        )
+        .unwrap();
+    }
+    let dry = prune(&setup, &["--dry-run"]);
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stderr));
+    let out = text(&dry.stdout);
+    assert_eq!(pinned_lines(&out).len(), 1, "{out}");
+    let fields: Vec<_> = pinned_lines(&out)[0].split("  ").collect();
+    assert_eq!(fields.len(), 3, "{out}");
+    assert_eq!(fields[1], gone);
+    let size = fields[2];
+    assert!(out.contains(&format!("would free {size}")), "{out}");
+    assert!(
+        setup.home().join("pinned").join(&gone).is_dir(),
+        "a dry run deletes nothing"
+    );
+    let yes = prune(&setup, &["--yes"]);
+    assert_eq!(yes.status.code(), Some(0), "{}", text(&yes.stderr));
+    let out = text(&yes.stdout);
+    assert_eq!(pinned_lines(&out).len(), 1, "{out}");
+    assert!(out.contains(&format!("pinned  {gone}  {size}")), "{out}");
+    assert!(out.contains(&format!("freed {size}")), "{out}");
+    assert!(
+        !setup.home().join("pinned").join(&gone).exists(),
+        "the copy is gone"
+    );
+    assert!(
+        !setup
+            .home()
+            .join("pinned")
+            .join(format!("{gone}.ready"))
+            .exists(),
+        "its marker is gone"
+    );
+    // The other copies stay: one named by another project's record, one
+    // with no project record at all. Every approval record stays.
+    assert!(setup.home().join("pinned").join(&shared).is_dir());
+    assert!(setup.home().join("pinned").join(&legacy).is_dir());
+    assert_eq!(names(&setup.home().join("approvals")).len(), 3);
 }

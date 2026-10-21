@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use config::{Imported, LeftBehind};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::shapes::Failure;
@@ -267,6 +268,54 @@ impl hub::DeviceLogin for DeviceLogin {
     }
 }
 impl hub::Machine for Seam {
+    fn import(
+        &self,
+        home: &Path,
+        source: Option<&str>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Option<Value>, Failure> {
+        // The hub already refused anything but the two; this names
+        // them again so the seam never misroutes a source.
+        let sources: &[config::ImportSource] = match source {
+            None => &[
+                config::ImportSource::ClaudeCode,
+                config::ImportSource::Codex,
+            ],
+            Some("claude-code") => &[config::ImportSource::ClaudeCode],
+            Some("codex") => &[config::ImportSource::Codex],
+            Some(_) => {
+                return Err(failure(
+                    ErrorCode::InvalidArguments,
+                    "`source` must be `claude-code` or `codex`.",
+                ));
+            }
+        };
+        // The ports the driver would print, minus the printing: each
+        // source's report extended into one answer, a failed source
+        // refusing the rest rather than answering a partial report.
+        let mut imported = Imported::default();
+        let mut left_behind = Vec::new();
+        for source in sources {
+            let report = config::import_source(
+                &self.home,
+                &config::source_home(home, *source),
+                *source,
+                clock.as_ref(),
+            )
+            .map_err(|error| failure(error.code(), error.to_string()))?;
+            imported.mcp_servers.extend(report.imported.mcp_servers);
+            imported.skills.extend(report.imported.skills);
+            imported.commands.extend(report.imported.commands);
+            imported.instructions.extend(report.imported.instructions);
+            left_behind.extend(report.left_behind.into_iter().map(|left| LeftBehind {
+                item: left.item,
+                reason: left.reason,
+            }));
+        }
+        Ok(Some(
+            json!({"imported": imported, "left_behind": left_behind}),
+        ))
+    }
     fn file_search(&self, workspace: &Path, home: Option<&Path>) -> Box<dyn hub::FileSearch> {
         let workspace = workspace.to_path_buf();
         let roots = tui::files::Roots::new(
@@ -361,6 +410,44 @@ impl hub::Machine for Seam {
             "login_targets" => {
                 a.shape(&[], &[])?;
                 json!({"targets":self.login_targets().map_err(from_view)?.into_iter().map(|t|json!({"name":t.name,"kind":match t.kind{LoginKind::Key=>"key",LoginKind::Browser=>"browser",LoginKind::Secret=>"secret"}})).collect::<Vec<_>>()})
+            }
+            "logout_rows" => {
+                a.shape(&[], &[])?;
+                json!({"rows":self.logout_rows().map_err(from_view)?.into_iter().map(|row|{
+                    match row {
+                        tui::LogoutRow::Provider { name, label, default, deletable, origin, siblings } => {
+                            let mut value = Map::from_iter([
+                                ("row".to_owned(), json!("provider")),
+                                ("name".to_owned(), json!(name)),
+                                ("label".to_owned(), json!(label)),
+                                ("default".to_owned(), json!(default)),
+                                ("deletable".to_owned(), json!(deletable)),
+                                ("siblings".to_owned(), json!(siblings)),
+                            ]);
+                            if let Some(origin) = origin {
+                                drop(value.insert("origin".to_owned(), json!(origin)));
+                            }
+                            Value::Object(value)
+                        }
+                        tui::LogoutRow::Secret { name, deletable } => json!({
+                            "row": "secret",
+                            "name": name,
+                            "deletable": deletable,
+                        }),
+                    }
+                }).collect::<Vec<_>>()})
+            }
+            "delete_stored" => {
+                a.shape(&["name"], &["label"])?;
+                let label = if args.contains_key("label") {
+                    Some(a.string("label")?.to_owned())
+                } else {
+                    None
+                };
+                let path = self
+                    .delete_stored(a.string("name")?, label)
+                    .map_err(from_view)?;
+                json!({"path":path})
             }
             "store_key" => {
                 a.shape(&["name", "key"], &["label"])?;
@@ -484,6 +571,14 @@ impl hub::Machine for Seam {
             "skill_text" => {
                 a.shape(&["path"], &[])?;
                 json!({"text":self.skill_text(Path::new(a.string("path")?)).map_err(from_view)?})
+            }
+            // Whether the first-run offer shows on a remote terminal:
+            // neither source has a completed receipt under the hub
+            // machine's own Fiber home, as the hub's `import` writes
+            // them there, never under the terminal's home.
+            "import_pending" => {
+                a.shape(&[], &[])?;
+                json!({"pending":config::import_pending(&self.home)})
             }
             _ => return Err(invalid()),
         };

@@ -726,8 +726,11 @@ impl LuaProvider {
     }
 }
 
-/// Calls `sign({ method, url, headers, body_sha256 })` and returns the
-/// headers it returns, a table of names to values.
+/// Calls `sign({ method, url, headers, body_sha256, time })` and returns the
+/// headers it returns, a table of names to values. `time` is the extension
+/// clock's wall time in whole Unix seconds: a scheme such as AWS SigV4 signs
+/// over the time, and Lua has no clock of its own (`docs/model-routing.md`,
+/// "Signing a request").
 impl Signer for LuaProvider {
     fn sign(&self, request: &SignRequest<'_>) -> Result<Vec<(String, String)>, signing::Error> {
         let headers: Map<String, Value> = request
@@ -735,11 +738,18 @@ impl Signer for LuaProvider {
             .iter()
             .map(|(name, value)| (name.clone(), Value::String(value.clone())))
             .collect();
+        let time = self
+            .extension
+            .clock()
+            .wall()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
         let arg = json!({
             "method": request.method,
             "url": request.url,
             "headers": headers,
             "body_sha256": sha256_hex(request.body),
+            "time": time,
         });
         let returned = self
             .call("sign", arg)

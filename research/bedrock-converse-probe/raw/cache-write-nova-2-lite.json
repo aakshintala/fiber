@@ -1,0 +1,126 @@
+{
+  "case": "cache-write-nova-2-lite",
+  "model": "global.amazon.nova-2-lite-v1:0",
+  "region": "ap-south-1",
+  "url_path": "/model/global.amazon.nova-2-lite-v1%3A0/converse-stream",
+  "request": {
+    "system": [
+      {
+        "text": "You are a terse assistant. Rule 1: answer in as few words as the question allows. Rule 2: answer in as few words as the question allows. Rule 3: answer in as few words as the question allows. Rule 4: answer in as few words as the question allows. Rule 5: answer in as few words as the question allows. Rule 6: answer in as few words as the question allows. Rule 7: answer in as few words as the question allows. Rule 8: answer in as few words as the question allows. Rule 9: answer in as few words as the question allows. Rule 10: answer in as few words as the question allows. Rule 11: answer in as few words as the question allows. Rule 12: answer in as few words as the question allows. Rule 13: answer in as few words as the question allows. Rule 14: answer in as few words as the question allows. Rule 15: answer in as few words as the question allows. Rule 16: answer in as few words as the question allows. Rule 17: answer in as few words as the question allows. Rule 18: answer in as few words as the question allows. Rule 19: answer in as few words as the question allows. Rule 20: answer in as few words as the question allows. Rule 21: answer in as few words as the question allows. Rule 22: answer in as few words as the question allows. Rule 23: answer in as few words as the question allows. Rule 24: answer in as few words as the question allows. Rule 25: answer in as few words as the question allows. Rule 26: answer in as few words as the question allows. Rule 27: answer in as few words as the question allows. Rule 28: answer in as few words as the question allows. Rule 29: answer in as few words as the question allows. Rule 30: answer in as few words as the question allows. Rule 31: answer in as few words as the question allows. Rule 32: answer in as few words as the question allows. Rule 33: answer in as few words as the question allows. Rule 34: answer in as few words as the question allows. Rule 35: answer in as few words as the question allows. Rule 36: answer in as few words as the question allows. Rule 37: answer in as few words as the question allows. Rule 38: answer in as few words as the question allows. Rule 39: answer in as few words as the question allows. Rule 40: answer in as few words as the question allows. Rule 41: answer in as few words as the question allows. Rule 42: answer in as few words as the question allows. Rule 43: answer in as few words as the question allows. Rule 44: answer in as few words as the question allows. Rule 45: answer in as few words as the question allows. Rule 46: answer in as few words as the question allows. Rule 47: answer in as few words as the question allows. Rule 48: answer in as few words as the question allows. Rule 49: answer in as few words as the question allows. Rule 50: answer in as few words as the question allows. Rule 51: answer in as few words as the question allows. Rule 52: answer in as few words as the question allows. Rule 53: answer in as few words as the question allows. Rule 54: answer in as few words as the question allows. Rule 55: answer in as few words as the question allows. Rule 56: answer in as few words as the question allows. Rule 57: answer in as few words as the question allows. Rule 58: answer in as few words as the question allows. Rule 59: answer in as few words as the question allows. Rule 60: answer in as few words as the question allows. Rule 61: answer in as few words as the question allows. Rule 62: answer in as few words as the question allows. Rule 63: answer in as few words as the question allows. Rule 64: answer in as few words as the question allows. Rule 65: answer in as few words as the question allows. Rule 66: answer in as few words as the question allows. Rule 67: answer in as few words as the question allows. Rule 68: answer in as few words as the question allows. Rule 69: answer in as few words as the question allows. Rule 70: answer in as few words as the question allows. Rule 71: answer in as few words as the question allows. Rule 72: answer in as few words as the question allows. Rule 73: answer in as few words as the question allows. Rule 74: answer in as few words as the question allows. Rule 75: answer in as few words as the question allows. Rule 76: answer in as few words as the question allows. Rule 77: answer in as few words as the question allows. Rule 78: answer in as few words as the question allows. Rule 79: answer in as few words as the question allows. Rule 80: answer in as few words as the question allows. Rule 81: answer in as few words as the question allows. Rule 82: answer in as few words as the question allows. Rule 83: answer in as few words as the question allows. Rule 84: answer in as few words as the question allows. Rule 85: answer in as few words as the question allows. Rule 86: answer in as few words as the question allows. Rule 87: answer in as few words as the question allows. Rule 88: answer in as few words as the question allows. Rule 89: answer in as few words as the question allows. Rule 90: answer in as few words as the question allows. Rule 91: answer in as few words as the question allows. Rule 92: answer in as few words as the question allows. Rule 93: answer in as few words as the question allows. Rule 94: answer in as few words as the question allows. Rule 95: answer in as few words as the question allows. Rule 96: answer in as few words as the question allows. Rule 97: answer in as few words as the question allows. Rule 98: answer in as few words as the question allows. Rule 99: answer in as few words as the question allows. Rule 100: answer in as few words as the question allows. Rule 101: answer in as few words as the question allows. Rule 102: answer in as few words as the question allows. Rule 103: answer in as few words as the question allows. Rule 104: answer in as few words as the question allows. Rule 105: answer in as few words as the question allows. Rule 106: answer in as few words as the question allows. Rule 107: answer in as few words as the question allows. Rule 108: answer in as few words as the question allows. Rule 109: answer in as few words as the question allows. Rule 110: answer in as few words as the question allows. Rule 111: answer in as few words as the question allows. Rule 112: answer in as few words as the question allows. Rule 113: answer in as few words as the question allows. Rule 114: answer in as few words as the question allows. Rule 115: answer in as few words as the question allows. Rule 116: answer in as few words as the question allows. Rule 117: answer in as few words as the question allows. Rule 118: answer in as few words as the question allows. Rule 119: answer in as few words as the question allows. Rule 120: answer in as few words as the question allows. Rule 121: answer in as few words as the question allows. Rule 122: answer in as few words as the question allows. Rule 123: answer in as few words as the question allows. Rule 124: answer in as few words as the question allows. Rule 125: answer in as few words as the question allows. Rule 126: answer in as few words as the question allows. Rule 127: answer in as few words as the question allows. Rule 128: answer in as few words as the question allows. Rule 129: answer in as few words as the question allows. Rule 130: answer in as few words as the question allows. Rule 131: answer in as few words as the question allows. Rule 132: answer in as few words as the question allows. Rule 133: answer in as few words as the question allows. Rule 134: answer in as few words as the question allows. Rule 135: answer in as few words as the question allows. Rule 136: answer in as few words as the question allows. Rule 137: answer in as few words as the question allows. Rule 138: answer in as few words as the question allows. Rule 139: answer in as few words as the question allows."
+      },
+      {
+        "cachePoint": {
+          "type": "default"
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "Say ok."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 16
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": "Ok"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": "."
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "end_turn"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 731
+        },
+        "usage": {
+          "cacheReadInputTokenCount": 0,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokenCount": 1999,
+          "cacheWriteInputTokens": 1999,
+          "inputTokens": 3,
+          "outputTokens": 5,
+          "serverToolUsage": {},
+          "totalTokens": 2007
+        }
+      }
+    }
+  ],
+  "usage": {
+    "cacheReadInputTokenCount": 0,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokenCount": 1999,
+    "cacheWriteInputTokens": 1999,
+    "inputTokens": 3,
+    "outputTokens": 5,
+    "serverToolUsage": {},
+    "totalTokens": 2007
+  },
+  "cost_usd": 0.000613
+}

@@ -3,7 +3,14 @@
 //! Bedrock, Google Vertex and Azure Foundry. A request is a `POST` to
 //! `<base_url>/messages`; the reply is a server-sent event stream that ends
 //! with `message_stop`, which always follows the `message_delta` carrying
-//! the stop reason (`research/anthropic-messages-probe`).
+//! the stop reason (`research/anthropic-messages-probe`). A model that
+//! declares `compat.bedrock_invoke` is Claude on AWS Bedrock's Invoke API
+//! instead: a `POST` to `<base_url>/model/<id>/invoke-with-response-stream`,
+//! whose reply carries the same events in AWS event-stream framing
+//! (`research/bedrock-invoke-probe`).
+//! One that declares `compat.vertex_raw_predict` is Claude on Google Vertex:
+//! a `POST` to `<base_url>/models/<id>:streamRawPredict` whose reply is the
+//! same event stream (`docs/model-routing.md`, "Google Vertex wire facts").
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,12 +22,23 @@ use contract::provider::{Input, ModelCall, ModelRequest, Provider, ToolDefinitio
 use serde_json::{Map, Value, json};
 
 pub use crate::anthropic_messages_decode::decode;
-use crate::anthropic_messages_decode::decode_tracked;
+use crate::anthropic_messages_decode::{decode_bedrock_tracked, decode_tracked};
 pub use crate::call::Call;
-use crate::{Endpoint, strict};
+use crate::{Endpoint, Error, strict};
 
 /// The wire version every request declares (`research/anthropic-messages-probe`).
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// The wire version a Bedrock Invoke request declares in its body, where
+/// Bedrock reads it in place of the `anthropic-version` header.
+const BEDROCK_VERSION: &str = "bedrock-2023-05-31";
+
+/// The media type a Bedrock Invoke reply streams in.
+const EVENT_STREAM: &str = "application/vnd.amazon.eventstream";
+
+/// The wire version a Vertex request declares in its body, where Vertex
+/// reads it (`docs/model-routing.md`, "Google Vertex wire facts").
+const VERTEX_VERSION: &str = "vertex-2023-10-16";
 
 /// One model reached over `anthropic-messages`.
 #[derive(Debug, Clone)]
@@ -55,29 +73,59 @@ impl Messages {
     )]
     pub fn request(&self, request: &ModelRequest) -> Call {
         let endpoint = &self.endpoint;
+        let bedrock = endpoint.compat.bedrock_invoke;
+        // A Bedrock API key is a bearer token (`docs/model-routing.md`,
+        // "Protocols and providers").
         let auth = endpoint.key.as_ref().map(|key| {
-            if endpoint.compat.bearer {
+            if endpoint.compat.bearer || bedrock {
                 ("authorization", format!("Bearer {}", key.expose()))
             } else {
                 ("x-api-key", key.expose().to_owned())
             }
         });
+        let base_url = endpoint.base_url.trim_end_matches('/');
+        let (accept, fixed, url, decode): (&str, &[(&str, &str)], String, crate::call::Decode) =
+            if bedrock {
+                (
+                    EVENT_STREAM,
+                    &[],
+                    format!(
+                        "{base_url}/model/{}/invoke-with-response-stream",
+                        crate::wire::path_segment(&endpoint.model)
+                    ),
+                    |stream, _, sink| decode_bedrock_tracked(stream, sink),
+                )
+            } else if endpoint.compat.vertex_raw_predict {
+                // Vertex names the model in the path, not the body.
+                (
+                    "text/event-stream",
+                    &[("anthropic-version", ANTHROPIC_VERSION)],
+                    format!("{base_url}/models/{}:streamRawPredict", endpoint.model),
+                    |stream, _, sink| decode_tracked(stream, sink),
+                )
+            } else {
+                (
+                    "text/event-stream",
+                    &[("anthropic-version", ANTHROPIC_VERSION)],
+                    format!("{base_url}/messages"),
+                    |stream, _, sink| decode_tracked(stream, sink),
+                )
+            };
         let headers = crate::call::base_headers(
             endpoint,
-            &[("anthropic-version", ANTHROPIC_VERSION)],
+            accept,
+            fixed,
             auth,
             self.cache_key_header.as_deref(),
             &request.cache_key,
         );
         let body = body(endpoint, request);
-        Call::new(
-            endpoint,
-            request,
-            format!("{}/messages", endpoint.base_url.trim_end_matches('/')),
-            headers,
-            body,
-            |stream, _, sink| decode_tracked(stream, sink),
-        )
+        let call = Call::new(endpoint, request, url, headers, body, decode);
+        if endpoint.compat.vertex_raw_predict {
+            call.on_error(unlisted)
+        } else {
+            call
+        }
     }
     /// Builds the observed call for `request`: as the plain request, writing
     /// one `provider_request` line when the call was sent. At `info` the
@@ -209,8 +257,19 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // verbatim, so it matches the parent's bytes (`docs/events.md`,
     // "Rewind").
     let tools = wired_tools(request);
+    let bedrock = endpoint.compat.bedrock_invoke;
     let mut body = Map::new();
-    body.insert("model".into(), json!(endpoint.model));
+    // Bedrock's Invoke API names the model in the path and streams by the
+    // path it is sent to, so its body carries neither, and declares its
+    // version where the header would.
+    if bedrock {
+        body.insert("anthropic_version".into(), json!(BEDROCK_VERSION));
+    } else if endpoint.compat.vertex_raw_predict {
+        // Vertex reads the model from the path and the version from the body.
+        body.insert("anthropic_version".into(), json!(VERTEX_VERSION));
+    } else {
+        body.insert("model".into(), json!(endpoint.model));
+    }
     if let Some(system) = system(request) {
         body.insert("system".into(), system);
     }
@@ -219,7 +278,9 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         body.insert("tools".into(), Value::Array(tools));
     }
     body.insert("tool_choice".into(), tool_choice(&request.tool_choice));
-    body.insert("stream".into(), json!(true));
+    if !bedrock {
+        body.insert("stream".into(), json!(true));
+    }
     // The `max_tokens` the body ends up sending, resolved once so the
     // thinking budget and the insert below cannot disagree.
     let sent = sent_max_tokens(
@@ -289,6 +350,20 @@ fn budget_tokens(level: &contract::ThinkingLevel, max_tokens: Option<u64>) -> Op
         Some(m) if m <= 1024 => None,
         Some(m) => Some(1024.max(budget.min(m - 1024))),
     }
+}
+
+/// A failure whose body is a one-element list holding an object, as
+/// Vertex's `streamRawPredict` sends one, with that object as its body, so
+/// the error codes read it as any provider's (`docs/model-routing.md`,
+/// "Google Vertex wire facts"). Any other failure is kept as it came.
+fn unlisted(mut error: Error) -> Error {
+    if let Error::Status { body, .. } = &mut error
+        && let Ok(Value::Array(items)) = serde_json::from_str::<Value>(body)
+        && let [inner @ Value::Object(_)] = items.as_slice()
+    {
+        *body = inner.to_string();
+    }
+    error
 }
 
 /// Whether any `enum` in `schema` has an object or array value.

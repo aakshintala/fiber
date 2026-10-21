@@ -24,6 +24,7 @@ use contract::events::{
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
+use contract::steering::Queue;
 use contract::tool::Tool;
 use contract::{CommandId, ErrorCode, SessionId};
 use log::{Injector, Log, Watcher};
@@ -113,6 +114,11 @@ pub(crate) struct Gate {
     /// each entry is one admitted command, a job's end or a hook's delivery,
     /// and the loop drains it at step boundaries.
     inbox: Mutex<Option<Sender<Delivery>>>,
+    /// The steering queue every connection thread shares
+    /// (`docs/architecture.md`, "One inbox"): a reader admits a `steer`
+    /// into it at once and answers `command_accepted`, and the loop
+    /// reconciles each delivery against it at its next drain.
+    pub(crate) steering: Arc<Queue>,
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.
     cancel: OnceLock<Arc<dyn Fn() -> bool + Send + Sync>>,
@@ -121,6 +127,9 @@ pub(crate) struct Gate {
     close_now: OnceLock<Arc<dyn Fn() + Send + Sync>>,
     /// The tool a driver `shell` runs. None leaves `shell` unknown.
     driver_shell: OnceLock<Arc<dyn Tool>>,
+    /// The workspace a driver `propose_notes` gathers evidence under.
+    /// None leaves `propose_notes` unknown.
+    notes_workspace: OnceLock<PathBuf>,
     /// The session's jobs, which `job_stop` and `background` reach. None
     /// leaves both with nothing to act on.
     jobs: OnceLock<Arc<dyn contract::jobs::Jobs>>,
@@ -147,6 +156,9 @@ pub(crate) struct Gate {
     /// Fiber home: what the sender-name lookup reads (`docs/tools.md`,
     /// "Messaging other sessions").
     pub(crate) home: PathBuf,
+    /// The session's directory: what `propose_notes` reads its project
+    /// key from, copied before its thread starts.
+    pub(crate) dir: PathBuf,
     /// The admission the door shares with the loop: once it closes, no
     /// session message enters the inbox (`docs/tools.md`, "Messaging
     /// other sessions").
@@ -353,6 +365,14 @@ impl Session {
         debug_assert!(stored.is_ok(), "driver_shell is wired once");
     }
 
+    /// The workspace a driver `propose_notes` gathers evidence under
+    /// (`docs/invocation.md`, "What each command does"). With none set,
+    /// `propose_notes` stays an unknown command.
+    pub fn notes_workspace(&self, workspace: PathBuf) {
+        let stored = self.gate.notes_workspace.set(workspace);
+        debug_assert!(stored.is_ok(), "notes_workspace is wired once");
+    }
+
     /// Replaces the session's listings and extension handles on reload.
     pub fn reloader(&self) -> Arc<dyn Fn(Replacement) + Send + Sync> {
         let gate = Arc::downgrade(&self.gate);
@@ -546,6 +566,13 @@ impl Session {
     /// (`docs/tools.md`, "Messaging other sessions").
     pub fn admission(&self) -> Arc<support::admission::Admission> {
         Arc::clone(&self.gate.admission)
+    }
+
+    /// The steering queue the door shares with the loop: a reader admits
+    /// into it at once, and the loop reconciles each delivery against it
+    /// at the drain (`docs/architecture.md`, "One inbox").
+    pub fn steering(&self) -> Arc<Queue> {
+        Arc::clone(&self.gate.steering)
     }
 
     /// The session's own id: its directory's name, which also names its
@@ -745,6 +772,10 @@ impl Gate {
         self.driver_shell.get().cloned()
     }
 
+    pub(crate) fn notes_workspace(&self) -> Option<PathBuf> {
+        self.notes_workspace.get().cloned()
+    }
+
     /// What a `close` with `now` starts, cloned out of the slot so the
     /// shutdown runs with no gate lock held.
     pub(crate) fn close_now(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
@@ -758,14 +789,33 @@ impl Gate {
     }
 
     pub(crate) fn deliver(&self, delivery: Delivery) {
+        // The ack's answer runs host code `doors` does not own, so no
+        // `doors` lock is held across it: under the guard only the slot
+        // read and the one send run, and the undelivered delivery drops
+        // after the guard releases.
+        let undelivered = {
+            let inbox = lock(&self.inbox);
+            if let Some(sender) = inbox.as_ref() {
+                match sender.send(delivery) {
+                    Ok(()) => None,
+                    Err(mpsc::SendError(delivery)) => Some(delivery),
+                }
+            } else {
+                Some(delivery)
+            }
+        };
+        drop(undelivered);
+    }
+
+    /// Hands `delivery` to the loop when it is listening: false when the
+    /// inbox is gone or closed, so a steer's admission answers `closing`
+    /// instead of queueing what no drain will ever reconcile.
+    pub(crate) fn try_deliver(&self, delivery: Delivery) -> bool {
         let inbox = lock(&self.inbox);
         let Some(inbox) = inbox.as_ref() else {
-            drop(delivery);
-            return;
+            return false;
         };
-        if let Err(mpsc::SendError(delivery)) = inbox.send(delivery) {
-            drop(delivery);
-        }
+        inbox.send(delivery).is_ok()
     }
 }
 
@@ -829,9 +879,11 @@ fn open_in(
         mcp_login: OnceLock::new(),
         accepted: Accepted::new(),
         inbox: Mutex::new(None),
+        steering: Arc::new(Queue::new()),
         cancel: OnceLock::new(),
         close_now: OnceLock::new(),
         driver_shell: OnceLock::new(),
+        notes_workspace: OnceLock::new(),
         jobs: OnceLock::new(),
         repository: OnceLock::new(),
         hooks: Mutex::new(None),
@@ -841,6 +893,7 @@ fn open_in(
         history: OnceLock::new(),
         prompts: crate::prompt_history::Pending::new(),
         home: home.to_owned(),
+        dir: dir.to_owned(),
         admission: Arc::new(support::admission::Admission::default()),
         shells: Shells::new(),
         #[cfg(test)]

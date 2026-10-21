@@ -820,7 +820,7 @@ none.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `generation_id` | string | yes | the provider's id for the generation, or an id Fiber mints, starting `fiber-`, when the provider named none |
+| `generation_id` | string | yes | the provider's id for the generation, on `bedrock-converse` the response's `x-amzn-RequestId` (`docs/model-routing.md`, "Bedrock Converse wire facts"), or an id Fiber mints, starting `fiber-`, when the provider named none |
 | `model` | string | yes | the model reference, `provider/model` |
 | `tokens` | `tokens` | yes | the call's tokens |
 | `input_bytes` | integer | yes | the size in bytes of the request body Fiber sent for the call: the system prompt, tool definitions and messages as serialised for the provider, with the request's settings |
@@ -1365,7 +1365,9 @@ Every driver command is answered with exactly one of these, echoing its id
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
 | `offered_file` | `text` (string), the file's full UTF-8 text |
+| `import` | `imported` (object with `mcp_servers`, `skills`, `commands` and `instructions`, arrays of the names the import copied) and `left_behind` (array with one object per item not copied: `item` and `reason` strings) (`docs/configuration.md`, "Importing") |
 | `shell` | with `send` false, `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command`; with `send` true, `result` is absent |
+| `propose_notes` | `evidence` (array: `kind`, `text`, and on `session` `prefix`, `count`, `here`), `proposed` (array: `text`, `cites`), `error` (`error`, optional) |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |
 | `pairing_code` | `code` (string), a new single-use pairing code, over the hub (`docs/invocation.md`, "Remote clients") |
 | `pair` | `device` (string), the paired device's name, and `token` (string), its device token, over the hub's port (`docs/invocation.md`, "Remote clients") |

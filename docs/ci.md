@@ -391,8 +391,13 @@ renamed in the new release fails it, because `unknown_lints` is denied
 ## Releases
 
 `.github/workflows/release.yml` runs on a push to `main` that changes the
-fiber version in `crates/main/Cargo.toml`. A `preflight` job compares the
-version at the push's base and head, and every release job runs only when
+fiber version in `crates/main/Cargo.toml`. A nightly schedule, or a manual
+dispatch of the workflow from main, builds a pre-release once a day, only when
+main changed since the last nightly: its skip-when-unchanged preflight
+computes the next nightly version, skips when that version's tag already
+exists (a scheduled nightly after a manual one the same day), and every later
+nightly job runs only when it publishes, reusing the same gate. A `preflight`
+job compares the version at the push's base and head, and every release job runs only when
 it changed: any other push runs no release. A version decrease, a missing
 `CHANGELOG.md` section or an existing `v<version>` fails the run before
 anything builds. Before the release workflow publishes anything, it:
@@ -416,7 +421,9 @@ What the artifacts are, how a release is triggered and how it is signed is
 ## The user docs site
 
 A workflow publishes `docs/user/` to GitHub Pages on every merge to `main`.
-The site's address is `https://aakshintala.github.io/fiber/`.
+The site's address is `https://aakshintala.com/fiber/`: GitHub serves the
+repository's Pages under the account's custom domain. The front page is a
+product page; the user guide sits beside it.
 The site carries the rest of `docs/` too, for readers who follow a link into
 an area doc. Nothing else hosts Fiber's documentation. The command reference
 in `docs/user/` is generated from the same command definitions as `fiber help`

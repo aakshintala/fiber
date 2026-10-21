@@ -1,0 +1,22 @@
+{
+  "case": "bad-signature",
+  "model": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "region": "ap-south-1",
+  "url_path": "/model/global.anthropic.claude-haiku-4-5-20251001-v1%3A0/invoke-with-response-stream",
+  "request": {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 64,
+    "messages": [
+      {
+        "role": "user",
+        "content": "hi"
+      }
+    ]
+  },
+  "status": 403,
+  "headers": {
+    "Content-Type": "application/json",
+    "x-amzn-ErrorType": "InvalidSignatureException:http://internal.amazon.com/coral/com.amazon.coral.service/"
+  },
+  "body": "{\"message\":\"The request signature we calculated does not match the signature you provided. Check your AWS Secret Access Key and signing method. Consult the service documentation for details.\\n\\nThe Canonical String for this request should have been\\n'POST\\n/model/global.anthropic.claude-haiku-4-5-20251001-v1%253A0/invoke-with-response-stream\\n\\naccept:application/vnd.amazon.eventstream\\ncontent-type:application/json\\nhost:bedrock-runtime.ap-south-1.amazonaws.com\\nx-amz-content-sha256:1f6e6d7e1f721d93440a84f94d678cd3d71c1c54ec1297dfb9e9d65bb3d5a2c4\\nx-amz-date:20261019T202451Z\\n\\naccept;content-type;host;x-amz-content-sha256;x-amz-date\\n1f6e6d7e1f721d93440a84f94d678cd3d71c1c54ec1297dfb9e9d65bb3d5a2c4'\\n\\nThe String-to-Sign should have been\\n'AWS4-HMAC-SHA256\\n20261019T202451Z\\n20261019/ap-south-1/bedrock/aws4_request\\ne5770fb6022a21073c2af60b3f078836906c7c4fb430e425f3ba99a655af042d'\\n\"}"
+}

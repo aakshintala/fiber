@@ -109,6 +109,8 @@ pub enum Command {
     Background,
     /// Re-reads configuration and declares the tool set again.
     Reload,
+    /// Copies another harness's configuration into Fiber home, once.
+    Import(ImportArgs),
     /// Answers with every declared tool.
     Tools,
     /// Answers with every configured MCP server and its state.
@@ -142,6 +144,8 @@ pub enum Command {
     Rewind(RewindArgs),
     /// Runs a shell command the person typed.
     Shell(Shell),
+    /// Proposes reviewer-note lines for one topic, without conversation.
+    ProposeNotes(crate::notes::ProposeNotesArgs),
     /// Runs an extension's command by name.
     Command(RunCommand),
     /// Accepts no more prompts, finishes what is running, and exits; with `now`, shuts down.
@@ -385,6 +389,15 @@ pub struct CredentialArgs {
     pub label: String,
 }
 
+/// The `args` of `import`: `claude-code` or `codex`; absent means both.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportArgs {
+    /// The source to import; absent means both sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
 /// The `args` of `quota`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -506,6 +519,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "handoff",
     "name",
     "login",
+    "logout",
     "approvals",
     "reload",
     "import",

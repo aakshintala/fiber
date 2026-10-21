@@ -1183,3 +1183,101 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
         })
     );
 }
+
+#[test]
+fn a_reader_admitted_idle_steer_hooks_and_joins_the_input() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(passed());
+    let mut world = started(Vec::new(), Some(hooks.clone()));
+    let mut looped = world.looped.take().unwrap();
+    // The reader admitted at once, still queued and unstaged.
+    looped
+        .steering
+        .push(
+            CommandId("c_1".into()),
+            vec![ContentPart::Text {
+                text: "hello".into(),
+            }],
+            Sender {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_1".into())),
+            },
+            &*world.log,
+        )
+        .unwrap();
+    let mut input = TurnInput::of(Vec::new());
+    let (ack, answered) = capture();
+    looped
+        .take_steer_idle(driver("c_1", "hello"), ack, &mut input)
+        .unwrap();
+    assert_eq!(
+        hooks.seen(),
+        vec!["hello".to_owned()],
+        "the idle take runs the hook pass over the reader entry"
+    );
+    assert_eq!(
+        input.pieces.len(),
+        1,
+        "the hooked steer lands in the turn input, not merely acked"
+    );
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the steer is answered")
+            .is_ok(),
+        "the idle take accepts the steer"
+    );
+    world.looped = Some(looped);
+}
+
+#[test]
+fn a_reader_removed_idle_steer_answers_idempotently_with_no_hook_pass() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(passed());
+    let mut world = started(Vec::new(), Some(hooks.clone()));
+    let mut looped = world.looped.take().unwrap();
+    // The reader admitted at once, then dropped: the entry left while
+    // its id stays admitted, so the loop's follow-up delivery is a
+    // no-op (`remove` keeps the id; `take` would forget it).
+    looped
+        .steering
+        .push(
+            CommandId("c_1".into()),
+            vec![ContentPart::Text {
+                text: "hello".into(),
+            }],
+            Sender {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_1".into())),
+            },
+            &*world.log,
+        )
+        .unwrap();
+    assert!(
+        looped
+            .steering
+            .remove(&CommandId("c_1".into()), &*world.log)
+    );
+    let mut input = TurnInput::of(Vec::new());
+    let (ack, answered) = capture();
+    looped
+        .take_steer_idle(driver("c_1", "hello"), ack, &mut input)
+        .unwrap();
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the duplicate steer is answered")
+            .is_ok(),
+        "the reader's answer stands: this ack answers idempotently"
+    );
+    assert_eq!(
+        hooks.count(),
+        0,
+        "no hook pass runs for an id with nothing queued"
+    );
+    assert!(
+        input.pieces.is_empty(),
+        "the duplicate gains the turn no piece"
+    );
+    world.looped = Some(looped);
+}

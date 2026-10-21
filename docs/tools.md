@@ -285,6 +285,10 @@ path's directory, ending in `/`.
   `google-generative-ai` an `inlineData` part in `functionResponse.parts`.
   `openai-completions` rejects a file part in a tool message, so it gets the
   pages rendered as images in a user message after the tool message.
+  `bedrock-converse` gets the rendered pages too, and carries them, as it
+  carries a result's images, as `image` blocks right after the `toolResult`
+  in the same user message: Mistral and Qwen models on Bedrock refused an
+  image inside it (`docs/model-routing.md`, "Bedrock Converse wire facts").
 - A path that does not exist fails with `not_found`.
 - Any other file that is not UTF-8 text, and any directory or device, fails
   with `unsupported_file`, giving its size and detected type.
@@ -722,6 +726,8 @@ The kinds are `docs/events.md`.
 - `delegate_spawn`'s `model` is neither required nor typed in its schema, because
   the tool checks it and lists the valid roles and references (`docs/delegates.md`,
   "Choosing a model"), so `delegate_spawn` is sent with `strict: false`.
+- `delegate_fork`'s `timeout_ms` is optional and carries a `minimum` limit, so
+  `delegate_fork` is sent with `strict: false`.
 - The model-facing tool is one `jobs` tool with actions `list`, `wait`,
   `stop` and `write`. `wait` blocks up to a timeout. Cancelling a wait (for
   example because the turn is cancelled) stops only the wait and leaves the

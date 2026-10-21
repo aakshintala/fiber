@@ -538,6 +538,7 @@ fn resumed_session(
         }
     };
     session.shell(driver);
+    session.notes_workspace(workspace.clone());
     session.jobs(jobs.clone());
     session.repository_code(Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>);
     session.images(Arc::clone(&session_servers.images));
@@ -606,7 +607,7 @@ fn resumed_session(
     // `mcp_servers_started` writes after this read: the late preparer
     // drops the ones it would repeat and keeps the new ones.
     let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
-    let providers = reload.mcp_providers();
+    let providers = reload.mcp_providers(&server_failures);
     let (reloader, late) = reload.preparers(written);
     session.mcp_servers(providers.refresh);
     session.mcp_login(providers.login);
@@ -647,6 +648,7 @@ fn resumed_session(
     let inbox_wake = session.inbox_wake();
     let rewrites = session.rewrites();
     let admission = session.admission();
+    let steering = session.steering();
     // The fetch runs a prompt row through its server, starting a lazy
     // one as a first tool call does (`docs/mcp.md`, "Prompts and
     // resources"). No logic lives here beyond that call.
@@ -703,6 +705,7 @@ fn resumed_session(
                         .inbox_wake(inbox_wake)
                         .on_rewrite(rewrites)
                         .admission(admission)
+                        .steering(steering)
                 }),
                 budget,
                 idle,

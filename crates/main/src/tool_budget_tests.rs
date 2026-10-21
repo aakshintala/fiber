@@ -7,7 +7,6 @@
 use std::sync::Arc;
 
 use config::{Protocol, ProviderData};
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::provider::{Provider, ToolDefinition};
 use contract::search::{Domains, SearchBackend, SearchResult};
@@ -17,7 +16,7 @@ use serde_json::{Map, Value, json};
 
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes: `builtin()`'s definitions and `mcp_resources`, with no headroom.
-const BUDGET: usize = 14174;
+const BUDGET: usize = 15089;
 
 /// The Anthropic hosted tool type the budget measures
 /// (`config::Protocol::reads_web_search`); `openai-responses` reads
@@ -117,16 +116,14 @@ struct Sizes {
     total: usize,
 }
 
-/// What `measure` found: the spoken protocols' sizes and the protocols
-/// this Fiber does not speak.
+/// What `measure` found: every protocol's sizes.
 struct Measured {
     sizes: Vec<Sizes>,
-    not_spoken: Vec<&'static str>,
 }
 
 /// The provider a session reaches for `protocol`, through the session's own
-/// `connect`, or `None` when the protocol is not spoken.
-fn provider(protocol: Protocol) -> Result<Option<Arc<dyn Provider>>, String> {
+/// `connect`.
+fn provider(protocol: Protocol) -> Result<Arc<dyn Provider>, String> {
     let data: ProviderData = serde_json::from_value(json!({
         "name": "budget",
         "models": [{
@@ -146,34 +143,19 @@ fn provider(protocol: Protocol) -> Result<Option<Arc<dyn Provider>>, String> {
         clock: fakes::clock::FakeClock::new(),
         cache_diagnostics: false,
     };
-    spoken(crate::connect::connect(model, None, None, None, &here))
+    crate::connect::connect(model, None, None, None, &here)
+        .map_err(|failure| format!("{:?}: {}", failure.code, failure.message))
 }
 
-/// `connect`'s result: a protocol this Fiber does not speak yet is `None`;
-/// any other failure is an error.
-fn spoken(result: Result<Arc<dyn Provider>, Failure>) -> Result<Option<Arc<dyn Provider>>, String> {
-    match result {
-        Ok(provider) => Ok(Some(provider)),
-        Err(failure) if failure.code == ErrorCode::ProtocolUnsupported => Ok(None),
-        Err(failure) => Err(format!("{:?}: {}", failure.code, failure.message)),
-    }
-}
-
-/// Each definition's bytes in every spoken protocol's request shape. A
+/// Each definition's bytes in every protocol's request shape. A
 /// hosted definition counts only where the protocol reads its type. The
 /// whole set goes through `wire_tools` at once, since the strict-tool
 /// budget is spent across it.
 fn measure(definitions: &[ToolDefinition]) -> Measured {
-    let mut measured = Measured {
-        sizes: Vec::new(),
-        not_spoken: Vec::new(),
-    };
+    let mut measured = Measured { sizes: Vec::new() };
     for protocol in PROTOCOLS {
         let name = protocol_name(protocol);
-        let Some(provider) = provider(protocol).unwrap() else {
-            measured.not_spoken.push(name);
-            continue;
-        };
+        let provider = provider(protocol).unwrap();
         let kept: Vec<ToolDefinition> = definitions
             .iter()
             .filter(|definition| {
@@ -213,7 +195,8 @@ fn measure(definitions: &[ToolDefinition]) -> Measured {
 }
 
 /// Whether each wire object carries the name it is paired with: `name` at
-/// the top level, or `function.name` in `openai-completions`' shape.
+/// the top level, `function.name` in `openai-completions`' shape, or
+/// `toolSpec.name` in `bedrock-converse`'s.
 fn aligned(names: &[String], objects: &[Map<String, Value>]) -> Result<(), String> {
     if names.len() != objects.len() {
         return Err(format!(
@@ -226,6 +209,7 @@ fn aligned(names: &[String], objects: &[Map<String, Value>]) -> Result<(), Strin
         let wire = object
             .get("name")
             .or_else(|| object.get("function")?.get("name"))
+            .or_else(|| object.get("toolSpec")?.get("name"))
             .and_then(Value::as_str);
         match wire {
             Some(wire) if wire == name => {}
@@ -245,8 +229,8 @@ fn largest(sizes: &[Sizes]) -> Option<&Sizes> {
     sizes.iter().max_by_key(|sizes| sizes.total)
 }
 
-/// One line per protocol and tool, one total per protocol, the protocols
-/// not spoken, then the largest total and the budget.
+/// One line per protocol and tool, one total per protocol, then the
+/// largest total and the budget.
 fn report(measured: &Measured, budget: usize) -> String {
     let mut lines = vec![String::from(
         "built-in tool definition bytes per protocol (docs/tools.md, \"Size budget in CI\")",
@@ -256,9 +240,6 @@ fn report(measured: &Measured, budget: usize) -> String {
             lines.push(format!("{} {tool} {bytes}", sizes.protocol));
         }
         lines.push(format!("{} total {}", sizes.protocol, sizes.total));
-    }
-    for protocol in &measured.not_spoken {
-        lines.push(format!("{protocol} not spoken"));
     }
     lines.push(match largest(&measured.sizes) {
         Some(sizes) => format!(

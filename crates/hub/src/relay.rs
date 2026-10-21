@@ -200,6 +200,36 @@ pub(crate) fn route(
         return;
     };
     let order = lock(relays).order.clone();
+    // A `full` subscribe for a finished delegate never reaches a relay,
+    // an opener or a resume: the exited run's log is the view, replayed
+    // below, and the kept subscription follows a resume. Above
+    // `serve_existing`, so the live relay never sees the command. The
+    // credential check runs first, so a malformed subscribe gains no
+    // accepted answer.
+    if stripped.get("command").and_then(Value::as_str) == Some("subscribe")
+        && stripped
+            .get("args")
+            .and_then(|args| args.get("level"))
+            .and_then(Value::as_str)
+            == Some("full")
+    {
+        if let Err(refused) = startup_credential(&stripped) {
+            crate::retire::refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                id,
+                &refused.code,
+                &refused.message,
+            );
+            return;
+        }
+        if crate::resume::exited_delegate(&hub.home, &SessionId(session.to_owned())) {
+            replay_exited_delegate(id, session, &stripped, hub, writer, relays);
+            return;
+        }
+    }
     // Serves the command on the session's published relay, when one
     // outlives this call's check: every path below serves it and reports
     // true. False when no relay for the session is published: the caller
@@ -397,6 +427,286 @@ pub(crate) fn route(
     );
 }
 
+/// Refuses `id` for `session` when its exited log cannot be replayed:
+/// the freshly cut socket pair, its clone, or the relay thread failed to
+/// start. One `IoFailed` wording for all three, so a transient resource
+/// shortage reads the same wherever the replay fails.
+fn could_not_replay(
+    writer: &Arc<Mutex<UnixStream>>,
+    hub: &Arc<Hub>,
+    relays: &Arc<Mutex<Relays>>,
+    session: &str,
+    id: &CommandId,
+) {
+    crate::retire::refuse(
+        writer,
+        hub,
+        relays,
+        session,
+        id,
+        &ErrorCode::IoFailed,
+        &format!("The hub could not replay session `{session}`."),
+    );
+}
+
+/// Serves a `full` subscribe for a finished delegate from its log: the
+/// replay branch of [`route`] calls this when
+/// [`crate::resume::exited_delegate`] holds, before any opener, relay or
+/// resume. The fold the exited run left is the view: one relay thread owns
+/// a socket pair preloaded with the accept and the fold, so settling,
+/// forwarding and teardown run exactly as for a session close. The entry
+/// is born retiring, so a command routed while it drains queues and is
+/// passed on, never written into the preloaded void; the kept `full`
+/// subscription the accept settles survives the teardown, so the rejoin
+/// sweep follows the delegate into its resumed run with no client command.
+/// A log that vanished answers `session_not_found`, one that cannot be
+/// read or serialised `log_corrupt`: never a partial fold, never a hang.
+fn replay_exited_delegate(
+    id: &CommandId,
+    session: &str,
+    stripped: &Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+) {
+    let Some((_, dir)) = crate::recent::lookup_logged(&hub.home, &SessionId(session.to_owned()))
+    else {
+        crate::retire::refuse_not_found(writer, hub, relays, session, id);
+        return;
+    };
+    let fold = match exited_fold(&dir) {
+        Ok(fold) => fold,
+        Err(code) => {
+            crate::retire::refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                id,
+                &code,
+                &format!("The log of session `{session}` cannot be replayed."),
+            );
+            return;
+        }
+    };
+    let last = fold.last().and_then(|line| line.seq.map(|seq| seq.0));
+    let mut result = Map::new();
+    if let Some(last) = last {
+        result.insert("last_seq".into(), Value::from(last));
+    }
+    let mut payload = Map::new();
+    payload.insert("command_id".into(), Value::String(id.0.clone()));
+    payload.insert("result".into(), Value::Object(result));
+    let mut preloaded = crate::connection::line(hub, "command_accepted", payload);
+    preloaded.push(b'\n');
+    for line in &fold {
+        let Ok(bytes) = serde_json::to_vec(line) else {
+            crate::retire::refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                id,
+                &ErrorCode::LogCorrupt,
+                &format!("The log of session `{session}` cannot be replayed."),
+            );
+            return;
+        };
+        preloaded.extend_from_slice(&bytes);
+        preloaded.push(b'\n');
+    }
+    let order = lock(relays).order.clone();
+    crate::retire::enqueue_new(&order, session, id, stripped);
+    let kept: Kept = Arc::new(Mutex::new(vec![(id.0.clone(), stripped.clone(), true)]));
+    let mark = crate::rejoin::Mark::now(&hub.home, session);
+    let (hub_end, preload_end) = match UnixStream::pair() {
+        Ok(pair) => pair,
+        Err(_) => {
+            could_not_replay(writer, hub, relays, session, id);
+            return;
+        }
+    };
+    let reader = match hub_end.try_clone() {
+        Ok(reader) => reader,
+        Err(_) => {
+            could_not_replay(writer, hub, relays, session, id);
+            return;
+        }
+    };
+    let mut held = lock(relays);
+    // The entry is born retiring, so it takes no writes, and a command
+    // routed while it drains queues on it and is passed on at its end.
+    // Admission with exclusive=false always succeeds, so Refused never
+    // fires here; it shares the failure answer.
+    match establish(
+        session,
+        hub,
+        writer,
+        relays,
+        &mut held,
+        Establishment {
+            mark,
+            exclusive: false,
+            stream: hub_end,
+            reader,
+            kept,
+            reopen: None,
+            replayed: Replayed::default(),
+            retiring: Some(Retire::Dead),
+            pending: None,
+        },
+    ) {
+        Established::Running => {}
+        Established::SpawnFailed(_) | Established::Refused(_, _) => {
+            drop(held);
+            could_not_replay(writer, hub, relays, session, id);
+            return;
+        }
+    }
+    drop(held);
+    // The relay thread drains this side: a write that fails leaves a
+    // thread that ends at once, and its drain drops the kept command
+    // without an answer, as a session close does today.
+    if write_all(&preload_end, &preloaded).is_ok() {
+        preload_end.shutdown(Shutdown::Write).unwrap_or(());
+    }
+}
+
+/// The durable lines of an exited delegate's log, root first: the fold a
+/// `full` subscribe replays. `NotFound` when the log vanished mid-route,
+/// `LogCorrupt` when its history cannot be read.
+fn exited_fold(dir: &std::path::Path) -> Result<Vec<contract::Envelope>, ErrorCode> {
+    let segments = log::history(dir).map_err(|error| match error {
+        log::Error::NotFound(_) => ErrorCode::SessionNotFound,
+        log::Error::Held { .. }
+        | log::Error::Poisoned { .. }
+        | log::Error::Ambiguous { .. }
+        | log::Error::Exists(_)
+        | log::Error::Pointer { .. }
+        | log::Error::Unreadable { .. }
+        | log::Error::Encode(_)
+        | log::Error::Io { .. } => ErrorCode::LogCorrupt,
+    })?;
+    let mut fold = Vec::new();
+    for segment in &segments {
+        match segment.lines(0) {
+            Ok(lines) => fold.extend(lines),
+            Err(_) => return Err(ErrorCode::LogCorrupt),
+        }
+    }
+    if fold.is_empty() {
+        return Err(ErrorCode::LogCorrupt);
+    }
+    Ok(fold)
+}
+
+/// Everything `establish` needs beyond the connection: the mark to admit
+/// under, the stream the entry writes and the reader its thread drains,
+/// the kept subscription, the replayed ids the thread mutes, why the
+/// entry no longer takes writes, and `attach_inner`'s pending-replay guard,
+/// moved into the pending slot once the worker can observe its
+/// acknowledgement (the replay path passes none).
+struct Establishment {
+    mark: crate::rejoin::Mark,
+    exclusive: bool,
+    stream: UnixStream,
+    reader: UnixStream,
+    kept: Kept,
+    reopen: Option<String>,
+    replayed: Replayed,
+    retiring: Option<Retire>,
+    pending: Option<(String, log::diag::Timer)>,
+}
+
+/// What `establish` leaves behind: a thread running behind a pushed entry,
+/// a refused admission (no entry pushed, the stream back for the caller to
+/// shut down), or a thread that never started (no entry pushed). The
+/// pending-replay guard rides along for the caller to emit outside the
+/// relays lock.
+enum Established {
+    Running,
+    Refused(Option<log::diag::Timer>, UnixStream),
+    SpawnFailed(Option<log::diag::Timer>),
+}
+
+/// Mints the epoch, admits the session, starts the relay thread and pushes
+/// its entry: the establishment `attach_inner` and `replay_exited_delegate`
+/// share. The entry is pushed only when the thread runs. The caller answers
+/// the other two its own way: `attach_inner` shuts the returned stream on
+/// a refusal and emits the guard outside the lock on either failure; the
+/// replay path refuses the command.
+fn establish(
+    session: &str,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+    held: &mut std::sync::MutexGuard<'_, Relays>,
+    establishment: Establishment,
+) -> Established {
+    let Establishment {
+        mark,
+        exclusive,
+        stream,
+        reader,
+        kept,
+        reopen,
+        replayed,
+        retiring,
+        pending,
+    } = establishment;
+    let epoch = held.mint();
+    // The guard moves into the pending slot before the worker can run:
+    // its acknowledgement then completes it instead of leaking, and a
+    // failed admission or spawn below takes it back out again.
+    let pending_key = pending.map(|(minted, timer)| {
+        let key = (session.to_owned(), epoch, minted);
+        held.pending_replay.insert(key.clone(), timer);
+        key
+    });
+    let admitted = crate::rejoin::admit(held, session, exclusive, mark, epoch);
+    // A non-exclusive admission always succeeds, so only `attach_inner`
+    // sees a refusal.
+    if !admitted {
+        let guard = pending_key
+            .as_ref()
+            .and_then(|key| held.pending_replay.remove(key));
+        return Established::Refused(guard, stream);
+    }
+    let owned = RelayThread {
+        epoch,
+        reopen,
+        replayed: Arc::clone(&replayed),
+        kept: Arc::clone(&kept),
+        order: Arc::clone(&held.order),
+        gone: held.rejoin.closed_flag(),
+    };
+    // The thread may run before its entry is pushed: on session EOF it
+    // only removes an entry it finds.
+    let relayed = thread::Builder::new().name("hub-relay".to_owned()).spawn({
+        let hub = Arc::clone(hub);
+        let writer = Arc::clone(writer);
+        let relays = Arc::clone(relays);
+        let session = session.to_owned();
+        move || relay(owned, &session, reader, &hub, &writer, &relays)
+    });
+    let Ok(thread) = relayed else {
+        let guard = pending_key
+            .as_ref()
+            .and_then(|key| held.pending_replay.remove(key));
+        return Established::SpawnFailed(guard);
+    };
+    held.entries.push(Relay {
+        session: session.to_owned(),
+        epoch,
+        writer: stream,
+        kept,
+        replayed,
+        thread: Some(thread),
+        retiring,
+    });
+    Established::Running
+}
+
 /// Sends the kept subscription again under a hub-minted id the relay
 /// thread mutes (without `stream_reopened` for this redirect), then the
 /// client's command when one is relayed, and
@@ -544,66 +854,41 @@ fn attach_inner(
             return;
         }
     };
-    let order = admission
-        .as_ref()
-        .map_or_else(|| lock(relays).order.clone(), |held| held.order.clone());
     let mut held = match admission {
         Some(held) => held,
         None => lock(relays),
     };
-    let epoch = held.mint();
-    // The guard moves into the pending slot before the worker can run:
-    // its acknowledgement then completes it instead of leaking, and a
-    // failed admission or spawn below takes it back out again.
-    let pending_key = replayed_id.zip(replay_timer.take()).map(|(minted, timer)| {
-        let key = (session.to_owned(), epoch, minted);
-        held.pending_replay.insert(key.clone(), timer);
-        key
-    });
-    if !crate::rejoin::admit(&mut held, session, exclusive, mark, epoch) {
-        let guard = pending_key
-            .as_ref()
-            .and_then(|key| held.pending_replay.remove(key));
-        drop(held);
-        drop(guard);
-        stream.shutdown(Shutdown::Both).unwrap_or(());
-        return;
-    }
-    // The thread may run before its entry is pushed: on session EOF it
-    // only removes an entry it finds.
-    let relayed = thread::Builder::new().name("hub-relay".to_owned()).spawn({
-        let hub = Arc::clone(hub);
-        let writer = Arc::clone(writer);
-        let relays = Arc::clone(relays);
-        let session = session.to_owned();
-        let kept = Arc::clone(&kept);
-        let owned = RelayThread {
-            epoch,
-            reopen: reopening,
-            replayed: Arc::clone(&replayed),
-            kept,
-            order: Arc::clone(&order),
-            gone: held.rejoin.closed_flag(),
-        };
-        move || relay(owned, &session, reader, &hub, &writer, &relays)
-    });
     // A thread that never started leaves no entry: the next command for
     // the session reconnects. Its pending replay guard goes back with
     // it, emitted outside the lock.
-    if let Ok(thread) = relayed {
-        held.entries.push(Relay {
-            session: session.to_owned(),
-            epoch,
-            writer: stream,
+    match establish(
+        session,
+        hub,
+        writer,
+        relays,
+        &mut held,
+        Establishment {
+            mark,
+            exclusive,
+            stream,
+            reader,
             kept,
+            reopen: reopening,
             replayed,
-            thread: Some(thread),
             retiring: None,
-        });
-    } else if let Some(key) = pending_key {
-        let guard = held.pending_replay.remove(&key);
-        drop(held);
-        drop(guard);
+            pending: replayed_id.zip(replay_timer.take()),
+        },
+    ) {
+        Established::Running => {}
+        Established::Refused(guard, stream) => {
+            drop(held);
+            drop(guard);
+            stream.shutdown(Shutdown::Both).unwrap_or(());
+        }
+        Established::SpawnFailed(guard) => {
+            drop(held);
+            drop(guard);
+        }
     }
 }
 

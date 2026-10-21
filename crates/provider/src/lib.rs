@@ -8,9 +8,13 @@
 
 pub mod anthropic_messages;
 mod anthropic_messages_decode;
+pub mod bedrock_converse;
+mod bedrock_converse_decode;
+mod bedrock_converse_request;
 mod cache_diagnostics;
 mod call;
 mod error;
+mod event_stream;
 pub use call::RequestObservation;
 pub mod google_generative_ai;
 mod google_generative_ai_decode;
@@ -169,6 +173,40 @@ pub struct Compat {
     /// `x-api-key`, as the Databricks gateway's Anthropic route takes it
     /// (`docs/configuration.md`, "A provider's data").
     pub bearer: bool,
+    /// `anthropic-messages`: the model is Claude on AWS Bedrock's Invoke
+    /// API. The request goes to `<base_url>/model/<id>/invoke-with-response-stream`
+    /// with `anthropic_version` in the body and no `model` or `stream`, the
+    /// key goes in `authorization: Bearer`, and the reply is read in AWS
+    /// event-stream framing (`docs/model-routing.md`, "Protocols and
+    /// providers").
+    pub bedrock_invoke: bool,
+    /// `anthropic-messages`: the model is Claude on Google Vertex. The
+    /// request goes to `<base_url>/models/<id>:streamRawPredict` with
+    /// `anthropic_version` in the body and no `model`, and an error body
+    /// wrapped in a one-element list is read as the object inside it
+    /// (`docs/model-routing.md`, "Google Vertex wire facts").
+    pub vertex_raw_predict: bool,
+    /// `bedrock-converse`: the model takes `cachePoint` blocks, placed where
+    /// Anthropic's cache markers go, each after a text block
+    /// (`docs/prompt-cache.md`, "Cache markers and keys"). Absent, a
+    /// request carries no marker.
+    pub cache_point: bool,
+    /// `bedrock-converse`: the `additionalModelRequestFields` field that
+    /// carries the thinking level (`docs/model-routing.md`, "Thinking").
+    /// Absent, no level is sent.
+    pub reasoning_field: Option<ReasoningField>,
+}
+
+/// The field a `bedrock-converse` model reads its thinking level from,
+/// inside `additionalModelRequestFields` (`docs/model-routing.md`,
+/// "Thinking").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningField {
+    /// `reasoning_effort: <level>`, as gpt-oss takes it.
+    ReasoningEffort,
+    /// `reasoningConfig: {type: "enabled", maxReasoningEffort: <level>}`,
+    /// as Nova 2 Lite takes it; at `high` no `maxTokens` is sent beside it.
+    ReasoningConfig,
 }
 
 impl Compat {
@@ -187,6 +225,14 @@ impl Compat {
                 .map(str::to_owned),
             thinking_budget: flag("thinking_budget").unwrap_or(false),
             bearer: flag("bearer").unwrap_or(false),
+            bedrock_invoke: flag("bedrock_invoke").unwrap_or(false),
+            vertex_raw_predict: flag("vertex_raw_predict").unwrap_or(false),
+            cache_point: flag("cache_point").unwrap_or(false),
+            reasoning_field: match data.get("reasoning_field").and_then(Value::as_str) {
+                Some("reasoning_effort") => Some(ReasoningField::ReasoningEffort),
+                Some("reasoningConfig") => Some(ReasoningField::ReasoningConfig),
+                Some(_) | None => None,
+            },
         }
     }
 }

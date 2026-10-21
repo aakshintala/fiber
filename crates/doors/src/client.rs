@@ -22,6 +22,7 @@ use contract::commands::{Command, CommandLine};
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, Event, Notice};
 use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::shapes::{ContentPart, Origin, Sender};
+use contract::steering::Duplicate;
 use contract::{CommandId, Envelope, ErrorCode};
 
 use crate::session::{self, Gate};
@@ -35,6 +36,9 @@ pub(crate) const UNFIT: &str = "The arguments do not fit this command.";
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
 pub(crate) const ENDED: &str = "The session ended before answering.";
+/// A `steer_drop` names nothing still queued: the loop's stale answer
+/// reads the same (`docs/invocation.md`, "What each command does").
+const STALE_DROP: &str = "That steering message was already applied, or was never queued.";
 /// A `cancel` names no running turn.
 const NO_TURN: &str = "No turn is running.";
 /// A `job_stop` names no running job.
@@ -335,13 +339,13 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             }
         }
         Command::SteerDrop(args) => {
-            let ack = inbox_ack(conn, id.clone());
-            conn.gate.deliver(Delivery::SteerDrop(args.command_id, ack));
+            admit_drop(conn, id, args.command_id);
         }
         Command::Message(args) => crate::message::run(conn, id, args),
         Command::Reply(reply) => crate::reply::route(conn, id, reply),
         Command::Cancel => cancel(conn, id),
         Command::Shell(args) => shell(conn, id, &args, name),
+        Command::ProposeNotes(args) => crate::notes::run(conn, id, args),
         Command::Close(args) => crate::close::run(conn, id, args.now),
         Command::Model(args) => {
             let ack = inbox_ack(conn, id);
@@ -375,6 +379,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Reload(ack));
         }
+        Command::Import(args) => import(conn, id, &args),
         Command::McpServers => {
             let Some(refresh) = conn.gate.servers_refresh() else {
                 unknown(conn, id, name);
@@ -423,6 +428,74 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         Command::Unknown => unknown(conn, id, name),
         Command::ArtifactPage(args) => crate::artifact::run(conn, id, args),
     }
+}
+
+/// Copies another harness's configuration into Fiber home, once
+/// (`docs/configuration.md`, "Importing"): the same shared import `fiber
+/// import` runs, answered at once on the reader thread. With no `source`
+/// both sources run, each independent: one source's completed receipt
+/// short-circuits only that source, and the first failure rejects, so a
+/// retry short-circuits what landed and completes the rest.
+fn import(conn: &mut Conn, id: CommandId, args: &contract::commands::ImportArgs) {
+    use config::{ImportSource, source_home};
+    let sources: &[ImportSource] = match args.source.as_deref() {
+        None => &[ImportSource::ClaudeCode, ImportSource::Codex],
+        Some("claude-code") => &[ImportSource::ClaudeCode],
+        Some("codex") => &[ImportSource::Codex],
+        Some(_) => {
+            reject(
+                conn,
+                Some(id),
+                ErrorCode::InvalidArguments,
+                "`source` must be `claude-code` or `codex`.",
+            );
+            return;
+        }
+    };
+    let Some(home_env) = std::env::var_os("HOME") else {
+        reject(
+            conn,
+            Some(id),
+            ErrorCode::IoFailed,
+            "HOME is not set, so the source home cannot be found.",
+        );
+        return;
+    };
+    let clock = Arc::clone(&conn.gate.clock);
+    let mut imported = contract::events::ImportedNames::default();
+    let mut left_behind = Vec::new();
+    for source in sources {
+        let report = match config::import_source(
+            &conn.gate.home,
+            &source_home(std::path::Path::new(&home_env), *source),
+            *source,
+            clock.as_ref(),
+        ) {
+            Ok(report) => report,
+            Err(error) => {
+                reject(conn, Some(id), error.code(), &error.to_string());
+                return;
+            }
+        };
+        imported.mcp_servers.extend(report.imported.mcp_servers);
+        imported.skills.extend(report.imported.skills);
+        imported.commands.extend(report.imported.commands);
+        imported.instructions.extend(report.imported.instructions);
+        left_behind.extend(report.left_behind.into_iter().map(|left| {
+            contract::events::LeftBehindEntry {
+                item: left.item,
+                reason: left.reason,
+            }
+        }));
+    }
+    accept(
+        conn,
+        id,
+        Some(CommandResult::Import {
+            imported,
+            left_behind,
+        }),
+    );
 }
 
 /// Accepted when `done`, else rejected `stale_request` with `message`. For
@@ -666,6 +739,74 @@ fn subscribe(
     drop(direct);
 }
 
+/// Admits one reader steer into the session's shared steering queue and
+/// answers `command_accepted` at once (`docs/architecture.md`, "One
+/// inbox"): the row draws while the turn streams, and the loop
+/// reconciles the inbox delivery against the queued entry at its next
+/// drain, running the unchanged hook pass there. No hook runs here, no
+/// hook state is taken, no durable event is written. The forwarded ack is
+/// a no-op closure: the at-once answer consumed the single answer. A
+/// delivery the inbox refuses after queueing is taken back out, so no
+/// row outlives its answer.
+fn admit_steer(conn: &mut Conn, id: CommandId, message: Message) {
+    let ack = inbox_ack(conn, id.clone());
+    let refused = |ack: Ack, code: ErrorCode, text: &str| {
+        ack.0(Err(Rejection {
+            code,
+            message: text.to_owned(),
+        }));
+    };
+    let Some(log) = conn.gate.log.upgrade() else {
+        refused(ack, ErrorCode::Closing, ENDED);
+        return;
+    };
+    if let Err(Duplicate) = conn.gate.steering.push(
+        id.clone(),
+        message.content.clone(),
+        message.sender.clone(),
+        log.as_ref(),
+    ) {
+        refused(ack, ErrorCode::DuplicateCommand, DUPLICATE);
+        return;
+    }
+    if conn
+        .gate
+        .try_deliver(Delivery::Steer(message, Ack(Box::new(|_| {}))))
+    {
+        ack.0(Ok(None));
+    } else {
+        conn.gate.steering.take(&id, log.as_ref());
+        refused(ack, ErrorCode::Closing, ENDED);
+    }
+}
+
+/// Takes one queued steer off the shared steering queue for a reader
+/// `steer_drop` and answers at once (`docs/architecture.md`, "One
+/// inbox"). A drop that misses a live entry is delivered for the loop to
+/// answer at its drain; one that names nothing admitted is rejected
+/// `stale_request` at once.
+fn admit_drop(conn: &mut Conn, id: CommandId, target: CommandId) {
+    let ack = inbox_ack(conn, id);
+    let Some(log) = conn.gate.log.upgrade() else {
+        ack.0(Err(Rejection {
+            code: ErrorCode::Closing,
+            message: ENDED.to_owned(),
+        }));
+        return;
+    };
+    if conn.gate.steering.remove(&target, log.as_ref()) {
+        ack.0(Ok(None));
+    } else if conn.gate.steering.is_admitted(&target) {
+        // Live: the loop answers at its drain; the entry may clear first.
+        conn.gate.deliver(Delivery::SteerDrop(target, ack));
+    } else {
+        ack.0(Err(Rejection {
+            code: ErrorCode::StaleRequest,
+            message: STALE_DROP.to_owned(),
+        }));
+    }
+}
+
 fn deliver_message(
     conn: &mut Conn,
     id: CommandId,
@@ -680,8 +821,8 @@ fn deliver_message(
             command_id: Some(id.clone()),
         },
     };
-    let ack = inbox_ack(conn, id.clone());
     if prompt {
+        let ack = inbox_ack(conn, id.clone());
         let ack = match conn.gate.history.get().cloned().flatten() {
             Some(path) => {
                 conn.gate
@@ -693,7 +834,7 @@ fn deliver_message(
         };
         conn.gate.deliver(Delivery::Prompt(message, ack));
     } else {
-        conn.gate.deliver(Delivery::Steer(message, ack));
+        admit_steer(conn, id, message);
     }
 }
 
