@@ -281,6 +281,41 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
             ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
         }
+        cli::Invocation::Run(Some(cli::Commands::Update { channel }), _) => {
+            let flag = channel.map(|flag| match flag {
+                cli::ChannelArg::Stable => ::cli::Channel::Stable,
+                cli::ChannelArg::Nightly => ::cli::Channel::Nightly,
+            });
+            let channel = match ::cli::resolve_channel(
+                flag,
+                std::env::var("FIBER_CHANNEL").ok().as_deref(),
+            ) {
+                Ok(channel) => channel,
+                Err(error) => {
+                    eprintln!("fiber: {error}");
+                    return 2;
+                }
+            };
+            let home = match config::fiber_home_from_env() {
+                Ok(home) => home,
+                Err(e) => return fail(failed(e.code(), e)),
+            };
+            let stdin = io::stdin();
+            let stderr = io::stderr();
+            ::cli::update(
+                &home,
+                env!("CARGO_PKG_VERSION"),
+                env!("FIBER_TARGET"),
+                channel,
+                &::cli::ReleaseBases::production(),
+                clock.as_ref(),
+                ::cli::Io {
+                    terminal: stdin.is_terminal(),
+                    input: &mut stdin.lock(),
+                    err: &mut stderr.lock(),
+                },
+            )
+        }
         // The hidden search subcommands hold no feature logic: they only
         // call into `tools` (`docs/architecture.md`, "The call rules").
         cli::Invocation::Run(Some(cli::Commands::Grep { args }), _) => tools::grep_main(args),

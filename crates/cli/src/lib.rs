@@ -107,6 +107,7 @@ mod sessions_list;
 )]
 mod sessions_search;
 mod table;
+mod update;
 
 #[cfg(test)]
 mod test_support;
@@ -140,6 +141,7 @@ pub use sessions::{delete, export};
 pub use sessions_list::list as sessions_list;
 pub use sessions_list::resolve_listed;
 pub use sessions_search::search as sessions_search;
+pub use update::{Channel, ChannelError, Io, ReleaseBases, resolve_channel, update};
 
 /// What `fiber logout` says when it is given no provider.
 pub const LOGOUT_SHAPE: &str =

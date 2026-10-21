@@ -85,6 +85,8 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     (
         "",
         &[
+            "update",
+            "upgrade",
             "ask",
             "resume",
             "continue",
@@ -105,6 +107,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
         ],
         &["--model", "-c", "--hub", "-h", "--help", "-v", "--version"],
     ),
+    ("update", &[], &["--channel", "-h", "--help"]),
     (
         "ask",
         &[],
