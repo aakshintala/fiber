@@ -228,6 +228,15 @@ fn logout_rows_decode_each_variant_and_reject_an_unknown_row() {
 }
 
 #[test]
+fn deleted_carries_the_hubs_path_and_rejects_a_missing_one() {
+    assert_eq!(
+        deleted(&json!({"path": "credentials/acme/work"})),
+        Some("credentials/acme/work".to_owned())
+    );
+    assert_eq!(deleted(&json!({})), None);
+}
+
+#[test]
 fn notes_answers_carry_each_layers_file_text_and_version() {
     let parsed = notes(&json!({"global":{"file":"/hub/config.json","text":"global notes","version":"abc123"},"project":{"file":"/hub/projects/p/config.json","text":"","version":"absent"}})).unwrap();
     assert_eq!(parsed.global.file, PathBuf::from("/hub/config.json"));

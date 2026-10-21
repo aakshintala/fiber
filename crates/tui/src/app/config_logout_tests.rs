@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 
 use super::super::{App, Effect};
 use crate::Configure;
@@ -21,6 +22,14 @@ use crate::swapped::Spot;
 /// The injected clock's now.
 fn now() -> Instant {
     contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref())
+}
+
+/// Thirty labels: more than the sixteen body rows an 80x24 screen
+/// shows, so the list scrolls.
+fn many_labels() -> Vec<LogoutRow> {
+    (0..30)
+        .map(|at| stored("acme", &format!("l{at:02}"), at == 0, &[]))
+        .collect()
 }
 
 /// A seam answering `rows` for the list.
@@ -98,6 +107,14 @@ fn store_file(seam: &Fake, rel: &str) {
     std::fs::write(path, "sk-live").unwrap();
 }
 
+/// The screen's buffer, for style assertions text cannot see.
+fn rendered(app: &App) -> Buffer {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    buf
+}
+
 /// The screen's rows as text.
 fn screen(app: &App) -> Vec<String> {
     let area = Rect::new(0, 0, 80, 24);
@@ -140,6 +157,20 @@ fn logout_deletes_the_confirmed_label_and_drops_its_row() {
     assert!(rows.iter().any(|row| row.contains("work")), "{rows:?}");
     assert!(rows.iter().any(|row| row.contains("(default)")), "{rows:?}");
     assert!(rows.iter().any(|row| row.contains("home")), "{rows:?}");
+
+    // The focus highlight sits on the first label's row: the `› ` gutter
+    // names the focused choice, and the other label carries none.
+    assert!(
+        rows.iter()
+            .any(|row| row.contains('›') && row.contains("work")),
+        "{rows:?}"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains('›') && row.contains("home")),
+        "{rows:?}"
+    );
 
     // Enter asks for confirmation, deleting nothing yet.
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
@@ -218,6 +249,25 @@ fn clicking_a_dim_row_neither_selects_nor_confirms_it() {
     ]);
     let mut app = attached(Some(Arc::clone(&seam)));
     open_logout(&mut app);
+
+    // The dim row draws dimmed while the deletable row draws full:
+    // without the negation the live row dims and the dim row shines.
+    let buf = rendered(&app);
+    let text_at = |y: u16| (0..80).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let dim_y = (0..24)
+        .find(|y| text_at(*y).contains("environment variable ACME_KEY"))
+        .expect("no dim row");
+    assert!(
+        (0..80).any(|x| buf[(x, dim_y)].modifier.contains(Modifier::DIM)),
+        "the dim row draws with no dimmed cell"
+    );
+    let live_y = (0..24)
+        .find(|y| text_at(*y).contains("acme work"))
+        .expect("no live row");
+    assert!(
+        (0..80).all(|x| !buf[(x, live_y)].modifier.contains(Modifier::DIM)),
+        "the deletable row draws dimmed"
+    );
 
     // Focus opens on the deletable row past the dim one. Clicking the
     // dim row's item does nothing: the selection stays where it was.
@@ -322,11 +372,22 @@ fn a_failed_delete_keeps_the_row_and_says_why() {
             .any(|row| row.contains("another login or logout holds its lock")),
         "{rows:?}"
     );
+    // A blank row separates the list body from the said line: without
+    // the separator the message runs directly against the last row.
+    let said_at = rows
+        .iter()
+        .position(|row| row.contains("another login or logout holds its lock"))
+        .expect("no said line");
+    assert!(said_at > 0, "{rows:?}");
+    assert!(rows[said_at - 1].trim().is_empty(), "{rows:?}");
 }
 
 #[test]
 fn a_relist_after_delete_names_the_error_beside_the_removed_line() {
-    let seam = logout_seam(vec![stored("acme", "work", true, &[])]);
+    let seam = logout_seam(vec![
+        stored("acme", "work", true, &[]),
+        stored("acme", "home", false, &[]),
+    ]);
     if let Ok(mut deleted) = seam.deleted.lock() {
         *deleted = Ok("credentials/acme/work".to_owned());
     }
@@ -353,6 +414,13 @@ fn a_relist_after_delete_names_the_error_beside_the_removed_line() {
     );
     assert!(
         rows.iter().any(|row| row.contains("the hub is gone")),
+        "{rows:?}"
+    );
+    // The failed re-list drops exactly the deleted row: its row is
+    // gone while its same-provider sibling survives.
+    assert!(rows.iter().any(|row| row.contains("home")), "{rows:?}");
+    assert!(
+        !rows.iter().any(|row| row.contains("acme work")),
         "{rows:?}"
     );
 }
@@ -415,4 +483,144 @@ fn a_secret_row_confirms_by_name_and_deletes_with_no_label() {
         [("acme.api_key".to_owned(), None)]
     );
     assert!(!seam.home().join("credentials/acme.api_key").exists());
+}
+
+#[test]
+fn up_moves_back_over_the_target_rows() {
+    let seam = logout_seam(vec![
+        stored("acme", "aaa", true, &[]),
+        stored("acme", "bbb", false, &[]),
+        stored("acme", "ccc", false, &[]),
+    ]);
+    let mut app = attached(Some(Arc::clone(&seam)));
+    open_logout(&mut app);
+
+    // Down twice reaches the last label; two Ups return to the first,
+    // and Enter confirms it.
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    let rows = screen(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("Delete acme/aaa?")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn paging_moves_a_page_of_labels_each_step() {
+    let seam = logout_seam(many_labels());
+    let mut app = attached(Some(Arc::clone(&seam)));
+    open_logout(&mut app);
+
+    // A page is the shown body rows less one: PageDown from the first
+    // label lands twelve rows below, and Enter confirms that label.
+    assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    let rows = screen(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("Delete acme/l12?")),
+        "{rows:?}"
+    );
+
+    // Esc returns to the list; PageUp lands back on the first label.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.config_view_open());
+    assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    let rows = screen(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("Delete acme/l00?")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn providers_and_secrets_list_under_their_own_headings() {
+    let seam = logout_seam(vec![
+        stored("acme", "work", true, &[]),
+        LogoutRow::Secret {
+            name: "acme.api_key".to_owned(),
+            deletable: true,
+        },
+    ]);
+    let mut app = attached(Some(Arc::clone(&seam)));
+    open_logout(&mut app);
+
+    // Each row lists under its own heading, with a blank row between
+    // the groups.
+    let rows = screen(&app);
+    let providers = rows
+        .iter()
+        .position(|row| row.contains("Providers"))
+        .expect("no Providers heading");
+    let work = rows
+        .iter()
+        .position(|row| row.contains("acme work"))
+        .expect("no provider row");
+    let secrets = rows
+        .iter()
+        .position(|row| row.contains("Secrets"))
+        .expect("no Secrets heading");
+    let secret = rows
+        .iter()
+        .position(|row| row.contains("acme.api_key"))
+        .expect("no secret row");
+    assert!(
+        providers < work && work < secrets && secrets < secret,
+        "{rows:?}"
+    );
+    assert!(rows[work + 1].trim().is_empty(), "{rows:?}");
+}
+
+#[test]
+fn a_tall_list_scrolls_its_window_with_focus() {
+    let seam = logout_seam(many_labels());
+    let mut app = attached(Some(Arc::clone(&seam)));
+    open_logout(&mut app);
+
+    // Thirteen body rows show over the view: twelve Downs put focus on
+    // the first clipped row, scrolling the window by one.
+    for _ in 0..12 {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    let rows = screen(&app);
+    assert!(
+        !rows.iter().any(|row| row.contains("Providers")),
+        "{rows:?}"
+    );
+    assert!(rows.iter().any(|row| row.contains("acme l00")), "{rows:?}");
+    assert!(rows.iter().any(|row| row.contains("acme l12")), "{rows:?}");
+    assert!(!rows.iter().any(|row| row.contains("acme l13")), "{rows:?}");
+
+    // Two rows further on the top rows stay clipped.
+    for _ in 0..2 {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    let rows = screen(&app);
+    assert!(
+        !rows.iter().any(|row| row.contains("Providers")),
+        "{rows:?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains("acme l00")), "{rows:?}");
+    assert!(!rows.iter().any(|row| row.contains("acme l01")), "{rows:?}");
+    assert!(rows.iter().any(|row| row.contains("acme l02")), "{rows:?}");
+    assert!(rows.iter().any(|row| row.contains("acme l14")), "{rows:?}");
+    assert!(!rows.iter().any(|row| row.contains("acme l15")), "{rows:?}");
+
+    // On the last row the first labels are clipped away.
+    for _ in 0..15 {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    let rows = screen(&app);
+    assert!(
+        !rows.iter().any(|row| row.contains("Providers")),
+        "{rows:?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains("acme l00")), "{rows:?}");
+    assert!(!rows.iter().any(|row| row.contains("acme l16")), "{rows:?}");
+    assert!(rows.iter().any(|row| row.contains("acme l17")), "{rows:?}");
+    assert!(rows.iter().any(|row| row.contains("acme l29")), "{rows:?}");
 }

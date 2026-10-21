@@ -375,16 +375,24 @@ mod tests {
             let rows = setup.seam().logout_rows().unwrap();
             assert_eq!(
                 rows.iter()
-                    .map(|row| (row.name(), row.label(), row.deletable(), row.origin()))
+                    .map(|row| match row {
+                        tui::LogoutRow::Provider { origin, .. } =>
+                            (row.name(), row.label(), row.deletable(), origin.as_deref(),),
+                        tui::LogoutRow::Secret { .. } =>
+                            (row.name(), row.label(), row.deletable(), None),
+                    })
                     .collect::<Vec<_>>(),
                 [("acme", Some("work"), false, Some(origin))],
                 "{source:?}"
             );
             // A command's arguments may hold a key: only its program shows.
             assert!(
-                rows.iter().all(|row| row
-                    .origin()
-                    .is_none_or(|text| !text.contains("sk-live-secret-arg"))),
+                rows.iter().all(|row| match row {
+                    tui::LogoutRow::Provider { origin, .. } => origin
+                        .as_deref()
+                        .is_none_or(|text| !text.contains("sk-live-secret-arg")),
+                    tui::LogoutRow::Secret { .. } => true,
+                }),
                 "{rows:?}"
             );
         }
@@ -515,7 +523,10 @@ mod tests {
         assert_eq!(after.len(), 1);
         assert!(!after[0].deletable());
         assert_eq!(
-            after[0].origin(),
+            match &after[0] {
+                tui::LogoutRow::Provider { origin, .. } => origin.as_deref(),
+                tui::LogoutRow::Secret { .. } => None,
+            },
             Some(format!("file {}", key_file.display()).as_str())
         );
         let config = setup.seam().load(&setup.home()).unwrap();

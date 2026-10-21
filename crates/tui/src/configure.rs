@@ -199,15 +199,6 @@ impl LogoutRow {
         }
     }
 
-    /// Where a non-deletable provider key comes from; `None` on a
-    /// deletable row and on a secret.
-    pub fn origin(&self) -> Option<&str> {
-        match self {
-            LogoutRow::Provider { origin, .. } => origin.as_deref(),
-            LogoutRow::Secret { .. } => None,
-        }
-    }
-
     /// The other providers reading the same stored directory; empty on
     /// a secret.
     pub fn siblings(&self) -> &[String] {

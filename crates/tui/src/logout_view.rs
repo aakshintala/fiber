@@ -586,3 +586,7 @@ fn wrapped_rows(text: &str, inner: usize, style: Style) -> Vec<overlay::Row> {
         .map(|row| text_row(row, style))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "logout_view_tests.rs"]
+mod tests;
