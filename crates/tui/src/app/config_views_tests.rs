@@ -880,6 +880,94 @@ fn no_workspace_remote_case(
     );
 }
 
+/// A `hub_hello` the remote home reads: the link comes up.
+fn hello() -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    })
+}
+
+/// A hub `command_accepted` no ask waits for: the loop drops it, so it
+/// proves a second pass asks the hub nothing more.
+fn stray_accepted() -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            (
+                "command_id".to_owned(),
+                serde_json::Value::String("c_deadbeefdeadbeef".to_owned()),
+            ),
+            ("result".to_owned(), serde_json::Value::Null),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// The remote offer's hub reads in order: pending first, then the
+/// chips' global file and settings the home also owes.
+fn offer_script(pending: bool) -> Vec<(serde_json::Value, serde_json::Value)> {
+    use serde_json::json;
+    vec![
+        (
+            json!({"command":"configure","args":{"operation":"import_pending"}}),
+            json!({"pending": pending}),
+        ),
+        (
+            json!({"command":"configure","args":{"operation":"global_file"}}),
+            json!({"file": "/hub/.fiber/config.json"}),
+        ),
+        (
+            json!({"command":"configure","args":{"operation":"settings","workspace":"/hub/.fiber"}}),
+            json!({"rows": []}),
+        ),
+    ]
+}
+
+/// A remote home resolves its first-run offer from the hub machine's
+/// home: pending shows the question, answered receipts do not. The
+/// terminal's own home never answers, so a local receipt cannot still
+/// the hub's offer and a missing one cannot fire it.
+#[test]
+fn remote_offer_follows_the_hubs_pending_answer() {
+    for pending in [true, false] {
+        no_workspace_remote_case(offer_script(pending), move |mut app| {
+            drop(app.on_line(hello()));
+            assert_eq!(app.home_screen().unwrap().question_import, pending);
+            assert_eq!(app.notices.newest(), None);
+            // The read runs once: a second pass asks the hub nothing
+            // more, so a receipt landing mid-run changes nothing.
+            drop(app.on_line(stray_accepted()));
+            assert_eq!(app.home_screen().unwrap().question_import, pending);
+        });
+    }
+}
+
+/// A refused pending read is one notice and the offer stays down:
+/// the terminal never shows an offer it cannot ground in the hub's
+/// home.
+#[test]
+fn remote_offer_refused_stays_down_with_a_notice() {
+    use serde_json::json;
+    let mut script = vec![(
+        json!({"command":"configure","args":{"operation":"import_pending"}}),
+        json!({"reject": "no such operation"}),
+    )];
+    script.extend(offer_script(false).into_iter().skip(1));
+    no_workspace_remote_case(script, |mut app| {
+        drop(app.on_line(hello()));
+        assert!(!app.home_screen().unwrap().question_import);
+        assert_eq!(app.notices.newest(), Some("no such operation"));
+        drop(app.on_line(stray_accepted()));
+        assert!(!app.home_screen().unwrap().question_import);
+    });
+}
+
 fn remote_case(
     script: Vec<(serde_json::Value, serde_json::Value)>,
     build: impl FnOnce(std::sync::Arc<crate::remote::Router>) -> App + Send + 'static,

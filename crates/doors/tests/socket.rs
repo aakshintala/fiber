@@ -1437,12 +1437,14 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
             send(&sender, r#"{"id":"c_noargs","command":"handoff"}"#);
             send(&sender, r#"{"id":"c_close","command":"close"}"#);
             let wait = Deadline::after(DEADLINE);
+            // The drop is answered at once and never delivered: the reader
+            // took its entry off the shared queue, so the drain has
+            // nothing to reconcile.
             assert_eq!(
-                (0..8).map(|_| take(&inbox, &wait)).collect::<Vec<_>>(),
+                (0..7).map(|_| take(&inbox, &wait)).collect::<Vec<_>>(),
                 vec![
                     "prompt hi".to_owned(),
                     "steer more".to_owned(),
-                    "drop c_steer".to_owned(),
                     "reply r_1".to_owned(),
                     "handoff c_handoff Some(\"focus on tests\")".to_owned(),
                     "handoff c_bare None".to_owned(),
@@ -1452,18 +1454,21 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
             );
             log.append(&step(), None, None).unwrap();
             let own = until(&sender, |line| line["seq"].as_u64() == Some(0));
-            let ids: Vec<&str> = own.iter().filter_map(command_id).collect();
+            let mut ids: Vec<&str> = own.iter().filter_map(command_id).collect();
+            // The at-once steer and drop answers race the answers the
+            // stand-in takes, so the acknowledgement order is not pinned.
+            ids.sort();
             assert_eq!(
                 ids,
                 vec![
-                    "c_prompt",
-                    "c_steer",
-                    "c_drop",
-                    "c_reply",
-                    "c_handoff",
                     "c_bare",
+                    "c_close",
+                    "c_drop",
+                    "c_handoff",
                     "c_noargs",
-                    "c_close"
+                    "c_prompt",
+                    "c_reply",
+                    "c_steer"
                 ]
             );
             assert!(own.iter().all(|line| kind(line) != "command_rejected"));
@@ -6053,4 +6058,275 @@ fn an_undelivered_ack_answers_after_the_inbox_guard_releases() {
         })
         .unwrap();
     opened.close();
+}
+
+/// The `import` driver command answers what a direct shared import
+/// reports: the same files plus the same left-behind items, on identical
+/// fixtures (`docs/testing.md`, "Levels"). The child re-run carries a
+/// private `HOME`, since the dispatch reads the person's home from the
+/// environment exactly as `fiber import` does.
+mod import_sameness {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde_json::{Map, Value, json};
+
+    use super::support::{Opened, kind, response, send, subscribe};
+
+    /// The child's case marker: set, the test runs the named case in the
+    /// child and returns, so the parent proves the sameness against a
+    /// private `HOME`.
+    const CHILD: &str = "FIBER_DOORS_SOCKET_IMPORT_CHILD";
+
+    /// How long a re-run child may run: opening a session and importing
+    /// local files only. Twice it stays inside half of nextest's per-test
+    /// timeout (`docs/testing.md`, "Waits and timeouts").
+    const CHILD_WITHIN: Duration = Duration::from_secs(30);
+
+    fn child_name() -> String {
+        module_path!().split_once("::").unwrap().1.to_owned()
+    }
+
+    /// Writes `content` to `rel` under `root`, creating parents.
+    fn write(root: &Path, rel: &str, content: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    /// A fake `~/.claude` mirroring the probed layout: a skill, a flat
+    /// command, instruction content, two mapped servers, and unmapped
+    /// entries including a secret.
+    fn claude_home(root: &Path) {
+        write(
+            root,
+            ".claude/skills/review/SKILL.md",
+            "---\nname: review\ndescription: Reviews code.\n---\n\nBody.\n",
+        );
+        write(root, ".claude/commands/greet.md", "Hello there.\n");
+        write(root, ".claude/CLAUDE.md", "Be kind.\n");
+        write(
+            root,
+            ".claude/settings.json",
+            &json!({
+                "model": "opus",
+                "mcpServers": {
+                    "notes": {"command": "notes-server", "args": ["--fast"]},
+                    "remote": {"url": "https://mcp.example.com/x"},
+                },
+            })
+            .to_string(),
+        );
+        write(root, ".claude/agents/worker.md", "worker\n");
+        write(root, ".claude/auth.json", "{\"token\": \"x\"}\n");
+    }
+
+    /// A fake `~/.codex` mirroring the probed layout: a skill, a flat
+    /// prompt, instruction content, two mapped servers, and a secret.
+    fn codex_home(root: &Path) {
+        write(
+            root,
+            ".codex/skills/lint/SKILL.md",
+            "---\nname: lint\ndescription: Lints.\n---\n\nLint body.\n",
+        );
+        write(root, ".codex/prompts/plan.md", "Plan it.\n");
+        write(root, ".codex/AGENTS.md", "Be thorough.\n");
+        write(
+            root,
+            ".codex/config.toml",
+            "[mcp_servers.alpha]\n\
+             command = \"alpha-server\"\n\
+             \n\
+             [mcp_servers.beta]\n\
+             url = \"https://beta.example.com/mcp\"\n",
+        );
+        write(root, ".codex/auth.json", "{\"token\": \"x\"}\n");
+    }
+
+    /// Every import-landed file under `home` but the receipts, as relative
+    /// paths with bytes, in order: the opened session's own durable files
+    /// under `projects/` are the harness's, not the import's.
+    fn tree(home: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut pending = vec![home.to_path_buf()];
+        while let Some(path) = pending.pop() {
+            if path.is_dir() && !path.is_symlink() {
+                for entry in std::fs::read_dir(&path).unwrap() {
+                    pending.push(entry.unwrap().path());
+                }
+                continue;
+            }
+            if path.is_file() {
+                let rel = path.strip_prefix(home).unwrap().display().to_string();
+                if rel == "import-claude-code.json"
+                    || rel == "import-codex.json"
+                    || rel.starts_with("projects/")
+                {
+                    continue;
+                }
+                out.push((rel, std::fs::read(&path).unwrap()));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Runs the shared import directly, as `fiber import` does: the same
+    /// code path the driver command runs.
+    fn direct(home: &Path, person: &Path, source: config::ImportSource) -> config::ImportReport {
+        let clock = fakes::clock::FakeClock::new();
+        let source_home = config::source_home(person, source);
+        config::import_source(home, &source_home, source, clock.as_ref()).unwrap()
+    }
+
+    /// The driver's accepted `result` for the `import` line with `id`.
+    fn drive(client: &fakes::Client, line: &str, id: &str) -> Value {
+        send(client, line);
+        let answer = response(client, id);
+        assert_eq!(kind(&answer), "command_accepted", "{answer}");
+        answer["payload"]["result"].clone()
+    }
+
+    /// Two reports back to back, Claude Code's lists then Codex's, as the
+    /// bare driver command aggregates them.
+    fn combined(first: &config::ImportReport, second: &config::ImportReport) -> Value {
+        let first = serde_json::to_value(first).unwrap();
+        let second = serde_json::to_value(second).unwrap();
+        let mut imported = Map::new();
+        for key in ["mcp_servers", "skills", "commands", "instructions"] {
+            let mut names = first["imported"][key].as_array().unwrap().clone();
+            names.extend(second["imported"][key].as_array().unwrap().clone());
+            imported.insert(key.to_owned(), Value::Array(names));
+        }
+        let mut left = first["left_behind"].as_array().unwrap().clone();
+        left.extend(second["left_behind"].as_array().unwrap().clone());
+        json!({"imported": imported, "left_behind": left})
+    }
+
+    /// A bare `import` matches two direct shared imports, one per source:
+    /// the accepted report, the landed files, and both receipts.
+    fn bare(person: &Path) {
+        let direct_home = fakes::TempDir::new("fiber-import-direct");
+        let opened = Opened::open(Vec::new());
+        let socket = opened.socket.clone();
+        let home = opened.home.clone();
+        let direct_root = direct_home.path().to_path_buf();
+        let person = person.to_path_buf();
+        opened
+            .session
+            .run(Vec::new(), Arc::new(|| false), move |_| {
+                let client = fakes::Client::connect(&socket).unwrap();
+                subscribe(&client, "sub", "summary");
+                let result = drive(&client, r#"{"id":"imp","command":"import"}"#, "imp");
+                let claude = direct(&direct_root, &person, config::ImportSource::ClaudeCode);
+                let codex = direct(&direct_root, &person, config::ImportSource::Codex);
+                assert_eq!(result, combined(&claude, &codex), "{result}");
+                assert_eq!(tree(&home), tree(&direct_root));
+                for receipt in ["import-claude-code.json", "import-codex.json"] {
+                    assert!(home.join(receipt).is_file(), "driver writes {receipt}");
+                    assert!(
+                        direct_root.join(receipt).is_file(),
+                        "direct writes {receipt}"
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+        opened.close();
+    }
+
+    /// A sourced `import` matches the direct shared import for that
+    /// source: no Claude receipt, no Claude files.
+    fn one(person: &Path) {
+        let direct_home = fakes::TempDir::new("fiber-import-direct");
+        let opened = Opened::open(Vec::new());
+        let socket = opened.socket.clone();
+        let home = opened.home.clone();
+        let direct_root = direct_home.path().to_path_buf();
+        let person = person.to_path_buf();
+        opened
+            .session
+            .run(Vec::new(), Arc::new(|| false), move |_| {
+                let client = fakes::Client::connect(&socket).unwrap();
+                subscribe(&client, "sub", "summary");
+                let result = drive(
+                    &client,
+                    r#"{"id":"imp","command":"import","args":{"source":"codex"}}"#,
+                    "imp",
+                );
+                let codex = direct(&direct_root, &person, config::ImportSource::Codex);
+                assert_eq!(result, serde_json::to_value(&codex).unwrap(), "{result}");
+                assert_eq!(tree(&home), tree(&direct_root));
+                assert!(!home.join("import-claude-code.json").exists());
+                assert!(!direct_root.join("import-claude-code.json").exists());
+                Ok(())
+            })
+            .unwrap();
+        opened.close();
+    }
+
+    /// The child's entry: the parent's `HOME` holds the fake person home
+    /// the case reads.
+    fn run_child(case: &str) {
+        let person = PathBuf::from(std::env::var_os("HOME").unwrap());
+        match case {
+            "bare" => bare(&person),
+            "one" => one(&person),
+            other => panic!("unknown import case {other}"),
+        }
+    }
+
+    /// Re-runs the current test in a child with `HOME` pointing at
+    /// `person`: the child's exit code proves the case.
+    #[track_caller]
+    fn parent(test: &str, case: &str, person: &Path) {
+        let output = fakes::rerun_prepared(
+            &format!("{}::{test}", child_name()),
+            &[(CHILD, case)],
+            CHILD_WITHIN,
+            |command| {
+                command.env("HOME", person);
+            },
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "child {case} failed: stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bare_import_matches_a_direct_shared_import() {
+        if let Some(case) = std::env::var_os(CHILD) {
+            run_child(case.to_str().unwrap());
+            return;
+        }
+        let person = fakes::TempDir::new("fiber-import-person");
+        claude_home(person.path());
+        codex_home(person.path());
+        parent(
+            "bare_import_matches_a_direct_shared_import",
+            "bare",
+            person.path(),
+        );
+    }
+
+    #[test]
+    fn sourced_import_matches_a_direct_shared_import() {
+        if let Some(case) = std::env::var_os(CHILD) {
+            run_child(case.to_str().unwrap());
+            return;
+        }
+        let person = fakes::TempDir::new("fiber-import-person");
+        claude_home(person.path());
+        codex_home(person.path());
+        parent(
+            "sourced_import_matches_a_direct_shared_import",
+            "one",
+            person.path(),
+        );
+    }
 }

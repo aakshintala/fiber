@@ -341,6 +341,14 @@ impl Remote {
     pub(crate) fn local_global_file(&self) -> PathBuf {
         self.local.global_file()
     }
+    /// Reads the first-run offer's pending state from the hub
+    /// machine's home: the receipts live where the hub's `import`
+    /// writes them, never under the terminal's own home.
+    pub(crate) fn import_pending_hub(&self) -> Result<bool, ConfigureError> {
+        self.call("import_pending", json!({}), Caller::Loop, |value| {
+            value.get("pending")?.as_bool()
+        })
+    }
 
     fn hub_global(&self) -> Result<PathBuf, ConfigureError> {
         if let Some(file) = self.router.cached_global() {
@@ -714,6 +722,13 @@ impl Configure for Remote {
         on: bool,
     ) -> Result<(), ConfigureError> {
         self.call("switch_skill",json!({"workspace":self.workspace(workspace)?,"name":name,"scope":scope_name(scope),"on":on}),Caller::Loop,|_| Some(()))
+    }
+    /// The offer asks about the person's own sources: the hub command
+    /// it sends imports the same machine's home, so pending reads
+    /// there too. Without the link the read fails and the offer stays
+    /// down until the link is up and the hub answers.
+    fn import_pending(&self) -> bool {
+        matches!(self.import_pending_hub(), Ok(true))
     }
     fn skill_text(&self, path: &Path) -> Result<String, ConfigureError> {
         self.call(

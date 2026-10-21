@@ -15,7 +15,7 @@ use contract::{Envelope, Seq, SessionId};
 
 use super::batch::{HUB_BATCH, batch, batchable, ready};
 use crate::Input;
-use crate::app::{App, mint, session_command};
+use crate::app::{App, history_args, mint, session_command};
 use crate::link::{self, Credits, Line};
 use crate::retry::Retry;
 use crate::tick::TickThread;
@@ -204,8 +204,15 @@ impl Connection {
         while from <= range.end().0 {
             let to = from.saturating_add(HISTORY_LINES - 1).min(range.end().0);
             let id = mint();
-            let args = serde_json::json!({"from_seq": from, "to_seq": to});
-            let command = session_command(&id, "history", session, Some(args)).to_string();
+            // An ancestor window rides the serving session's chain read:
+            // the command stays routed to the serving session, and the
+            // args name the ancestor segment. Own windows carry no
+            // session, exactly as today: when the serving session is the
+            // window's own, it is the same value either way, so no guard
+            // is left for mutants to flip.
+            let top = app.paging_session().unwrap_or(session);
+            let args = history_args(top, session, Some(from), Some(to));
+            let command = session_command(&id, "history", top, Some(args)).to_string();
             let written = self
                 .hub
                 .as_ref()

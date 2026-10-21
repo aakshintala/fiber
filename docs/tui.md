@@ -79,10 +79,13 @@ line says so: "Connecting 2 MCP servers…".
 
 On the first interactive run, with no import receipt yet
 (`docs/configuration.md`, "Importing"), home offers a one-time import of
-another harness's configuration: Claude Code's or Codex's. (Built in P2.)
+another harness's configuration: Claude Code's or Codex's.
 The offer runs the same shared import `fiber import` runs, and imported
 items apply on the next `/reload` with the reload's usual cache cost
-(`docs/mcp.md`, "Reload"). The offer fires once: answering it, or running
+(`docs/mcp.md`, "Reload"). A `1` or `2` pressed before the hub connects
+still imports once it does, so an early press is never lost. Over a
+remote hub connection the receipts are the hub machine's, where that
+import runs (`docs/configuration.md`, "Importing"). The offer fires once: answering it, or running
 `fiber import` first, writes the receipt, and the offer never shows again.
 
 **The workspace chip** names the workspace in use: the one last picked, else
@@ -549,7 +552,11 @@ a click on it returns too. The views are:
   `error`. The input box's hint reads "steering goes to ◆ <description>",
   dim. A delegate that has not bound its socket yet answers
   `session_not_found`; while its parent lists it running, the terminal asks
-  again every 500 ms.
+  again every 500 ms. A delegate or job that has finished opens the same
+  view read-only: its status row shows the outcome (`completed`, `failed`
+  or `cancelled`) where the stop target would be, the transcript is the
+  replay of its log, and Enter keeps the finished notice instead of
+  steering.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box sends `job_input` to type into it as raw keys, as `jobs write`
   does for the model, so the person can finish an interactive step the model
@@ -629,6 +636,20 @@ a click on it returns too. The views are:
   matches nothing shows one line, "No models match" dim, and no provider
   sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
   Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
+- The credential picker, `/credential`: the header reads "Credentials" bold,
+  "  /credential" dim and "Esc returns" dim, right-aligned. The provider's
+  labels follow the header in the answer's order,
+  one per row. Only the current label has "  ● current" in `accent` after
+  it and starts selected in reverse. With no current label, the first row
+  starts selected. The plain line above the bottom footer reads the provider's name, such as
+  "fake", or "Reading the labels…" before the answer, or
+  "<provider> has no credential labels" for an empty answer. A rejected
+  query shows its message instead. The dim footer on the last row is
+  "↑↓ move · Enter choose · Ctrl+S this session · Esc close".
+  ↑ and ↓ move between rows. Enter or a click chooses a label and saves
+  it; Ctrl+S, `session_only`'s key, chooses it for this session only.
+  Esc closes. Typing does nothing: there is no filter. Choosing from an
+  empty list does nothing. A session-only choice adds no extra row.
 - **The usage view,** `/usage`: the session's `usage` (`docs/events.md`) broken
   down by turn, by model and by delegate, each with tokens by kind, cost billed
   and cost on subscription, and the budget left when `budget.usd` is set.
@@ -902,6 +923,17 @@ arrived after `sessions` was sent.
   lines; Enter on a focused row does the same. Enter again on the opened
   call, or a click on its "… N more lines (Enter to view)", opens the whole
   call in a swapped view ("Swapped views").
+- **While an opened call's row, or an open ledger's group line, is above the
+  conversation's top row and any of its content is on screen, that row stays
+  pinned to the conversation's top row.** Scrolling into the opened output
+  keeps the row over the covered content row, drawn as the row it stands for,
+  on the card's tint, with hover highlighting it like any click target. When a
+  call is opened inside an open ledger, only the innermost one pins: the
+  call's row. Clicking the pinned row closes what it opened, and the
+  conversation scrolls so the closed row sits at the top. Ctrl+O keeps its
+  current meaning. Whenever a find, a search-results jump, keyboard focus or
+  a reveal scrolls a row into view while a row is pinned, the visible top is
+  the row under the pin, with the pin staying.
 - **A call that changed a file is highlighted** in the ledger, with the file's
   name and its lines added and removed, so edits stand out from reads and
   commands. Its counts are in `added` and `removed`, where every other result
@@ -1089,6 +1121,10 @@ right-aligned. Clicking a notice shows the whole text in an overlay.
 - The "N approvals waiting" row (see "An approval") sits above the notices, and on a screen too short for both it drops first.
 - A notice that arrives during a drag waits for the release.
 - In the screen-reader mode notices are lines in reading order.
+
+An accepted `/import` answer is one notice per `fiber import` line,
+naming what the import copied and left behind, plus a `/reload` reminder
+(`docs/configuration.md`, "Importing").
 
 When the hub sends `stream_closed` for the open session (it cannot read
 the session's log to serve this terminal), the conversation keeps every line
@@ -1438,7 +1474,7 @@ what it started keeps running.
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
 - **Every action has a key.** Every action also has a mouse target or a slash
   command, except editing the draft in the input box and search, and choosing
-  in the model picker for this session only. A mouse target is drawn only where one fits naturally, never as a
+  in the model picker or the credential picker for this session only. A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -1613,7 +1649,7 @@ of them when a key arrives:
   an approval or question, an offer, or the Ctrl+R panel; or the `/`
   or `@` completion panel while focus is not in the conversation. An overlay's
   own keys, such as an approval's ↑ and ↓, are not bindings.
-- Picker: the model picker is open. Only its own keys and the global actions
+- Picker: the model picker or the credential picker is open. Only its own keys and the global actions
   act.
 - Search: conversation search is open.
 - Conversation: focus is in the conversation.
@@ -1709,7 +1745,7 @@ later release still applies.
 | `/resume` | Goes home, focused on the first exited row. |
 | `/model` | Opens the model picker. |
 | `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. Sent while a turn runs, the choice applies when the turn ends. The notice appears when the choice is sent; if the session rejects the choice, the rejection's notice replaces it. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
-| `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
+| `/credential [<label>]` | With no label, opens the credential picker ("Swapped views"): Enter switches to the chosen label and saves it as the provider's `credential`, Ctrl+S switches for this session only and saves nothing. With a label, switches to it and saves it. The label is saved under the provider the session accepted the switch on. The terminal first says the switch rebuilds the cache, with its size (`docs/model-routing.md`, "Which credential a session uses"). |
 | `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. Each row carries its mark between the gutter and the id: `[x]` marked, `[ ]` not, bold on the focused row and dim when unmarked. The count row reads ` {m} of {n} marked ` unfiltered and ` {v} of {n} models · {m} marked ` filtered, with no show-all toggle and no refresh button. The row below each model is its thinking row, dim with nothing to choose. Ctrl+S saves and closes. The footer is "↑↓ move · Enter toggle · Ctrl+S save · Esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/tools` | Opens the tools view. |
 | `/mcp` | Opens the MCP servers view. |
@@ -2153,7 +2189,11 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   terminal subscribes at `summary` and asks `history`, with no `from_seq`,
   for the session's last lines. It cuts them into pages and asks for the
   lines before them until it holds the pages that fill the screen up from
-  its last row, and begin at a turn's start. The first frame draws those
+  its last row, and begin at a turn's start. When the held run reaches the
+  session's `seq 0`, the read continues past it into each ancestor named
+  by `forked_from`, to the chain root: on its own segment the read stops
+  once the display fills, while past a segment start it keeps going for
+  the joint total. The first frame draws those
   pages. The terminal then raises the subscription to `full`.
   The pass goes over the session's lines as the `full` subscription sends
   them. It builds the panel's cards and counts every row, keeping each
@@ -2171,7 +2211,10 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   The one exception: rows that depend on turns before the held pages (an
   orphaned job's completion, an automatic handoff's trigger, a ledger
   toggled earlier: only rows of these kinds) may change in the frame where
-  the pass ends.
+  the pass ends. At an open across the chain the preview already holds
+  the whole run to the chain root, so the landing rewrites nothing
+  across the seam. On one segment the preview holds the filled run and
+  the pass counts the rest, so the landing adds the rows above it.
   EOF, `stream_closed`, a failed read, a disconnect and lowering
   to `summary` end the pass too. The feed's `session_left` for a session
   ends that session's pass. Waiting work then runs against what is held,
@@ -2180,6 +2223,20 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   once. Stashed lines fold in order before the new fold, whose lines are
   never stashed. The late answer is discarded by its id, and the page
   loads in a frame after the pass ends.
+- **A rewound session pages across its `forked_from` chain as one history,**
+  cut at each continuation point. The terminal reads `forked_from` from the
+  session's `session_started`, asks `history` with `session_id` set to that
+  ancestor and `to_seq` set to its `seq`, pages that session the same way,
+  and repeats for each further ancestor. Pages, row counts, search and the
+  opening pass treat the chain as one history. The terminal never reads a
+  log from disk. `land` carries the preview's closed ancestor pages across
+  the swap the way it carries open items; a dropped ancestor page loads
+  again with `history` under its `session_id`, and the fold still replays
+  the own log only. Ancestor rows are counted by the same `history`
+  streaming before the scroll bar appears, never from the subscription:
+  "until the screen is full" governs the display phase on its segment,
+  and past a segment start the count phase keeps streaming to the chain
+  root.
 - **Pages are cut inside turns,** at `step_started`, about 64 lines each, and
   never inside a tool group, so each page renders on its own.
 - **The window** is the pages on screen plus one screen of rows above and

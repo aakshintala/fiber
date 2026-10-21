@@ -140,6 +140,7 @@ credential a session uses"). A new session takes its label from
 | Command | What it does |
 |---|---|
 | `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). `upgrade` runs the same command. A repository's extensions are not updated: each changes only through a new offer. |
+| `setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code \| codex>]... [--completions <shell> \| --no-completions] [--hub \| --no-hub]` | Asks the questions a new install needs, and applies each answer with the command that already does it (below). `install.sh` runs it last; a person runs it again at any time. |
 | `approve [--yes]` | Run in a repository: shows every extension, hook and MCP server the repository declares, as one offer would, and approves them for this person (`docs/extensions.md`, "Code a repository ships"). `--yes` approves without asking, for a script or a machine image. It prints each approval on stderr. |
 | `login [<name>] [--as <label>] [--device]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"), or a secret an installed extension declares (`docs/configuration.md`, "Secrets"). Without `--as`, a provider's label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. `--as` applies only to a provider. `--device` applies only to a provider that logs in by browser, and logs in with a device code instead of the browser. A name that is neither an installed provider nor a declared secret is a usage error that lists both. With no name, a terminal offers the installed providers and the declared secrets; without a terminal, it is a usage error. |
 | `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
@@ -167,6 +168,35 @@ age (`docs/state.md`, "What each part holds"). When `docs/` is missing from
 Fiber home, it says `` user guide not installed: run `fiber update` ``
 (`docs/releasing.md`). It never touches the network, so it does not check that
 a key is valid.
+
+**Setting up.** `fiber setup` asks, in this order, and each answer runs the
+command that already does that job:
+
+1. which providers to sign in to: the installed providers that log in, with
+   any that already have a stored credential marked and not selected. Each
+   one picked runs that provider's login, as `fiber login <name>` does,
+   reviewer pick included (`docs/model-routing.md`, "Logging in").
+2. whether to import Claude Code's or Codex's configuration, offered for each
+   source whose directory exists and has no completed receipt. Yes runs
+   `fiber import` for it (`docs/configuration.md`, "Importing").
+3. the default `model` and `thinking`, from the signed-in providers' models,
+   with the current global values preselected. The answer is written to the
+   global `config.json`; skipping leaves it unset.
+4. whether to install completions for the shell `$SHELL` names. Yes appends
+   one line that runs `fiber completion <shell>` to that shell's startup
+   file (`~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`), unless
+   the line is already there.
+5. whether to register the hub as a login service, default no. Yes runs
+   `fiber hub install` without `--port`; a hub already registered is named,
+   not asked.
+
+Each question has a flag. A flag answers its question and the rest are still
+asked. Without a terminal nothing is asked: setup does what the flags say,
+skips every question without one, and prints each skipped step with the
+command that does it later. It never picks a model nobody chose. Running
+`fiber setup` again asks the same questions with the current answers
+preselected; a step already done is shown as done, and changing it runs its
+command again.
 
 **Extensions.** `fiber extension` manages extensions (`docs/extensions.md`,
 "Installing").
@@ -374,12 +404,13 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `propose_notes` | `topic` (string: `source_control`, `internal_hosts`, `internal_tools`, `routine_actions` or `never`), `answer` (string, optional), `earlier` (array of strings, optional) |
 | `command` | `name` (string); `text` (string, optional), what the person typed after the name |
 | `close` | `now` (boolean, default false) |
+| `import` | `source` (string, optional), `claude-code` or `codex`; absent means both sources |
 
 ### What each command does
 
 | Command | What it does |
 |---|---|
-| `subscribe` | The first command on every connection to a session, and on a connection to the hub the first command for each session. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command for that session before it is rejected `not_subscribed`. A later `subscribe` at the other level changes the connection's level: raising it to `full` folds the stream from the log as a first `full` subscribe does; lowering it to `summary` ends the connection's count in `clients`, sends every durable line written before the change, then stops the stream and sends the latest `session_status` and `extensions_loaded`. Its acknowledgement is the first line at the new level. At `full`, its `command_accepted` carries `result.last_seq`, the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log. A rejected change leaves the level as it was. A `subscribe` at the level the connection already holds is rejected `invalid_arguments`. Through the hub, a session that resumes is subscribed at the level the connection last held. At `full`, the client then receives `stream_reopened` (`docs/events.md`) before the new fold. When the session cannot read its log to serve a connection, a line that does not parse or a failed read, it closes that connection: the client receives every line before the one that failed, then end of file. The session keeps running. Through the hub, the client receives `stream_closed` (`docs/events.md`) where a direct client receives end of file, and its next command for that session is rejected `not_subscribed` until it subscribes again. With `credential`, a subscribe that resumes an exited session starts it on that label, as `--credential` on a resume does (`docs/model-routing.md`, "Which credential a session uses"). On a running session it switches the label as the `credential` command does. A credential switch accepted while a model switch is queued applies to the queued model's provider, else the session model's provider. It applies to that subscribe only. A later subscribe, or a reconnect, carries no label unless it names one. A subscribe on a running session is accepted with one `command_accepted`, carrying only `last_seq` at `full`, even when its requested switch fails; the failure follows as an ephemeral `notice` (`docs/events.md`, "Usage and notices") carrying the switch rejection's code and message, and the session keeps its old label. |
+| `subscribe` | The first command on every connection to a session, and on a connection to the hub the first command for each session. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command for that session before it is rejected `not_subscribed`. A later `subscribe` at the other level changes the connection's level: raising it to `full` folds the stream from the log as a first `full` subscribe does; lowering it to `summary` ends the connection's count in `clients`, sends every durable line written before the change, then stops the stream and sends the latest `session_status` and `extensions_loaded`. Its acknowledgement is the first line at the new level. At `full`, its `command_accepted` carries `result.last_seq`, the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log. A rejected change leaves the level as it was. A `subscribe` at the level the connection already holds is rejected `invalid_arguments`. Through the hub, a session that resumes is subscribed at the level the connection last held. At `full`, the client then receives `stream_reopened` (`docs/events.md`) before the new fold. Through the hub, a `full` subscribe naming a delegate whose run has finished replays that run's log instead of opening the session: `command_accepted` carries `last_seq`, then the fold follows, with no live tail after it; the kept subscription follows the delegate into its resumed run on a later `delegate_message` (`docs/delegates.md`, "Talking to a delegate"). A log that vanished is refused `session_not_found`; one that cannot be read or serialised `log_corrupt`. A `summary` subscribe, and one whose parent still runs the job, are refused as a delegate that is not running ("Lifecycle"). When the session cannot read its log to serve a connection, a line that does not parse or a failed read, it closes that connection: the client receives every line before the one that failed, then end of file. The session keeps running. Through the hub, the client receives `stream_closed` (`docs/events.md`) where a direct client receives end of file, and its next command for that session is rejected `not_subscribed` until it subscribes again. With `credential`, a subscribe that resumes an exited session starts it on that label, as `--credential` on a resume does (`docs/model-routing.md`, "Which credential a session uses"). On a running session it switches the label as the `credential` command does. A credential switch accepted while a model switch is queued applies to the queued model's provider, else the session model's provider. It applies to that subscribe only. A later subscribe, or a reconnect, carries no label unless it names one. A subscribe on a running session is accepted with one `command_accepted`, carrying only `last_seq` at `full`, even when its requested switch fails; the failure follows as an ephemeral `notice` (`docs/events.md`, "Usage and notices") carrying the switch rejection's code and message, and the session keeps its old label. |
 | `prompt` | Starts a turn. Rejected `busy` if a turn is running. Rejected `invalid_arguments` or `mcp_prompt_failed` when its `/name` runs an MCP server's prompt Fiber cannot get (`docs/mcp.md`, "Prompts and resources"). |
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. |
 | `steer_drop` | Removes a queued steering message, so nothing is applied. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
@@ -410,7 +441,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `propose_notes` | Proposes reviewer-note lines for one topic on the session's model, in a request of its own with no conversation, from the evidence `docs/permissions.md` "Setting up the notes" lists, with user names and passwords removed from every URL; answers `evidence`, `proposed` and `error`; when it sends the request, writes one `usage_recorded` with no turn and no action, and no configuration; rejected `busy` while a turn runs or an approval waits, and `closing` after `close`. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands and screens"). Rejected `unknown_command` for a name no extension registered. |
 | `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. With `now`, it starts a shutdown instead ("Shutdown"): the turn in flight ends, every job and delegate stops, and the session exits 0. A `close` with `now` is accepted also after `close`. |
-| `import` | (Built in P2.) Runs the same one-time import `fiber import` runs (`docs/configuration.md`, "Importing"), and reports the same imported and left-behind lists. |
+| `import` | Runs the same one-time import `fiber import` runs (`docs/configuration.md`, "Importing"), and reports the same imported and left-behind lists. |
 
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
@@ -585,8 +616,7 @@ because its conversation is its log.
 parent (`docs/delegates.md`, "Talking to a delegate"). A command for a delegate
 that is not running is refused `session_not_found`, "A delegate resumes only
 through its parent." A delegate whose log ends in `fiber_exited` is refused at
-once, without the shutdown wait below. A running delegate is reached as any
-session.
+once, without the shutdown wait below — except a `full` `subscribe`, which replays the finished run's log instead: `command_accepted` carries `last_seq`, then the fold follows, with no live tail after it. A log that vanished is refused `session_not_found`; one that cannot be read or serialised `log_corrupt`. A `summary` subscribe, and a `full` one whose parent still runs the job, are refused as a delegate that is not running. A running delegate is reached as any session.
 
 A session whose log ends in `fiber_exited` has exited, even while its process
 is still shutting down. The hub does not pass on a `closing` answer from it: it
@@ -1248,7 +1278,12 @@ git library is linked in. `git worktree add` runs the repository's hooks, so
 a `post-checkout` hook can set up the new tree. Every other git command the
 `worktree` module runs, including those of `fiber sessions prune`, runs with
 the repository's hooks off (`-c core.hooksPath=/dev/null`), so removing a
-worktree can't hang on a hook. A supervisor that wants its own tree still makes it
+worktree can't hang on a hook. Every git `fiber sessions prune` runs, discovery
+and worktree reads alike, carries the scrubbed environment as well:
+`core.fsmonitor` off (`-c core.fsmonitor=false`), `GIT_OPTIONAL_LOCKS` and
+`GIT_TERMINAL_PROMPT` pinned to `0`, and `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_COMMON_DIR` and `GIT_INDEX_FILE` removed, so a redirected environment
+cannot move the prune to another repository. A supervisor that wants its own tree still makes it
 and passes the path.
 
 ## Deleting and pruning

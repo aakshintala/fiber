@@ -105,7 +105,43 @@ A first-party provider is one Fiber can probe and re-record. There are eleven:
 The protocols are the ones each provider serves and Fiber speaks for it. A
 package's shipped models may use only some of them, and a model on another
 one is added once it is probed. The OpenAI provider sends `store: false` on every request. Google Vertex's
-flags and URLs are data, like any provider's.
+flags and URLs are data, like any provider's. Google Vertex ships its Gemini 3
+and later models only, at the `global` location: no Claude model answered on
+the project it was probed with ("Google Vertex wire facts"), so its Claude
+models are added once one is probed.
+
+Google Vertex's `credential()` returns an OAuth access token from the Google
+Cloud CLI, sent as `authorization: Bearer`. The session's credential label
+names a gcloud configuration. Under any label but `default` it runs
+`gcloud config config-helper --configuration <label>`, which prints that
+configuration's account's token and its expiry; a person picks the
+configuration as any label is picked ("Which credential a session uses"),
+such as in the global file:
+
+```json
+{ "providers": { "vertex": { "credential": "work" } } }
+```
+
+and switches it mid-session with `/credential <configuration>`. Under
+`default` it takes the active configuration's token. Only when gcloud has no
+account selected at all, saying "You do not currently have an active account
+selected", does it take Application Default Credentials' token instead:
+`gcloud auth application-default print-access-token`. Any other failure, such
+as a login that needs reauthentication or a selected account with no
+credentials, fails with `credential_failed` and says to run `gcloud auth
+login`, so a session never switches to the account Application Default
+Credentials hold. Each command's `--format` prints the token and its expiry
+and no other field. The token is refreshed before its expiry, as any token is
+("Keys, tokens and OAuth"). With no account selected and no Application
+Default Credentials, the call fails with `credential_failed`, and the message
+says to run `gcloud auth login` or `gcloud auth application-default login`,
+or name a configuration. The failure keeps gcloud's own reason, with an
+address shown as `[account]` and any run of 20 or more token-like characters
+as `[redacted]`.
+`fiber login vertex` is not supported: it stores a key, and a provider with
+`credential()` reads none. The Google Cloud project is the package's
+`project` setting, which its base URL names, read from
+`GOOGLE_CLOUD_PROJECT` when unset ("A per-account host").
 
 A provider Fiber cannot probe is left to the community: a vendor whose
 subscription Fiber does not hold, or a key vendor such as Groq, Mistral,
@@ -207,9 +243,66 @@ The Gemini API answers HTTP 404 "no longer available to new users" for
 `gemini-2.5-flash-lite`, `gemini-2.5-flash` and `gemini-2.5-pro` on a key created
 in September 2026.
 
-Fiber targets Gemini 3 and later on `google-generative-ai`. How Gemini 2.x
-models treat function-call ids and images in `functionResponse.parts` is not
-measured, and is settled when Fiber adds them.
+Fiber targets Gemini 3 and later on `google-generative-ai`. Google Vertex
+serves `gemini-2.5-flash-lite`, and there it emitted no id on a call, took a
+made-up id on replay, and did not read an image in `functionResponse.parts`.
+It also refuses the `includeThoughts` Fiber sends on every request while no
+thinking level is set ("Google Vertex wire facts").
+
+### Google Vertex wire facts
+
+Measured on October 20, 2026 against `aiplatform.googleapis.com`, mostly with
+`gemini-3.1-flash-lite`, and one tool call to each Gemini 3 and later model
+(`research/vertex-probe`).
+
+- Gemini's base URL is
+  `https://aiplatform.googleapis.com/v1/projects/<project>/locations/global/publishers/google`,
+  and `google-generative-ai` appends the Gemini API's own
+  `/models/<id>:streamGenerateContent?alt=sse`. The stream is the Gemini
+  API's, with `modelVersion`, `createTime` and `usageMetadata.trafficType`
+  added. The token goes in `authorization: Bearer`; `x-goog-api-key` answered
+  401 "API keys are not supported by this API".
+- Every Gemini API fact above held for `gemini-3.1-flash-lite`:
+  `systemInstruction.role` `user`, `model` or left out was obeyed;
+  `parametersJsonSchema` took `$defs`, `$ref` and `anyOf` under `VALIDATED`,
+  and `parameters` refused them with 400; a replayed `functionCall` without
+  its `thoughtSignature` failed with 400, and the three odd ids were
+  accepted; an image in `functionResponse.parts` was read. Calls carried an
+  id on every model but `gemini-3.1-pro-preview-customtools`, whose call had
+  none. A `thinkingLevel` streamed a `thought` part, the text, then an empty
+  part carrying the signature.
+- Function tools beside the hosted `google_search` were accepted without
+  `includeServerSideToolInvocations`. With or without it the search came only
+  as the last chunk's `groundingMetadata`, never as `toolCall` and
+  `toolResponse` parts, so no Vertex model declares `web_search`. One of two
+  requests with the flag ended after its first chunk with no finish reason.
+- Implicit caching reports reads: a session's later call counted 3,167 of its
+  3,590 input tokens as `cachedContentTokenCount`.
+- `global` is served from `aiplatform.googleapis.com` and a region from
+  `<region>-aiplatform.googleapis.com`; `global-aiplatform.googleapis.com`
+  answered 404. `gemini-3.1-flash-lite` answered 404 at `us-central1` and
+  `asia-south1`: Gemini 3 is served at `global` only, so every Vertex model's
+  base URL names `global`.
+- Claude's base URL is the same with `publishers/anthropic`. A model that
+  declares `compat.vertex_raw_predict` posts the `anthropic-messages` body to
+  `<base_url>/models/<id>:streamRawPredict`, with
+  `anthropic_version: vertex-2023-10-16` in place of `model`. No Claude model
+  answered on the probe's project, so this rests on Google's and Anthropic's
+  documentation: each answered 404 "not found or your project does not have
+  access to it", and `claude-fable-5` 403 "requires data sharing to be
+  enabled for publisher 'anthropic'".
+- Every `streamRawPredict` failure came as a list holding one error object,
+  `[{"error": {...}}]`. Under `vertex_raw_predict` the object inside is read,
+  as any provider's error body is (`docs/errors.md`).
+- An unknown model, or one the project cannot call, answered 404
+  `NOT_FOUND` with "Publisher model `projects/.../models/<id>` was not found";
+  a garbage token and an expired one the same 401 `UNAUTHENTICATED`, reason
+  `ACCESS_TOKEN_TYPE_UNSUPPORTED`; a 429 `RESOURCE_EXHAUSTED` "Resource
+  exhausted. Please try again later." with no `Retry-After` and no
+  `RetryInfo`. `gemini-4-argon` answered one call and then refused every
+  request with 403 "Request rejected in accordance with our terms of use and
+  policies", so it is not shipped. Gemini's error bodies arrived as
+  `content-type: text/event-stream`.
 
 ### OpenCode wire facts
 
@@ -355,7 +448,7 @@ For each model:
 - output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
 
-A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
+A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. A `databricks` model found by discovery takes the `thinking` row of the vendor model its bare service name matches, looked up by the same match key discovery routes it with; a service the table names no row for keeps no levels. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.
@@ -398,12 +491,16 @@ any other type is left out of the model list, with the notice
 ### A per-account host
 
 Some providers serve each account from its own host, such as a Databricks
-workspace, an Azure resource or a Vertex region. A model's `base_url` names
-that part with a placeholder, `{name}`:
+workspace or an Azure resource, or from its own path, such as a Google Cloud
+project on Vertex. A model's `base_url` names that part with a placeholder,
+`{name}`:
 
 ```json
 "base_url": "https://{workspace}/ai-gateway/anthropic/v1"
 ```
+
+A placeholder in the path is filled and checked the same way, so its value
+must have a host's shape, as a Google Cloud project id does.
 
 The extension's manifest lists the same pattern under `providers`
 (`docs/extensions.md`, "What a package holds"), so an install or an offer
@@ -811,11 +908,16 @@ The label is part of the request settings, so `preamble_built` records it
 records `model_changed`, as a switch does.
 
 A person switches credential with `/credential <label>`, and a driver with the
-`credential` command (`docs/invocation.md`). The switch applies at the next
+`credential` command (`docs/invocation.md`). A credential switch accepted
+while a model switch is queued applies to the queued model's provider.
+The `credentials` query lists that provider's labels and the label it uses now.
+With no label, `/credential` opens the credential picker (`docs/tui.md`,
+"Swapped views"): Enter chooses a label and saves it; Ctrl+S chooses it for
+this session only and saves nothing. The switch applies at the next
 turn boundary and rebuilds the prompt cache, because a vendor holds the cache
 per account or workspace (`docs/prompt-cache.md`, "Switching model"). The
 terminal saves the label to the global `providers."<name>".credential`, unless
-the person marks the switch as this session only. A per-project file can pin a
+the person chooses it with Ctrl+S in the credential picker. A per-project file can pin a
 label for one project. Saving the label never changes another session that
 is already running.
 
@@ -935,8 +1037,9 @@ The saved responses had statuses 200, 400, 401, 403, 404, 405 and 429; no 409,
 The wait a provider asks for, in seconds, becomes the error's `retry_after_ms`, in milliseconds rounded up.
 Fiber reads it from `retry-after`. On `google-generative-ai`, Fiber reads
 `Retry-After` or the error body's `RetryInfo.retryDelay`, whichever is present.
-That is the shape Google documents, and it is unprobed: no Gemini 429 was
-reached (`research/retry-signals/`).
+That is the shape Google documents, and no Gemini API 429 was reached
+(`research/retry-signals/`). The one 429 Google Vertex sent carried neither,
+so Fiber waits its own backoff for one ("Google Vertex wire facts").
 
 The defaults are 3 retries with exponential backoff: 2 seconds, then 4, then
 8, with each delay capped at 60 seconds. If the server asks Fiber to wait longer

@@ -30,6 +30,15 @@ pub trait Machine: Send + Sync {
         args: &Map<String, Value>,
         clock: Arc<dyn Clock>,
     ) -> Result<Option<Value>, Failure>;
+    /// Runs the one-time import of `source` (`None` runs both) from the
+    /// person's home into the hub machine's Fiber home, answering the
+    /// imported and left-behind JSON the driver answers with.
+    fn import(
+        &self,
+        home: &Path,
+        source: Option<&str>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Option<Value>, Failure>;
     /// Reads a configuration view's file and its version.
     fn read_config(&self, workspace: &Path, path: &Path) -> Result<(String, String), Failure>;
     /// Writes text only while the configuration file still has `version`.
@@ -71,6 +80,40 @@ pub(crate) fn on_configure(hub: &Hub, args: &Map<String, Value>) -> Result<Optio
         .as_ref()
         .ok_or_else(invalid)?
         .configure(operation, &rest, Arc::clone(&hub.clock))
+        .map_err(refused)
+}
+
+/// Runs the one-time import through the machine: `source` names one
+/// source, absent runs both, and anything else is refused naming the
+/// two, mirroring the driver. The person's home comes from the hub's
+/// environments, the `directories` precedent; without one there is no
+/// source home to read.
+pub(crate) fn on_import(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
+    if args.keys().any(|key| key != "source") {
+        return Err(invalid());
+    }
+    let source = match args.get("source") {
+        None => None,
+        Some(Value::String(source)) if source == "claude-code" || source == "codex" => {
+            Some(source.as_str())
+        }
+        Some(_) => {
+            return Err(Refused {
+                code: contract::ErrorCode::InvalidArguments,
+                message: "`source` must be `claude-code` or `codex`.".to_owned(),
+            });
+        }
+    };
+    let Some(home) = hub.environments.user_home() else {
+        return Err(Refused {
+            code: contract::ErrorCode::IoFailed,
+            message: "HOME is not set, so the source home cannot be found.".to_owned(),
+        });
+    };
+    hub.machine
+        .as_ref()
+        .ok_or_else(invalid)?
+        .import(&home, source, Arc::clone(&hub.clock))
         .map_err(refused)
 }
 

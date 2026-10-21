@@ -261,6 +261,15 @@ holds"). The layers merge exactly as Fiber's own keys do.
 
 A separate file means an extension never rewrites the person's `config.json`.
 
+The first-party `vertex` extension has one setting, `project`: the Google
+Cloud project its models' base URL names, read from `GOOGLE_CLOUD_PROJECT`
+when it is unset (`docs/model-routing.md`, "A per-account host"). Its
+credential is not a key source. Its `credential()` asks the Google Cloud CLI
+for a token, and the credential label is a gcloud configuration's name:
+`providers."vertex".credential` set to `work` takes the token of the
+configuration `work`, and `/credential` switches it
+(`docs/model-routing.md`, "Protocols and providers").
+
 ## Secrets
 
 A secret is a file in `credentials/` in Fiber home, mode 0600. A provider's
@@ -395,7 +404,8 @@ Fiber writes configuration in these places:
 - ⌥R, `/rail`, or dragging the rail below its floor saves the global
   `tui.rail.shown` (`docs/tui.md`, "The rail")
 - `/credential` saves the global `providers."<name>".credential`, unless the
-  switch is marked as this session only, and `fiber login`, or the terminal's
+  label is chosen with Ctrl+S in the credential picker (`docs/tui.md`,
+  "Swapped views"), and `fiber login`, or the terminal's
   `/login`, writes it when it stores a provider's first label
   (`docs/model-routing.md`, "Credentials")
 - `/scoped-models` saves the global `scoped_models`, and the `/keys` screen
@@ -603,6 +613,7 @@ declares") lists:
   | `cache_key_header` | string | `openai-responses`, `openai-completions`, `anthropic-messages`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |
   | `thinking_budget` | boolean | `anthropic-messages` | the thinking level goes in `thinking: {type: "enabled", budget_tokens}` (`docs/model-routing.md`, "Thinking"); absent, it goes in `thinking: {type: "adaptive"}` and `output_config: {effort}` |
   | `bearer` | boolean | `anthropic-messages` | the key goes in `authorization: Bearer`; absent, it goes in `x-api-key` |
+  | `vertex_raw_predict` | boolean | `anthropic-messages` | the model is Claude on Google Vertex: the request goes to `<base_url>/models/<id>:streamRawPredict` with `anthropic_version` in the body and no `model`, and an error body that is a list of one object is read as that object (`docs/model-routing.md`, "Google Vertex wire facts") |
 
   `openai-completions` always sends `stream_options.include_usage: true`,
   because OpenAI sends no usage without it (`docs/model-routing.md`,
@@ -688,7 +699,9 @@ One receipt file per source sits at the top of Fiber home,
 time and counts (`docs/state.md`, "What each part holds"). A completed
 receipt short-circuits the command for that source: with a completed
 receipt the command succeeds without reading the source at all. The receipt
-is written last, and only on full success.
+is written last, and only on full success. Over a remote hub connection
+the import runs on that machine: `/import` in the terminal imports the
+hub machine's `~/.claude` or `~/.codex`, never the terminal's own home.
 
 A provider with a `models()` function returns a list in exactly the shape of
 `models`. Fiber caches it at `cache/models/<name>.json`.

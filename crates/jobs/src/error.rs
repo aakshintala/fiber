@@ -70,6 +70,13 @@ pub enum JobsError {
         /// What the credential check reported.
         message: String,
     },
+    /// The fork's point could not be read: nothing started. The code is
+    /// the point reader's, so a point that cannot fork fails its own code.
+    #[error("Starting the fork failed: {}", failure.message)]
+    ForkPoint {
+        /// The point reader's own refusal, with its code and message.
+        failure: Failure,
+    },
     /// The session is already at the delegate depth cap.
     #[error(
         "This delegate is at depth {}, the deepest a delegate can be, so it cannot use `{tool}`; do the work in this session.",
@@ -288,6 +295,7 @@ impl JobsError {
             Self::ModelNotString { .. } => ErrorCode::InvalidArguments,
             Self::ModelUnresolved { .. } => ErrorCode::InvalidArguments,
             Self::CredentialUnavailable { .. } => ErrorCode::CredentialMissing,
+            Self::ForkPoint { failure } => failure.code.clone(),
             Self::DepthExceeded { .. } => ErrorCode::DepthExceeded,
             Self::NoInbox => ErrorCode::ToolError,
             Self::SpawnFailed { .. } => ErrorCode::ToolError,

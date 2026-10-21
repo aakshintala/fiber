@@ -1,0 +1,207 @@
+{
+  "cost": 0.002024,
+  "events": [
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "**Gathering Paris Weather Data**\n\nI'm currently focused on obtaining today's weather for Paris. My next step is to specify the unit as Celsius.\n\n",
+                  "thought": true
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:58:38.577053Z",
+        "modelVersion": "gemini-3.1-pro-preview",
+        "responseId": "00000000000000000000005",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "functionCall": {
+                    "args": {
+                      "city": "Paris",
+                      "days": 1,
+                      "unit": "c"
+                    },
+                    "id": "call_1086065",
+                    "name": "get_weather"
+                  },
+                  "thoughtSignature": "AY89a181aMd5NCofHHBa88ZQE6r1XHkvcVUR8DgoJTPkiHlub424hAy4tFuuMvd+WIxdVUo0R9VdgAhuWzXDtuhyr+SUgpujlWgh4gVOKOPPZPOiX4tP9ca0PEL8z6uAFS3jDNz+SZc2ZX691VOSWIqzIrvC+njedsevlJU0bodbs1qaQXi4kCAmbhiQdtu9sltE9faJ8wqWM1zJxScTXndSL8+sts6w8ehNqmlyPAUFq8f1XehPMyu0NEgFhkWYE7VvaGh5WALKJ/Xt5XdMFNzWb4UgAUFRrvgMocWvI5cwTVq2scJaoMvAlZpuTzoLGrPn3tdh97LQVZIysZR+0Yp0EaHqxwA95vHwki5viQMH35RDrDQosAM3RFiFeWtYs2Rjbkol34re5Bq4RgY5veJrH4pTzwSqNr9HqdgMia8R9LDc164gqhl9EOg40FtTj10JnTCjeDCWs6yIaBd+QG6xlZ9KQ7ez6Uf2qIDQK70fk/ykHuVkAW4QTtE2rvjQALdoVX61KXVlq5RD5nG3dv9mXt2yI6xm2O+DzkfS9p9zbtGaYlMNc56DsNuBwHThPKz/JwpVUmRwEgnFAOusW7hOdBOvLVk6LggSJdwOxP8ocsfg67To2NhAFPS7P0al2gRQkPHCLQYIxwFkitHdEfeNZUChQjJ5CpsnyYU2wmbBmqQNx4rEqYQICS41EYV8QPx04/iODqtMTlWZLel1qbiiGl7O4J41ocmvVVb/stlK87Hj9uru2SRZheypm7weESIbeIxXGKT/L01oF2ANlGIl7w=="
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:58:38.577053Z",
+        "modelVersion": "gemini-3.1-pro-preview",
+        "responseId": "00000000000000000000005",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": ""
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-10-20T16:58:38.577053Z",
+        "modelVersion": "gemini-3.1-pro-preview",
+        "responseId": "00000000000000000000005",
+        "usageMetadata": {
+          "candidatesTokenCount": 26,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 26
+            }
+          ],
+          "promptTokenCount": 58,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 58
+            }
+          ],
+          "thoughtsTokenCount": 133,
+          "totalTokenCount": 217,
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    }
+  ],
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-disposition": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "What is the weather in Paris in celsius for today? Use the tool."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 1024,
+      "thinkingConfig": {
+        "includeThoughts": true,
+        "thinkingLevel": "LOW"
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "Weather for a city.",
+            "name": "get_weather",
+            "parametersJsonSchema": {
+              "$defs": {
+                "unit": {
+                  "enum": [
+                    "c",
+                    "f"
+                  ],
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "days": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                }
+              },
+              "required": [
+                "city",
+                "unit",
+                "days"
+              ],
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "usage": {
+    "candidatesTokenCount": 26,
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 26
+      }
+    ],
+    "promptTokenCount": 58,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 58
+      }
+    ],
+    "thoughtsTokenCount": 133,
+    "totalTokenCount": 217,
+    "trafficType": "ON_DEMAND"
+  }
+}

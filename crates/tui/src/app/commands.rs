@@ -92,6 +92,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_thinking,
     },
     CommandEntry {
+        name: "credential",
+        description: "Switches the credential label, or opens the credential picker.",
+        hint: Some("[<label>]"),
+        run: run_credential,
+    },
+    CommandEntry {
         name: "scoped-models",
         description: "Chooses which models the model picker shows.",
         hint: None,
@@ -188,6 +194,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_reload,
     },
     CommandEntry {
+        name: "import",
+        description: "Copies another harness's configuration into Fiber home, once.",
+        hint: Some("[<source>]"),
+        run: run_import,
+    },
+    CommandEntry {
         name: "close",
         description: "Stops the session on screen.",
         hint: None,
@@ -269,6 +281,14 @@ fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.send_command("reload", None))
 }
 
+fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
+    // A bare `/import` imports both sources; anything else goes out as
+    // `source`, and the session refuses what it does not take.
+    let rest = rest.trim();
+    let args = (!rest.is_empty()).then(|| json!({"source": rest}));
+    Some(app.send_command("import", args))
+}
+
 fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.close())
 }
@@ -310,6 +330,10 @@ fn run_context(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_usage(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::Usage))
+}
+
+fn run_credential(app: &mut App, rest: &str) -> Option<Effect> {
+    Some(app.credential_command(rest))
 }
 
 fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {

@@ -1003,13 +1003,13 @@ fn version_prints_the_package_version() {
     let line = match option_env!("FIBER_COMMIT") {
         Some(commit) => {
             assert!(
-                commit.len() >= 4
+                commit.len() == 40
                     && commit
                         .bytes()
                         .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
                 "{commit}"
             );
-            format!("fiber 0.0.0 ({commit})\n")
+            format!("fiber 0.0.0 ({})\n", &commit[..7])
         }
         None => "fiber 0.0.0\n".to_owned(),
     };
@@ -2625,6 +2625,7 @@ fn two_runs_send_byte_identical_preambles() {
         names,
         [
             "ask_user",
+            "delegate_fork",
             "delegate_message",
             "delegate_models",
             "delegate_spawn",

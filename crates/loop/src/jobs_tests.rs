@@ -441,7 +441,7 @@ impl World {
         by_call: Vec<Vec<Delivery>>,
         tools: impl FnOnce(&Sender<Delivery>) -> Vec<Arc<dyn Tool>>,
     ) -> Self {
-        let home = fakes::TempDir::new("fiber-job-notices");
+        let home = fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-job-notices");
         let workspace = home.path().join("workspace");
         let credentials = home.path().join("credentials");
         std::fs::create_dir_all(&workspace).unwrap();
@@ -2744,8 +2744,8 @@ fn a_steer_arriving_as_the_check_turn_starts_follows_jobs_pending_notified() {
             "step_started",
             "jobs_pending_notified",
             "steering_queue",
-            "steering_applied",
             "steering_queue",
+            "steering_applied",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",

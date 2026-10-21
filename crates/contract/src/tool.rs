@@ -22,6 +22,7 @@ use crate::shapes::{ContentPart, DeclaredEffects, Failure, Process};
 /// lists it in `replaces` (`docs/extensions.md`, "What a package holds").
 pub const BUILT_IN_TOOLS: &[&str] = &[
     "ask_user",
+    "delegate_fork",
     "delegate_message",
     "delegate_models",
     "delegate_spawn",

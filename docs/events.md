@@ -338,7 +338,7 @@ the envelope's `ts`.
 | `parent` | object | no | for a delegate: `session_id`, its parent session, and `delegate_id`, the delegate's `job_id` there (`docs/delegates.md`) |
 | `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
 | `rewind` | object | no | for a rewind: `summary` (string, optional) and `note` (string) |
-| `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind continues: `path` and `branch` (strings), and `repository` (string), the absolute path of the repository's git common directory, which a resume recreates a removed worktree from; `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
+| `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind or fork continues: `path` and `branch` (strings), and `repository` (string), the absolute path of the repository's git common directory, which a resume recreates a removed worktree from; `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
 
 #### `rewound`
 
@@ -1365,6 +1365,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
 | `offered_file` | `text` (string), the file's full UTF-8 text |
+| `import` | `imported` (object with `mcp_servers`, `skills`, `commands` and `instructions`, arrays of the names the import copied) and `left_behind` (array with one object per item not copied: `item` and `reason` strings) (`docs/configuration.md`, "Importing") |
 | `shell` | with `send` false, `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command`; with `send` true, `result` is absent |
 | `propose_notes` | `evidence` (array: `kind`, `text`, and on `session` `prefix`, `count`, `here`), `proposed` (array: `text`, `cites`), `error` (`error`, optional) |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |

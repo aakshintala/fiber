@@ -109,6 +109,8 @@ pub enum Command {
     Background,
     /// Re-reads configuration and declares the tool set again.
     Reload,
+    /// Copies another harness's configuration into Fiber home, once.
+    Import(ImportArgs),
     /// Answers with every declared tool.
     Tools,
     /// Answers with every configured MCP server and its state.
@@ -385,6 +387,15 @@ pub struct ModelArgs {
 pub struct CredentialArgs {
     /// A credential label of the session model's provider.
     pub label: String,
+}
+
+/// The `args` of `import`: `claude-code` or `codex`; absent means both.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportArgs {
+    /// The source to import; absent means both sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// The `args` of `quota`.

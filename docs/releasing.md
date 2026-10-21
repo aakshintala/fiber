@@ -88,10 +88,10 @@ includes the built-in skills, `docs/skills/<name>/SKILL.md`
 Nothing in the binary embeds documentation.
 
 The release also carries `fiber-extensions.tar.gz` and its checksum file:
-every first-party extension at the release tag, the eleven directories under
-`providers/`, the two harnesses, `extensions/claude` and
-`extensions/cursor-agent`, and `extensions/hooks` and `extensions/memory`. It is the same for every target. Nothing
+every first-party extension at the release tag: every directory under
+`providers/` and `extensions/` at the release tag. It is the same for every target. Nothing
 in the binary embeds an extension (`docs/extensions.md`, "A fresh install").
+The run fails when the packed set is empty or two top-level names collide.
 At its top level the archive has one directory per extension, named as it is
 installed under `extensions/` in Fiber home (`docs/extensions.md`, "Names"),
 with no install record. The docs archive holds the contents of `docs/` at its
@@ -148,8 +148,12 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
 3. checks the SHA-256 before moving anything into place
 4. extracts the binary next to its destination and renames it into place, so a
    failed install never leaves half a binary
-5. installs to `$FIBER_INSTALL_DIR`, or `~/.local/bin` if that is unset, and
-   warns without failing when that directory is not on `PATH`
+5. installs to the directory the person picks, offered as
+   `$FIBER_INSTALL_DIR`, or `~/.local/bin` if that is unset. When that
+   directory is not on `PATH`, it asks whether to add it, and yes appends one
+   line to the login shell's startup file (`~/.zshrc`, `~/.bashrc`, or
+   `fish_add_path` in `~/.config/fish/config.fish`) unless the line is
+   already there. No leaves `PATH` alone and prints the line to add.
 6. runs the binary it installed, once, with the internal install step,
    passing the version. That step downloads the same release's docs and
    extensions archives, checks each SHA-256, and puts `docs/` and each
@@ -157,6 +161,21 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
    renaming, as `fiber update` does. It takes the extensions lock, and records
    each extension at the release's version and the commit the binary was built
    from.
+7. runs `fiber setup` (`docs/invocation.md`, "Commands and flags"), which asks the
+   rest: providers, import, default model, completions and the hub.
+
+The script reads its questions from `/dev/tty`, so they work under
+`curl | sh`. Its flags answer them, after `sh -s --`:
+
+```sh
+curl -fsSL .../install.sh | sh -s -- --dir ~/bin --no-path -- --provider openrouter --no-hub
+```
+
+`--dir <path>` picks the directory, `--path` and `--no-path` answer the `PATH`
+question, and `--no-setup` skips step 7. Everything after a second `--` goes
+to `fiber setup` unchanged. Without a terminal the script asks nothing: it
+installs to the default directory, leaves `PATH` alone with a warning, and
+runs `fiber setup` without a terminal, which does only what its flags say.
 
 The binary unpacks the archives itself and refuses any entry that is not a
 file, a directory or a relative symlink inside its directory.

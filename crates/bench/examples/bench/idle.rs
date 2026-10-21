@@ -23,6 +23,13 @@ use crate::run::{self, Client, Session};
 /// the first frame, a socket line.
 const READY: Duration = Duration::from_secs(30);
 
+/// The home prompt the first frame waits for, once the first-run offer
+/// is gone.
+const FIRST_FRAME_READY: &str = "\u{203a}";
+/// The session line the idle terminal waits for, once the first-run
+/// offer is gone.
+const IDLE_READY: &str = "0 live";
+
 /// How long the hub may take to remove its socket after the terminal exits:
 /// it idles out a second after its last client leaves.
 const HUB_EXIT: Duration = Duration::from_secs(10);
@@ -284,11 +291,15 @@ pub(crate) fn quit(
     Ok(())
 }
 
-/// From just before the spawn to the pty output first holding `›`.
+/// From just before the spawn to the pty output first holding the home
+/// prompt: the first-run offer opens over it in a fresh bench home, so
+/// the scenario dismisses the offer first, the way a person does.
 fn terminal_first_frame(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
-    let terminal = Terminal::spawn(ctx.home, &[], ctx.path.as_deref(), ctx.clock)?;
+    let mut terminal = Terminal::spawn(ctx.home, &[], ctx.path.as_deref(), ctx.clock)?;
     let started = terminal.proc.spawned;
-    let framed = terminal.wait_for(ctx.clock, started + READY, "›");
+    let dismissed = terminal.dismiss_first_run_offer(ctx.clock, started + READY);
+    let framed =
+        dismissed.and_then(|()| terminal.wait_for(ctx.clock, started + READY, FIRST_FRAME_READY));
     let took = ms(ctx.clock, started);
     // The hub is up before the quit, so it idles out rather than starting
     // after the terminal has gone.
@@ -365,10 +376,14 @@ fn terminal_idle(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, Stri
             paging: ctx.paging,
         };
         seed(&ctx, home, notes)?;
-        let terminal = Terminal::spawn(home, &[], ctx.path.as_deref(), ctx.clock)?;
+        let mut terminal = Terminal::spawn(home, &[], ctx.path.as_deref(), ctx.clock)?;
+        // The seeded home holds no receipts, so the first-run offer
+        // opens over the session line the idle wait looks for:
+        // dismiss it first, the way a person does.
         let pid = terminal.proc.pid();
         let measured = terminal
-            .wait_for(ctx.clock, ctx.clock.now() + READY, "0 live")
+            .dismiss_first_run_offer(ctx.clock, ctx.clock.now() + READY)
+            .and_then(|()| terminal.wait_for(ctx.clock, ctx.clock.now() + READY, IDLE_READY))
             .and_then(|()| idle_window(&ctx, pid, notes));
         let quit = quit(&ctx, terminal, notes, HubExit::Wait);
         let (switches, rss, split, _) = measured?;

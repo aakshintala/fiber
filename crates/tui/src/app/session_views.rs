@@ -223,8 +223,8 @@ impl App {
     }
 
     /// Opens the selected list row's item: the row resolves to its serial
-    /// at key time, and a serial whose job is gone, or no longer running,
-    /// opens nothing.
+    /// at key time; a serial whose job is gone opens nothing, and a
+    /// finished job opens its replay.
     fn session_view_open_selected(&mut self) -> Effect {
         let selected = match self.session_views.open.as_ref() {
             Some(Open::Delegates(list)) | Some(Open::Jobs(list)) => list.selected(),

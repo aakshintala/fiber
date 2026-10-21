@@ -57,7 +57,7 @@ fn user_texts(body: &Value) -> Vec<String> {
 impl Setup {
     fn new_with_fa_root() -> Self {
         let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fa");
+        let root = fakes::TempDir::under(std::path::Path::new("/tmp"), "fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { deadline, root }
@@ -910,8 +910,8 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
             "tool_call_completed",
             "step_started",
             "steering_queue",
-            "steering_applied",
             "steering_queue",
+            "steering_applied",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",
@@ -1087,8 +1087,8 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
             "tool_call_completed",
             "step_started",
             "steering_queue",
-            "steering_applied",
             "steering_queue",
+            "steering_applied",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",

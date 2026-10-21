@@ -107,6 +107,39 @@ pub(crate) fn run(
             fiber,
         );
     }
+    // A fork names its point outright: no last line is checked. The
+    // parent, the delegate job and the prompt ride with the flags.
+    if args.forked_from.is_some() {
+        let (Some(from), Some(seq), Some(parent), Some(prompt)) = (
+            args.forked_from,
+            args.forked_seq,
+            args.parent
+                .zip(args.delegate_id)
+                .map(|(session_id, delegate_id)| Parent {
+                    session_id: SessionId(session_id),
+                    delegate_id: contract::JobId(delegate_id),
+                }),
+            args.prompt,
+        ) else {
+            return ask_failed(failed(
+                ErrorCode::Usage,
+                "--forked-from requires --forked-seq, --parent, --delegate-id and --prompt",
+            ));
+        };
+        return crate::rewind::session_forked(
+            SessionId(args.id),
+            contract::shapes::Point {
+                session_id: SessionId(from),
+                seq: contract::Seq(seq),
+            },
+            parent,
+            args.depth.unwrap_or(0),
+            prompt,
+            clock,
+            &signals,
+            fiber,
+        );
+    }
     // A delegate's stdin is its lifeline: the parent holds the write end
     // open and never writes to it (`docs/delegates.md`, "Lifetime").
     let parent = args
@@ -563,6 +596,7 @@ pub(crate) fn run_new(
     let inbox_wake = session.inbox_wake();
     let rewrites = session.rewrites();
     let admission = session.admission();
+    let steering = session.steering();
     // The fetch runs a prompt row through its server, starting a lazy
     // one as a first tool call does (`docs/mcp.md`, "Prompts and
     // resources"). No logic lives here beyond that call.
@@ -674,6 +708,7 @@ pub(crate) fn run_new(
                         .inbox_wake(inbox_wake)
                         .on_rewrite(rewrites)
                         .admission(admission)
+                        .steering(steering)
                 }),
                 budget,
                 idle,
