@@ -27,8 +27,8 @@ use fakes::{Scripted, reply};
 use serde_json::{Value, json};
 
 use support::{
-    MODEL, Session, TestTool, delivery, kinds, message, reasoning_item, reasoning_reply, steer,
-    tool_call_reply,
+    MODEL, Session, TestTool, child_usage, delivery, kinds, message, reasoning_item,
+    reasoning_reply, send_child, steer, tool_call_reply,
 };
 
 fn user(text: &str) -> Input {
@@ -1492,47 +1492,6 @@ fn a_budget_end_without_jobs_ends_the_same_way() {
     assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
 }
 
-/// A delegate's `usage_recorded` as the delegate wrote it: 10 input and 3
-/// output tokens, `cost` billed, `origin` naming the writer.
-fn child_usage(
-    generation: &str,
-    cost: Option<f64>,
-    origin: Option<SessionId>,
-    subscription: Option<bool>,
-) -> UsageRecorded {
-    UsageRecorded {
-        generation_id: GenerationId(generation.into()),
-        model: "fake/m".into(),
-        tokens: Tokens {
-            input: 10,
-            cache_read: 0,
-            cache_write: std::collections::BTreeMap::new(),
-            output: 3,
-        },
-        input_bytes: 100,
-        input_media: None,
-        web_searches: None,
-        cost,
-        subscription,
-        extension: None,
-        origin_session_id: origin,
-        reviewer: None,
-    }
-}
-
-/// Sends one delegate copy to the session's inbox, as the watcher's tap
-/// forwards it: the delegate's job and session with the line.
-fn send_child(session: &Session, job: &str, child: &str, line: UsageRecorded) {
-    session
-        .inbox
-        .send(Delivery::DelegateUsage {
-            job_id: JobId(job.into()),
-            session: SessionId(child.into()),
-            line,
-        })
-        .unwrap();
-}
-
 /// Attaches `jobs` to the session's loop, as the session does once its
 /// delegates can run: the restored ledger and the budget publish to the
 /// spend tripwire under its lock (`docs/loop.md`, "Spending budget").
@@ -1608,6 +1567,29 @@ fn a_copy_replaying_a_ledgered_line_counts_nothing_again() {
         (spent - (one + 0.6)).abs() < 1e-9,
         "the replay spends nothing twice: {spent} vs {one} + 0.6"
     );
+}
+
+#[test]
+fn replacing_the_jobs_attachment_clears_the_previous_tap() {
+    // Replacing the attachment uninstalls the first registry's tap: a
+    // still-running delegate on it can neither update the shared
+    // tripwire nor stop the detached registry. Without the clear the
+    // first registry keeps its tap.
+    let mut session = budgeted(
+        vec![Scripted::text("One.")],
+        None,
+        per_token(false),
+        Some(1.0),
+    );
+    let first = fakes::jobs::FakeJobs::new(&session.workspace);
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(looped.jobs(Arc::clone(&first) as Arc<dyn contract::jobs::Jobs>));
+    assert!(first.has_usage_tap());
+    let second = fakes::jobs::FakeJobs::new(&session.workspace);
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(looped.jobs(Arc::clone(&second) as Arc<dyn contract::jobs::Jobs>));
+    assert!(!first.has_usage_tap());
+    assert!(second.has_usage_tap());
 }
 
 #[test]

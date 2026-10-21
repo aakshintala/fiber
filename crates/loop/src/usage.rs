@@ -435,12 +435,10 @@ impl Tripwire {
         trip
     }
 
-    /// Records one line's delta (`billed(new) - billed(old)`), so a
+    /// Folds one line's delta (`billed(new) - billed(old)`), so a
     /// correction adds only its difference and a re-delivery adds
-    /// nothing. Never claims the trip: loop-side publication only
-    /// reconciles the sum, leaving the claim to tap arrivals, copies
-    /// and the request-time budget end.
-    pub(crate) fn record(&mut self, line: &UsageRecorded) {
+    /// nothing.
+    fn fold(&mut self, line: &UsageRecorded) {
         let new = Self::billed_cost(line);
         let old = self.billed.get(&line.generation_id).copied().unwrap_or(0.0);
         let known = self.billed.contains_key(&line.generation_id);
@@ -450,18 +448,18 @@ impl Tripwire {
         }
     }
 
-    /// Applies one line's delta (`billed(new) - billed(old)`), so a
-    /// correction adds only its difference and a re-delivery adds
-    /// nothing. True when this call claims the one-way trip: billed
-    /// spend reached the budget. A downward correction never untrips.
+    /// Records one ledgered line on the spend tripwire without claiming
+    /// the trip: loop-side publication only reconciles the sum, leaving
+    /// the claim to tap arrivals, copies and the request-time budget end.
+    pub(crate) fn record(&mut self, line: &UsageRecorded) {
+        self.fold(line);
+    }
+
+    /// Applies one line's delta, true when this call claims the one-way
+    /// trip: billed spend reached the budget. A downward correction never
+    /// untrips.
     pub(crate) fn apply(&mut self, line: &UsageRecorded) -> bool {
-        let new = Self::billed_cost(line);
-        let old = self.billed.get(&line.generation_id).copied().unwrap_or(0.0);
-        let known = self.billed.contains_key(&line.generation_id);
-        if !known || new != old {
-            self.billed.insert(line.generation_id.clone(), new);
-            self.sum += new - old;
-        }
+        self.fold(line);
         if self.tripped {
             return false;
         }

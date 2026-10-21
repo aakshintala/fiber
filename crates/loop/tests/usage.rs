@@ -14,15 +14,14 @@ mod support;
 use std::sync::Arc;
 
 use contract::events::{Event, TurnOutcome, UsageRecorded};
-use contract::inbox::Delivery;
-use contract::shapes::{Failure, Tokens};
-use contract::{Envelope, ErrorCode, GenerationId, JobId, SessionId};
+use contract::shapes::Failure;
+use contract::{Envelope, ErrorCode, SessionId};
 use fakes::{Scripted, call_usage, unnamed_usage};
 use serde_json::Value;
 
 use support::{
-    REVIEWER_MODEL, Session, allow, calls_reply, delivery, kinds, on_request, paris,
-    reply_delivery, shell,
+    REVIEWER_MODEL, Session, allow, calls_reply, child_usage, delivery, kinds, on_request, paris,
+    reply_delivery, send_child, shell,
 };
 
 fn failed_after(generation: &str, input: u64, output: u64, bytes: u64) -> Scripted {
@@ -423,47 +422,6 @@ fn a_minted_record_s_cost_is_null_on_a_priced_model() {
     let recorded = only_record(&mut session, &FAILED_UNNAMED_KINDS);
     assert_eq!(recorded.tokens.input, 10);
     assert_eq!(recorded.cost, None);
-}
-
-/// A delegate's `usage_recorded` as the delegate wrote it: 10 input and 3
-/// output tokens, `cost` billed, `origin` naming the writer.
-fn child_usage(
-    generation: &str,
-    cost: Option<f64>,
-    origin: Option<SessionId>,
-    subscription: Option<bool>,
-) -> UsageRecorded {
-    UsageRecorded {
-        generation_id: GenerationId(generation.into()),
-        model: "fake/m".into(),
-        tokens: Tokens {
-            input: 10,
-            cache_read: 0,
-            cache_write: std::collections::BTreeMap::new(),
-            output: 3,
-        },
-        input_bytes: 100,
-        input_media: None,
-        web_searches: None,
-        cost,
-        subscription,
-        extension: None,
-        origin_session_id: origin,
-        reviewer: None,
-    }
-}
-
-/// Sends one delegate copy to the session's inbox, as the watcher's tap
-/// forwards it: the delegate's job and session with the line.
-fn send_child(session: &Session, job: &str, child: &str, line: UsageRecorded) {
-    session
-        .inbox
-        .send(Delivery::DelegateUsage {
-            job_id: JobId(job.into()),
-            session: SessionId(child.into()),
-            line,
-        })
-        .unwrap();
 }
 
 /// Runs one completed turn after `send`, and returns every line through

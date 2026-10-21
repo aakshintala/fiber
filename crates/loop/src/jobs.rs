@@ -152,6 +152,12 @@ impl Loop {
     /// by only adding ledger lines the map lacks.
     pub fn jobs(mut self, jobs: Arc<dyn Jobs>) -> Self {
         let trip = Arc::clone(&self.spend_trip);
+        // Replacing an attachment uninstalls the previous registry's
+        // tap first: a still-running delegate on it must neither update
+        // the shared tripwire nor stop the detached registry.
+        if let Some(previous) = self.ending.jobs.take() {
+            previous.install_usage_tap(None);
+        }
         // Publishes the restored ledger and budget before the tap runs,
         // so a tap firing between the publish and the install still
         // serialises on the same lock and loses nothing.

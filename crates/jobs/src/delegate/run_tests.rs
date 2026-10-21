@@ -247,9 +247,11 @@ impl Rig {
         cap: u64,
         after: Option<u64>,
     ) -> mpsc::Receiver<()> {
-        self.start_timeout(shell, bound, cap, after, None).0
+        self.start_timeout(shell, bound, cap, after, None, None).0
     }
 
+    /// Builds the runner, spawns, records and drives it. `on_usage` is
+    /// the watcher's tap; `None` keeps the existing unwired behavior.
     fn start_timeout(
         &self,
         shell: &str,
@@ -257,6 +259,7 @@ impl Rig {
         cap: u64,
         after: Option<u64>,
         timeout: Option<Duration>,
+        on_usage: Option<super::UsageForward>,
     ) -> (mpsc::Receiver<()>, Arc<Parker>) {
         let shell = shell.to_owned();
         let script = Arc::clone(&self.script);
@@ -281,7 +284,7 @@ impl Rig {
             watch,
             after,
             timeout,
-            None,
+            on_usage,
         );
         let launched = Launched {
             depth: 1,
@@ -355,19 +358,105 @@ fn reported(rig: &Rig) -> contract::inbox::JobNotice {
 /// Takes the runner's report with one wall-clock deadline for the whole
 /// wait, failing at the caller's line: `#[track_caller]` reports the
 /// test's line, which the `thread::scope` closure below cannot. `expiry`
-/// names the wait that never reported.
+/// names the wait that never reported. `DelegateUsage` deliveries the
+/// watcher's tap forwards ahead of the report are stashed in `usages`
+/// and the take loops past them until the `Job` notice arrives.
 #[track_caller]
-fn take_report(rig: &Rig, stop: &AtomicBool, expiry: &str) -> contract::inbox::JobNotice {
-    let result = Deadline::after(DEADLINE).recv(&rig.inbox);
-    stop.store(true, Ordering::Relaxed);
-    match result {
-        Ok(Delivery::Job(notice)) => notice,
-        Ok(other) => panic!("expected the runner's report, got {other:?}"),
-        Err(_) => panic!(
-            "{expiry}; now={:?} parked={:?}",
-            rig.clock.now(),
-            rig.clock.parked()
-        ),
+fn take_report(
+    rig: &Rig,
+    stop: &AtomicBool,
+    expiry: &str,
+    usages: &mut Vec<(JobId, SessionId, String)>,
+) -> contract::inbox::JobNotice {
+    let deadline = Deadline::after(DEADLINE);
+    loop {
+        match deadline.recv(&rig.inbox) {
+            Ok(Delivery::Job(notice)) => {
+                stop.store(true, Ordering::Relaxed);
+                return notice;
+            }
+            Ok(Delivery::DelegateUsage {
+                job_id,
+                session,
+                line,
+            }) => {
+                usages.push((job_id, session, line.generation_id.0.clone()));
+            }
+            Ok(other) => {
+                stop.store(true, Ordering::Relaxed);
+                panic!("expected the runner's report, got {other:?}");
+            }
+            Err(_) => {
+                stop.store(true, Ordering::Relaxed);
+                panic!(
+                    "{expiry}; now={:?} parked={:?}",
+                    rig.clock.now(),
+                    rig.clock.parked()
+                );
+            }
+        }
+    }
+}
+
+/// Advances the fake clock only from the runner's own park, until `stop`
+/// is set or `deadline` runs out (docs/testing.md, "Waits and timeouts":
+/// a test advances a fake clock only after a signal that the code under
+/// test is waiting on that clock). A park at or past `horizon` wakes the
+/// runner with a zero advance, which moves no time but wakes every
+/// subscriber; `None` advances every park at most one poll ahead. The
+/// test thread's single `Deadline` receive is the wall-clock deadline for
+/// the whole wait, driver included. The stop flag is set on every outcome
+/// of that receive, before the result is inspected, so the driver always
+/// ends within `deadline` and the scope never outlives the wait.
+fn drive_runner_clock(
+    stop: &AtomicBool,
+    clock: &Arc<FakeClock>,
+    deadline: &Deadline,
+    horizon: Option<std::time::Instant>,
+) {
+    let mut carried: Option<Instant> = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        if deadline.left().is_zero() {
+            panic!(
+                "the runner did not report; now={:?} parked={:?}",
+                clock.now(),
+                clock.parked()
+            );
+        }
+        let mut candidate = carried.take();
+        if candidate.is_some_and(|watched| watched <= clock.now()) {
+            candidate = None;
+        }
+        match candidate.or_else(|| park_ahead(clock)) {
+            Some(until) => {
+                if horizon.is_some_and(|horizon| until >= horizon) {
+                    // Fake time never reaches `horizon`: a zero
+                    // advance wakes the parked pass without moving
+                    // time, staying short of the park.
+                    match try_step(clock, until, Duration::ZERO) {
+                        Step::Moved | Step::NoPark => {}
+                        Step::Next(watched) => {
+                            carried = Some(watched);
+                        }
+                    }
+                } else {
+                    let now = clock.now();
+                    match until.checked_duration_since(now) {
+                        Some(gap) if gap <= super::POLL => match try_step(clock, until, gap) {
+                            Step::Moved | Step::NoPark => {}
+                            Step::Next(watched) => {
+                                carried = Some(watched);
+                            }
+                        },
+                        _ => thread::yield_now(),
+                    }
+                }
+            }
+            None => thread::yield_now(),
+        }
     }
 }
 
@@ -380,59 +469,12 @@ fn take_report(rig: &Rig, stop: &AtomicBool, expiry: &str) -> contract::inbox::J
 #[track_caller]
 fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::inbox::JobNotice {
     let stop = Arc::new(AtomicBool::new(false));
-    let driver_stop = Arc::clone(&stop);
     let clock = Arc::clone(&rig.clock);
     let deadline = Deadline::after(DEADLINE);
     thread::scope(|scope| {
-        scope.spawn(move || {
-            let mut carried: Option<Instant> = None;
-            loop {
-                if driver_stop.load(Ordering::Relaxed) {
-                    return;
-                }
-                if deadline.left().is_zero() {
-                    panic!(
-                        "the runner did not report; now={:?} parked={:?}",
-                        clock.now(),
-                        clock.parked()
-                    );
-                }
-                let mut candidate = carried.take();
-                if candidate.is_some_and(|watched| watched <= clock.now()) {
-                    candidate = None;
-                }
-                match candidate.or_else(|| park_ahead(&clock)) {
-                    Some(until) => {
-                        if horizon.is_some_and(|horizon| until >= horizon) {
-                            // Fake time never reaches `horizon`: a zero
-                            // advance wakes the parked pass without moving
-                            // time, staying short of the park.
-                            match try_step(&clock, until, Duration::ZERO) {
-                                Step::Moved | Step::NoPark => {}
-                                Step::Next(watched) => {
-                                    carried = Some(watched);
-                                }
-                            }
-                        } else {
-                            let now = clock.now();
-                            match until.checked_duration_since(now) {
-                                Some(gap) if gap <= super::POLL => {
-                                    match try_step(&clock, until, gap) {
-                                        Step::Moved | Step::NoPark => {}
-                                        Step::Next(watched) => {
-                                            carried = Some(watched);
-                                        }
-                                    }
-                                }
-                                _ => thread::yield_now(),
-                            }
-                        }
-                    }
-                    None => thread::yield_now(),
-                }
-            }
-        });
-        take_report(rig, &stop, "the runner did not report")
+        scope.spawn(|| drive_runner_clock(&stop, &clock, &deadline, horizon));
+        let mut discarded = Vec::new();
+        take_report(rig, &stop, "the runner did not report", &mut discarded)
     })
 }
 
@@ -1205,7 +1247,12 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
                 }
             }
         });
-        take_report(&rig, &stop, "the drain's end did not report")
+        take_report(
+            &rig,
+            &stop,
+            "the drain's end did not report",
+            &mut Vec::new(),
+        )
     });
     assert_eq!(notice.completed.status, Outcome::Failed);
     assert_eq!(
@@ -1566,7 +1613,7 @@ fn timeout_stops_a_term_trap_without_sigkill() {
     let rig = rig(vec![WatchReply::Block(held)]);
     let origin = rig.clock.now();
     let timeout = Duration::from_millis(500);
-    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(timeout));
+    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(timeout), None);
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
@@ -1602,7 +1649,7 @@ fn timeout_does_not_replace_a_childs_own_early_exit() {
         block.display(),
         json_line(1, "done")
     );
-    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(BOUND * 10));
+    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(BOUND * 10), None);
     let watchdog = Watchdog::group(pid_in_file(&pidfile));
     release_fifo(&block, b"go\n");
     let notice = timeout_report(&rig, &park);
@@ -1625,7 +1672,7 @@ fn timeout_report(rig: &Rig, park: &Parker) -> contract::inbox::JobNotice {
                 thread::yield_now();
             }
         });
-        take_report(rig, &stopped, "timeout runner report")
+        take_report(rig, &stopped, "timeout runner report", &mut Vec::new())
     })
 }
 
@@ -2523,82 +2570,6 @@ fn usage_envelope(seq: u64, generation: &str, cost: Option<f64>) -> Envelope {
     )
 }
 
-/// Starts the rig's runner with `on_usage` as the watcher's tap, mirroring
-/// [`Rig::start_timeout`]: build the runner, spawn, record, drive.
-fn start_with_usage(
-    rig: &Rig,
-    shell: &str,
-    bound: Duration,
-    cap: u64,
-    on_usage: Option<super::UsageForward>,
-) -> mpsc::Receiver<()> {
-    start_after_with_usage(rig, shell, bound, cap, on_usage, None)
-}
-
-/// [`start_with_usage`], watching past `after`: lines at or before the
-/// boundary belong to an earlier run, so the stream never delivers them.
-fn start_after_with_usage(
-    rig: &Rig,
-    shell: &str,
-    bound: Duration,
-    cap: u64,
-    on_usage: Option<super::UsageForward>,
-    after: Option<u64>,
-) -> mpsc::Receiver<()> {
-    let shell = shell.to_owned();
-    let script = Arc::clone(&rig.script);
-    let watch = Arc::new(
-        move |id: &SessionId, after: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
-            script.watch(id, after, on_line)
-        },
-    );
-    let events = rig.events.clone();
-    let launch: Launch = Arc::new(move |_: &Launched| {
-        let mut command = Command::new("sh");
-        command.args(["-c", shell.as_str()]);
-        command
-    });
-    let (runner, stop) = Runner::new(
-        rig.job.clone(),
-        SessionId("s_child".into()),
-        events.clone(),
-        Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
-        bound,
-        cap,
-        watch,
-        after,
-        None,
-        on_usage,
-    );
-    let launched = Launched {
-        depth: 1,
-        session_id: SessionId("s_child".into()),
-        job_id: rig.job.clone(),
-        parent: SessionId("s_parent".into()),
-        prompt: "hi".into(),
-        workspace: rig.events.parent().unwrap().to_path_buf(),
-        start: Start::Fresh(Fresh::Spawn {
-            model: "fake/m".into(),
-            credential: None,
-        }),
-    };
-    let (child, listing) = runner.spawn(&launch, &launched).unwrap();
-    let (_started, finish) = rig.registry.open_started(
-        rig.job.clone(),
-        "delegate_spawn".into(),
-        "scan".into(),
-        events.to_string_lossy().into_owned(),
-        stop,
-        crate::support::delegate_started(&rig.job.0),
-    );
-    let (done, waited) = mpsc::channel();
-    thread::spawn(move || {
-        runner.drive(child, Some(listing), finish);
-        let _sent = done.send(());
-    });
-    waited
-}
-
 #[test]
 fn the_stream_forwards_live_usage_past_the_run_boundary() {
     // The socket streams two live usage lines past `after`: the stream
@@ -2616,14 +2587,16 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
     ])]);
     let exit = serde_json::to_string(&fiber_exited_line(4, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
-    let waited = start_after_with_usage(
-        &rig,
-        &shell,
-        BOUND,
-        1 << 20,
-        Some(rig.registry.usage_forward()),
-        Some(1),
-    );
+    let waited = rig
+        .start_timeout(
+            &shell,
+            BOUND,
+            1 << 20,
+            Some(1),
+            None,
+            Some(rig.registry.usage_forward()),
+        )
+        .0;
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
     // The Job can precede the watcher's forwards (see #3005): both
@@ -2639,76 +2612,19 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
 }
 
 /// [`reported`], collecting the `DelegateUsage` deliveries the watcher's
-/// tap forwards ahead of the runner's report: the take loops past them,
-/// stashing each, until the `Job` notice arrives. A scoped driver thread
-/// advances the fake clock exactly as `reported_before` does.
+/// tap forwards ahead of the runner's report: the shared clock driver
+/// advances fake time exactly as `reported_before` does, while the shared
+/// take loops past those deliveries, stashing each, until the `Job`
+/// notice arrives.
 #[track_caller]
 fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(JobId, SessionId, String)>) {
     let stop = Arc::new(AtomicBool::new(false));
-    let driver_stop = Arc::clone(&stop);
     let clock = Arc::clone(&rig.clock);
     let deadline = Deadline::after(DEADLINE);
     thread::scope(|scope| {
-        scope.spawn(move || {
-            let mut carried: Option<Instant> = None;
-            loop {
-                if driver_stop.load(Ordering::Relaxed) {
-                    return;
-                }
-                if deadline.left().is_zero() {
-                    panic!(
-                        "the runner did not report; now={:?} parked={:?}",
-                        clock.now(),
-                        clock.parked()
-                    );
-                }
-                let mut candidate = carried.take();
-                if candidate.is_some_and(|watched| watched <= clock.now()) {
-                    candidate = None;
-                }
-                match candidate.or_else(|| park_ahead(&clock)) {
-                    Some(until) => {
-                        let now = clock.now();
-                        match until.checked_duration_since(now) {
-                            Some(gap) if gap <= super::POLL => match try_step(&clock, until, gap) {
-                                Step::Moved | Step::NoPark => {}
-                                Step::Next(watched) => {
-                                    carried = Some(watched);
-                                }
-                            },
-                            _ => thread::yield_now(),
-                        }
-                    }
-                    None => thread::yield_now(),
-                }
-            }
-        });
+        scope.spawn(|| drive_runner_clock(&stop, &clock, &deadline, None));
         let mut usages = Vec::new();
-        let notice = loop {
-            let result = Deadline::after(DEADLINE).recv(&rig.inbox);
-            match result {
-                Ok(Delivery::Job(notice)) => {
-                    stop.store(true, Ordering::Relaxed);
-                    break notice;
-                }
-                Ok(Delivery::DelegateUsage {
-                    job_id,
-                    session,
-                    line,
-                }) => {
-                    usages.push((job_id, session, line.generation_id.0.clone()));
-                }
-                Ok(other) => panic!("expected the runner's report, got {other:?}"),
-                Err(_) => {
-                    stop.store(true, Ordering::Relaxed);
-                    panic!(
-                        "the runner did not report; now={:?} parked={:?}",
-                        rig.clock.now(),
-                        rig.clock.parked()
-                    )
-                }
-            }
-        };
+        let notice = take_report(rig, &stop, "the runner did not report", &mut usages);
         (notice, usages)
     })
 }
@@ -2723,8 +2639,9 @@ fn drain_streamed_usages(
     mut usages: Vec<(JobId, SessionId, String)>,
     want: usize,
 ) -> Vec<(JobId, SessionId, String)> {
+    let deadline = Deadline::after(DEADLINE);
     while usages.len() < want {
-        match Deadline::after(DEADLINE).recv(&rig.inbox) {
+        match deadline.recv(&rig.inbox) {
             Ok(Delivery::DelegateUsage {
                 job_id,
                 session,
@@ -2756,13 +2673,16 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
-    let waited = start_with_usage(
-        &rig,
-        &shell,
-        BOUND,
-        1 << 20,
-        Some(rig.registry.usage_forward()),
-    );
+    let waited = rig
+        .start_timeout(
+            &shell,
+            BOUND,
+            1 << 20,
+            None,
+            None,
+            Some(rig.registry.usage_forward()),
+        )
+        .0;
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
     // The well-formed line reaches the tap with the delegate's session id;
@@ -2891,13 +2811,16 @@ fn the_reap_replays_file_usage_the_socket_never_saw() {
         "printf '%s\\n' '{line}' >> '{}'; exit 0",
         rig.events.display()
     );
-    let waited = start_with_usage(
-        &rig,
-        &shell,
-        BOUND,
-        1 << 20,
-        Some(rig.registry.usage_forward()),
-    );
+    let waited = rig
+        .start_timeout(
+            &shell,
+            BOUND,
+            1 << 20,
+            None,
+            None,
+            Some(rig.registry.usage_forward()),
+        )
+        .0;
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
     assert_eq!(usages.len(), 1, "the file line forwards once: {usages:?}");
@@ -3085,13 +3008,16 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
     rig.registry.install_usage_tap(Some(Arc::new(move |line| {
         tapped.tap(&line);
     })));
-    let waited = start_with_usage(
-        &rig,
-        "exit 0",
-        BOUND,
-        1 << 20,
-        Some(rig.registry.usage_forward()),
-    );
+    let waited = rig
+        .start_timeout(
+            "exit 0",
+            BOUND,
+            1 << 20,
+            None,
+            None,
+            Some(rig.registry.usage_forward()),
+        )
+        .0;
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
     // Below the budget nothing trips; the crossing trips once; the line
@@ -3128,13 +3054,16 @@ fn a_correction_applies_only_its_delta() {
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
-    let waited = start_with_usage(
-        &rig,
-        &shell,
-        BOUND,
-        1 << 20,
-        Some(rig.registry.usage_forward()),
-    );
+    let waited = rig
+        .start_timeout(
+            &shell,
+            BOUND,
+            1 << 20,
+            None,
+            None,
+            Some(rig.registry.usage_forward()),
+        )
+        .0;
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
     // The second arrival of the same generation adds only its delta, so
