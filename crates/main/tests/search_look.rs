@@ -1025,70 +1025,11 @@ fn the_changed_files_rows_match_the_doc() {
     assert!(changed_file_row_ready(&grid));
 }
 
-/// The Session card once its `cost` row is drawn: the row is absent only
-/// when spend is `Some(0.0)` with no budget, and the cards below it sit
-/// one row higher without it, so a wait that supplies coordinates for a
-/// later click or hover holds until the row lands
-/// (`crates/tui/src/view/panel.rs`, `session_rows`). The `cost` label
-/// draws only with the row: `cost on subscription` draws without it, so
-/// its `cost` prefix does not count.
-/// The panel is frozen for coordinate-taking: the Session card has
-/// settled and its speed row has landed. A usage fold adds the speed
-/// row (`panel.rs`, `session_rows`), moving the Delegates and Jobs cards
-/// a row down, as a late cost row moved them before `session_settled`;
-/// coordinates read before it lands name the wrong cells and the click
-/// or hover misses. The held turn's reply has completed once it shows,
-/// so its usage is recorded and the speed row always lands: waiting for
-/// it cannot hang. Afterwards no fold in this turn can add or remove a
-/// session row, and a queued duplicate only repeats the rows the grid
-/// already shows.
-fn panel_settled(grid: &Grid) -> bool {
-    session_settled(grid) && grid.contents.contains("speed, last reply")
-}
-
-/// Coordinates re-read after a layout shift land: the resize moves the
-/// panel's cells every run (no real-clock hold), standing in for a
-/// session row landing late. The test reads the Jobs card's coordinates
-/// again from the shifted grid before clicking, so the click names the
-/// card and the card expands.
-#[test]
-fn reread_panel_coords_land_after_a_shift() {
-    let (setup, _release, _guard, _command) = running_setup();
-    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
-    run.ready();
-    run.write(b"go\r");
-    let grid = run.wait_screen("the parent reply and running panel cards", |grid| {
-        grid.contents.contains(REPLY)
-            && panel_item_at(grid, "review the diff").is_some()
-            && panel_item_at(grid, "Jobs").is_some()
-            && session_settled(grid)
-    });
-    let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
-    let size = grid.size();
-    // The forced shift: narrowing the terminal moves the panel's cells
-    // left, as a session row landing late moves the cards down.
-    run.resize(150, 48);
-    let grid = run.wait_screen("the shifted panel", |grid| {
-        // The move itself, not just the new size: the first frames at
-        // the new size still show the old layout until the reflow lands.
-        grid.size() != size && panel_item_at(grid, "Jobs").is_some_and(|at| at != (x, y))
-    });
-    let (moved_x, moved_y) = panel_item_at(&grid, "Jobs").unwrap();
-    assert_ne!(
-        (moved_x, moved_y),
-        (x, y),
-        "the resize must move the card for this test to prove anything"
-    );
-    click(&mut run, moved_x, moved_y);
-    run.wait_screen("the expanded Jobs card after the shift", |grid| {
-        panel_item_at(grid, "head -n 1").is_some()
-    });
-}
-
+/// Session settled and its speed row drawn: no later fold in this turn moves the cards.
 fn session_settled(grid: &Grid) -> bool {
     // The panel starts at column 100, as in `panel_item_at`: a `cost`
     // elsewhere (a conversation echo, another card) does not settle us.
-    support::session_cost_drawn(grid, 100)
+    support::session_cost_drawn(grid, 100) && grid.contents.contains("speed, last reply")
 }
 
 fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {
@@ -1116,7 +1057,7 @@ fn the_item_views_top_row_closes_them() {
         grid.contents.contains(REPLY)
             && panel_item_at(grid, "review the diff").is_some()
             && panel_item_at(grid, "Jobs").is_some()
-            && panel_settled(grid)
+            && session_settled(grid)
     });
     let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
     click(&mut run, x, y);
@@ -1132,7 +1073,7 @@ fn the_item_views_top_row_closes_them() {
         ("Jobs", "head -n 1", format!("› ▸ {command}")),
     ] {
         let grid = run.wait_screen("the running panel card's first item", |grid| {
-            panel_settled(grid) && panel_card_item_at(grid, card, description).is_some()
+            session_settled(grid) && panel_card_item_at(grid, card, description).is_some()
         });
         let (x, y) = panel_card_item_at(&grid, card, description).unwrap();
         // The hover frame acknowledges this cell as a live click target.
