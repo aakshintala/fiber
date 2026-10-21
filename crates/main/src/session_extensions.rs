@@ -81,6 +81,29 @@ pub(crate) fn required(
     ))
 }
 
+/// Registers the session's one watcher fan-out on `log`: every event
+/// appended from now on — durable and ephemeral, from every source — is
+/// offered to `extensions.deliver` with its seq, in the one place all
+/// session lines pass through. While a shutdown code is set the offers
+/// skip: when a signal stops Fiber, no watcher runs. Records the log end
+/// as the watermark first, so the drain defaults unset cursors to the
+/// post-registration range. Dropping the returned guard unregisters.
+pub(crate) fn subscribe(
+    log: &Arc<Log>,
+    extensions: &Arc<SessionExtensions>,
+    cancel: &Arc<r#loop::TurnCancel>,
+) -> log::Subscription {
+    extensions.set_watermark(log.count());
+    let extensions = Arc::clone(extensions);
+    let cancel = Arc::clone(cancel);
+    log.subscribe(Arc::new(move |event, line| {
+        if cancel.shutdown_code().is_some() {
+            return;
+        }
+        extensions.deliver(event, line.seq);
+    }))
+}
+
 /// Writes `extensions_loaded` and the notices loading raised.
 pub(crate) fn written(log: &Log, extensions: &SessionExtensions) -> Result<(), r#loop::Error> {
     r#loop::extensions_loaded(log, extensions.loaded(), extensions.notices())
@@ -135,4 +158,123 @@ pub(crate) fn hooked(looped: Loop, current: &Current) -> Loop {
     }
     let hooks: Arc<dyn Hooks> = extensions as Arc<dyn Hooks>;
     looped.hooks(hooks)
+}
+
+#[cfg(test)]
+mod tests {
+    //! The watcher fan-out subscription: everything appended reaches the
+    //! watchers, unless a shutdown is in progress.
+
+    #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
+
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use contract::ErrorCode;
+    use contract::events::{Event, Notice};
+    use fakes::Deadline;
+
+    use super::subscribe;
+    use crate::test_support::{Rig, install_extension, load};
+
+    /// One `host.status` line per watcher run, sent on a channel: the
+    /// tests wait on the channel through a deadline, never on a sleep.
+    struct StatusSignal(std::sync::mpsc::Sender<String>);
+
+    impl contract::emit::Emit for StatusSignal {
+        fn emit(&self, event: &contract::events::Event) {
+            if let contract::events::Event::ExtensionUi(ui) = event
+                && let contract::events::Ui::Status { status } = &ui.ui
+            {
+                let _ignored = self.0.send(status.clone());
+            }
+        }
+    }
+
+    /// A session with one watcher on `notice`, subscribed on a real log:
+    /// the rig, the session and the log, each alive for the test. Statuses
+    /// arrive on the returned channel in run order.
+    fn subscribed() -> (
+        Rig,
+        Arc<extensions::SessionExtensions>,
+        Arc<log::Log>,
+        std::sync::mpsc::Receiver<String>,
+    ) {
+        let rig = Rig::new("fiber-watch-subscribe");
+        install_extension(
+            &rig.home,
+            "extensions/watch",
+            serde_json::json!({"name": "fiber.test/watch", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+            &[],
+        );
+        std::fs::write(
+            rig.home.join("extensions/watch/init.lua"),
+            "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('watch:' .. ev.payload.message) end })\n",
+        )
+        .unwrap();
+        let config = load(&rig.home, &rig.workspace, "test", &[] as &[&str]);
+        let extensions = Arc::new(extensions::SessionExtensions::load(
+            &rig.home,
+            &config,
+            fakes::clock::FakeClock::new(),
+            Arc::new(tools::PathLocks::new()),
+            None,
+        ));
+        assert!(
+            extensions.notices().is_empty(),
+            "{:?}",
+            extensions.notices()
+        );
+        let sessions = rig.root.path().join("sessions");
+        let log = Arc::new(
+            log::Log::create(
+                &sessions,
+                contract::SessionId("s_1".into()),
+                fakes::clock::FakeClock::new(),
+            )
+            .unwrap(),
+        );
+        let (status_tx, status_rx) = std::sync::mpsc::channel();
+        extensions.emit_to(Arc::new(StatusSignal(status_tx)));
+        (rig, extensions, log, status_rx)
+    }
+
+    fn noticed(message: &str) -> Event {
+        Event::Notice(Notice {
+            code: ErrorCode::ExtensionFailed,
+            message: message.to_owned(),
+            extension: None,
+        })
+    }
+
+    #[test]
+    fn session_extensions_subscribe_fans_every_append_out_to_the_watchers() {
+        let (_rig, extensions, log, status_rx) = subscribed();
+        let cancel = Arc::new(r#loop::TurnCancel::default());
+        let _subscription = subscribe(&log, &extensions, &cancel);
+        log.append(&noticed("hello"), None, None).unwrap();
+        assert_eq!(
+            Deadline::after(Duration::from_secs(5))
+                .recv(&status_rx)
+                .expect("waited for the watcher to run"),
+            "watch:hello"
+        );
+    }
+
+    #[test]
+    fn session_extensions_subscribe_skips_offers_while_a_shutdown_is_set() {
+        let (_rig, extensions, log, status_rx) = subscribed();
+        let cancel = Arc::new(r#loop::TurnCancel::default());
+        cancel.shutdown(15);
+        let _subscription = subscribe(&log, &extensions, &cancel);
+        log.append(&noticed("skipped"), None, None).unwrap();
+        // The offer closure runs synchronously inside `append`: it queued
+        // nothing, so no worker can run it later and the channel stays
+        // empty without waiting, while the positive control above proves
+        // the rig delivers in milliseconds when no shutdown is set.
+        assert!(
+            status_rx.try_recv().is_err(),
+            "no watcher runs while a shutdown is set"
+        );
+    }
 }

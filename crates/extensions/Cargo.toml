@@ -9,6 +9,7 @@ publish.workspace = true
 base64.workspace = true
 config = { path = "../config" }
 contract = { path = "../contract" }
+log = { path = "../log" }
 net = { path = "../net" }
 serde_json.workspace = true
 # Decompressing the release's docs and extensions archives.

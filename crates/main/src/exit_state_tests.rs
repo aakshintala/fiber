@@ -206,3 +206,15 @@ fn exit_state_timer_write_uses_an_injected_clock_and_survives_clean_exit() {
     assert_eq!(lines[0].kind, "extension_state_set");
     assert_eq!(lines.last().unwrap().kind, "fiber_exited");
 }
+
+/// The drain exit keeps the `fiber_exited` code normally and the shutdown
+/// code once a signal stops the drain (Ruling 19). Flipping the branch
+/// would return the pre-signal code after a signal.
+#[test]
+fn drain_exit_prefers_the_shutdown_code() {
+    let live = Arc::new(r#loop::TurnCancel::default());
+    assert_eq!(super::drain_exit_code(0, &live), 0);
+    let stopped = Arc::new(r#loop::TurnCancel::default());
+    stopped.shutdown(143);
+    assert_eq!(super::drain_exit_code(0, &stopped), 143);
+}
