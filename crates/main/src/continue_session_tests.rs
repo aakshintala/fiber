@@ -13,6 +13,8 @@
 )]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use contract::SessionId;
 use serde_json::{Value, json};
@@ -316,6 +318,137 @@ fn matching_worktree_resolves_with_its_record() {
     assert_eq!(recorded.path, workspace.to_string_lossy());
     assert_eq!(recorded.branch, "fiber/x");
     assert_eq!(recorded.repository.as_deref(), Some("/repo"));
+}
+
+#[test]
+fn missing_repository_is_corrupt() {
+    // A record from a log that never carries one: `docs/events.md`
+    // requires the absolute repository path, so the worktree cannot be
+    // continued and reads as corrupt.
+    let (_home, old_dir, workspace) = fixture("main-continues-no-repository", None);
+    let first = started(
+        &workspace,
+        Some(json!({"path": workspace.to_string_lossy(), "branch": "fiber/x"})),
+    );
+    std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
+    assert!(
+        !old_dir
+            .parent()
+            .unwrap()
+            .join("s_bbbbbbbbbbbbbbbb")
+            .exists(),
+        "no new session log was created"
+    );
+}
+
+#[test]
+fn relative_repository_is_corrupt() {
+    let (_home, old_dir, workspace) = fixture("main-continues-relative-repository", None);
+    let first = started(
+        &workspace,
+        Some(json!({
+            "path": workspace.to_string_lossy(),
+            "branch": "fiber/x",
+            "repository": "relative/repo",
+        })),
+    );
+    std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
+    assert!(
+        !old_dir
+            .parent()
+            .unwrap()
+            .join("s_bbbbbbbbbbbbbbbb")
+            .exists(),
+        "no new session log was created"
+    );
+}
+
+/// Re-running this test's entry-point case in a child process: `run`
+/// reports through the process's stdout and stderr and every non-usage
+/// code exits 1, so only a child run can pin the reported code and the
+/// message naming the old session.
+const ENTRY_CHILD: &str = "FIBER_MAIN_CONTINUES_ENTRY_CHILD";
+
+/// The child's bound: the entry fails before any session starts, so the
+/// child exits at once; the wait stays inside half of nextest's per-test
+/// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
+const ENTRY_WITHIN: Duration = Duration::from_secs(30);
+
+/// This test's full path, for `fakes::rerun_within`: the crate name
+/// `module_path!` carries is not part of a test's path.
+fn this(test: &str) -> String {
+    let module = module_path!();
+    let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+    format!("{module}::{test}")
+}
+
+#[test]
+fn entry_point_with_removed_workspace_and_continues_is_not_found() {
+    if std::env::var(ENTRY_CHILD).is_ok() {
+        entry_child();
+        return;
+    }
+    let home = fakes::TempDir::new("main-continues-entry");
+    let workspace = home.path().join("wt");
+    std::fs::create_dir(&workspace).unwrap();
+    // The worktree went away after hub validation, before the child
+    // started: entering it fails with the path absent.
+    std::fs::remove_dir(&workspace).unwrap();
+    let home_str = home.path().to_string_lossy();
+    let workspace_str = workspace.to_string_lossy();
+    let out = fakes::rerun_within(
+        &this("entry_point_with_removed_workspace_and_continues_is_not_found"),
+        &[
+            (ENTRY_CHILD, "1"),
+            ("FIBER_HOME", home_str.as_ref()),
+            ("FIBER_MAIN_CONTINUES_ENTRY_WS", workspace_str.as_ref()),
+            ("FIBER_MAIN_CONTINUES_ENTRY_OLD", OLD),
+            ("FIBER_MAIN_CONTINUES_ENTRY_NEW", "s_bbbbbbbbbbbbbbbb"),
+        ],
+        ENTRY_WITHIN,
+    );
+    assert_eq!(out.status.code(), Some(1), "the entry reports a failure");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("session_not_found"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("No session `{OLD}`")),
+        "the refusal names the old session: {stderr}"
+    );
+    assert!(
+        !home.path().join("sessions").exists(),
+        "no new session log was created"
+    );
+}
+
+/// The re-run child: calls the session entry point with a removed
+/// workspace and `continues` set, then exits with what it returns.
+fn entry_child() {
+    let args = crate::cli::SessionArgs {
+        id: std::env::var("FIBER_MAIN_CONTINUES_ENTRY_NEW").unwrap(),
+        workspace: PathBuf::from(std::env::var("FIBER_MAIN_CONTINUES_ENTRY_WS").unwrap()),
+        model: None,
+        overrides: Vec::new(),
+        prompt: None,
+        resume: false,
+        credential: None,
+        worktree: false,
+        rewound_from: None,
+        continues: Some(std::env::var("FIBER_MAIN_CONTINUES_ENTRY_OLD").unwrap()),
+        forked_from: None,
+        forked_seq: None,
+        parent: None,
+        delegate_id: None,
+        depth: None,
+        login_shell: false,
+    };
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let code = crate::session_command::run(args, clock, Err("no fiber in test".to_owned()));
+    std::process::exit(code);
 }
 
 #[test]

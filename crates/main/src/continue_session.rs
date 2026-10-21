@@ -177,6 +177,17 @@ fn resolve(
             ));
         }
     };
+    // The schema requires the repository's absolute path: a record
+    // without one cannot be continued (`docs/events.md`,
+    // `session_started`), so it reads as corrupt, before any session
+    // line is written.
+    if !recorded
+        .repository
+        .as_deref()
+        .is_some_and(|repository| Path::new(repository).is_absolute())
+    {
+        return Err(corrupt(old));
+    }
     if path != workspace.to_string_lossy() {
         return Err(failed(
             ErrorCode::InvalidArguments,
