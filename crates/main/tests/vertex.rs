@@ -100,7 +100,6 @@ fn vertex<const N: usize>(
     (server, env, ran)
 }
 
-/// `env` as [`run`] takes it.
 fn borrowed<'a>(env: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
     env.iter()
         .map(|(name, value)| (*name, value.as_str()))
