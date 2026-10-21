@@ -868,6 +868,12 @@ fn terminal(
     // connect closure moves it, as is the diagnostic writer's.
     let launch_home = home.clone();
     let diag_home = home.clone();
+    // The interactive door's report writer reads the same launch
+    // directory the terminal opens in: cloned before `launch` takes it.
+    let feedback_home = home.clone();
+    let feedback_workspace = workspace.clone();
+    let feedback_version = cli::bare_version();
+    let feedback_clock = Arc::clone(&clock);
     let identity = doors::project(&workspace);
     let mut launch = launch::launch(
         workspace,
@@ -886,6 +892,30 @@ fn terminal(
     });
     launch.models = Some(models);
     launch.configure = Some(seam);
+    // The interactive door's report writer: `cli::feedback::write`
+    // behind the contract seam, beside the model-list reader. It captures
+    // the launch directory, so a later `/feedback` reports the same
+    // `doctor` output the headless door would.
+    let feedback: tui::WriteFeedback = std::sync::Arc::new(move |description: &str| {
+        let context = ::cli::ReportContext {
+            version: &feedback_version,
+            cwd: &feedback_workspace,
+            clock: feedback_clock.as_ref(),
+            doctor: &|| {
+                ::cli::capture(
+                    &feedback_home,
+                    &feedback_workspace,
+                    &feedback_version,
+                    feedback_clock.as_ref(),
+                    &McpClient,
+                )
+                .map(|(report, _)| report)
+                .map_err(|error| ::cli::FeedbackError::Doctor(error.to_string()))
+            },
+        };
+        ::cli::write(description, &context).map_err(|error| error.to_string())
+    });
+    launch.feedback = Some(feedback);
     launch.open_at = open_at;
     match tui::run(
         tty,

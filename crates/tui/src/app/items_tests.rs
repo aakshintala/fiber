@@ -562,7 +562,8 @@ fn enter_sends_exactly_one_steer_naming_the_delegate() {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("Enter sends"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("Enter sends"),
     };
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["command"], "steer");
@@ -594,7 +595,8 @@ fn a_rejected_steer_shows_its_notice_and_puts_the_draft_back() {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("Enter sends"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("Enter sends"),
     };
     let id = out[0]["id"]
         .as_str()
@@ -624,7 +626,8 @@ fn a_slash_close_in_the_view_closes_the_parent_and_the_view() {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("/close sends"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("/close sends"),
     };
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["command"], "close");
@@ -825,7 +828,8 @@ fn a_resumed_job_opens_from_its_row_again() {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("resuming opens"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("resuming opens"),
     };
     assert_eq!(subscribes(&resumed).len(), 1);
     assert_eq!(resumed[0]["args"]["level"], "full");
@@ -859,7 +863,8 @@ fn an_open_view_runs_and_steers_again_after_its_job_restarts() {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("Enter sends"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("Enter sends"),
     };
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["command"], "steer");
@@ -898,7 +903,8 @@ fn an_accepted_delegate_steer_closes_its_pending_entry() {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("Enter sends"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("Enter sends"),
     };
     let id = out[0]["id"].as_str().unwrap_or_else(|| panic!("an id"));
     assert!(app.outbox.pending.contains_key(id));
@@ -1006,7 +1012,8 @@ fn clicking_a_delegate_row_opens_that_delegate() {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("opening sends"),
     };
     // No card subscribe went out here, so the click sends the view's
     // `full` subscribe at once.

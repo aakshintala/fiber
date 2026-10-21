@@ -674,6 +674,115 @@ fn a_rejected_extension_command_returns_its_draft_with_the_notice() {
     assert_eq!(app.notice(), Some("No."));
 }
 
+/// A writer answering `done` for every description.
+fn feedback_writer(done: crate::FeedbackDone) -> crate::WriteFeedback {
+    std::sync::Arc::new(move |_: &str| Ok(done.clone()))
+}
+
+fn feedback_done() -> crate::FeedbackDone {
+    crate::FeedbackDone {
+        path: PathBuf::from("/w/fiber-feedback-7.md"),
+        link: "https://example.test/new?title=x".to_owned(),
+    }
+}
+
+/// The conversation screen's text at 80 by 24.
+fn screen_text(app: &App) -> String {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    crate::view::text(&buf)
+}
+
+#[test]
+fn feedback_without_a_description_asks_for_one() {
+    let mut app = attached();
+    assert_eq!(enter(&mut app, "/feedback"), Effect::None);
+    assert_eq!(app.draft(), "/feedback ");
+    assert_eq!(
+        app.notice(),
+        Some("Describe the feedback after /feedback, then press Enter.")
+    );
+}
+
+#[test]
+fn feedback_without_a_writer_keeps_the_draft_and_sends_nothing() {
+    let mut app = attached();
+    assert_eq!(enter(&mut app, "/feedback the sound"), Effect::None);
+    assert_eq!(app.draft(), "/feedback the sound");
+    assert_eq!(app.notice(), Some(crate::feedback::NO_WRITER));
+}
+
+#[test]
+fn feedback_sends_the_description_and_lands_path_plus_link() {
+    let mut app = attached();
+    app.set_feedback(Some(feedback_writer(feedback_done())));
+    let effect = enter(&mut app, "/feedback the sound");
+    assert_eq!(
+        effect,
+        Effect::Feedback {
+            description: "the sound".to_owned()
+        }
+    );
+    // The draft stays until the worker's answer lands.
+    assert_eq!(app.draft(), "/feedback the sound");
+    app.on_feedback(Ok(feedback_done()));
+    assert!(app.draft().is_empty());
+    assert_eq!(
+        app.notice(),
+        Some("Wrote /w/fiber-feedback-7.md\nhttps://example.test/new?title=x")
+    );
+}
+
+#[test]
+fn feedback_failure_keeps_the_draft_with_the_error() {
+    let mut app = attached();
+    app.set_feedback(Some(feedback_writer(feedback_done())));
+    assert!(matches!(
+        enter(&mut app, "/feedback the sound"),
+        Effect::Feedback { .. }
+    ));
+    app.on_feedback(Err("the write failed".to_owned()));
+    assert_eq!(app.draft(), "/feedback the sound");
+    assert_eq!(app.notice(), Some("the write failed"));
+}
+
+#[test]
+fn feedback_renders_the_prompt_then_the_written_report() {
+    use std::sync::mpsc;
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.set_feedback(Some(feedback_writer(feedback_done())));
+    assert_eq!(enter(&mut app, "/feedback"), Effect::None);
+    let prompt = screen_text(&app);
+    assert!(
+        prompt.contains("Describe the feedback after /feedback"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("/feedback"), "{prompt}");
+    type_text(&mut app, "the sound");
+    let Effect::Feedback { description } = app.on_key(Key::Enter, now()) else {
+        panic!("feedback effect");
+    };
+    let (tx, rx) = mpsc::channel();
+    assert_eq!(
+        crate::feedback::start(app.feedback_writer(), Some(&tx), description),
+        None
+    );
+    let crate::Input::Feedback(result) = fakes::Deadline::after(std::time::Duration::from_secs(10))
+        .recv_or_fail(&rx, "feedback answer")
+    else {
+        panic!("feedback answer");
+    };
+    app.on_feedback(result);
+    let written = screen_text(&app);
+    assert!(written.contains("/w/fiber-feedback-7.md"), "{written}");
+    assert!(
+        written.contains("https://example.test/new?title=x"),
+        "{written}"
+    );
+}
+
 fn credential_app() -> (App, std::sync::Arc<crate::configure_fake::Fake>) {
     let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]));
     let mut app = attached();

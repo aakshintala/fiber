@@ -300,11 +300,12 @@ fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
 }
 
 /// `/feedback`: with no description, asks for one by leaving the draft
-/// on `/feedback `; with a description, the injected writer (wired in a
-/// later task) writes the report, and the notice carries its path and
-/// link. Without a writer the draft is kept and nothing is sent.
+/// on `/feedback `; with a description, the loop writes the report off
+/// its thread through the injected writer, and the answer lands as a
+/// notice. Without a writer the draft is kept and nothing is sent.
 fn run_feedback(app: &mut App, rest: &str) -> Option<Effect> {
-    if rest.trim().is_empty() {
+    let description = rest.trim();
+    if description.is_empty() {
         app.push_notice(
             "feedback",
             "Describe the feedback after /feedback, then press Enter.".to_owned(),
@@ -313,7 +314,13 @@ fn run_feedback(app: &mut App, rest: &str) -> Option<Effect> {
         app.draft.paste("/feedback ");
         return Some(Effect::None);
     }
-    Some(Effect::None)
+    if app.feedback_writer().is_none() {
+        app.push_notice("feedback", crate::feedback::NO_WRITER.to_owned());
+        return Some(Effect::None);
+    }
+    Some(Effect::Feedback {
+        description: description.to_owned(),
+    })
 }
 
 fn run_quit(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -832,6 +839,25 @@ impl App {
             }
             super::paste::Landed::Dropped => {}
         }
+    }
+
+    /// A feedback report finished writing: the path with the issue link
+    /// shows, and the draft clears. A failure keeps the draft with its
+    /// notice, as a rejected command does.
+    pub(crate) fn on_feedback(&mut self, result: Result<crate::FeedbackDone, String>) {
+        match result {
+            Ok(done) => {
+                self.draft.clear();
+                self.notices.push(
+                    "feedback",
+                    format!("Wrote {}\n{}", done.path.display(), done.link),
+                );
+            }
+            Err(notice) => {
+                self.notices.push("feedback", notice);
+            }
+        }
+        self.settle();
     }
 }
 
