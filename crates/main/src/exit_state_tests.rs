@@ -211,11 +211,11 @@ fn exit_state_timer_write_uses_an_injected_clock_and_survives_clean_exit() {
 /// would return the pre-signal code after a signal.
 #[test]
 fn drain_exit_prefers_the_shutdown_code() {
-    let live = Arc::new(r#loop::TurnCancel::default());
-    assert_eq!(super::drain_exit_code(0, &live), 0);
-    let stopped = Arc::new(r#loop::TurnCancel::default());
-    stopped.shutdown(143);
-    assert_eq!(super::drain_exit_code(0, &stopped), 143);
+    assert_eq!(super::drain_exit_code(0, false, None), 0);
+    assert_eq!(super::drain_exit_code(0, true, Some(143)), 143);
+    // A stop with no shutdown recorded (an abandonment, an idle hub)
+    // keeps `exited`.
+    assert_eq!(super::drain_exit_code(7, true, None), 7);
 }
 
 /// A shutdown that arrives after the drain already finished changes
@@ -223,7 +223,5 @@ fn drain_exit_prefers_the_shutdown_code() {
 /// `fiber_exited` code even though a shutdown code is recorded.
 #[test]
 fn drain_exit_ignores_a_shutdown_after_the_drain_finished() {
-    let late = Arc::new(r#loop::TurnCancel::default());
-    late.shutdown(129);
-    assert_eq!(super::drain_exit_code(0, &late), 0);
+    assert_eq!(super::drain_exit_code(0, false, Some(129)), 0);
 }
