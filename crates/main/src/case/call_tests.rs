@@ -332,13 +332,20 @@ fn install_package(home: &std::path::Path, package: &str, provider: Option<&str>
 }
 
 fn installed(package: &str) -> extensions::Installed {
+    installed_with_depends(package, std::collections::BTreeMap::new())
+}
+
+fn installed_with_depends(
+    package: &str,
+    depends: std::collections::BTreeMap<String, String>,
+) -> extensions::Installed {
     extensions::Installed {
         name: package.to_owned(),
         version: "0.1.0".to_owned(),
         provenance: extensions::Provenance::Path(std::path::PathBuf::from("test")),
         requested: true,
         floor: None,
-        depends: std::collections::BTreeMap::new(),
+        depends,
     }
 }
 
@@ -410,6 +417,76 @@ fn a_package_that_registers_nothing_is_not_chosen() {
     assert_eq!(
         resolved(&installed, "openrouter", &home).as_deref(),
         Some(OPENROUTER)
+    );
+}
+
+/// Installs a dependency package holding one `trim` module.
+fn install_dep(home: &std::path::Path, dep: &str) {
+    let dir = home.join("extensions").join(config::dir_name(dep));
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = json!({"name": dep, "version": "0.1.0", "fiber": "0.0.0", "api": 1});
+    std::fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    std::fs::write(
+        dir.join("trim.lua"),
+        "return { trim = function(s) return s end }",
+    )
+    .unwrap();
+}
+
+/// Points the package's provider file at a qualified require of `require`.
+fn point_provider_at(home: &std::path::Path, package: &str, provider: &str, require: &str) {
+    let dir = home.join("extensions").join(config::dir_name(package));
+    std::fs::write(
+        dir.join("providers").join(format!("{provider}.lua")),
+        format!(
+            "local dep = require({require:?})\n\
+             fiber.provider({provider:?}, {{ cost = {{ timeout = 5000, \
+             run = function() return dep.trim(0.5) end }} }})"
+        ),
+    )
+    .unwrap();
+}
+
+fn selected(
+    installed: &[extensions::Installed],
+    provider: &str,
+    home: &std::path::Path,
+) -> std::sync::Arc<extensions::LuaExtension> {
+    let clock: Arc<dyn contract::clock::Clock> = crate::case::clock::CaseClock::new();
+    let host = extensions::HostScript::new(Vec::new(), Vec::new(), Vec::new());
+    super::provider_extension(installed, provider, home, &clock, &host, true).unwrap()
+}
+
+#[test]
+fn a_declared_dependency_loads_in_the_case_path() {
+    let (_root, home) = fixture_home("fiber-call-dep-loads");
+    install_package(&home, "casepkg", Some("p"));
+    install_dep(&home, "dep");
+    point_provider_at(&home, "casepkg", "p", "dep:trim");
+    let installed = [installed_with_depends(
+        "casepkg",
+        [("dep".to_owned(), "1.0".to_owned())].into_iter().collect(),
+    )];
+    let extension = selected(&installed, "p", &home);
+    assert_eq!(extension.provider_functions("p").unwrap(), ["cost"]);
+}
+
+#[test]
+fn a_non_dependency_is_refused_in_the_case_path() {
+    let (_root, home) = fixture_home("fiber-call-dep-refused");
+    install_package(&home, "casepkg", Some("p"));
+    install_dep(&home, "dep");
+    point_provider_at(&home, "casepkg", "p", "other:trim");
+    let installed = [installed_with_depends(
+        "casepkg",
+        [("dep".to_owned(), "1.0".to_owned())].into_iter().collect(),
+    )];
+    let extension = selected(&installed, "p", &home);
+    let err = extension.provider_functions("p").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("`dependency 'other' not installed`"),
+        "{err}"
     );
 }
 
