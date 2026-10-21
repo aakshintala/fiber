@@ -1688,6 +1688,10 @@ fn install_host_provider(setup: &Setup) {
 /// Runs `fiber models` on pipes, returning its exit code and streams.
 fn list_models(setup: &Setup) -> Output {
     let mut command = setup.command(&["models"]);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     setup.run_piped(&mut command, &["models"], "")
 }
 
@@ -1699,7 +1703,8 @@ fn a_terminal_login_asks_for_the_host_and_lists_the_models_after() {
     run.screen.wait_for("Key for acme: ");
     run.screen.type_text(&format!("{KEY}\n"));
     run.screen.type_text("https://adb-1.example.test/\n");
-    run.screen.wait_for("fiber: stored credentials/acme/default");
+    run.screen
+        .wait_for("fiber: stored credentials/acme/default");
     run.screen.wait_for("Reviewer, by number or name: ");
     run.screen.type_text("1\n");
     run.screen.wait_for("fiber: reviewer acme m");
@@ -1760,7 +1765,8 @@ fn a_project_empty_hides_the_saved_host_and_names_its_file() {
     run.screen.wait_for("Key for acme: ");
     run.screen.type_text(&format!("{KEY}\n"));
     run.screen.type_text("adb-1.example.test\n");
-    run.screen.wait_for("fiber: stored credentials/acme/default");
+    run.screen
+        .wait_for("fiber: stored credentials/acme/default");
     run.screen.wait_for("Reviewer, by number or name: ");
     run.screen.type_text("1\n");
     run.screen.wait_for("fiber: reviewer acme m");
@@ -1772,10 +1778,7 @@ fn a_project_empty_hides_the_saved_host_and_names_its_file() {
             .unwrap();
     assert_eq!(saved, json!({"workspace": "adb-1.example.test"}));
     let file = dir.join("acme.json");
-    assert!(
-        shown.contains("sets it empty and hides it"),
-        "{shown:?}"
-    );
+    assert!(shown.contains("sets it empty and hides it"), "{shown:?}");
     assert!(shown.contains(&file.display().to_string()), "{shown:?}");
     // The mask holds: the model stays out of the list.
     let models = list_models(&setup);

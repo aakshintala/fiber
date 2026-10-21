@@ -128,7 +128,7 @@ pub use hub_token::{hub_token_list, hub_token_revoke};
 pub use import::import;
 pub use login::{
     LoginCancel, LoginName, LoginStored, LogoutTarget, ReviewerModels, browser_login, login_store,
-    login_targets, providers_in, reviewer_models, run_login, run_logout, set_reviewer,
+    login_targets, providers_in, reviewer_models, run_login, run_logout, save_host, set_reviewer,
 };
 pub use mcp::{DeclaredServer, McpDeclaration, declared_servers, mcp_add, mcp_list, mcp_remove};
 pub use mcp_login::{login_target, mcp_login, mcp_logout};

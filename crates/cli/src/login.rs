@@ -28,11 +28,13 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::{Handle, Signals};
 
 mod browser;
+mod host;
 mod reviewer;
 
 use crate::{CliError, Refusal, finish, project_of};
 use browser::login_with;
 pub use browser::{LoginCancel, browser_login};
+pub use host::save_host;
 pub use reviewer::{ReviewerModels, reviewer_models, set_reviewer};
 
 /// The label a login stores under when `--as` is absent and the login
@@ -603,10 +605,10 @@ pub(crate) fn login(
             } else {
                 "stored"
             };
-            // The reviewer question follows a stored provider key at a
-            // terminal: never a declared secret, a failed store or a
-            // pipe, and never a browser login (which asks through its
-            // own post-store step). Cancellation arms before the
+            // The host questions follow a stored provider key, and the
+            // reviewer only after no gaps: never a declared secret or a
+            // failed store, and never a browser login (which asks through
+            // its own post-store step). Cancellation arms before the
             // stored-line readiness output, so an interrupt between the
             // store and the prompt still ends the login with no reviewer
             // set instead of terminating it.
@@ -616,7 +618,11 @@ pub(crate) fn login(
                     .get(&name)
                     .is_some_and(|data| data.login != Some(Login::Browser))
             {
+                host::hosts(io, &name)?;
                 post_store_reviewer(io, &name, &format!("fiber: {done} {}", stored.path))?;
+            } else if !io.terminal && io.providers.get(&name).is_some() {
+                host::hosts(io, &name)?;
+                writeln!(io.err, "fiber: {done} {}", stored.path).map_err(CliError::Terminal)?;
             } else {
                 writeln!(io.err, "fiber: {done} {}", stored.path).map_err(CliError::Terminal)?;
             }

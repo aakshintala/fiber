@@ -1581,12 +1581,9 @@ fn install_two_gaps(home: &Path) {
     fs::create_dir_all(dir.join("providers")).unwrap();
     let mut manifest = json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
     manifest["providers"] = serde_json::Value::Object(
-        [(
-            "acme".to_owned(),
-            json!(["https://{workspace}/v1/{other}"]),
-        )]
-        .into_iter()
-        .collect(),
+        [("acme".to_owned(), json!(["https://{workspace}/v1/{other}"]))]
+            .into_iter()
+            .collect(),
     );
     fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     write_record(&dir);
@@ -1623,7 +1620,9 @@ fn a_terminal_key_login_asks_for_the_host_after_storing() {
     );
     result.unwrap();
     let asked = err.find("`workspace`: ").unwrap();
-    let stored = err.find("fiber: stored credentials/acme/default\n").unwrap();
+    let stored = err
+        .find("fiber: stored credentials/acme/default\n")
+        .unwrap();
     assert!(asked < stored, "{err:?}");
     assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
     assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
@@ -1662,11 +1661,7 @@ fn a_non_host_answer_is_refused_and_asked_again() {
         1,
         "{err:?}"
     );
-    assert_eq!(
-        err.matches("`workspace`: ").count(),
-        2,
-        "{err:?}"
-    );
+    assert_eq!(err.matches("`workspace`: ").count(), 2, "{err:?}");
     assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
 }
 
@@ -1707,10 +1702,7 @@ const HOST_ENV: &str = "FIBER_TEST_2909_HOST";
 
 /// Installs the `acme` provider whose `workspace` reads `HOST_ENV`.
 fn install_host_env(home: &Path) {
-    install_host(
-        home,
-        json!({"workspace": {"env": HOST_ENV}}),
-    );
+    install_host(home, json!({"workspace": {"env": HOST_ENV}}));
 }
 
 #[test]
@@ -1819,15 +1811,17 @@ fn as_label_asks_the_same_but_saves_the_host_globally() {
     assert!(err.contains("`workspace`: "), "{err:?}");
     assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
     assert_eq!(setup.stored("acme", "work").as_deref(), Some(KEY));
-    assert!(err.contains("fiber: stored credentials/acme/work\n"), "{err:?}");
+    assert!(
+        err.contains("fiber: stored credentials/acme/work\n"),
+        "{err:?}"
+    );
 }
 
 #[test]
 fn a_project_empty_hides_the_saved_host_and_names_its_file() {
     let setup = Setup::new();
     install_host(&setup.home(), json!({"workspace": {}}));
-    let (_, project) =
-        crate::project_of(&setup.home(), &std::env::current_dir().unwrap()).unwrap();
+    let (_, project) = crate::project_of(&setup.home(), &std::env::current_dir().unwrap()).unwrap();
     let dir = setup
         .home()
         .join("projects")
@@ -1859,7 +1853,7 @@ fn end_of_input_at_the_host_prompt_saves_nothing_and_still_ends_zero() {
     // EOF stops the questions: an empty typed line would ask again, but
     // 0 bytes end the host step with nothing saved for any gap.
     let setup = Setup::new();
-    install_two_gaps(&setup.home());
+    install_host(&setup.home(), json!({"workspace": {}}));
     let (result, err) = setup.login(Some("acme"), true, "", &mut Fake::new(KEY));
     result.unwrap();
     assert_eq!(err.matches("`workspace`: ").count(), 1, "{err:?}");
@@ -1904,7 +1898,10 @@ fn a_project_empty_over_a_global_answer_reads_as_no_value() {
     // global answer stays written, but the project layer's empty string
     // wins the merge, so the model list still reports no value.
     let setup = Setup::new();
-    install_host(&setup.home(), json!({"workspace": {"env": "FIBER_TEST_2909_UNSET_HOST"}}));
+    install_host(
+        &setup.home(),
+        json!({"workspace": {"env": "FIBER_TEST_2909_UNSET_HOST"}}),
+    );
     let mut config = setup.config();
     config
         .extensions_mut()
@@ -1926,7 +1923,10 @@ fn a_project_empty_over_a_global_answer_reads_as_no_value() {
     assert_eq!(
         notices[0].message,
         "The model `acme/m` needs the setting `workspace` for its base URL, \
-         which has no value, and `FIBER_TEST_2909_UNSET_HOST` has none either."
+         which has no value, and `FIBER_TEST_2909_UNSET_HOST` is not set in the hub's \
+         environment (your login shell). Run `fiber login acme`, \
+         or set `workspace` in `config/acme.json` in Fiber home, \
+         or export it in your shell profile and run `fiber hub refresh`."
     );
 }
 
@@ -2007,7 +2007,9 @@ fn a_terminal_browser_login_asks_for_the_host_after_storing() {
         .unwrap_or_else(|_| panic!("browser login did not finish within {STAGE_WAIT:?}"));
     result.unwrap();
     let asked = err.find("`workspace`: ").unwrap();
-    let stored = err.find("fiber: stored credentials/acme/alice@example.com\n").unwrap();
+    let stored = err
+        .find("fiber: stored credentials/acme/alice@example.com\n")
+        .unwrap();
     assert!(asked < stored, "{err:?}");
     assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
     assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
