@@ -32,6 +32,16 @@ impl Environment {
     pub fn variables(&self) -> Variables {
         Variables::of(self.vars.clone(), self.source)
     }
+
+    /// The published value of the requested placeholder variable `name`,
+    /// or `None` when the published environment lacks it: absent names
+    /// stay out of the `placeholder_env` answer, never `null`.
+    pub fn value(&self, name: &str) -> Option<String> {
+        self.vars
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+    }
 }
 
 impl std::fmt::Debug for Environment {

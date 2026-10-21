@@ -797,7 +797,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             Delivery::Close(_) => "close",
             Delivery::SteerDrop(..)
             | Delivery::Name(..)
-            | Delivery::Message(_)
+            | Delivery::Message(..)
             | Delivery::Model(..)
             | Delivery::Reload(..)
             | Delivery::McpReconnect(..)
@@ -1742,7 +1742,8 @@ fn a_same_id_session_message_never_rescues_a_dropped_steer() {
     // globally unique: its staged entry must not rescue the dropped steer.
     looped
         .admit_message_running(
-            super::session_message::for_test("s_other", None, "c_1", "session says hi"),
+            super::session_message::for_test("s_other", None, None, "c_1", "session says hi"),
+            steer_ignore(),
             &turn,
         )
         .unwrap();

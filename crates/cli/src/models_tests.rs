@@ -43,6 +43,7 @@ fn catalogue_and_cached_model_lists_follow_project_configuration() {
             crate::model_lists::ModelLists::Cached,
             &|_| unreachable!("cached lists start no extensions"),
             &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap();
         assert!(notices.is_empty());
@@ -1044,13 +1045,20 @@ fn the_refresh_child_leaves_an_unnamed_uncached_provider_alone() {
     // `refresh_named` joins its refresh threads: run it on a worker and
     // receive completion under one named deadline.
     let (done, finished) = mpsc::channel();
+    let refresh_clock = fakes::clock::FakeClock::new();
+    // `setup` stays in the parent so its home directory outlives the
+    // worker: moving it into the thread would drop the directory while
+    // the parent below still reads the cache back.
+    let worker_home = setup.home();
     thread::spawn(move || {
         refresh_named(
+            &worker_home,
             &["stale".to_owned()],
             &providers,
             &loaded,
             &config,
             &fakes::children::grouped_output,
+            refresh_clock.as_ref(),
         );
         done.send(()).unwrap();
     });
@@ -1570,5 +1578,137 @@ fn a_shadowed_personal_provider_prints_one_notice() {
                 "{err:?}"
             );
         },
+    );
+}
+
+/// A placeholder variable name no test process sets: each hub test reads
+/// its absence first and sets nothing.
+const HUB_ENV_HOST: &str = "FIBER_TEST_MODELS_HUB_ENV_HOST";
+
+impl Setup {
+    /// Installs the extension `extension` registering the provider `name`
+    /// with one model whose base URL fills `{workspace}` from the
+    /// environment variable `var`.
+    fn install_placeholder(&self, extension: &str, name: &str, var: &str) {
+        let dir = self.home().join("extensions").join(extension);
+        let data = json!({
+            "name": name,
+            "placeholders": {"workspace": {"env": var}},
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
+        });
+        let mut manifest = json!({
+            "name": extension,
+            "version": "v0.0.0",
+            "fiber": "0.0.0",
+            "api": extensions::API,
+        });
+        manifest["providers"] = Value::Object(
+            [(name.to_owned(), json!(["https://{workspace}/v1"]))]
+                .into_iter()
+                .collect(),
+        );
+        fs::create_dir_all(dir.join("providers")).unwrap();
+        fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+        write_record(&dir);
+        fs::write(
+            dir.join("providers").join(format!("{name}.json")),
+            data.to_string(),
+        )
+        .unwrap();
+    }
+}
+
+/// A hub on `home`'s `run/hub` for one client: it says `hub_hello`, reads
+/// the one command line and sends it on, then answers the requested names
+/// from `values` and holds the connection until the client closes it.
+fn fake_hub_env(
+    home: &std::path::Path,
+    values: serde_json::Value,
+) -> std::sync::mpsc::Receiver<String> {
+    use std::io::{BufRead, Write};
+    let listener = std::os::unix::net::UnixListener::bind(home.join("run/hub")).unwrap();
+    let (sent, got) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({"kind": "hub_hello", "ts": 1,
+                        "schema_version": contract::SCHEMA_VERSION, "payload": {}})
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(&stream)
+            .read_line(&mut line)
+            .unwrap();
+        sent.send(line).unwrap_or(());
+        stream
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({"kind": "command_accepted", "ts": 1,
+                        "schema_version": contract::SCHEMA_VERSION,
+                        "payload": {"command_id": "c_env",
+                            "result": {"values": values}}})
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        let mut rest = String::new();
+        std::io::BufReader::new(stream)
+            .read_line(&mut rest)
+            .unwrap_or(0);
+    });
+    got
+}
+
+#[test]
+fn models_lists_what_the_hub_holds_though_the_client_lacks_it() {
+    assert!(
+        std::env::var_os(HUB_ENV_HOST).is_none(),
+        "the test process lacks {HUB_ENV_HOST}"
+    );
+    let setup = Setup::new();
+    setup.install_placeholder("acme-ext", "acme", HUB_ENV_HOST);
+    fs::create_dir_all(setup.home().join("run")).unwrap();
+    let got = fake_hub_env(&setup.home(), json!({HUB_ENV_HOST: "adb-1.example.test"}));
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    assert!(out.contains("acme/m"), "{out:?}");
+    assert_eq!(err, "", "{err:?}");
+    let request: Value = serde_json::from_str(
+        &fakes::Deadline::after(std::time::Duration::from_secs(10))
+            .recv(&got)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        request,
+        json!({"id": "c_env", "command": "placeholder_env",
+            "args": {"names": [HUB_ENV_HOST]}}),
+    );
+}
+
+#[test]
+fn models_leaves_out_what_no_hub_answers_when_the_client_lacks_it() {
+    assert!(
+        std::env::var_os(HUB_ENV_HOST).is_none(),
+        "the test process lacks {HUB_ENV_HOST}"
+    );
+    let setup = Setup::new();
+    setup.install_placeholder("acme-ext", "acme", HUB_ENV_HOST);
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    assert!(!out.contains("acme/"), "{out:?}");
+    assert!(
+        err.contains(HUB_ENV_HOST) && err.contains("hub's environment"),
+        "the list names the unconfigured model: {err:?}"
     );
 }

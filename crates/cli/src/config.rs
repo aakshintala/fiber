@@ -106,6 +106,7 @@ fn run_set(
     key: &str,
     value: &str,
     err: &mut dyn Write,
+    clock: &dyn contract::clock::Clock,
 ) -> Result<PathBuf, CliError> {
     let (_, project) = project_of(home, workspace)?;
     let parsed = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
@@ -113,7 +114,7 @@ fn run_set(
     if key == "model"
         && let Some(typed) = parsed.as_str()
     {
-        notices.extend(check_model(home, workspace, &project, typed, err)?);
+        notices.extend(check_model(home, workspace, &project, typed, err, clock)?);
     } else {
         // No other load happens on this path: one lenient load surfaces
         // this command's configuration notices. A configuration that
@@ -142,9 +143,11 @@ pub fn config_set_text(
     layer: Layer,
     key: &str,
     text: &str,
+    clock: &dyn contract::clock::Clock,
 ) -> Result<(Vec<String>, PathBuf), Failure> {
     let mut err = Vec::new();
-    let file = run_set(home, workspace, layer, key, text, &mut err).map_err(Failure::from)?;
+    let file =
+        run_set(home, workspace, layer, key, text, &mut err, clock).map_err(Failure::from)?;
     Ok((
         String::from_utf8_lossy(&err)
             .lines()
@@ -166,6 +169,7 @@ fn check_model(
     project: &ProjectKey,
     typed: &str,
     err: &mut dyn Write,
+    clock: &dyn contract::clock::Clock,
 ) -> Result<Vec<Notice>, CliError> {
     let (providers, loading) = workspace_providers(home, workspace, project)?;
     let mut notices = loading;
@@ -213,7 +217,8 @@ fn check_model(
     .map_err(CliError::from)?;
     notices.extend(config.notices().iter().cloned());
     let mut providers = providers;
-    let _notices = providers.fill_placeholders(&config, &|name| std::env::var(name).ok())?;
+    let lookup = crate::hub_env::placeholder_lookup(home, &providers, clock);
+    let _notices = providers.fill_placeholders(&config, &lookup)?;
     match providers.resolve(typed) {
         Ok(_) => Ok(notices),
         Err(e @ extensions::Error::Unconfigured { .. }) => {
@@ -287,9 +292,9 @@ pub fn config_get(key: &str) -> i32 {
 
 /// `fiber config set [--project | --repo] <key> <value>` in the current
 /// directory: writes one key in one layer's file.
-pub fn config_set(layer: Layer, key: &str, value: &str) -> i32 {
+pub fn config_set(layer: Layer, key: &str, value: &str, clock: &dyn contract::clock::Clock) -> i32 {
     with_dirs(|home, workspace| {
-        run_set(home, workspace, layer, key, value, &mut io::stderr()).map(|_| ())
+        run_set(home, workspace, layer, key, value, &mut io::stderr(), clock).map(|_| ())
     })
 }
 

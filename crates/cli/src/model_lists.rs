@@ -68,6 +68,7 @@ pub fn model_lists(
     read: ModelLists,
     load: &dyn Fn(&Config) -> SessionExtensions,
     run: config::Runner<'_>,
+    clock: &dyn contract::clock::Clock,
 ) -> Result<(Providers, Config, Vec<String>), ModelListsError> {
     let (mut providers, config, load_notices) =
         crate::models::providers_and_config(home, workspace).map_err(ModelListsError::Load)?;
@@ -78,16 +79,28 @@ pub fn model_lists(
     // The cached lists serve every cached copy an installed extension
     // declares. A refresh works from the Lua providers alone, so a
     // removed one's cache file shows no longer once it answers.
+    // Each placeholder value from the hub's captured environment, so the
+    // list agrees with the session the hub would start; no hub answers
+    // and the process environment serves, as before.
+    let lookup = crate::hub_env::placeholder_lookup(home, &providers, clock);
     match read {
         ModelLists::Cached => {
             cached_lists(home, &mut providers, &mut notices)?;
         }
         ModelLists::Refresh { check_age } => {
             let max_age = check_age.then(|| config::refresh_after(&config));
-            refreshed(&config, load, &mut providers, &mut notices, max_age, run);
+            refreshed(
+                &config,
+                load,
+                &mut providers,
+                &mut notices,
+                max_age,
+                run,
+                &lookup,
+            );
         }
     }
-    for notice in providers.fill_placeholders(&config, &|name| std::env::var(name).ok())? {
+    for notice in providers.fill_placeholders(&config, &lookup)? {
         notices.push(notice.message);
     }
     providers.forget_lua();
@@ -127,11 +140,12 @@ fn refreshed(
     notices: &mut Vec<String>,
     max_age: Option<std::time::Duration>,
     run: config::Runner<'_>,
+    lookup: &dyn Fn(&str) -> Option<String>,
 ) {
     let loaded = load(config);
     notices.extend(
         providers
-            .add_session(&loaded, config, run, &|name| std::env::var(name).ok())
+            .add_session(&loaded, config, run, lookup)
             .into_iter()
             .map(|notice| notice.message),
     );
@@ -141,9 +155,7 @@ fn refreshed(
         .map(|(_, provider)| Arc::clone(provider))
         .collect();
     for (name, handle) in
-        extensions::refresh_lists(&wanted, providers, config, max_age, run, &|name| {
-            std::env::var(name).ok()
-        })
+        extensions::refresh_lists(&wanted, providers, config, max_age, run, lookup)
     {
         match handle.join() {
             Ok(Ok(models)) => {

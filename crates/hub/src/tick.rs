@@ -13,14 +13,14 @@ use std::time::Instant;
 
 use contract::clock::{Clock, Wake};
 
-/// Woken on every clock move, every change to what a waiter checks and
-/// every signal.
+/// Woken on every clock move, every change to what a waiter checks,
+/// every signal, and every stop-store.
 #[derive(Default)]
 pub(crate) struct Tick {
     held: Mutex<()>,
     moved: Condvar,
-    /// Told once of the next wake: when it finds `held` taken, or else
-    /// once its notify has returned.
+    /// Told once of the next wake or stop-store: when it finds `held`
+    /// taken, or else once its notify has returned.
     #[cfg(test)]
     pub(crate) attempt: Mutex<Option<Sender<()>>>,
 }
@@ -44,8 +44,10 @@ impl Wake for Tick {
 #[cfg(test)]
 impl Tick {
     /// Tells the armed sender at once when `held` is taken, and otherwise
-    /// returns it to be told after the notify.
-    fn tell_if_contended(&self) -> Option<Sender<()>> {
+    /// returns it to be told after the wait. Shared by [`Tick::wake`] and
+    /// the stop-store's arrival signal, which reports before the hold
+    /// instead of after a notify.
+    pub(crate) fn tell_if_contended(&self) -> Option<Sender<()>> {
         let attempt = lock(&self.attempt).take()?;
         if matches!(
             self.held.try_lock(),

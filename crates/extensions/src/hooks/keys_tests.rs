@@ -23,7 +23,7 @@ use contract::clock::Wake;
 use contract::events::{CallStatus, HandoffTrigger, InputItem, Notice};
 use contract::hook::{
     AfterToolCall, BeforeHandoff, BeforeMessage, BeforeModelCall, BeforeToolCall, Hooks,
-    SessionStart, StartReason, TurnEnd, TurnStart,
+    MessageSender, SessionStart, StartReason, TurnEnd, TurnStart,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Process, Tokens, Usage};
 use contract::tool::Cancel;
@@ -278,8 +278,16 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
         }
         "before_message" => {
             let content = vec![ContentPart::Text { text: "x".into() }];
+            let from = SessionId("s_aaaaaaaaaaaaaaaa".into());
+            let parent = SessionId("s_bbbbbbbbbbbbbbbb".into());
             session
-                .before_message(&BeforeMessage { content: &content })
+                .before_message(&BeforeMessage {
+                    content: &content,
+                    sender: Some(MessageSender {
+                        from_session_id: &from,
+                        parent_session_id: Some(&parent),
+                    }),
+                })
                 .notices
         }
         "before_handoff" => {
@@ -385,7 +393,10 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
         "before_message" => {
             let content = vec![ContentPart::Text { text: "x".into() }];
             session
-                .before_message(&BeforeMessage { content: &content })
+                .before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
                 .notices
         }
         "before_handoff" => {

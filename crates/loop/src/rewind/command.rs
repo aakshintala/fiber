@@ -227,10 +227,10 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
         | Delivery::Reply(_, ack)
         | Delivery::Close(ack)
         | Delivery::Resolved(_, ack)
+        | Delivery::Message(_, ack)
         | Delivery::Rewind(_, _, ack) => reject(ack, ErrorCode::Closing, REWOUND_CLOSING),
         Delivery::Job(_)
         | Delivery::JobLine(_)
-        | Delivery::Message(_)
         | Delivery::ExtensionExec(_)
         | Delivery::Interaction(_)
         | Delivery::ExtensionLog(_)

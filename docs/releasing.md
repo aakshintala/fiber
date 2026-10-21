@@ -105,10 +105,12 @@ One archive per target, each with a checksum file beside it:
 | Linux arm64 | `fiber-aarch64-unknown-linux-musl.tar.gz` |
 
 Each archive holds the `fiber` binary and `THIRD-PARTY-NOTICES`, the notices
-file `docs/dependencies.md` requires. Each checksum file is named after its
-archive with `.sha256` added. Each checksum file holds the archive's SHA-256
-as 64 hex digits, optionally followed by whitespace and the archive's name, as
-`sha256sum` writes it. The release also carries `install.sh`.
+file `docs/dependencies.md` requires. The template is the root `about.hbs`
+and the licence config is the root `about.toml`. Each checksum file is named
+after its archive with `.sha256` added. Each checksum file holds the
+archive's SHA-256 as 64 hex digits, optionally followed by whitespace and
+the archive's name, as `sha256sum` writes it. The release also carries
+`install.sh`.
 
 The release also carries `fiber-docs.tar.gz` and its checksum file: the
 repository's `docs/` tree at the release tag, without the documents about
@@ -251,10 +253,12 @@ credentials, sessions, rules, approvals, pinned copies or extension data
 
 It:
 
-1. finds the newest version by requesting
+1. finds the newest version on its channel: on stable by requesting
    `https://github.com/aakshintala/fiber/releases/latest` and reading the tag
    from the redirect, which is not a GitHub API call and so is not held to the
-   API's limit of 60 requests an hour for each address
+   API's limit of 60 requests an hour for each address; on nightly from the
+   release list instead, whose match rule and limit are the channel's own,
+   shared with `install.sh` ("Installing" above)
 2. if that version is newer than the running one, downloads the archive for
    the running binary's own target and its checksum file into the directory
    that holds the binary, checks the SHA-256 and extracts the binary there,
@@ -279,20 +283,21 @@ an error naming the directory. It never asks for elevated privileges.
 
 After step 4, if the hub is running, `fiber update` restarts it: through
 its login service when it is installed (`launchctl kickstart` on macOS,
-`systemctl --user restart` on Linux), and otherwise by signalling it, after
+`systemctl --user restart` on Linux), and otherwise by sending it `stop`, after
 which the next client starts a new one. Clients reconnect with backoff, and
 no session stops (`docs/invocation.md`, "The hub").
 
 Nothing checks for a new version on its own. An idle Fiber does no work.
 
-`fiber update` follows a channel setting, stable by default. The stable
-channel finds the newest version through `releases/latest` as above; the
-nightly channel reads the release list instead and updates from its
-nightlies, because GitHub's `releases/latest` skips pre-releases. `fiber
-update` does not exist yet, so its channel is built by #408, which lands
-after this ticket and updates from its nightlies. This ticket writes the
-channel into this section for #408 to build. It does not add competing
-release code.
+`fiber update` takes `--channel stable|nightly`, or `FIBER_CHANNEL` when the
+flag is absent; an empty or unset `FIBER_CHANNEL` means stable, and the flag
+beats the environment. An invalid channel is a usage error naming it.
+`upgrade` runs the same command with the same flag. The stable channel finds
+the newest version through `releases/latest` as above; the nightly channel
+reads the release list instead and updates from its nightlies, because
+GitHub's `releases/latest` skips pre-releases. The list, its match rule,
+its API limit and its failure modes are the channel's own, shared with
+`install.sh` ("Installing" above).
 
 ### How `fiber update` replaces the binary
 

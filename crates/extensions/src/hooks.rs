@@ -38,6 +38,8 @@ mod handoff;
 mod lifecycle;
 mod settle;
 mod start;
+pub use start::dep_dirs;
+pub(crate) use start::is_repository_copy;
 #[cfg(test)]
 mod state_tests;
 

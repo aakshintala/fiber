@@ -180,7 +180,7 @@ pub(super) fn before_message(
         };
         let name = extension.name();
         let current = content.as_deref().unwrap_or(message.content);
-        let arg = shown_message(current);
+        let arg = shown_message(current, message);
         let returned = extension
             .hook_with(BEFORE_MESSAGE, entry.index, arg, |value| {
                 let change = decode_message(name, current, value, entry.check)?;
@@ -249,8 +249,9 @@ pub(super) fn before_message(
 }
 
 /// What a `before_message` hook is shown: the message's content parts as
-/// logged, without a part this build does not know.
-fn shown_message(content: &[ContentPart]) -> Value {
+/// logged, without a part this build does not know, plus the sender's id
+/// and its parent's id for a session message, each absent otherwise.
+fn shown_message(content: &[ContentPart], message: &BeforeMessage<'_>) -> Value {
     let mut shown = Map::new();
     shown.insert(
         "content".into(),
@@ -262,6 +263,15 @@ fn shown_message(content: &[ContentPart]) -> Value {
                 .collect(),
         ),
     );
+    if let Some(sender) = message.sender {
+        shown.insert(
+            "from_session_id".into(),
+            Value::String(sender.from_session_id.0.clone()),
+        );
+        if let Some(parent) = sender.parent_session_id {
+            shown.insert("parent_session_id".into(), Value::String(parent.0.clone()));
+        }
+    }
     Value::Object(shown)
 }
 

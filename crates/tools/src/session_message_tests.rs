@@ -11,6 +11,7 @@ use std::sync::Mutex;
 struct Call {
     to: SessionId,
     from: SessionId,
+    parent: Option<SessionId>,
     text: String,
     cancelled: bool,
 }
@@ -31,12 +32,14 @@ impl Sessions for FakeSessions {
         &self,
         to: &SessionId,
         from: &SessionId,
+        parent: Option<&SessionId>,
         text: &str,
         cancel: &dyn Cancel,
     ) -> Result<(), MessageError> {
         self.calls.lock().unwrap().push(Call {
             to: to.clone(),
             from: from.clone(),
+            parent: parent.cloned(),
             text: text.to_owned(),
             cancelled: cancel.is_cancelled(),
         });
@@ -52,7 +55,15 @@ fn fake(result: Result<(), MessageError>) -> Arc<FakeSessions> {
 }
 
 fn tool(sessions: Arc<FakeSessions>) -> SessionMessage {
-    SessionMessage::new(sessions, SessionId("s_own".into()))
+    tool_with_parent(sessions, None)
+}
+
+fn tool_with_parent(sessions: Arc<FakeSessions>, parent: Option<SessionId>) -> SessionMessage {
+    SessionMessage::new(
+        sessions,
+        SessionId("s_own".into()),
+        Arc::new(move || parent.clone()),
+    )
 }
 
 fn text(output: &Output) -> &str {
@@ -71,7 +82,7 @@ fn definition_and_defaults_are_constant() {
     let tool = tool(fake(Ok(())));
     assert_eq!(tool.definition(), ToolDefinition {
         name: "session_message".into(),
-        description: "Sends a plain-text message to one running Fiber session by its full id from session_list. It arrives there as steering during a turn, or starts a turn. Answers \"delivered\" once it is in that session's inbox; fails unreachable when no running session has the id, and closing when the target is closing.".into(),
+        description: "Sends a plain-text message to one running Fiber session by its full id from session_list. It arrives there as steering during a turn, or starts a turn. Answers \"delivered\" once the target takes it; fails unreachable, closing, message_refused, or hook_failed.".into(),
         input_schema: json!({"type":"object","properties":{"id":{"type":"string","description":"The target session's full id, as session_list gives it."},"text":{"type":"string","description":"The message, plain text."}},"required":["id","text"],"additionalProperties":false}),
         deferred: false, hosted: None,
     });
@@ -114,6 +125,26 @@ fn effects_reject_what_does_not_fit_the_schema() {
 }
 
 #[test]
+fn run_sends_the_readers_parent_as_the_hooks_parent() {
+    for parent in [Some(SessionId("s_parent".into())), None] {
+        let sessions = fake(Ok(()));
+        let output = tool_with_parent(Arc::clone(&sessions), parent.clone()).run(
+            &arguments(json!({"id": "s_0000000000000001", "text": "hi"})),
+            &CancelToken::new(),
+            &Recorder::default(),
+        );
+        assert_eq!(text(&output), "delivered");
+        assert_eq!(output.error, None);
+        let calls = sessions.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].parent, parent,
+            "the reader's parent reaches the send"
+        );
+    }
+}
+
+#[test]
 fn run_sends_from_the_calling_session_and_answers_delivered() {
     let sessions = fake(Ok(()));
     let output = tool(Arc::clone(&sessions)).run(
@@ -127,6 +158,7 @@ fn run_sends_from_the_calling_session_and_answers_delivered() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].to, SessionId("s_0000000000000001".into()));
     assert_eq!(calls[0].from, SessionId("s_own".into()));
+    assert_eq!(calls[0].parent, None);
     assert_eq!(calls[0].text, "the parser is fixed");
     assert!(!calls[0].cancelled);
 }

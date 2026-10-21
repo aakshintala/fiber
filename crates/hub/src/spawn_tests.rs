@@ -466,6 +466,26 @@ fn starter_with(exe: PathBuf, source: VariablesSource, root: &fakes::TempDir) ->
     )
 }
 
+/// The marker rides beside the snapshot it marks, with the names-only
+/// value `1`, so the session keys its fixed startup environment off it
+/// instead of querying the hub again.
+#[test]
+fn apply_marks_the_session_for_the_startup_snapshot() {
+    let mut command = Command::new("fiber");
+    apply(
+        &mut command,
+        &Environment {
+            vars: vec![(OsString::from("MARK"), OsString::from("start"))],
+            source: VariablesSource::Inherited,
+        },
+    );
+    let marked = command
+        .get_envs()
+        .find(|(name, _)| name.to_str() == Some(HUB_SESSION_MARKER))
+        .map(|(_, value)| value.map(|value| value.to_owned()));
+    assert_eq!(marked, Some(Some(OsString::from("1"))));
+}
+
 /// The stand-in's reported arguments and environment.
 fn reported(root: &fakes::TempDir) -> (Vec<String>, String) {
     let args = std::fs::read_to_string(root.path().join("args")).unwrap_or_default();

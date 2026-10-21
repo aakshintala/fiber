@@ -529,7 +529,7 @@ impl Loop {
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
             | Delivery::Name(..)
-            | Delivery::Message(_)
+            | Delivery::Message(..)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
             | Delivery::Reload(..)
@@ -620,7 +620,7 @@ impl Loop {
                 }
             }
             // A session message joins the turn's input, after `close` too.
-            Delivery::Message(message) => self.admit_message_idle(message, input),
+            Delivery::Message(message, ack) => self.admit_message_idle(message, ack, input)?,
             // Like a steer, a handoff starts a turn while idle: one
             // `handoff` item per command, run at the turn's first step
             // boundary.
@@ -807,7 +807,7 @@ impl Loop {
             }
             // A session message queues for the next step boundary, in an
             // after-`close` turn too.
-            Delivery::Message(message) => self.admit_message_running(message, turn)?,
+            Delivery::Message(message, ack) => self.admit_message_running(message, ack, turn)?,
             // Held until the next step boundary; not listed on
             // `steering_queue`, which holds steering messages only.
             Delivery::Handoff(id, args, ack) => {

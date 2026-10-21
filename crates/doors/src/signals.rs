@@ -4,11 +4,13 @@
 //! the process has come:
 //!
 //! - booting, before any child process starts: the process exits at once
-//!   with the signal's code, writing nothing;
+//!   with the signal's code, writing nothing to the session log but one
+//!   diagnostic line (`docs/invocation.md`, "Shutdown");
 //! - armed, from then until `fiber_started` is about to be written: the
-//!   signal is recorded, the door's startup is told to stop, and
-//!   [`Signals::start`] hands it to the door, which stops what it started
-//!   and exits writing nothing;
+//!   signal is recorded, one diagnostic line is written, the door's
+//!   startup is told to stop, and [`Signals::start`] hands the code to
+//!   the door, which stops what it started and exits writing nothing to
+//!   the session log;
 //! - committing, while the first lines are written: a first signal starts
 //!   the bound at once and reaches the shutdown once the write returns,
 //!   so a recorded signal writes nothing and one during the write still
@@ -28,7 +30,7 @@
 
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -139,6 +141,11 @@ struct State {
     seen: u32,
     /// The code a signal left while armed.
     recorded: Option<i32>,
+    /// The code whose early diagnostic line is still being written:
+    /// `None` once the line is on disk, so a code without one is
+    /// unrepresentable. Only a signal while booting or armed publishes it,
+    /// and only with a writer held; `close_now` codes carry no line.
+    early_pending: Option<i32>,
     on_record: Option<Callback>,
     on_bound: Option<Callback>,
     on_signal: Option<OnSignal>,
@@ -153,6 +160,9 @@ struct State {
 /// The process's signal handling. One per process.
 pub struct Signals {
     state: Mutex<State>,
+    /// Released when `early_pending` clears: readers wait on it rather
+    /// than returning a recorded code before its line is written.
+    settled: Condvar,
     clock: Arc<dyn Clock>,
     /// Ends the process: `std::process::exit`, or a test's recorder.
     exit: Box<dyn Fn(i32) + Send + Sync>,
@@ -192,6 +202,7 @@ impl Signals {
                 phase: Phase::Booting,
                 seen: 0,
                 recorded: None,
+                early_pending: None,
                 on_record: None,
                 on_bound: None,
                 on_signal: None,
@@ -199,6 +210,7 @@ impl Signals {
                 diag,
                 session_diag: None,
             }),
+            settled: Condvar::new(),
             clock,
             exit,
             spawn: Box::new(spawn_bound),
@@ -234,14 +246,30 @@ impl Signals {
     }
 
     /// The code a signal left while armed, if one came: read under the
-    /// state lock (`docs/invocation.md`, "Shutdown").
+    /// state lock (`docs/invocation.md`, "Shutdown"). It waits while the
+    /// signal's line is still being written, so a code never returns
+    /// before its line is on disk.
     pub fn recorded(&self) -> Option<i32> {
-        lock(&self.state).recorded
+        self.settled_state().recorded
+    }
+
+    /// The state with no early line owed: waits while one's in flight, so
+    /// a recorded code never returns before its line is on disk. The wait
+    /// has no deadline: the bound ends the process by 5 s.
+    fn settled_state(&self) -> MutexGuard<'_, State> {
+        let mut state = lock(&self.state);
+        while state.early_pending.is_some() {
+            state = self
+                .settled
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        state
     }
 
     /// Called just before the session's first line: the code of a signal
-    /// that came while armed, for the door to exit with, writing nothing.
-    /// Otherwise the session stays armed until [`Signals::commit`]: a first
+    /// that came while armed, for the door to exit with, writing nothing
+    /// to the session log. Otherwise the session stays armed until [`Signals::commit`]: a first
     /// signal from the commit on calls `on_signal` with its code, and a
     /// second SIGTERM or SIGINT calls `on_second`. A signal is either
     /// returned here or given to `on_signal`, never both.
@@ -250,7 +278,7 @@ impl Signals {
         on_signal: Box<dyn Fn(i32) + Send + Sync>,
         on_second: Box<dyn Fn() + Send + Sync>,
     ) -> Option<i32> {
-        let mut state = lock(&self.state);
+        let mut state = self.settled_state();
         if let Some(code) = state.recorded {
             return Some(code);
         }
@@ -262,14 +290,16 @@ impl Signals {
     /// Writes the session's first lines unless a signal was recorded: with
     /// no signal and no `close` with `now` recorded before the commit takes
     /// the lock, `write` runs once with no lock held and the phase becomes
-    /// started afterwards, whatever `write` returned. A first signal or
+    /// started afterwards, whatever `write` returned. The recorded check
+    /// waits while the signal's line is still being written, so the code
+    /// never returns before its line. A first signal or
     /// `close` with `now` during `write` starts the bound at that moment
     /// and reaches `on_signal` exactly once the write returns, outside the
     /// lock. Called only after [`Signals::start`] returned `None`, at most
     /// once per process.
     pub fn commit<R>(&self, write: impl FnOnce() -> R) -> Result<R, i32> {
         {
-            let mut state = lock(&self.state);
+            let mut state = self.settled_state();
             if let Some(code) = state.recorded {
                 return Err(code);
             }
@@ -346,31 +376,113 @@ impl Signals {
         }
     }
 
-    /// Handles one signal. The callbacks run outside the lock.
+    /// Handles one signal. The callbacks run outside the lock. A first
+    /// signal while booting or armed claims one diagnostic line through
+    /// the pid-named writer, if one is held (`docs/invocation.md`,
+    /// "Shutdown"): the claim happens under the same lock as the
+    /// decision, so at most one line is written per process.
     fn handle(self: &Arc<Self>, signal: i32) {
-        let (action, on_record, on_signal, on_second) = {
+        let (action, on_record, on_signal, on_second, early) = {
             let mut state = lock(&self.state);
-            let action = decide(state.phase, signal, state.seen);
+            let mut action = decide(state.phase, signal, state.seen);
+            // At most one early line: a booting signal after a recorded
+            // code writes nothing more.
+            if matches!(action, Action::Exit(_)) && state.diag.is_some() && state.recorded.is_some()
+            {
+                action = Action::Nothing;
+            }
             state.seen = state.seen.saturating_add(1);
-            match action {
-                Action::Record(code) => {
+            let early = match (action, state.diag.clone()) {
+                (Action::Record(code) | Action::Exit(code), Some(diag)) => {
                     state.recorded = Some(code);
+                    state.early_pending = Some(code);
+                    Some((signal, code, diag))
                 }
-                Action::Defer(code) => {
+                (Action::Record(code), None) => {
+                    state.recorded = Some(code);
+                    None
+                }
+                (Action::Defer(code), _) => {
                     state.phase = Phase::Committing {
                         deferred: Some(code),
                     };
+                    None
                 }
-                Action::Exit(_) | Action::Shutdown(_) | Action::KillGroups | Action::Nothing => {}
-            }
+                (
+                    Action::Exit(_) | Action::Shutdown(_) | Action::KillGroups | Action::Nothing,
+                    _,
+                ) => None,
+            };
             (
                 action,
                 state.on_record.clone(),
                 state.on_signal.clone(),
                 state.on_second.clone(),
+                early,
             )
         };
-        self.run(action, on_record, on_signal, on_second);
+        if let Some((signal, code, diag)) = early {
+            self.run_early(action, signal, code, diag, on_record);
+        } else {
+            self.run(action, on_record, on_signal, on_second);
+        }
+    }
+
+    /// Runs a booting or armed signal with a writer held: the bound starts
+    /// before the early append, so a stalled open cannot eat it, then
+    /// `on_record` runs for an armed signal, one diagnostic line goes to
+    /// the pid-named writer, the readers are released, and a booting
+    /// signal exits. When the bound thread cannot start, the readers are
+    /// released before `end` writes the timeout line and exits on this
+    /// thread instead, and the early line is never written. The callbacks
+    /// and the append run outside the lock.
+    fn run_early(
+        self: &Arc<Self>,
+        action: Action,
+        signal: i32,
+        code: i32,
+        diag: Arc<Diag>,
+        on_record: Option<Callback>,
+    ) {
+        match self.start_bound(code) {
+            Ok(()) => {
+                if matches!(action, Action::Record(_))
+                    && let Some(on_record) = on_record
+                {
+                    on_record();
+                }
+                diag.line(
+                    Severity::Error,
+                    None,
+                    "signal",
+                    &early_message(signal, code),
+                );
+                self.clear_early();
+                if matches!(action, Action::Exit(_)) {
+                    (self.exit)(code);
+                }
+            }
+            Err(exit_by) => {
+                // No thread, no bound and no early line: release the
+                // readers before `end` writes the timeout line and exits
+                // on this thread, as on the bound path.
+                self.clear_early();
+                self.end(code, exit_by);
+                if matches!(action, Action::Record(_))
+                    && let Some(on_record) = on_record
+                {
+                    on_record();
+                }
+            }
+        }
+    }
+
+    /// Releases the readers waiting on the early line: the line is on
+    /// disk, or never will be, so a recorded code may go out.
+    fn clear_early(&self) {
+        let mut state = lock(&self.state);
+        state.early_pending = None;
+        self.settled.notify_all();
     }
 
     /// Runs what `action` decided, outside the lock.
@@ -413,18 +525,29 @@ impl Signals {
     /// to the session log: a line it wrote could be followed by a stuck
     /// loop's.
     fn bound(self: &Arc<Self>, code: i32) {
+        // No thread, no bound: rather than a shutdown with no limit, the
+        // kill point is reached now, with only the line's own cap left.
+        if let Err(exit_by) = self.start_bound(code) {
+            self.end(code, exit_by);
+        }
+    }
+
+    /// Spawns the bound thread for `code`: at [`KILL_AT`] it kills
+    /// whatever is still alive, and at [`SHUTDOWN_BOUND`] the process
+    /// exits with `code`. `Ok` once started; `Err` with the line's own cap
+    /// when no thread started, for the caller to reach the kill point on
+    /// its own thread instead.
+    fn start_bound(self: &Arc<Self>, code: i32) -> Result<(), Instant> {
         let now = self.clock.now();
         let kill_at = now.checked_add(KILL_AT).unwrap_or(now);
         let exit_by = now.checked_add(SHUTDOWN_BOUND).unwrap_or(now);
         let signals = Arc::clone(self);
-        let started = (self.spawn)(Box::new(move || {
+        match (self.spawn)(Box::new(move || {
             sleep_until(signals.clock.as_ref(), kill_at);
             signals.end(code, exit_by);
-        }));
-        // No thread, no bound: rather than a shutdown with no limit, the
-        // kill point is reached now, with only the line's own cap left.
-        if started.is_err() {
-            self.end(code, now.checked_add(LINE_CAP).unwrap_or(now));
+        })) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(now.checked_add(LINE_CAP).unwrap_or(now)),
         }
     }
 
@@ -481,6 +604,18 @@ fn spawn_bound(run: Box<dyn FnOnce() + Send>) -> io::Result<()> {
         .name("bound".to_owned())
         .spawn(run)
         .map(|_| ())
+}
+
+/// The early diagnostic line's message for `signal` ending the process
+/// with `code` before `fiber_started` (`docs/invocation.md`, "Shutdown"):
+/// the lifeline's end of file takes the SIGHUP sentence, as it takes the
+/// SIGHUP path.
+fn early_message(signal: i32, code: i32) -> String {
+    format!(
+        "{} arrived before the session started; the process exits {}.",
+        support::group::signal_name(signal),
+        code
+    )
 }
 
 /// The bound's diagnostic line for `code`.

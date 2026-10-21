@@ -8,6 +8,7 @@
 //! finishes. Each parked callback still ends at its own deadline. The thread
 //! quits once the extension is stopped.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -68,6 +69,7 @@ pub(super) struct Start {
     pub(super) browser: Arc<dyn Browser>,
     pub(super) session: Option<crate::host::Session>,
     pub(super) secrets: Vec<String>,
+    pub(super) deps: BTreeMap<String, PathBuf>,
 }
 
 /// Spawns the extension's thread on the first call.
@@ -85,6 +87,7 @@ pub(super) fn start(extension: &LuaExtension, shared: &mut Shared) -> Result<(),
         browser: Arc::clone(&extension.browser),
         session: extension.session.clone(),
         secrets: extension.secrets.clone(),
+        deps: extension.deps.clone(),
     };
     let hub = Arc::clone(&extension.hub);
     thread::Builder::new()

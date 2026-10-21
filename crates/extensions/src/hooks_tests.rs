@@ -2784,7 +2784,7 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
     let before = clock.now();
     session.deliver(&noticed("x"), None);
     // The `sleeping` line proves the run reached the exec call; the park
-    // follows under the same lock hold, and `await_parked` waits for it.
+    // follows under the same lock hold, and `mark_parked` waits for it.
     assert_eq!(
         Deadline::after(WAIT)
             .recv(&statuses)
@@ -2795,13 +2795,25 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
     // is frozen, so asked is exactly `before`. The wall-clock deadline only
     // bounds the waits for the parked delivery to appear and the loop to
     // notice the move.
+    let thread = clock
+        .mark_parked(before + Duration::from_millis(300), WAIT)
+        .expect("waited for the sleeping watcher to park at its deadline")
+        .threads()
+        .pop()
+        .expect("one watcher parked at its deadline");
+    // Pin the exec runner's fresh re-park at before + 10 ms before
+    // advancing: its poll park would otherwise arrive beside the
+    // watcher's deadline park and fail the unnamed wait.
+    let poll = clock
+        .mark_parked(before + Duration::from_millis(10), WAIT)
+        .expect("waited for the exec runner to park");
     assert!(
-        clock.await_parked(before + Duration::from_millis(300), WAIT),
-        "waited for the sleeping watcher to park at its deadline"
+        clock.await_any_parked_since(&poll, WAIT),
+        "waited for the exec runner to re-park"
     );
     clock.advance_when_parked(
         Some(before + Duration::from_millis(300)),
-        None,
+        Some(thread),
         Duration::from_millis(300),
         &Deadline::after(WAIT),
     );

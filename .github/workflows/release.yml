@@ -201,23 +201,10 @@ jobs:
         run: cargo build --locked --release --target "${{ matrix.target }}" --bin fiber
       - name: Generate THIRD-PARTY-NOTICES
         run: |
-          # The notices template ships here, not in the repository: it is
-          # workflow mechanics, and no other step reads it.
-          cat > "$RUNNER_TEMP/about.hbs" << 'EOF'
-          Third-party notices for the fiber binary (docs/dependencies.md, "Supply chain").
-          {{#each overview}}
-          --------------------------------------------------------------------------------
-          {{name}} {{version}}: {{license}}
-          {{#if repository}}{{repository}}{{/if}}
-          {{/each}}
-          {{#each licenses}}
-          --------------------------------------------------------------------------------
-          {{id}}:
-          {{text}}
-          {{/each}}
-          EOF
+          # The notices template lives at the repository root (about.hbs):
+          # both release jobs and the pull-request check read the same file.
           notices="target/${{ matrix.target }}/release/THIRD-PARTY-NOTICES"
-          cargo about generate --manifest-path crates/main/Cargo.toml "$RUNNER_TEMP/about.hbs" --output-file "$notices"
+          cargo about generate --manifest-path crates/main/Cargo.toml "$GITHUB_WORKSPACE/about.hbs" --output-file "$notices"
           # cargo-about must name a licence the tree certainly holds; an
           # empty or schema-drifted render fails the release here, not silently.
           [ -s "$notices" ] || { printf 'release: %s\n' "cargo-about wrote an empty notices file." >&2; exit 1; }
@@ -315,23 +302,10 @@ jobs:
         run: cargo build --locked --release --target "${{ matrix.target }}" --bin fiber
       - name: Generate THIRD-PARTY-NOTICES
         run: |
-          # The notices template ships here, not in the repository: it is
-          # workflow mechanics, and no other step reads it.
-          cat > "$RUNNER_TEMP/about.hbs" << 'EOF'
-          Third-party notices for the fiber binary (docs/dependencies.md, "Supply chain").
-          {{#each overview}}
-          --------------------------------------------------------------------------------
-          {{name}} {{version}}: {{license}}
-          {{#if repository}}{{repository}}{{/if}}
-          {{/each}}
-          {{#each licenses}}
-          --------------------------------------------------------------------------------
-          {{id}}:
-          {{text}}
-          {{/each}}
-          EOF
+          # The notices template lives at the repository root (about.hbs):
+          # both release jobs and the pull-request check read the same file.
           notices="target/${{ matrix.target }}/release/THIRD-PARTY-NOTICES"
-          cargo about generate --manifest-path crates/main/Cargo.toml "$RUNNER_TEMP/about.hbs" --output-file "$notices"
+          cargo about generate --manifest-path crates/main/Cargo.toml "$GITHUB_WORKSPACE/about.hbs" --output-file "$notices"
           # cargo-about must name a licence the tree certainly holds; an
           # empty or schema-drifted render fails the release here, not silently.
           [ -s "$notices" ] || { printf 'release: %s\n' "cargo-about wrote an empty notices file." >&2; exit 1; }
