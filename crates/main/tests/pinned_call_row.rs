@@ -64,20 +64,24 @@ fn script(setup: &Setup) {
     );
 }
 
-/// The binary started and prompted, with the turn done.
+/// The binary started and prompted, with the turn finished: the
+/// finished title at its output offset plus the completed paint, so
+/// later wheel steps cannot race the turn's own frames.
 fn started(setup: &Setup) -> Run {
     let mut run = Run::spawn(setup, 160, 48, &[], &TRUECOLOUR);
-    run.ready();
+    let from = run.ready();
     run.write(b"go\r");
     loop {
         let grid = run.wait_screen("approval or done", |grid| {
             grid.contents.contains("Allow once") || grid.contents.contains("Done.")
         });
         if grid.contents.contains("Done.") {
-            return run;
+            break;
         }
         run.write(b"\r");
     }
+    run.turn_finished(from);
+    run
 }
 
 /// The ledger opened and the `read` call clicked open: the grid with
@@ -141,23 +145,92 @@ fn pinned(grid: &Grid) -> bool {
     pin_row(grid).is_some()
 }
 
+/// Whether `next` shows the viewport scrolled one wheel step from
+/// `prev`: an anchor row sitting alone in each sits further along the
+/// step, down the screen for a step up and up it for a step down. A
+/// repaint leaves every anchor where it was and an earlier step's frame
+/// leaves them behind, so neither passes: only a frame with this step's
+/// scroll moves an anchor along the step. Rows the step covered or
+/// uncovered, rows it leaves still, and rows repeating on screen prove
+/// nothing either way.
+fn scrolled(prev: &[String], next: &[String], up: bool) -> bool {
+    for (i, anchor) in prev.iter().enumerate() {
+        if prev.iter().filter(|row| *row == anchor).count() != 1 {
+            continue;
+        }
+        let mut at = next.iter().enumerate().filter(|(_, row)| *row == anchor);
+        let (Some((j, _)), None) = (at.next(), at.next()) else {
+            continue;
+        };
+        if j != i && (j > i) == up {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn scrolled_rejects_a_repaint() {
+    let grid = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    assert!(!scrolled(&grid, &grid.clone(), true));
+    assert!(!scrolled(&grid, &grid.clone(), false));
+}
+
+#[test]
+fn scrolled_up_needs_movement_down_the_screen() {
+    let prev = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let next = vec!["n".to_string(), "a".to_string(), "b".to_string()];
+    assert!(scrolled(&prev, &next, true));
+    assert!(!scrolled(&prev, &next, false));
+}
+
+#[test]
+fn scrolled_down_needs_movement_up_the_screen() {
+    let prev = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let next = vec!["b".to_string(), "c".to_string(), "n".to_string()];
+    assert!(scrolled(&prev, &next, false));
+    assert!(!scrolled(&prev, &next, true));
+}
+
+#[test]
+fn scrolled_ignores_repeated_missing_and_still_anchors() {
+    // `a` repeats, `gone` never arrives, `b` sits still: none proves a step.
+    let prev = vec!["a".to_string(), "a".to_string(), "b".to_string()];
+    let next = vec!["a".to_string(), "a".to_string(), "b".to_string()];
+    assert!(!scrolled(&prev, &next, true));
+    let prev = vec!["gone".to_string(), "b".to_string()];
+    let next = vec!["new".to_string(), "b".to_string()];
+    assert!(!scrolled(&prev, &next, true));
+    assert!(!scrolled(&prev, &next, false));
+}
+
 /// One wheel step up at 160x48.
 const UP: &[u8] = b"\x1b[<64;21;11M";
 /// One wheel step down at 160x48.
 const DOWN: &[u8] = b"\x1b[<65;21;40M";
 
 /// Wheels up one step at a time until the pin shows: the step count
-/// stays below the clamp, so every step moves the top row.
+/// stays below the clamp, so every step moves the top row. Each wait
+/// proves its own step moved the rows along the step, never any row
+/// change at all, or the pin it was wheeling towards.
 fn wheel_to_pin(run: &mut Run) {
     let mut prev = run.screen().rows.clone();
     for _ in 0..12 {
         run.write(UP);
-        let grid = run.wait_screen("one step up", |next| next.rows != prev);
+        let grid = run.wait_screen("one step up", |next| {
+            scrolled(&prev, &next.rows, true) || pinned(next)
+        });
         if pinned(&grid) {
             return;
         }
         prev = grid.rows.clone();
     }
+}
+
+/// Whether the grid shows the followed bottom: no pin over it, with
+/// the tail's last row on screen.
+fn followed_bottom(grid: &Grid) -> bool {
+    pin_row(grid).is_none() && grid.rows.iter().any(|row| row.contains("T0060"))
 }
 
 /// Every text cell of the pin row shares one background: the pin keeps
@@ -237,7 +310,9 @@ fn paging_up_pins_the_same_lead_row_with_its_tint() {
             break;
         }
         run.write(DOWN);
-        run.wait_screen("one step down", |next| next.rows != grid.rows);
+        run.wait_screen("one step down", |next| {
+            scrolled(&grid.rows, &next.rows, false) || pinned(next)
+        });
     }
     let grid = run.wait_screen("the pinned call row", pinned);
     let _pin = assert_pinned(&grid, "notes.txt");
@@ -309,15 +384,15 @@ fn wheeling_past_the_call_clears_the_pin_and_wheeling_back_restores_it() {
     // on its own row, and row 0 is the window's own first row.
     for _ in 0..20 {
         let grid = run.screen();
-        if pin_row(&grid).is_none() && grid.rows.iter().any(|row| row.contains("T0060")) {
+        if followed_bottom(&grid) {
             break;
         }
         run.write(DOWN);
-        run.wait_screen("one step down", |next| next.rows != grid.rows);
+        run.wait_screen("one step down", |next| {
+            scrolled(&grid.rows, &next.rows, false) || followed_bottom(next)
+        });
     }
-    let grid = run.wait_screen("the followed bottom", |grid| {
-        pin_row(grid).is_none() && grid.rows.iter().any(|row| row.contains("T0060"))
-    });
+    let grid = run.wait_screen("the followed bottom", followed_bottom);
     assert!(
         grid.rows.iter().all(|row| !row.contains("notes.txt")),
         "the call row scrolled off with no pin over it"
@@ -412,11 +487,15 @@ fn opened_ledger(run: &mut Run) -> Grid {
 }
 
 /// Wheels up one step at a time until `pred` holds; every step must move.
+/// Each wait proves its own step moved the rows along the step, or the
+/// goal it was wheeling towards.
 fn wheel_until(run: &mut Run, what: &str, pred: impl Fn(&Grid) -> bool) {
     let mut prev = run.screen().rows.clone();
     for _ in 0..80 {
         run.write(UP);
-        let grid = run.wait_screen("one step up", |next| next.rows != prev);
+        let grid = run.wait_screen("one step up", |next| {
+            scrolled(&prev, &next.rows, true) || pred(next)
+        });
         if pred(&grid) {
             return;
         }
@@ -458,7 +537,9 @@ fn the_group_line_pins_while_no_call_is_opened() {
     for _ in 0..3 {
         let prev = run.screen().rows.clone();
         run.write(UP);
-        run.wait_screen("one step up", |next| next.rows != prev);
+        // The pin persists through every frame here, so only the step's
+        // own scroll proves the wait: a pin check would pass on any frame.
+        run.wait_screen("one step up", |next| scrolled(&prev, &next.rows, true));
     }
     let grid = run.screen();
     assert_group_pinned(&grid, "Read 30 files");
