@@ -355,6 +355,9 @@ provider has several labels, it refuses unless given `--as <label>` or `--all`.
 When the key comes from an environment variable, a file outside Fiber home or
 a command, `fiber logout` cannot remove it: it names the source and exits
 non-zero.
+A live session keeps its cached key: only sessions started after the delete fail
+with `credential_missing`, unless a configured source covers the label, which
+later sessions then use.
 
 ## When Fiber reads configuration
 
@@ -624,6 +627,8 @@ declares") lists:
   | `bearer` | boolean | `anthropic-messages` | the key goes in `authorization: Bearer`; absent, it goes in `x-api-key` |
   | `bedrock_invoke` | boolean | `anthropic-messages` | the model is Claude on AWS Bedrock's Invoke API: the request goes to `<base_url>/model/<id>/invoke-with-response-stream` with `anthropic_version` in the body and no `model` or `stream`, the key goes in `authorization: Bearer`, and the reply is read in AWS event-stream framing (`docs/model-routing.md`, "Bedrock Invoke wire facts") |
   | `vertex_raw_predict` | boolean | `anthropic-messages` | the model is Claude on Google Vertex: the request goes to `<base_url>/models/<id>:streamRawPredict` with `anthropic_version` in the body and no `model`, and an error body that is a list of one object is read as that object (`docs/model-routing.md`, "Google Vertex wire facts") |
+  | `cache_point` | boolean | `bedrock-converse` | the model takes `cachePoint` blocks: requests carry them where Anthropic's cache markers go, each after a text block (`docs/prompt-cache.md`, "Cache markers and keys"); absent, no marker is sent |
+  | `reasoning_field` | string | `bedrock-converse` | the `additionalModelRequestFields` field that carries the thinking level, `reasoning_effort` or `reasoningConfig` (`docs/model-routing.md`, "Thinking"); absent or any other value, no level is sent |
 
   `openai-completions` always sends `stream_options.include_usage: true`,
   because OpenAI sends no usage without it (`docs/model-routing.md`,

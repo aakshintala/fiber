@@ -115,7 +115,7 @@ pub use repository::{
     approved_extension, approved_extensions, declared_items, hash, kind_name, mcp_server_item,
     pending, repository_servers,
 };
-pub use startable::{context_window, protocol_refusal, takes, thinking_refusal};
+pub use startable::{context_window, takes, thinking_refusal};
 
 /// The extension API's major version this Fiber speaks
 /// (`docs/extensions.md`, "The extension API version").
