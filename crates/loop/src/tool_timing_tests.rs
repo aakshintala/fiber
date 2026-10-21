@@ -405,8 +405,8 @@ impl ModelCall for ScriptCall {
 }
 
 impl ScriptCall {
-    /// Parks a held call until the test sends its answer: signals entry,
-    /// queues the release, then runs the test's answer as the reply.
+    /// Parks a held call until the test sends its answer: queues the release,
+    /// then signals entry, then runs the test's answer as the reply.
     /// A cancel still ends the hold cancelled, as with `Answer::Hold`.
     /// The block carries no deadline: the channel is the test's own — the
     /// test pops the sender and sends the answer, and dropping it releases
@@ -418,9 +418,9 @@ impl ScriptCall {
             .hold
             .as_ref()
             .expect("a held call is armed by the test");
-        let _sent = entered.send(());
         let (tx, rx) = mpsc::channel();
         lock(releases).push_back(tx);
+        let _sent = entered.send(());
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(CallError::Cancelled {
                 usage: Box::new(fakes::unnamed_usage()),
