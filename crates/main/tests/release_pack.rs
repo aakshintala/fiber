@@ -153,6 +153,7 @@ impl Pack {
             0o644,
         );
     }
+    /// The members of `archive`, sorted, as `tar -tzf` lists them.
     #[track_caller]
     fn members(&self, archive: &str) -> Vec<String> {
         let at = self.path(&format!("out/{archive}"));
