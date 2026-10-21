@@ -10,17 +10,28 @@ name: Release
 # leaves no tag and no Release. A failed run is re-run from the Actions tab
 # on the same commit. The preflight job compares the fiber crate's version
 # at the push's base and head; every release job runs only when it changed.
+# A daily schedule builds a nightly pre-release instead, when main moved
+# since the last nightly: the nightly preflight computes the next nightly
+# version and every later nightly job runs only when it publishes. A manual
+# dispatch (`gh workflow run release.yml`) is a nightly under the same check.
 on:
   push:
     branches: [main]
     paths:
       - crates/main/Cargo.toml
       - CHANGELOG.md
+  schedule:
+    # The nightly pre-release (docs/releasing.md, "Cutting a release").
+    - cron: '0 5 * * *'
+  # A manual nightly, for a nightly before the cron's late start.
+  workflow_dispatch:
 
-# Pushes to main share one group that cancels nothing: releases run one at
-# a time, in push order, and a re-run waits behind the run in flight.
+# Pushes share one group and nightlies, scheduled or manual, share another,
+# neither cancelling: stable releases run one at a time, in push order, a
+# nightly never blocks a stable release behind it, and a manual nightly never
+# overlaps a scheduled one.
 concurrency:
-  group: release-main
+  group: release-${{ github.event_name == 'push' && 'push' || 'nightly' }}
   cancel-in-progress: false
 
 permissions:
@@ -38,6 +49,7 @@ defaults:
 jobs:
   preflight:
     name: Preflight
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     # The selection job it mirrors gets 5 minutes (docs/ci.md, "Job time limits").
     timeout-minutes: 5
@@ -99,10 +111,161 @@ jobs:
           echo "version-changed=true" >> "$GITHUB_OUTPUT"
           echo "version=$head_version" >> "$GITHUB_OUTPUT"
 
+  nightly-preflight:
+    name: Nightly preflight
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    # The selection job it mirrors gets 5 minutes (docs/ci.md, "Job time limits").
+    timeout-minutes: 5
+    outputs:
+      nightly-needed: ${{ steps.decide.outputs.nightly-needed }}
+      nightly-version: ${{ steps.decide.outputs.nightly-version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The skip decision reads the nightly tags at origin and the
+          # notes range reads local history, which a shallow checkout
+          # without tags does not hold.
+          fetch-depth: 0
+      - name: Compute the nightly version and decide
+        id: decide
+        env:
+          HEAD: ${{ github.sha }}
+        run: |
+          date=$(date -u +%Y%m%d)
+          version=$(scripts/release-pack nightly-version . "$date")
+          tag=v$version
+          tags=$(git ls-remote --tags origin 'v*-nightly.*') || { printf 'release: %s\n' "could not list tags at origin." >&2; exit 1; }
+          # A second nightly the same day, scheduled after a manual one,
+          # skips: it would build over the first one's tag.
+          if printf '%s' "$tags" | grep -q -F "refs/tags/$tag"; then
+            decision="skip: $tag already exists"
+          else
+            decision=$(printf '%s' "$tags" | scripts/release-pack nightly-needed "$HEAD")
+          fi
+          echo "the nightly version is $version; $decision."
+          echo "nightly-version=$version" >> "$GITHUB_OUTPUT"
+          echo "nightly-needed=$decision" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build (${{ matrix.target }})
     needs: preflight
     if: needs.preflight.outputs.version-changed == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: macos-26
+            target: aarch64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    # The release-profile job in ci.yml builds the same profile within 60 (docs/ci.md, "Job time limits").
+    timeout-minutes: 60
+    # The macOS leg reads the signing secrets from here; the environment
+    # deploys only from main. The Linux legs read no secret.
+    environment: release
+    env:
+      # C code compiles against musl's headers; the Rust linker stays the default.
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CC_aarch64_unknown_linux_musl: musl-gcc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - name: Install the musl target and C compiler
+        if: runner.os == 'Linux'
+        # A mirror that stops answering must fail the step, not hold the job to its bound.
+        timeout-minutes: 5
+        run: |
+          rustup target add "${{ matrix.target }}"
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS update
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only the backstop saves the build cache (docs/ci.md); a release restores it.
+          shared-key: release
+          save-if: false
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-about
+      - name: Build the release binary
+        run: cargo build --locked --release --target "${{ matrix.target }}" --bin fiber
+      - name: Generate THIRD-PARTY-NOTICES
+        run: |
+          # The notices template ships here, not in the repository: it is
+          # workflow mechanics, and no other step reads it.
+          cat > "$RUNNER_TEMP/about.hbs" << 'EOF'
+          Third-party notices for the fiber binary (docs/dependencies.md, "Supply chain").
+          {{#each overview}}
+          --------------------------------------------------------------------------------
+          {{name}} {{version}}: {{license}}
+          {{#if repository}}{{repository}}{{/if}}
+          {{/each}}
+          {{#each licenses}}
+          --------------------------------------------------------------------------------
+          {{id}}:
+          {{text}}
+          {{/each}}
+          EOF
+          notices="target/${{ matrix.target }}/release/THIRD-PARTY-NOTICES"
+          cargo about generate --manifest-path crates/main/Cargo.toml "$RUNNER_TEMP/about.hbs" --output-file "$notices"
+          # cargo-about must name a licence the tree certainly holds; an
+          # empty or schema-drifted render fails the release here, not silently.
+          [ -s "$notices" ] || { printf 'release: %s\n' "cargo-about wrote an empty notices file." >&2; exit 1; }
+          grep -q "Apache-2.0" "$notices" || { printf 'release: %s\n' "the notices file names no Apache-2.0 licence." >&2; exit 1; }
+      - name: Sign and notarise the macOS binary
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+        run: |
+          binary="target/${{ matrix.target }}/release/fiber"
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          clean() {
+            security delete-keychain "$keychain" 2> /dev/null || true
+            rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/api-key.p8" "$RUNNER_TEMP/signed.zip"
+          }
+          trap clean EXIT
+          [ -n "$MACOS_CERTIFICATE_P12" ] || { printf 'release: %s\n' "the release environment holds no macOS certificate." >&2; exit 1; }
+          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode -o "$RUNNER_TEMP/cert.p12"
+          printf '%s' "$APPSTORE_API_PRIVATE_KEY" > "$RUNNER_TEMP/api-key.p8"
+          security create-keychain -p actions "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p actions "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$keychain"
+          security list-keychains -d user -s "$keychain" "$(security list-keychains -d user | tr -d '"')"
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep "Developer ID Application" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+          [ -n "$identity" ] || { printf 'release: %s\n' "the keychain holds no Developer ID Application identity." >&2; exit 1; }
+          codesign --sign "$identity" --options runtime --timestamp --force -v "$binary"
+          (cd "$(dirname "$binary")" && ditto -c -k --keepParent "$(basename "$binary")" "$RUNNER_TEMP/signed.zip")
+          xcrun notarytool submit "$RUNNER_TEMP/signed.zip" --key "$RUNNER_TEMP/api-key.p8" --key-id "$APPSTORE_API_KEY_ID" --issuer "$APPSTORE_API_ISSUER_ID" --wait
+      - name: Pack the target archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          scripts/release-pack pack-target "target/${{ matrix.target }}/release" "${{ matrix.target }}" "$RUNNER_TEMP/release"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ matrix.target }}
+          path: ${{ runner.temp }}/release/fiber-*
+          if-no-files-found: error
+
+  nightly-build:
+    name: Nightly build (${{ matrix.target }})
+    needs: nightly-preflight
+    if: needs.nightly-preflight.outputs.nightly-needed == 'publish'
     strategy:
       fail-fast: true
       matrix:
@@ -239,6 +402,32 @@ jobs:
           path: ${{ runner.temp }}/assets/
           if-no-files-found: error
 
+  nightly-assets:
+    name: Nightly assets
+    needs: nightly-preflight
+    if: needs.nightly-preflight.outputs.nightly-needed == 'publish'
+    runs-on: ubuntu-24.04
+    # A checkout plus three pack runs finishes inside the preflight bound (docs/ci.md, "Job time limits").
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Pack the docs, extensions and installer assets
+        # The release gate and the publish job share these exact files:
+        # the gate tests what the publish uploads.
+        run: |
+          mkdir -p "$RUNNER_TEMP/assets"
+          scripts/release-pack pack-docs . "$RUNNER_TEMP/assets"
+          scripts/release-pack pack-extensions . "$RUNNER_TEMP/assets"
+          scripts/release-pack stage-installer . "$RUNNER_TEMP/assets"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/assets/
+          if-no-files-found: error
+
   release-gate:
     name: Release gate (${{ matrix.runner }})
     needs: [preflight, build, assets]
@@ -258,6 +447,96 @@ jobs:
     timeout-minutes: ${{ matrix.runner == 'macos-26' && 25 || 20 }}
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The gate selects everything by diffing against the root commit,
+          # which a shallow checkout does not hold.
+          fetch-depth: 0
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only the backstop saves the build cache (docs/ci.md); a release restores it.
+          shared-key: ci-line-tables
+          save-if: false
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
+      - name: Install zsh and fish
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: scripts/install-shells
+      - name: Install fish
+        if: runner.os == 'macOS'
+        run: brew install fish
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ matrix.target }}
+          path: ${{ runner.temp }}/release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/assets
+      - name: The full test suite, with no selection
+        # The ci profile retries a failed binary-level test once, as on a
+        # pull request (docs/ci.md). The root commit as base selects
+        # everything, so this is the whole suite, not the diff's.
+        env:
+          NEXTEST_PROFILE: ci
+        run: scripts/check --base "$(git rev-list --max-parents=0 HEAD | tail -1)" --platform-only
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        if: matrix.runner == 'ubuntu-24.04'
+        with:
+          tool: cargo-deny
+      - name: cargo-deny advisories
+        if: matrix.runner == 'ubuntu-24.04'
+        run: cargo deny check advisories
+      - name: The built binary installs the built archives in a fresh home
+        # The release gate in docs/ci.md runs binary-level tests against
+        # those exact artifacts: the packed docs and extensions archives go
+        # through the shipped install code, so an archive the unpacker
+        # refuses fails the release here. They arrive as the release-assets
+        # artifact the publish job uploads, so the gate tests what ships.
+        run: |
+          probe="$RUNNER_TEMP/release-probe"
+          mkdir -p "$probe/files/download/v$VERSION"
+          cp "$RUNNER_TEMP/assets"/fiber-docs.tar.gz* "$probe/files/download/v$VERSION/"
+          cp "$RUNNER_TEMP/assets"/fiber-extensions.tar.gz* "$probe/files/download/v$VERSION/"
+          cp "$RUNNER_TEMP/release"/fiber-*.tar.gz* "$probe/files/download/v$VERSION/"
+          (cd "$probe" && tar -xzf "$RUNNER_TEMP/release/fiber-${{ matrix.target }}.tar.gz")
+          port=8901
+          python3 -m http.server "$port" --directory "$probe/files" > "$probe/server.log" 2>&1 &
+          server=$!
+          trap 'kill $server 2> /dev/null || true' EXIT
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            curl -fsS -o /dev/null "http://127.0.0.1:$port/download/v$VERSION/fiber-docs.tar.gz" && break
+            sleep 1
+          done
+          FIBER_HOME="$probe/home" "$probe/fiber" release-install "$VERSION" --base-url "http://127.0.0.1:$port"
+          [ -d "$probe/home/docs" ] || { printf 'release: %s\n' "release-install staged no docs." >&2; exit 1; }
+          [ -n "$(ls "$probe/home/extensions")" ] || { printf 'release: %s\n' "release-install staged no extensions." >&2; exit 1; }
+
+  nightly-gate:
+    name: Nightly release gate (${{ matrix.runner }})
+    needs: [nightly-preflight, nightly-build, nightly-assets]
+    if: needs.nightly-preflight.outputs.nightly-needed == 'publish'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-26
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    # The backstop's test job runs this same full suite within these bounds (docs/ci.md, "Job time limits").
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 25 || 20 }}
+    env:
+      VERSION: ${{ needs.nightly-preflight.outputs.nightly-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -371,6 +650,51 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: scripts/release-pack draft-delete "${{ needs.preflight.outputs.version }}"
+
+  nightly-publish:
+    name: Nightly publish
+    needs: [nightly-preflight, nightly-build, nightly-assets, nightly-gate]
+    if: needs.nightly-preflight.outputs.nightly-needed == 'publish'
+    runs-on: ubuntu-24.04
+    # A generous bound for the draft, the asset uploads and the publish (docs/ci.md, "Job time limits").
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    # The deployment itself; the environment deploys only from main.
+    environment: release
+    env:
+      VERSION: ${{ needs.nightly-preflight.outputs.nightly-version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The notes range reads local history and tags, which a shallow
+          # checkout without tags does not hold.
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/release
+      - name: Create the draft, upload every asset, publish last
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pack="$GITHUB_WORKSPACE/scripts/release-pack"
+          cd "$RUNNER_TEMP/release" || exit 1
+          # A nightly writes no CHANGELOG.md section and requires none:
+          # its notes are the commit range since the previous stable tag.
+          last_stable=$(git -C "$GITHUB_WORKSPACE" tag --list 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+          "$pack" nightly-notes "${last_stable:-}" "$GITHUB_SHA" > notes.md
+          [ -s notes.md ] || { printf 'release: %s\n' "the $VERSION notes are empty." >&2; exit 1; }
+          "$pack" draft-begin --prerelease "$VERSION" "$GITHUB_SHA" notes.md
+          "$pack" draft-upload "$VERSION" install.sh fiber-*.tar.gz fiber-*.tar.gz.sha256
+          "$pack" draft-publish "$VERSION"
+      - name: Delete the draft when anything above failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release-pack draft-delete "${{ needs.nightly-preflight.outputs.nightly-version }}"
 
   # Benchmarks report, never gate: a slow sample or a missing figure is a
   # line in the summary, not a failure (docs/ci.md, "Releases"). The Linux

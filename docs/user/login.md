@@ -25,3 +25,5 @@ When the provider serves each account from its own host, the login asks for that
 ## From inside the terminal
 
 `/login` signs in from the terminal with the same flow as `fiber login`: a provider list, then a browser wait, a device-code step, or a key entry, then the same reviewer step. The steps are [Logging in](../tui.md).
+
+`/logout` deletes a stored key from the terminal with the same steps as `fiber logout`: a label list, a confirm naming the provider and label, then the removed line. The steps are [Logging out](../tui.md).

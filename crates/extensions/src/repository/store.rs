@@ -1,12 +1,14 @@
 //! Approvals and pinned copies in Fiber home (`docs/state.md`, "What each
 //! part holds"): `projects/<key>/approvals/<hash>` for an extension or a
-//! hook, `approvals/<hash>` for an MCP server, and `pinned/<hash>/` for the
-//! copy. The approval file is the last thing an approval writes, so an
-//! approval never lacks its copy; a kill before it leaves an unfinished
-//! copy, which the next approval removes and builds again. `fiber sessions
-//! prune` collects a finished copy only when at least one project's
-//! `approvals/<hash>` names it and no per-machine `approvals/<hash>` does;
-//! a copy with no approval record anywhere is kept.
+//! hook, `approvals/<hash>` for an MCP server, `projects/<key>/servers/<hash>`
+//! for each project that approved that server copy, and `pinned/<hash>/`
+//! for the copy. An extension or a hook approval writes its approval file
+//! last, so an approval never lacks its copy; a kill before it leaves an
+//! unfinished copy, which the next approval removes and builds again. A
+//! server approval writes the machine approval first and its project
+//! record after it. `fiber sessions prune` collects a finished copy only when at least one project's
+//! `approvals/<hash>` or `servers/<hash>` names it; a copy with no project
+//! record anywhere is kept.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -125,7 +127,8 @@ pub struct KeptCopy {
     pub hash: String,
     /// The copy's directory.
     pub dir: PathBuf,
-    /// The project keys with `projects/<key>/approvals/<hash>`, sorted.
+    /// The project keys with `projects/<key>/approvals/<hash>` or
+    /// `projects/<key>/servers/<hash>`, sorted.
     pub owners: Vec<String>,
     /// Whether the per-machine `approvals/<hash>` names it.
     pub machine_wide: bool,
@@ -308,8 +311,9 @@ impl Store {
     }
 
     /// Every `pinned/<hash>` that has an approval record: `owners` are the
-    /// project keys with `projects/<key>/approvals/<hash>`, sorted, and
-    /// `machine_wide` is the per-machine `approvals/<hash>`. An approval
+    /// project keys with `projects/<key>/approvals/<hash>` or
+    /// `projects/<key>/servers/<hash>`, sorted, and `machine_wide` is the
+    /// per-machine `approvals/<hash>`. An approval
     /// without its copy is not listed. Takes no lock. Any listing error
     /// other than `NotFound` is `Err` naming the path.
     pub fn kept_copies(home: &Path) -> Result<Vec<KeptCopy>, Error> {
@@ -330,19 +334,24 @@ impl Store {
                         continue;
                     }
                     let key = entry.file_name().to_string_lossy().into_owned();
-                    let approvals = path.join("approvals");
-                    match fs::read_dir(&approvals) {
-                        Ok(records) => {
-                            for record in records {
-                                let record = record.map_err(io_error(&approvals))?;
-                                let name = record.file_name().to_string_lossy().into_owned();
-                                if is_hash(&name) {
-                                    owners.entry(name).or_default().push(key.clone());
+                    // A server copy's project records live beside the
+                    // extension and hook approvals: each names one more
+                    // project that approved the copy.
+                    for sub in ["approvals", "servers"] {
+                        let dir = path.join(sub);
+                        match fs::read_dir(&dir) {
+                            Ok(records) => {
+                                for record in records {
+                                    let record = record.map_err(io_error(&dir))?;
+                                    let name = record.file_name().to_string_lossy().into_owned();
+                                    if is_hash(&name) {
+                                        owners.entry(name).or_default().push(key.clone());
+                                    }
                                 }
                             }
+                            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                            Err(e) => return Err(io_error(&dir)(e)),
                         }
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                        Err(e) => return Err(io_error(&approvals)(e)),
                     }
                 }
             }
@@ -679,13 +688,35 @@ impl Store {
         }
         .to_string()
             + "\n";
-        // The approval file is the last thing an approval writes, and
+        // The machine approval is written before a server's project record
+        // below (for an extension or a hook it is the last write), and
         // the write is atomic: a reader sees the old file or the new
         // one, never half. A directory-sync failure reports `Unsynced`
         // with the file already in place; rewriting the same bytes is
         // idempotent, so a retry is safe.
         let target = dir.join(hash);
         config::write_atomic(&target, body.as_bytes(), 0o666)?;
+        if item.kind == OfferedKind::McpServer {
+            if decision == "approve" {
+                // The machine approval above is already in place, written
+                // first: a project-record failure returns the error and
+                // removes nothing, leaving a copy with no project record,
+                // which prune keeps.
+                let servers = config::project_servers_dir(home, project);
+                fs::create_dir_all(&servers).map_err(io_error(&servers))?;
+                let record = servers.join(hash);
+                config::write_atomic(&record, body.as_bytes(), 0o666)?;
+            } else {
+                // A never writes no project record: it removes one an
+                // earlier approval left, when present.
+                let record = config::project_servers_dir(home, project).join(hash);
+                match fs::remove_file(&record) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(io_error(&record)(e)),
+                }
+            }
+        }
         Ok(())
     }
 

@@ -645,9 +645,8 @@ fn a_file_behind_a_symlink_names_its_target() {
 }
 
 /// Every check that can reject runs before the read: an unsupported
-/// level, an unparseable one, an unknown model, a protocol this Fiber does
-/// not speak, and the new model being the reviewer's. None runs the
-/// `command`, and none caches a key.
+/// level, an unparseable one, an unknown model, and the new model being the
+/// reviewer's. None runs the `command`, and none caches a key.
 #[test]
 fn every_rejection_comes_before_the_read() {
     let fixture = fixture("fiber-switch-pre-read");
@@ -656,7 +655,6 @@ fn every_rejection_comes_before_the_read() {
         (args_thinking("other/m2", "high"), "unsupported level"),
         (args_thinking("other/m", "sideways"), "unparseable level"),
         (args("other/x"), "unknown model"),
-        (args("bed/bk"), "bedrock-converse"),
         (args("other/m"), "the reviewer's model"),
     ];
     for (asked, case) in &cases {
@@ -1097,7 +1095,7 @@ fn an_unparseable_args_thinking_rejects_before_any_lookup() {
 }
 
 #[test]
-fn a_bedrock_model_is_rejected() {
+fn a_bedrock_converse_model_is_prepared() {
     let fixture = fixture("fiber-switch-bedrock");
     let config = config(&fixture, &[]);
     let (providers, _) = Providers::load(&fixture.home).unwrap();
@@ -1107,13 +1105,9 @@ fn a_bedrock_model_is_rejected() {
         .collect();
     let naming = vec![("bed".to_owned(), "bk".to_owned())];
     let switching = over(&fixture.home, providers, naming, config, credentials);
-    let rejection = rejected(&switching, &args("bed/bk"), None);
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert!(
-        rejection.message.contains("does not speak yet"),
-        "{}",
-        rejection.message
-    );
+    let made = prepared(&switching, &args("bed/bk"), None);
+    assert_eq!(made.model.reference, "bed/bk");
+    assert_eq!(made.context_window, 1000);
 }
 
 #[test]

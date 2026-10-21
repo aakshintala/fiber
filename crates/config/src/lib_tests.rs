@@ -27,6 +27,10 @@ fn layout_builds_the_approvals_and_pinned_dirs() {
         PathBuf::from("/home/approvals")
     );
     assert_eq!(pinned_dir(&home), PathBuf::from("/home/pinned"));
+    assert_eq!(
+        super::project_servers_dir(&home, &project),
+        PathBuf::from("/home/projects/key/servers")
+    );
 }
 
 #[test]

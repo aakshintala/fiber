@@ -2,7 +2,7 @@
 
 use crate::configure::{
     ConfigureError, FileOutcome, FileSaved, HostGap, HostSaved, Layer, LoginKind, LoginTarget,
-    NotesFile, NotesSaved, ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesSection, Saved,
+    LogoutRow, NotesFile, NotesSaved, ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesSection, Saved,
     SettingRow, Shown, SkillsDisabled, Stored, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 use contract::{ErrorCode, HubLine};
@@ -176,6 +176,31 @@ pub(super) fn stored(value: &Value) -> Option<Stored> {
         path: read!(value, "path")?,
         replaced: read!(value, "replaced")?,
     })
+}
+pub(super) fn logout_rows(value: &Value) -> Option<Vec<LogoutRow>> {
+    value
+        .get("rows")?
+        .as_array()?
+        .iter()
+        .map(|row| match row.get("row")?.as_str()? {
+            "provider" => Some(LogoutRow::Provider {
+                name: read!(row, "name")?,
+                label: read!(row, "label")?,
+                default: read!(row, "default")?,
+                deletable: read!(row, "deletable")?,
+                origin: optional!(row, "origin")?,
+                siblings: read!(row, "siblings")?,
+            }),
+            "secret" => Some(LogoutRow::Secret {
+                name: read!(row, "name")?,
+                deletable: read!(row, "deletable")?,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+pub(super) fn deleted(value: &Value) -> Option<String> {
+    read!(value, "path")
 }
 pub(super) fn install(value: &Value) -> Option<crate::ProviderInstall> {
     Some(crate::ProviderInstall {

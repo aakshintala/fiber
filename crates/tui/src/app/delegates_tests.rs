@@ -355,7 +355,8 @@ fn open_first(app: &mut App) -> Vec<Value> {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("opening sends"),
     }
 }
 

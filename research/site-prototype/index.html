@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Fiber runs every coding agent session you have from one terminal: sessions live in a hub, delegate to Claude Code or cursor-agent, extend or replace any part, on any of 11 providers.">
+  <title>Fiber — one control center for your coding agents</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <header class="column">
+    <a class="wordmark" href="#main"><img src="fiber-logo.png" width="640" height="160" alt="fiber"></a>
+    <nav aria-label="Main navigation">
+      <a href="https://github.com/aakshintala/fiber/tree/main/docs/user">Docs</a>
+      <a href="https://github.com/aakshintala/fiber">GitHub</a>
+    </nav>
+  </header>
+  <main id="main">
+    <section class="hero column" aria-labelledby="pitch">
+      <h1 id="pitch">One control center for every agent you run.</h1>
+      <p class="subline">Sessions live in a hub, not your terminal window. Watch every project from one screen, hand work to Claude Code or cursor-agent, and replace any part of Fiber you don’t like. In 13 MiB.</p>
+      <div class="install">
+        <span class="prompt" aria-hidden="true">$</span>
+        <code id="install-command">curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install.sh | sh</code>
+        <button id="copy" type="button" hidden>Copy</button>
+      </div>
+      <p class="install-note">macOS and Linux · <a href="https://github.com/aakshintala/fiber/blob/main/docs/releasing.md#installing">Install instructions</a></p>
+    </section>
+
+    <figure class="terminal" aria-describedby="screen-caption">
+      <div class="screen">
+        <img src="fiber-tui.png" width="3140" height="2144" alt="Fiber in Ghostty: the left rail groups sessions under fiber, pi-rig and beacon. The conversation shows a finished repair with a summary table. Approval 1 of 2 waits for cargo mutants at the bottom. The right panel shows context, changed files, a reviewer delegate, jobs and quota.">
+        <ul class="annotations" aria-label="Screen guide">
+          <li class="rail-label">Rail · every session</li>
+          <li class="conversation-label">Conversation · follow the work</li>
+          <li class="panel-label">Panel · delegates, jobs, quota</li>
+          <li class="approval-label">Approval · you decide what runs</li>
+        </ul>
+      </div>
+      <figcaption id="screen-caption">The TUI prototype, captured in Ghostty</figcaption>
+    </figure>
+
+    <section class="stats column" aria-labelledby="stats-title">
+      <h2 id="stats-title">Small and fast, and CI keeps it that way.</h2>
+      <dl class="stat-grid">
+        <div><dt>13 <span>MiB</span></dt><dd>an idle session’s peak memory</dd></div>
+        <div><dt>50 <span>ms</span></dt><dd>from <code>fiber</code> to the first frame</dd></div>
+        <div><dt>20 <span>ms</span></dt><dd>to start a session</dd></div>
+        <div><dt>0</dt><dd>context switches while idle, on every thread</dd></div>
+      </dl>
+      <p class="stats-note">Ceilings on Linux x86_64. A change that crosses one fails CI. <a href="https://github.com/aakshintala/fiber/blob/main/docs/performance.md#budgets">Every budget</a></p>
+    </section>
+
+    <section class="features column" aria-labelledby="features-title">
+      <h2 id="features-title">What Fiber does differently.</h2>
+      <article>
+        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/invocation.md#the-hub">Sessions outlive the terminal</a></h3>
+        <p>Every session runs headless under a hub. Close the terminal and the work keeps going; reopen it and you’re back. Pair a phone or another machine with its own device token, and every client sees the same session.</p>
+      </article>
+      <article>
+        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/extensions.md#what-an-extension-is">Extend or replace anything</a></h3>
+        <p>An extension registers tools, providers, hooks, commands and screens through the same seams the built-ins use. Give it a built-in’s name and it replaces that built-in. Write it in Lua, inside the session at about 150 KiB, or as a program in any language.</p>
+      </article>
+      <article>
+        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/delegates.md#what-a-delegate-is">Delegate to other agents</a></h3>
+        <p>Hand part of the work to another Fiber session, Claude Code or cursor-agent, each with your own setup for that tool. Every delegate is a background job you can wait on, talk to or stop.</p>
+      </article>
+      <article>
+        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/permissions.md#the-reviewer">A reviewer, not a prompt for every call</a></h3>
+        <p>Calls your rules don’t settle go to a reviewer model that reads what you asked for and judges the call against it. A blocked call goes back to the agent to find another way; you’re asked only when it keeps hitting the wall.</p>
+      </article>
+      <article>
+        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/model-routing.md#protocols-and-providers">Any model, 11 providers</a></h3>
+        <p>Anthropic, OpenAI, Gemini API, ChatGPT/codex, OpenRouter, OpenCode, Databricks, muse, AWS Bedrock, Google Vertex and Azure.</p>
+      </article>
+      <article>
+        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/configuration.md#importing">Bring your setup</a></h3>
+        <p><code>fiber import</code> copies your Claude Code or Codex configuration into Fiber once.</p>
+      </article>
+    </section>
+  </main>
+  <footer class="column"><span>Fiber · static product page prototype</span><a href="https://github.com/aakshintala/fiber">Read the source ↗</a></footer>
+  <p id="copy-status" class="sr-only" role="status" aria-live="polite"></p>
+</body>
+</html>

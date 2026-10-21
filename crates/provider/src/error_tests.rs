@@ -45,6 +45,54 @@ const RECORDED: &[(&str, &str)] = &[
         include_str!("../../../research/anthropic-messages-probe/raw/thinking-enabled.json"),
     ),
     (
+        "research/bedrock-invoke-probe/raw/adaptive.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/adaptive.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-bearer.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/bad-bearer.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-key-id.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/bad-key-id.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-model.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/bad-model.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-signature.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/bad-signature.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/cache-read.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/cache-read.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/cache-write.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/cache-write.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/plain.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/plain.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/thinking.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/thinking.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/tool.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/tool.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/ttl-1h.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/ttl-1h.json"),
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/validation.json",
+        include_str!("../../../research/bedrock-invoke-probe/raw/validation.json"),
+    ),
+    (
         "research/codex-responses-probe/raw/beta-other.json",
         include_str!("../../../research/codex-responses-probe/raw/beta-other.json"),
     ),
@@ -2413,6 +2461,13 @@ fn recorded(path: &str) -> Error {
             .and_then(|wait| wait.parse::<f64>().ok()),
         should_retry: None,
         url: crate::error::target(value["url"].as_str().unwrap_or_default()),
+        error_type: value["headers"].as_object().and_then(|headers| {
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("x-amzn-errortype"))
+                .and_then(|(_, value)| value.as_str()?.split(':').next())
+                .map(str::to_owned)
+        }),
     }
 }
 
@@ -2465,6 +2520,7 @@ fn status(status: u16, body: &str, retry_after: Option<f64>) -> ErrorCode {
         retry_after,
         should_retry: None,
         url: String::new(),
+        error_type: None,
     }
     .code()
 }
@@ -2532,6 +2588,7 @@ fn a_wrong_path_failure_names_the_host_and_path_not_the_query() {
         retry_after: None,
         should_retry: None,
         url: crate::error::target("https://user:pw@host.test:8080/v1beta/m:gen?key=SECRET#frag"),
+        error_type: None,
     };
     let message = wrong_key.failure("p", &Secrets::default()).message;
     assert_eq!(
@@ -2554,6 +2611,7 @@ fn a_404_that_names_the_model_keeps_the_provider_wording() {
         retry_after: None,
         should_retry: None,
         url: "h/p".to_owned(),
+        error_type: None,
     };
     assert_eq!(
         other.failure("p", &Secrets::default()).message,
@@ -2831,6 +2889,7 @@ fn no_recorded_reply_is_quota_exceeded() {
             retry_after: None,
             should_retry: None,
             url: String::new(),
+            error_type: None,
         }
         .code();
         assert_ne!(code, ErrorCode::QuotaExceeded, "{path}");
@@ -2862,6 +2921,7 @@ fn a_failed_status_records_the_asked_wait_in_milliseconds_rounded_up() {
             retry_after,
             should_retry: None,
             url: String::new(),
+            error_type: None,
         }
         .failure("p", &Secrets::default());
         serde_json::to_value(&value).unwrap()
@@ -2961,6 +3021,7 @@ fn a_usage_limit_failure_names_the_reset_time() {
         retry_after: Some(7200.0),
         should_retry: None,
         url: String::new(),
+        error_type: None,
     }
     .failure("codex", &Secrets::default());
     assert_eq!(failed.code, ErrorCode::QuotaExceeded);
@@ -2984,6 +3045,7 @@ fn another_quota_shape_keeps_the_generic_status_message() {
         retry_after: None,
         should_retry: None,
         url: String::new(),
+        error_type: None,
     }
     .failure("openai", &Secrets::default());
 
@@ -3005,6 +3067,7 @@ fn a_usage_limit_failure_without_a_reset_names_no_time() {
             retry_after: None,
             should_retry: None,
             url: String::new(),
+            error_type: None,
         }
         .failure("codex", &Secrets::default());
         assert_eq!(failed.code, ErrorCode::QuotaExceeded);
@@ -3037,11 +3100,249 @@ fn reset_times_name_the_civil_date_in_utc() {
             retry_after: None,
             should_retry: None,
             url: String::new(),
+            error_type: None,
         }
         .failure("codex", &Secrets::default());
         assert_eq!(
             failed.message,
             format!("codex reached its usage limit; it resets at {day}.")
         );
+    }
+}
+
+/// A status as AWS answers it: the exception named in `X-Amzn-ErrorType`.
+fn aws_status(status: u16, error_type: &str, body: &str) -> ErrorCode {
+    Error::Status {
+        status,
+        body: body.to_owned(),
+        retry_after: None,
+        should_retry: None,
+        url: String::new(),
+        error_type: Some(error_type.to_owned()),
+    }
+    .code()
+}
+
+#[test]
+fn each_recorded_bedrock_error_maps_to_its_code() {
+    for (path, code) in [
+        (
+            "bedrock-invoke-probe/raw/bad-model.json",
+            ErrorCode::ModelNotFound,
+        ),
+        (
+            "bedrock-invoke-probe/raw/validation.json",
+            ErrorCode::InvalidRequest,
+        ),
+        (
+            "bedrock-invoke-probe/raw/bad-signature.json",
+            ErrorCode::AuthenticationFailed,
+        ),
+        (
+            "bedrock-invoke-probe/raw/bad-key-id.json",
+            ErrorCode::AuthenticationFailed,
+        ),
+        (
+            "bedrock-invoke-probe/raw/bad-bearer.json",
+            ErrorCode::AuthenticationFailed,
+        ),
+    ] {
+        assert_eq!(recorded(path).code(), code, "{path}");
+    }
+}
+
+#[test]
+fn an_aws_error_body_gives_its_message_whatever_the_keys_case() {
+    for (path, said) in [
+        (
+            "bedrock-invoke-probe/raw/bad-model.json",
+            "The provided model identifier is invalid.",
+        ),
+        (
+            "bedrock-invoke-probe/raw/bad-bearer.json",
+            "Invalid API Key format: Delimiter ':' not found",
+        ),
+    ] {
+        let failure = recorded(path).failure("bedrock", &Secrets::default());
+        assert_eq!(failure.provider.unwrap().message, said, "{path}");
+    }
+}
+
+#[test]
+fn an_aws_exception_decides_the_code_whatever_its_case() {
+    for (status, name, code) in [
+        (
+            403,
+            "AccessDeniedException",
+            ErrorCode::AuthenticationFailed,
+        ),
+        (
+            403,
+            "UnrecognizedClientException",
+            ErrorCode::AuthenticationFailed,
+        ),
+        (
+            403,
+            "InvalidSignatureException",
+            ErrorCode::AuthenticationFailed,
+        ),
+        (
+            400,
+            "IncompleteSignatureException",
+            ErrorCode::AuthenticationFailed,
+        ),
+        (
+            403,
+            "MissingAuthenticationTokenException",
+            ErrorCode::AuthenticationFailed,
+        ),
+        (
+            403,
+            "ExpiredTokenException",
+            ErrorCode::AuthenticationFailed,
+        ),
+        (429, "ThrottlingException", ErrorCode::RateLimited),
+        (429, "ModelNotReadyException", ErrorCode::RateLimited),
+        (
+            500,
+            "InternalServerException",
+            ErrorCode::ProviderUnavailable,
+        ),
+        (
+            503,
+            "ServiceUnavailableException",
+            ErrorCode::ProviderUnavailable,
+        ),
+        (
+            424,
+            "ModelStreamErrorException",
+            ErrorCode::ProviderUnavailable,
+        ),
+        (408, "ModelTimeoutException", ErrorCode::ProviderUnavailable),
+        (424, "ModelErrorException", ErrorCode::ProviderUnavailable),
+        (404, "ResourceNotFoundException", ErrorCode::ModelNotFound),
+        // A name the status and the message decide.
+        (400, "ValidationException", ErrorCode::InvalidRequest),
+        // Unsettled until a probe reaches it (`docs/errors.md`, "Not
+        // settled here"): any other 4xx.
+        (
+            400,
+            "ServiceQuotaExceededException",
+            ErrorCode::InvalidRequest,
+        ),
+    ] {
+        let body = r#"{"message":"m"}"#;
+        assert_eq!(aws_status(status, name, body), code, "{name}");
+        let camel = format!("{}{}", name[..1].to_ascii_lowercase(), &name[1..]);
+        assert_eq!(aws_status(status, &camel, body), code, "{camel}");
+    }
+    // The name decides over the status.
+    assert_eq!(
+        aws_status(400, "ThrottlingException", "{}"),
+        ErrorCode::RateLimited
+    );
+    assert_eq!(
+        aws_status(429, "ModelStreamErrorException", "{}"),
+        ErrorCode::ProviderUnavailable
+    );
+}
+
+#[test]
+fn an_aws_validation_message_is_matched_as_every_body_is() {
+    assert_eq!(
+        aws_status(
+            400,
+            "ValidationException",
+            r#"{"message":"prompt is too long: 250000 tokens > 200000 maximum"}"#
+        ),
+        ErrorCode::ContextOverflow
+    );
+    assert_eq!(
+        aws_status(
+            400,
+            "ValidationException",
+            r#"{"message":"The provided model identifier is invalid."}"#
+        ),
+        ErrorCode::ModelNotFound
+    );
+}
+
+#[test]
+fn authentication_and_quota_shapes_win_over_an_aws_exception() {
+    // A usage-limit body wins over everything; an authentication exception
+    // wins over a quota shape; a quota shape wins over any other exception.
+    assert_eq!(
+        aws_status(
+            403,
+            "AccessDeniedException",
+            r#"{"error":{"code":"usage_limit_reached"}}"#
+        ),
+        ErrorCode::QuotaExceeded
+    );
+    let spend = r#"{"error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits."}}"#;
+    assert_eq!(
+        aws_status(400, "ExpiredTokenException", spend),
+        ErrorCode::AuthenticationFailed
+    );
+    assert_eq!(
+        aws_status(400, "ThrottlingException", spend),
+        ErrorCode::QuotaExceeded
+    );
+    assert_eq!(
+        aws_status(401, "ThrottlingException", "{}"),
+        ErrorCode::AuthenticationFailed
+    );
+}
+
+#[test]
+fn an_aws_exception_inside_the_stream_maps_to_its_code() {
+    for (name, message, code) in [
+        (
+            "throttlingException",
+            "Too many tokens.",
+            ErrorCode::RateLimited,
+        ),
+        (
+            "modelStreamErrorException",
+            "The model stream failed.",
+            ErrorCode::ProviderUnavailable,
+        ),
+        (
+            "internalServerException",
+            "Internal error.",
+            ErrorCode::ProviderUnavailable,
+        ),
+        (
+            "serviceUnavailableException",
+            "Unavailable.",
+            ErrorCode::ProviderUnavailable,
+        ),
+        (
+            "modelTimeoutException",
+            "Timed out.",
+            ErrorCode::ProviderUnavailable,
+        ),
+        (
+            "validationException",
+            "Bad field.",
+            ErrorCode::InvalidRequest,
+        ),
+        (
+            "validationException",
+            "prompt is too long: 250000 tokens > 200000 maximum",
+            ErrorCode::ContextOverflow,
+        ),
+        ("someNewException", "New.", ErrorCode::StreamIncomplete),
+    ] {
+        let error = Error::ReplyFailed {
+            code: Some(name.to_owned()),
+            message: message.to_owned(),
+        };
+        assert_eq!(error.code(), code, "{name}: {message}");
+        assert_eq!(error.should_retry(), None, "{name}");
+        let failure = error.failure("bedrock", &Secrets::default());
+        let said = failure.provider.unwrap();
+        assert_eq!(said.status, Some(200), "{name}");
+        assert_eq!(said.message, message, "{name}");
     }
 }

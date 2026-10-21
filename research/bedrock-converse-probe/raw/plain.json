@@ -1,0 +1,113 @@
+{
+  "case": "plain",
+  "model": "mistral.ministral-3-8b-instruct",
+  "region": "ap-south-1",
+  "url_path": "/model/mistral.ministral-3-8b-instruct/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "Say hello in five words."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 32
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ]
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": ""
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": "Hello! How\u2019s it goin\u2019 now?"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "end_turn"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 192
+        },
+        "usage": {
+          "inputTokens": 15,
+          "outputTokens": 11,
+          "serverToolUsage": {},
+          "totalTokens": 26
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 15,
+    "outputTokens": 11,
+    "serverToolUsage": {},
+    "totalTokens": 26
+  },
+  "cost_usd": 4e-06
+}

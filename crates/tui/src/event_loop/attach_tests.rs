@@ -272,6 +272,7 @@ fn kinds(inputs: &[Input]) -> Vec<String> {
             | Input::Files { .. }
             | Input::FindDue(_)
             | Input::Image { .. }
+            | Input::Feedback(_)
             | Input::Viewed { .. }
             | Input::Models(_)
             | Input::Login { .. } => "other".to_owned(),

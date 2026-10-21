@@ -1,0 +1,22 @@
+{
+  "case": "bad-model",
+  "model": "global.anthropic.claude-nonexistent-v9:0",
+  "region": "ap-south-1",
+  "url_path": "/model/global.anthropic.claude-nonexistent-v9%3A0/invoke-with-response-stream",
+  "request": {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 64,
+    "messages": [
+      {
+        "role": "user",
+        "content": "hi"
+      }
+    ]
+  },
+  "status": 400,
+  "headers": {
+    "Content-Type": "application/json",
+    "x-amzn-ErrorType": "ValidationException:http://internal.amazon.com/coral/com.amazon.bedrock/"
+  },
+  "body": "{\"message\":\"The provided model identifier is invalid.\"}"
+}

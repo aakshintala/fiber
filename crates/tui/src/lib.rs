@@ -26,6 +26,7 @@ mod diff;
 mod editor;
 mod event_loop;
 mod ext;
+mod feedback;
 pub mod files;
 mod focus;
 mod format;
@@ -43,6 +44,7 @@ mod local_time;
 mod logical;
 mod login_view;
 mod login_worker;
+mod logout_view;
 mod look;
 mod markdown;
 mod mcp_view;
@@ -103,11 +105,12 @@ pub use attention::Attention;
 pub use catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, ReadModels, Refresh};
 pub use configure::{
     BrowserLogin, Configure, ConfigureError, FileOutcome, FileSaved, HostGap, HostSaved, KeyEdit,
-    Layer, LoginKind, LoginNeed, LoginShow, LoginTarget, NotesFile, NotesSaved, NotesWrite,
+    Layer, LoginKind, LoginNeed, LoginShow, LoginTarget, LogoutRow, NotesFile, NotesSaved, NotesWrite,
     ProviderInstall, ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesScope, RulesSection,
     Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists,
     ToolSwitches, WriteScope,
 };
+pub use contract::feedback::{FeedbackDone, WriteFeedback};
 
 pub use home::{Launch, LaunchLocation};
 
@@ -185,6 +188,9 @@ pub(crate) enum Input {
     /// A model-list read answered: the installed models, or why they
     /// could not be read. An answer for a closed loop is dropped.
     Models(Result<Catalogue, String>),
+    /// A feedback report finished writing: the report's path with its
+    /// issue link, or why the report could not be written.
+    Feedback(Result<FeedbackDone, String>),
     /// A browser login's progress or end for `ticket`: an event for a
     /// ticket no longer waiting changes nothing and opens nothing.
     Login {

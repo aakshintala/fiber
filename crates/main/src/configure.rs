@@ -7,6 +7,7 @@
 
 mod install;
 mod login;
+mod logout;
 mod models;
 mod remote;
 mod skills;
@@ -312,6 +313,15 @@ impl tui::Configure for Seam {
 
     fn save_host(&self, name: &str, key: &str, value: &str) -> Result<HostSaved, ConfigureError> {
         login::save_host(&self.home, name, key, value)
+    }
+
+    fn logout_rows(&self) -> Result<Vec<tui::LogoutRow>, ConfigureError> {
+        let config = self.load(&self.home)?;
+        logout::rows(&self.home, &config)
+    }
+
+    fn delete_stored(&self, name: &str, label: Option<String>) -> Result<String, ConfigureError> {
+        logout::delete(&self.home, name, label)
     }
 
     fn reviewer_notes(&self, workspace: &Path) -> Result<tui::ReviewerNotes, ConfigureError> {

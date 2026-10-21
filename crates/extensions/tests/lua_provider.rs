@@ -555,6 +555,50 @@ fn sign_returns_a_table_of_headers_or_nothing() {
     }
 }
 
+/// `sign()` is handed the extension clock's wall time in whole Unix
+/// seconds, which a scheme such as AWS SigV4 signs over
+/// (`docs/model-routing.md`, "Signing a request").
+#[test]
+fn sign_sees_the_extension_clocks_time_in_unix_seconds() {
+    let dir = fakes::TempDir::new("sign-time");
+    std::fs::create_dir_all(dir.path().join("providers")).unwrap();
+    std::fs::write(
+        dir.path().join("providers/p.lua"),
+        "fiber.provider('p', {sign={timeout=1000, run=function(arg) \
+         return {['x-time'] = string.format('%d', arg.time)} end}})",
+    )
+    .unwrap();
+    let clock = FakeClock::new();
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        dir.path(),
+        dir.path(),
+        Arc::clone(&clock) as Arc<dyn Clock>,
+    ));
+    let provider = LuaProvider::new(ext, "p");
+    let sign = |provider: &Arc<LuaProvider>| {
+        let provider = Arc::clone(provider);
+        fakes::within("provider.sign", fakes::MUST_SUCCEED_WITHIN, move || {
+            provider.sign(&SignRequest {
+                method: "POST",
+                url: "https://example.test/",
+                headers: &[],
+                body: b"",
+            })
+        })
+        .unwrap()
+    };
+    assert_eq!(
+        sign(&provider),
+        [("x-time".to_owned(), "1700000000".to_owned())]
+    );
+    clock.advance(Duration::from_millis(61_500));
+    assert_eq!(
+        sign(&provider),
+        [("x-time".to_owned(), "1700000061".to_owned())]
+    );
+}
+
 #[test]
 fn sign_sees_the_bodys_hash_never_the_body_and_adds_headers() {
     let setup = Setup::new();
@@ -582,7 +626,7 @@ fn sign_sees_the_bodys_hash_never_the_body_and_adds_headers() {
     };
     let hash = hex(ring::digest::digest(&ring::digest::SHA256, body).as_ref());
     assert_eq!(get("x-fixture-content-sha256"), hash);
-    assert_eq!(get("x-fixture-saw"), "body_sha256,headers,method,url");
+    assert_eq!(get("x-fixture-saw"), "body_sha256,headers,method,time,url");
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, b"fixture-secret");
     let text = format!("POST\n{url}\n{hash}");
     assert_eq!(

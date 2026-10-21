@@ -37,6 +37,10 @@ pub enum Error {
         should_retry: Option<bool>,
         /// The host and path the request went to, from [`target`].
         url: String,
+        /// The exception AWS named in `X-Amzn-ErrorType`, the part before
+        /// its first `:`, such as `ValidationException`: AWS names it
+        /// nowhere else (`docs/errors.md`, "Recognising an AWS exception").
+        error_type: Option<String>,
     },
     /// The stream ended before its terminal event, or carried something
     /// Fiber could not read.
@@ -80,8 +84,9 @@ impl Error {
                 status,
                 body,
                 retry_after,
+                error_type,
                 ..
-            } => status_code(*status, *retry_after, body),
+            } => status_code(*status, *retry_after, error_type.as_deref(), body),
             Self::StreamIncomplete(_) => ErrorCode::StreamIncomplete,
             Self::ReplyFailed { code, message } => reply_failed_code(code.as_deref(), message),
             Self::UnknownStopReason(_) => ErrorCode::UnknownStopReason,
@@ -239,11 +244,20 @@ fn sign_sentence(provider: &str, error: &contract::signing::Error, secrets: &Sec
 /// on any status (`docs/model-routing.md`, "Protocols and providers");
 /// authentication wins over every other shape; a documented quota or
 /// billing shape wins over every other code (`docs/errors.md`,
-/// "Recognising a quota or billing error").
-fn status_code(status: u16, retry_after: Option<f64>, body: &str) -> ErrorCode {
+/// "Recognising a quota or billing error"). An AWS exception named in
+/// `X-Amzn-ErrorType` comes next (`docs/errors.md`, "Recognising an AWS
+/// exception").
+fn status_code(
+    status: u16,
+    retry_after: Option<f64>,
+    error_type: Option<&str>,
+    body: &str,
+) -> ErrorCode {
+    let aws = error_type.and_then(aws_exception);
     match status {
         _ if usage_limit_body(body) => ErrorCode::QuotaExceeded,
         401 => ErrorCode::AuthenticationFailed,
+        _ if aws == Some(ErrorCode::AuthenticationFailed) => ErrorCode::AuthenticationFailed,
         // Gemini answers a bad key with 400 `API_KEY_INVALID`
         // (`research/google-generative-ai-probe`, `raw/auth-badheader.json`).
         400 if has_reason(body, "API_KEY_INVALID") => ErrorCode::AuthenticationFailed,
@@ -252,6 +266,15 @@ fn status_code(status: u16, retry_after: Option<f64>, body: &str) -> ErrorCode {
         402 if in_flight_budget(body) && retry_after.is_some() => ErrorCode::RateLimited,
         402 => ErrorCode::QuotaExceeded,
         _ if quota_status(status, body) => ErrorCode::QuotaExceeded,
+        _ => aws.unwrap_or_else(|| ordinary_status_code(status, body)),
+    }
+}
+
+/// The code for a status no usage-limit, authentication, quota or AWS
+/// exception shape decided: the status, then the body's unknown-model and
+/// overflow shapes.
+fn ordinary_status_code(status: u16, body: &str) -> ErrorCode {
+    match status {
         429 => ErrorCode::RateLimited,
         408 | 409 | 500..=599 => ErrorCode::ProviderUnavailable,
         _ if unknown_model(body) => ErrorCode::ModelNotFound,
@@ -414,8 +437,9 @@ pub(crate) fn target(url: &str) -> String {
 /// ID", a `not_found_error` whose message names the model (Anthropic, muse
 /// on messages; the same type with "Not found" is a wrong path), Gemini's
 /// `NOT_FOUND` for a `models/` name (`research/provider-errors`, "Unknown
-/// model" and "Wrong path"), or Vertex's `NOT_FOUND` for a `Publisher
-/// model` (`research/vertex-probe`).
+/// model" and "Wrong path"), Bedrock's "The provided model identifier is
+/// invalid." (`research/bedrock-invoke-probe`, `raw/bad-model.json`), or
+/// Vertex's `NOT_FOUND` for a `Publisher model` (`research/vertex-probe`).
 fn unknown_model(body: &str) -> bool {
     let value: Option<Value> = serde_json::from_str(body).ok();
     let field = |pointer: &str| {
@@ -427,6 +451,7 @@ fn unknown_model(body: &str) -> bool {
     let message = body_message(body);
     body_code(body).as_deref() == Some("model_not_found")
         || message.contains("is not a valid model ID")
+        || message.contains("The provided model identifier is invalid")
         || (field("/error/type") == "not_found_error"
             && message.to_ascii_lowercase().contains("model"))
         || (field("/error/status") == "NOT_FOUND"
@@ -437,6 +462,9 @@ fn unknown_model(body: &str) -> bool {
 /// or `stream_incomplete` when none matches (`docs/model-routing.md`, "When
 /// a model call fails").
 fn reply_failed_code(code: Option<&str>, message: &str) -> ErrorCode {
+    if let Some(aws) = code.and_then(aws_exception) {
+        return aws;
+    }
     match code {
         Some("rate_limit_exceeded" | "rate_limit_error") => ErrorCode::RateLimited,
         // Gemini's in-stream `error.status` is a `google.rpc.Code` name.
@@ -446,7 +474,39 @@ fn reply_failed_code(code: Option<&str>, message: &str) -> ErrorCode {
             | "DEADLINE_EXCEEDED",
         ) => ErrorCode::ProviderUnavailable,
         _ if overflow(code, message) => ErrorCode::ContextOverflow,
+        // AWS's exception for a request it refuses, which the event stream
+        // spells `validationException` (`docs/errors.md`, "Recognising an
+        // AWS exception").
+        Some(code) if code.eq_ignore_ascii_case("ValidationException") => ErrorCode::InvalidRequest,
         _ => ErrorCode::StreamIncomplete,
+    }
+}
+
+/// The code an AWS exception reports, for the names whose code the name
+/// alone decides (`docs/errors.md`, "Recognising an AWS exception"). The
+/// name is matched without regard to case: `X-Amzn-ErrorType` spells it
+/// `ThrottlingException`, Bedrock's event stream `throttlingException`.
+/// `None` for any other name, such as `ValidationException`, whose code the
+/// status and the message decide.
+fn aws_exception(name: &str) -> Option<ErrorCode> {
+    match name.to_ascii_lowercase().as_str() {
+        // The signature, or the credential behind it, was refused: Bedrock
+        // answers a malformed API key with `AccessDeniedException`
+        // (`research/bedrock-invoke-probe`, `raw/bad-bearer.json`).
+        "accessdeniedexception"
+        | "unrecognizedclientexception"
+        | "invalidsignatureexception"
+        | "incompletesignatureexception"
+        | "missingauthenticationtokenexception"
+        | "expiredtokenexception" => Some(ErrorCode::AuthenticationFailed),
+        "throttlingexception" | "modelnotreadyexception" => Some(ErrorCode::RateLimited),
+        "internalserverexception"
+        | "serviceunavailableexception"
+        | "modelstreamerrorexception"
+        | "modeltimeoutexception"
+        | "modelerrorexception" => Some(ErrorCode::ProviderUnavailable),
+        "resourcenotfoundexception" => Some(ErrorCode::ModelNotFound),
+        _ => None,
     }
 }
 
@@ -511,13 +571,17 @@ fn has_reason(body: &str, reason: &str) -> bool {
 }
 
 /// The provider's own message in an error body: `error.message`, or
-/// `detail` as ChatGPT/codex sends it, or else the body itself.
+/// `detail` as ChatGPT/codex sends it, or a top-level `message` (or
+/// `Message`) as AWS sends it, or else the body itself.
 fn body_message(body: &str) -> String {
     let value: Option<Value> = serde_json::from_str(body).ok();
     value
         .as_ref()
-        .and_then(|v| v.pointer("/error/message").or_else(|| v.get("detail")))
-        .and_then(Value::as_str)
+        .and_then(|v| {
+            ["/error/message", "/detail", "/message", "/Message"]
+                .iter()
+                .find_map(|pointer| v.pointer(pointer)?.as_str())
+        })
         .unwrap_or(body)
         .to_owned()
 }
