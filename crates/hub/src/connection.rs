@@ -138,10 +138,9 @@ pub(crate) enum Closer {
 
 /// What one pass of [`Hub::idle_wait`] found.
 pub(crate) enum Idle {
-    /// A signal arrived: its number.
+    /// A signal arrived, or a local `stop`: its number, SIGTERM for a
+    /// stop, which ends the hub as a SIGTERM does.
     Signal(i32),
-    /// A local `stop` arrived: ends the hub as SIGTERM does.
-    Stop,
     /// No client for the whole `idle_exit`: the exit is claimed.
     Expired,
     /// Woken by a clock move or a change: check again.
@@ -361,10 +360,10 @@ impl Hub {
         // signal that lands in between blocks in `Tick::wake` until this
         // thread waits, instead of waking nobody.
         let guard = self.tick.hold();
-        // A local `stop` ends the hub as a signal does, checked before
+        // A local `stop` ends the hub as a SIGTERM does, checked before
         // the signal so the order of arrival decides nothing.
         if self.stop.load(Ordering::SeqCst) {
-            return Idle::Stop;
+            return Idle::Signal(signal_hook::consts::SIGTERM);
         }
         let signal = got.swap(0, Ordering::SeqCst);
         if signal != 0 {
@@ -395,9 +394,18 @@ impl Hub {
     /// missing it. Returns unwoken: the `stop` arm wakes after writing the
     /// acknowledgement, so the client always reads the acceptance before
     /// the exit closes its socket. Joins as a waker, never as a waiter.
+    /// In tests, tells the armed `attempt` sender once this call reaches
+    /// the hold, so a test proves its stop thread arrived before asserting
+    /// the store is blocked.
     pub(crate) fn request_stop(&self) {
+        #[cfg(test)]
+        let attempt = self.tick.tell_if_contended();
         let _held = self.tick.hold();
         self.stop.store(true, Ordering::SeqCst);
+        #[cfg(test)]
+        if let Some(attempt) = attempt {
+            attempt.send(()).unwrap_or(());
+        }
     }
 
     /// Shuts down every client connection: each session sees its clients

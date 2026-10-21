@@ -20,7 +20,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use contract::clock::Wake;
 use log::diag::{Level, Severity};
 
 use super::*;
@@ -1522,6 +1521,11 @@ fn a_stop_store_waits_on_the_tick_hold() {
     ));
     // Hold the tick guard: the store below cannot land until it drops.
     let held = hub.tick.hold();
+    // Arm the stop-store's arrival signal before spawning it: the report
+    // proves the stop thread reached the held lock, not that it was
+    // merely unscheduled.
+    let (attempt_tx, attempt_rx) = mpsc::channel();
+    *support::lock(&hub.tick.attempt) = Some(attempt_tx);
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn({
         let hub = Arc::clone(&hub);
@@ -1530,24 +1534,17 @@ fn a_stop_store_waits_on_the_tick_hold() {
             done_tx.send(()).unwrap_or(());
         }
     });
-    // The attempt seam proves the waker queues behind the same hold: the
-    // report arrives contended, before anything unblocks.
-    let (attempt_tx, attempt_rx) = mpsc::channel();
-    *support::lock(&hub.tick.attempt) = Some(attempt_tx);
-    thread::spawn({
-        let hub = Arc::clone(&hub);
-        move || hub.tick.wake()
-    });
-    Deadline::after(DEADLINE).recv_or_fail(&attempt_rx, "the wake to queue behind the hold");
-    // Still held: the store has not landed.
+    Deadline::after(DEADLINE).recv_or_fail(&attempt_rx, "the stop to reach the held lock");
+    // Still held, with the arrival proven: the store has not landed, read
+    // with no clock.
     assert!(
-        Deadline::after(STILL).recv(&done_rx).is_err(),
+        done_rx.try_recv().is_err(),
         "the stop store rides the tick hold"
     );
     drop(held);
     Deadline::after(DEADLINE).recv_or_fail(&done_rx, "the store to land once the hold drops");
     assert!(matches!(
         hub.idle_wait(IDLE, &AtomicBool::new(false), &AtomicI32::new(0)),
-        Idle::Stop
+        Idle::Signal(signal_hook::consts::SIGTERM)
     ));
 }

@@ -1308,11 +1308,13 @@ fn doctor_takes_no_arguments() {
 
 #[test]
 fn update_takes_an_optional_channel_and_upgrade_runs_the_same_command() {
-    let Invocation::Run(Some(Commands::Update { channel }), _) = parse_from(["fiber", "update"])
+    let Invocation::Run(Some(Commands::Update { channel, base_url }), _) =
+        parse_from(["fiber", "update"])
     else {
         panic!("bare update did not parse");
     };
     assert_eq!(channel, None);
+    assert_eq!(base_url, None);
     for (args, expected) in [
         (
             vec!["fiber", "update", "--channel", "stable"],
@@ -1328,12 +1330,21 @@ fn update_takes_an_optional_channel_and_upgrade_runs_the_same_command() {
             Some(ChannelArg::Nightly),
         ),
     ] {
-        let Invocation::Run(Some(Commands::Update { channel }), _) = parse_from(args.clone())
+        let Invocation::Run(Some(Commands::Update { channel, base_url }), _) =
+            parse_from(args.clone())
         else {
             panic!("{args:?} did not parse");
         };
         assert_eq!(channel, expected, "{args:?}");
+        assert_eq!(base_url, None, "{args:?}");
     }
+    let Invocation::Run(Some(Commands::Update { channel, base_url }), _) =
+        parse_from(["fiber", "update", "--base-url", "http://127.0.0.1:1"])
+    else {
+        panic!("update with --base-url did not parse");
+    };
+    assert_eq!(channel, None);
+    assert_eq!(base_url.as_deref(), Some("http://127.0.0.1:1"));
 }
 
 #[test]

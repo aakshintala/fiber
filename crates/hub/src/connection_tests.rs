@@ -269,7 +269,7 @@ fn stop_from_a_local_client_is_accepted_and_records_the_stop() {
     let (id, result) = accepted(&client.next("the acknowledgement"));
     assert_eq!(id, "c_stop");
     assert_eq!(result, Value::Null);
-    // The store landed: the idle wait ends the hub as a signal does,
+    // The store landed: the idle wait ends the hub as a SIGTERM does,
     // with no clock advance.
     assert!(matches!(
         hub.idle_wait(
@@ -277,7 +277,7 @@ fn stop_from_a_local_client_is_accepted_and_records_the_stop() {
             &AtomicBool::new(false),
             &AtomicI32::new(0)
         ),
-        Idle::Stop
+        Idle::Signal(signal_hook::consts::SIGTERM)
     ));
 }
 

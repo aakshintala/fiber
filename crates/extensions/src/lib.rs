@@ -119,7 +119,7 @@ pub use repository::{
     approved_extension, approved_extensions, declared_items, hash, kind_name, mcp_server_item,
     pending, repository_servers,
 };
-pub use resolve::{nightly_parts, version};
+pub use resolve::{nightly_parts, version, version_key};
 pub use startable::{context_window, takes, thinking_refusal};
 pub use update::{StagedUpdate, Target, stage_update};
 

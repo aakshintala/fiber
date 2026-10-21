@@ -13,7 +13,7 @@ use crate::git::Origin;
 use crate::install::{Scratch, io, remove, unique_name};
 use crate::installed::read;
 use crate::manage::{Adopted, Plan, plan_updates};
-use crate::prepare::prepare;
+use crate::prepare::prepare_binary;
 use crate::release::{
     DOCS, EXTENSIONS, Release, fetch_verified, layout, stage_docs_from, swap_docs_in,
     unpack_release_archive,
@@ -57,7 +57,7 @@ pub struct StagedUpdate<'c> {
     plan: Plan<'c>,
     _scratch: Scratch,
     home: PathBuf,
-    docs_fresh: PathBuf,
+    docs_fresh: Option<PathBuf>,
     binary: PathBuf,
 }
 
@@ -74,7 +74,9 @@ impl<'c> StagedUpdate<'c> {
     pub fn commit(mut self) -> Result<PathBuf, Error> {
         self.plan.commit_prepared()?;
         self.plan.unlock();
-        swap_docs_in(&self.home, &self.docs_fresh)?;
+        if let Some(fresh) = &self.docs_fresh {
+            swap_docs_in(&self.home, fresh)?;
+        }
         let staged = self
             .home
             .join(format!("{}.new", unique_name(".fiber-update")));
@@ -87,7 +89,9 @@ impl Drop for StagedUpdate<'_> {
     fn drop(&mut self) {
         // The plan's drop removes the members' fresh copies and the
         // scratch guard removes the archives and unpack directories.
-        remove(&self.docs_fresh).unwrap_or(());
+        if let Some(fresh) = &self.docs_fresh {
+            remove(fresh).unwrap_or(());
+        }
     }
 }
 
@@ -103,6 +107,7 @@ pub fn stage_update<'c>(
     release: &Target,
     origin: &Origin,
     clock: &'c dyn Clock,
+    stage_docs: bool,
 ) -> Result<StagedUpdate<'c>, Error> {
     let scratch = Scratch::create(&std::env::temp_dir(), "fiber-update", 0o700)?;
     let archives = Release {
@@ -124,7 +129,6 @@ pub fn stage_update<'c>(
             why: "holds no `fiber` binary".into(),
         });
     }
-    let docs_archive = fetch_verified(&archives, DOCS)?;
     let extensions_archive = fetch_verified(&archives, EXTENSIONS)?;
     let extensions_dir = scratch.path().join("extensions");
     fs::create_dir(&extensions_dir).map_err(io(&extensions_dir))?;
@@ -133,7 +137,15 @@ pub fn stage_update<'c>(
     let tag = format!("v{}", release.version);
     let commit = origin.tag_commit(FIBER_REPO, &tag, clock)?;
     let mut plan = plan_updates(home, &compat(&release.version), origin, clock)?;
-    let docs_fresh = stage_docs_from(home, &docs_archive, scratch.path())?;
+    // The docs stage with the rest and swap after checks and approval:
+    // an already-newest run whose docs are present fetches no docs
+    // archive and stages none.
+    let docs_fresh = stage_docs
+        .then(|| {
+            let archive = fetch_verified(&archives, DOCS)?;
+            stage_docs_from(home, &archive, scratch.path())
+        })
+        .transpose()?;
     let installed = read(home)?;
     for short in &shorts {
         let name = config::full_name(short);
@@ -150,8 +162,10 @@ pub fn stage_update<'c>(
             )?;
         }
     }
+    // Only the member binaries pre-stage, before the person's approval:
+    // each member's install step runs once after approval, at the commit.
     for item in plan.items() {
-        prepare(item.staged(), &item.manifest, clock)?;
+        prepare_binary(item.staged(), &item.manifest)?;
     }
     Ok(StagedUpdate {
         plan,

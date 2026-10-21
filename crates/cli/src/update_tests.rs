@@ -93,25 +93,21 @@ fn serve(
             anthropic.as_bytes(),
         )]));
         let ok = |body: Vec<u8>| fakes::Response::status(200, body);
+        // One route per archive: every fetch runs once, against the
+        // release the stage resolves.
         for (name, bytes) in [
             (format!("fiber-{TRIPLE}.tar.gz"), binary),
             ("fiber-docs.tar.gz".to_owned(), docs),
             ("fiber-extensions.tar.gz".to_owned(), extensions),
         ] {
-            // Docs routes answer twice: the already-newest path installs
-            // missing docs through `install_docs_if_missing` before the
-            // stage refreshes them, as a real server answers every fetch.
-            let repeats = if name == "fiber-docs.tar.gz" { 2 } else { 1 };
-            for _ in 0..repeats {
-                routes.push((
-                    format!("/releases/download/v{version}/{name}"),
-                    ok(bytes.clone()),
-                ));
-                routes.push((
-                    format!("/releases/download/v{version}/{name}.sha256"),
-                    ok(sha256(&bytes).into_bytes()),
-                ));
-            }
+            routes.push((
+                format!("/releases/download/v{version}/{name}"),
+                ok(bytes.clone()),
+            ));
+            routes.push((
+                format!("/releases/download/v{version}/{name}.sha256"),
+                ok(sha256(&bytes).into_bytes()),
+            ));
         }
     }
     let mut latest = fakes::Response::status(302, "");
@@ -287,16 +283,78 @@ fn stable_already_newest_keeps_the_binary_but_moves_members_and_docs() {
     assert_eq!(fs::read(&world.binary).unwrap(), MARKER);
     assert_eq!(member_version(&world.home), "0.2.0");
     assert!(world.home.join("docs").is_dir(), "{err}");
-    // The already-newest path installs the missing docs itself before
-    // the stage refreshes them: two docs fetches for the staged version,
-    // not one.
+    // The already-newest path stages the missing docs with the rest and
+    // swaps them after approval: one docs fetch for the staged version.
     let docs = world
         .server
         .requests()
         .iter()
         .filter(|request| request.path.contains("v0.2.0/fiber-docs.tar.gz"))
         .count();
-    assert_eq!(docs, 4, "{err}");
+    assert_eq!(docs, 2, "{err}");
+    assert!(err.contains("fiber: updated docs"), "{err}");
+}
+
+/// An already-newest run with its docs present stages no docs: the
+/// binary keeps its bytes, the members still move, and no docs fetch
+/// runs.
+#[test]
+fn stable_already_newest_with_present_docs_fetches_no_docs() {
+    let world = World::new("0.1.0", "0.2.0", "v0.2.0", None, MARKER);
+    fs::create_dir_all(world.home.join("docs")).unwrap();
+    fs::write(world.home.join("docs").join("v"), "old").unwrap();
+    let (result, err) = world.run("0.2.0", Channel::Stable, false, b"", &World::no_restart);
+    assert_eq!(result.unwrap(), 0, "{err}");
+    assert_eq!(fs::read(&world.binary).unwrap(), MARKER);
+    assert_eq!(member_version(&world.home), "0.2.0");
+    assert_eq!(
+        fs::read_to_string(world.home.join("docs").join("v")).unwrap(),
+        "old",
+        "present docs stay untouched"
+    );
+    // The v0.1.0 docs fetches belong to the install; the stage fetches
+    // no docs for its own version.
+    assert!(
+        world
+            .server
+            .requests()
+            .iter()
+            .all(|request| !request.path.contains("v0.2.0/fiber-docs.tar.gz")),
+        "no staged docs fetch runs: {:?}",
+        world.server.requests()
+    );
+    assert!(!err.contains("fiber: updated docs"), "{err}");
+}
+
+/// A refused already-newest run with missing docs installs nothing: the
+/// docs swap after approval, so the refusal leaves them missing.
+#[test]
+fn stable_already_newest_refusal_leaves_missing_docs_missing() {
+    let world = World::new("0.1.0", "0.2.0", "v0.2.0", None, MARKER);
+    fs::remove_dir_all(world.home.join("docs")).unwrap();
+    let (result, err) = world.run("0.2.0", Channel::Stable, true, b"n\n", &World::no_restart);
+    assert_eq!(result.unwrap(), 1, "{err}");
+    assert!(
+        !world.home.join("docs").exists(),
+        "a refused update stages nothing"
+    );
+    assert_eq!(member_version(&world.home), "0.1.0");
+}
+
+/// `update` names each damaged member's skip line and still updates the
+/// rest: the damaged directory stays, recorded for `reinstall`.
+#[test]
+fn stable_update_names_damaged_members_and_updates_the_rest() {
+    let world = World::new("0.1.0", "0.2.0", "v0.2.0", None, OLD_BINARY);
+    fs::create_dir_all(world.home.join("extensions").join("broken")).unwrap();
+    let (result, err) = world.run("0.1.0", Channel::Stable, false, b"", &World::no_restart);
+    assert_eq!(result.unwrap(), 0, "{err}");
+    assert!(
+        err.contains("fiber: `broken` is damaged, so its dependency minimums are unknown"),
+        "{err}"
+    );
+    assert_eq!(member_version(&world.home), "0.2.0");
+    assert!(world.home.join("extensions").join("broken").is_dir());
 }
 
 #[test]
@@ -543,8 +601,36 @@ fn terminal_refusal_installs_nothing() {
     assert_eq!(member_version(&world.home), "0.1.0");
 }
 
+/// `update` on the already-newest path returns zero through the public
+/// entry point: the binary keeps its bytes, the members move, the docs
+/// stay, and no rename touches the running binary. This kills
+/// `update -> i32 with 1`.
+#[test]
+fn update_returns_zero_without_touching_the_binary_when_already_newest() {
+    let world = World::new("0.2.0", "0.2.0", "v0.2.0", None, MARKER);
+    let mut err = Vec::new();
+    let code = super::update(
+        &world.home,
+        "0.2.0",
+        TRIPLE,
+        Channel::Stable,
+        &world.bases(),
+        &fakes::clock::SystemClock,
+        Io {
+            terminal: false,
+            input: &mut Cursor::new(b"".as_slice()),
+            err: &mut err,
+        },
+        &world.origin(),
+    );
+    let err = String::from_utf8(err).unwrap();
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(fs::read(&world.binary).unwrap(), MARKER);
+    assert_eq!(member_version(&world.home), "0.2.0");
+}
+
 /// `update` reports its run's exit code: a failed tag fetch exits one.
-/// The failure answers before any git runs, so the hardcoded origin never
+/// The failure answers before any git runs, so the fixture origin never
 /// leaves the loopback server.
 #[test]
 fn update_maps_a_failed_tag_fetch_to_exit_one() {
@@ -573,6 +659,7 @@ fn update_maps_a_failed_tag_fetch_to_exit_one() {
             input: &mut Cursor::new(b"".as_slice()),
             err: &mut err,
         },
+        &extensions::Origin::github(),
     );
     assert_eq!(code, 1);
 }

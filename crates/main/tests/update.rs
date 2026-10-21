@@ -61,9 +61,9 @@ impl Github {
 
 impl Setup {
     /// Runs `binary` with `args` and waits for it under the test's
-    /// [`Deadline`]. Both release roots point at `server`, `channel`
-    /// sets `FIBER_CHANNEL`, and git resolves `github.com` to the
-    /// fixture in `Github`.
+    /// [`Deadline`]. The hidden `--base-url` points both release roots
+    /// at `server`, `channel` sets `FIBER_CHANNEL`, and git resolves
+    /// `github.com` to the fixture in `Github`.
     #[track_caller]
     fn run_update(
         &self,
@@ -76,14 +76,14 @@ impl Setup {
         let mut command = Command::new(binary);
         command
             .args(args)
+            .arg("--base-url")
+            .arg(server.url())
             .current_dir(self.root.path())
             .env_clear()
             .envs(fakes::check_run())
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", self.root.path())
             .env("FIBER_HOME", self.home())
-            .env("FIBER_UPDATE_WEB_BASE", server.url())
-            .env("FIBER_UPDATE_API_BASE", server.url())
             .env("GIT_CONFIG_COUNT", "1")
             .env("GIT_CONFIG_KEY_0", &github.key)
             .env("GIT_CONFIG_VALUE_0", "https://github.com/")
@@ -196,24 +196,27 @@ fn serve() -> fakes::ProviderServer {
     .unwrap()
 }
 
-/// Polls `sessions` until `live` names `session`, as the restarted hub
-/// takes a moment to list what the stopped hub ran.
-fn poll_live(client: &support::Socket, session: &str, ids: &mut u32) {
-    loop {
-        *ids += 1;
-        client.send(&format!(
-            "{{\"id\":\"c_poll{ids}\",\"command\":\"sessions\"}}"
-        ));
-        let ack = support::recv_reply(client, "the restarted hub to list the session");
-        assert_eq!(ack["kind"], "command_accepted", "{ack}");
-        let live = ack["payload"]["result"]["live"].as_array().unwrap();
-        if live
-            .iter()
-            .any(|row| row["session_id"].as_str() == Some(session))
-        {
-            return;
-        }
-    }
+/// Waits for the restarted hub to list `session` as live: the fresh
+/// client subscribes to the feed, and the hub fans out the session's
+/// `session_status` once its rescan follows the surviving session
+/// socket. One event-driven wait replaces polling `sessions`; the
+/// status lands under the feed's state lock just before the live entry,
+/// so one `sessions` call then lists it.
+fn await_live(client: &support::Socket, session: &str) {
+    client.send(r#"{"id":"c_feed","command":"feed"}"#);
+    let ack = support::recv_answer(client, "c_feed", "the feed acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    support::until(client, "the restarted session's status", |line| {
+        line["kind"] == "session_status" && line["session_id"].as_str() == Some(session)
+    });
+    client.send(r#"{"id":"c_sessions","command":"sessions"}"#);
+    let listed = support::recv_answer(client, "c_sessions", "the restarted hub's sessions");
+    let live = listed["payload"]["result"]["live"].as_array().unwrap();
+    assert!(
+        live.iter()
+            .any(|row| row["session_id"].as_str() == Some(session)),
+        "the restarted hub lists the session: {listed}"
+    );
 }
 
 #[test]
@@ -284,8 +287,7 @@ fn a_restarted_hub_keeps_its_sessions() {
     let slot = Arc::new(Mutex::new(None));
     let (fresh, hello) = support::connect_hub(&setup, &slot);
     assert_eq!(hello["kind"], "hub_hello");
-    let mut ids = 0;
-    poll_live(&fresh, &session, &mut ids);
+    await_live(&fresh, &session);
     let direct = support::Socket::connect(setup.deadline, &setup.session_socket(&session));
     support::close_session(&direct);
     drop(direct);

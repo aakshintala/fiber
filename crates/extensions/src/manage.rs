@@ -393,28 +393,7 @@ pub fn plan<'c>(
             match &have.provenance {
                 Provenance::Path(path) => ctx.add_path(&mut plan, path, Some(&name))?,
                 Provenance::Git { .. } => {
-                    // Every installed dependent's minimum, the person
-                    // minimum and the persistent floor constrain the root
-                    // tag before any fetch; no constraints mean the newest
-                    // tag.
-                    let mut minima = BTreeMap::new();
-                    for other in &listing.installed {
-                        if let Some(min) = other.depends.get(&name) {
-                            minima.insert(other.name.clone(), min.clone());
-                        }
-                    }
-                    let version = have.version.clone();
-                    let requested = have.requested;
-                    let floor = have.floor.clone();
-                    if requested {
-                        minima.insert("your install".into(), version);
-                    }
-                    if let Some(floor) = floor {
-                        minima.insert("your update".into(), floor);
-                    }
-                    let (repo, _) = split(&name)?;
-                    let tag = newest_within(&name, &minima, &ctx.origin.tags(repo, ctx.clock)?)?;
-                    ctx.add_git(&mut plan, &name, Some(tag), false, None, true)?;
+                    ctx.stage_git_member(&mut plan, have)?;
                     name
                 }
             }
@@ -499,24 +478,7 @@ pub(crate) fn plan_updates<'c>(
                 ctx.add_path(&mut plan, path, Some(&member.name))?;
             }
             Provenance::Git { .. } => {
-                // Every installed dependent's minimum, the person's
-                // own version and the persistent floor constrain the
-                // member's tag, as an update-all run constrains it.
-                let mut minima = BTreeMap::new();
-                for other in &installed {
-                    if let Some(min) = other.depends.get(&member.name) {
-                        minima.insert(other.name.clone(), min.clone());
-                    }
-                }
-                if member.requested {
-                    minima.insert("your install".into(), member.version.clone());
-                }
-                if let Some(floor) = &member.floor {
-                    minima.insert("your update".into(), floor.clone());
-                }
-                let (repo, _) = split(&member.name)?;
-                let tag = newest_within(&member.name, &minima, &ctx.origin.tags(repo, ctx.clock)?)?;
-                ctx.add_git(&mut plan, &member.name, Some(tag), false, None, true)?;
+                ctx.stage_git_member(&mut plan, member)?;
             }
         }
         plan.roots.insert(member.name.clone());
@@ -635,6 +597,29 @@ impl Ctx<'_, '_> {
             },
         );
         Ok(name)
+    }
+
+    /// Stages the installed git member the update moves to: every installed
+    /// dependent's minimum, the person's own version and the persistent
+    /// floor constrain the tag before any fetch; no constraints mean the
+    /// newest tag. Shared by an update-all run and the batch plan, which
+    /// stages every installed git member this way.
+    fn stage_git_member(&mut self, plan: &mut Plan, member: &Installed) -> Result<(), Error> {
+        let mut minima = BTreeMap::new();
+        for other in self.installed {
+            if let Some(min) = other.depends.get(&member.name) {
+                minima.insert(other.name.clone(), min.clone());
+            }
+        }
+        if member.requested {
+            minima.insert("your install".into(), member.version.clone());
+        }
+        if let Some(floor) = &member.floor {
+            minima.insert("your update".into(), floor.clone());
+        }
+        let (repo, _) = split(&member.name)?;
+        let tag = newest_within(&member.name, &minima, &self.origin.tags(repo, self.clock)?)?;
+        self.add_git(plan, &member.name, Some(tag), false, None, true)
     }
 
     /// Fetches `name` at `tag`, or at its newest tag when none, and stages it.

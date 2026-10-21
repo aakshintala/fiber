@@ -248,6 +248,7 @@ impl Setup {
             &self.target(server),
             &self.origin(),
             clock.as_ref(),
+            true,
         ) {
             Ok(_) => panic!("the staged update was expected to fail"),
             Err(err) => err,
@@ -304,6 +305,7 @@ fn an_update_moves_every_member_and_leaves_a_removed_first_party_absent() {
         &setup.target(&server),
         &setup.origin(),
         clock.as_ref(),
+        true,
     )
     .unwrap();
     let names: Vec<String> = staged.plan().items().map(|i| i.name.clone()).collect();
@@ -368,6 +370,7 @@ fn fresh_names_hold_only_members_not_yet_installed() {
         &setup.target(&server),
         &setup.origin(),
         clock.as_ref(),
+        true,
     )
     .unwrap();
     let mut fresh: Vec<&str> = staged.plan().fresh_names().collect();
@@ -409,6 +412,7 @@ fn an_archive_member_keeps_its_requested_and_floor() {
         &setup.target(&server),
         &setup.origin(),
         clock.as_ref(),
+        true,
     )
     .unwrap();
     staged.commit().unwrap();
@@ -444,6 +448,7 @@ fn docs_are_installed_when_absent() {
         &setup.target(&server),
         &setup.origin(),
         clock.as_ref(),
+        true,
     )
     .unwrap()
     .commit()
@@ -451,6 +456,96 @@ fn docs_are_installed_when_absent() {
     assert_eq!(
         fs::read_to_string(setup.home().join("docs/v")).unwrap(),
         "new"
+    );
+}
+
+/// The update's pre-stage runs no install step: the step first runs at
+/// the commit, in the installed directory.
+#[test]
+fn an_install_step_runs_at_the_commit_not_the_stage() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.release_manifest(
+        "github.com/acme/widget",
+        "1.1.0",
+        &serde_json::json!({
+            "name": "github.com/acme/widget",
+            "version": "1.1.0",
+            "fiber": "0.0.0",
+            "api": 1,
+            "install": ["sh", "-c", "touch step-ran"],
+        })
+        .to_string(),
+    );
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+    )
+    .unwrap();
+    for item in staged.plan().items() {
+        assert!(
+            !item.staged().join("step-ran").exists(),
+            "the stage runs no install step for {}",
+            item.name
+        );
+    }
+    staged.commit().unwrap();
+    assert!(
+        setup
+            .home()
+            .join("extensions/github.com-acme-widget/step-ran")
+            .exists(),
+        "the commit runs the install step"
+    );
+}
+
+/// A staged update that stages no docs swaps none in: the commit moves
+/// the extensions and leaves `docs/` alone.
+#[test]
+fn a_stageless_docs_stage_leaves_docs_alone() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    assert!(!setup.home().join("docs").exists());
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        false,
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    assert!(
+        !setup.home().join("docs").exists(),
+        "a stageless docs stage swaps no docs in"
     );
 }
 
@@ -479,6 +574,7 @@ fn dropping_a_staged_update_removes_the_staged_docs_and_installs_nothing() {
         &setup.target(&server),
         &setup.origin(),
         clock.as_ref(),
+        true,
     )
     .unwrap();
     // The docs sit staged beside `docs/`, not yet swapped in.

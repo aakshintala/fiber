@@ -91,12 +91,7 @@ pub(crate) fn swap_docs_in(home: &Path, fresh: &Path) -> Result<(), Error> {
 /// Puts the release's docs at `docs/` when it is absent: downloads and
 /// checks the docs archive, unpacks it and swaps it in. A present `docs/`
 /// is left alone without any download.
-pub fn install_docs_if_missing(
-    home: &Path,
-    release: &Release,
-    clock: &dyn Clock,
-) -> Result<(), Error> {
-    let _ = clock;
+pub fn install_docs_if_missing(home: &Path, release: &Release) -> Result<(), Error> {
     if fs::symlink_metadata(config::docs_dir(home)).is_ok() {
         return Ok(());
     }

@@ -282,7 +282,7 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
             ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
         }
-        cli::Invocation::Run(Some(cli::Commands::Update { channel }), _) => {
+        cli::Invocation::Run(Some(cli::Commands::Update { channel, base_url }), _) => {
             let flag = channel.map(|flag| match flag {
                 cli::ChannelArg::Stable => ::cli::Channel::Stable,
                 cli::ChannelArg::Nightly => ::cli::Channel::Nightly,
@@ -304,14 +304,12 @@ fn run() -> i32 {
             let stdin = io::stdin();
             let stderr = io::stderr();
             // A test seam, not a user control: the binary update tests
-            // point both roots at their fixture server. Production runs
-            // leave both unset.
+            // point both roots at their fixture server through
+            // `--base-url`. Production runs leave it absent.
             let mut bases = ::cli::ReleaseBases::production();
-            if let Ok(web) = std::env::var("FIBER_UPDATE_WEB_BASE") {
-                bases.web = web;
-            }
-            if let Ok(api) = std::env::var("FIBER_UPDATE_API_BASE") {
-                bases.api = api;
+            if let Some(base) = base_url {
+                bases.web = base.clone();
+                bases.api = base;
             }
             ::cli::update(
                 &home,
@@ -325,6 +323,7 @@ fn run() -> i32 {
                     input: &mut stdin.lock(),
                     err: &mut stderr.lock(),
                 },
+                &::extensions::Origin::github(),
             )
         }
         cli::Invocation::Run(Some(cli::Commands::Feedback(args)), _) => {

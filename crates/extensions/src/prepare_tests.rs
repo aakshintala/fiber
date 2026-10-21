@@ -461,3 +461,39 @@ fn a_prepared_commit_downloads_nothing() {
         body
     );
 }
+
+/// The update's pre-stage downloads the member binary but runs no
+/// install step: the step runs once after approval, at the commit.
+#[test]
+fn prepare_binary_downloads_the_binary_but_runs_no_install_step() {
+    let body = b"#!/bin/sh\necho hi\n";
+    let digest = super::hex(ring::digest::digest(&ring::digest::SHA256, body).as_ref());
+    let server =
+        fakes::ProviderServer::start([fakes::Response::status(200, body.to_vec())]).unwrap();
+    let url = format!("{}/tool", server.url());
+    let manifest: config::Manifest = serde_json::from_value(serde_json::json!({
+        "name": "acme",
+        "version": "v1.0.0",
+        "fiber": "0.1.0",
+        "api": 1,
+        "binaries": { platform(): { "url": url, "sha256": digest } },
+        "install": ["sh", "-c", "touch step-ran"],
+    }))
+    .unwrap();
+    let dir = fakes::TempDir::new("fiber-prepare-binary-only");
+    let clock = FakeClock::new();
+    super::prepare_binary(dir.path(), &manifest).unwrap();
+    assert_eq!(
+        std::fs::read(dir.path().join("bin").join("acme")).unwrap(),
+        body
+    );
+    assert!(
+        !dir.path().join("step-ran").exists(),
+        "the pre-stage runs no install step"
+    );
+    super::install_step(dir.path(), &manifest, clock.as_ref()).unwrap();
+    assert!(
+        dir.path().join("step-ran").exists(),
+        "the commit's install step runs the step"
+    );
+}

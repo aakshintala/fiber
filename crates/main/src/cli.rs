@@ -175,6 +175,10 @@ pub(crate) enum Commands {
         /// `FIBER_CHANNEL`; an empty or unset variable means stable.
         #[arg(long, value_name = "channel")]
         channel: Option<ChannelArg>,
+        /// Where releases are published, for tests: both roots point at
+        /// it. Hidden and free to change, like `release-install`'s.
+        #[arg(long = "base-url", value_name = "url", hide = true)]
+        base_url: Option<String>,
     },
     /// Run one session of one turn; its events go to stdout
     Ask(AskArgs),

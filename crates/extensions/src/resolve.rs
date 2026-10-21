@@ -29,13 +29,19 @@ pub fn nightly_parts(text: &str) -> Result<([u64; 3], String), Error> {
 /// nightly sorts below the stable release on its base, and two nightlies
 /// on one base order by date. Anything else is [`Error::BadVersion`].
 pub(crate) fn at_least(need: &str, have: &str) -> Result<bool, Error> {
-    fn key(text: &str) -> Result<([u64; 3], bool, String), Error> {
-        match nightly_parts(text) {
-            Ok((base, date)) => Ok((base, false, date)),
-            Err(_) => version(text).map(|base| (base, true, String::new())),
-        }
+    Ok(version_key(need)? <= version_key(have)?)
+}
+
+/// A release version as an orderable key: the base triple, whether the
+/// release is a stable one (stable sorts above a nightly on the same
+/// base), and the nightly date, which orders two nightlies on one base.
+/// A nightly-form version keeps its date, anything else parses as a
+/// stable triple.
+pub fn version_key(text: &str) -> Result<([u64; 3], bool, String), Error> {
+    match nightly_parts(text) {
+        Ok((base, date)) => Ok((base, false, date)),
+        Err(_) => version(text).map(|base| (base, true, String::new())),
     }
-    Ok(key(need)? <= key(have)?)
 }
 
 /// A minimum, such as `1.2`, `v1.2` or `v1.2.0`: missing numbers are 0.

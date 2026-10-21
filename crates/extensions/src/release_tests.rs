@@ -492,9 +492,7 @@ fn install_docs_if_missing_leaves_present_docs_alone() {
     std::fs::create_dir_all(home.join("docs")).unwrap();
     std::fs::write(home.join("docs/v"), "old").unwrap();
     let server = update_fixture(b"marker", fixture_nightly_list());
-    let clock = fakes::clock::FakeClock::new();
-    super::install_docs_if_missing(&home, &fixture_release(&server, "abc1234"), clock.as_ref())
-        .unwrap();
+    super::install_docs_if_missing(&home, &fixture_release(&server, "abc1234")).unwrap();
     assert_eq!(std::fs::read_to_string(home.join("docs/v")).unwrap(), "old");
     assert!(server.requests().is_empty());
 }
@@ -505,9 +503,7 @@ fn install_docs_if_missing_installs_absent_docs() {
     let home = held.path().join("home");
     std::fs::create_dir(&home).unwrap();
     let server = update_fixture(b"marker", fixture_nightly_list());
-    let clock = fakes::clock::FakeClock::new();
-    super::install_docs_if_missing(&home, &fixture_release(&server, "abc1234"), clock.as_ref())
-        .unwrap();
+    super::install_docs_if_missing(&home, &fixture_release(&server, "abc1234")).unwrap();
     assert_eq!(std::fs::read_to_string(home.join("docs/v")).unwrap(), "new");
 }
 

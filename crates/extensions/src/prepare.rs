@@ -39,11 +39,11 @@ pub fn platform() -> String {
     format!("{os}-{arch}")
 }
 
-/// Downloads this platform's binary into `dir/bin/` and checks its SHA-256,
-/// then runs the install step in `dir`. Another platform's binary is never
-/// fetched. The step runs in Fiber's process group, so its terminal prompts
-/// still work, and is stopped at [`INSTALL_STEP_DEADLINE`] on `clock`.
-pub(crate) fn prepare(dir: &Path, manifest: &Manifest, clock: &dyn Clock) -> Result<(), Error> {
+/// Downloads this platform's binary into `dir/bin/` and checks its SHA-256.
+/// Another platform's binary is never fetched. The update's pre-stage runs
+/// only this, before the person's approval: the manifest's install step
+/// runs once after approval, at the commit. [`prepare`] runs both.
+pub(crate) fn prepare_binary(dir: &Path, manifest: &Manifest) -> Result<(), Error> {
     if let Some(binary) = manifest.binaries.get(&platform()) {
         let file = binary_name(&manifest.name).ok_or_else(|| Error::Download {
             name: manifest.name.clone(),
@@ -76,6 +76,15 @@ pub(crate) fn prepare(dir: &Path, manifest: &Manifest, clock: &dyn Clock) -> Res
         });
         write.map_err(crate::install::io(&path))?;
     }
+    Ok(())
+}
+
+/// Downloads this platform's binary into `dir/bin/` and checks its SHA-256,
+/// then runs the install step in `dir`. Another platform's binary is never
+/// fetched. The step runs in Fiber's process group, so its terminal prompts
+/// still work, and is stopped at [`INSTALL_STEP_DEADLINE`] on `clock`.
+pub(crate) fn prepare(dir: &Path, manifest: &Manifest, clock: &dyn Clock) -> Result<(), Error> {
+    prepare_binary(dir, manifest)?;
     install_step(dir, manifest, clock)
 }
 

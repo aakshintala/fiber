@@ -107,11 +107,17 @@ struct ScopedInstall {
 }
 
 /// What a command asks on and reports to: whether stdin is a terminal,
-/// stdin, and stderr.
-struct Io<'a> {
-    terminal: bool,
-    input: &'a mut dyn BufRead,
-    err: &'a mut dyn Write,
+/// stdin, and stderr. Shared with `update`, whose terminal question asks
+/// through the same seam: `terminal` from `stdin.is_terminal()` at the
+/// call site, `input` its lock, `err` standard error. Stays `pub` for the
+/// `fiber update` dispatch in `main`, which builds it at the call site.
+pub struct Io<'a> {
+    /// Whether stdin is a terminal: without one there is no question.
+    pub terminal: bool,
+    /// Standard input, to read the answer from.
+    pub input: &'a mut dyn BufRead,
+    /// Standard error, to print the question on.
+    pub err: &'a mut dyn Write,
 }
 
 /// `fiber extension install <name or path>`: fetches and checks the

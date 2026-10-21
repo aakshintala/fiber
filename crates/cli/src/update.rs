@@ -4,14 +4,15 @@
 //! unset variable means stable. `upgrade` runs the same command.
 
 use std::fs;
-use std::io::{BufRead, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::shapes::Failure;
 
 use crate::error::CliError;
+use crate::extension::Io;
 
 /// The release channel `fiber update` installs from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,18 +70,6 @@ impl ReleaseBases {
     }
 }
 
-/// The terminal question `fiber update` asks through, the same seam
-/// `extension` asks through: `terminal` from `stdin.is_terminal()` at the
-/// call site, `input` its lock, `err` standard error.
-pub struct Io<'a> {
-    /// Whether stdin is a terminal: without one there is no question.
-    pub terminal: bool,
-    /// Standard input, to read the answer from.
-    pub input: &'a mut dyn BufRead,
-    /// Standard error, to print the question on.
-    pub err: &'a mut dyn Write,
-}
-
 /// `fiber update`: move the running binary and every installed extension
 /// to the channel's newest release, together.
 #[allow(
@@ -95,6 +84,7 @@ pub fn update(
     bases: &ReleaseBases,
     clock: &dyn Clock,
     io: Io<'_>,
+    origin: &extensions::Origin,
 ) -> i32 {
     let binary = match std::env::current_exe() {
         Ok(binary) => binary,
@@ -105,7 +95,6 @@ pub fn update(
             ));
         }
     };
-    let origin = extensions::Origin::github();
     crate::finish_code(run(
         home,
         fiber_version,
@@ -115,57 +104,50 @@ pub fn update(
         clock,
         io,
         &binary,
-        &origin,
+        origin,
         &crate::hub_service::hub_restart,
     ))
 }
 
-/// A release version ordered against another: the base triple, whether
-/// the release is a stable one (stable sorts above a nightly on the
-/// same base), and the nightly date, which orders two nightlies on one
-/// base.
-type VersionKey = ([u64; 3], bool, String);
-
-/// The running version as an orderable key: a nightly-form version
-/// keeps its date, anything else parses as a stable triple.
-fn running_key(fiber_version: &str) -> Result<VersionKey, extensions::Error> {
-    match extensions::nightly_parts(fiber_version) {
-        Ok((base, date)) => Ok((base, false, date)),
-        Err(_) => extensions::version(fiber_version).map(|base| (base, true, String::new())),
-    }
-}
-
 /// The target tag as an orderable key plus the bare version staging
-/// uses: a stable tag parses as a triple, a nightly tag as its base
-/// and date.
-fn target_key(tag: &str, channel: Channel) -> Result<(VersionKey, String), extensions::Error> {
-    let key = match channel {
-        Channel::Stable => extensions::version(tag).map(|base| (base, true, String::new())),
-        Channel::Nightly => extensions::nightly_parts(tag).map(|(base, date)| (base, false, date)),
-    }?;
+/// uses: [`extensions::version_key`] orders a stable tag as a triple
+/// and a nightly tag by its base and date.
+type TargetKey = (([u64; 3], bool, String), String);
+fn target_key(tag: &str) -> Result<TargetKey, extensions::Error> {
+    let key = extensions::version_key(tag)?;
     let bare = tag.strip_prefix('v').unwrap_or(tag);
     Ok((key, bare.to_owned()))
 }
 
 /// Proves the binary directory takes a write before the commit renames
-/// anything: a probe file created and removed, naming the directory on
-/// failure.
+/// anything: a uniquely named probe file created and removed, naming the
+/// directory on failure.
 fn check_writable(directory: &Path) -> Result<(), CliError> {
-    let probe = directory.join(".fiber-update-writable");
-    if let Err(source) = fs::write(&probe, b"") {
-        return Err(CliError::UpdateBinaryDirectory {
-            dir: directory.to_path_buf(),
-            source,
-        });
-    }
-    fs::remove_file(&probe).unwrap_or(());
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let probe = directory.join(format!(
+        ".fiber-update-writable-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::SeqCst)
+    ));
+    let failed = |source: std::io::Error| CliError::UpdateBinaryDirectory {
+        dir: directory.to_path_buf(),
+        source,
+    };
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .map_err(failed)?;
+    fs::remove_file(&probe).map_err(failed)?;
     Ok(())
 }
 
 /// The run `update` calls: resolves the channel's tag, stages that
 /// release (or the running one when already newest), asks once over the
-/// combined member summaries, commits extensions then docs, renames the
-/// staged binary last, and restarts the hub with the sessions kept.
+/// combined member summaries, commits extensions then the staged docs,
+/// renames the staged binary last unless already newest, and restarts
+/// the hub with the sessions kept. Already newest updates only the
+/// extensions, staging the docs only when `docs/` is missing.
 #[allow(
     clippy::too_many_arguments,
     reason = "the run takes what main parsed plus the seams tests replace"
@@ -186,8 +168,8 @@ fn run(
         Channel::Stable => extensions::latest_stable_tag(&bases.web)?,
         Channel::Nightly => extensions::fetch_nightly_tag(&bases.api)?,
     };
-    let (target, bare) = target_key(&tag, channel)?;
-    let running = running_key(fiber_version)?;
+    let (target, bare) = target_key(&tag)?;
+    let running = extensions::version_key(fiber_version)?;
     let already = target <= running;
     let version = if already {
         fiber_version.strip_prefix('v').unwrap_or(fiber_version)
@@ -195,17 +177,11 @@ fn run(
         &bare
     };
     let base = format!("{}/releases", bases.web.trim_end_matches('/'));
-    if already {
-        extensions::install_docs_if_missing(
-            home,
-            &extensions::Release {
-                base: base.clone(),
-                version: version.to_owned(),
-                commit: String::new(),
-            },
-            clock,
-        )?;
-    }
+    // An already-newest run whose docs are present stages no docs: with
+    // the binary replacement skipped, the docs stage only when missing.
+    // The docs stage with the rest and swap after checks and approval,
+    // so a failure up to that point changes nothing.
+    let stage_docs = !already || fs::symlink_metadata(config::docs_dir(home)).is_err();
     let staged = extensions::stage_update(
         home,
         &extensions::Target {
@@ -215,7 +191,13 @@ fn run(
         },
         origin,
         clock,
+        stage_docs,
     )?;
+    // The plan's damaged directories are named before approval, so a
+    // declined or failed update still names them.
+    for hit in staged.plan().damaged() {
+        writeln!(io.err, "fiber: {}", hit.skipped()).unwrap_or(());
+    }
     let names: Vec<String> = staged
         .plan()
         .items()
@@ -226,24 +208,24 @@ fn run(
         writeln!(io.err, "fiber: nothing was installed.").unwrap_or(());
         return Ok(1);
     }
-    let directory = binary.parent().unwrap_or(Path::new("/"));
-    check_writable(directory)?;
-    let staged_binary = staged.commit()?;
-    if !staged_binary.is_file() {
-        return Err(CliError::Extensions(extensions::Error::BadArchive {
-            archive: format!("fiber-{triple}.tar.gz"),
-            why: "holds no `fiber` binary".into(),
-        }));
+    if !already {
+        let directory = binary.parent().unwrap_or(Path::new("/"));
+        check_writable(directory)?;
     }
+    let staged_binary = staged.commit()?;
     for name in &names {
         writeln!(io.err, "fiber: updated {name}").unwrap_or(());
     }
-    writeln!(io.err, "fiber: updated docs").unwrap_or(());
-    fs::rename(&staged_binary, binary).map_err(|source| CliError::UpdateBinaryRename {
-        staged: staged_binary.clone(),
-        binary: binary.to_path_buf(),
-        source,
-    })?;
+    if stage_docs {
+        writeln!(io.err, "fiber: updated docs").unwrap_or(());
+    }
+    if !already {
+        fs::rename(&staged_binary, binary).map_err(|source| CliError::UpdateBinaryRename {
+            staged: staged_binary.clone(),
+            binary: binary.to_path_buf(),
+            source,
+        })?;
+    }
     match restart(home) {
         Ok(true) => {}
         Ok(false) => crate::hub_service::stop_running_hub(home, clock),
