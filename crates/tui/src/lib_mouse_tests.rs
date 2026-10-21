@@ -347,8 +347,11 @@ fn the_wheel_one_column_past_the_conversation_scrolls_nothing() {
     assert_eq!(lp.app.panel_state().scroll(), 0);
 }
 
+/// Home's session list, taller than its window, starts with nothing
+/// focused: one wheel-down over its rows shows later rows, and the
+/// focus stays where it was.
 #[test]
-fn the_wheel_on_home_scrolls_nothing() {
+fn the_wheel_over_home_list_scrolls_it_three_rows() {
     use std::path::PathBuf;
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.app.set_home(crate::home::Launch {
@@ -360,7 +363,22 @@ fn the_wheel_on_home_scrolls_nothing() {
         ..Default::default()
     });
     assert!(lp.app.on_home());
-    feed(&mut lp, vec![wheel_up(10, 5)]);
+    let names = ["one", "two", "three", "four", "five", "six"];
+    feed(
+        &mut lp,
+        names
+            .iter()
+            .enumerate()
+            .map(|(at, name)| status(&format!("s_{at:017}"), name))
+            .collect(),
+    );
+    assert!(shown(&lp).contains("6 live"), "{}", shown(&lp));
+    assert_eq!(lp.app.focused(), None);
+    feed(&mut lp, vec![wheel_down(10, 5)]);
+    let after = shown(&lp);
+    assert!(after.contains("two"), "{after}");
+    assert!(!after.contains("one"), "{after}");
+    assert_eq!(lp.app.focused(), None);
     assert_eq!(lp.app.top(), None);
 }
 
