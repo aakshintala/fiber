@@ -400,7 +400,7 @@ dispatch of the workflow from main, builds a pre-release once a day, only when
 main changed since the last nightly: its skip-when-unchanged preflight
 computes the next nightly version, skips when that version's tag already
 exists (a scheduled nightly after a manual one the same day), and every later
-nightly job runs only when it publishes, reusing the same gate. A `preflight`
+nightly job runs only when it publishes, reusing the same gate. A nightly build first sets the fiber crate's version, in `crates/main/Cargo.toml` and `Cargo.lock` together, to the nightly version, so the binary it builds reports that version. A `preflight`
 job compares the version at the push's base and head, and every release job runs only when
 it changed: any other push runs no release. A version decrease, a missing
 `CHANGELOG.md` section or an existing `v<version>` fails the run before
