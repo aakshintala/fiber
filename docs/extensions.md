@@ -672,7 +672,10 @@ exactly. An expected `null` matches a missing field or a field set to `null`.
 ```
 
 A case may add `config`, written as the temporary home's global
-configuration. `host.http` and `host.exec` list requests and replies in order.
+configuration. A case may add `settings`, an object keyed by extension name;
+each value is written as that extension's global settings file,
+`config/<extension>.json`, in the temporary home (`docs/configuration.md`,
+"Extension settings"). `host.http` and `host.exec` list requests and replies in order.
 An HTTP reply has `status` and `body`, or an `error` with `code` and `message`.
 An exec reply has `stdout` and `stderr` and either `code` or `signal`, an
 integer signal number the extension sees as a name such as `SIGKILL`. A reply

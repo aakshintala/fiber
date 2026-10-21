@@ -24,6 +24,9 @@ pub(crate) struct SessionCase {
     pub(crate) prompt: String,
     /// Global configuration written into the case's temporary Fiber home.
     pub(crate) config: Option<Value>,
+    /// Extension settings written into the case's temporary Fiber home,
+    /// one global settings file per extension name.
+    pub(crate) settings: Option<Value>,
     /// Scripted extension host calls.
     pub(crate) host: Host,
     /// Advances on the case clock, in order.
@@ -135,6 +138,10 @@ impl Case {
         if config.as_ref().is_some_and(|value| !value.is_object()) {
             return Err("config: expected an object".to_owned());
         }
+        let settings = map.get("settings").cloned();
+        if settings.as_ref().is_some_and(|value| !value.is_object()) {
+            return Err("settings: expected an object".to_owned());
+        }
         let host = parse_host(map.get("host"))?;
         let clock = parse_clock(map.get("clock"), &host.exec)?;
         let until = map
@@ -155,7 +162,7 @@ impl Case {
             if prompt.is_some() {
                 return Err("call and prompt cannot be used in the same case".to_owned());
             }
-            if ["script", "config", "until", "expect"]
+            if ["script", "config", "settings", "until", "expect"]
                 .iter()
                 .any(|field| map.contains_key(*field))
             {
@@ -233,6 +240,7 @@ impl Case {
                 script: script_value.clone(),
                 prompt,
                 config,
+                settings,
                 host,
                 clock,
                 until,
@@ -286,6 +294,7 @@ const CASE_FIELDS: &[&str] = &[
     "script",
     "prompt",
     "config",
+    "settings",
     "host",
     "clock",
     "until",

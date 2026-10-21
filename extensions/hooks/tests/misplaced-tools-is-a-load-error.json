@@ -1,0 +1,73 @@
+{
+  "script": {
+    "steps": [
+      {
+        "text": "Hello."
+      }
+    ]
+  },
+  "prompt": "hi",
+  "settings": {
+    "hooks": {
+      "hooks": {
+        "loud": {
+          "point": "session_start",
+          "tools": [
+            "read"
+          ],
+          "command": "probe",
+          "args": [],
+          "timeout": 10000,
+          "on_failure": "non-blocking"
+        }
+      }
+    }
+  },
+  "expect": [
+    {
+      "kind": "session_started"
+    },
+    {
+      "kind": "fiber_started"
+    },
+    {
+      "kind": "extensions_loaded",
+      "payload": {
+        "extensions": []
+      }
+    },
+    {
+      "kind": "preamble_built"
+    },
+    {
+      "kind": "opening_message"
+    },
+    {
+      "kind": "turn_started"
+    },
+    {
+      "kind": "step_started"
+    },
+    {
+      "kind": "assistant_message_started"
+    },
+    {
+      "kind": "text_completed",
+      "payload": {
+        "text": "Hello."
+      }
+    },
+    {
+      "kind": "usage_recorded"
+    },
+    {
+      "kind": "assistant_message_completed"
+    },
+    {
+      "kind": "turn_completed"
+    },
+    {
+      "kind": "fiber_exited"
+    }
+  ]
+}

@@ -701,3 +701,76 @@ fn a_removed_package_with_watcher_only_declarations_runs_quietly() {
         run.all("notice")
     );
 }
+
+#[test]
+fn an_entry_with_misplaced_tools_is_not_registered_and_names_the_field() {
+    let (setup, _server) = hooked(
+        vec![hello()],
+        &json!({
+            "loud": json!({
+                "point": "session_start",
+                "tools": ["read"],
+                "command": "hooks/capture.sh",
+                "args": ["loud.log"],
+                "timeout": 30000,
+                "on_failure": "non-blocking",
+            }),
+        }),
+    );
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
+
+    let notices = run.all("notice");
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    let failure = notices
+        .iter()
+        .find(|notice| notice["payload"]["code"] == "extension_failed")
+        .expect("the entry's own notice");
+    let message = failure["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("loud"), "{message}");
+    assert!(message.contains("tools"), "{message}");
+    assert!(
+        !setup.workspace().join("loud.log").exists(),
+        "the entry never ran"
+    );
+}
+
+#[test]
+fn an_after_tool_exit_two_with_non_blocking_keeps_the_output() {
+    let (setup, _server) = hooked(
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
+        &json!({
+            "soft": entry("after_tool", "hooks/capture.sh", json!(["soft.log", "refuse"]), 30000, "non-blocking"),
+        }),
+    );
+    fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    assert_eq!(captured(&setup, "soft.log").len(), 1);
+    let failure = run
+        .all("notice")
+        .into_iter()
+        .find(|notice| notice["payload"]["code"] == "hook_failed")
+        .expect("the hook's failure notice");
+    let message = failure["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("soft"), "{message}");
+    assert!(message.contains("exited 2"), "{message}");
+    let completed = run.first("tool_call_completed");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert!(
+        completed["payload"]["content"]
+            .to_string()
+            .contains("note text"),
+        "the original output is kept: {:?}",
+        completed["payload"]["content"]
+    );
+}
