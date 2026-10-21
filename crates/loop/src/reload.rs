@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::{BlockLimits, Error, HandoffSettings, Loop, Retry, Reviewer};
 use contract::diag::Observe;
-use contract::events::{CacheLifetime, LoadedExtension, Notice};
+use contract::events::{CacheLifetime, LoadedExtension, Notice, ReloadFailure};
 use contract::hook::Hooks;
 use contract::inbox::{Ack, Rejection};
 use contract::shapes::Failure;
@@ -81,6 +81,28 @@ pub struct ReloadSettings {
     pub warm_cap: Option<u32>,
 }
 
+/// One reload's MCP server sync, in `reloaded` order: the four-quadrant
+/// grouping, the server lines written before `reloaded`, and the
+/// non-required failures for its `failed` entry. Carried as one result
+/// from preparation through installation to the log, so the six fields
+/// describing one sync never drift apart.
+#[derive(Default)]
+pub struct ServerSync {
+    /// Kept as they were.
+    pub kept_servers: Vec<String>,
+    /// Restarted beside the old servers.
+    pub restarted_servers: Vec<String>,
+    /// Started fresh, with no old server.
+    pub started_servers: Vec<String>,
+    /// Stopped and undeclared.
+    pub stopped_servers: Vec<String>,
+    /// The `mcp_server_failed`/`mcp_server_ready` lines in sync order,
+    /// written before `reloaded`.
+    pub server_records: Vec<contract::tool::ServerRecord>,
+    /// Each non-required server failure, for `reloaded`'s `failed` entry.
+    pub server_failures: Vec<ReloadFailure>,
+}
+
 /// A complete reload ready for an infallible field swap and installation.
 pub struct ReloadPrepared {
     /// The non-route preamble inputs.
@@ -91,21 +113,8 @@ pub struct ReloadPrepared {
     pub extensions: Vec<LoadedExtension>,
     /// Tolerated startup failures and other load notices.
     pub notices: Vec<Notice>,
-    /// Names of the running MCP servers.
-    pub servers: Vec<String>,
-    /// The reload's server sync, in `reloaded` order: kept as they were.
-    pub kept_servers: Vec<String>,
-    /// The reload's server sync: restarted beside the old servers.
-    pub restarted_servers: Vec<String>,
-    /// The reload's server sync: started fresh, with no old server.
-    pub started_servers: Vec<String>,
-    /// The reload's server sync: stopped and undeclared.
-    pub stopped_servers: Vec<String>,
-    /// The `mcp_server_failed`/`mcp_server_ready` lines in sync order,
-    /// written before `reloaded`.
-    pub server_records: Vec<contract::tool::ServerRecord>,
-    /// Each non-required server failure, for `reloaded`'s `failed` entry.
-    pub server_failures: Vec<contract::events::ReloadFailure>,
+    /// The reload's MCP server sync.
+    pub server_sync: ServerSync,
     /// Hooks over the session's one extension state registry.
     pub hooks: Option<Arc<dyn Hooks>>,
     /// The reviewer for the session's current model.
@@ -125,12 +134,7 @@ pub struct ReloadPrepared {
 struct Installed {
     extensions: Vec<LoadedExtension>,
     notices: Vec<Notice>,
-    kept_servers: Vec<String>,
-    restarted_servers: Vec<String>,
-    started_servers: Vec<String>,
-    stopped_servers: Vec<String>,
-    server_records: Vec<contract::tool::ServerRecord>,
-    server_failures: Vec<contract::events::ReloadFailure>,
+    sync: ServerSync,
 }
 
 impl Loop {
@@ -253,12 +257,7 @@ impl Loop {
         Installed {
             extensions: prepared.extensions,
             notices: prepared.notices,
-            kept_servers: prepared.kept_servers,
-            restarted_servers: prepared.restarted_servers,
-            started_servers: prepared.started_servers,
-            stopped_servers: prepared.stopped_servers,
-            server_records: prepared.server_records,
-            server_failures: prepared.server_failures,
+            sync: prepared.server_sync,
         }
     }
 
@@ -273,7 +272,7 @@ impl Loop {
         }
         // The sync's records first, in sync order, then `reloaded`:
         // program order on the loop thread is the edge for that line order.
-        for record in &installed.server_records {
+        for record in &installed.sync.server_records {
             let event = match record {
                 contract::tool::ServerRecord::Failed(failed) => {
                     Event::McpServerFailed(failed.clone())
@@ -282,15 +281,15 @@ impl Loop {
             };
             self.write(&event, None, None)?;
         }
-        let failed =
-            (!installed.server_failures.is_empty()).then(|| installed.server_failures.clone());
+        let failed = (!installed.sync.server_failures.is_empty())
+            .then(|| installed.sync.server_failures.clone());
         self.write(
             &Event::Reloaded(Reloaded {
                 servers: ReloadedServers {
-                    kept: installed.kept_servers,
-                    restarted: installed.restarted_servers,
-                    started: installed.started_servers,
-                    stopped: installed.stopped_servers,
+                    kept: installed.sync.kept_servers,
+                    restarted: installed.sync.restarted_servers,
+                    started: installed.sync.started_servers,
+                    stopped: installed.sync.stopped_servers,
                 },
                 extensions: installed
                     .extensions

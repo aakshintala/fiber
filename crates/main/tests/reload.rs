@@ -920,7 +920,7 @@ fn mcp_entry(dir: &std::path::Path) -> Value {
     json!({
         "command": "/bin/bash",
         "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
-        "startup_timeout_ms": 600000,
+        "startup_timeout_ms": 30_000,
     })
 }
 

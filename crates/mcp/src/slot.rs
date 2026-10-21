@@ -24,7 +24,7 @@ use crate::cache::{self, Cached};
 use crate::elicit::Asker;
 use crate::error::{McpError, login_sentence};
 use crate::server::{CallError, Server};
-use crate::server_json::ListedTool;
+use crate::server_json::{ListedPrompt, ListedTool};
 use crate::start::{ServerSpec, not_started};
 use serde_json::Value;
 
@@ -76,6 +76,12 @@ enum State {
         server: Arc<Server>,
         live: HashSet<String>,
         listed: Cached,
+        /// Whether the handshake advertised the tools capability: the
+        /// re-list asks again for advertised sections, even when the
+        /// last list came back empty.
+        advertises_tools: bool,
+        /// Whether the handshake advertised the prompts capability.
+        advertises_prompts: bool,
         /// Whether this is the restart, so the next death is final.
         restarted: bool,
     },
@@ -148,6 +154,18 @@ pub(crate) enum Relisted {
         /// The death records the commit writes before the ready.
         records: Vec<ServerRecord>,
     },
+}
+
+/// How a re-list page ended before its last page: the Timeout/Gone/other
+/// outcome the shared paging passes through its `fail`.
+enum ListEnd {
+    /// The bound passed or the RPC timed out: the missed-deadline record.
+    Deadline,
+    /// The server died mid-list: this re-list is the first to see it, as
+    /// the entry of `serve` is for a call.
+    Death,
+    /// Any other end: a malformed page, a refused list, or an expiry.
+    Empty,
 }
 
 impl Slot {
@@ -240,6 +258,8 @@ impl Slot {
         version: &str,
         server: Server,
         listed: Cached,
+        advertises_tools: bool,
+        advertises_prompts: bool,
         timing: Option<contract::diag::Timing>,
     ) -> Arc<Self> {
         Self::new(
@@ -252,6 +272,8 @@ impl Slot {
                 server: Arc::new(server),
                 live: names(&listed.tools),
                 listed,
+                advertises_tools,
+                advertises_prompts,
                 restarted: false,
             },
             timing,
@@ -306,6 +328,23 @@ impl Slot {
             | State::Down { listed }
             | State::NotStarted { cached: listed } => listed.tools.clone(),
             State::Dead { .. } => Vec::new(),
+        }
+    }
+
+    /// The last raw lists this slot saw, for the commit's cache write:
+    /// the running list, else empty. The re-list installs nothing until
+    /// the commit reads this back, so a prompts-only change is not lost
+    /// when the tools stay the same.
+    pub(crate) fn listed_snapshot(&self) -> Cached {
+        match &*lock(&self.state) {
+            State::Running { listed, .. }
+            | State::Down { listed }
+            | State::NotStarted { cached: listed } => listed.clone(),
+            State::Dead { .. } => Cached {
+                tools: Vec::new(),
+                prompts: Vec::new(),
+                resources: false,
+            },
         }
     }
 
@@ -413,6 +452,8 @@ impl Slot {
                 // set that changes mid-session misses the whole prompt
                 // cache; the cache is updated for the next session.
                 let live = open.listed;
+                let advertises_tools = open.advertises_tools;
+                let advertises_prompts = open.advertises_prompts;
                 if live != listed {
                     cache::write(&self.cache, &name, &self.spec.key(), &live);
                 }
@@ -425,6 +466,8 @@ impl Slot {
                     server: Arc::clone(&server),
                     live: tools,
                     listed: live,
+                    advertises_tools,
+                    advertises_prompts,
                     restarted: restart,
                 };
                 if ready {
@@ -514,21 +557,21 @@ impl Slot {
                 State::Running {
                     server,
                     restarted,
-                    listed,
+                    advertises_tools,
+                    advertises_prompts,
                     ..
                 } if !server.is_gone() && !server.is_expired() => {
-                    // The handshake lists only advertised capabilities, and
-                    // the slot remembers no advertisement flags: a section
-                    // whose last list came back empty is not listed again.
-                    // A server that advertised an empty section re-lists it
-                    // on its next restart, when the handshake sees the
-                    // advertisement. Listing an unadvertised section would
-                    // hang a server that answers it with malformed JSON.
+                    // The handshake lists only advertised capabilities: the
+                    // slot holds what it advertised, so an advertised-but-
+                    // empty section re-lists on reload, and a server that
+                    // advertised an empty list picks up a tool added since.
+                    // Listing an unadvertised section would hang a server
+                    // that answers it with malformed JSON.
                     (
                         Arc::clone(server),
                         *restarted,
-                        !listed.tools.is_empty(),
-                        !listed.prompts.is_empty(),
+                        *advertises_tools,
+                        *advertises_prompts,
                     )
                 }
                 State::Running {
@@ -556,124 +599,69 @@ impl Slot {
         // The missed-deadline record, shared by the bound check and the
         // timed-out RPC: one deadline, one record, either path.
         let missed = || self.deadline_death();
-        let mut tools = Vec::new();
-        let mut cursor: Option<String> = None;
-        if list_tools {
-            loop {
-                if self.clock.now() >= bound {
-                    return Relisted::Replace {
-                        records: vec![missed()],
-                    };
+        // Maps a page's end to the replace path, through the shared
+        // paging: a timeout misses the deadline, a death carries the
+        // death this re-list is the first to see, and any other end
+        // replaces with no records.
+        let replace = |end: ListEnd| match end {
+            ListEnd::Deadline => Relisted::Replace {
+                records: vec![missed()],
+            },
+            ListEnd::Death => {
+                let death = died(&self.spec.name, !restarted, self.spec.remote());
+                Relisted::Replace {
+                    records: vec![ServerRecord::Failed(death.record)],
                 }
-                let remaining = bound
-                    .checked_duration_since(self.clock.now())
-                    .unwrap_or_default();
-                let params = match &cursor {
-                    Some(cursor) => serde_json::json!({"cursor": cursor}),
-                    None => serde_json::json!({}),
-                };
-                let page =
-                    match server.call("tools/list", &params, remaining, &crate::wait::NoCancel) {
-                        Ok(value) => value,
-                        Err(CallError::Timeout) => {
-                            return Relisted::Replace {
-                                records: vec![missed()],
-                            };
-                        }
-                        Err(CallError::Gone) => {
-                            let death = died(&self.spec.name, !restarted, self.spec.remote());
-                            return Relisted::Replace {
-                                records: vec![ServerRecord::Failed(death.record)],
-                            };
-                        }
-                        Err(_) => {
-                            return Relisted::Replace {
-                                records: Vec::new(),
-                            };
-                        }
-                    };
-                let object = match page.as_object() {
-                    Some(object) => object,
-                    None => {
-                        return Relisted::Replace {
-                            records: Vec::new(),
-                        };
+            }
+            ListEnd::Empty => Relisted::Replace {
+                records: Vec::new(),
+            },
+        };
+        let end = |error: Option<CallError>| match error {
+            Some(CallError::Timeout) => ListEnd::Deadline,
+            Some(CallError::Gone) => ListEnd::Death,
+            _ => ListEnd::Empty,
+        };
+        let tools = if list_tools {
+            match crate::server::list_pages::<ListedTool, ListEnd>(
+                &server,
+                &self.clock,
+                "tools/list",
+                "tools",
+                bound,
+                &crate::wait::NoCancel,
+                |error| Err(end(error)),
+            ) {
+                Ok(tools) => tools,
+                Err(end) => return replace(end),
+            }
+        } else {
+            Vec::new()
+        };
+        let prompts = if list_prompts {
+            // A prompts list that errors leaves no prompts while the
+            // re-list goes on, as at startup; only a missed deadline,
+            // a death or an expiry falls back to the replace path.
+            match crate::server::list_pages::<ListedPrompt, ListEnd>(
+                &server,
+                &self.clock,
+                "prompts/list",
+                "prompts",
+                bound,
+                &crate::wait::NoCancel,
+                |error| match error {
+                    Some(CallError::JsonRpc { .. } | CallError::Http(_) | CallError::Login(_)) => {
+                        Ok(Vec::new())
                     }
-                };
-                let Some(found) = object.get("tools").and_then(Value::as_array) else {
-                    return Relisted::Replace {
-                        records: Vec::new(),
-                    };
-                };
-                tools.extend(crate::server_json::entries(found.clone()));
-                cursor = object
-                    .get("nextCursor")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                if cursor.is_none() {
-                    break;
-                }
+                    error => Err(end(error)),
+                },
+            ) {
+                Ok(prompts) => prompts,
+                Err(end) => return replace(end),
             }
-        }
-        let mut prompts = Vec::new();
-        let mut cursor: Option<String> = None;
-        if list_prompts {
-            loop {
-                if self.clock.now() >= bound {
-                    return Relisted::Replace {
-                        records: vec![missed()],
-                    };
-                }
-                let remaining = bound
-                    .checked_duration_since(self.clock.now())
-                    .unwrap_or_default();
-                let params = match &cursor {
-                    Some(cursor) => serde_json::json!({"cursor": cursor}),
-                    None => serde_json::json!({}),
-                };
-                let page =
-                    match server.call("prompts/list", &params, remaining, &crate::wait::NoCancel) {
-                        Ok(value) => value,
-                        Err(CallError::Timeout) => {
-                            return Relisted::Replace {
-                                records: vec![missed()],
-                            };
-                        }
-                        Err(CallError::Gone) => {
-                            let death = died(&self.spec.name, !restarted, self.spec.remote());
-                            return Relisted::Replace {
-                                records: vec![ServerRecord::Failed(death.record)],
-                            };
-                        }
-                        // A prompts list that errors leaves no prompts while the
-                        // re-list goes on, as at startup; only a missed deadline,
-                        // a death or an expiry falls back to the replace path.
-                        Err(CallError::JsonRpc { .. })
-                        | Err(CallError::Http(_))
-                        | Err(CallError::Login(_)) => break,
-                        Err(_) => {
-                            return Relisted::Replace {
-                                records: Vec::new(),
-                            };
-                        }
-                    };
-                let object = match page.as_object() {
-                    Some(object) => object,
-                    None => break,
-                };
-                let Some(found) = object.get("prompts").and_then(Value::as_array) else {
-                    break;
-                };
-                prompts.extend(crate::server_json::entries(found.clone()));
-                cursor = object
-                    .get("nextCursor")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                if cursor.is_none() {
-                    break;
-                }
-            }
-        }
+        } else {
+            Vec::new()
+        };
         Relisted::Up {
             listed: Cached {
                 tools,

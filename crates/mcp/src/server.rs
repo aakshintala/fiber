@@ -80,22 +80,27 @@ pub(crate) fn shutting_down() -> StartError {
 /// handshake's shared startup `deadline`: the deadline is checked before
 /// every page request, so a server answering every page at once with a
 /// fresh cursor still ends at it (`docs/mcp.md`, "Starting servers"). A
-/// missed deadline fails the start; any other failure runs `fail`, which
-/// fails the start for tools and keeps no prompts for prompts.
-fn list_pages<T: serde::de::DeserializeOwned>(
+/// missed deadline fails the start; any other failure runs `fail` with
+/// the transport error (`None` for a page that is not a result), which
+/// fails the start for tools and keeps no prompts for prompts. The
+/// reload's re-list shares this with its own outcomes.
+pub(crate) fn list_pages<T: serde::de::DeserializeOwned, E>(
     server: &Server,
     clock: &Arc<dyn Clock>,
     method: &str,
     entry: &str,
     deadline: Instant,
     cancel: &dyn Cancel,
-    fail: impl Fn() -> Result<Vec<T>, StartError>,
-) -> Result<Vec<T>, StartError> {
+    fail: impl Fn(Option<CallError>) -> Result<Vec<T>, E>,
+) -> Result<Vec<T>, E> {
     let mut listed = Vec::new();
     let mut cursor: Option<String> = None;
+    // The deadline maps without `fail`: every caller ends a missed bound
+    // the same way, while `fail` maps the Timeout/Gone/other outcome.
+    let past = || clock.now() >= deadline;
     loop {
-        if clock.now() >= deadline {
-            return Err(StartError::Deadline);
+        if past() {
+            return fail(Some(CallError::Timeout));
         }
         let params = match &cursor {
             Some(cursor) => serde_json::json!({"cursor": cursor}),
@@ -103,17 +108,15 @@ fn list_pages<T: serde::de::DeserializeOwned>(
         };
         let page = match server.request(method, &params, deadline, cancel, None) {
             Ok(value) => value,
-            Err(CallError::Timeout) => return Err(StartError::Deadline),
-            Err(CallError::Login(detail)) => return Err(StartError::Login(detail)),
-            Err(_) => return fail(),
+            Err(error) => return fail(Some(error)),
         };
         let object = match page.as_object() {
             Some(object) => object,
-            None => return fail(),
+            None => return fail(None),
         };
         match object.get(entry).and_then(Value::as_array) {
             Some(found) => listed.extend(entries(found.clone())),
-            None => return fail(),
+            None => return fail(None),
         }
         cursor = object
             .get("nextCursor")
@@ -210,6 +213,13 @@ pub(crate) struct OpenServer {
     pub server: Server,
     /// The tools and prompts it listed.
     pub listed: Cached,
+    /// Whether `initialize` advertised the tools capability: a re-list
+    /// asks again only for advertised sections, since listing an
+    /// unadvertised section can hang a server that answers it with
+    /// malformed JSON.
+    pub advertises_tools: bool,
+    /// Whether `initialize` advertised the prompts capability.
+    pub advertises_prompts: bool,
 }
 
 impl Server {
@@ -340,7 +350,7 @@ impl Server {
         // `Cancelled` is just another failed start, not a deadline.
         let not_a_list =
             || StartError::StartFailed("The server's tool list was not a result.".to_owned());
-        let mut handshake = |server: &Server| -> Result<Cached, StartError> {
+        let mut handshake = |server: &Server| -> Result<(Cached, bool, bool), StartError> {
             let initialize = match server.request(
                 "initialize",
                 &serde_json::json!({
@@ -391,7 +401,11 @@ impl Server {
                     "tools",
                     deadline,
                     &stopping,
-                    || Err(not_a_list()),
+                    |error| match error {
+                        Some(CallError::Timeout) => Err(StartError::Deadline),
+                        Some(CallError::Login(detail)) => Err(StartError::Login(detail)),
+                        _ => Err(not_a_list()),
+                    },
                 )?
             } else {
                 Vec::new()
@@ -407,11 +421,11 @@ impl Server {
             // or is not a result leaves the server with no prompts while
             // the start goes on; only a missed deadline fails it
             // (`docs/mcp.md`, "Prompts and resources").
-            let advertises = initialize
+            let advertises_prompts = initialize
                 .get("capabilities")
                 .and_then(|capabilities| capabilities.get("prompts"))
                 .is_some_and(Value::is_object);
-            let prompts: Vec<ListedPrompt> = if advertises {
+            let prompts: Vec<ListedPrompt> = if advertises_prompts {
                 list_pages(
                     server,
                     clock,
@@ -419,7 +433,11 @@ impl Server {
                     "prompts",
                     deadline,
                     &stopping,
-                    || Ok(Vec::new()),
+                    |error| match error {
+                        Some(CallError::Timeout) => Err(StartError::Deadline),
+                        Some(CallError::Login(detail)) => Err(StartError::Login(detail)),
+                        _ => Ok(Vec::new()),
+                    },
                 )?
             } else {
                 Vec::new()
@@ -430,14 +448,23 @@ impl Server {
                 .get("capabilities")
                 .and_then(|capabilities| capabilities.get("resources"))
                 .is_some_and(Value::is_object);
-            Ok(Cached {
-                tools,
-                prompts,
-                resources,
-            })
+            Ok((
+                Cached {
+                    tools,
+                    prompts,
+                    resources,
+                },
+                advertises_tools,
+                advertises_prompts,
+            ))
         };
         match handshake(&server) {
-            Ok(listed) => Ok(OpenServer { server, listed }),
+            Ok((listed, advertises_tools, advertises_prompts)) => Ok(OpenServer {
+                server,
+                listed,
+                advertises_tools,
+                advertises_prompts,
+            }),
             Err(error) => {
                 if stopping.is_cancelled() {
                     // The documented stop, then the failure the door never writes.

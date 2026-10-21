@@ -239,13 +239,10 @@ fn prepared() -> ReloadPrepared {
             replaces: Vec::new(),
         }],
         notices: Vec::new(),
-        servers: vec!["kept".into()],
-        kept_servers: vec!["kept".into()],
-        restarted_servers: Vec::new(),
-        started_servers: Vec::new(),
-        stopped_servers: Vec::new(),
-        server_records: Vec::new(),
-        server_failures: Vec::new(),
+        server_sync: r#loop::ServerSync {
+            kept_servers: vec!["kept".into()],
+            ..r#loop::ServerSync::default()
+        },
         hooks: None,
         reviewer: Err(contract::shapes::Failure {
             code: ErrorCode::NoModel,

@@ -22,6 +22,7 @@ mod server_json;
 mod slot;
 mod sse;
 mod start;
+mod sync;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

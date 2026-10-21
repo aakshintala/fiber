@@ -1217,72 +1217,11 @@ fn loaded(session: super::SessionServers, key: r#loop::OfferKey) -> Vec<(String,
 }
 
 #[test]
-fn reload_server_names_keep_successes_and_omit_failed_starts() {
-    let rig = offer_rig();
-    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    approve_db(&rig, &clock);
-    rig.write_global(&json!({"mcp":{"servers":{"broken":{
-        "command":rig.root.path().join("missing-server"), "required":false
-    }}}}));
-    let config = rig.config(Vec::<String>::new());
-    let specs = super::specs(&config).unwrap();
-    let artifacts = rig.root.path().join("artifacts");
-    let jobs = jobs::Registry::new(
-        artifacts.clone(),
-        clock.clone(),
-        std::sync::Arc::new(fakes::Recorder::default()),
-    );
-    let locks = std::sync::Arc::new(tools::PathLocks::new());
-    let project = config::ProjectKey::new("test").unwrap();
-    let home = rig.home.clone();
-    let workspace = rig.workspace.clone();
-    let fiber = rig.root.path().join("fiber-stub");
-    let delegates = delegates();
-    let (_, _, _, session) = fakes::within(
-        "session with a failed optional server",
-        WIRING_WITHIN,
-        move || {
-            super::session_tools(
-                Ok(fiber),
-                &home,
-                &workspace,
-                &artifacts,
-                &clock,
-                &jobs,
-                &locks,
-                &project,
-                specs.specs,
-                specs.repository,
-                &[],
-                None,
-                &delegates,
-                skills(),
-                Vec::new(),
-                None,
-                Default::default(),
-            )
-            .unwrap()
-        },
-    );
-    assert_eq!(session.server_names, ["db"]);
-    assert_eq!(
-        session
-            .failed
-            .iter()
-            .map(|failure| failure.server.as_str())
-            .collect::<Vec<_>>(),
-        ["broken"]
-    );
-    session.servers.stop();
-}
-
-#[test]
 fn an_extension_replacement_keeps_the_original_mcp_info_for_reload() {
     let rig = offer_rig();
     let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     approve_db(&rig, &clock);
     let (tools, session) = wired(&rig, vec![pair("fiber.test/replacement", "mcp__db__echo")]);
-    assert_eq!(session.server_names, ["db"]);
     let row = session
         .kept_infos
         .iter()
@@ -1508,33 +1447,18 @@ fn reconnect_of(
 }
 
 #[test]
-fn the_shared_declared_check_rejects_unknown_like_reconnect() {
+fn reconnect_rejects_unknown_and_unapproved_servers() {
     let setup = Setup::new();
     let sources = sources_of(&setup.rig);
     let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let declared = super::declared_servers(&sources, &clock).expect("the load reads");
-    assert!(declared.is_empty());
-    let helper = super::approved_row(&declared, "missing").err().unwrap();
     let reconnect = reconnect_of(sources, empty_servers(&setup.rig, &clock));
-    let through_reconnect = reconnect("missing").err().unwrap();
-    assert_eq!(helper.code, through_reconnect.code);
-    assert_eq!(helper.message, through_reconnect.message);
-    assert_eq!(helper.code, contract::ErrorCode::InvalidArguments);
-}
+    let unknown = reconnect("missing").err().expect("unknown rejects");
+    assert_eq!(unknown.code, contract::ErrorCode::InvalidArguments);
 
-#[test]
-fn the_shared_declared_check_rejects_unapproved_like_reconnect() {
     let setup = Setup::new();
     setup.repository(&json!({"mcp":{"servers":{"repo":{"command":"./srv/run.sh"}}}}));
     let sources = sources_of(&setup.rig);
-    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let declared = super::declared_servers(&sources, &clock).expect("the load reads");
-    assert_eq!(declared.len(), 1);
-    assert!(!declared[0].approved);
-    let helper = super::approved_row(&declared, "repo").err().unwrap();
     let reconnect = reconnect_of(sources, empty_servers(&setup.rig, &clock));
-    let through_reconnect = reconnect("repo").err().unwrap();
-    assert_eq!(helper.code, through_reconnect.code);
-    assert_eq!(helper.message, through_reconnect.message);
-    assert_eq!(helper.code, contract::ErrorCode::McpServerUnapproved);
+    let unapproved = reconnect("repo").err().expect("unapproved rejects");
+    assert_eq!(unapproved.code, contract::ErrorCode::McpServerUnapproved);
 }

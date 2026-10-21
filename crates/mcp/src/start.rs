@@ -508,513 +508,10 @@ pub fn restart(
     })
 }
 
-/// One row of the reload sync, classified from the new specs against the
-/// live slots (`docs/mcp.md`, "Reload"). `Keep` re-lists in place with a
-/// staged install; `Replace` and `Start` shadow-start first and install at
-/// commit; `Remove` stops and drops at commit. Main drives the
-/// classify/stage/commit entries and never touches slots directly.
-pub enum SyncRow {
-    /// The same executable with only declare-time differences, or an
-    /// identical spec: re-list in place, rebuilding the declaration
-    /// filters at declare time with no restart.
-    Keep {
-        /// The new spec to re-list and declare through.
-        spec: ServerSpec,
-    },
-    /// A new executable or endpoint, a timeout/`required` difference, a
-    /// dead slot, or a kept re-list that signalled the replace path:
-    /// shadow-start the new spec fresh and swap at commit.
-    Replace {
-        /// The new spec to shadow-start fresh.
-        spec: ServerSpec,
-    },
-    /// Declared now with no live slot: start fresh as the session start
-    /// does. A lazy `NotStarted` slot never answers a reload.
-    Start {
-        /// The new spec to start.
-        spec: ServerSpec,
-    },
-    /// Declared before with no declaration now: stop, drop, undeclare.
-    /// A removed `required` server is a removal, never a start failure.
-    Remove {
-        /// The dropped server's name.
-        name: String,
-    },
-}
-
-/// Classifies the person's new specs against the live slots, required
-/// operations first (program order on the prepare thread is the edge),
-/// each partition in new-spec order, removals last in slot-list order.
-/// A key mismatch or a `startup_timeout`/`call_timeout`/`required`
-/// difference takes the replace path; a running slot with a matching
-/// key and timeouts keeps; a running slot that died or expired replaces;
-/// a slot that never serves (`NotStarted`, `Down`, `Dead`) and a name
-/// with no slot start fresh. Any other difference rebuilds at declare
-/// time with no restart.
-pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncRow> {
-    let slots = servers
-        .slots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
-    let mut by_name = std::collections::HashMap::new();
-    for slot in &slots {
-        by_name.insert(slot.spec().name.clone(), slot.clone());
-    }
-    let mut new_names = std::collections::HashSet::new();
-    for spec in &new_specs {
-        new_names.insert(spec.name.clone());
-    }
-    let mut required = Vec::new();
-    let mut optional = Vec::new();
-    for spec in new_specs {
-        let row = match by_name.get(&spec.name) {
-            None => SyncRow::Start { spec },
-            Some(slot) => {
-                let old = slot.spec();
-                // A lazy slot never answers a reload: force a real start.
-                // A changed key or timeouts replace even a slot that never
-                // served: serving in place would run the old spec.
-                if old.key() != spec.key()
-                    || old.startup_timeout != spec.startup_timeout
-                    || old.call_timeout != spec.call_timeout
-                    || old.required != spec.required
-                {
-                    SyncRow::Replace { spec }
-                } else if slot.is_live() {
-                    SyncRow::Keep { spec }
-                } else if slot.is_running() {
-                    // Running but gone or expired: it died while idle, so
-                    // the re-list would only fall back; replace beside it.
-                    SyncRow::Replace { spec }
-                } else {
-                    // `NotStarted`, `Down` or `Dead`: nothing serves, so
-                    // the single-spec start runs fresh and the commit
-                    // swaps the leftover slot out.
-                    SyncRow::Start { spec }
-                }
-            }
-        };
-        let is_required = match &row {
-            SyncRow::Keep { spec } | SyncRow::Replace { spec } | SyncRow::Start { spec } => {
-                spec.required
-            }
-            SyncRow::Remove { .. } => false,
-        };
-        if is_required {
-            required.push(row);
-        } else {
-            optional.push(row);
-        }
-    }
-    required.extend(optional);
-    for slot in &slots {
-        let name = slot.spec().name.clone();
-        if !new_names.contains(&name) {
-            required.push(SyncRow::Remove { name });
-        }
-    }
-    required
-}
-
-/// What one staged row holds: the outcome with the cache payload, without
-/// touching the live slots or the cache files until every required start
-/// succeeds.
-enum StagedRow {
-    Keep {
-        spec: ServerSpec,
-        listed: Cached,
-        used: Vec<Declaration>,
-    },
-    Replaced {
-        spec: ServerSpec,
-        slot: Arc<Slot>,
-        listed: Cached,
-        used: Vec<Declaration>,
-        ready: contract::tool::ServerRecord,
-        /// The old death the commit writes before the ready.
-        records: Vec<contract::tool::ServerRecord>,
-    },
-    Started {
-        spec: ServerSpec,
-        slot: Arc<Slot>,
-        listed: Cached,
-        used: Vec<Declaration>,
-        ready: contract::tool::ServerRecord,
-    },
-    ReplaceFailed {
-        spec: ServerSpec,
-        failure: McpServerFailed,
-    },
-    StartFailed {
-        spec: ServerSpec,
-        failure: McpServerFailed,
-    },
-    Remove {
-        name: String,
-    },
-}
-
-/// The staged sync: every kept re-list outcome and every shadow-started
-/// replacement, with staged tools and staged cache writes. Opaque to
-/// `main`, which passes it from stage to commit.
-pub struct StagedSync {
-    rows: Vec<StagedRow>,
-}
-
-/// Stages the classified rows without touching the live slots or the cache
-/// files: kept servers re-list in place with staged installs, replacements
-/// and starts shadow-start first. Required rows already come first from
-/// `classify_sync`, so a required failure returns before any non-required
-/// row runs. On a required shadow-start failure the shadows are stopped,
-/// the staged outcomes dropped, and the start's failure propagates: the
-/// old slots keep serving and the old caches stay byte-identical.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one sync's startup inputs, as at session start"
-)]
-pub fn stage_sync(
-    rows: Vec<SyncRow>,
-    servers: &Servers,
-    workspace: &Path,
-    artifacts: &Path,
-    images: &Arc<dyn Images>,
-    cache: &Path,
-    clock: &Arc<dyn Clock>,
-    version: &str,
-) -> Result<StagedSync, contract::shapes::Failure> {
-    let mut staged = Vec::new();
-    let mut shadows: Vec<Arc<Slot>> = Vec::new();
-    // Stops every shadow started so far: the failure path below, so no
-    // replacement child outlives the rejected reload.
-    let stop_shadows = |shadows: &[Arc<Slot>]| {
-        for shadow in shadows {
-            shadow.stop();
-        }
-    };
-    let required_failed = |failure: &McpServerFailed| contract::shapes::Failure {
-        code: contract::ErrorCode::McpRequiredServerFailed,
-        message: failure.error.message.clone(),
-        retry_after_ms: None,
-        provider: None,
-    };
-    for row in rows {
-        match row {
-            SyncRow::Keep { spec } => {
-                let name = spec.name.clone();
-                let Some(slot) = servers.slot(&name) else {
-                    // The slot left between classify and stage: start fresh.
-                    match open_staged(
-                        spec.clone(),
-                        workspace,
-                        artifacts,
-                        images,
-                        cache,
-                        clock,
-                        version,
-                        servers.timing(),
-                    ) {
-                        Shadowed::Up(opened) => {
-                            shadows.push(Arc::clone(&opened.slot));
-                            let ready = ServerRecord::Ready(contract::events::McpServerReady {
-                                server: name,
-                            });
-                            staged.push(StagedRow::Replaced {
-                                spec,
-                                slot: opened.slot,
-                                listed: opened.listed,
-                                used: opened.declared,
-                                ready,
-                                records: Vec::new(),
-                            });
-                        }
-                        Shadowed::Down { failure, required } => {
-                            if required {
-                                stop_shadows(&shadows);
-                                return Err(required_failed(&failure));
-                            }
-                            staged.push(StagedRow::ReplaceFailed { spec, failure });
-                        }
-                    }
-                    continue;
-                };
-                match slot.relist() {
-                    crate::slot::Relisted::Up { listed } => {
-                        let link = Arc::downgrade(&slot);
-                        let used = declare(&spec, &listed.tools, &link, artifacts, images);
-                        staged.push(StagedRow::Keep { spec, listed, used });
-                    }
-                    crate::slot::Relisted::Replace { records } => {
-                        match open_staged(
-                            spec.clone(),
-                            workspace,
-                            artifacts,
-                            images,
-                            cache,
-                            clock,
-                            version,
-                            servers.timing(),
-                        ) {
-                            Shadowed::Up(opened) => {
-                                shadows.push(Arc::clone(&opened.slot));
-                                let ready = ServerRecord::Ready(contract::events::McpServerReady {
-                                    server: spec.name.clone(),
-                                });
-                                staged.push(StagedRow::Replaced {
-                                    spec,
-                                    slot: opened.slot,
-                                    listed: opened.listed,
-                                    used: opened.declared,
-                                    ready,
-                                    records,
-                                });
-                            }
-                            Shadowed::Down { failure, required } => {
-                                if required {
-                                    stop_shadows(&shadows);
-                                    return Err(required_failed(&failure));
-                                }
-                                staged.push(StagedRow::ReplaceFailed { spec, failure });
-                            }
-                        }
-                    }
-                }
-            }
-            SyncRow::Replace { spec } => {
-                // The old death the commit writes before the ready, when
-                // this check is the first to see it: nothing for a live or
-                // expired slot, whose stop writes no record.
-                let records: Vec<contract::tool::ServerRecord> = servers
-                    .slot(&spec.name)
-                    .and_then(|slot| slot.idle_death())
-                    .into_iter()
-                    .collect();
-                match open_staged(
-                    spec.clone(),
-                    workspace,
-                    artifacts,
-                    images,
-                    cache,
-                    clock,
-                    version,
-                    servers.timing(),
-                ) {
-                    Shadowed::Up(opened) => {
-                        shadows.push(Arc::clone(&opened.slot));
-                        let ready = ServerRecord::Ready(contract::events::McpServerReady {
-                            server: spec.name.clone(),
-                        });
-                        staged.push(StagedRow::Replaced {
-                            spec,
-                            slot: opened.slot,
-                            listed: opened.listed,
-                            used: opened.declared,
-                            ready,
-                            records,
-                        });
-                    }
-                    Shadowed::Down { failure, required } => {
-                        if required {
-                            stop_shadows(&shadows);
-                            return Err(required_failed(&failure));
-                        }
-                        staged.push(StagedRow::ReplaceFailed { spec, failure });
-                    }
-                }
-            }
-            SyncRow::Start { spec } => {
-                match open_staged(
-                    spec.clone(),
-                    workspace,
-                    artifacts,
-                    images,
-                    cache,
-                    clock,
-                    version,
-                    servers.timing(),
-                ) {
-                    Shadowed::Up(opened) => {
-                        shadows.push(Arc::clone(&opened.slot));
-                        let ready = ServerRecord::Ready(contract::events::McpServerReady {
-                            server: spec.name.clone(),
-                        });
-                        staged.push(StagedRow::Started {
-                            spec,
-                            slot: opened.slot,
-                            listed: opened.listed,
-                            used: opened.declared,
-                            ready,
-                        });
-                    }
-                    Shadowed::Down { failure, required } => {
-                        if required {
-                            stop_shadows(&shadows);
-                            return Err(required_failed(&failure));
-                        }
-                        staged.push(StagedRow::StartFailed { spec, failure });
-                    }
-                }
-            }
-            SyncRow::Remove { name } => {
-                staged.push(StagedRow::Remove { name });
-            }
-        }
-    }
-    Ok(StagedSync { rows: staged })
-}
-
-/// What the commit installs: the new MCP tool set, the records to write
-/// before `reloaded`, the non-required failures for its `failed` entry,
-/// and the four-quadrant grouping.
-pub struct Synced {
-    /// `(registered_by, tool, info)` for the post-sync MCP set, in
-    /// declaration order.
-    pub tools: Vec<(String, Arc<dyn Tool>, ToolInfo)>,
-    /// The `mcp_server_failed`/`mcp_server_ready` lines in sync order,
-    /// written before `reloaded`.
-    pub records: Vec<ServerRecord>,
-    /// Each non-required server failure, for `reloaded`'s `failed` entry.
-    pub failed: Vec<contract::events::ReloadFailure>,
-    /// Kept as they were.
-    pub kept: Vec<String>,
-    /// Restarted: shadow-started replacements, including non-required
-    /// ones whose shadow failed (the old slot is still stopped at
-    /// commit, with the server showing failed).
-    pub restarted: Vec<String>,
-    /// Started: fresh starts, including non-required ones that failed.
-    pub started: Vec<String>,
-    /// Stopped: removed declarations, never started again.
-    pub stopped: Vec<String>,
-}
-
-/// Commits the staged sync: stops and removes old slots, installs the new
-/// ones, writes caches, and declares. Runs only after every required serve
-/// passed, so no two slots for one name ever serve at once and no stale
-/// spec survives.
-pub fn commit_sync(
-    staged: StagedSync,
-    servers: &Servers,
-    cache: &Path,
-    artifacts: &Path,
-    images: &Arc<dyn Images>,
-) -> Synced {
-    let mut tools = Vec::new();
-    let mut records = Vec::new();
-    let mut failed = Vec::new();
-    let mut kept = Vec::new();
-    let mut restarted = Vec::new();
-    let mut started = Vec::new();
-    let mut stopped = Vec::new();
-    for row in staged.rows {
-        match row {
-            StagedRow::Keep { spec, listed, used } => {
-                let name = spec.name.clone();
-                if let Some(slot) = servers.slot(&name) {
-                    if slot.listed_tools() != listed.tools {
-                        cache::write(cache, &name, &spec.key(), &listed);
-                    }
-                    slot.install_relisted(listed);
-                    tools.extend(used);
-                    kept.push(name);
-                }
-            }
-            StagedRow::Replaced {
-                spec,
-                slot,
-                listed,
-                used,
-                ready,
-                records: carried,
-            } => {
-                let name = spec.name.clone();
-                servers.remove(&name);
-                servers
-                    .slots
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(Arc::clone(&slot));
-                cache::write(cache, &name, &spec.key(), &listed);
-                tools.extend(used);
-                records.extend(carried);
-                records.push(ready);
-                restarted.push(name);
-            }
-            StagedRow::Started {
-                spec,
-                slot,
-                listed,
-                used,
-                ready,
-            } => {
-                let name = spec.name.clone();
-                // A fresh start swaps a leftover slot out: a lazy
-                // `NotStarted` or failed slot with the same name never
-                // serves again once the commit installs the new one.
-                servers.remove(&name);
-                servers
-                    .slots
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(Arc::clone(&slot));
-                cache::write(cache, &name, &spec.key(), &listed);
-                records.push(ready);
-                tools.extend(used);
-                started.push(name);
-            }
-            StagedRow::ReplaceFailed { spec, failure } => {
-                let name = spec.name.clone();
-                servers.remove(&name);
-                records.push(ServerRecord::Failed(failure.clone()));
-                failed.push(contract::events::ReloadFailure {
-                    server: name.clone(),
-                    reason: failure.reason,
-                    error: failure.error,
-                });
-                restarted.push(name);
-            }
-            StagedRow::StartFailed { spec, failure } => {
-                let name = spec.name.clone();
-                records.push(ServerRecord::Failed(failure.clone()));
-                failed.push(contract::events::ReloadFailure {
-                    server: name.clone(),
-                    reason: failure.reason,
-                    error: failure.error,
-                });
-                started.push(name);
-            }
-            StagedRow::Remove { name } => {
-                servers.remove(&name);
-                stopped.push(name);
-            }
-        }
-    }
-    // One `mcp_resources` when any post-sync slot offers resources, as at
-    // session start: the installed hook undeclares it when none does.
-    let offering = servers
-        .slots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .any(|slot| slot.offers_resources());
-    if offering {
-        let definition = crate::resources_definition();
-        let tool: Arc<dyn Tool> = Arc::new(crate::resources::Resources::new(
-            &servers.slots,
-            artifacts,
-            images,
-        ));
-        tools.push(("builtin".to_owned(), tool, resources_info(&definition)));
-    }
-    Synced {
-        tools,
-        records,
-        failed,
-        kept,
-        restarted,
-        started,
-        stopped,
-    }
-}
+/// The reload's server sync: classified, staged and committed in
+/// [](crate::sync), re-exported here so the crate root's paths
+/// stay put.
+pub use crate::sync::{StagedSync, SyncRow, Synced, classify_sync, commit_sync, stage_sync};
 
 /// The default startup deadline: 5 seconds (`docs/configuration.md`).
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_millis(5000);
@@ -1216,7 +713,7 @@ pub(crate) fn start_observed_tracked(
 
 /// One `mcp_resources` row: listed as built in, in full, like
 /// `main`'s `builtin::registered` builds its rows.
-fn resources_info(definition: &ToolDefinition) -> ToolInfo {
+pub(crate) fn resources_info(definition: &ToolDefinition) -> ToolInfo {
     let bytes =
         u64::try_from(serde_json::to_vec(definition).unwrap_or_default().len()).unwrap_or(u64::MAX);
     ToolInfo {
@@ -1254,13 +751,6 @@ pub(crate) fn open(
     )
 }
 
-/// As [`open`], timing the attempt's connection through `timing`: the
-/// guard is consumed at the tool-list boundary, before prompt discovery.
-/// `None` stays untimed, as before.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the observed companion adds only the Timing"
-)]
 /// What a shadow start holds: the running slot, its declarations, the
 /// raw lists for the commit's cache write, and the prompt sources the
 /// session would list. The cache file is unwritten: the commit writes it
@@ -1280,7 +770,7 @@ pub(crate) struct StagedOpen {
 /// with whether its server is required. A plain enum, not a `Result`:
 /// the failure half travels with its flag, as the death record travels
 /// with the call that observed it.
-enum Shadowed {
+pub(crate) enum Shadowed {
     Up(StagedOpen),
     Down {
         failure: McpServerFailed,
@@ -1292,7 +782,7 @@ enum Shadowed {
     clippy::too_many_arguments,
     reason = "the observed companion adds only the Timing"
 )]
-fn open_staged(
+pub(crate) fn open_staged(
     spec: ServerSpec,
     workspace: &Path,
     artifacts: &Path,
@@ -1326,6 +816,8 @@ fn open_staged(
         version,
         open.server,
         live.clone(),
+        open.advertises_tools,
+        open.advertises_prompts,
         timing,
     );
     let link: Weak<Slot> = Arc::downgrade(&slot);
@@ -1339,6 +831,9 @@ fn open_staged(
     })
 }
 
+/// As [`open`], timing the attempt's connection through `timing`: the
+/// guard is consumed at the tool-list boundary, before prompt discovery.
+/// `None` stays untimed, as before.
 #[allow(
     clippy::too_many_arguments,
     reason = "the observed companion adds only the Timing"

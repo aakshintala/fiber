@@ -193,13 +193,7 @@ fn prepared() -> ReloadPrepared {
         tools: Vec::new(),
         extensions: Vec::new(),
         notices: Vec::new(),
-        servers: Vec::new(),
-        kept_servers: Vec::new(),
-        restarted_servers: Vec::new(),
-        started_servers: Vec::new(),
-        stopped_servers: Vec::new(),
-        server_records: Vec::new(),
-        server_failures: Vec::new(),
+        server_sync: ServerSync::default(),
         hooks: None,
         reviewer: Err(Failure {
             code: ErrorCode::NoModel,
@@ -575,11 +569,11 @@ fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
     let mut w = world();
     w.looped = w.looped.reloader(Arc::new(|_| {
         let mut next = prepared();
-        next.kept_servers = vec!["keep".into()];
-        next.restarted_servers = vec!["changed".into()];
-        next.started_servers = vec!["new".into()];
-        next.stopped_servers = vec!["gone".into()];
-        next.server_records = vec![
+        next.server_sync.kept_servers = vec!["keep".into()];
+        next.server_sync.restarted_servers = vec!["changed".into()];
+        next.server_sync.started_servers = vec!["new".into()];
+        next.server_sync.stopped_servers = vec!["gone".into()];
+        next.server_sync.server_records = vec![
             contract::tool::ServerRecord::Ready(McpServerReady {
                 server: "changed".into(),
             }),
@@ -595,7 +589,7 @@ fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
                 },
             }),
         ];
-        next.server_failures = vec![ReloadFailure {
+        next.server_sync.server_failures = vec![ReloadFailure {
             server: "flaky".into(),
             reason: ServerFailure::StartFailed,
             error: Failure {
