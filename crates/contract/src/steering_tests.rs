@@ -6,8 +6,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use super::{Duplicate, EntryGate, Queue};
+use super::{Duplicate, EntryGate, Queue, Staged};
 use crate::CommandId;
+use crate::SessionId;
 use crate::emit::Emit;
 use crate::events::{Event, QueuedMessage};
 use crate::shapes::{ContentPart, Origin, Sender};
@@ -300,5 +301,229 @@ fn a_drop_released_while_the_push_is_held_still_lands_empty_last() {
         messages_of(&events).last().expect("both sections emitted"),
         &[],
         "the final event is the empty queue, not the push's stale row"
+    );
+}
+
+fn session(id: &str, from: &str) -> (CommandId, Sender) {
+    let id = CommandId(id.to_owned());
+    (
+        id.clone(),
+        Sender {
+            origin: Origin::Session {
+                from_session_id: SessionId(from.to_owned()),
+            },
+            command_id: Some(id),
+        },
+    )
+}
+
+fn staged(id: &str, log: &Recorded, queue: &Queue) {
+    let (pushed, sender) = driver(id);
+    queue
+        .push(pushed, text(id), sender, log)
+        .expect("a fresh id queues");
+    assert!(
+        queue.stage(&CommandId(id.to_owned()), text(id), Staged::default(), log),
+        "the pushed entry stages"
+    );
+}
+
+#[test]
+fn admit_hooked_stages_from_the_start() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    let (id, sender) = driver("c_a");
+    queue
+        .admit_hooked(id.clone(), text("a"), sender, Staged::default(), &log)
+        .expect("a fresh id admits");
+    assert!(
+        queue.is_staged(&id, &Origin::Driver),
+        "a hooked admit is staged at once"
+    );
+    assert!(
+        queue.unstaged(&id).is_none(),
+        "a hooked admit never needs a hook pass"
+    );
+    assert_eq!(queue.snapshot().len(), 1, "the hooked entry is queued");
+}
+
+#[test]
+fn admit_hooked_rejects_a_second_admit_of_the_same_id() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    let (id, sender) = driver("c_a");
+    queue
+        .admit_hooked(
+            id.clone(),
+            text("a"),
+            sender.clone(),
+            Staged::default(),
+            &log,
+        )
+        .expect("the first admit of a fresh id lands");
+    assert_eq!(
+        queue.admit_hooked(id, text("again"), sender, Staged::default(), &log),
+        Err(Duplicate),
+        "the id stays with its first entry"
+    );
+    assert_eq!(queue.snapshot().len(), 1, "the duplicate queues nothing");
+}
+
+#[test]
+fn is_staged_ignores_an_id_that_is_not_queued() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    staged("c_a", &log, &queue);
+    assert!(
+        !queue.is_staged(&CommandId("c_absent".into()), &Origin::Driver),
+        "an absent id is not staged while another entry is"
+    );
+}
+
+#[test]
+fn is_staged_matches_the_exact_id_and_origin() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    staged("c_a", &log, &queue);
+    let (id, _) = driver("c_a");
+    assert!(
+        queue.is_staged(&id, &Origin::Driver),
+        "the staged entry matches its own id and origin"
+    );
+}
+
+#[test]
+fn a_hooked_entry_needs_no_hook_pass() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    let (id, sender) = driver("c_a");
+    queue
+        .admit_hooked(id.clone(), text("a"), sender, Staged::default(), &log)
+        .expect("a fresh id admits");
+    assert!(
+        queue.unstaged(&id).is_none(),
+        "a staged entry is never hook-passed twice"
+    );
+}
+
+#[test]
+fn a_pushed_entry_waits_for_its_hook_pass() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    queued(&queue, "c_a", "a", &log);
+    let (content, _) = queue
+        .unstaged(&CommandId("c_a".into()))
+        .expect("a fresh reader entry waits unstaged");
+    assert_eq!(content, text("a"), "the hook pass sees what was sent");
+}
+
+#[test]
+fn unstaged_skips_session_messages_but_keeps_driver_entries() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    queued(&queue, "c_a", "a", &log);
+    assert!(
+        queue.unstaged(&CommandId("c_a".into())).is_some(),
+        "a normal driver entry waits for its hook pass"
+    );
+    let (id, sender) = session("c_m", "s_other");
+    queue.admit_message(id.clone(), text("m"), sender, &log);
+    assert!(
+        queue.unstaged(&id).is_none(),
+        "a session entry never takes the hook pass"
+    );
+}
+
+#[test]
+fn take_removes_and_forgets_the_entry() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    queued(&queue, "c_a", "a", &log);
+    let taken = queue.take(&CommandId("c_a".into()), &log);
+    assert!(
+        taken.is_some_and(|entry| entry.id == CommandId("c_a".into())),
+        "take returns the named entry"
+    );
+    assert!(
+        queue.unstaged(&CommandId("c_a".into())).is_none(),
+        "the taken entry is gone"
+    );
+    assert!(
+        queue.snapshot().is_empty(),
+        "the snapshot drops the taken entry"
+    );
+    assert!(
+        !queue.is_admitted(&CommandId("c_a".into())),
+        "a later drop for the taken id is stale"
+    );
+    assert_eq!(
+        messages(&log).last().expect("the take emits"),
+        &[],
+        "the take emits the queue as the section left it"
+    );
+}
+
+#[test]
+fn take_staged_drains_only_staged_entries() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    queued(&queue, "c_a", "a", &log);
+    queued(&queue, "c_b", "b", &log);
+    assert!(
+        queue.stage(&CommandId("c_a".into()), text("a"), Staged::default(), &log),
+        "the first entry stages"
+    );
+    assert!(
+        queue.stage(&CommandId("c_b".into()), text("b"), Staged::default(), &log),
+        "the second entry stages"
+    );
+    let mut taken = queue
+        .take_staged(&log)
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect::<Vec<_>>();
+    taken.sort_by(|left, right| left.0.cmp(&right.0));
+    assert_eq!(
+        taken,
+        [CommandId("c_a".into()), CommandId("c_b".into())],
+        "both staged entries drain"
+    );
+    assert!(
+        queue.snapshot().is_empty(),
+        "no unstaged entry stayed behind"
+    );
+    assert_eq!(
+        messages(&log).last().expect("the drain emits"),
+        &[],
+        "the emit lists the remainder"
+    );
+}
+
+#[test]
+fn take_for_ending_keeps_only_session_messages() {
+    let log = Recorded::default();
+    let queue = Queue::new();
+    let (message_id, message_sender) = session("c_m", "s_other");
+    queue.admit_message(message_id, text("m"), message_sender, &log);
+    queued(&queue, "c_p", "person", &log);
+    let taken = queue.take_for_ending(&log);
+    assert_eq!(taken.len(), 1, "exactly the session message moves");
+    assert_eq!(
+        taken[0].content,
+        text("m"),
+        "the message comes out oldest-first"
+    );
+    assert!(
+        !queue.is_admitted(&CommandId("c_p".into())),
+        "the dropped person steer forgets its id"
+    );
+    assert!(
+        queue.snapshot().is_empty(),
+        "nothing stays queued after the ending take"
+    );
+    assert_eq!(
+        messages(&log).last().expect("the ending take emits"),
+        &[],
+        "the emit lists the emptied queue"
     );
 }

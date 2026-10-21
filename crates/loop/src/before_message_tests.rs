@@ -1183,3 +1183,49 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
         })
     );
 }
+
+#[test]
+fn a_reader_admitted_idle_steer_hooks_and_joins_the_input() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer(passed());
+    let mut world = started(Vec::new(), Some(hooks.clone()));
+    let mut looped = world.looped.take().unwrap();
+    // The reader admitted at once, still queued and unstaged.
+    looped
+        .steering
+        .push(
+            CommandId("c_1".into()),
+            vec![ContentPart::Text {
+                text: "hello".into(),
+            }],
+            Sender {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_1".into())),
+            },
+            &*world.log,
+        )
+        .unwrap();
+    let mut input = TurnInput::of(Vec::new());
+    let (ack, answered) = capture();
+    looped
+        .take_steer_idle(driver("c_1", "hello"), ack, &mut input)
+        .unwrap();
+    assert_eq!(
+        hooks.seen(),
+        vec!["hello".to_owned()],
+        "the idle take runs the hook pass over the reader entry"
+    );
+    assert_eq!(
+        input.pieces.len(),
+        1,
+        "the hooked steer lands in the turn input, not merely acked"
+    );
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the steer is answered")
+            .is_ok(),
+        "the idle take accepts the steer"
+    );
+    world.looped = Some(looped);
+}
