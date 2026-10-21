@@ -82,12 +82,13 @@ impl Pack {
     /// first on `PATH`, and waits for it under the test's deadline.
     #[track_caller]
     fn pack(&self, args: &[&str]) -> Output {
-        self.tool(&script(), args)
+        self.tool(&script(), args, None)
     }
 
-    /// Runs `tool` with `args` under the test's deadline.
+    /// Runs `tool` with `args` under the test's deadline, with `stdin`
+    /// as its standard input when given.
     #[track_caller]
-    fn tool(&self, tool: &Path, args: &[&str]) -> Output {
+    fn tool(&self, tool: &Path, args: &[&str], stdin: Option<&Path>) -> Output {
         let path = format!("{}:/usr/bin:/bin", fixture_bin().display());
         let mut command = Command::new(tool);
         command
@@ -99,48 +100,21 @@ impl Pack {
             .env("HOME", self.root.path())
             .env("TMPDIR", self.path("tmp"))
             .env("RELEASE_PACK_STATE", self.state())
-            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        run_watched(&mut command, self.deadline, "release-pack to exit")
-    }
-
-    /// Runs `scripts/release-pack` with `args` and `input` on stdin, with
-    /// the stubbed `gh` first on `PATH`, and waits for it under the
-    /// test's deadline.
-    #[track_caller]
-    fn pack_with_stdin(&self, args: &[&str], input: &str) -> Output {
-        let path = format!("{}:/usr/bin:/bin", fixture_bin().display());
-        let mut command = Command::new(script());
-        command
-            .args(args)
-            .current_dir(self.root.path())
-            .env_clear()
-            .envs(fakes::check_run())
-            .env("PATH", path)
-            .env("HOME", self.root.path())
-            .env("TMPDIR", self.path("tmp"))
-            .env("RELEASE_PACK_STATE", self.state())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        use std::io::Write as _;
-        let (mut child, watchdog) = support::spawn_watched(&mut command);
-        let group = child.id();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match self.deadline.recv(&finished) {
-            Ok(output) => output.unwrap(),
-            Err(_) => support::expired(self.deadline, group, &finished, "release-pack to exit"),
-        };
-        watchdog.stand_down(self.deadline.cleanup());
-        Output::from(output)
+        match stdin {
+            Some(file) => {
+                command.stdin(fs::File::open(file).unwrap());
+            }
+            None => {
+                command.stdin(Stdio::null());
+            }
+        }
+        Output::from(support::run_to_exit(
+            self.deadline,
+            "release-pack to exit",
+            command,
+        ))
     }
 
     /// Writes a `fiber` crate manifest at `tree/crates/main/Cargo.toml`
@@ -157,7 +131,7 @@ impl Pack {
     #[track_caller]
     fn members(&self, archive: &str) -> Vec<String> {
         let at = self.path(&format!("out/{archive}"));
-        let run = self.tool(Path::new("tar"), &["-tzf", &at.to_string_lossy()]);
+        let run = self.tool(Path::new("tar"), &["-tzf", &at.to_string_lossy()], None);
         assert_eq!(run.code, Some(0), "{}", run.stderr);
         let mut members: Vec<_> = run.stdout.lines().map(str::to_owned).collect();
         members.sort();
@@ -1098,7 +1072,8 @@ fn tag_line(sha: &str, tag: &str) -> String {
 fn nightly_needed_publishes_when_head_is_ahead() {
     let pack = Pack::start();
     let input = tag_line(SHA_A, "v0.0.1-nightly.20261018");
-    let run = pack.pack_with_stdin(&["nightly-needed", SHA_B], &input);
+    let stdin = pack.wfile("stdin.txt", input.as_bytes(), 0o644);
+    let run = pack.tool(&script(), &["nightly-needed", SHA_B], Some(&stdin));
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.stdout, "publish\n");
 }
@@ -1109,7 +1084,8 @@ fn nightly_needed_publishes_when_head_is_ahead() {
 fn nightly_needed_skips_only_at_the_newest_tag() {
     let pack = Pack::start();
     let input = tag_line(SHA_A, "v0.0.1-nightly.20261018");
-    let run = pack.pack_with_stdin(&["nightly-needed", SHA_A], &input);
+    let stdin = pack.wfile("stdin.txt", input.as_bytes(), 0o644);
+    let run = pack.tool(&script(), &["nightly-needed", SHA_A], Some(&stdin));
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(
         run.stdout,
@@ -1127,7 +1103,8 @@ fn nightly_needed_publishes_when_only_an_older_tag_is_at_head() {
         tag_line(SHA_A, "v0.0.1-nightly.20261018"),
         tag_line(SHA_B, "v0.0.1-nightly.20261019")
     );
-    let run = pack.pack_with_stdin(&["nightly-needed", SHA_A], &input);
+    let stdin = pack.wfile("stdin.txt", input.as_bytes(), 0o644);
+    let run = pack.tool(&script(), &["nightly-needed", SHA_A], Some(&stdin));
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.stdout, "publish\n");
 }
@@ -1142,7 +1119,8 @@ fn nightly_needed_publishes_without_any_nightly_tag() {
         format!("{}{}", tag_line(SHA_A, "v0.0.9"), "not a ls-remote line\n"),
     ] {
         let pack = Pack::start();
-        let run = pack.pack_with_stdin(&["nightly-needed", SHA_A], &input);
+        let stdin = pack.wfile("stdin.txt", input.as_bytes(), 0o644);
+        let run = pack.tool(&script(), &["nightly-needed", SHA_A], Some(&stdin));
         assert_eq!(run.code, Some(0), "{input:?}: {}", run.stderr);
         assert_eq!(run.stdout, "publish\n", "{input:?}");
     }
@@ -1158,13 +1136,14 @@ fn nightly_needed_compares_versions_numerically() {
         tag_line(SHA_A, "v0.0.9-nightly.20261020"),
         tag_line(SHA_B, "v0.0.10-nightly.20261018")
     );
-    let at_newest = pack.pack_with_stdin(&["nightly-needed", SHA_B], &input);
+    let stdin = pack.wfile("stdin.txt", input.as_bytes(), 0o644);
+    let at_newest = pack.tool(&script(), &["nightly-needed", SHA_B], Some(&stdin));
     assert_eq!(at_newest.code, Some(0), "{}", at_newest.stderr);
     assert_eq!(
         at_newest.stdout,
         "skip: main unchanged since v0.0.10-nightly.20261018\n"
     );
-    let at_older = pack.pack_with_stdin(&["nightly-needed", SHA_A], &input);
+    let at_older = pack.tool(&script(), &["nightly-needed", SHA_A], Some(&stdin));
     assert_eq!(at_older.code, Some(0), "{}", at_older.stderr);
     assert_eq!(at_older.stdout, "publish\n");
 }
