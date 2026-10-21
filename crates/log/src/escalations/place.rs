@@ -153,11 +153,11 @@ where
             Ok(None)
         }
         fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Option<String>, A::Error> {
-            while let Some((_, _)) = map.next_entry::<IgnoredAny, IgnoredAny>()? {}
+            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
             Ok(None)
         }
         fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Option<String>, A::Error> {
-            while let Some(_) = seq.next_element::<IgnoredAny>()? {}
+            while seq.next_element::<IgnoredAny>()?.is_some() {}
             Ok(None)
         }
     }
@@ -253,7 +253,7 @@ where
             Ok(Some(Payload::default()))
         }
         fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Option<Payload>, A::Error> {
-            while let Some(_) = seq.next_element::<IgnoredAny>()? {}
+            while seq.next_element::<IgnoredAny>()?.is_some() {}
             Ok(Some(Payload::default()))
         }
     }
@@ -321,7 +321,7 @@ where
             self,
             mut seq: A,
         ) -> Result<Option<Worktree>, A::Error> {
-            while let Some(_) = seq.next_element::<IgnoredAny>()? {}
+            while seq.next_element::<IgnoredAny>()?.is_some() {}
             Ok(None)
         }
     }
