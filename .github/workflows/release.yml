@@ -259,7 +259,7 @@ jobs:
   nightly-build:
     name: Nightly build (${{ matrix.target }})
     needs: nightly-preflight
-    if: github.event_name == 'schedule' && needs.nightly-preflight.outputs.nightly-needed == 'publish'
+    if: needs.nightly-preflight.outputs.nightly-needed == 'publish'
     strategy:
       fail-fast: true
       matrix:
@@ -399,7 +399,7 @@ jobs:
   nightly-assets:
     name: Nightly assets
     needs: nightly-preflight
-    if: github.event_name == 'schedule' && needs.nightly-preflight.outputs.nightly-needed == 'publish'
+    if: needs.nightly-preflight.outputs.nightly-needed == 'publish'
     runs-on: ubuntu-24.04
     # A checkout plus three pack runs finishes inside the preflight bound (docs/ci.md, "Job time limits").
     timeout-minutes: 10
@@ -515,7 +515,7 @@ jobs:
   nightly-gate:
     name: Nightly release gate (${{ matrix.runner }})
     needs: [nightly-preflight, nightly-build, nightly-assets]
-    if: github.event_name == 'schedule' && needs.nightly-preflight.outputs.nightly-needed == 'publish'
+    if: needs.nightly-preflight.outputs.nightly-needed == 'publish'
     strategy:
       fail-fast: true
       matrix:
@@ -648,7 +648,7 @@ jobs:
   nightly-publish:
     name: Nightly publish
     needs: [nightly-preflight, nightly-build, nightly-assets, nightly-gate]
-    if: github.event_name == 'schedule' && needs.nightly-preflight.outputs.nightly-needed == 'publish'
+    if: needs.nightly-preflight.outputs.nightly-needed == 'publish'
     runs-on: ubuntu-24.04
     # A generous bound for the draft, the asset uploads and the publish (docs/ci.md, "Job time limits").
     timeout-minutes: 15

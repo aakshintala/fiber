@@ -253,12 +253,6 @@ tree_version() {
 # fails naming the fault.
 nightly_version() {
   version=$(tree_version "$1")
-  case ${version:-} in
-    *[!0-9.]* | .* | *. | *..* | *.*.*.*) version= ;;
-    *.*.*) ;;
-    *) version= ;;
-  esac
-  # shellcheck disable=SC2125 # the assignment above is the version check
   [ -n "${version:-}" ] || fail "$1 holds no fiber version such as 0.0.0." 2
   case ${2:-} in
     *[!0-9]* | ??????? | ?????????* | '') fail "${2:-empty} is not a date such as 20261020." 2 ;;

@@ -60,9 +60,7 @@ to the measured value times two.
 
 ### Nightly pre-releases
 
-A nightly pre-release is built from main once a day, only when main changed
-since the last nightly, for example `0.0.N-nightly.YYYYMMDD`. The nightly
-job runs on a daily schedule: its preflight computes the next nightly
+The nightly job runs on a daily schedule: its preflight computes the next nightly
 version from the `fiber` crate's `Cargo.toml` and skips every later job when
 main is unchanged since the newest nightly tag. A nightly is published as a
 GitHub pre-release, so `releases/latest` and the stable channel never see
