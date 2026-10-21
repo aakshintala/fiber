@@ -14,6 +14,7 @@ mod support;
 
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -92,6 +93,9 @@ impl Pack {
         let path = format!("{}:/usr/bin:/bin", fixture_bin().display());
         let mut command = Command::new(tool);
         command
+            // Its own process group, so run_to_exit's group-alive check
+            // probes this run alone.
+            .process_group(0)
             .args(args)
             .current_dir(self.root.path())
             .env_clear()

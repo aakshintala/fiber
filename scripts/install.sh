@@ -119,13 +119,15 @@ elif [ "$channel" = nightly ]; then
   # API writes it. Depth is counted in braces outside strings, so nested
   # author and asset objects never reset the candidate: fields count only
   # at the release entry's own depth, and only its closing brace decides.
+  # The strip is escape-aware, so an escaped quote in a body never ends a
+  # string early and its braces never count.
   list=$(curl -fsSL --proto-redir =https "$list_url") ||
     fail "the nightly release list could not be downloaded from $list_url."
   tag=$(printf '%s' "$list" | tr ',' '\n' | awk '
     {
       line = $0
       stripped = line
-      gsub(/"[^"]*"/, "\"\"", stripped)
+      gsub(/"([^"\\]|\\.)*"/, "\"\"", stripped)
       opens = gsub(/\{/, "{", stripped)
       closes = gsub(/\}/, "}", stripped)
       if (depth == 0 && opens > 0) { tag = ""; pre = ""; draft = "" }
