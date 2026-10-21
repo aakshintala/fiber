@@ -392,6 +392,32 @@ fn detach_with_a_terminal_gives_the_child_a_controlling_terminal() {
 }
 
 #[test]
+fn detach_with_a_terminal_foregrounds_the_childs_group() {
+    // `ps` names the terminal's foreground group: the child's own, so a
+    // background read never stops it with `SIGTTIN` (the macOS-only hang
+    // of the install script's `/dev/tty` questions).
+    let (output, status) = run_on_pty("echo $$; ps -o tpgid= -p $$", true, true);
+    assert!(status.success(), "the pid and foreground group printed");
+    let mut lines = output.lines();
+    let pid: i32 = lines
+        .next()
+        .unwrap_or("")
+        .trim()
+        .parse()
+        .expect("the child printed its pid");
+    let foreground: i32 = lines
+        .next()
+        .unwrap_or("")
+        .trim()
+        .parse()
+        .expect("ps named the foreground group");
+    assert_eq!(
+        foreground, pid,
+        "the child leads the terminal's foreground group: {output:?}"
+    );
+}
+
+#[test]
 fn detach_without_a_terminal_leaves_the_child_without_one() {
     let (output, status) = run_on_pty("exec 3</dev/tty && echo ok", false, false);
     assert!(!status.success(), "the open of /dev/tty failed");
