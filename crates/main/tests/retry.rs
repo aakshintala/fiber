@@ -623,6 +623,13 @@ fn a_401_that_echoes_the_key_is_logged_redacted() {
         message["payload"]["error"]["provider"]["message"],
         "Incorrect API key provided: [redacted]"
     );
+    // A key provider reads the key `fiber login` stores, so the sentence
+    // advises it (`docs/errors.md`, "The shape").
+    assert_eq!(
+        message["payload"]["error"]["message"],
+        "fake rejected the credential (HTTP 401). Check the key it is configured with, or log \
+         in again with `fiber login fake`."
+    );
     for line in &run.lines {
         assert!(
             !serde_json::to_string(line).unwrap().contains("sk-test"),
