@@ -96,7 +96,6 @@ asked for the session.
 | `session_not_found` | a resume names no session | 1 |
 | `session_held` | another process holds the session's lock, or runs it at a schema version this build cannot read | 1 |
 | `extension_missing` | the provider of a `provider/model` is not installed | 1 |
-| `protocol_unsupported` | the session model's protocol is one this Fiber does not speak yet | 1 |
 | `extension_required_failed` | an extension marked `required` failed to start | 1 |
 | `extension_not_installed` | `fiber extension remove <name>` found no directory for the name; the message names the extension and the directory it looked for | 1 |
 | `mcp_required_server_failed` | an MCP server marked `required` failed to start | 1 |
@@ -119,9 +118,7 @@ as `provider/model`. `no_model` also covers an installed provider that lacks the
 named model, and a bare id no installed provider has: run `fiber models` and
 name one it lists. `model_unconfigured` means the model needs its host: set
 the setting it names. `extension_missing` means the provider is not installed:
-install it. `protocol_unsupported` means the provider is installed
-but Fiber cannot speak its protocol: pick another model. None of these is
-retried.
+install it. None of these is retried.
 
 ## A failed model call
 
@@ -138,7 +135,7 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | `quota_exceeded` | quota, billing or a subscription limit, as an HTTP status or inside the stream ("Recognising a quota or billing error") | never |
 | `authentication_failed` | HTTP 401, a rejected key, an AWS exception refusing the signature or the credential ("Recognising an AWS exception"), an OAuth refresh the token endpoint rejected, a login with nobody attached, or a login that did not finish within `credential()`'s timeout | never |
 | `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/handoff.md`, "Overflow") |
-| `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter` and a Gemini safety finish reason | never |
+| `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter`, a Gemini safety finish reason, and a `bedrock-converse` `stopReason` of `guardrail_intervened` or `content_filtered` | never |
 | `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, Google Vertex's `NOT_FOUND` for a `Publisher model`, which also covers a model the project may not call, OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"), or Bedrock's "The provided model identifier is invalid."; or AWS names a `ResourceNotFoundException`. A 404 alone is not enough, since a wrong base URL also returns 404 | never |
 | `invalid_request` | any other HTTP 4xx; for a 404 the message names the status and the requested host and path, never the query string | never |
 | `unknown_stop_reason` | a stop or finish reason the protocol does not map; the message carries the raw value | never |
@@ -229,7 +226,8 @@ reached it, so whether it is `quota_exceeded` or `rate_limited` is unsettled
 
 AWS names an exception only in the `X-Amzn-ErrorType` header of a failed
 response, and in the `:exception-type` of an exception message inside the
-stream (`docs/model-routing.md`, "Bedrock Invoke wire facts"). The name,
+stream, on Bedrock's Invoke and Converse APIs alike (`docs/model-routing.md`,
+"Bedrock Invoke wire facts" and "Bedrock Converse wire facts"). The name,
 matched without regard to case, decides the code:
 
 - `AccessDeniedException`, `UnrecognizedClientException`,
@@ -349,7 +347,6 @@ the lines that carry it.
 | `pairing_failed` | hub connection | a pairing code was wrong, already used or more than 10 minutes old (`docs/invocation.md`, "Remote clients") | — |
 | `path_changed` | tool call | a symbolic link changed between the permission decision and the read or write | — |
 | `paused_too_long` | turn | a reply was still paused (`pause_turn`) after 5 continuations in a row; send the request again or simplify it | — |
-| `protocol_unsupported` | exit, driver command (`rewind`) | the model's protocol is one this Fiber does not speak yet; pick another model | — |
 | `provider_unavailable` | model call, turn | a provider server error or overload | — |
 | `quota_exceeded` | model call, turn | a quota, billing or subscription limit | — |
 | `rate_limited` | extension call, model call, turn | the provider rate-limited the request | — |
@@ -409,7 +406,7 @@ Notices, for a failure outside any action or a login a person must finish:
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`, `not_found`,
 `unknown_command`, `closing`, `cancelled`, `io_failed`, `duplicate_command`, `session_not_found`,
-`message_refused`, `hook_failed`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `protocol_unsupported`, `session_has_dependents`, `usage`, `version_conflict`)
+`message_refused`, `hook_failed`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`)
 are `docs/invocation.md`, "Driver commands".
 
 Codes no table lists — a refusal or driver code the hub names

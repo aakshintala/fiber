@@ -1295,6 +1295,7 @@ fn doctor_takes_no_arguments() {
         ),
         "{MENU}"
     );
+    assert!(MENU.contains("feedback [<prompt>] [-]"), "{MENU}");
 }
 
 #[test]
@@ -1969,6 +1970,58 @@ fn ask_takes_one_prompt_then_an_optional_dash() {
     }
 }
 
+/// `feedback` resolves its description through the same `ask_parts`
+/// seam as `ask`: one description, then an optional `-`.
+#[test]
+fn feedback_takes_one_description_then_an_optional_dash() {
+    let parsed = parse_from(["fiber", "feedback", "hi", "-"]);
+    let Invocation::Run(Some(Commands::Feedback(args)), _) = parsed else {
+        panic!("{parsed:?}");
+    };
+    assert_eq!(
+        super::ask_parts(&args.prompt).unwrap(),
+        (Some("hi".to_owned()), true)
+    );
+
+    let Invocation::Run(Some(Commands::Feedback(args)), _) = parse_from(["fiber", "feedback", "-"])
+    else {
+        panic!("dash");
+    };
+    assert_eq!(super::ask_parts(&args.prompt).unwrap(), (None, true));
+
+    let Invocation::Run(Some(Commands::Feedback(args)), _) =
+        parse_from(["fiber", "feedback", "hi"])
+    else {
+        panic!("description");
+    };
+    assert_eq!(
+        super::ask_parts(&args.prompt).unwrap(),
+        (Some("hi".to_owned()), false)
+    );
+
+    for args in [
+        &["fiber", "feedback", "a", "b"][..],
+        &["fiber", "feedback", "-", "a"],
+        &["fiber", "feedback", "-", "-"],
+    ] {
+        let Invocation::Run(Some(Commands::Feedback(feedback)), _) =
+            parse_from(args.iter().copied())
+        else {
+            panic!("{args:?}");
+        };
+        assert_eq!(
+            super::ask_parts(&feedback.prompt).unwrap_err(),
+            super::ASK_SHAPE,
+            "{args:?}"
+        );
+    }
+
+    assert_eq!(
+        super::FEEDBACK_SHAPE,
+        "`fiber feedback` takes one description, then an optional `-`; quote the description. Run `fiber --help` for usage."
+    );
+}
+
 #[test]
 fn a_commands_help_matches_its_flag_and_names_fiber() {
     let names = visible();
@@ -2105,6 +2158,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "login",
             "logout",
             "doctor",
+            "feedback",
             "completion",
             "version",
             "help",
@@ -2176,6 +2230,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "login",
             "logout",
             "doctor",
+            "feedback",
             "completion",
             "version",
             "help",
@@ -3330,7 +3385,7 @@ fn synopses_come_from_command_tables_only() {
 #[test]
 fn doc_synopses_are_the_commands_section() {
     let synopses = doc_synopses();
-    assert_eq!(synopses.len(), 44);
+    assert_eq!(synopses.len(), 45);
     assert_eq!(synopses[0], "fiber [--model <model>] [-c <key>=<value>]...");
     assert_eq!(
         synopses[1],

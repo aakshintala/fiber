@@ -217,8 +217,8 @@ impl Checked<'_> {
             .and_then(|(value, _)| value.as_str().map(str::to_owned))
     }
 
-    /// The model line and its checks: the window, the `:level` suffix,
-    /// the protocol and the scripted script.
+    /// The model line and its checks: the window, the `:level` suffix and
+    /// the scripted script.
     fn model(&mut self) {
         let Some(typed) = self.typed() else {
             let line = clean(&extensions::Error::NoModel.to_string());
@@ -254,7 +254,6 @@ impl Checked<'_> {
                     .push(format!("model: {shown} (provider {provider})"));
                 self.window(&model);
                 self.thinking(&model);
-                self.protocol(&model);
                 self.script(&model);
             }
         }
@@ -294,21 +293,6 @@ impl Checked<'_> {
                 clean(&message)
             );
             self.block(line.clone(), ErrorCode::InvalidArguments, false);
-            self.lines.push(line);
-        }
-    }
-
-    /// The model's protocol must be one Fiber speaks.
-    fn protocol(&mut self, model: &Model<'_>) {
-        if let Some(message) =
-            extensions::protocol_refusal(model.model.protocol, &model.reference())
-        {
-            let line = format!(
-                "{} Run `fiber models` and set another with \
-                 `fiber config set model <provider/model>`.",
-                clean(&message)
-            );
-            self.block(line.clone(), ErrorCode::ProtocolUnsupported, false);
             self.lines.push(line);
         }
     }

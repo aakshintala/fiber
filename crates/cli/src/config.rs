@@ -6,14 +6,30 @@
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use config::{Config, Layer, ProjectKey, Sources};
 use contract::events::Notice;
 use contract::shapes::Failure;
-use extensions::Providers;
+use extensions::{Providers, RepositorySet};
 use serde_json::Value;
 
 use crate::{CliError, project_of, with_dirs, write_line};
+
+/// The installed providers merged with `workspace`'s approved repository
+/// set for `project`, and the notices loading them gave: every personal
+/// install loads, as `Providers::load` reads, with approved repository
+/// entries merged in. The set loads read-only on the process clock, which
+/// only bounds a contended lock wait; an empty set loads what `load` loads.
+fn workspace_providers(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+) -> Result<(Providers, Vec<Notice>), CliError> {
+    let set =
+        RepositorySet::load_pinned(home, project, workspace, Arc::new(support::clock::System));
+    Ok(Providers::load_all_repository(home, &set)?)
+}
 
 /// Prints each notice as one line on standard error: exactly the notice's
 /// message, nothing else (`docs/configuration.md`, "When Fiber reads
@@ -37,13 +53,14 @@ fn run_get(
     let config = Config::load(Sources {
         home: home.to_path_buf(),
         workspace: workspace.to_path_buf(),
-        project,
+        project: project.clone(),
         overrides: Vec::new(),
     })?;
     // Each notice as one line on stderr: this load's, then the installed
-    // providers', each once per command run.
+    // providers' merged with the workspace's approved repository set,
+    // each once per command run.
     let mut notices: Vec<Notice> = config.notices().to_vec();
-    if let Ok((_, loading)) = Providers::load(home) {
+    if let Ok((_, loading)) = workspace_providers(home, workspace, &project) {
         notices.extend(loading);
     }
     print_notices(err, &notices);
@@ -138,7 +155,7 @@ pub fn config_set_text(
 }
 
 /// Checks a `model` value against the installed providers' cached model
-/// lists, by the rules in `docs/model-routing.md`, "Naming a model"
+/// lists merged with the workspace's approved repository set, by the rules in `docs/model-routing.md`, "Naming a model"
 /// (`docs/configuration.md`, "When Fiber writes"). With no cached list
 /// the value is accepted, and no network is touched for any key. The typed
 /// text is written as typed, never normalised. Returns every notice the
@@ -150,7 +167,7 @@ fn check_model(
     typed: &str,
     err: &mut dyn Write,
 ) -> Result<Vec<Notice>, CliError> {
-    let (providers, loading) = Providers::load(home)?;
+    let (providers, loading) = workspace_providers(home, workspace, project)?;
     let mut notices = loading;
     // Without a cached list the reference is accepted unchecked: one
     // naming a provider that is not installed, or one installed with an

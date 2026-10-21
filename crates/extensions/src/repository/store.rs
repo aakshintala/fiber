@@ -1,12 +1,14 @@
 //! Approvals and pinned copies in Fiber home (`docs/state.md`, "What each
 //! part holds"): `projects/<key>/approvals/<hash>` for an extension or a
-//! hook, `approvals/<hash>` for an MCP server, and `pinned/<hash>/` for the
-//! copy. The approval file is the last thing an approval writes, so an
-//! approval never lacks its copy; a kill before it leaves an unfinished
-//! copy, which the next approval removes and builds again. `fiber sessions
-//! prune` collects a finished copy only when at least one project's
-//! `approvals/<hash>` names it and no per-machine `approvals/<hash>` does;
-//! a copy with no approval record anywhere is kept.
+//! hook, `approvals/<hash>` for an MCP server, `projects/<key>/servers/<hash>`
+//! for each project that approved that server copy, and `pinned/<hash>/`
+//! for the copy. An extension or a hook approval writes its approval file
+//! last, so an approval never lacks its copy; a kill before it leaves an
+//! unfinished copy, which the next approval removes and builds again. A
+//! server approval writes the machine approval first and its project
+//! record after it. `fiber sessions prune` collects a finished copy only when at least one project's
+//! `approvals/<hash>` or `servers/<hash>` names it; a copy with no project
+//! record anywhere is kept.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -125,7 +127,8 @@ pub struct KeptCopy {
     pub hash: String,
     /// The copy's directory.
     pub dir: PathBuf,
-    /// The project keys with `projects/<key>/approvals/<hash>`, sorted.
+    /// The project keys with `projects/<key>/approvals/<hash>` or
+    /// `projects/<key>/servers/<hash>`, sorted.
     pub owners: Vec<String>,
     /// Whether the per-machine `approvals/<hash>` names it.
     pub machine_wide: bool,
@@ -308,8 +311,9 @@ impl Store {
     }
 
     /// Every `pinned/<hash>` that has an approval record: `owners` are the
-    /// project keys with `projects/<key>/approvals/<hash>`, sorted, and
-    /// `machine_wide` is the per-machine `approvals/<hash>`. An approval
+    /// project keys with `projects/<key>/approvals/<hash>` or
+    /// `projects/<key>/servers/<hash>`, sorted, and `machine_wide` is the
+    /// per-machine `approvals/<hash>`. An approval
     /// without its copy is not listed. Takes no lock. Any listing error
     /// other than `NotFound` is `Err` naming the path.
     pub fn kept_copies(home: &Path) -> Result<Vec<KeptCopy>, Error> {
@@ -330,19 +334,24 @@ impl Store {
                         continue;
                     }
                     let key = entry.file_name().to_string_lossy().into_owned();
-                    let approvals = path.join("approvals");
-                    match fs::read_dir(&approvals) {
-                        Ok(records) => {
-                            for record in records {
-                                let record = record.map_err(io_error(&approvals))?;
-                                let name = record.file_name().to_string_lossy().into_owned();
-                                if is_hash(&name) {
-                                    owners.entry(name).or_default().push(key.clone());
+                    // A server copy's project records live beside the
+                    // extension and hook approvals: each names one more
+                    // project that approved the copy.
+                    for sub in ["approvals", "servers"] {
+                        let dir = path.join(sub);
+                        match fs::read_dir(&dir) {
+                            Ok(records) => {
+                                for record in records {
+                                    let record = record.map_err(io_error(&dir))?;
+                                    let name = record.file_name().to_string_lossy().into_owned();
+                                    if is_hash(&name) {
+                                        owners.entry(name).or_default().push(key.clone());
+                                    }
                                 }
                             }
+                            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                            Err(e) => return Err(io_error(&dir)(e)),
                         }
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                        Err(e) => return Err(io_error(&approvals)(e)),
                     }
                 }
             }
@@ -397,6 +406,58 @@ impl Store {
     /// on another process's approval.
     pub fn try_ensure_copy(&self, item: &RepoItem, hash: &str) -> Result<CopyHold, Error> {
         self.copy_wait(item, hash, Wait::Tries(&*self.clock))
+    }
+
+    /// Holds a finished copy without building it: only a real directory
+    /// with a regular-file `.ready` marker is held, through a shared lock
+    /// on the marker tried `installed::LOCK_TRIES` times, 10 ms apart on
+    /// the store's clock, then `Error::Busy`. Nothing is created or
+    /// written: no `pinned/` directory, no `.lock` file, no copy and no
+    /// approval. A missing copy, an unfinished copy, a link or an
+    /// unholdable marker is the caller's error to skip.
+    pub fn try_hold_finished(&self, hash: &str) -> Result<CopyHold, Error> {
+        if !is_hash(hash) {
+            return Err(Error::Pin {
+                item: hash.to_owned(),
+                why: "that is not a content hash".to_owned(),
+            });
+        }
+        let copy = self.copy_dir(hash);
+        // Read-only checks before any lock: only a real directory is a
+        // copy, so a link or a file where it goes is refused, never
+        // followed; only a regular-file marker proves it finished.
+        match fs::symlink_metadata(&copy) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => return Err(refused(hash, &copy, "is a symbolic link or a file")),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(refused(hash, &copy, "has no pinned copy"));
+            }
+            Err(e) => return Err(io_error(&copy)(e)),
+        }
+        let marker = config::pinned_dir(&self.home).join(format!("{hash}.ready"));
+        if !marker_state(hash, &marker)? {
+            return Err(refused(hash, &marker, "has no finished copy"));
+        }
+        // Read-write without create: macOS refuses `O_CREAT` on a
+        // read-only open, and create would forge what ownership is being
+        // proved.
+        let ready = File::options()
+            .read(true)
+            .write(true)
+            .open(&marker)
+            .map_err(io_error(&marker))?;
+        // The shared hold, tried without ever blocking: another session
+        // holding the copy shares the marker, while an approval
+        // rebuilding it holds the marker exclusively, so a held marker
+        // waits on the store's clock instead of on another process.
+        for _ in 0..LOCK_TRIES {
+            match ready.try_lock_shared() {
+                Ok(()) => return Ok(CopyHold { _ready: ready }),
+                Err(TryLockError::WouldBlock) => self.clock.sleep(Duration::from_millis(10)),
+                Err(TryLockError::Error(e)) => return Err(io_error(&marker)(e)),
+            }
+        }
+        Err(Error::Busy)
     }
 
     /// One copy through one wait for `pinned/.lock`: blocking for an
@@ -560,8 +621,9 @@ impl Store {
     /// or server (which has no dependencies), or an extension whose
     /// manifest names none, or whose dependency completion marker is
     /// present. A dependency-bearing copy without one is legacy and
-    /// rebuilds.
-    fn finished(&self, item: &RepoItem, copy: &Path) -> Result<bool, Error> {
+    /// rebuilds. Any failure reads as unfinished to a read-only caller,
+    /// which skips the copy.
+    pub(crate) fn finished(&self, item: &RepoItem, copy: &Path) -> Result<bool, Error> {
         if item.kind != OfferedKind::Extension {
             return Ok(true);
         }
@@ -679,13 +741,35 @@ impl Store {
         }
         .to_string()
             + "\n";
-        // The approval file is the last thing an approval writes, and
+        // The machine approval is written before a server's project record
+        // below (for an extension or a hook it is the last write), and
         // the write is atomic: a reader sees the old file or the new
         // one, never half. A directory-sync failure reports `Unsynced`
         // with the file already in place; rewriting the same bytes is
         // idempotent, so a retry is safe.
         let target = dir.join(hash);
         config::write_atomic(&target, body.as_bytes(), 0o666)?;
+        if item.kind == OfferedKind::McpServer {
+            if decision == "approve" {
+                // The machine approval above is already in place, written
+                // first: a project-record failure returns the error and
+                // removes nothing, leaving a copy with no project record,
+                // which prune keeps.
+                let servers = config::project_servers_dir(home, project);
+                fs::create_dir_all(&servers).map_err(io_error(&servers))?;
+                let record = servers.join(hash);
+                config::write_atomic(&record, body.as_bytes(), 0o666)?;
+            } else {
+                // A never writes no project record: it removes one an
+                // earlier approval left, when present.
+                let record = config::project_servers_dir(home, project).join(hash);
+                match fs::remove_file(&record) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(io_error(&record)(e)),
+                }
+            }
+        }
         Ok(())
     }
 

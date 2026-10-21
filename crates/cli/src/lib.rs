@@ -44,6 +44,11 @@ mod doctor;
 )]
 mod extension;
 mod extension_test;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
+mod feedback;
 mod hub_list;
 mod hub_pair;
 mod hub_refresh;
@@ -118,12 +123,13 @@ mod test_support;
 
 pub use approve::approve;
 pub use config::{config_get, config_set, config_set_text};
-pub use doctor::{doctor, with_fix};
+pub use doctor::{capture, doctor, with_fix};
 pub use extension::{
     FirstPartyInstall, LoginNeed, extension_install, extension_list, extension_reinstall,
     extension_remove, extension_update, install_first_party,
 };
 pub use extension_test::extension_test;
+pub use feedback::{FeedbackError, ReportContext, build_report, write};
 pub use hub_list::{hub_add, hub_remove};
 pub use hub_pair::{Address, hub_pair};
 pub use hub_refresh::hub_refresh;

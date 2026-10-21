@@ -28,7 +28,12 @@ pub fn login_provider(
         .ok_or_else(|| Error::ProviderMissing {
             provider: name.to_owned(),
         })?;
-    let dir = config::extensions_dir(home).join(config::dir_name(extension_name));
+    // The registering extension's own directory: the pinned copy for a
+    // repository entry, the personal install otherwise. A provider whose
+    // extension never loaded as a candidate falls back to the home layout.
+    let dir = providers
+        .provider_source_dir(name)
+        .unwrap_or_else(|| config::extensions_dir(home).join(config::dir_name(extension_name)));
     let manifest = config::read_manifest(&dir)?;
     let mut extension = LuaExtension::new(extension_name, dir, home, clock)
         .with_browser(browser)
