@@ -1,7 +1,8 @@
 //! The signal that cancels a running turn (`docs/architecture.md`,
 //! "Cancellation"): shared across threads, armed while a turn runs.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak, atomic::AtomicI32};
 
 use contract::clock::Wake;
 use contract::diag::Op;
@@ -13,9 +14,28 @@ use contract::tool::Cancel as _;
 /// before it writes `turn_started` and disarms it just before it writes
 /// `turn_completed`; a driver cancels through [`TurnCancel::cancel`] from
 /// any thread. Clones share one signal.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TurnCancel {
     inner: Mutex<Inner>,
+    /// The shutdown's exit code, once one started, mirrored from the lock
+    /// for lock-free reads: appends run under this signal's lock
+    /// (`commit`), so a log subscriber calling `shutdown_code` from an
+    /// append would deadlock on it. Set once, under the lock, with the
+    /// field below; never cleared.
+    shutdown_code: AtomicI32,
+}
+
+/// No shutdown started: `TurnCancel::shutdown_code`'s sentinel. Shutdown
+/// codes are non-negative exit codes.
+const NO_SHUTDOWN: i32 = -1;
+
+impl Default for TurnCancel {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::default(),
+            shutdown_code: AtomicI32::new(NO_SHUTDOWN),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -55,7 +75,10 @@ impl TurnCancel {
     pub fn shutdown(&self, code: i32) {
         let wakers = {
             let mut inner = lock(&self.inner);
-            inner.shutdown.get_or_insert(code);
+            if inner.shutdown.is_none() {
+                inner.shutdown = Some(code);
+                self.shutdown_code.store(code, Ordering::SeqCst);
+            }
             if inner.armed {
                 inner.cancelled = true;
             }
@@ -66,9 +89,13 @@ impl TurnCancel {
         }
     }
 
-    /// The exit code of the shutdown, once one started.
+    /// The exit code of the shutdown, once one started. Lock-free: safe
+    /// from a log subscriber, which runs under this signal's lock.
     pub fn shutdown_code(&self) -> Option<i32> {
-        lock(&self.inner).shutdown
+        match self.shutdown_code.load(Ordering::SeqCst) {
+            NO_SHUTDOWN => None,
+            code => Some(code),
+        }
     }
 
     /// The signal's state, read once under its lock. A shutdown wins over

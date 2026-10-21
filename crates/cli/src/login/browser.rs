@@ -203,11 +203,14 @@ pub(crate) fn login_with(
         &LoginCancel::default(),
     )?;
     // The same terminal-only question a key login asks: a pipe stores
-    // the credential and asks nothing. Cancellation arms before the
-    // stored-line readiness output, as in key login.
+    // the credential, prints one remedy line per presence gap, and asks
+    // nothing. Cancellation arms before the stored-line readiness output,
+    // as in key login.
     if io.terminal {
+        super::host::hosts(io, name)?;
         super::post_store_reviewer(io, name, &format!("fiber: stored {path}"))?;
     } else {
+        super::host::hosts(io, name)?;
         std::io::Write::write_fmt(io.err, format_args!("fiber: stored {path}\n"))
             .map_err(CliError::Terminal)?;
     }

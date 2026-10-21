@@ -1,9 +1,7 @@
 ---
 source: crates/tui/src/view_tests.rs
-assertion_line: 1113
 expression: "sized(&mut app, 80, 24)"
 ---
-
 
 
 
@@ -22,6 +20,7 @@ expression: "sized(&mut app, 80, 24)"
     handoff  Starts a handoff. [instructions]                          command
     help     Opens the key map.                                        command
     thinking Sets the thinking level, or opens the model pi… [<level>] command
+    theme    Opens the theme picker, or sets the named theme. [<name>] command
 
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

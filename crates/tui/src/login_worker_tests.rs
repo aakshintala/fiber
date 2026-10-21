@@ -81,6 +81,9 @@ fn start_posts_the_end_with_the_login_s_result() {
         | LoginStep::Reviewer(_) => {
             panic!("the end held something else: {step:?}")
         }
+        LoginStep::Host(_) => {
+            unreachable!("the fixture posts no gaps read")
+        }
     }
     drop(worker);
 }
@@ -172,6 +175,73 @@ fn reviewer_choices(models: &[&str], selected: Option<&str>) -> crate::configure
 }
 
 #[test]
+fn gaps_post_the_host_step_with_no_reviewer_read() {
+    // The host save has not run yet: a reviewer read now would list
+    // the provider's models before the host exists, so the worker
+    // leaves the reviewer to the save's own job.
+    let seam = Fake::new(Vec::new());
+    if let Ok(mut answer) = seam.gaps_answer.lock() {
+        *answer = Ok(vec![crate::configure::HostGap {
+            name: "workspace".to_owned(),
+            env: Some("ACME_HOST".to_owned()),
+        }]);
+    }
+    if let Ok(mut targets) = seam.targets.lock() {
+        *targets = Ok(vec![LoginTarget {
+            name: "codex".to_owned(),
+            kind: crate::configure::LoginKind::Browser,
+        }]);
+    }
+    let seam = Arc::new(seam);
+    let (tx, rx) = mpsc::channel();
+    let _worker = start(
+        LoginStart {
+            ticket: LoginTicket(9),
+            name: "codex".to_owned(),
+            seam: Arc::clone(&seam) as Arc<dyn Configure>,
+            job: super::LoginJob::Browser,
+        },
+        fakes::clock::FakeClock::new(),
+        tx,
+    );
+    seam.answer(
+        0,
+        Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        }),
+    );
+    let wait = Deadline::after(WAIT);
+    let (ticket, step) = next(&rx, &wait);
+    assert_eq!(ticket, LoginTicket(9));
+    assert!(matches!(step, LoginStep::Done(Ok(_))), "{step:?}");
+    let (ticket, step) = next(&rx, &wait);
+    assert_eq!(ticket, LoginTicket(9));
+    match step {
+        LoginStep::Host(Ok(gaps)) => {
+            assert_eq!(
+                gaps,
+                [crate::configure::HostGap {
+                    name: "workspace".to_owned(),
+                    env: Some("ACME_HOST".to_owned()),
+                }]
+            );
+        }
+        LoginStep::Done(_)
+        | LoginStep::Open(_)
+        | LoginStep::Code { .. }
+        | LoginStep::Reviewer(_)
+        | LoginStep::Host(Err(_)) => {
+            panic!("the gaps held something else: {step:?}")
+        }
+    }
+    // No reviewer read follows: its silence proves the save's own job
+    // runs it.
+    assert!(rx.try_recv().is_err(), "a reviewer read followed the gaps");
+    assert!(seam.reviewer_reads().is_empty());
+}
+
+#[test]
 fn a_browser_failure_posts_no_reviewer_read() {
     let seam = seam();
     let (tx, rx) = mpsc::channel();
@@ -234,6 +304,14 @@ fn a_browser_success_posts_done_then_the_reviewer_result() {
     let (ticket, step) = next(&rx, &wait);
     assert_eq!(ticket, LoginTicket(6));
     assert!(matches!(step, LoginStep::Done(Ok(_))), "{step:?}");
+    // The gaps read needs no gate: it lands before the held reviewer
+    // read, empty for the codex fixture.
+    let (ticket, step) = next(&rx, &wait);
+    assert_eq!(ticket, LoginTicket(6));
+    assert!(
+        matches!(&step, LoginStep::Host(Ok(gaps)) if gaps.is_empty()),
+        "{step:?}"
+    );
     assert!(rx.try_recv().is_err(), "the held read posted early");
     gate.send(Ok(reviewer_choices(&["m1", "m2"], Some("m2"))))
         .unwrap();
@@ -247,11 +325,80 @@ fn a_browser_success_posts_done_then_the_reviewer_result() {
         LoginStep::Open(_)
         | LoginStep::Code { .. }
         | LoginStep::Done(_)
-        | LoginStep::Reviewer(Err(_)) => {
+        | LoginStep::Reviewer(Err(_))
+        | LoginStep::Host(_) => {
             panic!("the reviewer result held something else: {step:?}")
         }
     }
     assert_eq!(seam.reviewer_reads(), ["codex"]);
+}
+
+#[test]
+fn a_failed_gaps_read_forwards_its_error_as_the_reviewer_result() {
+    let seam = seam();
+    if let Ok(mut answer) = seam.gaps_answer.lock() {
+        *answer = Err(ConfigureError {
+            code: ErrorCode::ConfigInvalid,
+            message: "gaps unreadable".to_owned(),
+        });
+    }
+    if let Ok(mut answer) = seam.reviewer_answer.lock() {
+        *answer = Ok(reviewer_choices(&["m1"], Some("m1")));
+    }
+    let (tx, rx) = mpsc::channel();
+    let _worker = start(
+        LoginStart {
+            ticket: LoginTicket(14),
+            name: "codex".to_owned(),
+            seam: Arc::clone(&seam) as Arc<dyn Configure>,
+            job: super::LoginJob::Browser,
+        },
+        fakes::clock::FakeClock::new(),
+        tx,
+    );
+    seam.answer(
+        0,
+        Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        }),
+    );
+    let wait = Deadline::after(WAIT);
+    let (ticket, step) = next(&rx, &wait);
+    assert_eq!(ticket, LoginTicket(14));
+    assert!(matches!(step, LoginStep::Done(Ok(_))), "{step:?}");
+    // The gaps failure posts its error, then forwards it as the reviewer
+    // result: the stored end names the failure with the credential kept,
+    // and no reviewer read runs that could complete the login over it.
+    let (ticket, step) = next(&rx, &wait);
+    assert_eq!(ticket, LoginTicket(14));
+    match step {
+        LoginStep::Host(Err(error)) => assert_eq!(error.code, ErrorCode::ConfigInvalid),
+        LoginStep::Open(_)
+        | LoginStep::Code { .. }
+        | LoginStep::Done(_)
+        | LoginStep::Reviewer(_)
+        | LoginStep::Host(Ok(_)) => {
+            panic!("the gaps failure held something else: {step:?}")
+        }
+    }
+    let (ticket, step) = next(&rx, &wait);
+    assert_eq!(ticket, LoginTicket(14));
+    match step {
+        LoginStep::Reviewer(Err(error)) => {
+            assert_eq!(error.code, ErrorCode::ConfigInvalid);
+            assert_eq!(error.message, "gaps unreadable");
+        }
+        LoginStep::Open(_)
+        | LoginStep::Code { .. }
+        | LoginStep::Done(_)
+        | LoginStep::Reviewer(Ok(_))
+        | LoginStep::Host(_) => {
+            panic!("the reviewer result held something else: {step:?}")
+        }
+    }
+    assert!(seam.reviewer_reads().is_empty());
+    assert_eq!(seam.gap_reads(), ["codex"]);
 }
 
 #[test]
@@ -274,12 +421,21 @@ fn a_reviewer_only_job_reads_no_credential_and_stores_nothing() {
     );
     let (ticket, step) = next(&rx, &Deadline::after(WAIT));
     assert_eq!(ticket, LoginTicket(9));
+    // The reviewer-only job reads the gaps first: none for the acme
+    // fixture, so the reviewer result follows it.
+    assert!(
+        matches!(&step, LoginStep::Host(Ok(gaps)) if gaps.is_empty()),
+        "{step:?}"
+    );
+    let (ticket, step) = next(&rx, &Deadline::after(WAIT));
+    assert_eq!(ticket, LoginTicket(9));
     match step {
         LoginStep::Reviewer(Ok(choices)) => assert_eq!(choices.models, ["m1"]),
         LoginStep::Open(_)
         | LoginStep::Code { .. }
         | LoginStep::Done(_)
-        | LoginStep::Reviewer(Err(_)) => {
+        | LoginStep::Reviewer(Err(_))
+        | LoginStep::Host(_) => {
             panic!("the reviewer result held something else: {step:?}")
         }
     }
@@ -314,12 +470,19 @@ fn a_reviewer_read_failure_posts_its_error() {
     );
     let (ticket, step) = next(&rx, &Deadline::after(WAIT));
     assert_eq!(ticket, LoginTicket(11));
+    assert!(
+        matches!(&step, LoginStep::Host(Ok(gaps)) if gaps.is_empty()),
+        "{step:?}"
+    );
+    let (ticket, step) = next(&rx, &Deadline::after(WAIT));
+    assert_eq!(ticket, LoginTicket(11));
     match step {
         LoginStep::Reviewer(Err(error)) => assert_eq!(error.code, ErrorCode::ConfigInvalid),
         LoginStep::Open(_)
         | LoginStep::Code { .. }
         | LoginStep::Done(_)
-        | LoginStep::Reviewer(Ok(_)) => {
+        | LoginStep::Reviewer(Ok(_))
+        | LoginStep::Host(_) => {
             panic!("the reviewer result held something else: {step:?}")
         }
     }
@@ -344,6 +507,12 @@ fn an_empty_reviewer_read_posts_no_models() {
     );
     let (ticket, step) = next(&rx, &Deadline::after(WAIT));
     assert_eq!(ticket, LoginTicket(13));
+    assert!(
+        matches!(&step, LoginStep::Host(Ok(gaps)) if gaps.is_empty()),
+        "{step:?}"
+    );
+    let (ticket, step) = next(&rx, &Deadline::after(WAIT));
+    assert_eq!(ticket, LoginTicket(13));
     match step {
         LoginStep::Reviewer(Ok(choices)) => {
             assert!(choices.models.is_empty());
@@ -352,7 +521,8 @@ fn an_empty_reviewer_read_posts_no_models() {
         LoginStep::Open(_)
         | LoginStep::Code { .. }
         | LoginStep::Done(_)
-        | LoginStep::Reviewer(Err(_)) => {
+        | LoginStep::Reviewer(Err(_))
+        | LoginStep::Host(_) => {
             panic!("the reviewer result held something else: {step:?}")
         }
     }

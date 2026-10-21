@@ -51,14 +51,15 @@ pub use read::{
 };
 pub use resolve::{most_recent, resolve};
 pub use scan::{
-    FirstLineError, Hold, SessionLock, SessionStarted, Started, last_line_where, last_ts,
-    remaining, session_bytes, started_first, started_sessions, started_sessions_in, try_hold,
+    FirstLineError, Hold, MalformedWorktree, SessionLock, SessionStarted, Started, last_line_where,
+    last_ts, remaining, session_bytes, started_first, started_sessions, started_sessions_in,
+    try_hold,
 };
 pub use search::{Identity, SessionScan};
 pub use state_fold::{Fold, Ruled, StateSeed, fold, fold_boundary, fold_from, seed};
 pub use usage::usage;
 pub use weak_emit::WeakEmit;
-pub use write::{Log, cut_joined, cut_notice};
+pub use write::{Log, Subscription, cut_joined, cut_notice};
 
 /// The log's name in a session directory.
 const EVENTS: &str = "events.jsonl";

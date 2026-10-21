@@ -25,8 +25,9 @@ pub(super) enum Poll {
 }
 
 /// Removes the base library's I/O, which belongs to the host, and runs the
-/// prelude. Returns the tables `fiber.command`, `fiber.provider` and
-/// `fiber.hook` fill, the one `fiber.hook` fills with its refusals, and the
+/// prelude. Returns the tables `fiber.command`, `fiber.provider`,
+/// `fiber.hook` and `fiber.watch` fill, the one `fiber.hook` and
+/// `fiber.watch` fill with their refusals, and the
 /// failure constructor and pending-error state shared with the host.
 pub(crate) fn install(
     lua: &Lua,
@@ -35,6 +36,7 @@ pub(crate) fn install(
     memory_cap: usize,
     loading: Rc<RefCell<Option<String>>>,
 ) -> mlua::Result<(
+    Table,
     Table,
     Table,
     Table,
@@ -61,14 +63,22 @@ pub(crate) fn install(
     })?;
     let failures = crate::host::failure::install(lua)?;
     let loading = lua.create_function(move |_, ()| Ok(loading.borrow().clone()))?;
-    let (commands, providers, hooks, problems, violations): (Table, Table, Table, Table, Table) =
-        lua.load(PRELUDE).set_name("=prelude").call((
-            create,
-            load_module,
-            failures.rethrow_panic.clone(),
-            loading,
-        ))?;
-    Ok((commands, providers, hooks, problems, violations, failures))
+    let (commands, providers, hooks, watchers, problems, violations): (
+        Table,
+        Table,
+        Table,
+        Table,
+        Table,
+        Table,
+    ) = lua.load(PRELUDE).set_name("=prelude").call((
+        create,
+        load_module,
+        failures.rethrow_panic.clone(),
+        loading,
+    ))?;
+    Ok((
+        commands, providers, hooks, watchers, problems, violations, failures,
+    ))
 }
 
 #[cfg(test)]
@@ -77,10 +87,17 @@ pub(crate) fn install_prelude(
     deadline: &Deadline,
     dir: PathBuf,
     memory_cap: usize,
-) -> mlua::Result<(Table, Table, Table, Table, crate::host::failure::FailureLib)> {
-    let (commands, providers, hooks, problems, _violations, failures) =
+) -> mlua::Result<(
+    Table,
+    Table,
+    Table,
+    Table,
+    Table,
+    crate::host::failure::FailureLib,
+)> {
+    let (commands, providers, hooks, watchers, problems, _violations, failures) =
         install(lua, deadline, dir, memory_cap, Rc::default())?;
-    Ok((commands, providers, hooks, problems, failures))
+    Ok((commands, providers, hooks, watchers, problems, failures))
 }
 
 /// Observers waiting for the next load of one file, keyed by canonical

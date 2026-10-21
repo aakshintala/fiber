@@ -2477,6 +2477,28 @@ fn a_label_caret_fills_the_left_room_to_the_cell() {
     );
 }
 
+/// The host edit row's spans for `text` with the caret at `caret`, at
+/// width `inner`: the caret rides its cell, with the end block after
+/// the text.
+fn host_spans(text: &str, caret: usize, inner: usize) -> Vec<String> {
+    let mut typed = crate::input::Draft::default();
+    typed.set(text);
+    for _ in caret..text.chars().count() {
+        typed.edit(Edit::Left);
+    }
+    span_texts(&super::host_edit_row(&typed, inner))
+}
+
+#[test]
+fn a_host_caret_rides_its_cell_with_the_end_block_after_it() {
+    // The caret at the end draws the block after the text; one cell in
+    // draws it on its cell with no trailing block. With `>=` flipped
+    // to `<` the end loses its block while the middle gains one.
+    assert_eq!(host_spans("", 0, 80), ["█"]);
+    assert_eq!(host_spans("ab", 2, 80), ["ab█"]);
+    assert_eq!(host_spans("ab", 1, 80), ["a█b"]);
+}
+
 #[test]
 fn a_secret_only_list_is_as_wide_as_its_heading_or_row() {
     // The heading "Secrets" is 7 cells and the row 5, so the list is 7.
@@ -2589,6 +2611,277 @@ fn a_browser_done_prepares_on_its_ticket_until_the_reviewer_lands() {
 }
 
 #[test]
+fn host_results_change_nothing_until_the_host_stage_reads_them() {
+    // The ticket is waiting on a browser login, not a gaps read: until
+    // the host stage folds them, the steps change nothing.
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    assert_eq!(
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Host(Ok(Vec::new()))
+        ),
+        None
+    );
+    assert!(!rows_open(&login));
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("Starting the login to codex"), "{screen}");
+}
+
+/// Two gaps: one naming its variable, one declaring none.
+fn host_gaps() -> Vec<crate::configure::HostGap> {
+    vec![
+        crate::configure::HostGap {
+            name: "workspace".to_owned(),
+            env: Some("ACME_HOST".to_owned()),
+        },
+        crate::configure::HostGap {
+            name: "other".to_owned(),
+            env: None,
+        },
+    ]
+}
+
+/// Stores acme's key and queues its reviewer read: the key path into
+/// the preparing step, on `ticket`.
+fn stored_key(login: &mut Login, fake: &Fake, ticket: LoginTicket) {
+    open_key_panel(login, fake);
+    typed(login, fake, "sk-a");
+    assert!(matches!(login.key(&Key::Enter, &ctx(fake)), Act::Reviewer(name) if name == "acme"));
+    login.wait_reviewer(ticket, "acme".to_owned());
+}
+
+/// Folds `gaps` into `login` on `ticket`: the worker's gaps read.
+fn fold_gaps(login: &mut Login, ticket: LoginTicket, gaps: Vec<crate::configure::HostGap>) {
+    assert_eq!(
+        login.step(ticket, crate::login_worker::LoginStep::Host(Ok(gaps))),
+        None
+    );
+}
+
+#[test]
+fn a_key_login_with_gaps_opens_the_host_panel() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps());
+    assert!(matches!(login.mode, super::Mode::Host(_)));
+    // One gap at a time: the head names its setting and variable, and
+    // the typed answer echoes as typed.
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("`workspace` (`ACME_HOST`):"), "{screen}");
+    assert!(!screen.contains("`other`"), "{screen}");
+    typed(&mut login, &fake, "adb-1");
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("adb-1"), "{screen}");
+}
+
+#[test]
+fn a_browser_done_with_gaps_opens_the_host_panel() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    assert_eq!(
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Done(Ok(Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            }))
+        ),
+        None
+    );
+    fold_gaps(&mut login, LoginTicket(1), host_gaps());
+    assert!(matches!(login.mode, super::Mode::Host(_)));
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("`workspace` (`ACME_HOST`):"), "{screen}");
+}
+
+#[test]
+fn a_refused_host_asks_again_without_saving() {
+    // The seam refuses what is not a host: the panel keeps the typed
+    // answer and asks again, saving nothing.
+    let fake = fake_with(targets());
+    if let Ok(mut saved) = fake.host_saved.lock() {
+        *saved = Err(ConfigureError {
+            code: ErrorCode::Usage,
+            message: "`workspace` is not a host.".to_owned(),
+        });
+    }
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps());
+    typed(&mut login, &fake, "not a host");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    // The attempt reached the seam, which refused it: the panel keeps
+    // the typed answer and asks again.
+    assert_eq!(
+        fake.host_saves(),
+        [(
+            "acme".to_owned(),
+            "workspace".to_owned(),
+            "not a host".to_owned()
+        )]
+    );
+    assert!(matches!(login.mode, super::Mode::Host(_)));
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("`workspace` is not a host;"), "{screen}");
+    assert!(screen.contains("not a host"), "{screen}");
+}
+
+#[test]
+fn a_saved_host_saves_trimmed_and_queues_the_reviewer() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps()[..1].to_vec());
+    typed(&mut login, &fake, "  adb-1.example  ");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Reviewer(name) if name == "acme"));
+    assert_eq!(
+        fake.host_saves(),
+        [(
+            "acme".to_owned(),
+            "workspace".to_owned(),
+            "adb-1.example".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn only_backspace_deletes_a_typed_host_answer() {
+    // Backspace drops the last typed cell; any other editing key leaves
+    // the answer alone: with `==` flipped to `!=` Backspace would keep
+    // the cell while the other key deleted it.
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps()[..1].to_vec());
+    typed(&mut login, &fake, "ab");
+    assert!(matches!(login.key(&Key::Backspace, &ctx(&fake)), Act::Stay));
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Reviewer(name) if name == "acme"));
+    assert_eq!(
+        fake.host_saves(),
+        [("acme".to_owned(), "workspace".to_owned(), "a".to_owned())]
+    );
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps()[..1].to_vec());
+    typed(&mut login, &fake, "ab");
+    assert!(matches!(login.key(&Key::Up, &ctx(&fake)), Act::Stay));
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Reviewer(name) if name == "acme"));
+    assert_eq!(
+        fake.host_saves(),
+        [("acme".to_owned(), "workspace".to_owned(), "ab".to_owned())]
+    );
+}
+
+#[test]
+fn each_save_asks_the_next_gap() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps());
+    typed(&mut login, &fake, "adb-1.example");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert!(matches!(login.mode, super::Mode::Host(_)));
+    // The head is answered: the panel asks the gap without a variable.
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("`other`:"), "{screen}");
+    assert!(!screen.contains("ACME_HOST"), "{screen}");
+}
+
+#[test]
+fn a_masked_save_carries_its_note_to_the_choices() {
+    let fake = fake_with(targets());
+    if let Ok(mut saved) = fake.host_saved.lock() {
+        *saved = Ok(crate::configure::HostSaved {
+            masked: Some(std::path::PathBuf::from(
+                "/home/u/projects/p/config/acme.json",
+            )),
+        });
+    }
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps()[..1].to_vec());
+    typed(&mut login, &fake, "adb-1.example");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Reviewer(name) if name == "acme"));
+    // The save's own job finds no gaps and reads the reviewer: its
+    // choices carry the mask note under them.
+    fold_gaps(&mut login, LoginTicket(1), Vec::new());
+    assert_eq!(
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))))
+        ),
+        None
+    );
+    assert!(matches!(login.mode, super::Mode::Choices(_)));
+    let screen = drawn(&login, 80, 24)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(screen.contains("sets it empty and hides it"), "{screen}");
+    assert!(
+        screen.contains("/home/u/projects/p/config/acme.json"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn an_answered_gap_does_not_reopen_the_panel() {
+    // The save's own job still reads the masked gap: answered gaps
+    // never reopen the panel, and the reviewer ends the login.
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps()[..1].to_vec());
+    typed(&mut login, &fake, "adb-1.example");
+    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Reviewer(name) if name == "acme"));
+    fold_gaps(&mut login, LoginTicket(1), host_gaps()[..1].to_vec());
+    assert!(matches!(login.mode, super::Mode::Preparing(_)));
+    assert_eq!(
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))))
+        ),
+        None
+    );
+    assert!(matches!(login.mode, super::Mode::Choices(_)));
+}
+
+#[test]
+fn a_failed_gaps_read_waits_for_the_reviewer_error() {
+    // No gaps to ask: the reviewer error ends the stored login with
+    // its note, as before the host stage.
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    assert_eq!(
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Host(Err(ConfigureError {
+                code: ErrorCode::ConfigInvalid,
+                message: "the gaps read failed.".to_owned(),
+            }))
+        ),
+        None
+    );
+    assert!(matches!(login.mode, super::Mode::Preparing(_)));
+    assert_eq!(
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Reviewer(Err(ConfigureError {
+                code: ErrorCode::ConfigInvalid,
+                message: "the reviewer read failed.".to_owned(),
+            }))
+        ),
+        None
+    );
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("the reviewer read failed."), "{screen}");
+}
+
+#[test]
 fn reviewer_results_land_only_in_preparing_on_their_ticket() {
     let answer = || crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))));
     // Rows, panel and ended ignore the result; choices is already chosen.
@@ -2618,6 +2911,34 @@ fn reviewer_results_land_only_in_preparing_on_their_ticket() {
         screen.contains("Reading codex's reviewer models"),
         "{screen}"
     );
+}
+
+#[test]
+fn host_results_land_only_in_preparing_on_their_ticket() {
+    // A Host result on another ticket changes nothing: the view stays
+    // preparing, with no panel opened; the right ticket opens the
+    // panel. With the ticket guard stuck true the wrong ticket would
+    // open the panel.
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    stored_key(&mut login, &fake, LoginTicket(1));
+    assert_eq!(
+        login.step(
+            LoginTicket(2),
+            crate::login_worker::LoginStep::Host(Ok(host_gaps()))
+        ),
+        None
+    );
+    let screen = drawn(&login, 80, 24);
+    assert!(
+        screen.contains("Reading acme's reviewer models"),
+        "{screen}"
+    );
+    assert!(!screen.contains("`workspace`"), "{screen}");
+    fold_gaps(&mut login, LoginTicket(1), host_gaps());
+    assert!(matches!(login.mode, super::Mode::Host(_)));
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("`workspace` (`ACME_HOST`):"), "{screen}");
 }
 
 #[test]
