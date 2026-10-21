@@ -493,7 +493,7 @@ impl crate::reload::State {
         // startup's settlements — wins over them.
         let boundary = self.log.count();
         McpProviders {
-            refresh: servers_refresh_seeded(
+            refresh: servers_refresh(
                 seed,
                 boundary,
                 self.sources.clone(),
@@ -515,47 +515,18 @@ impl crate::reload::State {
     }
 }
 
-/// The `mcp_servers` answer's reader with the startup's settled failures
-/// carried alongside, so a query served before the startup commit wrote
-/// their lines reads the settled rows. The seed holds the same failures
-/// the commit is about to write, so the rows agree either way.
-/// `boundary` is the log length when the reader was built: lines before
-/// it are the resume's history and fold first, lines from it are this
-/// startup's commit and later and fold last, so the seed supersedes the
-/// history and the commit supersedes the seed.
-fn servers_refresh_seeded(
-    seed: HashMap<String, contract::events::McpServerFailed>,
-    boundary: u64,
-    sources: config::Sources,
-    servers: Arc<mcp::Servers>,
-    log: std::sync::Weak<log::Log>,
-    clock: Arc<dyn contract::clock::Clock>,
-    waiting: Arc<std::sync::Mutex<HashMap<String, Option<String>>>>,
-) -> doors::ServersRefresh {
-    servers_refresh_inner(seed, boundary, sources, servers, log, clock, waiting)
-}
-
-/// Reads the `mcp_servers` answer with no settled failures outstanding:
-/// for a reader built outside the startup, where every failure it can
-/// report already sits in the log it folds. The boundary is zero, so
-/// every line folds after the (empty) seed, exactly as before.
-#[cfg(test)]
-fn servers_refresh(
-    sources: config::Sources,
-    servers: Arc<mcp::Servers>,
-    log: std::sync::Weak<log::Log>,
-    clock: Arc<dyn contract::clock::Clock>,
-    waiting: Arc<std::sync::Mutex<HashMap<String, Option<String>>>>,
-) -> doors::ServersRefresh {
-    servers_refresh_inner(HashMap::new(), 0, sources, servers, log, clock, waiting)
-}
-
 /// Reads the `mcp_servers` answer from the tools answer's rows: one row
 /// per configured server, in configuration order, folding the session's
 /// own log so a mid-session death reads failed exactly as the startup
 /// notice did (`docs/mcp.md`, "Servers, their state and the per-server
-/// commands").
-fn servers_refresh_inner(
+/// commands"). `seed` carries the startup's settled failures, so a
+/// query served before the commit wrote their lines reads the settled
+/// rows; `boundary` is the log length when the reader was built, so the
+/// resume's history folds before the seed and this startup's lines fold
+/// after it. A reader built outside the startup passes an empty seed
+/// with a zero boundary, so every line folds after it, exactly as
+/// before.
+fn servers_refresh(
     seed: HashMap<String, contract::events::McpServerFailed>,
     boundary: u64,
     sources: config::Sources,
@@ -587,27 +558,23 @@ fn servers_refresh_inner(
                 retry_after_ms: None,
                 provider: None,
             })?;
-            let mut lines = Vec::with_capacity(envelopes.len());
-            for envelope in &envelopes {
-                lines.push(
-                    contract::events::Event::from_envelope(envelope).map_err(|error| Failure {
-                        code: contract::ErrorCode::LogCorrupt,
-                        message: error.to_string(),
-                        retry_after_ms: None,
-                        provider: None,
-                    })?,
-                );
-            }
+            let decode = |envelope: &contract::Envelope| {
+                contract::events::Event::from_envelope(envelope).map_err(|error| Failure {
+                    code: contract::ErrorCode::LogCorrupt,
+                    message: error.to_string(),
+                    retry_after_ms: None,
+                    provider: None,
+                })
+            };
             let split = usize::try_from(boundary)
                 .unwrap_or(usize::MAX)
-                .min(lines.len());
-            let (history, later) = lines.split_at(split);
-            for event in history {
-                fold_server_line(&mut failed, event);
+                .min(envelopes.len());
+            for envelope in envelopes.iter().take(split) {
+                fold_server_line(&mut failed, &decode(envelope)?);
             }
             failed.extend(seed.clone());
-            for event in later {
-                fold_server_line(&mut failed, event);
+            for envelope in envelopes.iter().skip(split) {
+                fold_server_line(&mut failed, &decode(envelope)?);
             }
         } else {
             // The log is gone: the seed is all the reader knows.
@@ -690,6 +657,7 @@ fn fold_server_line(
         Some(contract::events::Event::McpServerFailed(failed_server)) => {
             failed.insert(failed_server.server.clone(), failed_server.clone());
         }
+
         Some(contract::events::Event::McpServerReady(ready)) => {
             failed.remove(&ready.server);
         }
