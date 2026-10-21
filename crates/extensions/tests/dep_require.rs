@@ -299,6 +299,24 @@ fn a_second_colon_stays_in_the_module() {
 }
 
 #[test]
+fn a_key_prefix_without_a_colon_boundary_is_not_a_match() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}X:trim"), "non-blocking"),
+    );
+    let session = load(&setup, FakeClock::new());
+    // `DEP` is a string prefix of the head but the boundary byte is `X`,
+    // not a colon, so no key matches: the head names the missing
+    // dependency instead of the dependency's missing module.
+    let message = refused(&session);
+    assert!(
+        message.contains(&format!("`dependency '{DEP}X' not installed`")),
+        "{message}"
+    );
+}
+
+#[test]
 fn a_colon_holding_depends_key_loads_through_the_longest_match() {
     let setup = Setup::new();
     install_pair(&setup, &root_init_require("weird:key:trim", "blocking"));

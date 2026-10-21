@@ -79,16 +79,15 @@ pub(crate) fn install(
                 Err(message) => (None, Some(message)),
             });
         }
-        let mut best: Option<(&String, &PathBuf)> = None;
-        for (key, mapped) in &deps {
-            if name.len() > key.len()
-                && name.starts_with(key.as_str())
-                && name.as_bytes().get(key.len()) == Some(&b':')
-                && best.is_none_or(|(found, _)| key.len() > found.len())
-            {
-                best = Some((key, mapped));
-            }
-        }
+        // The longest depends key followed by a colon wins; a key that is
+        // only a string prefix (the boundary byte is not a colon) matches
+        // nothing, so `dep:a:` with only key `dep` loads module `a:`.
+        let best = deps
+            .iter()
+            .filter(|(key, _)| {
+                name.starts_with(key.as_str()) && name.as_bytes().get(key.len()) == Some(&b':')
+            })
+            .max_by_key(|(key, _)| key.len());
         // A qualified name whose remainder past its matched key is
         // empty names the dependency it matched: `dep:` with key `dep`
         // is an unknown dependency, and a remainder that only looks
