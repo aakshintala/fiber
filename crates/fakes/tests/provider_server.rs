@@ -377,20 +377,226 @@ fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
     assert_eq!(requests[4].body, b"abc");
 }
 
-/// `await_requests` on a helper, so a mutant that waits out its 30 s `within`
+/// `await_requests` on a helper, so a mutant that waits out its `within`
 /// fails this wait instead of hanging the test.
 #[track_caller]
 fn await_requests_within(server: &Arc<ProviderServer>, count: usize) -> bool {
+    let deadline = Deadline::after(DEADLINE);
+    let bound = deadline.left();
     let (tx, rx) = mpsc::channel();
     let server = Arc::clone(server);
-    thread::spawn(
-        move || match tx.send(server.await_requests(count, Duration::from_secs(30))) {
-            Ok(()) | Err(mpsc::SendError(_)) => {}
-        },
+    thread::spawn(move || match tx.send(server.await_requests(count, bound)) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    });
+    deadline.recv(&rx).expect("waited for await_requests")
+}
+
+/// Every `await_requests` wait takes what remains of its test's deadline, not
+/// a literal `Duration::from_secs` bound (`docs/testing.md`, "Waits and
+/// timeouts"). The scan reads test sources as lint-subject, never as test
+/// inputs.
+#[test]
+fn no_await_requests_takes_a_literal_duration() {
+    /// The source with string literals and comments blanked, newlines kept so
+    /// line numbers still match: the scan reads code, never prose, so its own
+    /// search needles below cannot flag this file.
+    fn mask_code(source: &str) -> String {
+        let bytes = source.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            let next = bytes.get(i + 1).copied();
+            if b == b'/' && next == Some(b'/') {
+                // A line comment blanks to its newline, which is kept.
+                out.extend_from_slice(b"  ");
+                i += 2;
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    out.push(b' ');
+                    i += 1;
+                }
+                continue;
+            }
+            if b == b'/' && next == Some(b'*') {
+                // Block comments nest: blank through the matching close.
+                let mut depth = 0;
+                while i < bytes.len() {
+                    if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                        depth += 1;
+                        out.extend_from_slice(b"  ");
+                        i += 2;
+                    } else if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                        depth -= 1;
+                        out.extend_from_slice(b"  ");
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        out.push(if bytes[i] == b'\n' { b'\n' } else { b' ' });
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            if b == b'r' && matches!(next, Some(b'"') | Some(b'#')) {
+                // A raw string blanks through its closing quote and hashes.
+                let mut hashes = 0;
+                let mut j = i + 1;
+                while bytes.get(j) == Some(&b'#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                if bytes.get(j) == Some(&b'"') {
+                    for &c in &bytes[i..=j] {
+                        out.push(if c == b'\n' { b'\n' } else { b' ' });
+                    }
+                    i = j + 1;
+                    loop {
+                        if i >= bytes.len() {
+                            break;
+                        }
+                        let mut closed = bytes[i] == b'"';
+                        for h in 0..hashes {
+                            closed &= bytes.get(i + 1 + h) == Some(&b'#');
+                        }
+                        if closed {
+                            for &c in &bytes[i..i + 1 + hashes] {
+                                out.push(if c == b'\n' { b'\n' } else { b' ' });
+                            }
+                            i += 1 + hashes;
+                            break;
+                        }
+                        out.push(if bytes[i] == b'\n' { b'\n' } else { b' ' });
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+            if b == b'"' {
+                out.push(b' ');
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        out.extend_from_slice(b"  ");
+                        i += 2;
+                    } else if bytes[i] == b'"' {
+                        out.push(b' ');
+                        i += 1;
+                        break;
+                    } else {
+                        out.push(if bytes[i] == b'\n' { b'\n' } else { b' ' });
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            if b == b'\'' {
+                // Only the closed `'x'` and `'\\e'` shapes are literals; a
+                // lifetime never holds a call, so it stays.
+                if bytes.get(i + 2) == Some(&b'\'') {
+                    out.extend_from_slice(b"   ");
+                    i += 3;
+                    continue;
+                }
+                if bytes.get(i + 1) == Some(&b'\\') && bytes.get(i + 3) == Some(&b'\'') {
+                    out.extend_from_slice(b"    ");
+                    i += 4;
+                    continue;
+                }
+            }
+            out.push(b);
+            i += 1;
+        }
+        String::from_utf8(out).expect("blanking keeps every other byte")
+    }
+
+    /// Test sources holding waits: integration tests everywhere, plus unit
+    /// tests living beside the code. Jigs under `examples/` keep their own
+    /// bounds: they run with no fixture deadline.
+    fn is_test_source(root: &std::path::Path, path: &std::path::Path) -> bool {
+        let Ok(rel) = path.strip_prefix(root) else {
+            return false;
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        let mut parts = rel.split('/');
+        if parts.next() != Some("crates") || parts.next().is_none() {
+            return false;
+        }
+        match parts.next() {
+            Some("tests") => path.extension().is_some_and(|ext| ext == "rs"),
+            Some("src") => path.file_name().is_some_and(|name| {
+                name == "tests.rs" || name.to_string_lossy().ends_with("_tests.rs")
+            }),
+            _ => false,
+        }
+    }
+
+    fn visit(dir: &std::path::Path, sources: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("test sources list") {
+            let path = entry.expect("test source entry").path();
+            if path.is_dir() {
+                visit(&path, sources);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                sources.push(path);
+            }
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut sources = Vec::new();
+    for entry in std::fs::read_dir(root.join("crates")).expect("crates dir lists") {
+        let krate = entry.expect("crate entry").path();
+        for sub in ["tests", "src"] {
+            let dir = krate.join(sub);
+            if dir.is_dir() {
+                visit(&dir, &mut sources);
+            }
+        }
+    }
+    sources.sort();
+
+    let mut offenders = Vec::new();
+    for path in &sources {
+        if !is_test_source(&root, path) {
+            continue;
+        }
+        let text = std::fs::read_to_string(path).expect("test source reads");
+        let masked = mask_code(&text);
+        // Each call's balanced parenthesised span holds its whole bound, so
+        // no call shape evades the match.
+        let mut rest = masked.as_str();
+        let mut base = 0;
+        while let Some(found) = rest.find("await_requests(") {
+            let call = base + found;
+            let mut depth = 0;
+            let mut end = None;
+            for (k, ch) in masked[call..].char_indices() {
+                if ch == '(' {
+                    depth += 1;
+                } else if ch == ')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(call + k);
+                        break;
+                    }
+                }
+            }
+            let Some(end) = end else { break };
+            if masked[call..=end].contains("Duration::from_secs") {
+                let line = masked[..call].bytes().filter(|&c| c == b'\n').count() + 1;
+                let rel = path.strip_prefix(&root).expect("source under the root");
+                offenders.push(format!("{}:{line}", rel.display()));
+            }
+            base = end + 1;
+            rest = &masked[base..];
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "await_requests takes what remains of the test's deadline, not a literal bound:\n{}",
+        offenders.join("\n")
     );
-    Deadline::after(DEADLINE)
-        .recv(&rx)
-        .expect("waited for await_requests")
 }
 
 #[test]
