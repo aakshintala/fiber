@@ -3,14 +3,21 @@
 #
 # Usage: sh install.sh
 #
-# Reads FIBER_INSTALL_DIR (default ~/.local/bin; empty means unset) and
-# FIBER_VERSION (default the newest release; one leading `v` is allowed).
-# It installs the binary, then runs it once with the internal release
-# install step, which puts that release's docs and first-party extensions in
+# Reads FIBER_INSTALL_DIR (default ~/.local/bin; empty means unset),
+# FIBER_VERSION (default the newest release; one leading `v` is allowed)
+# and FIBER_CHANNEL (default stable; empty means unset). It installs the
+# binary, then runs it once with the internal release install step, which
+# puts that release's docs and first-party extensions in
 # Fiber home.
 #
+# `--channel stable|nightly` picks the release channel, beating
+# FIBER_CHANNEL; an explicit FIBER_VERSION beats both. The stable channel
+# installs from `latest/download`, which never sees pre-releases. The
+# nightly channel reads the release list and installs the newest nightly.
+#
 # `--base-url <url>` replaces https://github.com/aakshintala/fiber/releases
-# and is for tests only.
+# and is for tests only: under it the list is read from
+# `$base/releases.json` in the same shape.
 set -eu
 
 fail() {
@@ -20,6 +27,7 @@ fail() {
 
 base=https://github.com/aakshintala/fiber/releases
 base_arg=
+channel=${FIBER_CHANNEL:-}
 while [ $# -gt 0 ]; do
   case $1 in
     --base-url)
@@ -28,9 +36,20 @@ while [ $# -gt 0 ]; do
       base=${2%/}
       shift 2
       ;;
+    --channel)
+      [ $# -ge 2 ] || fail "--channel needs stable or nightly." 2
+      channel=$2
+      shift 2
+      ;;
     *) fail "install.sh does not take $1." 2 ;;
   esac
 done
+
+case $channel in
+  '' | stable) channel=stable ;;
+  nightly) ;;
+  *) fail "--channel $channel is not stable or nightly." 2 ;;
+esac
 
 for tool in curl tar mktemp uname; do
   command -v "$tool" >/dev/null 2>&1 || fail "install.sh needs $tool."
@@ -84,6 +103,76 @@ fi
 
 if [ -n "$version" ]; then
   from=$base/download/v$version
+elif [ "$channel" = nightly ]; then
+  # GitHub's `releases/latest` skips pre-releases, so the nightly channel
+  # reads the release list instead: a GitHub API call, held to its limit
+  # of 60 requests an hour for each address.
+  if [ -n "$base_arg" ]; then
+    list_url=$base/releases.json
+  else
+    list_url="https://api.github.com/repos/aakshintala/fiber/releases?per_page=100"
+  fi
+  # The newest entry by numeric (base version tuple, date) comparison,
+  # with `"prerelease": true`, `"draft": false` and a nightly tag. A
+  # tied entry loses to the later one, so a repeated list entry changes
+  # nothing. The list is pretty-printed JSON, one field per line, as the
+  # API writes it. Commas split fields only outside strings, so a comma
+  # in a body never splits its string before the closing quote. Depth is
+  # counted in braces outside strings, so nested
+  # author and asset objects never reset the candidate: fields count only
+  # at the release entry's own depth, and only its closing brace decides.
+  # The strip is escape-aware, so an escaped quote in a body never ends a
+  # string early and its braces never count.
+  list=$(curl -fsSL --proto-redir =https "$list_url") ||
+    fail "the nightly release list could not be downloaded from $list_url."
+  tag=$(printf '%s' "$list" | awk '
+    {
+      out = ""
+      in_str = 0
+      esc = 0
+      for (i = 1; i <= length($0); i++) {
+        c = substr($0, i, 1)
+        if (esc) { out = out c; esc = 0; continue }
+        if (in_str && c == "\\") { out = out c; esc = 1; continue }
+        if (c == "\"") { in_str = !in_str; out = out c; continue }
+        if (c == "," && !in_str) { print out; out = ""; continue }
+        out = out c
+      }
+      print out
+    }
+  ' | awk '
+    {
+      line = $0
+      stripped = line
+      gsub(/"([^"\\]|\\.)*"/, "\"\"", stripped)
+      opens = gsub(/\{/, "{", stripped)
+      closes = gsub(/\}/, "}", stripped)
+      if (depth == 0 && opens > 0) { tag = ""; pre = ""; draft = "" }
+      if (depth == 1 || (depth == 0 && opens > 0)) {
+        if (line ~ /"tag_name"/) {
+          tag = line
+          sub(/.*"tag_name"[[:space:]]*:[[:space:]]*"/, "", tag)
+          sub(/".*/, "", tag)
+        }
+        if (line ~ /"prerelease"[[:space:]]*:/) { pre = (line ~ /:[[:space:]]*true/) ? "true" : "false" }
+        if (line ~ /"draft"[[:space:]]*:/) { draft = (line ~ /:[[:space:]]*true/) ? "true" : "false" }
+      }
+      depth += opens - closes
+      if (depth == 0 && closes > 0) {
+        if (tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$/ && pre == "true" && draft == "false") {
+          ver = tag
+          sub(/^v/, "", ver)
+          split(ver, parts, /[.\-]/)
+          key = sprintf("%020d.%020d.%020d.%s", parts[1], parts[2], parts[3], parts[5])
+          if (best == "" || key > best) { best = key; best_tag = tag }
+        }
+        tag = ""; pre = ""; draft = ""
+      }
+    }
+    END { if (best_tag != "") print best_tag }
+  ')
+  [ -n "$tag" ] || fail "no nightly release found."
+  from=$base/download/$tag
 else
   from=$base/latest/download
 fi
