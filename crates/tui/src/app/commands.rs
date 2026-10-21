@@ -344,7 +344,11 @@ fn run_settings(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Settings))
 }
 
-fn run_theme(_app: &mut App, _rest: &str) -> Option<Effect> {
+fn run_theme(app: &mut App, rest: &str) -> Option<Effect> {
+    if rest.trim().is_empty() {
+        return Some(app.open_config_view(super::ConfigView::Theme));
+    }
+    // A named theme saves at once, beside the completion that names it.
     Some(Effect::None)
 }
 

@@ -36,6 +36,8 @@ const UNAVAILABLE: &str = "Not available in this terminal.";
 pub(crate) enum ConfigView {
     /// `/settings`.
     Settings,
+    /// `/theme`: the theme picker, opened on its choices.
+    Theme,
     /// `/tools`.
     Tools,
     /// `/skills`.
@@ -280,6 +282,14 @@ impl App {
                 };
                 Open::Settings(Settings::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
+            (Some(seam), ConfigView::Theme) => {
+                let Some(workspace) = self.view_workspace() else {
+                    return Effect::None;
+                };
+                Open::Settings(Settings::open_theme(
+                    &self.config_ctx(seam.as_ref(), &workspace),
+                ))
+            }
             (Some(seam), ConfigView::Tools) => {
                 return self.open_asking(seam, "tools", build_tools);
             }
@@ -308,6 +318,7 @@ impl App {
                 Open::Logout(Logout::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
             (None, ConfigView::Settings) => Open::Unavailable("Settings", "/settings"),
+            (None, ConfigView::Theme) => Open::Unavailable("Themes", "/theme"),
             (None, ConfigView::Tools) => Open::Unavailable("Tools", "/tools"),
             (None, ConfigView::Skills) => Open::Unavailable("Skills", "/skills"),
             (None, ConfigView::Rules) => Open::Unavailable("Rules", "/rules"),
@@ -488,7 +499,19 @@ impl App {
             return self.credential_pick(pick);
         }
         let act = match (self.config_views.seam.clone(), spot) {
-            (_, Spot::Close) => Act::Close,
+            // The picker's `x` cancels like Esc: with the theme choices
+            // open the capture is queued first, then the view closes.
+            (_, Spot::Close) => {
+                let restore = match &self.config_views.open {
+                    Some(Open::Settings(settings)) => settings.choices_entry(),
+                    _ => None,
+                };
+                self.config_views.open = None;
+                if let Some(entry) = restore {
+                    return self.config_act(Act::Theme(entry));
+                }
+                return Effect::None;
+            }
             (Some(seam), Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
