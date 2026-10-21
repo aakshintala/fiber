@@ -32,6 +32,7 @@ Fiber itself:
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   doctor                                    Says whether a session can start, and how to fix it when it cannot
+  feedback [<prompt>] [-]                   Write a feedback report and print the issue link.
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
   version                                   Print the version
@@ -83,6 +84,8 @@ Examples:
 const HELP_SUFFIX: &str = " Run `fiber --help` for usage.";
 
 const ASK_SHAPE: &str = "`fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.";
+
+pub(crate) const FEEDBACK_SHAPE: &str = "`fiber feedback` takes one description, then an optional `-`; quote the description. Run `fiber --help` for usage.";
 
 /// What `fiber` was asked to do, or the parse error.
 #[allow(
@@ -201,6 +204,8 @@ pub(crate) enum Commands {
     Logout(LogoutArgs),
     /// Say whether a session can start, and how to fix it when it cannot
     Doctor,
+    /// Write a feedback report and print the issue link
+    Feedback(FeedbackArgs),
     /// Print a completion script for bash, zsh or fish
     Completion {
         /// The shell to complete in.
@@ -880,6 +885,14 @@ pub(crate) struct AskArgs {
     pub(crate) worktree: bool,
 
     /// The prompt. A final `-` reads stdin.
+    #[arg(value_name = "prompt", num_args = 0..)]
+    pub(crate) prompt: Vec<String>,
+}
+
+/// The `feedback` command: its description, resolved like `ask`'s prompt.
+#[derive(Debug, clap::Args)]
+pub(crate) struct FeedbackArgs {
+    /// The description. A final `-` reads stdin.
     #[arg(value_name = "prompt", num_args = 0..)]
     pub(crate) prompt: Vec<String>,
 }

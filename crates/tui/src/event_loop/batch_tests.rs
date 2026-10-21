@@ -50,6 +50,7 @@ fn described(inputs: &[Input]) -> Vec<String> {
             | Input::Files { .. }
             | Input::FindDue(_)
             | Input::Image { .. }
+            | Input::Feedback(_)
             | Input::Viewed { .. }
             | Input::Login { .. }
             | Input::Models(_) => "other".to_owned(),

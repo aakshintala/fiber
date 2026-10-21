@@ -370,6 +370,7 @@ fn an_amend_sends_the_drafts_images() {
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }

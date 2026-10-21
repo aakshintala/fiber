@@ -272,6 +272,7 @@ fn sent(effect: crate::app::Effect) -> Vec<Value> {
         | crate::app::Effect::Quit
         | crate::app::Effect::ListFiles
         | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::Feedback { .. }
         | crate::app::Effect::FindPause { .. }
         | crate::app::Effect::Search { .. }
         | crate::app::Effect::Editor { .. }

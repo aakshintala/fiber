@@ -1323,3 +1323,56 @@ fn remote_operation_documentation_lists_the_complete_wire_surface() {
         ]
     );
 }
+
+#[test]
+fn logout_operations_answer_their_wire_shapes() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let seam = Seam::new(home.clone());
+    install(&home);
+    crate::test_support::install_extension(
+        &home,
+        "extensions/acme-secrets",
+        json!({"name":"acme-secrets","version":"v0.0.0","fiber":"0.0.0","api":1,"secrets":["acme.api_key"]}),
+        &[],
+    );
+    assert_eq!(
+        result(
+            &seam,
+            "store_key",
+            json!({"name":"acme","key":"sk-test","label":"work"})
+        ),
+        json!({"path":"credentials/acme/work","replaced":false})
+    );
+    assert_eq!(
+        result(
+            &seam,
+            "store_key",
+            json!({"name":"acme.api_key","key":"sk-secret"})
+        ),
+        json!({"path":"credentials/acme.api_key","replaced":false})
+    );
+    // Flipping a variant arm breaks the shape: the provider row carries
+    // its label and default mark, the secret row neither.
+    assert_eq!(
+        result(&seam, "logout_rows", json!({})),
+        json!({"rows":[
+            {"row":"provider","name":"acme","label":"work","default":true,"deletable":true,"siblings":[]},
+            {"row":"secret","name":"acme.api_key","deletable":true},
+        ]})
+    );
+    assert_eq!(
+        result(
+            &seam,
+            "delete_stored",
+            json!({"name":"acme","label":"work"})
+        ),
+        json!({"path":"credentials/acme/work"})
+    );
+    assert_eq!(
+        result(&seam, "logout_rows", json!({})),
+        json!({"rows":[
+            {"row":"secret","name":"acme.api_key","deletable":true},
+        ]})
+    );
+}

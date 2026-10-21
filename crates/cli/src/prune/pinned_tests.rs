@@ -1034,9 +1034,8 @@ fn a_never_record_with_a_leftover_copy_is_removed() {
     assert!(approval(&home, &key, &hash).is_file());
 }
 
-/// Approves an MCP server, which records per machine, and returns its
-/// hash.
-fn approve_server(home: &Path, dir: &Path, clock: &FakeClock) -> String {
+/// Declares an MCP server `db` in `dir`.
+fn declare_server(dir: &Path) {
     fs::create_dir_all(dir.join("srv")).unwrap();
     fs::write(dir.join("srv/run.js"), "run\n").unwrap();
     fs::write(
@@ -1044,20 +1043,37 @@ fn approve_server(home: &Path, dir: &Path, clock: &FakeClock) -> String {
         r#"{"mcp":{"servers":{"db":{"command":"node","args":["srv/run.js"]}}}}"#,
     )
     .unwrap();
+}
+
+/// The MCP server `dir` declares, with its content hash.
+fn server_item(home: &Path, dir: &Path, clock: &FakeClock) -> (extensions::RepoItem, String) {
     let items = extensions::declared_items(dir, clock).unwrap();
     let item = items
         .into_iter()
         .find(|item| item.kind == OfferedKind::McpServer)
         .unwrap();
     let hash = extensions::hash(&mut extensions::Index::load(home), &item).unwrap();
+    (item, hash)
+}
+/// Approves the MCP server `dir` declares for `key`, which records per
+/// machine and in the project's record, and returns its hash.
+fn approve_server_key(home: &Path, key: &str, dir: &Path, clock: &FakeClock) -> String {
+    let (item, hash) = server_item(home, dir, clock);
     extensions::Store::new(
         home,
-        &config::ProjectKey::new("project").unwrap(),
+        &config::ProjectKey::new(key).unwrap(),
         FakeClock::new(),
     )
     .approve(&item, &hash)
     .unwrap();
     hash
+}
+
+/// Approves an MCP server, which records per machine, and returns its
+/// hash.
+fn approve_server(home: &Path, dir: &Path, clock: &FakeClock) -> String {
+    declare_server(dir);
+    approve_server_key(home, "project", dir, clock)
 }
 
 #[test]
@@ -1088,7 +1104,109 @@ fn a_server_copy_is_not_listed_outside_a_repository() {
         None,
     );
     let plan = plan(&home, &setup.workspace(), clock.as_ref());
+    // Judged as an extension copy is: the project record names it, but
+    // its project has no recorded identity, so it is kept, not listed.
+    assert_eq!(plan.rows.len(), 1);
+    assert_eq!(
+        pinned_line(&plan.rows[0]),
+        format!("pinned  {hash}  skipped: its project's directory cannot be found")
+    );
+    assert!(copy_dir(&home, &hash).is_dir());
+}
+
+/// Points the server `db` in `dir` at another file, so no approved copy
+/// matches the tree any more.
+fn redeclare_server(dir: &Path) {
+    fs::write(dir.join("srv/changed.js"), "changed\n").unwrap();
+    fs::write(
+        dir.join(".fiber/config.json"),
+        r#"{"mcp":{"servers":{"db":{"command":"node","args":["srv/changed.js"]}}}}"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_server_copy_with_an_in_scope_project_record_is_a_candidate() {
+    let setup = Setup::new("pinned-server-candidate");
+    let home = setup.home();
+    let repo = setup.repo("repo", "main\n");
+    let key = key_of(&repo);
+    let clock = FakeClock::new();
+    declare_server(&repo);
+    let hash = approve_server_key(&home, &key, &repo, clock.as_ref());
+    // No worktree matches the approved copy any more: the per-machine
+    // record does not keep it from being listed.
+    redeclare_server(&repo);
+    let plan = plan(&home, &repo, clock.as_ref());
+    assert_eq!(removable(&plan).len(), 1);
+    assert_eq!(removable(&plan)[0].0, hash.as_str());
+    assert_eq!(plan.rows.len(), 1);
+    let mut noop = |_: &str| {};
+    let removed = remove_planned(&home, &plan, clock.as_ref(), &mut noop);
+    assert_eq!(removed.total, 1);
+    assert!(removed.failures.is_empty());
+    assert!(copy_dir(&home, &hash).symlink_metadata().is_err());
+}
+
+#[test]
+fn a_server_copy_with_no_project_record_is_not_listed() {
+    let setup = Setup::new("pinned-server-orphan");
+    let home = setup.home();
+    let repo = setup.repo("repo", "main\n");
+    let key = key_of(&repo);
+    let clock = FakeClock::new();
+    declare_server(&repo);
+    let hash = approve_server_key(&home, &key, &repo, clock.as_ref());
+    // A copy approved before project records existed: the per-machine
+    // record stands, but no project record names it, so it is kept.
+    fs::remove_file(home.join("projects").join(&key).join("servers").join(&hash)).unwrap();
+    redeclare_server(&repo);
+    let plan = plan(&home, &repo, clock.as_ref());
     assert!(plan.rows.is_empty());
+    assert!(copy_dir(&home, &hash).is_dir());
+}
+
+#[test]
+fn revalidation_refuses_a_new_server_project_record() {
+    let setup = Setup::new("pinned-server-reval");
+    let home = setup.home();
+    let repo = setup.repo("repo", "main\n");
+    let key = key_of(&repo);
+    let clock = FakeClock::new();
+    declare_server(&repo);
+    let (item, hash) = server_item(&home, &repo, clock.as_ref());
+    extensions::Store::new(
+        &home,
+        &config::ProjectKey::new(&key).unwrap(),
+        FakeClock::new(),
+    )
+    .approve(&item, &hash)
+    .unwrap();
+    redeclare_server(&repo);
+    let plan = plan(&home, &repo, clock.as_ref());
+    assert_eq!(removable(&plan).len(), 1);
+    // Another project approves the same server copy after the listing:
+    // its new project record refuses the removal.
+    let mut before_remove = |_: &str| {
+        extensions::Store::new(
+            &home,
+            &config::ProjectKey::new("other").unwrap(),
+            FakeClock::new(),
+        )
+        .approve(&item, &hash)
+        .unwrap();
+    };
+    let removed = remove_planned(&home, &plan, clock.as_ref(), &mut before_remove);
+    assert_eq!(removed.total, 1);
+    assert_eq!(removed.freed, 0);
+    assert_eq!(
+        removed.failures,
+        vec![(
+            format!("pinned {hash}"),
+            ErrorCode::IoFailed,
+            "its approvals changed since it was listed".to_owned()
+        )]
+    );
     assert!(copy_dir(&home, &hash).is_dir());
 }
 

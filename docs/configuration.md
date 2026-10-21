@@ -355,6 +355,9 @@ provider has several labels, it refuses unless given `--as <label>` or `--all`.
 When the key comes from an environment variable, a file outside Fiber home or
 a command, `fiber logout` cannot remove it: it names the source and exits
 non-zero.
+A live session keeps its cached key: only sessions started after the delete fail
+with `credential_missing`, unless a configured source covers the label, which
+later sessions then use.
 
 ## When Fiber reads configuration
 

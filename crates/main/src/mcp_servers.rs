@@ -470,14 +470,32 @@ pub(crate) struct McpProviders {
 impl crate::reload::State {
     /// Builds the MCP hub providers from the session's own configuration,
     /// servers, declaration writer and log: the same inputs the startup
-    /// used, so queries, logins and reconnects agree with it.
-    pub(crate) fn mcp_providers(&self) -> McpProviders {
+    /// used, so queries, logins and reconnects agree with it. `settled`
+    /// is the startup's failures, which the commit writes after the door
+    /// starts serving: seeding the reader with them keeps every query's
+    /// rows on the settled outcome from the first one served. The
+    /// boundary is the log length at this call: lines before it are the
+    /// resume's history, lines from it this startup's own.
+    pub(crate) fn mcp_providers(
+        &self,
+        settled: &[contract::events::McpServerFailed],
+    ) -> McpProviders {
         // One entry per server with a login running, holding its
         // authorization URL while it waits for the callback. The session
         // shares the one map its providers close over.
         let waiting = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let seed: HashMap<String, contract::events::McpServerFailed> = settled
+            .iter()
+            .map(|failure| (failure.server.clone(), failure.clone()))
+            .collect();
+        // Lines already in the log predate this startup (a resume's
+        // history): the reader folds them first, so the seed — this
+        // startup's settlements — wins over them.
+        let boundary = self.log.count();
         McpProviders {
             refresh: servers_refresh(
+                seed,
+                boundary,
                 self.sources.clone(),
                 Arc::clone(&self.servers),
                 Arc::downgrade(&self.log),
@@ -501,8 +519,16 @@ impl crate::reload::State {
 /// per configured server, in configuration order, folding the session's
 /// own log so a mid-session death reads failed exactly as the startup
 /// notice did (`docs/mcp.md`, "Servers, their state and the per-server
-/// commands").
+/// commands"). `seed` carries the startup's settled failures, so a
+/// query served before the commit wrote their lines reads the settled
+/// rows; `boundary` is the log length when the reader was built, so the
+/// resume's history folds before the seed and this startup's lines fold
+/// after it. A reader built outside the startup passes an empty seed
+/// with a zero boundary, so every line folds after it, exactly as
+/// before.
 fn servers_refresh(
+    seed: HashMap<String, contract::events::McpServerFailed>,
+    boundary: u64,
     sources: config::Sources,
     servers: Arc<mcp::Servers>,
     log: std::sync::Weak<log::Log>,
@@ -517,6 +543,12 @@ fn servers_refresh(
             &sources.overrides,
         )
         .map_err(Failure::from)?;
+        // Three phases, in log order: the resume's history, this
+        // startup's settled failures, then this startup's commit and
+        // later lines. A query served before the commit wrote the
+        // settled lines reads the seed, so readers before and after
+        // the commit agree; a restart's ready still clears its row,
+        // and an old ready never erases a fresh settlement.
         let mut failed: HashMap<String, contract::events::McpServerFailed> = HashMap::new();
         if let Some(log) = log.upgrade() {
             let count = usize::try_from(log.count()).unwrap_or(usize::MAX);
@@ -526,24 +558,27 @@ fn servers_refresh(
                 retry_after_ms: None,
                 provider: None,
             })?;
-            for envelope in &envelopes {
-                let event =
-                    contract::events::Event::from_envelope(envelope).map_err(|error| Failure {
-                        code: contract::ErrorCode::LogCorrupt,
-                        message: error.to_string(),
-                        retry_after_ms: None,
-                        provider: None,
-                    })?;
-                match event {
-                    Some(contract::events::Event::McpServerFailed(failed_server)) => {
-                        failed.insert(failed_server.server.clone(), failed_server);
-                    }
-                    Some(contract::events::Event::McpServerReady(ready)) => {
-                        failed.remove(&ready.server);
-                    }
-                    _ => {}
-                }
+            let decode = |envelope: &contract::Envelope| {
+                contract::events::Event::from_envelope(envelope).map_err(|error| Failure {
+                    code: contract::ErrorCode::LogCorrupt,
+                    message: error.to_string(),
+                    retry_after_ms: None,
+                    provider: None,
+                })
+            };
+            let split = usize::try_from(boundary)
+                .unwrap_or(usize::MAX)
+                .min(envelopes.len());
+            for envelope in envelopes.iter().take(split) {
+                fold_server_line(&mut failed, &decode(envelope)?);
             }
+            failed.extend(seed.clone());
+            for envelope in envelopes.iter().skip(split) {
+                fold_server_line(&mut failed, &decode(envelope)?);
+            }
+        } else {
+            // The log is gone: the seed is all the reader knows.
+            failed = seed.clone();
         }
         let mut counts: HashMap<&str, usize> = HashMap::new();
         for info in &tools {
@@ -610,6 +645,24 @@ fn servers_refresh(
             .collect();
         Ok(rows)
     })
+}
+
+/// Folds one decoded log line into the failed map: a failure records
+/// its row, a ready clears it, any other line leaves the map alone.
+fn fold_server_line(
+    failed: &mut HashMap<String, contract::events::McpServerFailed>,
+    event: &Option<contract::events::Event>,
+) {
+    match event {
+        Some(contract::events::Event::McpServerFailed(failed_server)) => {
+            failed.insert(failed_server.server.clone(), failed_server.clone());
+        }
+
+        Some(contract::events::Event::McpServerReady(ready)) => {
+            failed.remove(&ready.server);
+        }
+        _ => {}
+    }
 }
 
 /// Runs one server's `fiber mcp login` flow on the login thread the door
