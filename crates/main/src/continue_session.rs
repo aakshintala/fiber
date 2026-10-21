@@ -25,8 +25,9 @@ use crate::{ask_failed, failed};
 /// unreadable, unparseable, not-`session_started`, or workspace-less
 /// first line, and a worktree record the session cannot read, is
 /// `log_corrupt`; no recorded worktree, or one that is not the current
-/// directory, is `invalid_arguments`. Every refusal answers before any
-/// session line is written.
+/// directory, is `invalid_arguments`; a worktree removed after the
+/// shared hold is taken names the old session `session_not_found`.
+/// Every refusal answers before any session line is written.
 pub(crate) fn session_continues(
     new: SessionId,
     old: SessionId,
@@ -64,6 +65,14 @@ pub(crate) fn session_continues(
         Ok(shared) => shared,
         Err(failure) => return crate::session_command::report(signals, failure),
     };
+    // The old session may have ended and cleaned up between validation
+    // and the shared hold: recheck the recorded path under the hold,
+    // which lives through `run_new`, so no exclusive removal
+    // interleaves after the recheck. A removed worktree names the old
+    // session missing, before any session line is written.
+    if let Err(e) = rechecked(&_shared, &recorded, &old) {
+        return ask_failed(e);
+    }
     match super::session_command::run_new(
         new,
         overrides,
@@ -174,6 +183,20 @@ fn resolve(
         ));
     }
     Ok(recorded)
+}
+
+/// Rulings 15: the recorded worktree path rechecked after the shared
+/// hold is taken. A removed path means the old session ended and
+/// cleaned up, so the check refuses `session_not_found` naming the old
+/// session. Taking the hold as a parameter types the order: the recheck
+/// runs only under the shared lock, and the guard lives through
+/// `run_new`, so no exclusive removal interleaves after it.
+fn rechecked(_shared: &doors::Shared, recorded: &Worktree, old: &SessionId) -> Result<(), Failure> {
+    if Path::new(&recorded.path).is_dir() {
+        Ok(())
+    } else {
+        Err(not_found(old))
+    }
 }
 
 /// A session the hub does not know, or whose first line is still being

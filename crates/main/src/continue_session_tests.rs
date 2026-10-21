@@ -104,6 +104,36 @@ fn missing_log_is_not_found() {
 }
 
 #[test]
+fn removed_worktree_after_share_refuses_not_found_with_no_new_log() {
+    let (_home, old_dir, workspace) = fixture("main-continues-rechecked-gone", None);
+    let first = started(&workspace, Some(worktree(&workspace)));
+    std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
+    let recorded = resolve(&new(), &old(), &old_dir, &workspace).unwrap();
+    // The old session ended and cleaned up between validation and the
+    // shared hold: `share` still succeeds (it creates the lock beside
+    // the missing path), then the recheck under the hold refuses.
+    let shared = doors::share(Path::new(&recorded.path)).unwrap();
+    std::fs::remove_dir_all(&workspace).unwrap();
+    let error = super::rechecked(&shared, &recorded, &old()).unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::SessionNotFound);
+    assert!(
+        error.message.contains(OLD),
+        "the refusal names the old session: {}",
+        error.message
+    );
+    // No new session line was written: the sessions dir holds only the
+    // old session, never the refused new one.
+    assert!(
+        !old_dir
+            .parent()
+            .unwrap()
+            .join("s_bbbbbbbbbbbbbbbb")
+            .exists(),
+        "no new session log was created"
+    );
+}
+
+#[test]
 fn a_longer_old_log_resolves_on_its_first_line() {
     // A live old session keeps appending: only the first line is read.
     // Parsing the whole log would refuse a log like this as corrupt.
