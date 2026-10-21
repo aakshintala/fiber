@@ -1055,9 +1055,7 @@ impl Loop {
                 }
                 return Ok(None);
             }
-            if let Some(tail) = pending.get_mut(index + 1..) {
-                self.rejudge_remaining(tail)?;
-            }
+            self.rejudge_remaining(not_yet_applied(&mut *pending, index))?;
             index += 1;
         }
         // One commit past the whole batch, after write-back.
@@ -1567,6 +1565,20 @@ impl Loop {
         }
         Ok(())
     }
+}
+
+/// The calls write-back has not applied yet: everything after `index`.
+/// A mutant of `+` to `*` re-includes the call just applied, whose buffered
+/// lines already flushed and whose decision already pushed, so re-judging it
+/// changes nothing a consumer sees; the remaining calls' re-judgment is
+/// tested through the grant re-classification tests in
+/// `crates/loop/tests/permissions.rs`.
+#[cfg_attr(false, mutants::skip)]
+fn not_yet_applied(pending: &mut [PendingCall], index: usize) -> &mut [PendingCall] {
+    let Some(tail) = pending.get_mut(index + 1..) else {
+        unreachable!("write-back visits each classified call once, in order");
+    };
+    tail
 }
 
 /// The completion of a call whose request the close denied by `cancel`:

@@ -24,12 +24,12 @@ use contract::clock::{Clock, Wake};
 use contract::commands::{Remember, RememberScope, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    AskStep, Decision, Event, FiberExited, Interaction, Notice, PermissionRequested, RuleScope,
-    StandingRule, ToolCallRequested, TurnOutcome,
+    AskStep, Decision, Event, FiberExited, Interaction, Notice, OnFork, PermissionRequested,
+    RuleScope, StandingRule, ToolCallRequested, TurnOutcome,
 };
 use contract::hook::{
     AfterToolAnswer, AfterToolOutcome, BeforeToolAnswer, BeforeToolOutcome, CheckAnswer,
-    CheckOutcome, HookFailure, Hooks, Refusal,
+    CheckOutcome, HookFailure, Hooks, Refusal, StateLine,
 };
 use contract::inbox::{Ack, Delivery};
 use contract::provider::{
@@ -5793,6 +5793,139 @@ fn three_first_stages_fly_together_and_resolve_in_request_order() {
         .map(str::to_owned)
         .collect::<Vec<_>>(),
         "resolutions stay in request order before any start",
+    );
+}
+
+// Carried hook state stays with its already-decided call: with the batch's
+// first call already decided and carrying state, and two more calls still
+// to judge, the state is written before the first call's start, not the
+// second's. Matching any other action would hand the first call's state to
+// the second call.
+#[test]
+fn carried_hook_state_stays_with_its_already_decided_call() {
+    let rules = Arc::new(FakeRules::default());
+    let atlas = Arc::new(ProbeTool::reads("atlas"));
+    let bruno = Arc::new(ProbeTool::reads("bruno"));
+    let coral = Arc::new(ProbeTool::reads("coral"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&atlas));
+    setup.tools.push(Arc::clone(&bruno));
+    setup.tools.push(Arc::clone(&coral));
+    setup.hooks = Some(Arc::new(ProbeHooks::passing()));
+    setup.reviewer_script = Some(Vec::new());
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(&setup, home, Vec::new());
+    let turn = TurnId("t_test".into());
+    let call = |name: &str| ToolCallRequested {
+        name: name.into(),
+        arguments: json!({}),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+        provider_item: None,
+    };
+    let prepared = |tool: &Arc<ProbeTool>| crate::before_tool::Prepared {
+        tool: Arc::clone(tool) as Arc<dyn Tool>,
+        arguments: Map::new(),
+        effects: Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        },
+        rewritten: None,
+    };
+    let id_a = ActionId("a_a".into());
+    let id_b = ActionId("a_b".into());
+    let id_c = ActionId("a_c".into());
+    let state = vec![StateLine {
+        extension: "probe.test".into(),
+        key: "carried".into(),
+        value: Some((json!("kept"), OnFork::AtPoint)),
+        landing: 0,
+    }];
+    let done = world
+        .loop_mut()
+        .run_batch(
+            vec![
+                (id_a.clone(), call("atlas"), Some(Ok(prepared(&atlas)))),
+                (id_b.clone(), call("bruno"), None),
+                (id_c.clone(), call("coral"), None),
+            ],
+            &turn,
+            None,
+            Some((id_a.clone(), state)),
+        )
+        .expect("the batch runs");
+    assert!(!done, "no cancel ends the batch");
+    let lines = log::read(&world.home.path().join("s_test")).unwrap();
+    let started: Vec<String> = lines
+        .iter()
+        .filter(|line| line.kind == "tool_call_started")
+        .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
+        .collect();
+    assert_eq!(
+        started,
+        vec!["a_a".to_owned(), "a_b".to_owned(), "a_c".to_owned()],
+        "every call runs in request order"
+    );
+    let state_at = lines
+        .iter()
+        .position(|line| line.kind == "extension_state_set")
+        .expect("the carried state is written");
+    assert_eq!(lines[state_at].payload["key"], json!("carried"));
+    let started_a_at = lines
+        .iter()
+        .position(|line| {
+            line.kind == "tool_call_started"
+                && line.action_id.as_ref().is_some_and(|id| id.0 == "a_a")
+        })
+        .expect("the first call starts");
+    assert!(
+        state_at < started_a_at,
+        "the carried state lands before its call's start, not the next call's"
+    );
+}
+
+// An idle unwind commits the cursor past the applied first stage: with the
+// first call allowed and the second escalating into an idle wait, the shared
+// cursor still advances past the applied cuts, so the next review chains
+// from them. Skipping the commit would leave the cursor behind.
+#[test]
+fn an_idle_unwind_commits_the_cursor_past_the_applied_first_stage() {
+    let rules = Arc::new(FakeRules::default());
+    let atlas = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let bruno = Arc::new(ProbeTool::executes("bruno", "bruno run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&atlas));
+    setup.tools.push(Arc::clone(&bruno));
+    setup.reviewer_script = Some(vec![
+        review_text("allow", 0),
+        review_text("check", 0),
+        review_text("block its reason", 0),
+    ]);
+    setup.reviewer_limits = Some((1, 20));
+    setup.idle = Some(IDLE);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![tool_answer_two(
+            ("atlas", json!({})),
+            ("bruno", json!({})),
+            0,
+        )],
+    );
+    prompt(&world, "hi");
+    suspend_on_approval(&mut world);
+    assert!(
+        world.loop_mut().reviewer_sent.is_some(),
+        "the unwind commits the cursor past the applied first stage"
     );
 }
 

@@ -1019,7 +1019,7 @@ pub(crate) struct StagedSecond {
 }
 
 /// What a first-stage worker carries across the thread boundary: cloned
-/// `Arc`s and, per spawn, an owned request. No `&mut Loop`, no log handle
+/// `Arc`s and, per spawn, an owned call. No `&mut Loop`, no log handle
 /// and no rules guard cross, so the deciding thread stays the only writer.
 #[derive(Clone)]
 pub(crate) struct Stage1Worker {
@@ -1031,24 +1031,34 @@ pub(crate) struct Stage1Worker {
     pub(crate) cancel: Arc<TurnCancel>,
 }
 
-/// Sends prebuilt first-stage requests, one thread each inside a
-/// `thread::scope`, and returns every reply in request order. A worker only
-/// runs its call to its end; the caller records usage and applies verdicts
-/// in order after the join.
+/// Runs prebuilt first-stage requests, one thread each inside a
+/// `thread::scope`, and returns every reply in request order. Every call
+/// starts on the deciding thread, in request order, as the serial path
+/// starts its own — so a recording provider sees the batch's requests in
+/// the order the batch built them — and only the runs overlap. The caller
+/// records usage and applies verdicts in order after the join.
 pub(crate) fn fanout_stage1(
     worker: &Stage1Worker,
     requests: Vec<ModelRequest>,
 ) -> Vec<Result<Reply, CallError>> {
+    let mut calls = Vec::with_capacity(requests.len());
+    for request in requests {
+        calls.push(start_review_call(
+            &worker.provider,
+            worker.observe.as_ref(),
+            &request,
+        ));
+    }
     thread::scope(|scope| {
-        let mut handles = Vec::with_capacity(requests.len());
-        for request in requests {
+        let mut handles = Vec::with_capacity(calls.len());
+        for call in calls {
             let worker = worker.clone();
             handles.push(scope.spawn(
                 #[allow(
                     clippy::result_large_err,
                     reason = "the error is the reviewer call's, returned unchanged"
                 )]
-                move || run_stage1(&worker, request),
+                move || crate::cancel::run_cancellable(&worker.cancel, call, &mut |_| {}),
             ));
         }
         let mut replies = Vec::with_capacity(handles.len());
@@ -1062,18 +1072,6 @@ pub(crate) fn fanout_stage1(
         }
         replies
     })
-}
-
-/// Runs one prebuilt first-stage request to its end: the reviewer's own
-/// factory builds the call, and a cancel wakes it. The caller records usage
-/// and applies the verdict.
-#[allow(
-    clippy::result_large_err,
-    reason = "the error is the reviewer call's, returned unchanged"
-)]
-fn run_stage1(worker: &Stage1Worker, request: ModelRequest) -> Result<Reply, CallError> {
-    let call = start_review_call(&worker.provider, worker.observe.as_ref(), &request);
-    crate::cancel::run_cancellable(&worker.cancel, call, &mut |_| {})
 }
 
 /// Where `reviewed` cuts for the call `id`: after its call item, or the end
