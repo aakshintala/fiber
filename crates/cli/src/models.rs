@@ -1,5 +1,6 @@
 //! `fiber models` (`docs/invocation.md`, "Commands and flags"): lists the
-//! models the installed providers serve, one row each, with the configured
+//! models the installed providers serve merged with the workspace's
+//! approved repository set, one row each, with the configured
 //! default marked. It reads each provider's cached list through
 //! [`Providers`], which serves `cache/models/<name>.json` when there is one,
 //! and runs each Lua provider's `models()` when there is none, as at startup
@@ -15,7 +16,7 @@ use config::{Config, Sources};
 use contract::clock::Clock;
 use contract::events::Notice;
 use contract::files::PathLock;
-use extensions::{Providers, SessionExtensions};
+use extensions::{Providers, RepositorySet, SessionExtensions, StateSeed};
 use serde::Serialize;
 
 use crate::table::pad;
@@ -153,7 +154,31 @@ pub(crate) fn providers_and_config(
     Ok((providers, config, notices))
 }
 
-/// Lists the installed providers' models in `home`, marking the configured
+/// The installed providers merged with the workspace's approved repository
+/// set, the configuration for `home` and `workspace`, the retained set,
+/// and the notices loading the providers gave: the first half of [`run`].
+/// Outside a project, or where the declarations do not read, the set is
+/// empty and the providers are the enabled installed ones, as
+/// [`providers_and_config`] reads.
+pub(crate) fn providers_config_and_set(
+    home: &Path,
+    workspace: &Path,
+    clock: Arc<dyn Clock>,
+) -> Result<(Providers, Config, RepositorySet, Vec<Notice>), CliError> {
+    let (_, project) = project_of(home, workspace)?;
+    let config = Config::load(Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project: project.clone(),
+        overrides: Vec::new(),
+    })?;
+    let set = RepositorySet::load_pinned(home, &project, workspace, clock);
+    let (providers, notices) = Providers::load_repository(home, &config, &set)?;
+    Ok((providers, config, set, notices))
+}
+
+/// Lists the models of the installed providers merged with the workspace's
+/// approved repository set in `home`, marking the configured
 /// default, filtered by `search` and printed as text or JSON Lines.
 #[allow(
     clippy::too_many_arguments,
@@ -166,19 +191,29 @@ fn run(
     json: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
-    load: &dyn Fn(&Config) -> SessionExtensions,
+    load: &dyn Fn(&Config, RepositorySet) -> SessionExtensions,
     spawn: &dyn Fn(Vec<String>) -> io::Result<()>,
-    clock: &dyn Clock,
+    clock: Arc<dyn Clock>,
     run: config::Runner<'_>,
 ) -> Result<(), CliError> {
     // Each notice as one line on stderr: this load's, the session
     // extensions', then discovery and placeholders', each once per
     // command run.
-    let (mut providers, config, loading) = providers_and_config(home, workspace)?;
+    let (mut providers, config, set, loading) =
+        providers_config_and_set(home, workspace, Arc::clone(&clock))?;
     let mut notices: Vec<Notice> = config.notices().to_vec();
     notices.extend(loading);
-    let extensions = load(&config);
-    notices.extend(extensions.notices());
+    let extensions = load(&config, set);
+    // The session load merges the same repository set, so it repeats the
+    // providers load's shadow notices: each message prints once per run.
+    for notice in extensions.notices() {
+        if !notices
+            .iter()
+            .any(|printed| printed.message == notice.message)
+        {
+            notices.push(notice);
+        }
+    }
     notices
         .extend(providers.add_session(&extensions, &config, run, &|name| std::env::var(name).ok()));
     notices.extend(providers.fill_placeholders(&config, &|name| std::env::var(name).ok())?);
@@ -251,7 +286,8 @@ fn run(
 }
 
 /// `fiber models [--json] [<search>]` in the current directory: lists the
-/// models the installed providers serve.
+/// models the installed providers serve merged with the current workspace's
+/// approved repository set.
 pub fn models(
     search: Option<&str>,
     json: bool,
@@ -268,14 +304,22 @@ pub fn models(
             json,
             &mut io::stdout(),
             &mut io::stderr(),
-            &|config: &Config| {
-                SessionExtensions::load(home, config, Arc::clone(&clock), Arc::clone(&locks), None)
+            &|config: &Config, repository: RepositorySet| {
+                SessionExtensions::load_repository(
+                    home,
+                    config,
+                    Arc::clone(&clock),
+                    Arc::clone(&locks),
+                    None,
+                    StateSeed::new(),
+                    repository,
+                )
             },
             &|providers| match &exe {
                 Ok(path) => spawn_refresh(path, providers).map(drop),
                 Err(message) => Err(io::Error::other(message.clone())),
             },
-            clock.as_ref(),
+            Arc::clone(&clock),
             run,
         )
     })
@@ -321,16 +365,18 @@ fn refresh_run(
     locks: Arc<dyn PathLock>,
     run: config::Runner<'_>,
 ) {
-    if let Ok((_, project)) = project_of(home, workspace)
-        && let Ok(config) = Config::load(Sources {
-            home: home.to_path_buf(),
-            workspace: workspace.to_path_buf(),
-            project,
-            overrides: Vec::new(),
-        })
-        && let Ok((providers, _)) = Providers::load_enabled(home, &config)
+    if let Ok((providers, config, set, _)) =
+        providers_config_and_set(home, workspace, Arc::clone(&clock))
     {
-        let loaded = SessionExtensions::load(home, &config, clock, locks, None);
+        let loaded = SessionExtensions::load_repository(
+            home,
+            &config,
+            clock,
+            locks,
+            None,
+            StateSeed::new(),
+            set,
+        );
         refresh_named(names, &providers, &loaded, &config, run);
     }
 }

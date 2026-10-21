@@ -28,6 +28,7 @@ pub struct Permissions {
 }
 
 /// What steps 1 to 6 say about one call.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Verdict {
     /// Refused. `reason` is `tool_call_completed`'s reason; `why` is
     /// `permission_resolved`'s reason and the model's text.

@@ -218,6 +218,27 @@ pub struct Stored {
     pub replaced: bool,
 }
 
+/// One presence-gap placeholder of a provider: its setting with its
+/// declared environment variable, which is `None` when the placeholder
+/// declares none (`docs/model-routing.md`, "A per-account host").
+/// Never a scope: the answer always saves globally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostGap {
+    /// The placeholder's setting name.
+    pub name: String,
+    /// The environment variable read when the setting is unset.
+    pub env: Option<String>,
+}
+
+/// What saving one host answer reported: the project settings file
+/// hiding the saved value, when a project-layer empty masks it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostSaved {
+    /// The project settings file whose empty value hides the saved
+    /// global one, if one masks it.
+    pub masked: Option<PathBuf>,
+}
+
 /// The reviewer choice for one provider: its models as local IDs in its
 /// order, with the saved pick or package default preselected. Empty
 /// `models` is an explicit skip, even when `selected` names a saved pick.
@@ -514,6 +535,26 @@ pub trait Configure: Send + Sync {
     /// Saves `id` as provider `name`'s reviewer, exactly as listed: one
     /// main-owned global write. Save errors name the key.
     fn set_reviewer(&self, name: &str, id: &str) -> Result<(), ConfigureError>;
+
+    /// One presence-gap placeholder of provider `name`: its setting with
+    /// its declared environment variable, which is `None` when the
+    /// placeholder declares none.
+    ///
+    /// A gap exists exactly when the placeholder has no present value —
+    /// no setting string and no environment-variable string — regardless
+    /// of validity (`docs/model-routing.md`, "A per-account host").
+    /// The view reads this after storing a credential; the worker reads
+    /// it after a browser login stores one.
+    fn gaps(&self, name: &str) -> Result<Vec<HostGap>, ConfigureError>;
+
+    /// Saves `value` as placeholder `key`'s answer for provider `name`:
+    /// one main-owned global write, the same file `fiber config set` and
+    /// `host.config.set(extension, "machine", ...)` write
+    /// (`docs/configuration.md`, "Extension settings"). A value that is
+    /// not a host is refused with a usage error naming the setting, never
+    /// the value, and nothing is written. A project-layer empty masking
+    /// the saved value comes back as the project settings file hiding it.
+    fn save_host(&self, name: &str, key: &str, value: &str) -> Result<HostSaved, ConfigureError>;
 
     // `/logout`.
 

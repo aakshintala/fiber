@@ -238,3 +238,89 @@ fn login_provider_fails_when_the_vm_registers_an_undeclared_provider() {
     assert_eq!(err.code(), contract::ErrorCode::ExtensionFailed);
     assert!(err.to_string().contains("rogue"), "{err}");
 }
+
+/// Declares the browser provider `provider` of the repository extension
+/// `name` in `workspace`: its manifest, its data file and its Lua
+/// credential script.
+fn declare_repo(workspace: &std::path::Path, name: &str, provider: &str) {
+    fs::create_dir_all(workspace).unwrap();
+    fakes::git::git(workspace, &["init", "--quiet"]);
+    let dir = workspace.join("repo");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    let mut manifest = json!({ "name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1 });
+    manifest["providers"] = serde_json::Value::Object(
+        [(provider.to_owned(), json!(["http://127.0.0.1:1/v1"]))]
+            .into_iter()
+            .collect(),
+    );
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    fs::write(
+        dir.join("providers").join(format!("{provider}.json")),
+        json!({
+            "name": provider,
+            "login": "browser",
+            "models": [
+                { "id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000 },
+            ],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("providers").join(format!("{provider}.lua")),
+        format!(
+            r#"fiber.provider("{provider}", {{
+          credential = {{ timeout = 60000, run = function(arg)
+            return {{ token = "t", expires_at = 4102444800 }}
+          end }}
+        }})"#
+        ),
+    )
+    .unwrap();
+    let config_dir = workspace.join(".fiber");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("config.json"),
+        json!({"repository_extensions": [{"path": "repo"}]}).to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn login_provider_resolves_a_repository_only_browser_provider_to_its_copy() {
+    let root = fakes::TempDir::new("repo-login");
+    let home = root.path().join("home");
+    let workspace = root.path().join("workspace");
+    declare_repo(&workspace, "fiber.test/acme", "acme");
+    let clock = FakeClock::new();
+    let project = config::ProjectKey::new("pin").unwrap();
+    let items = crate::declared_items(&workspace, &*clock).unwrap();
+    let item = items
+        .into_iter()
+        .find(|found| found.name == "fiber.test/acme")
+        .unwrap();
+    let mut index = crate::Index::load(&home);
+    let digest = crate::hash(&mut index, &item).unwrap();
+    crate::Store::new(&home, &project, clock.clone())
+        .approve(&item, &digest)
+        .unwrap();
+    // No personal install: only the pinned copy holds the extension, so a
+    // home-layout resolution fails while the copy resolves.
+    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone());
+    let (providers, notices) = Providers::load_all_repository(&home, &set).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        providers.provider_source_dir("acme"),
+        Some(crate::Store::new(&home, &project, clock.clone()).copy_dir(&digest))
+    );
+    let provider = login_provider(
+        &home,
+        &providers,
+        "acme",
+        Arc::new(SystemBrowser::default()),
+        clock,
+    )
+    .unwrap();
+    assert_eq!(provider.name(), "acme");
+    assert_eq!(provider.functions().unwrap(), ["credential"]);
+}
