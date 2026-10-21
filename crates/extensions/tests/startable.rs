@@ -1,10 +1,9 @@
 //! Whether a model can start, through the shared message constructors:
-//! the window a model declares, the thinking suffix it takes, and the
-//! protocols this Fiber speaks.
+//! the window a model declares and the thinking suffix it takes.
 
 use config::{ModelData, Protocol};
 use contract::ThinkingLevel;
-use extensions::{context_window, protocol_refusal, takes, thinking_refusal};
+use extensions::{context_window, takes, thinking_refusal};
 
 /// A model with these window, levels and protocol, and default fields
 /// otherwise.
@@ -82,24 +81,4 @@ fn a_model_with_no_levels_refuses_every_suffix() {
         Protocol::OpenaiResponses,
     );
     assert_eq!(takes(&taken), "takes `low`, `high`");
-}
-
-#[test]
-fn only_bedrock_converse_is_refused_and_scripted_passes() {
-    for protocol in [
-        Protocol::OpenaiResponses,
-        Protocol::OpenaiCompletions,
-        Protocol::AnthropicMessages,
-        Protocol::GoogleGenerativeAi,
-        Protocol::Scripted,
-    ] {
-        assert_eq!(protocol_refusal(protocol, "fake/m"), None);
-    }
-    assert_eq!(
-        protocol_refusal(Protocol::BedrockConverse, "fake/m"),
-        Some(
-            "The model `fake/m` speaks a protocol this Fiber does not speak yet; pick another model."
-                .to_owned()
-        )
-    );
 }
