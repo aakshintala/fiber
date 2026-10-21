@@ -440,6 +440,295 @@ fn declared_settings_keep_a_placeholder_out_of_repo_settings() {
     assert!(declared.placeholders.contains("region"));
 }
 
+/// A home/workspace pair with the `acme` fixture installed, for the
+/// `set` write-path tests below: every gate `set_extension_setting`
+/// holds gets a test that flips it, so CI's mutants die in this crate
+/// (mutation testing runs this crate's tests alone).
+struct SetSetup {
+    root: fakes::TempDir,
+    project: ProjectKey,
+}
+
+impl SetSetup {
+    fn new() -> Self {
+        let root = fakes::TempDir::new("fiber-extension-set-write");
+        let setup = Self {
+            root,
+            project: ProjectKey::new("proj").unwrap(),
+        };
+        fs::create_dir_all(setup.home()).unwrap();
+        fs::create_dir_all(setup.workspace()).unwrap();
+        fixture(&setup.home().join("extensions").join("acme"));
+        setup
+    }
+
+    fn home(&self) -> std::path::PathBuf {
+        self.root.path().join("home")
+    }
+
+    fn workspace(&self) -> std::path::PathBuf {
+        self.root.path().join("workspace")
+    }
+
+    /// The workspace ready for a `--repo` write: `.fiber/` and
+    /// `.fiber/config/` exist as plain directories, and `dir` holds an
+    /// approved copy of the extension.
+    fn repo_dirs(&self) -> std::path::PathBuf {
+        fs::create_dir_all(self.workspace().join(".fiber").join("config")).unwrap();
+        let dir = self.root.path().join("approved").join("acme");
+        fixture(&dir);
+        dir
+    }
+
+    fn refused_why(result: Result<std::path::PathBuf, crate::ConfigError>) -> String {
+        match result {
+            Err(crate::ConfigError::Refused { why, .. }) => why.to_owned(),
+            other => panic!("a refused set names its reason: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn set_global_placeholder_write_returns_its_settings_file() {
+    // Kills: whole-`set_extension_setting` to `Ok(Default)`,
+    // `repository && dir.is_none()` to `||`, the repository gate's `&&`
+    // to `||`, `!contains` to `contains`, the host gate's second `&&` to
+    // `||` and its `!` deletion, `settings_layer_file` to `Default`, and
+    // `set_settings_file` to `Ok(())` (the file content is read back).
+    let setup = SetSetup::new();
+    let file = crate::set(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        crate::Layer::Global,
+        "extensions.\"acme\".settings.region",
+        json!("example.com"),
+    )
+    .unwrap();
+    assert_eq!(file, setup.home().join("config").join("acme.json"));
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(written, json!({"region": "example.com"}));
+}
+
+#[test]
+fn set_global_unknown_setting_is_refused() {
+    // Kills the `!declared_names.contains` `!` deletion (an unknown key
+    // must be refused, and the refusal below the repository gate keeps
+    // its unknown-setting reason).
+    let setup = SetSetup::new();
+    let why = SetSetup::refused_why(crate::set(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        crate::Layer::Global,
+        "extensions.\"acme\".settings.bogus",
+        json!("example.com"),
+    ));
+    assert!(why.contains("no such setting"), "{why:?}");
+    assert!(!setup.home().join("config").join("acme.json").exists());
+}
+
+#[test]
+fn set_repo_valid_key_writes_the_repository_file() {
+    // Kills: `set_repo_extension_setting` to `Ok(Default)`, the `!any`
+    // `!` deletion and the `==` to `!=` in the repository gate (a listed
+    // `repo_settings` key must write), and the repository arm of
+    // `settings_layer_file` to `Default`.
+    let setup = SetSetup::new();
+    let dir = setup.repo_dirs();
+    let file = crate::set_repo_extension_setting(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        &dir,
+        "extensions.\"acme\".settings.workspace_url",
+        json!("repo-wire"),
+    )
+    .unwrap();
+    let expected = setup
+        .workspace()
+        .join(".fiber")
+        .join("config")
+        .join("acme.json");
+    assert_eq!(file, expected);
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&expected).unwrap()).unwrap();
+    assert_eq!(written, json!({"workspace_url": "repo-wire"}));
+}
+
+#[test]
+fn set_repo_undeclared_key_is_refused_as_not_a_repo_setting() {
+    // Kills the repository gate's `||` to `&&`: an undeclared key must
+    // still be refused there, with the repo-settings reason rather than
+    // falling through to the unknown-setting gate.
+    let setup = SetSetup::new();
+    let dir = setup.repo_dirs();
+    let why = SetSetup::refused_why(crate::set_repo_extension_setting(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        &dir,
+        "extensions.\"acme\".settings.bogus",
+        json!("example.com"),
+    ));
+    assert!(why.contains("repo_settings"), "{why:?}");
+}
+
+#[test]
+fn set_placeholder_descendant_is_refused() {
+    // Kills `placeholders.contains && len > 1`'s `&&` to `||` in one
+    // direction (a placeholder descendant must be refused) and the `>`
+    // to `<` (a longer rest must still be refused).
+    let setup = SetSetup::new();
+    let why = SetSetup::refused_why(crate::set(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        crate::Layer::Global,
+        "extensions.\"acme\".settings.region.sub",
+        json!("example.com"),
+    ));
+    assert!(why.contains("no object below"), "{why:?}");
+    assert!(!setup.home().join("config").join("acme.json").exists());
+}
+
+#[test]
+fn set_plain_descendant_below_a_repo_setting_writes() {
+    // Kills the descendant gate's `&&` to `||`: a descendant of a
+    // non-placeholder key is no placeholder descendant and must write.
+    // Also pins the `>` to `==` and `>=` kills beside the valid
+    // single-segment write above: a two-segment non-placeholder rest
+    // writes, so `len > 1` alone never refuses.
+    let setup = SetSetup::new();
+    let file = crate::set(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        crate::Layer::Global,
+        "extensions.\"acme\".settings.workspace_url.sub",
+        json!("v"),
+    )
+    .unwrap();
+    assert_eq!(file, setup.home().join("config").join("acme.json"));
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(written, json!({"workspace_url": {"sub": "v"}}));
+}
+
+#[test]
+fn set_plain_single_key_with_a_non_host_value_writes() {
+    // Kills the host gate's first `&&` to `||`: a non-placeholder key
+    // holds any value, even one that is no host.
+    let setup = SetSetup::new();
+    let file = crate::set(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        crate::Layer::Global,
+        "extensions.\"acme\".settings.workspace_url",
+        json!("not a host!!"),
+    )
+    .unwrap();
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(written, json!({"workspace_url": "not a host!!"}));
+}
+
+#[test]
+fn set_placeholder_single_key_with_a_non_host_value_is_refused() {
+    // Kills the host gate's `== 1` to `!=` (a single-segment placeholder
+    // with a non-host value must be refused) and its `!matches` `!`
+    // deletion in the refusal direction.
+    let setup = SetSetup::new();
+    let why = SetSetup::refused_why(crate::set(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        crate::Layer::Global,
+        "extensions.\"acme\".settings.region",
+        json!("not a host!!"),
+    ));
+    assert!(why.contains("host"), "{why:?}");
+    assert!(!setup.home().join("config").join("acme.json").exists());
+}
+
+#[test]
+fn set_direct_repository_key_without_a_directory_is_refused_uninstalled() {
+    // Pins the `repository && dir.is_none()` gate's repository direction:
+    // a settings-shaped repository key reaching `set` directly names no
+    // directory this crate may use.
+    let setup = SetSetup::new();
+    let dir = setup.repo_dirs();
+    let _ = &dir;
+    let why = SetSetup::refused_why(crate::set(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        crate::Layer::Repository,
+        "extensions.\"acme\".settings.workspace_url",
+        json!("repo-wire"),
+    ));
+    assert!(why.contains("not installed"), "{why:?}");
+}
+
+#[test]
+fn set_uninstalled_extension_is_refused_uninstalled() {
+    // Pins the `installed_dir` `None` arm: neither an installed nor a
+    // caller-resolved directory means uninstalled.
+    let setup = SetSetup::new();
+    let why = SetSetup::refused_why(crate::set(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        crate::Layer::Global,
+        "extensions.\"nobody\".settings.region",
+        json!("example.com"),
+    ));
+    assert!(why.contains("not installed"), "{why:?}");
+}
+
+#[test]
+fn set_empty_rest_is_a_usage_error() {
+    let setup = SetSetup::new();
+    match crate::set(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        crate::Layer::Global,
+        "extensions.\"acme\".settings",
+        json!("example.com"),
+    ) {
+        Err(crate::ConfigError::Override { .. }) => {}
+        other => panic!("an empty rest is usage: {other:?}"),
+    }
+}
+
+#[test]
+fn set_project_placeholder_write_returns_the_project_file() {
+    // Pins the project arm of `settings_layer_file`: the same key on the
+    // project layer writes under `projects/<key>/`.
+    let setup = SetSetup::new();
+    let file = crate::set(
+        &setup.home(),
+        &setup.workspace(),
+        &setup.project,
+        crate::Layer::Project,
+        "extensions.\"acme\".settings.region",
+        json!("example.com"),
+    )
+    .unwrap();
+    assert_eq!(
+        file,
+        setup
+            .home()
+            .join("projects")
+            .join("proj")
+            .join("config")
+            .join("acme.json")
+    );
+}
+
 #[test]
 fn layered_get_returns_the_notice_for_an_ignored_repository_key() {
     // The repository holds `region`, which no filter lists: the merged
