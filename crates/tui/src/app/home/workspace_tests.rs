@@ -146,6 +146,7 @@ fn directories_of(effect: &Effect) -> Vec<(String, String)> {
         | Effect::FindPause { .. }
         | Effect::OpenLink(_)
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::OpenFile(_) => Vec::new(),
     }
 }

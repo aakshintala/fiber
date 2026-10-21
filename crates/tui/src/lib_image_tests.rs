@@ -119,6 +119,7 @@ fn click(lp: &mut Loop<TestBackend>) -> Vec<String> {
         | Effect::Exit(_)
         | Effect::ListFiles
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -186,6 +187,7 @@ fn completion(rx: &Receiver<Input>, wait: &Deadline) -> Input {
             | Input::Files { .. }
             | Input::FindDue(_)
             | Input::Image { .. }
+            | Input::Feedback(_)
             | Input::Models(_)
             | Input::Login { .. }
             | Input::Tick,
@@ -218,6 +220,7 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
         | Input::Files { .. }
         | Input::FindDue(_)
         | Input::Image { .. }
+        | Input::Feedback(_)
         | Input::Models(_)
         | Input::Login { .. }
         | Input::Tick => panic!("the worker answered something else"),

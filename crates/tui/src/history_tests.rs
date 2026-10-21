@@ -63,6 +63,7 @@ fn sent(effect: Effect) -> Vec<Value> {
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. } => Vec::new(),
