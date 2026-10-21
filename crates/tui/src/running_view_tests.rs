@@ -136,7 +136,8 @@ fn opened(app: &mut App) {
             | crate::app::Effect::Copy(_)
             | crate::app::Effect::OpenLink(_)
             | crate::app::Effect::OpenFile(_)
-            | crate::app::Effect::ReadImage(_) => panic!("opening sends"),
+            | crate::app::Effect::ReadImage(_)
+            | crate::app::Effect::Feedback { .. } => panic!("opening sends"),
         };
     let id = out
         .iter()

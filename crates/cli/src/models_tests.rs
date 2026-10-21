@@ -8,7 +8,9 @@
     reason = "test code; a failure is the test's"
 )]
 
-use crate::test_support::write_record;
+use crate::test_support::{
+    approve_repo, declare_repo, never_repo, repo_data, repo_manifest, write_record,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -178,29 +180,43 @@ impl Setup {
         spawn: &dyn Fn(Vec<String>) -> std::io::Result<()>,
         clock: std::sync::Arc<dyn contract::clock::Clock>,
     ) -> (Result<(), CliError>, String, String) {
+        self.run_in(&self.workspace(), search, json, spawn, clock)
+    }
+
+    /// Runs the command in `workspace` with in-memory writers.
+    fn run_in(
+        &self,
+        workspace: &std::path::Path,
+        search: Option<&str>,
+        json: bool,
+        spawn: &dyn Fn(Vec<String>) -> std::io::Result<()>,
+        clock: std::sync::Arc<dyn contract::clock::Clock>,
+    ) -> (Result<(), CliError>, String, String) {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let home = self.home();
         let result = run(
             &self.home(),
-            &self.workspace(),
+            workspace,
             search,
             json,
             &mut out,
             &mut err,
-            &|config: &config::Config| {
+            &|config: &config::Config, repository: extensions::RepositorySet| {
                 let locks: std::sync::Arc<dyn contract::files::PathLock> =
                     std::sync::Arc::new(NoLock);
-                extensions::SessionExtensions::load(
+                extensions::SessionExtensions::load_repository(
                     &home,
                     config,
                     std::sync::Arc::clone(&clock),
                     locks,
                     None,
+                    extensions::StateSeed::new(),
+                    repository,
                 )
             },
             spawn,
-            clock.as_ref(),
+            std::sync::Arc::clone(&clock),
             &fakes::children::grouped_output,
         );
         (
@@ -1388,5 +1404,171 @@ fn providers_and_config_reads_the_same_providers_run_lists() {
             .get("model", None)
             .and_then(|(value, _)| value.as_str().map(str::to_owned)),
         Some("acme/m1".to_owned())
+    );
+}
+
+impl Setup {}
+
+/// The `providers/<name>.lua` script registering `name` with a credential
+/// and this `models()` body.
+fn repo_lua(name: &str, models_body: &str) -> String {
+    format!(
+        "fiber.provider(\"{name}\", {{ credential = {{ timeout = 1000, \
+         run = function() return {{ token = \"t\", expires_at = 1893456000 }} end }}, \
+         models = {{ timeout = 1000, run = function() return {models_body} end }} }})\n"
+    )
+}
+
+#[test]
+fn repository_provider_models_list_inside_the_project_but_not_outside() {
+    fakes::within("repository models list", Duration::from_secs(30), || {
+        let setup = Setup::new();
+        let manifest = repo_manifest(
+            "fiber.test/acme",
+            &json!({"acme": ["http://127.0.0.1:1/v1"]}),
+        );
+        let data = repo_data("acme", "http://127.0.0.1:1/v1", &["repo-model"]);
+        declare_repo(
+            &setup.workspace(),
+            &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
+        );
+        approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
+        let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+        assert!(result.is_ok(), "{result:?} {err}");
+        assert!(out.contains("acme/repo-model"), "{out:?}");
+        // Outside the project the approved provider is invisible: no
+        // personal install serves it, so the run says so.
+        let elsewhere = setup.root.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        let (result, out, err) = setup.run_in(
+            &elsewhere,
+            None,
+            false,
+            &no_spawn,
+            fakes::clock::FakeClock::new(),
+        );
+        assert!(result.is_ok(), "{result:?} {err}");
+        assert!(!out.contains("acme/repo-model"), "{out:?}");
+        assert!(err.contains("No provider is installed"), "{err:?}");
+    });
+}
+
+#[test]
+fn repository_lua_provider_models_run_without_a_cached_list() {
+    fakes::within("repository Lua models", Duration::from_secs(30), || {
+        let setup = Setup::new();
+        let manifest = repo_manifest(
+            "fiber.test/acme",
+            &json!({"acme": ["http://127.0.0.1:1/v1"]}),
+        );
+        let script = repo_lua(
+            "acme",
+            "{ { id = \"live-model\", protocol = \"openai-responses\", \
+             base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 } }",
+        );
+        declare_repo(
+            &setup.workspace(),
+            &[("repo", manifest, &[("providers/acme.lua", script.as_str())])],
+        );
+        approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
+        // No cached list: the one-shot run serves the Lua `models()`.
+        assert!(
+            !setup.home().join("cache/models/acme.json").exists(),
+            "no cached list stands in for the Lua models()"
+        );
+        let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+        assert!(result.is_ok(), "{result:?} {err}");
+        assert!(out.contains("acme/live-model"), "{out:?} {err:?}");
+        let elsewhere = setup.root.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        let (result, out, _) = setup.run_in(
+            &elsewhere,
+            None,
+            false,
+            &no_spawn,
+            fakes::clock::FakeClock::new(),
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert!(!out.contains("acme/live-model"), "{out:?}");
+    });
+}
+
+#[test]
+fn unapproved_and_never_repository_providers_never_load() {
+    fakes::within(
+        "unapproved repository models",
+        Duration::from_secs(30),
+        || {
+            let setup = Setup::new();
+            let ghost = repo_manifest(
+                "fiber.test/ghost",
+                &json!({"ghost": ["http://127.0.0.1:1/v1"]}),
+            );
+            let ghost_data = repo_data("ghost", "http://127.0.0.1:1/v1", &["ghost-model"]);
+            let boom = repo_manifest(
+                "fiber.test/boom",
+                &json!({"boom": ["http://127.0.0.1:1/v1"]}),
+            );
+            // A `models()` that fails loudly: if it ever ran, its text would
+            // print as a notice.
+            let script = repo_lua("boom", "error(\"repoboom\")");
+            declare_repo(
+                &setup.workspace(),
+                &[
+                    (
+                        "ghost",
+                        ghost,
+                        &[("providers/ghost.json", ghost_data.as_str())],
+                    ),
+                    ("boom", boom, &[("providers/boom.lua", script.as_str())]),
+                ],
+            );
+            never_repo(&setup.home(), &setup.workspace(), "fiber.test/ghost");
+            let (result, out, err) =
+                setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+            assert!(result.is_ok(), "{result:?} {err}");
+            assert!(!out.contains("ghost-model"), "{out:?}");
+            assert!(!out.contains("boom/"), "{out:?}");
+            assert!(!err.contains("repoboom"), "{err:?}");
+            assert!(!err.contains("ghost"), "{err:?}");
+        },
+    );
+}
+
+#[test]
+fn a_shadowed_personal_provider_prints_one_notice() {
+    fakes::within(
+        "shadowed repository models",
+        Duration::from_secs(60),
+        || {
+            let setup = Setup::new();
+            setup.install(
+                "acme",
+                "acme",
+                &json!([{"id": "personal-model", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
+            );
+            let manifest = repo_manifest("acme", &json!({"acme": ["http://127.0.0.1:1/v1"]}));
+            let data = repo_data("acme", "http://127.0.0.1:1/v1", &["repo-model"]);
+            declare_repo(
+                &setup.workspace(),
+                &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
+            );
+            approve_repo(&setup.home(), &setup.workspace(), "acme");
+            let (result, out, err) =
+                setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+            assert!(result.is_ok(), "{result:?} {err}");
+            // The repository copy wins, and its shadow over the personal
+            // install prints once, not once per load.
+            assert!(out.contains("acme/repo-model"), "{out:?}");
+            assert!(!out.contains("personal-model"), "{out:?}");
+            assert_eq!(
+                err.lines()
+                    .filter(|line| line.contains("in place of your install"))
+                    .count(),
+                1,
+                "{err:?}"
+            );
+        },
     );
 }

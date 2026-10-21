@@ -332,6 +332,7 @@ impl Connection {
                 | Input::Image { .. }
                 | Input::Viewed { .. }
                 | Input::Models(_)
+                | Input::Feedback(_)
                 | Input::Login { .. }
                 | Input::Files { .. }) => self.push_stash(other),
             }

@@ -28,11 +28,18 @@ pub fn login_provider(
         .ok_or_else(|| Error::ProviderMissing {
             provider: name.to_owned(),
         })?;
-    let dir = config::extensions_dir(home).join(config::dir_name(extension_name));
+    // The registering extension's own directory: the pinned copy for a
+    // repository entry, the personal install otherwise. A provider whose
+    // extension never loaded as a candidate falls back to the home layout.
+    let dir = providers
+        .provider_source_dir(name)
+        .unwrap_or_else(|| config::extensions_dir(home).join(config::dir_name(extension_name)));
     let manifest = config::read_manifest(&dir)?;
-    // A login runs a personal install only, never a repository copy: the
-    // same dependency map shape the session builds for that layout.
-    let deps = crate::hooks::dep_dirs(home, &dir, &manifest.depends, false);
+    // The dependency layout follows the resolved directory: a pinned
+    // copy serves its own .fiber-depends, a personal install serves home —
+    // the same prefix rule start_vm uses.
+    let is_repository_copy = dir.starts_with(config::pinned_dir(home));
+    let deps = crate::dep_dirs(home, &dir, &manifest.depends, is_repository_copy);
     let mut extension = LuaExtension::new(extension_name, dir, home, clock)
         .with_dependencies(deps)
         .with_browser(browser)

@@ -22,7 +22,7 @@ use config::{
 };
 use contract::clock::Clock;
 use contract::events::Notice;
-use extensions::Providers;
+use extensions::{Providers, RepositorySet};
 use rustix::termios::{self, LocalModes, OptionalActions, Termios};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::{Handle, Signals};
@@ -888,6 +888,28 @@ fn home_and_providers() -> Result<(std::path::PathBuf, Providers, Vec<Notice>), 
     Ok((home, providers, notices))
 }
 
+/// The home, the installed providers merged with the current workspace's
+/// approved repository set, the retained set, and the notices loading
+/// them gave: what `fiber login` reads. Every personal install loads, as
+/// [`home_and_providers`] reads, with approved repository entries merged
+/// in. Outside a project the set is empty and the providers are the
+/// installed ones.
+fn home_providers_and_set(
+    clock: Arc<dyn Clock>,
+) -> Result<(std::path::PathBuf, Providers, RepositorySet, Vec<Notice>), CliError> {
+    let home = config::fiber_home_from_env()?;
+    let workspace = std::env::current_dir().map_err(CliError::CurrentDirectory)?;
+    // A workspace with no project reads as home-only, as at Base: only a
+    // resolved project holds a repository set.
+    let set = project_of(&home, &workspace)
+        .map(|(_, project)| {
+            RepositorySet::load_pinned(&home, &project, &workspace, Arc::clone(&clock))
+        })
+        .unwrap_or_default();
+    let (providers, notices) = Providers::load_all_repository(&home, &set)?;
+    Ok((home, providers, set, notices))
+}
+
 /// `fiber login [<name>] [--as <label>] [--device]`.
 // Exempted from mutation testing: telling `&&` from `||` here needs
 // exactly one of the real stdin or stderr to be a terminal, which no test
@@ -899,32 +921,33 @@ pub fn run_login(
     device: bool,
     clock: Arc<dyn Clock>,
 ) -> i32 {
-    let ran = home_and_providers().and_then(|(home, providers, loading)| {
-        let stdin = io::stdin();
-        let on_terminal = stdin.is_terminal();
-        let mut err = io::stderr();
-        let terminal = on_terminal && err.is_terminal();
-        let mut keys: Box<dyn KeyReader> = if on_terminal {
-            Box::new(NoEcho)
-        } else {
-            Box::new(Plain)
-        };
-        login_with_notices(
-            name,
-            label,
-            &mut LoginIo {
-                home: &home,
-                providers: &providers,
-                terminal,
-                stdin: &mut stdin.lock(),
-                err: &mut err,
-                keys: keys.as_mut(),
-                device,
-                clock,
-            },
-            loading,
-        )
-    });
+    let ran =
+        home_providers_and_set(Arc::clone(&clock)).and_then(|(home, providers, _set, loading)| {
+            let stdin = io::stdin();
+            let on_terminal = stdin.is_terminal();
+            let mut err = io::stderr();
+            let terminal = on_terminal && err.is_terminal();
+            let mut keys: Box<dyn KeyReader> = if on_terminal {
+                Box::new(NoEcho)
+            } else {
+                Box::new(Plain)
+            };
+            login_with_notices(
+                name,
+                label,
+                &mut LoginIo {
+                    home: &home,
+                    providers: &providers,
+                    terminal,
+                    stdin: &mut stdin.lock(),
+                    err: &mut err,
+                    keys: keys.as_mut(),
+                    device,
+                    clock,
+                },
+                loading,
+            )
+        });
     finish(ran)
 }
 
