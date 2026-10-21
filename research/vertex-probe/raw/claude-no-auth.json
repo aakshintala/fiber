@@ -1,0 +1,71 @@
+{
+  "body": [
+    {
+      "error": {
+        "code": 401,
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "domain": "googleapis.com",
+            "metadata": {
+              "method": "google.cloud.aiplatform.v1.PredictionService.StreamRawPredict",
+              "service": "aiplatform.googleapis.com"
+            },
+            "reason": "CREDENTIALS_MISSING"
+          }
+        ],
+        "message": "Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+        "status": "UNAUTHENTICATED"
+      }
+    }
+  ],
+  "cost": 0.0,
+  "headers": {
+    "accept-ranges": null,
+    "alt-svc": null,
+    "connection": null,
+    "content-type": "application/json; charset=UTF-8",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "www-authenticate": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/anthropic/models/claude-haiku-4-5@20251001:streamRawPredict",
+  "request": {
+    "anthropic_version": "vertex-2023-10-16",
+    "max_tokens": 4,
+    "messages": [
+      {
+        "content": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "hi",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "stream": true,
+    "system": [
+      {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "text": "You are terse.",
+        "type": "text"
+      }
+    ],
+    "tool_choice": {
+      "type": "auto"
+    }
+  },
+  "status": 401,
+  "usage": {}
+}

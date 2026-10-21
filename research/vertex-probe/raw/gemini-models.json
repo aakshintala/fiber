@@ -1,0 +1,103 @@
+{
+  "gemini-3-flash-preview": {
+    "calls": [
+      {
+        "has_id": true,
+        "name": "get_weather"
+      }
+    ],
+    "signed": [
+      true
+    ],
+    "status": 200
+  },
+  "gemini-3.1-flash-lite": {
+    "calls": [
+      {
+        "has_id": true,
+        "name": "get_weather"
+      }
+    ],
+    "signed": [
+      true
+    ],
+    "status": 200
+  },
+  "gemini-3.1-pro-preview": {
+    "calls": [
+      {
+        "has_id": true,
+        "name": "get_weather"
+      }
+    ],
+    "signed": [
+      true
+    ],
+    "status": 200
+  },
+  "gemini-3.1-pro-preview-customtools": {
+    "calls": [
+      {
+        "has_id": false,
+        "name": "get_weather"
+      }
+    ],
+    "signed": [
+      true
+    ],
+    "status": 200
+  },
+  "gemini-3.5-flash": {
+    "calls": [
+      {
+        "has_id": true,
+        "name": "get_weather"
+      }
+    ],
+    "signed": [
+      true
+    ],
+    "status": 200
+  },
+  "gemini-3.5-flash-lite": {
+    "calls": [
+      {
+        "has_id": true,
+        "name": "get_weather"
+      }
+    ],
+    "signed": [
+      true
+    ],
+    "status": 200
+  },
+  "gemini-3.7-flash": {
+    "calls": [
+      {
+        "has_id": true,
+        "name": "get_weather"
+      }
+    ],
+    "signed": [
+      true
+    ],
+    "status": 200
+  },
+  "gemini-3.8-flash": {
+    "calls": [
+      {
+        "has_id": true,
+        "name": "get_weather"
+      }
+    ],
+    "signed": [
+      true
+    ],
+    "status": 200
+  },
+  "gemini-4-argon": {
+    "calls": [],
+    "signed": [],
+    "status": 403
+  }
+}

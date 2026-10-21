@@ -1,0 +1,6 @@
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": "It is"}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-3.1-flash-lite","createTime": "2026-10-20T16:56:40.869524Z","responseId": "00000000000000000000003"}
+
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": " sunny and 21°C in Paris today."}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-3.1-flash-lite","createTime": "2026-10-20T16:56:40.869524Z","responseId": "00000000000000000000003"}
+
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": "","thoughtSignature": "AY89a1+aW76GMRCfmUROXcCGAYyZyEv7ekKYiEV5v28GZRJQmNpAiLgD1nTUCBddoiRQSA1ZcEFoHhf9TVrJPYMQLGwOmGORd38N1Er8Y8PDbBGN4QW4GM0r3xA="}]},"finishReason": "STOP"}],"usageMetadata": {"promptTokenCount": 86,"candidatesTokenCount": 13,"totalTokenCount": 99,"trafficType": "ON_DEMAND","promptTokensDetails": [{"modality": "TEXT","tokenCount": 86}],"candidatesTokensDetails": [{"modality": "TEXT","tokenCount": 13}]},"modelVersion": "gemini-3.1-flash-lite","createTime": "2026-10-20T16:56:40.869524Z","responseId": "00000000000000000000003"}
+

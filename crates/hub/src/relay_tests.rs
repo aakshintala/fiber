@@ -2321,3 +2321,43 @@ fn a_subscribe_without_a_credential_is_left_for_the_session() {
         "a subscribe naming no label is never read for one"
     );
 }
+
+#[test]
+fn a_replay_that_cannot_start_is_refused_io_failed() {
+    use std::io::{BufRead, BufReader};
+    use std::time::Duration;
+    // The socket-pair, clone and spawn failures `could_not_replay` answers
+    // cannot be forced from outside, so a mutant emptying its body, or
+    // changing its code or message, would survive unnoticed and hang the
+    // client on its enqueued command: this test calls it alone and pins
+    // the refusal.
+    const DEADLINE: Duration = Duration::from_secs(10);
+    let held = fakes::TempDir::new("rs");
+    let hub = Arc::new(hub(&held));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let (writer, reader) = UnixStream::pair().unwrap();
+    let writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(writer));
+    super::could_not_replay(
+        &writer,
+        &hub,
+        &relays,
+        "s_aaaaaaaaaaaaaaaa",
+        &CommandId("c_1".to_owned()),
+    );
+    reader.set_read_timeout(Some(DEADLINE)).unwrap();
+    let mut text = String::new();
+    BufReader::new(reader)
+        .read_line(&mut text)
+        .expect("the refusal arrives");
+    let line: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(line["payload"]["code"], "io_failed", "{line}");
+    assert!(
+        line["payload"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("s_aaaaaaaaaaaaaaaa"),
+        "{line}"
+    );
+}

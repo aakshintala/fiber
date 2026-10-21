@@ -1,0 +1,11 @@
+{
+  "name": "github.com/aakshintala/fiber/providers/vertex",
+  "version": "0.0.0",
+  "fiber": "0.0.0",
+  "api": 1,
+  "providers": {
+    "vertex": [
+      "https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google"
+    ]
+  }
+}
