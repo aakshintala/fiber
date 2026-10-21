@@ -649,7 +649,7 @@ fn start_with_continues_naming_another_worktree_is_invalid_arguments() {
 }
 
 #[test]
-fn start_with_continues_accepts_an_alias_of_the_same_directory() {
+fn start_with_continues_refuses_an_alias_of_the_same_directory() {
     for alias in ["slash", "link"] {
         let temp = Temp::new();
         let worktree = continues_setup(&temp);
@@ -661,22 +661,10 @@ fn start_with_continues_accepts_an_alias_of_the_same_directory() {
                 link.to_string_lossy().into_owned()
             }
         };
-        let starter = FakeStarter::bind_and_hold(&temp.dir);
-        let hub = temp.hub(starter.clone());
-        let mut client = Client::connect(&hub);
-        client.hello();
-        client.send(&command(
-            "c_1",
-            "start",
+        refused_start(
+            &temp,
             json!({"workspace": workspace, "continues": OLD}),
-        ));
-        let (id, result) = accepted(&client.next("the acknowledgement"));
-        assert_eq!(id, "c_1", "{alias}");
-        assert!(result.get("session_id").is_some(), "{alias}");
-        assert_eq!(
-            starter.started_continues(),
-            [Some(contract::SessionId(OLD.to_owned()))],
-            "{alias}"
+            "invalid_arguments",
         );
     }
 }

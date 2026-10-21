@@ -151,7 +151,7 @@ fn resolve(old: &SessionId, old_dir: &Path, workspace: &Path) -> Result<Worktree
             ));
         }
     };
-    if path != workspace.to_string_lossy() && !same_dir(path, workspace) {
+    if path != workspace.to_string_lossy() {
         return Err(failed(
             ErrorCode::InvalidArguments,
             format!(
@@ -182,21 +182,6 @@ fn corrupt(old: &SessionId) -> Failure {
             old.0
         ),
     )
-}
-
-/// Whether `recorded` names the same directory as `workspace`: both
-/// sides are canonicalized and compared, so an alias spelling of the
-/// same directory accepts. Any canonicalization failure is not a match.
-/// Callers try exact string equality first, so matching spellings never
-/// canonicalize.
-fn same_dir(recorded: &str, workspace: &Path) -> bool {
-    match (
-        std::fs::canonicalize(recorded),
-        std::fs::canonicalize(workspace),
-    ) {
-        (Ok(recorded), Ok(workspace)) => recorded == workspace,
-        _ => false,
-    }
 }
 
 #[cfg(test)]

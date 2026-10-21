@@ -97,7 +97,7 @@ pub(crate) fn run(
                 "A start that continues a session keeps that session's worktree: it takes no new one.",
             );
         }
-        if let Err(outcome) = check_continues(hub, workspace, workspace_path, old) {
+        if let Err(outcome) = check_continues(hub, workspace, old) {
             return outcome;
         }
     }
@@ -378,12 +378,7 @@ pub(crate) fn io_failed(hub: &Hub, id: &SessionId, detail: &str) -> Outcome {
 /// or whose first line is still being written, is `session_not_found`,
 /// as for a missing log; an unreadable first line is `log_corrupt`;
 /// anything else that is not the workspace is `invalid_arguments`.
-fn check_continues(
-    hub: &Hub,
-    workspace: &str,
-    workspace_path: &Path,
-    old: &SessionId,
-) -> Result<(), Outcome> {
+fn check_continues(hub: &Hub, workspace: &str, old: &SessionId) -> Result<(), Outcome> {
     let Some((_, dir)) = crate::recent::lookup_logged(&hub.home, old) else {
         return Err(Outcome::Rejected(crate::resume::not_found(old)));
     };
@@ -414,28 +409,13 @@ fn check_continues(
             old.0
         )));
     };
-    if worktree != workspace && !same_dir(&worktree, workspace_path) {
+    if worktree != workspace {
         return Err(invalid(&format!(
             "Session `{}` runs in a worktree that is not the workspace.",
             old.0
         )));
     }
     Ok(())
-}
-
-/// Whether `recorded` names the same directory as `workspace`: both
-/// sides are canonicalized and compared, so an alias spelling of the
-/// same directory accepts. Any canonicalization failure is not a match.
-/// Callers try exact string equality first, so matching spellings never
-/// canonicalize.
-fn same_dir(recorded: &str, workspace: &Path) -> bool {
-    match (
-        std::fs::canonicalize(recorded),
-        std::fs::canonicalize(workspace),
-    ) {
-        (Ok(recorded), Ok(workspace)) => recorded == workspace,
-        _ => false,
-    }
 }
 
 fn invalid(message: &str) -> Outcome {

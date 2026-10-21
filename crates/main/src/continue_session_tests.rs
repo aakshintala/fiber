@@ -206,14 +206,25 @@ fn matching_worktree_resolves_with_its_record() {
 }
 
 #[test]
-fn alias_spellings_of_the_workspace_resolve() {
-    let (_home, old_dir, workspace) = fixture("main-continues-alias", None);
-    // A trailing slash names the same directory without spelling it.
-    let slashed = format!("{}/", workspace.to_string_lossy());
-    let first = started(&workspace, Some(worktree(Path::new(&slashed))));
-    std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
-    let recorded = resolve(&old(), &old_dir, &workspace).unwrap();
-    assert_eq!(recorded.path, slashed);
+fn alias_spellings_of_the_workspace_refuse() {
+    for alias in ["slash", "link"] {
+        let (home, old_dir, workspace) = fixture(&format!("main-continues-alias-{alias}"), None);
+        // An alias spelling names the same directory without matching
+        // the recorded string: a trailing slash, or a symlink at the
+        // current directory.
+        let current = match alias {
+            "slash" => PathBuf::from(format!("{}/", workspace.to_string_lossy())),
+            _ => {
+                let link = home.path().join("link");
+                std::os::unix::fs::symlink(&workspace, &link).unwrap();
+                link
+            }
+        };
+        let first = started(&workspace, Some(worktree(&workspace)));
+        std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
+        let error = resolve(&old(), &old_dir, &current).unwrap_err();
+        assert_eq!(error.code, contract::ErrorCode::InvalidArguments, "{alias}");
+    }
 }
 
 #[test]
