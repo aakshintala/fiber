@@ -4,13 +4,14 @@
 use super::super::commands::Rows;
 use super::super::commands::commands_testkit::{
     SESSION, answer_commands, answer_rows, attached, connected, enter, fold_file_answer, key, now,
-    paths, reloaded, remote_search_app, route_file_answer, selected, sent, session_line, shown,
-    table_lines, turn_starts, type_any, type_text,
+    paste_image, paths, reloaded, remote_search_app, route_file_answer, selected, sent,
+    session_line, shown, table_lines, turn_starts, type_any, type_text,
 };
 use crate::app::{App, Effect};
 use crate::keys::{Edit, Key};
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[test]
 fn slash_alone_shows_every_row_from_the_top() {
@@ -844,4 +845,141 @@ fn remote_mentions_without_workspace_or_link_do_not_fall_back_to_client_disk() {
     let mut local = connected();
     assert_eq!(local.on_key(Key::Char('@'), now()), Effect::ListFiles);
     assert!(matches!(local.on_key(Key::Char('x'),now()),Effect::Search{query,..} if query=="x"));
+}
+
+/// An attached app whose seam lists file themes `solar` and `solar dawn`.
+fn theme_attached() -> (App, std::sync::Arc<crate::configure_fake::Fake>) {
+    let mut fake = crate::configure_fake::Fake::new(Vec::new());
+    fake.themes = vec!["solar".to_owned(), "solar dawn".to_owned()];
+    let seam = std::sync::Arc::new(fake);
+    let mut app = attached();
+    app.set_configure(Some(Arc::clone(&seam) as Arc<dyn crate::Configure>));
+    (app, seam)
+}
+
+#[test]
+fn slash_theme_space_lists_builtin_and_file_themes() {
+    let (mut app, _) = theme_attached();
+    type_text(&mut app, "/theme ");
+    assert_eq!(
+        shown(&app),
+        ["auto", "dark", "light", "solar", "solar dawn"]
+    );
+    assert_eq!(selected(&app), Some("auto".to_owned()));
+}
+
+#[test]
+fn slash_theme_names_filter_by_prefix() {
+    let (mut app, _) = theme_attached();
+    type_text(&mut app, "/theme s");
+    assert_eq!(shown(&app), ["solar", "solar dawn"]);
+    let (mut app, _) = theme_attached();
+    type_text(&mut app, "/theme l");
+    assert_eq!(shown(&app), ["light"]);
+    // With no match there is no panel: Esc still interrupts, Enter
+    // still refuses the unknown name.
+    let (mut app, _) = theme_attached();
+    type_text(&mut app, "/theme zzz");
+    assert!(app.completions().is_none());
+}
+
+#[test]
+fn slash_themes_without_the_space_offers_no_theme_names() {
+    // `/themes` is a `/` query, not the `/theme ` boundary: it shows the
+    // `/` list's empty row, never theme names.
+    let (mut app, _) = theme_attached();
+    type_text(&mut app, "/themes");
+    assert_eq!(
+        app.completions().map(|completions| completions.lines()),
+        Some(vec!["no matches".to_owned()])
+    );
+}
+
+#[test]
+fn tab_accepts_the_theme_name_replacing_the_rest() {
+    let (mut app, _) = theme_attached();
+    type_text(&mut app, "/theme l");
+    assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
+    assert_eq!(app.draft(), "/theme light");
+    // The accepted rest still matches: the panel shows its one row.
+    assert_eq!(shown(&app), ["light"]);
+    // A spaced name survives whole.
+    let (mut app, _) = theme_attached();
+    type_text(&mut app, "/theme solar d");
+    assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
+    assert_eq!(app.draft(), "/theme solar dawn");
+    assert_eq!(shown(&app), ["solar dawn"]);
+}
+
+#[test]
+fn enter_runs_the_accepted_theme_name() {
+    let (mut app, seam) = theme_attached();
+    type_text(&mut app, "/theme li");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        seam.writes(),
+        [(
+            PathBuf::from("/w"),
+            crate::configure::Layer::Global,
+            "tui.theme".to_owned(),
+            "\"light\"".to_owned()
+        )]
+    );
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Light));
+    assert_eq!(app.draft(), "");
+}
+
+#[test]
+fn an_extension_theme_blanks_fiber_candidates_and_runs_in_place() {
+    let (mut app, seam) = theme_attached();
+    answer_rows(
+        &mut app,
+        json!([{"name": "theme", "description": "The theme extension.", "tag": "acme", "extension": true}]),
+    );
+    // While the extension owns the name, no Fiber candidates show.
+    type_text(&mut app, "/theme ");
+    assert!(app.completions().is_none());
+    // Enter sends the draft out as the extension's command instead.
+    let mut app = {
+        let (mut app, _) = theme_attached();
+        answer_rows(
+            &mut app,
+            json!([{"name": "theme", "description": "The theme extension.", "tag": "acme", "extension": true}]),
+        );
+        app
+    };
+    let lines = sent(enter(&mut app, "/theme light"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "command");
+    assert_eq!(lines[0]["args"]["name"], "theme");
+    assert_eq!(lines[0]["args"]["text"], "light");
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn slash_theme_with_an_image_is_a_prompt() {
+    // The draft-image guard holds: with an image `/theme light` sends a
+    // prompt, saving and queueing nothing.
+    let (mut app, seam) = theme_attached();
+    paste_image(&mut app);
+    type_text(&mut app, "/theme light");
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+    assert!(seam.writes().is_empty());
+    assert_eq!(app.take_theme_choice(), None);
+}
+
+#[test]
+fn slash_theme_name_without_a_seam_is_a_notice() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/theme light"));
+    assert!(lines.is_empty());
+    assert_eq!(app.draft(), "");
+    assert!(
+        app.notices().iter().any(
+            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if code == "io_failed" && text == "Not available in this terminal.")
+        ),
+        "a notice names why nothing changed"
+    );
 }

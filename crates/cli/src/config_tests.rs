@@ -656,7 +656,10 @@ fn config_set_of_an_unconfigured_model_warns_and_exits_zero() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     let line = "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
-                which has no value, and `FIBER_TEST_1128_UNSET_HOST` has none either.";
+                which has no value, and `FIBER_TEST_1128_UNSET_HOST` is not set in the hub's \
+                environment (your login shell). Run `fiber login acme`, \
+                or set `workspace` in `config/acme.json` in Fiber home, \
+                or export it in your shell profile and run `fiber hub refresh`.";
     assert_eq!(stderr.matches(line).count(), 1, "{stderr:?}");
     let written: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
@@ -680,7 +683,8 @@ fn config_set_text_writes_and_returns_the_warning_lines() {
         lines,
         [
             "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
-          which has no value."
+          which has no value. Run `fiber login acme`, \
+          or set `workspace` in `config/acme.json` in Fiber home."
         ]
     );
     let written: serde_json::Value =
@@ -745,7 +749,8 @@ fn set_of_an_unconfigured_model_warns_and_writes() {
         assert_eq!(
             err,
             "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
-             which has no value.\n",
+             which has no value. Run `fiber login acme`, \
+             or set `workspace` in `config/acme.json` in Fiber home.\n",
             "{typed}"
         );
         let written: serde_json::Value =
@@ -804,7 +809,8 @@ fn set_ignores_a_repository_host_setting() {
     assert_eq!(
         err,
         "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
-         which has no value.\n"
+         which has no value. Run `fiber login acme`, \
+         or set `workspace` in `config/acme.json` in Fiber home.\n"
     );
 }
 
@@ -834,7 +840,8 @@ fn set_of_a_model_in_an_all_unconfigured_provider_warns() {
     assert_eq!(
         err,
         "fiber: The model `acme/m` needs the setting `workspace` for its base URL, \
-         which has no value.\n"
+         which has no value. Run `fiber login acme`, \
+         or set `workspace` in `config/acme.json` in Fiber home.\n"
     );
     let written: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())

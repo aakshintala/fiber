@@ -520,6 +520,22 @@ impl hub::Machine for Seam {
                     .map_err(from_view)?;
                 return Ok(None);
             }
+            "gaps" => {
+                a.shape(&["name"], &[])?;
+                let gaps = self.gaps(a.string("name")?).map_err(from_view)?;
+                json!({"gaps":gaps.into_iter().map(|gap|json!({"name":gap.name,"env":gap.env})).collect::<Vec<_>>()})
+            }
+            "save_host" => {
+                a.shape(&["name", "key", "value"], &[])?;
+                let saved = self
+                    .save_host(a.string("name")?, a.string("key")?, a.string("value")?)
+                    .map_err(from_view)?;
+                let mut value = Map::new();
+                if let Some(masked) = saved.masked {
+                    drop(value.insert("masked".to_owned(), json!(masked)));
+                }
+                Value::Object(value)
+            }
             "reviewer_notes" => {
                 a.shape(&["workspace"], &[])?;
                 let notes = self.reviewer_notes(a.workspace()?).map_err(from_view)?;

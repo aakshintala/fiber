@@ -624,6 +624,7 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         credential: None,
         worktree: false,
         rewound_from: None,
+        continues: None,
         forked_from,
         forked_seq,
         parent: Some(launched.parent.clone()),

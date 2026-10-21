@@ -64,6 +64,17 @@ pub(crate) fn run(
 ) -> i32 {
     crate::startup_log::as_session();
     if let Err(e) = std::env::set_current_dir(&args.workspace) {
+        // The hub spawns a continues session with the recorded worktree
+        // as the workspace: a path removed after validation means the
+        // old session ended and cleaned up, so an absent path names the
+        // old session missing (Rulings 15). A present path keeps the
+        // `io_failed`, as today.
+        if let Some(old) = args.continues.as_ref().filter(|_| !args.workspace.is_dir()) {
+            return ask_failed(failed(
+                ErrorCode::SessionNotFound,
+                format!("No session `{old}`."),
+            ));
+        }
         return ask_failed(failed(
             ErrorCode::IoFailed,
             format!("{}: {e}", args.workspace.display()),
@@ -102,6 +113,20 @@ pub(crate) fn run(
         return crate::rewind::session_rewound(
             SessionId(args.id),
             SessionId(from),
+            clock,
+            &signals,
+            fiber,
+        );
+    }
+    if let Some(old) = args.continues {
+        // The original spelling rides along for the identity compare:
+        // `current_dir` above already normalized slashes and symlinks
+        // away, while the hub enforced the exact string.
+        return crate::continue_session::session_continues(
+            SessionId(args.id),
+            SessionId(old),
+            crate::per_run(args.model, args.overrides),
+            &args.workspace,
             clock,
             &signals,
             fiber,

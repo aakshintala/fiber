@@ -219,6 +219,7 @@ fn started(
                 &[],
                 false,
                 content.as_ref(),
+                None,
             );
             done_tx.send(outcome).unwrap_or(());
         })
@@ -271,6 +272,7 @@ impl crate::Starter for FailStarter {
         _model: Option<&str>,
         _overrides: &[&str],
         _worktree: bool,
+        _continues: Option<&SessionId>,
     ) -> io::Result<Box<dyn crate::Started>> {
         Err(io::Error::other("the starter blew up"))
     }
@@ -336,6 +338,7 @@ impl crate::Starter for HoldHandshake {
         _model: Option<&str>,
         _overrides: &[&str],
         _worktree: bool,
+        _continues: Option<&SessionId>,
     ) -> io::Result<Box<dyn crate::Started>> {
         let listener = UnixListener::bind(self.home.join("run").join(&id.0))?;
         let subscribed = self.subscribed.clone();
@@ -524,6 +527,7 @@ fn a_held_summary_handshake_ends_the_timer_at_bind() {
                 &[],
                 false,
                 Some(&content),
+                None,
             );
             done_tx.send(outcome).unwrap_or(());
         })
