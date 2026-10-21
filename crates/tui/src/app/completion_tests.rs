@@ -659,9 +659,10 @@ fn a_stale_commands_answer_sets_neither_rows_nor_extensions() {
         json!({"command_id": second["id"], "result": {"commands": []}}),
     );
     assert!(app.on_line(answer).is_empty());
-    let lines = sent(enter(&mut app, "/deploy"));
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "prompt");
+    // Only the latest answer fills the list, and it holds no `deploy`:
+    // Enter refuses the name rather than running the stale command.
+    assert_eq!(enter(&mut app, "/deploy"), Effect::None);
+    assert_eq!(app.draft(), "/deploy");
 }
 
 #[test]

@@ -542,9 +542,10 @@ impl App {
     }
 
     /// Runs the draft when its first word is an extension command or a
-    /// built-in command; `None` when it is neither, and the draft goes out
-    /// as typed. A draft holding an image is never a command: Enter sends
-    /// it as a prompt.
+    /// built-in command, and refuses a name the `/` list does not hold
+    /// once it holds the session's answer; `None` otherwise, and the
+    /// draft goes out as typed. A draft holding an image is never a
+    /// command: Enter sends it as a prompt.
     pub(super) fn built_in(&mut self) -> Option<Effect> {
         if self.draft.has_image() {
             return None;
@@ -562,16 +563,32 @@ impl App {
             };
             return Some(self.send_command("command", args));
         }
-        if !slash::is_built_in(name) {
+        // One table drives dispatch. An alias runs its row's command.
+        if let Some(entry) = TABLE
+            .iter()
+            .find(|entry| entry.name == name || alias_of(entry.name) == Some(name))
+        {
+            let rest = rest.trim().to_owned();
+            return (entry.run)(self, &rest);
+        }
+        // A skill, template or MCP prompt goes out as typed, and the
+        // session runs it; so does a path such as `/tmp/x`.
+        let listed = self
+            .completion
+            .slash_rows
+            .iter()
+            .any(|row| row.name == name);
+        // Home and an opening session hold no answer: the session there
+        // runs what it knows and sends the rest as written.
+        let answered = matches!(self.completion.answer, super::completion::Answer::Answered);
+        if listed || !answered || name.is_empty() || name.contains('/') {
             return None;
         }
-        let rest = rest.trim().to_owned();
-        // One table drives dispatch: a built-in the terminal does not
-        // draw goes out as typed. An alias runs its row's command.
-        let entry = TABLE
-            .iter()
-            .find(|entry| entry.name == name || alias_of(entry.name) == Some(name))?;
-        (entry.run)(self, &rest)
+        self.notices.push(
+            "unknown_command",
+            format!("Unknown command /{name}. Type / to see the list."),
+        );
+        Some(Effect::None)
     }
 
     /// Returns to the screen before a session: the conversation and the
@@ -617,7 +634,7 @@ impl App {
         self.offer = crate::offer::Offer::default();
         self.completion.slash_rows = slash::rows(&[]);
         self.completion.extensions.clear();
-        self.completion.commands_id = None;
+        self.completion.answer = super::completion::Answer::Unasked;
         true
     }
 
@@ -913,6 +930,10 @@ mod aliases;
 #[cfg(test)]
 #[path = "diff_command_tests.rs"]
 mod diff_command;
+
+#[cfg(test)]
+#[path = "unknown_command_tests.rs"]
+mod unknown_command;
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

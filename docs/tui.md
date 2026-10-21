@@ -1178,6 +1178,7 @@ and an expiry wakes the loop even with no input.
 | `stream_closed` | condition | The session reopens; opening another session drops other sessions' rows. |
 | `switch_pending` | condition | The turn ends and the switch applies; rejecting a pending command voids its claim. |
 | `tool_definitions_large` | event | Fades 10 s after it shows. |
+| `unknown_command` | event | Fades 10 s after it shows. |
 | `web_search_unavailable` | event | Fades 10 s after it shows. |
 
 Codes no table lists — a refusal or driver code the hub names
@@ -1787,6 +1788,16 @@ fills the list from the answer to the latest one it sent; until that answer
 arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
+
+Enter on a draft whose first word is `/` and a name runs that name's command.
+Once the list holds the session's answer, a name the list does not hold is
+refused: nothing is sent, the draft stays for the person to correct, and an
+`unknown_command` notice says "Unknown command /<name>. Type / to see the
+list." A first word with a second `/` in it, such as a path, names no command,
+and the draft goes out as written. On home, and before the answer arrives, the
+terminal does not know the session's list, so the draft goes out as written,
+and the session runs the skill or prompt template its first word names
+(`docs/invocation.md`, "Getting a prompt in").
 
 ### Clearing
 

@@ -345,7 +345,7 @@ fn home_while_start_is_pending_only_clears_the_draft() {
 }
 
 #[test]
-fn an_unknown_command_is_sent_as_written() {
+fn an_unknown_command_goes_out_as_written_before_the_answer() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/foo bar"));
     assert_eq!(lines.len(), 1);
@@ -639,7 +639,7 @@ fn a_skill_named_like_a_built_in_keeps_the_built_in() {
 }
 
 #[test]
-fn undrawn_built_ins_without_an_extension_go_out_as_typed() {
+fn an_undrawn_built_in_goes_out_as_typed_before_the_answer() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/rewind"));
     assert_eq!(lines.len(), 1);
@@ -648,7 +648,7 @@ fn undrawn_built_ins_without_an_extension_go_out_as_typed() {
 }
 
 #[test]
-fn every_table_row_dispatches_and_undrawn_built_ins_fall_through() {
+fn every_table_row_dispatches_and_undrawn_built_ins_fall_through_before_the_answer() {
     for entry in crate::app::commands::TABLE {
         let mut app = attached();
         type_text(&mut app, &format!("/{}", entry.name));
