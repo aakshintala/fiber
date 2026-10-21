@@ -64,8 +64,9 @@ pub(crate) fn install(
         // serving root is the mapped directory canonicalized per read,
         // so a symlinked home still serves through the same link; a
         // missing directory fails here, naming the dependency, without
-        // reaching the file loader. A root whose canonical target leaves
-        // the managed extensions root is refused below.
+        // reaching the file loader. A mapped directory whose final
+        // component is a symlink, or a root whose canonical target leaves
+        // the managed extensions root, is refused below.
         if name.is_empty() {
             return Ok((None, Some("`dependency '' not installed`".to_owned())));
         }
@@ -106,14 +107,28 @@ pub(crate) fn install(
                 }
             };
             let file = format!("{}.lua", module.replace('.', "/"));
-            // The canonical serving root stays inside the managed
+            // A mapped directory that is itself a symlink never serves:
+            // the final component is checked before any read, so a
+            // symlinked FIBER_HOME still serves (its final component is
+            // a real directory) while a symlinked dependency root is
+            // refused with the same outside-directory error below. The
+            // canonical serving root stays inside the managed
             // extensions root the map was built under: the lexical
             // parent of the mapped directory, canonicalized so a
             // symlinked home passes on both sides. A root whose link
             // target leaves that tree is refused here, before the file
             // loader runs, with the same outside-directory error it
             // reports. The root re-resolves on every require, so a link
-            // retargeted mid-run serves or refuses its new target.
+            // retargeted mid-run refuses its new target.
+            if mapped
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+            {
+                return Ok((
+                    None,
+                    Some(format!("`{file}` is outside the extension's directory")),
+                ));
+            }
             let confined = mapped
                 .parent()
                 .and_then(|parent| parent.canonicalize().ok())

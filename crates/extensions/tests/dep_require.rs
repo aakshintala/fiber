@@ -584,17 +584,18 @@ fn a_symlinked_fiber_home_serves_the_dependency() {
 }
 
 #[test]
-fn a_symlinked_dependency_root_loads() {
+fn a_symlinked_dependency_root_is_refused() {
     let setup = Setup::new();
     install_pair(
         &setup,
-        &root_init_require(&format!("{DEP}:trim"), "blocking"),
+        &root_init_require(&format!("{DEP}:trim"), "non-blocking"),
     );
     // The installed directory moves under a staging directory inside the
-    // managed extensions root, with a symlink in its place: the map
-    // still authorizes the name, and the prefix check runs against the
-    // canonical target. The staging directory starts with a dot, so
-    // discovery skips it as an install in progress.
+    // managed extensions root, with a symlink in its place: the mapped
+    // path's final component is a symlink, so the require is refused
+    // even though the canonical target stays inside the tree. The
+    // staging directory starts with a dot, so discovery skips it as an
+    // install in progress.
     let dir = setup.home().join("extensions").join(config::dir_name(DEP));
     let target = setup
         .home()
@@ -605,10 +606,38 @@ fn a_symlinked_dependency_root_loads() {
     std::fs::rename(&dir, &target).unwrap();
     std::os::unix::fs::symlink(&target, &dir).unwrap();
     let session = load(&setup, FakeClock::new());
-    let AfterToolOutcome::Changed { content, .. } = answer(ask(&session)).outcome else {
-        panic!("the hook runs");
-    };
-    assert_eq!(content.as_deref(), Some("x|x"));
+    let message = refused(&session);
+    assert!(
+        message.contains("outside the extension's directory"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_symlinked_dependency_root_to_a_sibling_is_refused() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:trim"), "non-blocking"),
+    );
+    // A sibling dependency directory inside the managed extensions root:
+    // the link target stays inside the tree, but the mapped path's final
+    // component is a symlink, so the require is refused.
+    let sibling = setup
+        .home()
+        .join("extensions")
+        .join(config::dir_name("example.com/acme/sibling"));
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(sibling.join("trim.lua"), TRIM).unwrap();
+    let dir = setup.home().join("extensions").join(config::dir_name(DEP));
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(&sibling, &dir).unwrap();
+    let session = load(&setup, FakeClock::new());
+    let message = refused(&session);
+    assert!(
+        message.contains("outside the extension's directory"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -638,52 +667,61 @@ fn a_dependency_root_outside_fiber_home_is_refused() {
 }
 
 #[test]
-fn a_retargeted_dependency_root_follows_the_new_target() {
+fn a_retargeted_dependency_root_is_refused_when_re_resolved() {
     let setup = Setup::new();
     // The hook requires the module named by the call, so each ask loads a
-    // module the earlier ask never cached.
+    // module the earlier ask never cached: the Lua require cache reuses
+    // values by full qualified name.
     install_pair(
         &setup,
-        "fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"blocking\",\n\
+        "fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"non-blocking\",\n\
            run = function(call)\n\
              local dep = require(\"example.com/acme/dep:\" .. call.content)\n\
              return { content = dep.trim(\"x\") } end })\n",
     );
     let dir = setup.home().join("extensions").join(config::dir_name(DEP));
-    // Both targets sit inside the managed extensions root, under a
-    // dot staging directory discovery skips, so each serves in turn.
-    let staging = setup.home().join("extensions").join(".retarget");
-    let first = staging.join("first");
-    let second = staging.join("second");
-    std::fs::create_dir_all(&first).unwrap();
-    std::fs::create_dir_all(&second).unwrap();
+    // The dependency starts as a real directory inside the managed root,
+    // so the first require serves.
     std::fs::write(
-        first.join("one.lua"),
+        dir.join("one.lua"),
         "return { trim = function(s) return \"a\" end }",
     )
     .unwrap();
-    std::fs::write(
-        second.join("two.lua"),
-        "return { trim = function(s) return \"b\" end }",
-    )
-    .unwrap();
-    std::fs::remove_dir_all(&dir).unwrap();
-    std::os::unix::fs::symlink(&first, &dir).unwrap();
     let session = load(&setup, FakeClock::new());
     let AfterToolOutcome::Changed { content, .. } = answer(ask_with(&session, "one")).outcome
     else {
         panic!("the hook runs");
     };
     assert_eq!(content.as_deref(), Some("a"));
-    // The root link moves mid-run: nothing caches the canonical root, so
-    // the next require re-resolves and serves the new target.
-    std::fs::remove_file(&dir).unwrap();
+    // The root is replaced mid-run by a link to a new target inside the
+    // tree, under a dot staging directory discovery skips: the next
+    // require re-resolves per read and refuses the link even though its
+    // target stays inside the tree. The ask names a module the first ask
+    // never loaded, so the refusal proves the re-resolved check fires,
+    // not the require cache.
+    let second = setup
+        .home()
+        .join("extensions")
+        .join(".retarget")
+        .join("second");
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::write(
+        second.join("two.lua"),
+        "return { trim = function(s) return \"b\" end }",
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
     std::os::unix::fs::symlink(&second, &dir).unwrap();
-    let AfterToolOutcome::Changed { content, .. } = answer(ask_with(&session, "two")).outcome
-    else {
-        panic!("the hook runs");
-    };
-    assert_eq!(content.as_deref(), Some("b"));
+    let answer = answer(ask_with(&session, "two"));
+    assert_eq!(answer.notices.len(), 1, "{answer:?}");
+    let notice = answer.notices.into_iter().next().unwrap();
+    assert_eq!(notice.code, contract::ErrorCode::HookFailed);
+    assert_eq!(notice.extension.as_deref(), Some(ROOT));
+    assert!(
+        notice.message.contains("outside the extension's directory"),
+        "{}",
+        notice.message
+    );
 }
 
 #[test]
@@ -699,41 +737,33 @@ fn a_retargeted_dependency_root_outside_the_tree_is_refused() {
              return { content = dep.trim(\"x\") } end })\n",
     );
     let dir = setup.home().join("extensions").join(config::dir_name(DEP));
-    // The first target sits inside the managed extensions root, under a
-    // dot staging directory discovery skips; the second sits inside
-    // Fiber home but outside the managed root, pinning the check to the
-    // extensions root rather than the home.
-    let inside = setup
-        .home()
-        .join("extensions")
-        .join(".retarget-outside")
-        .join("first");
-    let outside = setup.home().join("data-outside");
-    std::fs::create_dir_all(&inside).unwrap();
-    std::fs::create_dir_all(&outside).unwrap();
+    // The dependency starts as a real directory serving its first module;
+    // the second target sits inside Fiber home but outside the managed
+    // root, pinning the check to the extensions root rather than the home.
     std::fs::write(
-        inside.join("one.lua"),
+        dir.join("one.lua"),
         "return { trim = function(s) return \"a\" end }",
     )
     .unwrap();
+    let outside = setup.home().join("data-outside");
+    std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(
         outside.join("two.lua"),
         "return { trim = function(s) return \"b\" end }",
     )
     .unwrap();
-    std::fs::remove_dir_all(&dir).unwrap();
-    std::os::unix::fs::symlink(&inside, &dir).unwrap();
     let session = load(&setup, FakeClock::new());
     let AfterToolOutcome::Changed { content, .. } = answer(ask_with(&session, "one")).outcome
     else {
         panic!("the hook runs");
     };
     assert_eq!(content.as_deref(), Some("a"));
-    // The root link moves outside the tree mid-run: the next require
-    // re-resolves per read and refuses the new target, even though the
-    // module exists there. The ask names that module, so the refusal
-    // proves the location check fires, not the missing-module one.
-    std::fs::remove_file(&dir).unwrap();
+    // The root is replaced mid-run by a link outside the tree: the next
+    // require re-resolves per read and refuses the new target, even
+    // though the module exists there. Both asks name modules the other
+    // never loaded, so the refusal proves the location check fires, not
+    // the require cache or the missing-module one.
+    std::fs::remove_dir_all(&dir).unwrap();
     std::os::unix::fs::symlink(&outside, &dir).unwrap();
     let answer = answer(ask_with(&session, "two"));
     assert_eq!(answer.notices.len(), 1, "{answer:?}");
@@ -745,4 +775,62 @@ fn a_retargeted_dependency_root_outside_the_tree_is_refused() {
         "{}",
         notice.message
     );
+}
+
+#[test]
+fn a_link_replaced_by_a_real_inside_tree_dir_serves() {
+    let setup = Setup::new();
+    // The hook requires the module named by the call, so each ask loads a
+    // module the earlier ask never cached: the Lua require cache reuses
+    // values by full qualified name.
+    install_pair(
+        &setup,
+        "fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"non-blocking\",\n\
+           run = function(call)\n\
+             local dep = require(\"example.com/acme/dep:\" .. call.content)\n\
+             return { content = dep.trim(\"x\") } end })\n",
+    );
+    let dir = setup.home().join("extensions").join(config::dir_name(DEP));
+    // The root starts as a link into a dot staging directory discovery
+    // skips: the first require refuses the link even though its target
+    // stays inside the tree.
+    let staged = setup
+        .home()
+        .join("extensions")
+        .join(".retarget-real")
+        .join("first");
+    std::fs::create_dir_all(&staged).unwrap();
+    std::fs::write(
+        staged.join("one.lua"),
+        "return { trim = function(s) return \"a\" end }",
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(&staged, &dir).unwrap();
+    let session = load(&setup, FakeClock::new());
+    let refused_answer = answer(ask_with(&session, "one"));
+    assert_eq!(refused_answer.notices.len(), 1, "{refused_answer:?}");
+    let notice = refused_answer.notices.into_iter().next().unwrap();
+    assert_eq!(notice.code, contract::ErrorCode::HookFailed);
+    assert_eq!(notice.extension.as_deref(), Some(ROOT));
+    assert!(
+        notice.message.contains("outside the extension's directory"),
+        "{}",
+        notice.message
+    );
+    // The link is replaced mid-run by a real directory inside the tree
+    // holding a module the first ask never loaded: the next require
+    // re-resolves per read and serves it.
+    std::fs::remove_file(&dir).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("two.lua"),
+        "return { trim = function(s) return \"b\" end }",
+    )
+    .unwrap();
+    let AfterToolOutcome::Changed { content, .. } = answer(ask_with(&session, "two")).outcome
+    else {
+        panic!("the hook runs");
+    };
+    assert_eq!(content.as_deref(), Some("b"));
 }
