@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
+use contract::clock::Clock as _;
 use contract::events::{CallStatus, Notice};
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks, JobDelivery};
 use contract::shapes::Process;
@@ -109,6 +110,17 @@ impl Home {
     #[track_caller]
     fn load(&self, overrides: &[&str]) -> Arc<SessionExtensions> {
         self.load_with_host(overrides, None)
+    }
+
+    /// Loads with the caller's clock kept, so the test can advance fake
+    /// time past a parked deadline after the parked signal.
+    fn load_with_clock(&self, overrides: &[&str], clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
+        let config = self.config(overrides);
+        let home = self.home();
+        let locks: Arc<dyn contract::files::PathLock> = Arc::new(FakeLock::new());
+        Arc::new(bounded(move || {
+            SessionExtensions::load(&home, &config, clock, locks, None)
+        }))
     }
 
     #[track_caller]
@@ -2671,5 +2683,180 @@ fn one_extensions_watchers_run_in_registration_order() {
             .recv(&statuses)
             .expect("waited for the second watcher"),
         "second"
+    );
+}
+
+/// One `host.status` line and one notice per watcher run, each on its own
+/// channel in arrival order: the failure tests wait on channels through a
+/// deadline, never on a sleep.
+struct Observed {
+    status: mpsc::Sender<String>,
+    notice: mpsc::Sender<String>,
+}
+
+impl contract::emit::Emit for Observed {
+    fn emit(&self, event: &contract::events::Event) {
+        if let contract::events::Event::ExtensionUi(ui) = event
+            && let contract::events::Ui::Status { status } = &ui.ui
+        {
+            let _ignored = self.status.send(status.clone());
+        }
+        if let contract::events::Event::Notice(notice) = event {
+            let _ignored = self.notice.send(notice.message.clone());
+        }
+    }
+}
+
+/// Installs the status-and-notice emitter on `session`.
+fn observe(session: &Arc<SessionExtensions>) -> (mpsc::Receiver<String>, mpsc::Receiver<String>) {
+    let (status_tx, status_rx) = mpsc::channel();
+    let (notice_tx, notice_rx) = mpsc::channel();
+    session.emit_to(Arc::new(Observed {
+        status: status_tx,
+        notice: notice_tx,
+    }));
+    (status_rx, notice_rx)
+}
+
+/// An erroring watcher emits exactly one notice naming the extension, and
+/// the stream continues with the next watcher.
+#[test]
+fn an_erroring_watcher_emits_one_notice_and_the_stream_continues() {
+    let home = Home::new();
+    home.install(
+        "broke",
+        Some(
+            "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) error('boom') end })\n\
+             fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('second-ran') end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (statuses, notices) = observe(&session);
+    session.deliver(&noticed("x"), None);
+    let notice = Deadline::after(WAIT)
+        .recv(&notices)
+        .expect("waited for the failure notice");
+    assert!(
+        notice.contains("fiber.test/broke")
+            && notice.contains("watcher:0")
+            && notice.contains("boom"),
+        "the notice names the extension, the watcher and the error, {notice:?}"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the next watcher"),
+        "second-ran"
+    );
+    // Exactly one notice: the error ends the one delivery, not the stream.
+    assert!(
+        Deadline::after(Duration::from_secs(1))
+            .recv(&notices)
+            .is_err(),
+        "no second notice follows"
+    );
+}
+
+/// A watcher parked past its timeout yields the timeout notice naming the
+/// exact declared ms, and the stream continues with the next watcher. The
+/// run sleeps with no reply coming, so only the expiry arm can end it; the
+/// session runs on a frozen fake clock, so `asked` is exactly the instant
+/// read before `deliver`, and the test advances onto the deadline, which
+/// wakes the loop through the clock subscription.
+#[test]
+fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
+    let home = Home::new();
+    home.install(
+        "slow",
+        Some(
+            "fiber.watch({\"notice\"}, { timeout = 300, run = function(ev) host.status('sleeping') host.exec('sleep', {'30'}) end })\n\
+             fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('after-timeout') end })\n",
+        ),
+        &[],
+    );
+    let clock = FakeClock::new();
+    let session = home.load_with_clock(&[], Arc::clone(&clock));
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (statuses, notices) = observe(&session);
+    // Retire the loop's fresh boot park (unbounded, from loading): only
+    // parks made after this move count toward the wait below.
+    clock.advance(Duration::ZERO);
+    let before = clock.now();
+    session.deliver(&noticed("x"), None);
+    // The `sleeping` line proves the run reached the exec call; the park
+    // follows under the same lock hold, and `await_parked` waits for it.
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the watcher to start"),
+        "sleeping"
+    );
+    // The delivery parks the sleeping watcher at asked + 300 ms; fake time
+    // is frozen, so asked is exactly `before`. The wall-clock deadline only
+    // bounds the waits for the parked delivery to appear and the loop to
+    // notice the move.
+    assert!(
+        clock.await_parked(before + Duration::from_millis(300), WAIT),
+        "waited for the sleeping watcher to park at its deadline"
+    );
+    clock.advance_when_parked(
+        Some(before + Duration::from_millis(300)),
+        None,
+        Duration::from_millis(300),
+        &Deadline::after(WAIT),
+    );
+    let notice = Deadline::after(WAIT)
+        .recv(&notices)
+        .expect("waited for the timeout notice");
+    assert!(
+        notice.contains("fiber.test/slow")
+            && notice.contains("watcher:0")
+            && notice.contains("300 ms"),
+        "the notice names the extension, the watcher and the exact declared ms, {notice:?}"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the next watcher"),
+        "after-timeout"
+    );
+}
+
+/// `host.tool` from a watcher answers the no-runner error while
+/// `host.exec` runs: the refusal names the call site, not a tool failure.
+#[test]
+fn a_watcher_refuses_host_tool_but_runs_host_exec() {
+    let home = Home::new();
+    home.install(
+        "gated",
+        Some(
+            "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev)\n\
+             local took, err = pcall(host.tool, 'read', {})\n\
+             host.status('tool:' .. tostring(took) .. ':' .. tostring(err))\n\
+             local ran = pcall(host.exec, 'true', {})\n\
+             host.status('exec:' .. tostring(ran))\n\
+             end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    session.deliver(&noticed("x"), None);
+    let refused = Deadline::after(WAIT)
+        .recv(&statuses)
+        .expect("waited for the tool refusal");
+    assert!(
+        refused.starts_with("tool:false:")
+            && refused.contains("called outside a running tool call"),
+        "the refusal names the call site, {refused:?}"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the exec result"),
+        "exec:true"
     );
 }
