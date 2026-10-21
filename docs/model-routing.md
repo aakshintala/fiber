@@ -573,6 +573,14 @@ Most of a provider is data. For the provider:
   `credential()` function that returns a token
 - `login`, when `fiber login` runs that function as a login instead of
   reading a key: `browser`, whose device-code form takes `--device`
+- `credential_label`, when that function supplies the credential and reads
+  nothing Fiber stores, as AWS Bedrock's and Google Vertex's do: `names`,
+  what a credential label names, such as `AWS profile`, and `default`, what
+  the `default` label reads. Such a provider has no key for `fiber login` to
+  store, so `fiber doctor` shows its label as that source, unchecked
+  (`docs/invocation.md`, "Commands and flags"), and no sentence advises
+  `fiber login` (`docs/errors.md`, "The shape"). It is never declared beside
+  `login` or a `credential` key source
 - headers sent on every request
 - a `sign()` function, if every request must carry a signature
 - `reviewer_model`, optional: the package default `fiber login` preselects
@@ -700,7 +708,9 @@ fixes, login first: run `fiber login <provider>`, which asks for the host;
 set the named setting in `config/<extension>.json` in Fiber home, for every
 project at once; or, when it names an environment variable, export that
 variable in the shell profile and run `fiber hub refresh`, since the hub
-reads its environment when it starts.
+reads its environment when it starts. For a provider whose data declares
+`credential_label` it names only the last two: its `fiber login` would store
+a key the provider never reads ("What a provider extension declares").
 
 `fiber login <provider>` asks for each missing value after the credential
 is stored and before the reviewer, saving each answer globally. When a

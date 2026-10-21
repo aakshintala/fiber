@@ -159,7 +159,13 @@ also prints the environment its sessions get: the `PATH`, the names of the
 other variables and whether the login-shell capture succeeded ("A session's
 environment"). A line that stops a
 session from starting carries its fix, such as
-`` no key for openrouter: run `fiber login openrouter` ``. It also names each
+`` no key for openrouter: run `fiber login openrouter` ``. A provider whose
+data declares `credential_label` (`docs/model-routing.md`, "What a provider
+extension declares") has one line, for its selected label, naming what that
+label reads, such as `` * work  AWS profile work, read by credential() (not
+checked) ``: doctor runs no extension code, so the line never stops a session
+from starting, and no file stored under that provider is listed, since it
+reads none. It also names each
 secret an enabled extension declares that is not stored, with the
 `fiber login <name>` that stores it; a missing secret does not stop a
 session from starting. It exits non-zero

@@ -8,7 +8,7 @@ The version line names the binary you are running ([Commands and flags]).
 
 The model line names the default model and the provider it needs. When it says none is chosen, choose one before starting a session ([Commands and flags]).
 
-A provider block lists that provider's credentials. A line that carries a fix names the `fiber login` command that stores the key; run it ([Commands and flags]).
+A provider block lists that provider's credentials. A line that carries a fix names the `fiber login` command that stores the key; run it ([Commands and flags]). A provider whose credential comes from its own tool, such as Bedrock's AWS profile or Vertex's gcloud configuration, shows the label it reads, marked `(not checked)`: doctor does not run that tool, so a profile shown here can still fail when a session starts ([Commands and flags]).
 
 The permissions and MCP server lines need no action unless a line names a server Fiber cannot use ([Commands and flags]).
 
