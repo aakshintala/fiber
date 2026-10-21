@@ -27,12 +27,6 @@ fn layout_builds_the_approvals_and_pinned_dirs() {
         PathBuf::from("/home/approvals")
     );
     assert_eq!(pinned_dir(&home), PathBuf::from("/home/pinned"));
-}
-
-#[test]
-fn layout_builds_the_server_project_record_dir() {
-    let home = PathBuf::from("/home");
-    let project = ProjectKey::new("key").unwrap();
     assert_eq!(
         super::project_servers_dir(&home, &project),
         PathBuf::from("/home/projects/key/servers")

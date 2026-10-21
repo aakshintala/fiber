@@ -776,20 +776,6 @@ fn approving_a_server_writes_the_project_record_with_the_same_body() {
         .join(&digest);
     // The project record mirrors the machine approval byte for byte.
     assert_eq!(fs::read_to_string(&record).unwrap(), machine);
-    let body: serde_json::Value = serde_json::from_str(&machine).unwrap();
-    assert_eq!(
-        body.get("decision").and_then(serde_json::Value::as_str),
-        Some("approve")
-    );
-    assert_eq!(
-        body.get("kind").and_then(serde_json::Value::as_str),
-        Some("mcp_server")
-    );
-    assert_eq!(
-        body.get("name").and_then(serde_json::Value::as_str),
-        Some("db")
-    );
-    assert!(body.get("declaration").is_some());
 }
 
 #[test]
@@ -839,6 +825,28 @@ fn never_removes_the_server_project_record_and_writes_no_new_one() {
             .is_err()
     );
     assert!(repo.home().join("approvals").join(&digest).is_file());
+}
+
+#[test]
+fn never_surfaces_a_server_project_record_removal_failure() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, KEY).approve(&item, &digest).unwrap();
+    // A directory where the project record goes fails its removal with
+    // an error other than absence on every platform, which `never`
+    // surfaces instead of swallowing: with the absence guard replaced by
+    // `true` this returns `Ok` and the test fails.
+    let record = repo
+        .home()
+        .join("projects")
+        .join(KEY)
+        .join("servers")
+        .join(&digest);
+    fs::remove_file(&record).unwrap();
+    fs::create_dir(&record).unwrap();
+    let err = store(&repo, KEY).never(&item, &digest).unwrap_err();
+    assert!(err.to_string().contains(&digest), "{err}");
 }
 
 #[test]

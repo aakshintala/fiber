@@ -609,15 +609,16 @@ fn approve_in(setup: &Setup, dir: &Path) -> std::process::Output {
     run_to_exit(setup.deadline, "fiber approve", command)
 }
 
-/// The hash prefix the approval run approved for hook `fmt`.
+/// The hash prefix the approval run approved for `label`, such as
+/// `hook fmt` or `mcp_server shared`.
 #[track_caller]
-fn approved_prefix(output: &std::process::Output) -> String {
+fn approved_prefix(output: &std::process::Output, label: &str) -> String {
     let stderr = text(&output.stderr);
     assert!(output.status.success(), "fiber approve: {stderr}");
     stderr
         .lines()
-        .find_map(|line| line.strip_prefix("approved hook fmt "))
-        .expect("one hook approval")
+        .find_map(|line| line.strip_prefix(&format!("approved {label} ")))
+        .expect("one approval")
         .to_owned()
 }
 
@@ -674,9 +675,15 @@ fn approved_repo(setup: &Setup) -> (String, String, String) {
     linked(setup, "a", "wa", "a\n");
     linked(setup, "b", "wb", "b\n");
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    let main = approved_prefix(&approve_in(setup, &workspace));
-    let a = approved_prefix(&approve_in(setup, &setup.root.path().join("wa")));
-    let b = approved_prefix(&approve_in(setup, &setup.root.path().join("wb")));
+    let main = approved_prefix(&approve_in(setup, &workspace), "hook fmt");
+    let a = approved_prefix(
+        &approve_in(setup, &setup.root.path().join("wa")),
+        "hook fmt",
+    );
+    let b = approved_prefix(
+        &approve_in(setup, &setup.root.path().join("wb")),
+        "hook fmt",
+    );
     (main, a, b)
 }
 
@@ -901,18 +908,6 @@ fn other_repo(setup: &Setup) -> PathBuf {
     fs::canonicalize(&dir).unwrap()
 }
 
-/// The approval run's hash prefix for MCP server `server`.
-#[track_caller]
-fn approved_server_prefix(output: &std::process::Output, server: &str) -> String {
-    let stderr = text(&output.stderr);
-    assert!(output.status.success(), "fiber approve: {stderr}");
-    stderr
-        .lines()
-        .find_map(|line| line.strip_prefix(&format!("approved mcp_server {server} ")))
-        .expect("one server approval")
-        .to_owned()
-}
-
 /// The content hash the per-machine approval for server `name` holds.
 #[track_caller]
 fn server_hash(setup: &Setup, name: &str) -> String {
@@ -968,10 +963,10 @@ fn prune_lists_and_removes_a_server_copy_no_project_record_names() {
     let approved_other = approve_in(&setup, &other);
     // The same declaration is the same copy, whichever project approves
     // it first.
-    let shared_prefix = approved_server_prefix(&approved_other, "shared");
+    let shared_prefix = approved_prefix(&approved_other, "mcp_server shared");
     let approved = approve_in(&setup, &workspace);
     for server in ["gone", "legacy"] {
-        approved_server_prefix(&approved, server);
+        approved_prefix(&approved, &format!("mcp_server {server}"));
     }
     // `shared` is already approved machine-wide, so this repository is
     // not asked about it again and holds no project record for it.
