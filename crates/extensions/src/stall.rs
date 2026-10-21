@@ -42,18 +42,17 @@ pub(crate) fn advance_past_grace_or_answer<T>(
     for _ in 0..ROUNDS {
         match clock.try_advance_when_parked(Some(kill_at), None, advance, SIGHT) {
             Ok(_) => return None,
-            Err(fakes::clock::Miss::NoPark) => match done.try_recv() {
-                Ok(answer) => return Some(answer),
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    panic!("the stalled run returns")
-                }
-            },
             Err(miss) => match done.try_recv() {
-                // A park at another instant fails the advance: an answer
-                // that arrived instead still ends the wait, as above.
+                // A park at another instant fails the advance, while no
+                // park at all just waits for the next round: an answer
+                // that arrived instead still ends the wait either way.
                 Ok(answer) => return Some(answer),
-                Err(mpsc::TryRecvError::Empty) => panic!("{miss}"),
+                Err(mpsc::TryRecvError::Empty)
+                    if matches!(miss, fakes::clock::Miss::Mismatch { .. }) =>
+                {
+                    panic!("{miss}")
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
                     panic!("the stalled run returns")
                 }
