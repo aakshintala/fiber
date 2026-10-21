@@ -1417,8 +1417,11 @@ fn no_line_once_started_while_committing_or_on_close_now() {
 #[test]
 fn a_recorded_code_waits_for_its_line() {
     // Window 1, armed record: `recorded` and `start` wait while the line
-    // is in flight. The `entered` ack orders them after the publish, so a
-    // returned code proves the wait, not a missed race.
+    // is in flight. The `entered` ack proves the handler is held in
+    // `on_record`, hence after the publish and before the append; the
+    // state read and the empty `logs/` re-check that hold without the
+    // clock, and the readers' only wake is the append's notify, so the
+    // codes joined after the release necessarily came after their line.
     let temp = support::Temp::new();
     let home = temp.0.join("h");
     let clock = FakeClock::new();
@@ -1452,17 +1455,16 @@ fn a_recorded_code_waits_for_its_line() {
         let voted = starter.start(Box::new(|_| {}), Box::new(|| {}));
         if let Ok(()) = start_tx.send(voted) {}
     });
+    // Held in `on_record`: the publish ran and the append has not, so
+    // the readers spawned above can only be parked in `settled_state`.
+    {
+        let state = signals.state.lock().unwrap();
+        assert_eq!(state.recorded, Some(143), "the code is published");
+        assert_eq!(state.early_pending, Some(143), "its line is in flight");
+    }
     assert!(
-        Deadline::after(Duration::from_millis(100))
-            .recv(&recorded_rx)
-            .is_err(),
-        "recorded waits for its line"
-    );
-    assert!(
-        Deadline::after(Duration::from_millis(100))
-            .recv(&start_rx)
-            .is_err(),
-        "start waits for the line"
+        diag_lines(&home).is_empty(),
+        "no line while the append is held"
     );
     drop(bound_calls);
     release_tx.send(()).unwrap();
@@ -1483,7 +1485,9 @@ fn a_recorded_code_waits_for_its_line() {
     assert_eq!(without_ts(lines[0].1.clone()), early_line("SIGTERM", 143));
 
     // Window 2, record between `start` and `commit`: `commit` waits while
-    // the line is in flight, then reports the code without writing.
+    // the line is in flight, then reports the code without writing. The
+    // `entered` ack orders the hold as in window 1; the state read and the
+    // empty `logs/` re-check it without the clock.
     let temp = support::Temp::new();
     let home = temp.0.join("h");
     let clock = FakeClock::new();
@@ -1516,11 +1520,16 @@ fn a_recorded_code_waits_for_its_line() {
         });
         if let Ok(()) = commit_tx.send(commit) {}
     });
+    // Held in `on_record`, as in window 1: the committer can only be
+    // parked in `settled_state` until the append releases it.
+    {
+        let state = signals.state.lock().unwrap();
+        assert_eq!(state.recorded, Some(143), "the code is published");
+        assert_eq!(state.early_pending, Some(143), "its line is in flight");
+    }
     assert!(
-        Deadline::after(Duration::from_millis(100))
-            .recv(&commit_rx)
-            .is_err(),
-        "commit waits for the line"
+        diag_lines(&home).is_empty(),
+        "no line while the append is held"
     );
     drop(bound_calls);
     drop(calls);
