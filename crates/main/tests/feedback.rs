@@ -65,6 +65,7 @@ fn wait(setup: &Setup, what: &str, child: Child) -> Output {
     output
 }
 
+// debt: one stdin-terminal opener in main/tests/support shared with ask.rs and login.rs, when a third lane touches any of the three copies
 /// A pseudo-terminal, opened through rustix's safe calls. The main side
 /// stays open while the run uses the terminal side, so stdin is a
 /// terminal, as `ask`'s runner holds it.

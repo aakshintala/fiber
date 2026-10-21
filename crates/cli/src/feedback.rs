@@ -134,15 +134,6 @@ fn issue_link(title: &str, report: &str, description: &str) -> String {
     format!("{BASE}?title={}&body={}", encode(title), encode(&fallback))
 }
 
-/// One uppercase hex digit for a nibble: the callers pass a byte's
-/// halves, so the value is always below 16.
-fn hex_of(nibble: u8) -> char {
-    match nibble {
-        0..=9 => (b'0' + nibble) as char,
-        _ => (b'A' + (nibble - 10)) as char,
-    }
-}
-
 /// One `%XX` query component: UTF-8 bytes, leaving only the unreserved
 /// set bare.
 fn encode(text: &str) -> String {
@@ -152,11 +143,7 @@ fn encode(text: &str) -> String {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(byte as char);
             }
-            _ => {
-                out.push('%');
-                out.push(hex_of(byte >> 4));
-                out.push(hex_of(byte & 0x0F));
-            }
+            _ => out.push_str(&format!("%{byte:02X}")),
         }
     }
     out

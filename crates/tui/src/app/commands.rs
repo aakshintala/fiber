@@ -302,7 +302,7 @@ fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
 /// `/feedback`: with no description, asks for one by leaving the draft
 /// on `/feedback `; with a description, the loop writes the report off
 /// its thread through the injected writer, and the answer lands as a
-/// notice. Without a writer the draft is kept and nothing is sent.
+/// notice.
 fn run_feedback(app: &mut App, rest: &str) -> Option<Effect> {
     let description = rest.trim();
     if description.is_empty() {
@@ -312,10 +312,6 @@ fn run_feedback(app: &mut App, rest: &str) -> Option<Effect> {
         );
         app.draft.clear();
         app.draft.paste("/feedback ");
-        return Some(Effect::None);
-    }
-    if app.feedback_writer().is_none() {
-        app.push_notice("feedback", crate::feedback::NO_WRITER.to_owned());
         return Some(Effect::None);
     }
     Some(Effect::Feedback {

@@ -522,6 +522,19 @@ fn ask(
     }
 }
 
+/// The `doctor` output both feedback doors capture: the production
+/// report through the same `run` seam `doctor` prints, mapped into the
+/// report writer's error.
+fn doctor_report(
+    home: &Path,
+    workspace: &Path,
+    version: &str,
+    clock: &dyn contract::clock::Clock,
+) -> Result<String, ::cli::FeedbackError> {
+    ::cli::capture(home, workspace, version, clock, &McpClient)
+        .map_err(|error| ::cli::FeedbackError::Doctor(error.to_string()))
+}
+
 /// `fiber feedback`: resolves the description like `fiber ask` resolves
 /// its prompt, then runs the shared report writer; the path and the issue
 /// link print on stdout.
@@ -555,11 +568,7 @@ fn feedback(arg: Option<String>, dash: bool, clock: Arc<dyn contract::clock::Clo
         version: &version,
         cwd: &workspace,
         clock: clock.as_ref(),
-        doctor: &|| {
-            ::cli::capture(&home, &workspace, &version, clock.as_ref(), &McpClient)
-                .map(|(report, _)| report)
-                .map_err(|error| ::cli::FeedbackError::Doctor(error.to_string()))
-        },
+        doctor: &|| doctor_report(&home, &workspace, &version, clock.as_ref()),
     };
     match ::cli::write(&description, &context) {
         Ok(done) => {
@@ -904,15 +913,12 @@ fn terminal(
             cwd: &feedback_workspace,
             clock: feedback_clock.as_ref(),
             doctor: &|| {
-                ::cli::capture(
+                doctor_report(
                     &feedback_home,
                     &feedback_workspace,
                     &feedback_version,
                     feedback_clock.as_ref(),
-                    &McpClient,
                 )
-                .map(|(report, _)| report)
-                .map_err(|error| ::cli::FeedbackError::Doctor(error.to_string()))
             },
         };
         ::cli::write(description, &context).map_err(|error| error.to_string())

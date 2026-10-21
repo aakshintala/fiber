@@ -117,23 +117,15 @@ fn doctor_len_for(target: usize) -> usize {
 /// Decodes one `%XX` query component.
 fn decode(component: &str) -> String {
     let mut bytes = Vec::new();
-    let mut chars = component.as_bytes().iter();
-    while let Some(&byte) = chars.next() {
-        if byte == b'%' {
-            let hi = chars.next().copied().unwrap_or(b'0');
-            let lo = chars.next().copied().unwrap_or(b'0');
-            let hex = |digit: u8| {
-                u8::try_from(
-                    char::from_u32(u32::from(digit))
-                        .unwrap()
-                        .to_digit(16)
-                        .unwrap_or(0),
-                )
-                .unwrap_or(0)
-            };
-            bytes.push(hex(hi) * 16 + hex(lo));
+    let raw = component.as_bytes();
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%' {
+            bytes.push(u8::from_str_radix(&component[i + 1..i + 3], 16).unwrap());
+            i += 3;
         } else {
-            bytes.push(byte);
+            bytes.push(raw[i]);
+            i += 1;
         }
     }
     String::from_utf8(bytes).unwrap()
@@ -333,9 +325,8 @@ fn capture_returns_the_printed_report_with_whether_a_session_can_start() {
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&workspace).unwrap();
     let clock = FakeClock::new();
-    let (report, can_start) =
+    let report =
         super::super::doctor::capture(&home, &workspace, VERSION, clock.as_ref(), &Remote).unwrap();
     assert_eq!(report.lines().next(), Some("fiber 0.3.0 (abc123)"));
     assert!(report.contains("hub: not running"));
-    assert!(!can_start);
 }

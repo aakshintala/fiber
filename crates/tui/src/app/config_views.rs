@@ -111,8 +111,8 @@ pub(in crate::app) struct ConfigViews {
     /// through: the same function take_reads hands the thread.
     models: Option<crate::ReadModels>,
     /// The feedback report writer `main` injected: the loop thread
-    /// writes through it, and an empty one writes nothing.
-    feedback: crate::feedback::Feedback,
+    /// writes through it, and none writes nothing.
+    feedback: Option<crate::WriteFeedback>,
     /// The sole owner of an outstanding hub editor copy.
     copy: Option<crate::remote::RemoteCopy>,
     /// The open view.
@@ -145,12 +145,12 @@ impl App {
 
     /// Sets the feedback report writer the loop writes through.
     pub(crate) fn set_feedback(&mut self, writer: Option<crate::WriteFeedback>) {
-        self.config_views.feedback = crate::feedback::Feedback::new(writer);
+        self.config_views.feedback = writer;
     }
 
     /// The feedback report writer, absent with nothing to write through.
     pub(crate) fn feedback_writer(&self) -> Option<crate::WriteFeedback> {
-        self.config_views.feedback.writer()
+        self.config_views.feedback.clone()
     }
 
     /// The model-list reader, absent with no list to read.

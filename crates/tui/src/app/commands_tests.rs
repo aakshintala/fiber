@@ -706,9 +706,20 @@ fn feedback_without_a_description_asks_for_one() {
 }
 
 #[test]
-fn feedback_without_a_writer_keeps_the_draft_and_sends_nothing() {
+fn feedback_without_a_writer_lands_the_notice_through_the_loop() {
+    use std::sync::mpsc;
     let mut app = attached();
-    assert_eq!(enter(&mut app, "/feedback the sound"), Effect::None);
+    let Effect::Feedback { description } = enter(&mut app, "/feedback the sound") else {
+        panic!("feedback effect");
+    };
+    assert_eq!(description, "the sound");
+    // No writer, so nothing starts: the loop lands the same notice.
+    let (tx, _rx) = mpsc::channel();
+    assert_eq!(
+        crate::feedback::start(app.feedback_writer(), Some(&tx), description),
+        Some(crate::feedback::NO_WRITER.to_owned())
+    );
+    app.on_feedback(Err(crate::feedback::NO_WRITER.to_owned()));
     assert_eq!(app.draft(), "/feedback the sound");
     assert_eq!(app.notice(), Some(crate::feedback::NO_WRITER));
 }

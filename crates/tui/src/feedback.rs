@@ -14,25 +14,6 @@ pub(crate) const NO_WRITER: &str = "Feedback is not available here.";
 /// The loop is gone: the worker has no channel to answer on.
 pub(crate) const NO_CHANNEL: &str = "Feedback is not available: the terminal is closing.";
 
-/// The injected feedback writer `main` supplies; empty in the jigs,
-/// which write nothing.
-#[derive(Clone, Default)]
-pub(crate) struct Feedback {
-    writer: Option<WriteFeedback>,
-}
-
-impl Feedback {
-    /// A holder for `writer`, or an empty one without it.
-    pub(crate) fn new(writer: Option<WriteFeedback>) -> Self {
-        Self { writer }
-    }
-
-    /// The injected writer, if `main` supplied one.
-    pub(crate) fn writer(&self) -> Option<WriteFeedback> {
-        self.writer.clone()
-    }
-}
-
 /// Runs the writer off the loop thread and posts its answer: the path
 /// with the issue link, or why the report could not be written. Without
 /// a writer or a channel, answers nothing and returns the notice the
