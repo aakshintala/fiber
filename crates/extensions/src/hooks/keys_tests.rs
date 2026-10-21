@@ -278,8 +278,14 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
         }
         "before_message" => {
             let content = vec![ContentPart::Text { text: "x".into() }];
+            let from = SessionId("s_aaaaaaaaaaaaaaaa".into());
+            let parent = SessionId("s_bbbbbbbbbbbbbbbb".into());
             session
-                .before_message(&BeforeMessage { content: &content })
+                .before_message(&BeforeMessage {
+                    content: &content,
+                    from_session_id: Some(&from),
+                    parent_session_id: Some(&parent),
+                })
                 .notices
         }
         "before_handoff" => {
@@ -385,7 +391,11 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
         "before_message" => {
             let content = vec![ContentPart::Text { text: "x".into() }];
             session
-                .before_message(&BeforeMessage { content: &content })
+                .before_message(&BeforeMessage {
+                    content: &content,
+                    from_session_id: None,
+                    parent_session_id: None,
+                })
                 .notices
         }
         "before_handoff" => {

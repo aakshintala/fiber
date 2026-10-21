@@ -537,7 +537,11 @@ fn dispatch(session: &SessionExtensions, point: &str) -> Vec<Context> {
             session.check_tool(&call);
         }
         "before_message" => {
-            let answer = session.before_message(&BeforeMessage { content: &[] });
+            let answer = session.before_message(&BeforeMessage {
+                content: &[],
+                from_session_id: None,
+                parent_session_id: None,
+            });
             return match answer.outcome {
                 BeforeMessageOutcome::Passed { context, .. } => context,
                 BeforeMessageOutcome::Refused(_) | BeforeMessageOutcome::Failed(_) => Vec::new(),

@@ -214,7 +214,13 @@ fn dispatch_all(session: &Arc<SessionExtensions>) {
     });
     fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
         let session = Arc::clone(session);
-        move || session.before_message(&BeforeMessage { content: &content })
+        move || {
+            session.before_message(&BeforeMessage {
+                content: &content,
+                from_session_id: None,
+                parent_session_id: None,
+            })
+        }
     });
     fakes::within("session.before_model_call", fakes::MUST_SUCCEED_WITHIN, {
         let session = Arc::clone(session);
@@ -338,7 +344,13 @@ fn a_nil_hook_runs_once_per_dispatch() {
     let content = vec![ContentPart::Text { text: "hi".into() }];
     let answer = fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
         let session = Arc::clone(&session);
-        move || session.before_message(&BeforeMessage { content: &content })
+        move || {
+            session.before_message(&BeforeMessage {
+                content: &content,
+                from_session_id: None,
+                parent_session_id: None,
+            })
+        }
     });
     assert!(matches!(
         answer.outcome,
@@ -372,7 +384,13 @@ fn refusal_and_failure_return_inside_the_scope() {
     let content = vec![ContentPart::Text { text: "hi".into() }];
     let refused = fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
         let session = Arc::clone(&session);
-        move || session.before_message(&BeforeMessage { content: &content })
+        move || {
+            session.before_message(&BeforeMessage {
+                content: &content,
+                from_session_id: None,
+                parent_session_id: None,
+            })
+        }
     });
     assert!(matches!(refused.outcome, BeforeMessageOutcome::Refused(_)));
     let used = usage();
@@ -430,7 +448,13 @@ fn before_model_call_refusal_and_nonblocking_error_keep_their_scopes() {
     let content = vec![ContentPart::Text { text: "hi".into() }];
     let passed = fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
         let session = Arc::clone(&session);
-        move || session.before_message(&BeforeMessage { content: &content })
+        move || {
+            session.before_message(&BeforeMessage {
+                content: &content,
+                from_session_id: None,
+                parent_session_id: None,
+            })
+        }
     });
     // A non-blocking failure drops the change, keeps a notice and passes.
     assert!(matches!(
@@ -636,7 +660,11 @@ fn a_suspended_dispatch_spans_the_whole_call() {
         std::thread::spawn(move || {
             let _sent = id_tx.send(std::thread::current().id());
             let content = vec![ContentPart::Text { text: "hi".into() }];
-            let answer = session.before_message(&BeforeMessage { content: &content });
+            let answer = session.before_message(&BeforeMessage {
+                content: &content,
+                from_session_id: None,
+                parent_session_id: None,
+            });
             let _sent = tx.send(answer);
         })
     };
@@ -712,7 +740,11 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
         std::thread::spawn(move || {
             let _sent = id_tx.send(std::thread::current().id());
             let content = vec![ContentPart::Text { text: "hi".into() }];
-            let answer = session.before_message(&BeforeMessage { content: &content });
+            let answer = session.before_message(&BeforeMessage {
+                content: &content,
+                from_session_id: None,
+                parent_session_id: None,
+            });
             let _sent = tx.send(answer);
         })
     };
@@ -1146,7 +1178,13 @@ fn hook_http_sends_unobserved_with_a_sink_installed() {
     let content = vec![ContentPart::Text { text: "hi".into() }];
     fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
         let session = Arc::clone(&session);
-        move || session.before_message(&BeforeMessage { content: &content })
+        move || {
+            session.before_message(&BeforeMessage {
+                content: &content,
+                from_session_id: None,
+                parent_session_id: None,
+            })
+        }
     });
     assert_eq!(server.requests().len(), 1);
     assert!(sink.requests.lock().unwrap().is_empty());
@@ -1793,7 +1831,13 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
     let content = vec![ContentPart::Text { text: "hi".into() }];
     let answer = fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
         let session = Arc::clone(&session);
-        move || session.before_message(&BeforeMessage { content: &content })
+        move || {
+            session.before_message(&BeforeMessage {
+                content: &content,
+                from_session_id: None,
+                parent_session_id: None,
+            })
+        }
     });
     match answer.outcome {
         BeforeMessageOutcome::Passed { context, .. } => assert_eq!(context.len(), 1),
