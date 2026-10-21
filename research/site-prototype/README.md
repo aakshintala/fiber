@@ -6,19 +6,20 @@ from the system. Links to the docs and source open GitHub when followed.
 
 The page stays readable with JavaScript off. JavaScript only copies the
 install command. If clipboard access fails, it selects the command for
-manual copying. The full-size screenshot link needs no JavaScript.
+manual copying.
 
 ## Files
 
-- `index.html`: the pitch, install command, screenshot, screen guide and sourced figures
+- `index.html`: the pitch, install command, screenshot, screen guide, budgets and differentiators
 - `style.css`: the dark layout, system serif heading and responsive labels
 - `site.js`: copy button and clipboard fallback
+- `fiber-logo.png`: the TUI's image logo, 640 × 160: `crates/tui/assets/logo-mask.bin` tinted as `research/tui-prototype/src/logo.rs` tints it (the wave in accent, each letter its step of the dark theme's gradient, `docs/tui.md`, "The logo")
 - `fiber-tui.png`: the owner's original Ghostty screenshot, 3140 × 2144 pixels
 - `README.md`: opening instructions, screenshot provenance and content sources
 
 The screenshot is about 916 KiB, so this prototype serves the original
 without a second image. It displays at up to 1280 px wide, wider than the
-860 px text column. Clicking it opens the original. The 4 labels use
+860 px text column. It is not a link. The 4 labels use
 percentage positions over quiet parts of the screenshot. Below 600 px,
 they become a short list under the image.
 
@@ -51,20 +52,23 @@ Figures and claims were checked against this branch's docs at
 `60e174c26086c6836750add05015dab976b29159`. The page links to the
 corresponding sections on main for readers.
 
-- Pitch: `GLOSSARY.md`, “Session” and “Delegate”; `docs/invocation.md`,
-  “The hub”; `docs/model-routing.md`, “Choosing the model”. Fiber is a
-  terminal coding agent with persistent sessions and model choice.
+- Pitch: `docs/invocation.md`, "Two doors" and "The hub"; `docs/delegates.md`,
+  "Harnesses"; `docs/extensions.md`, "What an extension is".
 - Install command and supported systems: `docs/releasing.md`, “Installing”
   and “What a release publishes”. The command is reproduced from the doc. This task did
   not verify a published release or execute the installer.
-- RSS: `docs/performance.md`, “Budgets”. Idle headless session CI medians
-  are 12,416 to 12,480 KiB peak RSS on Linux x86_64. The ceiling is 13 MiB.
-  “What a budget covers” excludes child processes. This is not the
-  terminal's memory use or a busy session's memory use.
-- Binary size: `docs/ci.md`, “The backstop on main”. CI records each
-  commit's stripped binary size in bytes. Neither `docs/performance.md`
-  nor `docs/model-routing.md` reports a total binary size. The page says
-  so instead of substituting a component measurement or inventing a number.
+- Budgets: `docs/performance.md`, "Budgets". The page quotes four
+  ceilings, all gated on Linux x86_64: idle headless session 13,312 KiB
+  peak RSS, terminal to its first frame for a new session 50 ms, session
+  start 20 ms, and zero context switches in the idle window.
+- Hub and clients: `docs/invocation.md`, "The hub" and "Remote clients".
+- Extensions: `docs/extensions.md`, "What an extension is" (same seams,
+  replacing a built-in by name, Lua at about 120 to 150 KiB, process
+  extensions) and "Commands and screens".
+- Delegates: `docs/delegates.md`, "What a delegate is" and "Harnesses".
+- Reviewer: `docs/permissions.md`, "The reviewer" and "What happens on a
+  block".
+- Import: `docs/configuration.md`, "Importing".
 - Providers: `docs/model-routing.md`, “Protocols and providers”. The doc
   calls these eleven first-party providers, grouping OpenCode's two
   packages in one row. “Keys, tokens and OAuth” names ChatGPT/codex as
@@ -74,15 +78,12 @@ corresponding sections on main for readers.
 
 This is the owner's single approved direction, kept on `site/vision`.
 It uses the supplied Ghostty screenshot, not recreated HTML terminal cells.
-The only missing requested figure is total binary size: the branch docs
-provide no figure to quote. Nothing has been published.
+Nothing has been published.
 
 ## Verification
 
-Local Chrome checks passed at 1440 px and 390 px, and at 1440 px with
-JavaScript disabled. The image displays at 1278 px inside its border on
-desktop. There was no horizontal overflow, broken image, script error or
-third-party request. Automated WCAG A and AA checks reported no violations
-on the desktop and phone layouts. Copying and the manual selection fallback
-both preserved the complete install command. Desktop and phone screenshots
-were inspected. The repository docs check passed.
+Headless Chrome renders at 1440 px and 500 px were inspected: no
+horizontal overflow, the labels sit off the TUI text, and the stat grid
+and feature list stack on narrow screens. Headless Chrome on macOS will
+not size a window below about 500 px, so true phone width needs a
+device-emulation check before this ships.
