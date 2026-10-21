@@ -306,3 +306,314 @@ fn the_scratch_directory_is_removed_after_success_and_after_a_refusal() {
     assert!(matches!(err, Error::BadArchive { .. }), "{err:?}");
     assert_eq!(scratch_left(), Vec::<String>::new());
 }
+
+/// A release `fiber-update-fixture` serving a binary archive holding
+/// `marker`, the docs and extensions archives, and a release list holding
+/// `nightlies`.
+fn update_fixture(marker: &[u8], nightlies: serde_json::Value) -> fakes::ProviderServer {
+    let binary = gzip(&archive(&[(
+        header("fiber", b'0', marker.len() as u64, 0o755, ""),
+        marker,
+    )]));
+    let docs = gzip(&archive(&[(header("v", b'0', 3, 0o644, ""), b"new")]));
+    let extensions = gzip(&archive(&[]));
+    let ok = |body: Vec<u8>| fakes::Response::status(200, body);
+    fakes::ProviderServer::start_routed(
+        [
+            (
+                "/download/v0.2.0/fiber-test-triple.tar.gz",
+                ok(binary.clone()),
+            ),
+            (
+                "/download/v0.2.0/fiber-test-triple.tar.gz.sha256",
+                ok(sha(&binary).into_bytes()),
+            ),
+            ("/download/v0.2.0/fiber-docs.tar.gz", ok(docs.clone())),
+            (
+                "/download/v0.2.0/fiber-docs.tar.gz.sha256",
+                ok(sha(&docs).into_bytes()),
+            ),
+            (
+                "/download/v0.2.0/fiber-extensions.tar.gz",
+                ok(extensions.clone()),
+            ),
+            (
+                "/download/v0.2.0/fiber-extensions.tar.gz.sha256",
+                ok(sha(&extensions).into_bytes()),
+            ),
+            ("/releases", ok(nightlies.to_string().into_bytes())),
+        ],
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap()
+}
+
+fn fixture_nightly_list() -> serde_json::Value {
+    serde_json::json!([
+        {"tag_name": "v0.2.0", "prerelease": false, "draft": false},
+        {"tag_name": "v0.3.0-nightly.20240102", "prerelease": true, "draft": false},
+        {"tag_name": "v0.2.9-nightly.20241231", "prerelease": true, "draft": false},
+        {"tag_name": "v0.3.0-nightly.20240101", "prerelease": true, "draft": false},
+    ])
+}
+
+fn fixture_release(server: &fakes::ProviderServer, commit: &str) -> Release {
+    Release {
+        base: server.url(),
+        version: "0.2.0".into(),
+        commit: commit.into(),
+    }
+}
+
+#[test]
+fn fetch_verified_returns_the_checked_bytes() {
+    let server = update_fixture(b"marker", fixture_nightly_list());
+    let release = fixture_release(&server, "abc1234");
+    let bytes = super::fetch_verified(&release, "fiber-test-triple.tar.gz").unwrap();
+    let archived = gzip(&archive(&[(
+        header("fiber", b'0', 6, 0o755, ""),
+        b"marker".as_slice(),
+    )]));
+    assert_eq!(bytes, archived);
+}
+
+#[test]
+fn fetch_verified_refuses_a_tampered_archive() {
+    let binary = gzip(&archive(&[(
+        header("fiber", b'0', 6, 0o755, ""),
+        b"marker",
+    )]));
+    let server = fakes::ProviderServer::start_routed(
+        [
+            (
+                "/download/v0.2.0/fiber-test-triple.tar.gz",
+                fakes::Response::status(200, b"tampered".to_vec()),
+            ),
+            (
+                "/download/v0.2.0/fiber-test-triple.tar.gz.sha256",
+                fakes::Response::status(200, sha(&binary).into_bytes()),
+            ),
+        ],
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap();
+    let release = fixture_release(&server, "abc1234");
+    let err = super::fetch_verified(&release, "fiber-test-triple.tar.gz").unwrap_err();
+    let Error::ArchiveChecksum { archive, .. } = &err else {
+        panic!("a tampered archive fails its checksum: {err}");
+    };
+    assert_eq!(archive, "fiber-test-triple.tar.gz");
+}
+
+#[test]
+fn fetch_verified_names_a_missing_checksum_file() {
+    let server = fakes::ProviderServer::start_routed(
+        [(
+            "/download/v0.2.0/fiber-test-triple.tar.gz",
+            fakes::Response::status(200, b"bytes".to_vec()),
+        )],
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap();
+    let release = fixture_release(&server, "abc1234");
+    let err = super::fetch_verified(&release, "fiber-test-triple.tar.gz").unwrap_err();
+    let Error::Download { name, .. } = &err else {
+        panic!("a missing checksum fails the download: {err}");
+    };
+    assert_eq!(name, "fiber-test-triple.tar.gz.sha256");
+}
+
+#[test]
+fn unpack_release_archive_writes_the_members_under_the_directory() {
+    let marker = b"marker";
+    let archive = gzip(&archive(&[(
+        header("fiber", b'0', marker.len() as u64, 0o755, ""),
+        marker.as_slice(),
+    )]));
+    let held = fakes::TempDir::new("fiber-unpack-release");
+    let into = held.path().join("binary");
+    std::fs::create_dir(&into).unwrap();
+    super::unpack_release_archive(&archive, &into, "fiber-test-triple.tar.gz").unwrap();
+    assert_eq!(std::fs::read(into.join("fiber")).unwrap(), marker);
+}
+
+#[test]
+fn unpack_release_archive_names_a_refused_archive() {
+    let held = fakes::TempDir::new("fiber-unpack-release-bad");
+    let into = held.path().join("binary");
+    std::fs::create_dir(&into).unwrap();
+    let err =
+        super::unpack_release_archive(b"not gzip", &into, "fiber-test-triple.tar.gz").unwrap_err();
+    let Error::BadArchive { archive, .. } = &err else {
+        panic!("a refused archive names itself: {err}");
+    };
+    assert_eq!(archive, "fiber-test-triple.tar.gz");
+}
+
+#[test]
+fn staged_docs_swap_into_an_absent_or_present_docs_directory() {
+    for with_old in [true, false] {
+        let held = fakes::TempDir::new("fiber-stage-docs");
+        let home = held.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        if with_old {
+            std::fs::create_dir(home.join("docs")).unwrap();
+            std::fs::write(home.join("docs/v"), "old").unwrap();
+        }
+        let docs = gzip(&archive(&[(header("v", b'0', 3, 0o644, ""), b"new")]));
+        let scratch = super::Scratch::create(held.path(), "fiber-stage-docs", 0o700).unwrap();
+        let fresh = super::stage_docs_from(&home, &docs, scratch.path()).unwrap();
+        assert!(fresh.starts_with(&home));
+        super::swap_docs_in(&home, &fresh).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join("docs/v")).unwrap(), "new");
+    }
+}
+
+#[test]
+fn staged_docs_refuse_an_empty_archive_before_any_rename() {
+    let held = fakes::TempDir::new("fiber-stage-docs-empty");
+    let scratch_held = fakes::TempDir::new("fiber-stage-docs-empty-scratch");
+    let scratch =
+        super::Scratch::create(scratch_held.path(), "fiber-stage-docs-empty", 0o700).unwrap();
+    let err =
+        super::stage_docs_from(held.path(), &gzip(&archive(&[])), scratch.path()).unwrap_err();
+    let Error::BadArchive { archive, why } = &err else {
+        panic!("empty docs fail the staging: {err}");
+    };
+    assert_eq!(archive, "fiber-docs.tar.gz");
+    assert!(why.contains("no entries"), "{err}");
+    assert!(held.path().read_dir().unwrap().next().is_none());
+}
+
+#[test]
+fn install_docs_if_missing_leaves_present_docs_alone() {
+    let held = fakes::TempDir::new("fiber-docs-if-missing");
+    let home = held.path().join("home");
+    std::fs::create_dir_all(home.join("docs")).unwrap();
+    std::fs::write(home.join("docs/v"), "old").unwrap();
+    let server = update_fixture(b"marker", fixture_nightly_list());
+    super::install_docs_if_missing(&home, &fixture_release(&server, "abc1234")).unwrap();
+    assert_eq!(std::fs::read_to_string(home.join("docs/v")).unwrap(), "old");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn install_docs_if_missing_installs_absent_docs() {
+    let held = fakes::TempDir::new("fiber-docs-if-absent");
+    let home = held.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let server = update_fixture(b"marker", fixture_nightly_list());
+    super::install_docs_if_missing(&home, &fixture_release(&server, "abc1234")).unwrap();
+    assert_eq!(std::fs::read_to_string(home.join("docs/v")).unwrap(), "new");
+}
+
+#[test]
+fn fetch_nightly_tag_picks_the_newest_base_then_date() {
+    let server = update_fixture(b"marker", fixture_nightly_list());
+    assert_eq!(
+        super::fetch_nightly_tag(&server.url()).unwrap(),
+        "v0.3.0-nightly.20240102"
+    );
+}
+
+/// Two entries equal in (base, date) keep the deterministic winner: the
+/// strictly-greater comparison holds the first the list names, in either
+/// order. The `v` prefix is not part of the key, so `v0.3.0-nightly.D`
+/// and `0.3.0-nightly.D` tie.
+#[test]
+fn fetch_nightly_tag_keeps_the_first_of_equal_base_and_date() {
+    let server = update_fixture(
+        b"marker",
+        serde_json::json!([
+            {"tag_name": "v0.3.0-nightly.20240101", "prerelease": true, "draft": false},
+            {"tag_name": "0.3.0-nightly.20240101", "prerelease": true, "draft": false},
+        ]),
+    );
+    assert_eq!(
+        super::fetch_nightly_tag(&server.url()).unwrap(),
+        "v0.3.0-nightly.20240101"
+    );
+    let server = update_fixture(
+        b"marker",
+        serde_json::json!([
+            {"tag_name": "0.3.0-nightly.20240101", "prerelease": true, "draft": false},
+            {"tag_name": "v0.3.0-nightly.20240101", "prerelease": true, "draft": false},
+        ]),
+    );
+    assert_eq!(
+        super::fetch_nightly_tag(&server.url()).unwrap(),
+        "0.3.0-nightly.20240101"
+    );
+}
+
+#[test]
+fn fetch_nightly_tag_skips_what_is_not_a_matching_release() {
+    let list = serde_json::json!([
+        {"tag_name": "v0.3.0", "prerelease": false, "draft": false},
+        {"tag_name": "v0.3.0-nightly.20240101", "prerelease": false, "draft": false},
+        {"tag_name": "v0.3.0-nightly.20240101", "prerelease": true, "draft": true},
+        {"tag_name": "v0.3.0-nightly.2024010", "prerelease": true, "draft": false},
+        {"tag_name": 7, "prerelease": true, "draft": false},
+        {"prerelease": true, "draft": false},
+        "v0.3.0-nightly.20240101",
+    ]);
+    let server = update_fixture(b"marker", list);
+    let err = super::fetch_nightly_tag(&server.url()).unwrap_err();
+    let Error::NoNightly { url, .. } = &err else {
+        panic!("no matching nightly names the channel: {err}");
+    };
+    assert!(err.to_string().contains("`nightly`"), "{err}");
+    assert_eq!(
+        url.as_str(),
+        format!("{}/releases?per_page=100", server.url())
+    );
+}
+
+#[test]
+fn fetch_nightly_tag_names_a_failed_list() {
+    let server = fakes::ProviderServer::start_routed(
+        [("/releases", fakes::Response::status(500, "boom"))],
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap();
+    let err = super::fetch_nightly_tag(&server.url()).unwrap_err();
+    let Error::Download { name, why } = &err else {
+        panic!("a failed list names its URL: {err}");
+    };
+    assert!(
+        why.contains(&format!("{}/releases?per_page=100", server.url())),
+        "{err}"
+    );
+    assert_eq!(name, "nightly");
+}
+
+#[test]
+fn latest_stable_tag_reads_the_redirect_tag() {
+    let mut redirect = fakes::Response::status(302, "");
+    redirect
+        .headers
+        .push(("location".into(), "/releases/tag/v0.2.0".into()));
+    let server = fakes::ProviderServer::start_routed(
+        [
+            ("/releases/latest", redirect),
+            ("/releases/tag/v0.2.0", fakes::Response::status(200, "")),
+        ],
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap();
+    assert_eq!(super::latest_stable_tag(&server.url()).unwrap(), "v0.2.0");
+}
+
+#[test]
+fn latest_stable_tag_names_a_failed_redirect() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(500, "nope")]).unwrap();
+    let err = super::latest_stable_tag(&server.url()).unwrap_err();
+    let Error::Download { name, why } = err else {
+        panic!("a failed redirect fails as its download failed: {err}");
+    };
+    assert_eq!(name, "stable");
+    assert!(
+        why.contains(&server.url()),
+        "the failure names the URL: {why}"
+    );
+}

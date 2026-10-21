@@ -368,6 +368,25 @@ pub enum CliError {
     /// This build records no commit, so it cannot install a release's extensions.
     #[error("This build records no commit, so it cannot install a release's extensions.")]
     ReleaseNoCommit,
+    /// The binary directory cannot be written, so the staged binary
+    /// cannot be renamed into place.
+    #[error("update could not write to the binary directory {dir}: {source}", dir = .dir.display())]
+    UpdateBinaryDirectory {
+        /// The directory holding the running binary.
+        dir: PathBuf,
+        /// Why the probe write failed.
+        source: io::Error,
+    },
+    /// The staged binary could not be renamed over the running one.
+    #[error("update could not rename {} to {}: {source}", .staged.display(), .binary.display())]
+    UpdateBinaryRename {
+        /// The staged binary.
+        staged: PathBuf,
+        /// The running binary it replaces.
+        binary: PathBuf,
+        /// Why the rename failed.
+        source: io::Error,
+    },
     /// The working directory could not be read for an extension command.
     #[error("{0}")]
     ExtensionDirectory(#[source] io::Error),
@@ -612,6 +631,9 @@ impl CliError {
             Self::ApprovalNotStored { source, .. } => source.code(),
             Self::ApproveFailed { source, .. } => source.code(),
             Self::ReleaseNoCommit => ErrorCode::ExtensionIncompatible,
+            Self::UpdateBinaryDirectory { .. } | Self::UpdateBinaryRename { .. } => {
+                ErrorCode::IoFailed
+            }
             Self::NoFirstPartyPackage { .. } => ErrorCode::InvalidArguments,
             Self::SecretsKept(error) => error.code(),
             Self::ApprovalChanged { .. }
@@ -733,6 +755,8 @@ impl From<CliError> for Failure {
             | CliError::ApproveFailed { .. }
             | CliError::ReleaseVersionMismatch { .. }
             | CliError::ReleaseNoCommit
+            | CliError::UpdateBinaryDirectory { .. }
+            | CliError::UpdateBinaryRename { .. }
             | CliError::ExtensionDirectory(_)
             | CliError::FiberExecutable(_)
             | CliError::DoctorReport(_)

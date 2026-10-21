@@ -27,6 +27,7 @@ Sessions:
   models [<search>] [--json]                                                                                      List the models the installed providers serve
 
 Fiber itself:
+  update                                    Update the Fiber binary and every installed extension together; `upgrade` runs the same command, with `--channel stable|nightly`
   approve [--yes]                           Show what this repository ships and approve it
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
@@ -154,8 +155,39 @@ struct Cli {
     command: Option<Commands>,
 }
 
+/// The release channel `fiber update` installs from. The names are
+/// lowercase and matched exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum ChannelArg {
+    // The variants carry no doc comments: clap would show them as each
+    // value's help, and `update -h` and `--help` would differ.
+    Stable,
+    Nightly,
+}
+
+/// The hidden `--base-url` test seam `update` and `release-install`
+/// share: both release roots point at it, so the binary tests serve one
+/// fixture server as both. Hidden and free to change.
+#[derive(Debug, clap::Args)]
+pub(crate) struct TestBaseUrl {
+    /// Where releases are published, for tests.
+    #[arg(long = "base-url", value_name = "url", hide = true)]
+    pub(crate) base_url: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
+    /// Update the Fiber binary and every installed extension together;
+    /// `upgrade` runs the same command
+    #[command(visible_alias = "upgrade")]
+    Update {
+        /// The release channel: `stable` or `nightly`. Absent reads
+        /// `FIBER_CHANNEL`; an empty or unset variable means stable.
+        #[arg(long, value_name = "channel")]
+        channel: Option<ChannelArg>,
+        #[command(flatten)]
+        test_base_url: TestBaseUrl,
+    },
     /// Run one session of one turn; its events go to stdout
     Ask(AskArgs),
     /// Open a session in the terminal, or home at the session list
@@ -276,9 +308,8 @@ pub(crate) enum Commands {
         /// The release's version, which must be this binary's own.
         #[arg(value_name = "version")]
         version: String,
-        /// Where releases are published, for tests.
-        #[arg(long = "base-url", value_name = "url")]
-        base_url: Option<String>,
+        #[command(flatten)]
+        test_base_url: TestBaseUrl,
     },
     /// Manage this client's hub list, the hub's service and paired devices
     #[command(subcommand, arg_required_else_help = false)]

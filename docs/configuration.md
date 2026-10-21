@@ -67,9 +67,7 @@ The key is a dotted path and the value is JSON, or a bare string when it does
 not parse as JSON: `-c handoff.tokens=200000`, `-c model=openai/gpt-5.6`. It
 may be given more than once. A named flag such as `--model` is shorthand for
 the same thing, read before every `-c`, so `-c model=` wins over `--model`.
-`FIBER_HOME` is the only environment variable of its own that a person sets
-for the `fiber` binary (`install.sh` also reads `FIBER_INSTALL_DIR`,
-`FIBER_VERSION` and `FIBER_CHANNEL`, `docs/releasing.md`); the shell tool sets `FIBER_GREP_MATCHES`
+`FIBER_HOME` names Fiber home, and `FIBER_CHANNEL` names the release channel `fiber update` follows: the `--channel` flag beats the environment, and an empty setting means stable. `install.sh` reads the same channel setting, plus `FIBER_INSTALL_DIR` and `FIBER_VERSION` (`docs/releasing.md`); the shell tool sets `FIBER_GREP_MATCHES`
 for the built-in `grep` it runs (`docs/tools.md`, "Shell"); no
 environment variable overrides a key. Fiber also honours the platform's proxy
 variables (`docs/dependencies.md`, "Proxies").

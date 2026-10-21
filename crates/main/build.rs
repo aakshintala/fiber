@@ -1,8 +1,9 @@
 //! Records the full commit SHA so `fiber --version` can print it
-//! (`docs/releasing.md`, "Versions"). With no git history, such as a
-//! source tarball or a mutation-testing copy, the lookup fails and
-//! `FIBER_COMMIT` stays unset, so `fiber --version` prints
-//! `fiber <version>`; a present-but-malformed SHA fails the build.
+//! (`docs/releasing.md`, "Versions"), and the target triple so
+//! `fiber update` downloads the asset for this binary. With no git
+//! history, such as a source tarball or a mutation-testing copy, the
+//! lookup fails and `FIBER_COMMIT` stays unset, so `fiber --version`
+//! prints `fiber <version>`; a present-but-malformed SHA fails the build.
 
 #![allow(clippy::panic, reason = "a build script fails the build by panicking")]
 #![allow(
@@ -34,6 +35,13 @@ fn main() {
     } else {
         panic!("FIBER_COMMIT: `{commit}` is not a commit SHA.");
     }
+    // Cargo always sets TARGET for a build script; a different target
+    // rebuilds anyway, but the env is declared so the script reruns.
+    println!("cargo:rerun-if-env-changed=TARGET");
+    let Some(target) = std::env::var("TARGET").ok() else {
+        panic!("TARGET: cargo always sets TARGET for a build script.");
+    };
+    println!("cargo:rustc-env=FIBER_TARGET={target}");
 }
 
 fn git_line(args: &[&str]) -> Option<String> {

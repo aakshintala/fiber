@@ -209,9 +209,6 @@ fn installed_line(service: &Service) -> String {
     )
 }
 
-const TAKEOVER: &str = "A hub a client started is running; the installed hub takes over once it \
-                        exits, when no client has been connected for hub.idle_exit_ms.\n";
-
 #[test]
 fn launchd_not_loaded_writes_the_plist_and_bootstraps() {
     let setup = Setup::new();
@@ -617,18 +614,16 @@ fn current_exe_is_the_running_binary() {
 }
 
 #[test]
-fn a_hub_answering_while_the_service_is_not_loaded_prints_the_takeover_line() {
+fn install_with_a_vanished_hub_still_installs() {
+    // No socket: the hub vanished between the probe and the send, so the
+    // send fails and the install carries on through the manager calls.
     let setup = Setup::new();
     let service = setup.service(launchd());
-    let (result, out) = setup.install(&service, None, &Stub::unloaded(), true);
+    let stub = Stub::unloaded();
+    let (result, out) = setup.install(&service, None, &stub, true);
     result.unwrap();
-    assert_eq!(out, format!("{}{TAKEOVER}", installed_line(&service)));
-
-    let setup = Setup::new();
-    let service = setup.service(Manager::Systemd);
-    let (result, out) = setup.install(&service, None, &Stub::ok(), true);
-    result.unwrap();
-    assert_eq!(out, format!("{}{TAKEOVER}", installed_line(&service)));
+    assert_eq!(out, installed_line(&service));
+    assert_eq!(stub.calls(), [print(&service), bootstrap(&service)]);
 }
 
 #[test]
@@ -646,6 +641,196 @@ fn a_hub_answering_while_the_service_is_loaded_prints_no_takeover_line() {
     let (result, out) = setup.install(&service, None, &Stub::ok(), true);
     result.unwrap();
     assert_eq!(out, installed_line(&service));
+}
+
+/// A hub on `home`'s `run/hub` that answers every command with
+/// `command_accepted` and logs each command line in `events` before it
+/// answers, so the log orders the stop against the manager calls.
+/// Answering every connection keeps the install off the injected clock:
+/// an extra stop (such as the flipped `!changed` condition's) is
+/// answered too, so the install returns and the assertions fail instead
+/// of hanging. Dropping the shutdown sender ends the loop, so no join
+/// ever waits on a connection that never comes.
+fn stopping_hub(
+    home: &Path,
+    events: Arc<std::sync::Mutex<Vec<String>>>,
+) -> (std::thread::JoinHandle<()>, std::sync::mpsc::Sender<()>) {
+    fs::create_dir_all(home.join("run")).unwrap();
+    let listener = UnixListener::bind(home.join("run/hub")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let handle = std::thread::spawn(move || {
+        loop {
+            match stop_rx.try_recv() {
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                _ => return,
+            }
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    // The accepted stream stays blocking, as with a
+                    // blocking listener: the hello answers once the
+                    // command arrives, never with a `WouldBlock`.
+                    stream.set_nonblocking(false).unwrap();
+                    let mut read = BufReader::new(stream.try_clone().unwrap());
+                    let hello = json!({
+                        "kind": "hub_hello", "ts": 1,
+                        "schema_version": contract::SCHEMA_VERSION, "payload": {},
+                    });
+                    writeln!(stream.try_clone().unwrap(), "{hello}").unwrap();
+                    let mut line = String::new();
+                    read.read_line(&mut line).unwrap();
+                    events.lock().unwrap().push(format!("hub:{line}"));
+                    let got: Value = serde_json::from_str(line.trim()).unwrap();
+                    let id = got.get("id").and_then(Value::as_str).unwrap_or("?");
+                    let answer = json!({
+                        "kind": "command_accepted", "ts": 2,
+                        "schema_version": contract::SCHEMA_VERSION,
+                        "payload": {"command_id": id},
+                    });
+                    writeln!(stream.try_clone().unwrap(), "{answer}").unwrap();
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::yield_now();
+                }
+                Err(_) => return,
+            }
+        }
+    });
+    (handle, stop_tx)
+}
+
+#[test]
+fn install_with_an_answering_hub_sends_stop_before_any_manager_call() {
+    let setup = Setup::new();
+    let service = setup.service(launchd());
+    let events: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (_hub, _shutdown) = stopping_hub(&setup.home(), Arc::clone(&events));
+    let stub_events = Arc::clone(&events);
+    let stub = Stub::new(move |line| {
+        stub_events.lock().unwrap().push(format!("manager:{line}"));
+        Ok(if line.contains(" print ") { no() } else { ok() })
+    });
+    let (result, out) = setup.install(&service, None, &stub, true);
+    result.unwrap();
+    assert_eq!(out, installed_line(&service));
+    let events = events.lock().unwrap();
+    // The hub logs the stop before it answers, and the install waits for
+    // the answer before the manager runs: the stop is first.
+    let first = events.first().expect("the stop is sent");
+    assert!(
+        first.starts_with("hub:"),
+        "the stop comes before any manager call: {events:?}"
+    );
+    assert!(
+        first.contains("\"command\":\"stop\""),
+        "the command is stop: {first}"
+    );
+    assert!(
+        first.contains("\"args\":{}"),
+        "the stop carries no arguments: {first}"
+    );
+    assert!(
+        events
+            .iter()
+            .skip(1)
+            .all(|event| event.starts_with("manager:")),
+        "only the stop reaches the hub: {events:?}"
+    );
+    assert!(events.len() > 1, "the manager still runs: {events:?}");
+}
+
+#[test]
+fn a_second_identical_launchd_install_with_an_answering_hub_sends_no_stop() {
+    let setup = Setup::new();
+    let service = setup.service(launchd());
+    setup
+        .install(&service, None, &Stub::unloaded(), false)
+        .0
+        .unwrap();
+    let events: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (_hub, _shutdown) = stopping_hub(&setup.home(), Arc::clone(&events));
+    let stub_events = Arc::clone(&events);
+    let stub = Stub::new(move |line| {
+        stub_events.lock().unwrap().push(format!("manager:{line}"));
+        Ok(ok())
+    });
+    let (result, out) = setup.install(&service, None, &stub, true);
+    result.unwrap();
+    assert_eq!(out, installed_line(&service));
+    let events = events.lock().unwrap();
+    assert!(
+        events.iter().all(|event| event.starts_with("manager:")),
+        "an unchanged loaded install sends no stop: {events:?}"
+    );
+    assert_eq!(stub.calls(), [print(&service)]);
+}
+
+#[test]
+fn a_second_identical_systemd_install_with_an_answering_hub_sends_no_stop() {
+    let setup = Setup::new();
+    let service = setup.service(Manager::Systemd);
+    setup.install(&service, None, &Stub::ok(), false).0.unwrap();
+    let events: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (_hub, _shutdown) = stopping_hub(&setup.home(), Arc::clone(&events));
+    let stub = Stub::ok();
+    let (result, out) = setup.install(&service, None, &stub, true);
+    result.unwrap();
+    assert_eq!(out, installed_line(&service));
+    assert_eq!(
+        stub.calls(),
+        [systemctl(&format!("enable --now {}.service", service.name))]
+    );
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "an unchanged loaded install sends no stop"
+    );
+}
+
+#[test]
+fn an_unchanged_unloaded_launchd_install_with_an_answering_hub_sends_stop() {
+    let setup = Setup::new();
+    let service = setup.service(launchd());
+    fs::write(&service.unit, service.render(None).unwrap()).unwrap();
+    let events: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (hub, shutdown) = stopping_hub(&setup.home(), Arc::clone(&events));
+    let stub_events = Arc::clone(&events);
+    let stub = Stub::new(move |line| {
+        stub_events.lock().unwrap().push(format!("manager:{line}"));
+        Ok(if line.contains(" print ") { no() } else { ok() })
+    });
+    let (result, out) = setup.install(&service, None, &stub, true);
+    result.unwrap();
+    assert_eq!(out, installed_line(&service));
+    // The install returns only after the hub answers, and the answer
+    // waits on the logged stop: the events below are complete without
+    // joining. Shutting down ends the hub's loop, so the join reaps a
+    // thread that already exited instead of waiting on a real clock.
+    drop(shutdown);
+    hub.join().unwrap();
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 3, "print, stop, bootstrap: {events:?}");
+    assert_eq!(events[0], format!("manager:{}", print(&service)));
+    assert!(
+        events[1].starts_with("hub:") && events[1].contains("\"command\":\"stop\""),
+        "the unchanged unloaded install still stops the hub: {events:?}"
+    );
+    assert_eq!(events[2], format!("manager:{}", bootstrap(&service)));
+}
+
+#[test]
+fn install_without_an_answering_hub_connects_to_nothing() {
+    let setup = Setup::new();
+    let service = setup.service(launchd());
+    fs::create_dir_all(setup.home().join("run")).unwrap();
+    let listener = UnixListener::bind(setup.home().join("run/hub")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let (result, out) = setup.install(&service, None, &Stub::unloaded(), false);
+    result.unwrap();
+    assert_eq!(out, installed_line(&service));
+    assert!(
+        matches!(listener.accept(), Err(e) if e.kind() == io::ErrorKind::WouldBlock),
+        "install sends no stop without an answering hub"
+    );
 }
 
 #[test]
