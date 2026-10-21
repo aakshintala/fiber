@@ -5998,7 +5998,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
-                | Delivery::Message(_)
+                | Delivery::Message(..)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::ExtensionJob(..)
