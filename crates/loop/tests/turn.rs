@@ -1645,6 +1645,39 @@ fn a_copy_tripping_the_budget_stops_delegates_through_the_trip() {
 }
 
 #[test]
+fn loop_spend_and_a_copy_trip_together() {
+    // The loop's own 0.6 fills the tripwire through the recording-only
+    // path; the 0.5 copy crosses the 1.0 budget on its fold path and
+    // trips (stop one), and the failed turn's budget end stops again
+    // (stop two). Without the recording path the copy alone never trips,
+    // and only the budget end stops.
+    let (mut session, jobs) = budgeted_with_jobs(
+        vec![
+            reply_of("Done.", "gen_own", 600_000),
+            Scripted::text("Two."),
+        ],
+        None,
+        per_token(false),
+        Some(1.0),
+    );
+    session.inbox.send(delivery("one")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.lines();
+    assert_eq!(jobs.stop_delegates_calls(), 0);
+    send_child(
+        &session,
+        "j_1",
+        "s_child",
+        child_usage("g_1", Some(0.5), None, None),
+    );
+    session.inbox.send(delivery("two")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let completed = session.lines().last().unwrap().clone();
+    assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
+    assert_eq!(jobs.stop_delegates_calls(), 2);
+}
+
+#[test]
 fn a_copy_without_its_job_lines_still_counts() {
     // Pruning dropped the delegate's job lines, but the usage copy it
     // wrote before stays: the spend holds it with no job in sight.

@@ -2532,6 +2532,19 @@ fn start_with_usage(
     cap: u64,
     on_usage: Option<super::UsageForward>,
 ) -> mpsc::Receiver<()> {
+    start_after_with_usage(rig, shell, bound, cap, on_usage, None)
+}
+
+/// [`start_with_usage`], watching past `after`: lines at or before the
+/// boundary belong to an earlier run, so the stream never delivers them.
+fn start_after_with_usage(
+    rig: &Rig,
+    shell: &str,
+    bound: Duration,
+    cap: u64,
+    on_usage: Option<super::UsageForward>,
+    after: Option<u64>,
+) -> mpsc::Receiver<()> {
     let shell = shell.to_owned();
     let script = Arc::clone(&rig.script);
     let watch = Arc::new(
@@ -2553,7 +2566,7 @@ fn start_with_usage(
         bound,
         cap,
         watch,
-        None,
+        after,
         None,
         on_usage,
     );
@@ -2584,6 +2597,36 @@ fn start_with_usage(
         let _sent = done.send(());
     });
     waited
+}
+
+#[test]
+fn the_stream_forwards_live_usage_past_the_run_boundary() {
+    // The socket streams two live usage lines past `after`: the stream
+    // claims each under the fold lock and forwards both in order. A
+    // boundary check that drops past-`after` lines would forward none;
+    // a dedup that forgets the first claim would forward the first
+    // twice and drop the second.
+    let rig = rig(vec![WatchReply::Exited(vec![
+        usage_envelope(2, "g_2", Some(0.1)),
+        usage_envelope(3, "g_3", Some(0.2)),
+        fiber_exited_line(4, "Done."),
+    ])]);
+    let waited = start_after_with_usage(
+        &rig,
+        "exit 0",
+        BOUND,
+        1 << 20,
+        Some(rig.registry.usage_forward()),
+        Some(1),
+    );
+    let _waited = waited;
+    let (notice, usages) = reported_with_usage(&rig);
+    let generations: Vec<&str> = usages
+        .iter()
+        .map(|(_, _, generation)| generation.as_str())
+        .collect();
+    assert_eq!(generations, ["g_2", "g_3"]);
+    assert_eq!(notice.completed.status, Outcome::Completed);
 }
 
 /// [`reported`], collecting the `DelegateUsage` deliveries the watcher's

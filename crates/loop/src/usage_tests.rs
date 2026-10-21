@@ -583,3 +583,84 @@ fn a_null_cost_line_bills_zero() {
     assert!(!trip.apply(&line("g1", None, None, 0)));
     assert!(!trip.apply(&line("g2", Some(true), Some(2.0), 0)));
 }
+
+#[test]
+fn restored_ledger_lines_seed_the_tripwire_sum() {
+    // A resume keeps its restored spend: every held line joins the sum
+    // once. An empty seed, a multiplying fold or a subtracting one all
+    // lose it.
+    use super::Tripwire;
+    let mut ledger = Ledger::default();
+    ledger.record(&line("g1", None, Some(1.5), 0));
+    ledger.record(&line("g2", None, Some(2.5), 0));
+    let trip = Tripwire::from_ledger(&ledger, None);
+    assert_eq!(trip.sum, 4.0);
+    assert_eq!(trip.billed.len(), 2);
+}
+
+#[test]
+fn recording_a_line_adds_its_billed_cost() {
+    // The recording-only path reconciles the sum without claiming the
+    // trip: dropping the record loses the loop's own spend.
+    use super::Tripwire;
+    let mut trip = Tripwire::from_ledger(&Ledger::default(), None);
+    trip.record(&line("g1", None, Some(1.5), 0));
+    assert_eq!(trip.sum, 1.5);
+}
+
+#[test]
+fn a_recorded_correction_moves_the_sum_by_its_difference() {
+    // A correction adds only `billed(new) - billed(old)`: skipping a
+    // changed line keeps the stale total, adding the sum double-counts.
+    use super::Tripwire;
+    let mut trip = Tripwire::from_ledger(&Ledger::default(), None);
+    trip.record(&line("g1", None, Some(5.0), 0));
+    trip.record(&line("g1", None, Some(7.0), 0));
+    assert_eq!(trip.sum, 7.0);
+}
+
+#[test]
+fn a_zero_cost_record_still_registers_its_generation() {
+    // A stale restored snapshot must not overwrite the watcher's
+    // zero-cost arrival: the generation counts as present, so the
+    // publish finds it and adds nothing.
+    use super::Tripwire;
+    let mut trip = Tripwire::from_ledger(&Ledger::default(), None);
+    trip.record(&line("g1", None, None, 0));
+    trip.publish_missing(&line("g1", None, Some(5.0), 0));
+    assert_eq!(trip.sum, 0.0);
+}
+
+#[test]
+fn publishing_a_missing_restored_line_adds_its_cost() {
+    // Attaching publishes the restored ledger: a line the map lacks
+    // joins the sum, and publishing it again changes nothing.
+    use super::Tripwire;
+    let mut trip = Tripwire::from_ledger(&Ledger::default(), None);
+    trip.publish_missing(&line("g1", None, Some(5.0), 0));
+    assert_eq!(trip.sum, 5.0);
+    trip.publish_missing(&line("g1", None, Some(5.0), 0));
+    assert_eq!(trip.sum, 5.0);
+}
+
+#[test]
+fn an_applied_correction_moves_the_sum_by_its_difference() {
+    // As the recording path: a changed line moves the sum by the
+    // difference, so the trip reads the true total.
+    use super::Tripwire;
+    let mut trip = Tripwire::from_ledger(&Ledger::default(), None);
+    assert!(!trip.apply(&line("g1", None, Some(5.0), 0)));
+    assert!(!trip.apply(&line("g1", None, Some(7.0), 0)));
+    assert_eq!(trip.sum, 7.0);
+}
+
+#[test]
+fn a_zero_cost_apply_still_registers_its_generation() {
+    // As the recording path: a zero-cost arrival counts as present, so
+    // a later publish of the same generation adds nothing.
+    use super::Tripwire;
+    let mut trip = Tripwire::from_ledger(&Ledger::default(), None);
+    assert!(!trip.apply(&line("g1", None, None, 0)));
+    trip.publish_missing(&line("g1", None, Some(5.0), 0));
+    assert_eq!(trip.sum, 0.0);
+}
