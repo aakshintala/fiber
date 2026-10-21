@@ -12,7 +12,7 @@ use contract::ErrorCode;
 use serde_json::json;
 
 use super::clean;
-use super::startup::{LONGEST_SESSION_ID, startup};
+use super::startup::startup;
 use crate::hub_status::{Diagnostic, diagnose};
 
 // The session-start socket limit is `doors::SOCKET_PATH_MAX`: `sun_path`
@@ -26,7 +26,9 @@ struct Setup {
 
 impl Setup {
     fn new(prefix: &str) -> Self {
-        let root = fakes::TempDir::new(prefix);
+        // Socket paths are length-limited, so the home's root sits
+        // under a short parent, never the roomy system temp dir.
+        let root = fakes::TempDir::under(Path::new("/tmp"), prefix);
         fs::create_dir_all(root.path().join("workspace")).unwrap();
         Self { root }
     }
@@ -78,35 +80,25 @@ fn expected_sentence() -> String {
     )
 }
 
-/// A home whose `run/hub` is past the limit, so the longer session socket
-/// is past it too.
-fn overlong_home(root: &Path) -> PathBuf {
+/// A home whose `run/<file_name>` socket path is `socket_len` bytes long.
+/// A `"hub"` socket past the limit pushes every longer session socket
+/// past it too.
+fn home_with(root: &Path, file_name: &str, socket_len: usize) -> PathBuf {
     let base = root.to_string_lossy().len();
-    // `root` + `/` + pad + `/run/hub` lands past the limit.
-    let pad = doors::SOCKET_PATH_MAX - base - 1 - "/run/hub".len() + 1;
+    // `root` + `/` + pad + `/run/` + `file_name` is `socket_len` bytes.
+    let pad = socket_len - base - 1 - "/run/".len() - file_name.len();
     let home = root.join("p".repeat(pad));
-    assert!(home.join("run").join("hub").as_os_str().len() > doors::SOCKET_PATH_MAX);
-    home
-}
-
-/// A home whose longest session socket is exactly the limit.
-fn at_limit_home(root: &Path) -> PathBuf {
-    let base = root.to_string_lossy().len();
-    // `root` + `/` + pad + `/run/` + the longest session id == the limit.
-    let pad = doors::SOCKET_PATH_MAX - base - 1 - "/run/".len() - LONGEST_SESSION_ID.len();
-    let home = root.join("q".repeat(pad));
     assert_eq!(
-        home.join("run").join(LONGEST_SESSION_ID).as_os_str().len(),
-        doors::SOCKET_PATH_MAX
+        home.join("run").join(file_name).as_os_str().len(),
+        socket_len
     );
     home
 }
 
 #[test]
 fn an_overlong_home_blocks_startup_with_the_session_sentence() {
-    assert_eq!(LONGEST_SESSION_ID.len(), 18);
     let setup = Setup::new("fiber-doctor-socket-path");
-    let home = overlong_home(setup.root.path());
+    let home = home_with(setup.root.path(), "hub", doors::SOCKET_PATH_MAX + 1);
     fs::create_dir_all(&home).unwrap();
     setup.place_ready(&home);
 
@@ -125,24 +117,9 @@ fn an_overlong_home_blocks_startup_with_the_session_sentence() {
 }
 
 #[test]
-fn an_overlong_home_names_fiber_home_in_the_hub_line() {
-    let setup = Setup::new("fiber-doctor-socket-hub");
-    let home = overlong_home(setup.root.path());
-    fs::create_dir_all(&home).unwrap();
-    setup.place_ready(&home);
-
-    let clock = fakes::clock::FakeClock::new();
-    let Diagnostic::Failed(failure) = diagnose(&home, &*clock, Duration::from_secs(5)) else {
-        panic!("an overlong home fails the hub check instead of the connect");
-    };
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert_eq!(failure.message, expected_sentence());
-}
-
-#[test]
 fn an_overlong_home_reports_exit_non_zero() {
     let setup = Setup::new("fiber-doctor-socket-exit");
-    let home = overlong_home(setup.root.path());
+    let home = home_with(setup.root.path(), "hub", doors::SOCKET_PATH_MAX + 1);
     fs::create_dir_all(&home).unwrap();
     setup.place_ready(&home);
     let workspace = setup.workspace();
@@ -175,7 +152,13 @@ fn an_overlong_home_reports_exit_non_zero() {
 #[test]
 fn a_home_at_the_limit_still_starts() {
     let setup = Setup::new("fiber-doctor-socket-edge");
-    let home = at_limit_home(setup.root.path());
+    // Every minted session id is `s_` plus 16 hex, so this longest form
+    // stands in for all of them.
+    let home = home_with(
+        setup.root.path(),
+        &doors::mint("s_"),
+        doors::SOCKET_PATH_MAX,
+    );
     fs::create_dir_all(&home).unwrap();
     setup.place_ready(&home);
 

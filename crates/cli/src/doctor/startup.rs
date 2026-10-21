@@ -32,11 +32,6 @@ pub(crate) struct Blocker {
     pub key: bool,
 }
 
-/// The longest session id the code mints: `s_` plus 16 hex
-/// (`support::mint`). Doctor checks this form, so any home it passes
-/// binds every session id it could mint.
-pub(crate) const LONGEST_SESSION_ID: &str = "s_aaaaaaaaaaaaaaaa";
-
 /// The report's middle: the model, providers, permissions and MCP lines,
 /// the first blocker, and the loaded configuration and providers.
 pub(crate) struct Startup {
@@ -48,6 +43,22 @@ pub(crate) struct Startup {
     pub secrets: Vec<String>,
     /// The configuration and extension notices for stderr.
     pub notices: Vec<contract::events::Notice>,
+}
+
+impl Startup {
+    /// The first blocker is the whole report: its line, its code, no key.
+    fn blocked(line: String, code: ErrorCode) -> Self {
+        Startup {
+            lines: vec![line.clone()],
+            blocker: Some(Blocker {
+                code,
+                line,
+                key: false,
+            }),
+            secrets: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
 }
 
 /// Loads the configuration, extensions and model choice and checks each
@@ -63,33 +74,17 @@ pub(crate) fn startup(
 ) -> Startup {
     // A `FIBER_HOME` too long for a session socket stops every session
     // regardless of configuration, so it is the first blocker.
-    if let Err(failure) = doors::check_socket_path(home, LONGEST_SESSION_ID) {
+    // `doors::mint("s_")` is always the longest session-id form (`s_`
+    // plus 16 hex), so a home it passes binds every session id.
+    if let Err(failure) = doors::check_socket_path(home, &doors::mint("s_")) {
         let line = clean(&failure.message);
-        return Startup {
-            lines: vec![line.clone()],
-            blocker: Some(Blocker {
-                code: failure.code,
-                line,
-                key: false,
-            }),
-            secrets: Vec::new(),
-            notices: Vec::new(),
-        };
+        return Startup::blocked(line, failure.code);
     }
     let (_, project) = match project_of(home, workspace) {
         Ok(found) => found,
         Err(failure) => {
             let line = configuration_line(&failure.message, failure.code.clone());
-            return Startup {
-                lines: vec![line.clone()],
-                blocker: Some(Blocker {
-                    code: failure.code,
-                    line,
-                    key: false,
-                }),
-                secrets: Vec::new(),
-                notices: Vec::new(),
-            };
+            return Startup::blocked(line, failure.code);
         }
     };
     let config = match Config::load(Sources {
@@ -101,16 +96,7 @@ pub(crate) fn startup(
         Ok(config) => config,
         Err(error) => {
             let line = configuration_line(&error.to_string(), error.code());
-            return Startup {
-                lines: vec![line.clone()],
-                blocker: Some(Blocker {
-                    code: error.code(),
-                    line,
-                    key: false,
-                }),
-                secrets: Vec::new(),
-                notices: Vec::new(),
-            };
+            return Startup::blocked(line, error.code());
         }
     };
     let mut notices: Vec<contract::events::Notice> = config.notices().to_vec();
