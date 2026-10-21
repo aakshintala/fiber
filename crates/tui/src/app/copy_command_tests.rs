@@ -164,3 +164,34 @@ fn a_view_with_no_transcript_has_no_reply_to_copy() {
     assert_eq!(app.notice(), Some("No reply to copy in this view."));
     assert!(!app.copied());
 }
+
+#[test]
+fn closing_or_opening_a_view_drops_a_copy_waiting_on_a_pass() {
+    use crate::app::items::testkit::{
+        DELEGATE_A, home, opened, opened_item, start_delegate, start_job,
+    };
+    let mut app = home();
+    opened(&mut app);
+    turn_starts(&mut app);
+    message(&mut app, "a_1", &["the parent's reply"]);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    start_job(&mut app, "j_2");
+    // Waiting in a delegate's transcript, then back to the parent.
+    opened_item(&mut app, "j_1");
+    app.reopen_pending(contract::SessionId(DELEGATE_A.to_owned()));
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    app.close_item();
+    app.passes.clear();
+    assert_eq!(app.take_owed_copy(), None);
+    assert_eq!(app.notice(), None);
+    // Waiting on the parent, then into a job's view.
+    app.reopen_pending(contract::SessionId(
+        super::commands_testkit::SESSION.to_owned(),
+    ));
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    opened_item(&mut app, "j_2");
+    app.passes.clear();
+    assert_eq!(app.take_owed_copy(), None);
+    assert!(!app.copied());
+    assert_eq!(app.notice(), None);
+}

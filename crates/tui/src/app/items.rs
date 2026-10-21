@@ -328,6 +328,8 @@ impl App {
         if self.open_job().as_ref() == Some(job) {
             return Effect::None;
         }
+        // A `/copy` waiting on a pass was for the view this one replaces.
+        self.copy_owed = false;
         self.close_item();
         self.close_keymap();
         self.close_config_view();
@@ -409,6 +411,8 @@ impl App {
     /// A delegate view leaves a `summary` wish, which `items_due` lowers.
     pub(super) fn close_item(&mut self) -> Option<String> {
         let open = self.items.open.take()?;
+        // A `/copy` waiting on a pass was for the view closing.
+        self.copy_owed = false;
         if let Some(stashed) = open.stashed {
             let (width, height) = (self.screen.width(), self.screen.height());
             self.screen = stashed;
