@@ -411,7 +411,7 @@ fn a_read_to_string_of_a_docs_path_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -427,7 +427,7 @@ fn a_fs_read_of_a_prompt_path_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/loop/src/reviewer.rs: reads ../prompt/system.md at run time; compile it in with include_str!"
+            "crates/loop/src/reviewer.rs: reads ../prompt/system.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -443,7 +443,7 @@ fn a_file_open_of_a_docs_path_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/contract/src/lib.rs: reads ../../docs/errors.md at run time; compile it in with include_str!"
+            "crates/contract/src/lib.rs: reads ../../docs/errors.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -459,7 +459,7 @@ fn a_concat_on_the_manifest_dir_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/contract/src/lib.rs: reads /../docs/ci.md at run time; compile it in with include_str!"
+            "crates/contract/src/lib.rs: reads /../docs/ci.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -475,7 +475,7 @@ fn a_join_in_a_manifest_file_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -491,13 +491,13 @@ fn a_manifest_rooted_join_read_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/contract/src/golden_tests.rs: reads crates/contract/src/golden.rs at run time; compile it in with include_str!"
+            "crates/contract/src/golden_tests.rs: reads crates/contract/src/golden.rs at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
 
 #[test]
-fn a_read_dir_of_a_manifest_rooted_join_is_a_run_time_read() {
+fn a_read_dir_of_a_manifest_rooted_join_is_not_a_run_time_read() {
     let files = [runtime_src(
         "contract",
         "crates/contract/src/golden_tests.rs",
@@ -506,9 +506,7 @@ fn a_read_dir_of_a_manifest_rooted_join_is_a_run_time_read() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        [
-            "crates/contract/src/golden_tests.rs: reads crates/contract/src/data at run time; compile it in with include_str!"
-        ]
+        Vec::<String>::new()
     );
 }
 
@@ -593,13 +591,13 @@ fn a_join_on_a_bound_manifest_base_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
 
 #[test]
-fn a_join_chained_two_levels_is_not_a_run_time_read() {
+fn a_join_chained_two_levels_is_a_run_time_read() {
     let files = [runtime_src(
         "tui",
         "crates/tui/src/theme_tests.rs",
@@ -608,7 +606,9 @@ fn a_join_chained_two_levels_is_not_a_run_time_read() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        Vec::<String>::new()
+        [
+            "crates/tui/src/theme_tests.rs: reads docs/y at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -622,7 +622,9 @@ fn a_read_of_a_one_level_join_reports_its_literal() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        ["crates/tui/src/theme_tests.rs: reads x at run time; compile it in with include_str!"]
+        [
+            "crates/tui/src/theme_tests.rs: reads x at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -637,7 +639,7 @@ fn a_joined_name_in_a_read_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/contract/src/golden_tests.rs: reads golden.md at run time; compile it in with include_str!"
+            "crates/contract/src/golden_tests.rs: reads golden.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -667,7 +669,7 @@ fn a_one_level_join_passed_to_a_read_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/contract/src/golden_tests.rs: reads data.bin at run time; compile it in with include_str!"
+            "crates/contract/src/golden_tests.rs: reads data.bin at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -683,7 +685,7 @@ fn a_shadowed_joined_name_reads_through_the_old_binding() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/contract/src/golden_tests.rs: reads data.bin at run time; compile it in with include_str!"
+            "crates/contract/src/golden_tests.rs: reads data.bin at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -699,7 +701,7 @@ fn a_bound_name_with_a_trailing_comma_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/contract/src/golden_tests.rs: reads data.bin at run time; compile it in with include_str!"
+            "crates/contract/src/golden_tests.rs: reads data.bin at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -719,12 +721,196 @@ fn a_bound_name_followed_by_another_argument_is_not_a_run_time_read() {
 }
 
 #[test]
-fn a_two_level_join_passed_to_a_read_is_not_a_run_time_read() {
+fn a_two_level_join_passed_to_a_read_reports_the_second_join() {
     let files = [runtime_src(
         "contract",
         "crates/contract/src/golden_tests.rs",
         "src/golden_tests.rs",
         "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = base.join(\"data\");\nlet q = p.join(\"out.bin\");\nlet r = p;\nlet a = std::fs::read(q).unwrap();\nlet b = std::fs::read_to_string(r).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/golden_tests.rs: reads out.bin at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_two_level_chain_ending_in_a_recording_path_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "let root = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");\nlet call = root.join(\"crates/provider/tests/recordings/file.sse\");\nlet bytes = std::fs::read(call).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/ask.rs: reads crates/provider/tests/recordings/file.sse at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn shadowing_the_manifest_base_keeps_a_two_level_join_bound() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet mid = base.join(\"data\");\nlet q = mid.join(\"out.bin\");\nlet base = tempdir();\nlet bytes = std::fs::read(q).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/ask.rs: reads out.bin at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_manifest_rooted_join_of_an_absolute_path_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let p = std::fs::read(Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"/proc/cpuinfo\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_contained_relative_read_in_a_main_test_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "let bytes = std::fs::read(\"../../crates/provider/tests/recordings/file.sse\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/ask.rs: reads ../../crates/provider/tests/recordings/file.sse at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_root_escape_and_an_absolute_path_are_not_run_time_reads() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let a = std::fs::read(\"../../../docs/secret.md\").unwrap();\nlet b = std::fs::read(\"../../../../etc/passwd\").unwrap();\nlet c = std::fs::read(\"/proc/cpuinfo\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn bare_event_names_and_urls_are_not_repository_paths() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let a = std::fs::read(\"started\").unwrap();\nlet b = std::fs::read(\"https://example.com/docs/x\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_concat_with_an_escaping_suffix_is_not_a_run_time_read() {
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let doc = read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../../docs/secret.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_bare_relative_providers_read_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let bytes = std::fs::read(\"providers/opencode/extension.json\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/release.rs: reads providers/opencode/extension.json at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_manifest_token_providers_read_stays_with_the_package_reader_check() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let p = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers/opencode\");\nlet bytes = std::fs::read(&p).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_three_level_chain_is_not_a_run_time_read() {
+    // The second read is a vehicle: the old check over-reported a top-level
+    // escaping docs literal, so the red run fails here too.
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = base.join(\"data\");\nlet q = p.join(\"sub\");\nlet bytes = std::fs::read(q.join(\"docs/out.bin\")).unwrap();\nlet esc = std::fs::read(\"../../../docs/secret.md\").unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_manifest_rooted_format_read_of_a_contained_path_is_a_run_time_read() {
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let bytes = std::fs::read(format!(\"{}/../../research/pdf-tool-results/text.pdf\", env!(\"CARGO_MANIFEST_DIR\"))).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/release.rs: reads {}/../../research/pdf-tool-results/text.pdf at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn an_escaping_or_absolute_format_suffix_is_not_a_run_time_read() {
+    // The last read is a vehicle: the old check over-reported a top-level
+    // escaping docs literal, so the red run fails here too.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let a = std::fs::read(format!(\"{}/../../../docs/x.md\", env!(\"CARGO_MANIFEST_DIR\"))).unwrap();\nlet b = std::fs::read(format!(\"{}/{}\", env!(\"CARGO_MANIFEST_DIR\"), \"/proc/docs/x\")).unwrap();\nlet esc = std::fs::read(\"../../../docs/secret.md\").unwrap();\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
@@ -799,7 +985,7 @@ fn a_typed_manifest_base_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -815,7 +1001,7 @@ fn a_mut_manifest_base_is_a_run_time_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str!"
+            "crates/tui/src/theme_tests.rs: reads ../../docs/tui.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
@@ -844,7 +1030,9 @@ fn a_temp_dir_shadowed_by_a_manifest_base_is_a_run_time_read() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        ["crates/main/tests/release.rs: reads docs/x at run time; compile it in with include_str!"]
+        [
+            "crates/main/tests/release.rs: reads docs/x at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -872,7 +1060,9 @@ fn an_outer_binding_is_visible_in_a_nested_block() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        ["crates/main/tests/release.rs: reads docs/x at run time; compile it in with include_str!"]
+        [
+            "crates/main/tests/release.rs: reads docs/x at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -886,7 +1076,9 @@ fn a_ref_to_a_bound_base_is_a_run_time_read() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        ["crates/main/tests/release.rs: reads docs/a at run time; compile it in with include_str!"]
+        [
+            "crates/main/tests/release.rs: reads docs/a at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -900,7 +1092,9 @@ fn a_mut_ref_to_a_bound_base_is_a_run_time_read() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        ["crates/main/tests/release.rs: reads docs/b at run time; compile it in with include_str!"]
+        [
+            "crates/main/tests/release.rs: reads docs/b at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -914,7 +1108,9 @@ fn a_deref_of_a_bound_base_is_a_run_time_read() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        ["crates/main/tests/release.rs: reads docs/c at run time; compile it in with include_str!"]
+        [
+            "crates/main/tests/release.rs: reads docs/c at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -928,7 +1124,9 @@ fn a_parenthesised_bound_base_is_a_run_time_read() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        ["crates/main/tests/release.rs: reads docs/d at run time; compile it in with include_str!"]
+        [
+            "crates/main/tests/release.rs: reads docs/d at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -942,7 +1140,9 @@ fn a_parenthesised_ref_to_a_bound_base_is_a_run_time_read() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        ["crates/main/tests/release.rs: reads docs/e at run time; compile it in with include_str!"]
+        [
+            "crates/main/tests/release.rs: reads docs/e at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -956,7 +1156,9 @@ fn a_rebuilt_path_on_a_bound_base_is_a_run_time_read() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        ["crates/main/tests/release.rs: reads docs/f at run time; compile it in with include_str!"]
+        [
+            "crates/main/tests/release.rs: reads docs/f at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -1087,7 +1289,7 @@ fn a_join_argument_block_does_not_leak_its_bindings() {
 }
 
 #[test]
-fn a_partial_segment_is_not_a_repository_path() {
+fn a_contained_partial_segment_is_a_run_time_read() {
     let files = [runtime_src(
         "contract",
         "crates/contract/src/lib.rs",
@@ -1096,7 +1298,9 @@ fn a_partial_segment_is_not_a_repository_path() {
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
-        Vec::<String>::new()
+        [
+            "crates/contract/src/lib.rs: reads mydocs/x.md at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -1130,8 +1334,8 @@ fn an_xtask_command_read_is_not_a_test_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "xtask/src/ci_needs_tests.rs: reads ../../docs/ci.md at run time; compile it in with include_str!",
-            "xtask/tests/cli.rs: reads ../../docs/ci.md at run time; compile it in with include_str!"
+            "xtask/src/ci_needs_tests.rs: reads ../../docs/ci.md at run time; compile it in with include_str! or include_bytes!",
+            "xtask/tests/cli.rs: reads ../../docs/ci.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
