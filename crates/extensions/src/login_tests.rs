@@ -526,3 +526,39 @@ fn a_login_provider_serves_a_copy_local_dependency() {
     // served.
     assert_eq!(provider.functions().unwrap(), ["credential"]);
 }
+
+#[test]
+fn extension_source_dir_prefers_the_pinned_copy_then_the_install() {
+    let root = fakes::TempDir::new("extension-source-dir");
+    let home = root.path().join("home");
+    let workspace = root.path().join("workspace");
+    let clock = FakeClock::new();
+    let project = config::ProjectKey::new("pin").unwrap();
+    install(&home, "acme-ext", "acme");
+    // The personal install resolves while no repository copy is pinned.
+    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone());
+    let (providers, _) = Providers::load_all_repository(&home, &set).unwrap();
+    assert_eq!(
+        providers.extension_source_dir("acme-ext"),
+        Some(home.join("extensions").join("acme-ext"))
+    );
+    assert_eq!(providers.extension_source_dir("nobody"), None);
+    // The approved copy wins once one is pinned: the directory the load
+    // already admitted, never a repository's working files.
+    declare_repo(&workspace, "acme-ext", "acme");
+    let items = crate::declared_items(&workspace, &*clock).unwrap();
+    let item = items
+        .into_iter()
+        .find(|found| found.name == "acme-ext")
+        .unwrap();
+    let mut index = crate::Index::load(&home);
+    let digest = crate::hash(&mut index, &item).unwrap();
+    crate::Store::new(&home, &project, clock.clone())
+        .approve(&item, &digest)
+        .unwrap();
+    let copy = crate::Store::new(&home, &project, clock.clone()).copy_dir(&digest);
+    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone());
+    let (providers, _) = Providers::load_all_repository(&home, &set).unwrap();
+    assert_eq!(providers.extension_source_dir("acme-ext"), Some(copy));
+    assert_eq!(providers.extension_source_dir("nobody"), None);
+}

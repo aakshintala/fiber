@@ -703,14 +703,9 @@ fn stalled_ls_files_child() {
             // once, as above.
             let kill_at = clock.now() + GRACE;
             let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
-            if answered.is_none() {
-                clock.advance_when_parked(
-                    Some(kill_at),
-                    None,
-                    GRACE,
-                    &Deadline::after(CHILD_BUDGET),
-                );
-            }
+            let answered = crate::stall::advance_past_grace_or_answer(
+                &clock, &done_rx, kill_at, GRACE, answered,
+            );
             let answer = match answered {
                 Some(answer) => answer,
                 None => Deadline::after(CHILD_BUDGET).recv(&done_rx).unwrap(),

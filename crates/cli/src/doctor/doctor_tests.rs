@@ -60,7 +60,7 @@ struct Setup {
 
 impl Setup {
     fn new() -> Self {
-        let root = fakes::TempDir::new("fiber-doctor-report");
+        let root = fakes::TempDir::under(Path::new("/tmp"), "fiber-doctor-report");
         fs::create_dir_all(root.path().join("home")).unwrap();
         fs::create_dir_all(root.path().join("workspace")).unwrap();
         Self { root }

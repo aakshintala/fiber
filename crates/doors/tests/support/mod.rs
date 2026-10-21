@@ -31,11 +31,12 @@ use serde_json::Value;
 /// nextest's 120 s kill (`docs/testing.md`, "Waits and timeouts").
 pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
 
-/// One deadline for a whole `until` wait or one `subscribe` acknowledgement.
-/// The busiest test makes seven such waits and closes its session once under
-/// [`DEADLINE`]: 7 x 6 + 10 = 52 s, at most half of nextest's 120 s kill
-/// (`docs/testing.md`, "Waits and timeouts").
-pub(crate) const UNTIL: Duration = Duration::from_secs(6);
+/// One deadline for a whole `until` wait or one `subscribe` acknowledgement:
+/// the shared must-succeed bound, which only catches a hang. The busiest
+/// test makes seven such waits and closes its session once under
+/// [`DEADLINE`], which pairs with it at the same 10 s: 7 x 10 + 10 = 80 s,
+/// under nextest's 120 s kill (`docs/testing.md`, "Waits and timeouts").
+pub(crate) const UNTIL: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// How long the reader inside `until` blocks on one receive, so it notices a
 /// missed deadline within this bound instead of one more [`UNTIL`].

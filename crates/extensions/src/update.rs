@@ -59,6 +59,7 @@ pub struct StagedUpdate<'c> {
     home: PathBuf,
     docs_fresh: Option<PathBuf>,
     binary: PathBuf,
+    binary_dir: Option<PathBuf>,
 }
 
 impl<'c> StagedUpdate<'c> {
@@ -69,8 +70,10 @@ impl<'c> StagedUpdate<'c> {
 
     /// Puts every staged extension in place with no download inside, swaps
     /// the staged docs in, and returns the staged `fiber` binary's path:
-    /// the caller renames it into place last. The lock is released before
-    /// the docs swap.
+    /// the caller renames it into place last. The staged binary sits
+    /// beside the installed one when its path was given, so that rename
+    /// is same-filesystem and atomic; otherwise it sits in the home as
+    /// before. The lock is released before the docs swap.
     pub fn commit(mut self) -> Result<PathBuf, Error> {
         self.plan.commit_prepared()?;
         self.plan.unlock();
@@ -78,9 +81,19 @@ impl<'c> StagedUpdate<'c> {
             swap_docs_in(&self.home, fresh)?;
         }
         let staged = self
-            .home
+            .binary_dir
+            .as_deref()
+            .unwrap_or(&self.home)
             .join(format!("{}.new", unique_name(".fiber-update")));
-        fs::rename(&self.binary, &staged).map_err(io(&staged))?;
+        // The scratch directory can sit on another filesystem than the
+        // staged path, so a rename across devices falls back to a copy.
+        if let Err(rename) = fs::rename(&self.binary, &staged) {
+            if rename.kind() == std::io::ErrorKind::CrossesDevices {
+                fs::copy(&self.binary, &staged).map_err(io(&staged))?;
+            } else {
+                return Err(io(&staged)(rename));
+            }
+        }
         Ok(staged)
     }
 }
@@ -108,6 +121,7 @@ pub fn stage_update<'c>(
     origin: &Origin,
     clock: &'c dyn Clock,
     stage_docs: bool,
+    installed_binary: Option<&Path>,
 ) -> Result<StagedUpdate<'c>, Error> {
     let scratch = Scratch::create(&std::env::temp_dir(), "fiber-update", 0o700)?;
     let archives = Release {
@@ -173,6 +187,9 @@ pub fn stage_update<'c>(
         home: home.into(),
         docs_fresh,
         binary,
+        binary_dir: installed_binary
+            .and_then(Path::parent)
+            .map(Path::to_path_buf),
     })
 }
 

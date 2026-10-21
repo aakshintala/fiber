@@ -152,6 +152,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_diff,
     },
     CommandEntry {
+        name: "copy",
+        description: "Copies the newest reply.",
+        hint: None,
+        run: run_copy,
+    },
+    CommandEntry {
         name: "panel",
         description: "Shows or hides the panel.",
         hint: None,
@@ -415,6 +421,10 @@ fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_session_view(super::SessionView::ChangedFiles))
 }
 
+fn run_copy(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.copy_last_reply())
+}
+
 fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Rules))
 }
@@ -456,6 +466,7 @@ impl App {
     /// no more.
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
+        self.copy_owed = false;
         self.history.cancel();
         // The open picker owns every edit but Ctrl+C, which never
         // arrives as one.
@@ -629,6 +640,7 @@ impl App {
         self.completion.slash_rows = slash::rows(&[]);
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        self.copy_owed = false;
         true
     }
 
@@ -928,6 +940,10 @@ mod diff_command;
 #[cfg(test)]
 #[path = "status_command_tests.rs"]
 mod status_command;
+
+#[cfg(test)]
+#[path = "copy_command_tests.rs"]
+mod copy_command;
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

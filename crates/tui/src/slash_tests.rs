@@ -63,6 +63,7 @@ const DRAWN_ORDER: &[&str] = &[
     "quota",
     "status",
     "diff",
+    "copy",
     "panel",
     "rail",
     "rules",
