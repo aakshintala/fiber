@@ -645,6 +645,7 @@ fn sent_id(effect: Effect) -> String {
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }

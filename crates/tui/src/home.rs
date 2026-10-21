@@ -210,6 +210,10 @@ pub struct Launch {
     /// once, refreshed in the background (`docs/model-routing.md`,
     /// "Model discovery"). `None` in the jigs, which read nothing.
     pub models: Option<crate::ReadModels>,
+    /// Writes a feedback report for a description: the injected writer
+    /// `main` supplies (`docs/user/reporting.md`). `None` in the jigs,
+    /// which write nothing.
+    pub feedback: Option<crate::WriteFeedback>,
     /// `scoped_models`: the references the model picker shows; empty
     /// means every installed model (`docs/configuration.md`, "Keys").
     pub scoped_models: Vec<String>,

@@ -2,6 +2,10 @@
 //! keeps by hand for it, so a rerun reproduces the file exactly
 //! (`docs/model-routing.md`, "What a provider extension declares").
 
+mod bedrock;
+
+use bedrock::BEDROCK;
+
 /// How a package's models get their protocol.
 pub(crate) enum ProtocolRule {
     /// Every model speaks this protocol.
@@ -729,8 +733,8 @@ const VERTEX: Package = Package {
     ],
 };
 
-/// The eight first-party provider files generated from models.dev.
-pub(crate) const PACKAGES: [Package; 8] = [
+/// The nine first-party provider files generated from models.dev.
+pub(crate) const PACKAGES: [Package; 9] = [
     ANTHROPIC,
     GEMINI,
     OPENAI,
@@ -738,5 +742,6 @@ pub(crate) const PACKAGES: [Package; 8] = [
     MUSE,
     OPENCODE_GO,
     OPENCODE_ZEN,
+    BEDROCK,
     VERTEX,
 ];

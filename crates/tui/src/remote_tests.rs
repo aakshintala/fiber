@@ -1,5 +1,5 @@
 use super::*;
-use crate::configure::{LoginKind, Shown, WriteScope};
+use crate::configure::{LoginKind, LogoutRow, Shown, WriteScope};
 use crate::configure_fake::Fake;
 use fakes::Deadline;
 use serde_json::json;
@@ -386,6 +386,54 @@ fn each_configure_operation_uses_the_hub_wire_shape() {
         )
         .unwrap(),
         "skill\n"
+    );
+}
+
+#[test]
+fn logout_rows_returns_the_hubs_decoded_rows() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let rows = hub
+        .call(
+            "logout_rows",
+            json!({}),
+            json!({"rows":[
+                {"row":"provider","name":"acme","label":"work","default":true,"deletable":true,"siblings":["beta"]},
+                {"row":"secret","name":"acme.api_key","deletable":true},
+            ]}),
+            |r| r.logout_rows(),
+        )
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            LogoutRow::Provider {
+                name: "acme".into(),
+                label: "work".into(),
+                default: true,
+                deletable: true,
+                origin: None,
+                siblings: vec!["beta".into()],
+            },
+            LogoutRow::Secret {
+                name: "acme.api_key".into(),
+                deletable: true,
+            },
+        ]
+    );
+}
+
+#[test]
+fn delete_stored_returns_the_hubs_path() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    assert_eq!(
+        hub.call(
+            "delete_stored",
+            json!({"name":"acme","label":"work"}),
+            json!({"path":"credentials/acme/work"}),
+            |r| r.delete_stored("acme", Some("work".to_owned())),
+        )
+        .unwrap(),
+        "credentials/acme/work"
     );
 }
 

@@ -1,0 +1,34 @@
+{
+  "call": {
+    "provider": "bedrock",
+    "function": "sign",
+    "arg": {
+      "method": "POST",
+      "url": "https://bedrock-runtime.ap-south-1.amazonaws.com/model/openai.gpt-oss-20b-1%3A0/converse-stream",
+      "headers": {
+        "content-type": "application/json",
+        "accept": "application/vnd.amazon.eventstream",
+        "user-agent": "fiber/0.0.0"
+      }
+    }
+  },
+  "host": {
+    "exec": [
+      {
+        "request": {
+          "program": "/bin/sh"
+        },
+        "reply": {
+          "code": 0,
+          "stdout": "\u0000AKIDEXAMPLE\u0000wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY\u0000session-token-example",
+          "stderr": ""
+        }
+      }
+    ]
+  },
+  "returns": {
+    "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20231114/ap-south-1/bedrock/aws4_request, SignedHeaders=accept;content-type;host;x-amz-date;x-amz-security-token, Signature=84dc3d7eeff2fa0bd81385ac521c4050034f03848c0d3c15cbec9728e3dfd856",
+    "x-amz-date": "20231114T221320Z",
+    "x-amz-security-token": "session-token-example"
+  }
+}

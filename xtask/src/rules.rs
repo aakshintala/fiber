@@ -511,6 +511,7 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/extensions/src/repository/store.rs", "fn copy_dir|root:self.home", "join:pinned", "#1720"),
     source_allowance!("crates/extensions/src/repository/store.rs", "fn ensure_copy|root:self.home", "join:pinned", "#1720"),
     source_allowance!("crates/extensions/src/repository/store.rs", "fn pin|root:self.home", "join:pinned", "#1720"),
+    source_allowance!("crates/extensions/src/repository/store.rs", "fn kept_copies|root:home", "join:servers", "#1322"),
     source_allowance!("crates/extensions/src/repository/store.rs", "fn kept_copies|root:home", "join:projects", "#653"),
     source_allowance!("crates/extensions/src/repository/store.rs", "fn kept_copies|root:home", "join:approvals", "#653"),
     source_allowance!("crates/extensions/src/repository/store.rs", "fn kept_copies|root:home", "join:pinned", "#653"),
@@ -556,6 +557,7 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/log/src/name.rs", "fn session_name|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/read.rs", "fn walk|root:home", "join:projects", "#1725"),
     source_allowance!("crates/log/src/scan.rs", "fn started_sessions|root:home", "join:projects", "#1720"),
+    source_allowance!("crates/log/src/escalations/place.rs", "fn sessions|root:home", "join:projects", "#2481"),
     source_allowance!("crates/log/src/search.rs", "fn projects|root:self.home", "join:projects", "#1720"),
     source_allowance!("crates/loop/src/skills.rs", "fn places|root:inputs.home", "join:skills", "#1720"),
     source_allowance!("crates/loop/src/skills.rs", "fn places|root:inputs.home", "join:docs/skills", "#1720"),
@@ -629,6 +631,7 @@ const HOME_COMPONENTS: &[&str] = &[
     "pinned",
     "pinned.json",
     "approvals",
+    "servers",
     "docs",
     "skills",
 ];

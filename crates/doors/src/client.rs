@@ -345,6 +345,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         Command::Reply(reply) => crate::reply::route(conn, id, reply),
         Command::Cancel => cancel(conn, id),
         Command::Shell(args) => shell(conn, id, &args, name),
+        Command::ProposeNotes(args) => crate::notes::run(conn, id, args),
         Command::Close(args) => crate::close::run(conn, id, args.now),
         Command::Model(args) => {
             let ack = inbox_ack(conn, id);

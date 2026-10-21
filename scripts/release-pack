@@ -40,7 +40,10 @@
 #   pack-docs <tree> <outdir>
 #   pack-extensions <tree> <outdir>
 #   stage-installer <tree> <outdir>
-#   draft-begin <version> <commit> <notes-file>
+#   nightly-version <tree> <YYYYMMDD>
+#   nightly-needed <head-sha>
+#   nightly-notes <last-stable-tag-or-empty> <head-sha>
+#   draft-begin [--prerelease] <version> <commit> <notes-file>
 #   draft-upload <version> <file>...
 #   draft-publish <version>
 #   draft-delete <version>
@@ -235,6 +238,75 @@ stage_installer() {
   cp -p "$1/scripts/install.sh" "$outdir/install.sh"
 }
 
+# Prints the `fiber` crate's version in the tree at $1: the same awk
+# idiom the release workflow's preflight uses on `crates/main/Cargo.toml`.
+tree_version() {
+  awk '
+    /^\[package\]/{ package = 1; next }
+    /^\[/{ package = 0 }
+    package && /^version = "/{ gsub(/"/, ""); print $3; exit }
+  ' "$1/crates/main/Cargo.toml" 2> /dev/null || true
+}
+
+# Prints `<bumped>-nightly.<date>`: the patch +1 of the `fiber` crate's
+# version in the tree at $1, for the YYYYMMDD date $2. A bad tree,
+# version or date fails naming the fault.
+nightly_version() {
+  version=$(tree_version "$1")
+  [ -n "${version:-}" ] || fail "$1 holds no fiber version such as 0.0.0." 2
+  case ${2:-} in
+    *[!0-9]* | ??????? | ?????????* | '') fail "${2:-empty} is not a date such as 20261020." 2 ;;
+  esac
+  major=${version%%.*}
+  rest=${version#*.}
+  minor=${rest%%.*}
+  patch=${rest#*.}
+  case $major/$minor/$patch in
+    *[!0-9/]* | *//* | /* | */) fail "$version is not a version such as 0.0.0." 2 ;;
+  esac
+  [ "$major.$minor.$patch" = "$version" ] || fail "$version is not a version such as 0.0.0." 2
+  printf '%s.%s.%s-nightly.%s\n' "$major" "$minor" "$((patch + 1))" "$2"
+}
+
+# Prints `publish`, or `skip: main unchanged since <tag>` naming the
+# newest nightly tag when $1 equals that tag's commit. Reads
+# `git ls-remote --tags` lines on stdin; malformed lines are ignored.
+# Newest means the version-date maximum, compared numerically. Always
+# exits 0: the workflow gates on the words, not the status.
+nightly_needed() {
+  [ -n "${1:-}" ] || fail "nightly-needed needs a head commit." 2
+  awk -v head="$1" '
+    NF == 2 && $2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$/ {
+      sha = $1
+      tag = $2
+      sub(/^refs\/tags\//, "", tag)
+      ver = tag
+      sub(/^v/, "", ver)
+      split(ver, parts, /[.\-]/)
+      key = sprintf("%020d.%020d.%020d.%s", parts[1], parts[2], parts[3], parts[5])
+      if (best == "" || key > best) { best = key; best_tag = tag; best_sha = sha }
+    }
+    END {
+      if (best != "" && best_sha == head) printf "skip: main unchanged since %s\n", best_tag
+      else print "publish"
+    }
+  '
+}
+
+# Prints `- <short> <subject>` lines for $1..$2, the last stable tag (empty
+# when none exists yet) to the head commit, capped at 50 lines. An empty
+# range prints one line for the head itself, so the notes are never empty.
+nightly_notes() {
+  [ -n "${2:-}" ] || fail "nightly-notes needs a head commit." 2
+  if [ -z "${1:-}" ]; then
+    git log --format='- %h %s' -n 50 "$2"
+  elif [ -n "$(git log --format='%H' "$1..$2" 2> /dev/null | head -n 1)" ]; then
+    git log --format='- %h %s' -n 50 "$1..$2"
+  else
+    git log --format='- %h %s' -n 1 "$2"
+  fi
+}
+
 # Prints `true` when `v$1` is a draft, `false` when it is published, and
 # fails when no release carries the name.
 release_state() {
@@ -243,16 +315,26 @@ release_state() {
 
 # Refuses before building when published `v$1` already exists, deletes any
 # leftover draft for the version first, then creates the Release as a
-# draft targeting $2 with the notes in $3. Publishing later is what
+# draft targeting $2 with the notes in $3. With `--prerelease` the create
+# call marks the release as a pre-release. Publishing later is what
 # creates `v$1`; no tag step exists.
 draft_begin() {
+  prerelease=
+  if [ "${1:-}" = --prerelease ]; then
+    prerelease=1
+    shift
+  fi
   if state=$(release_state "$1"); then
     case $state in
       true) gh release delete "v$1" --cleanup-tag -y ;;
       *) fail "v$1 is already published; refusing to build over it." ;;
     esac
   fi
-  gh release create "v$1" --draft --target "$2" --title "v$1" --notes-file "$3"
+  if [ -n "$prerelease" ]; then
+    gh release create "v$1" --draft --prerelease --target "$2" --title "v$1" --notes-file "$3"
+  else
+    gh release create "v$1" --draft --target "$2" --title "v$1" --notes-file "$3"
+  fi
 }
 
 # Uploads every asset file to the draft `v$1`.
@@ -326,6 +408,9 @@ case $command in
   pack-docs) pack_docs "$@" ;;
   pack-extensions) pack_extensions "$@" ;;
   stage-installer) stage_installer "$@" ;;
+  nightly-version) nightly_version "$@" ;;
+  nightly-needed) nightly_needed "$@" ;;
+  nightly-notes) nightly_notes "$@" ;;
   draft-begin) draft_begin "$@" ;;
   draft-upload) draft_upload "$@" ;;
   draft-publish) draft_publish "$@" ;;

@@ -1,0 +1,166 @@
+{
+  "case": "reasoning-oss-high",
+  "model": "openai.gpt-oss-20b-1:0",
+  "region": "ap-south-1",
+  "url_path": "/model/openai.gpt-oss-20b-1%3A0/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "What is 17 * 23? Answer with the number."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 2048
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ],
+    "additionalModelRequestFields": {
+      "reasoning_effort": "high"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": ""
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "reasoningContent": {
+            "text": "We are chatGPT; the user says \"What is 17 * 23? Answer with the number.\" The system says \"You are terse.\" So we should respond with just the number. Also check no extraneous words, no punctuation maybe? The user says \"Answer with the number.\" So likely we respond with \"391\". The requirement: no extra text. So \"391\". The system message says \"You are terse.\" The user request: \"What is 17 * 23? Answer with the number.\" So we answer"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "reasoningContent": {
+            "text": " just \"391\". That's the number. That should satisfy.\n\nBut the user might expect \"391\" only. The system message says \"You are terse\", so minimal. We can just output \"391\". That is all."
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 2,
+        "delta": {
+          "text": "391"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 2
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "end_turn"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 461
+        },
+        "usage": {
+          "inputTokens": 88,
+          "outputTokens": 164,
+          "serverToolUsage": {},
+          "totalTokens": 252
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 88,
+    "outputTokens": 164,
+    "serverToolUsage": {},
+    "totalTokens": 252
+  },
+  "cost_usd": 5.5e-05
+}

@@ -102,6 +102,36 @@ impl Setup {
         }
     }
 
+    /// Writes each target's archive, holding the stub as `fiber`, and its
+    /// `.sha256` file as `sha256sum` writes it, under `release/download/<tag>/`.
+    fn publish_nightly(&self, tag: &str, targets: &[&str]) {
+        self.publish(&format!("download/{tag}"), targets);
+    }
+
+    /// Writes `release/releases.json` in the GitHub release-list shape:
+    /// one pretty-printed object per entry with `tag_name`, `prerelease`
+    /// and `draft`. Field order alternates per entry, so the test proves
+    /// the channel pick reads fields, not positions.
+    fn write_list(&self, entries: &[(&str, bool, bool)]) {
+        let mut json = String::from("[\n");
+        for (i, (tag, prerelease, draft)) in entries.iter().enumerate() {
+            if i > 0 {
+                json.push_str(",\n");
+            }
+            if i % 2 == 0 {
+                json.push_str(&format!(
+                    "  {{\n    \"tag_name\": \"{tag}\",\n    \"prerelease\": {prerelease},\n    \"draft\": {draft}\n  }}"
+                ));
+            } else {
+                json.push_str(&format!(
+                    "  {{\n    \"draft\": {draft},\n    \"tag_name\": \"{tag}\",\n    \"prerelease\": {prerelease}\n  }}"
+                ));
+            }
+        }
+        json.push_str("\n]\n");
+        fs::write(self.path("release/releases.json"), json).unwrap();
+    }
+
     /// What the stub's `release-install` recorded, or `None` if it never
     /// ran.
     fn calls(&self) -> Option<String> {
@@ -113,12 +143,19 @@ impl Setup {
     /// waits for it under the test's [`Deadline`].
     #[track_caller]
     fn install(&self, host: &Host, env: &[(&str, &str)]) -> Output {
+        self.install_args(host, &[], env)
+    }
+
+    /// As [`Setup::install`], with `args` passed after `--base-url`.
+    #[track_caller]
+    fn install_args(&self, host: &Host, args: &[&str], env: &[(&str, &str)]) -> Output {
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/install.sh");
         let path = format!("{}:/usr/bin:/bin", fixture().join("bin").display());
         let mut command = Command::new("/bin/dash");
         command
             .arg(script)
             .args(["--base-url", &self.base()])
+            .args(args)
             .current_dir(self.root.path())
             .env_clear()
             .envs(fakes::check_run())
@@ -435,4 +472,364 @@ fn a_failed_step_keeps_the_binary_and_says_to_run_again() {
         "{}",
         run.stderr
     );
+}
+
+/// The nightly channel installs the newest nightly from a mixed release
+/// list (`docs/releasing.md`, "Installing"): `0.0.10-nightly.*` sorts
+/// above `0.0.9-nightly.*` whatever the dates say, a draft pre-release is
+/// skipped even when it is the highest version, and a duplicated entry
+/// for one date still resolves to that date's tag.
+#[test]
+fn the_nightly_channel_installs_the_newest_nightly() {
+    let setup = Setup::new_with_stub_version("0.0.10-nightly.20261018");
+    for tag in [
+        "v0.0.9-nightly.20261018",
+        "v0.0.9-nightly.20261019",
+        "v0.0.9-nightly.20261020",
+        "v0.0.10-nightly.20261018",
+    ] {
+        setup.publish_nightly(tag, &TARGETS);
+    }
+    setup.write_list(&[
+        ("v0.0.10-nightly.20261018", true, false),
+        ("v0.0.9", false, false),
+        ("v0.0.9-nightly.20261020", true, false),
+        ("v0.0.99-nightly.20261231", true, true),
+        ("v0.0.9-nightly.20261018", true, false),
+        ("v0.0.9-nightly.20261019", true, false),
+        ("v0.0.10-nightly.20261018", true, false),
+    ]);
+    let run = setup.install_args(&LINUX_X86_64, &["--channel", "nightly"], &[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    setup.assert_installed(&setup.dest());
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!(
+            "release-install 0.0.10-nightly.20261018 --base-url {}\n",
+            setup.base()
+        )
+    );
+    assert!(
+        run.stderr.ends_with(&format!(
+            "fiber: installed {}/fiber 0.0.10-nightly.20261018.\n",
+            setup.dest().display()
+        )),
+        "{}",
+        run.stderr
+    );
+}
+
+/// The stable channel installs from `latest/download` untouched by
+/// nightlies: the release list beside it changes nothing.
+#[test]
+fn the_stable_channel_ignores_nightlies() {
+    for args in [&[][..], &["--channel", "stable"][..]] {
+        let setup = Setup::new_with_stub_version("0.0.9");
+        setup.publish("latest/download", &TARGETS);
+        setup.publish_nightly("v0.0.10-nightly.20261018", &TARGETS);
+        setup.write_list(&[
+            ("v0.0.9", false, false),
+            ("v0.0.10-nightly.20261018", true, false),
+        ]);
+        let run = setup.install_args(&LINUX_X86_64, args, &[]);
+        assert_eq!(run.code, Some(0), "{args:?}: {}", run.stderr);
+        setup.assert_installed(&setup.dest());
+        assert_eq!(
+            setup.calls().unwrap(),
+            format!("release-install 0.0.9 --base-url {}\n", setup.base())
+        );
+    }
+}
+
+/// The nightly pick tracks JSON structure: nested `author` and `assets`
+/// objects around a release's fields never reset its candidate, so the
+/// entry whose `tag_name` sits above its flags still wins
+/// (`docs/releasing.md`, "Installing").
+#[test]
+fn the_nightly_channel_survives_nested_release_objects() {
+    let setup = Setup::new_with_stub_version("0.0.10-nightly.20261018");
+    for tag in ["v0.0.9-nightly.20261018", "v0.0.10-nightly.20261018"] {
+        setup.publish_nightly(tag, &TARGETS);
+    }
+    let entry = |tag: &str| {
+        format!(
+            concat!(
+                "  {{\n",
+                "    \"tag_name\": \"{tag}\",\n",
+                "    \"author\": {{\n",
+                "      \"login\": \"octocat\"\n",
+                "    }},\n",
+                "    \"prerelease\": true,\n",
+                "    \"draft\": false,\n",
+                "    \"assets\": [\n",
+                "      {{\n",
+                "        \"name\": \"fiber.tar.gz\",\n",
+                "        \"uploader\": {{\n",
+                "          \"login\": \"octocat\"\n",
+                "        }}\n",
+                "      }}\n",
+                "    ]\n",
+                "  }}"
+            ),
+            tag = tag
+        )
+    };
+    let json = format!(
+        "[\n{},\n{}\n]\n",
+        entry("v0.0.9-nightly.20261018"),
+        entry("v0.0.10-nightly.20261018")
+    );
+    fs::write(setup.path("release/releases.json"), json).unwrap();
+    let run = setup.install_args(&LINUX_X86_64, &["--channel", "nightly"], &[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    setup.assert_installed(&setup.dest());
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!(
+            "release-install 0.0.10-nightly.20261018 --base-url {}\n",
+            setup.base()
+        )
+    );
+}
+
+/// The nightly pick survives an escaped quote before a brace in a
+/// release body (`docs/releasing.md`, "Installing"): the string strip
+/// is escape-aware, so `\"` never ends the strip early and the body's
+/// `{` never counts as structure. Without that, the brace pairs with the
+/// entry's own closing brace, swallowing the entry boundary and missing
+/// every release in the list.
+#[test]
+fn the_nightly_channel_survives_escaped_quotes_in_a_body() {
+    let setup = Setup::new_with_stub_version("0.0.10-nightly.20261018");
+    for tag in ["v0.0.9-nightly.20261019", "v0.0.10-nightly.20261018"] {
+        setup.publish_nightly(tag, &TARGETS);
+    }
+    let json = concat!(
+        "[\n",
+        "  {\n",
+        "    \"tag_name\": \"v0.0.10-nightly.20261018\",\n",
+        "    \"prerelease\": true,\n",
+        "    \"draft\": false,\n",
+        "    \"body\": \"See, \\\"note\\\" {placeholder\"\n",
+        "  },\n",
+        "  {\n",
+        "    \"tag_name\": \"v0.0.9-nightly.20261019\",\n",
+        "    \"prerelease\": true,\n",
+        "    \"draft\": false,\n",
+        "    \"body\": \"plain\"\n",
+        "  }\n",
+        "]\n",
+    );
+    fs::write(setup.path("release/releases.json"), json).unwrap();
+    let run = setup.install_args(&LINUX_X86_64, &["--channel", "nightly"], &[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    setup.assert_installed(&setup.dest());
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!(
+            "release-install 0.0.10-nightly.20261018 --base-url {}\n",
+            setup.base()
+        )
+    );
+}
+
+/// The nightly pick splits fields only outside strings
+/// (`docs/releasing.md`, "Installing"): a comma in a release body never
+/// splits its string before the closing quote, so the body's `{` never
+/// counts as structure. Without that, the brace pairs with the entry's
+/// own closing brace, swallowing the entry boundary and missing every
+/// release in the list.
+#[test]
+fn the_nightly_channel_survives_a_comma_and_brace_in_a_body() {
+    let setup = Setup::new_with_stub_version("0.0.10-nightly.20261018");
+    for tag in ["v0.0.9-nightly.20261019", "v0.0.10-nightly.20261018"] {
+        setup.publish_nightly(tag, &TARGETS);
+    }
+    let json = concat!(
+        "[\n",
+        "  {\n",
+        "    \"tag_name\": \"v0.0.10-nightly.20261018\",\n",
+        "    \"prerelease\": true,\n",
+        "    \"draft\": false,\n",
+        "    \"body\": \"See, { in body\"\n",
+        "  },\n",
+        "  {\n",
+        "    \"tag_name\": \"v0.0.9-nightly.20261019\",\n",
+        "    \"prerelease\": true,\n",
+        "    \"draft\": false,\n",
+        "    \"body\": \"plain\"\n",
+        "  }\n",
+        "]\n",
+    );
+    fs::write(setup.path("release/releases.json"), json).unwrap();
+    let run = setup.install_args(&LINUX_X86_64, &["--channel", "nightly"], &[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    setup.assert_installed(&setup.dest());
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!(
+            "release-install 0.0.10-nightly.20261018 --base-url {}\n",
+            setup.base()
+        )
+    );
+}
+
+/// An empty list and a stable-only list fail naming the nightly channel:
+/// there is no nightly to install.
+#[test]
+fn the_nightly_channel_without_a_match_fails() {
+    for entries in [
+        vec![],
+        vec![("v0.0.9", false, false)],
+        vec![("v0.0.99-nightly.20261231", true, true)],
+    ] {
+        let setup = Setup::new_with_stub_version("0.0.9");
+        setup.publish("latest/download", &TARGETS);
+        setup.write_list(&entries);
+        let run = setup.install_args(&LINUX_X86_64, &["--channel", "nightly"], &[]);
+        assert_eq!(run.code, Some(1), "{entries:?}: {}", run.stderr);
+        assert_eq!(
+            run.stderr, "fiber: no nightly release found.\n",
+            "{entries:?}"
+        );
+        assert!(!setup.dest().exists());
+    }
+}
+
+/// An unknown channel, by flag or environment, exits 2.
+#[test]
+fn an_unknown_channel_is_refused() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let run = setup.install_args(&LINUX_X86_64, &["--channel", "bogus"], &[]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        "fiber: --channel bogus is not stable or nightly.\n"
+    );
+    assert!(!setup.dest().exists());
+
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let run = setup.install(&LINUX_X86_64, &[("FIBER_CHANNEL", "bogus")]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        "fiber: --channel bogus is not stable or nightly.\n"
+    );
+    assert!(!setup.dest().exists());
+}
+
+/// The channel precedence (`docs/releasing.md`, "Installing"): the flag
+/// beats the environment either way, an empty environment means stable,
+/// and an explicit `FIBER_VERSION` beats the nightly channel.
+#[test]
+fn the_channel_precedence() {
+    // The environment alone picks nightly.
+    let setup = Setup::new_with_stub_version("0.0.10-nightly.20261018");
+    setup.publish("latest/download", &TARGETS);
+    setup.publish_nightly("v0.0.10-nightly.20261018", &TARGETS);
+    setup.write_list(&[
+        ("v0.0.9", false, false),
+        ("v0.0.10-nightly.20261018", true, false),
+    ]);
+    let run = setup.install(&LINUX_X86_64, &[("FIBER_CHANNEL", "nightly")]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!(
+            "release-install 0.0.10-nightly.20261018 --base-url {}\n",
+            setup.base()
+        )
+    );
+
+    // The flag beats the environment: stable over nightly, nightly over stable.
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    setup.publish_nightly("v0.0.10-nightly.20261018", &TARGETS);
+    setup.write_list(&[
+        ("v0.0.9", false, false),
+        ("v0.0.10-nightly.20261018", true, false),
+    ]);
+    let run = setup.install_args(
+        &LINUX_X86_64,
+        &["--channel", "stable"],
+        &[("FIBER_CHANNEL", "nightly")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!("release-install 0.0.9 --base-url {}\n", setup.base())
+    );
+
+    let setup = Setup::new_with_stub_version("0.0.10-nightly.20261018");
+    setup.publish("latest/download", &TARGETS);
+    setup.publish_nightly("v0.0.10-nightly.20261018", &TARGETS);
+    setup.write_list(&[
+        ("v0.0.9", false, false),
+        ("v0.0.10-nightly.20261018", true, false),
+    ]);
+    let run = setup.install_args(
+        &LINUX_X86_64,
+        &["--channel", "nightly"],
+        &[("FIBER_CHANNEL", "stable")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!(
+            "release-install 0.0.10-nightly.20261018 --base-url {}\n",
+            setup.base()
+        )
+    );
+
+    // An empty environment means stable.
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    setup.publish_nightly("v0.0.10-nightly.20261018", &TARGETS);
+    setup.write_list(&[
+        ("v0.0.9", false, false),
+        ("v0.0.10-nightly.20261018", true, false),
+    ]);
+    let run = setup.install(&LINUX_X86_64, &[("FIBER_CHANNEL", "")]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!("release-install 0.0.9 --base-url {}\n", setup.base())
+    );
+
+    // An explicit version beats the nightly channel.
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("download/v0.0.8", &TARGETS);
+    setup.publish_nightly("v0.0.10-nightly.20261018", &TARGETS);
+    setup.write_list(&[
+        ("v0.0.9", false, false),
+        ("v0.0.10-nightly.20261018", true, false),
+    ]);
+    let run = setup.install_args(
+        &LINUX_X86_64,
+        &["--channel", "nightly"],
+        &[("FIBER_VERSION", "0.0.8")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!("release-install 0.0.8 --base-url {}\n", setup.base())
+    );
+}
+
+/// A nightly-form `FIBER_VERSION` stays refused: pinning a single nightly
+/// is out of scope.
+#[test]
+fn a_nightly_fiber_version_is_refused() {
+    let asked = "0.0.1-nightly.20261020";
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let run = setup.install(&LINUX_X86_64, &[("FIBER_VERSION", asked)]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        format!("fiber: FIBER_VERSION={asked} is not a version such as 0.3.0.\n")
+    );
+    assert!(!setup.dest().exists());
 }

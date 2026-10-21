@@ -20,6 +20,7 @@ use crate::configure::{Configure, ConfigureError, Layer, Saved};
 use crate::keys::{Edit, Key};
 use crate::login_view::Login;
 use crate::login_worker::{LoginJob, LoginStart, LoginStep, LoginTicket, LoginWorker};
+use crate::logout_view::Logout;
 use crate::mcp_view::Mcp;
 use crate::rules_view::Rules;
 use crate::settings_view::{Act, Ctx, Settings};
@@ -43,6 +44,8 @@ pub(crate) enum ConfigView {
     Rules,
     /// `/login`.
     Login,
+    /// `/logout`: built by the slash table below.
+    Logout,
     /// `/mcp`.
     Mcp,
     /// `/credential`.
@@ -62,6 +65,8 @@ enum Open {
     Rules(Rules),
     /// `/login`.
     Login(Login),
+    /// `/logout`.
+    Logout(Logout),
     /// `/mcp`.
     Mcp(Mcp),
     /// `/credential`.
@@ -80,6 +85,8 @@ impl Open {
             Open::Skills(skills) => skills.rejected(id, message),
             Open::Mcp(mcp) => mcp.rejected(id, message),
             Open::Credential(picker) => picker.rejected(id, message),
+            // `/logout` sends nothing: it never waits on an answer.
+            Open::Logout(_) => {}
             Open::Settings(_) | Open::Rules(_) | Open::Login(_) | Open::Unavailable(..) => {}
         }
     }
@@ -110,6 +117,9 @@ pub(in crate::app) struct ConfigViews {
     /// The model-list reader the loop thread and the start pick read
     /// through: the same function take_reads hands the thread.
     models: Option<crate::ReadModels>,
+    /// The feedback report writer `main` injected: the loop thread
+    /// writes through it, and none writes nothing.
+    feedback: Option<crate::WriteFeedback>,
     /// The sole owner of an outstanding hub editor copy.
     copy: Option<crate::remote::RemoteCopy>,
     /// The open view.
@@ -138,6 +148,16 @@ impl App {
     /// Sets the model-list reader the start pick reads through.
     pub(crate) fn set_models(&mut self, models: Option<crate::ReadModels>) {
         self.config_views.models = models;
+    }
+
+    /// Sets the feedback report writer the loop writes through.
+    pub(crate) fn set_feedback(&mut self, writer: Option<crate::WriteFeedback>) {
+        self.config_views.feedback = writer;
+    }
+
+    /// The feedback report writer, absent with nothing to write through.
+    pub(crate) fn feedback_writer(&self) -> Option<crate::WriteFeedback> {
+        self.config_views.feedback.clone()
     }
 
     /// The model-list reader, absent with no list to read.
@@ -281,11 +301,18 @@ impl App {
                 };
                 Open::Login(Login::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
+            (Some(seam), ConfigView::Logout) => {
+                let Some(workspace) = self.view_workspace() else {
+                    return Effect::None;
+                };
+                Open::Logout(Logout::open(&self.config_ctx(seam.as_ref(), &workspace)))
+            }
             (None, ConfigView::Settings) => Open::Unavailable("Settings", "/settings"),
             (None, ConfigView::Tools) => Open::Unavailable("Tools", "/tools"),
             (None, ConfigView::Skills) => Open::Unavailable("Skills", "/skills"),
             (None, ConfigView::Rules) => Open::Unavailable("Rules", "/rules"),
             (None, ConfigView::Login) => Open::Unavailable("Log in", "/login"),
+            (None, ConfigView::Logout) => Open::Unavailable("Log out", "/logout"),
             (None, ConfigView::Mcp) => Open::Unavailable("MCP servers", "/mcp"),
         };
         self.config_views.open = Some(open);
@@ -405,6 +432,7 @@ impl App {
                     Some(Open::Mcp(mcp)) => mcp.key(key, &ctx),
                     Some(Open::Rules(rules)) => rules.key(key, &ctx),
                     Some(Open::Login(login)) => login.key(key, &ctx),
+                    Some(Open::Logout(logout)) => logout.key(key, &ctx),
                     Some(Open::Credential(_) | Open::Unavailable(..)) | None => esc(key),
                 }
             }
@@ -442,6 +470,8 @@ impl App {
                         login.edit_key(edit);
                         Act::Stay
                     }
+                    // `/logout` has no field: nothing takes an edit.
+                    Some(Open::Logout(_)) => Act::Stay,
                     Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
                 }
             }
@@ -471,6 +501,7 @@ impl App {
                     Some(Open::Mcp(mcp)) => mcp.click(spot, &ctx),
                     Some(Open::Rules(rules)) => rules.click(spot, &ctx),
                     Some(Open::Login(login)) => login.click(spot, &ctx),
+                    Some(Open::Logout(logout)) => logout.click(spot, &ctx),
                     Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
                 }
             }
@@ -633,6 +664,15 @@ impl App {
         }
     }
 
+    /// The open logout view, in any mode: what the swapped view draws in
+    /// the shared overlay frame.
+    pub(crate) fn logout_view(&self) -> Option<&Logout> {
+        match &self.config_views.open {
+            Some(Open::Logout(logout)) => Some(logout),
+            _ => None,
+        }
+    }
+
     /// The open login view, in any mode: what the swapped view draws in
     /// the shared overlay frame.
     pub(crate) fn login_view(&self) -> Option<&Login> {
@@ -658,6 +698,8 @@ impl App {
             Open::Credential(picker) => picker.frame(),
             Open::Rules(rules) => rules.frame(),
             Open::Login(_) => return None,
+            // `/logout` draws its own overlay, as `/login` does.
+            Open::Logout(_) => return None,
             Open::Unavailable(title, command) => Frame {
                 title: (*title).to_owned(),
                 command,
@@ -724,6 +766,8 @@ impl App {
                 Some(Open::Settings(settings)) => settings.reread(&ctx),
                 Some(Open::Rules(rules)) => rules.reread(&ctx),
                 Some(Open::Skills(skills)) => skills.reread(&ctx),
+                // `/logout` writes no file an editor could return from.
+                Some(Open::Logout(_)) => {}
                 Some(
                     Open::Credential(_)
                     | Open::Tools(_)
@@ -788,6 +832,9 @@ impl App {
                                 }
                             }
                         },
+                        // `/logout` waits on no command: no line folds
+                        // into it.
+                        Some(Open::Logout(_)) => {}
                         Some(
                             Open::Credential(_)
                             | Open::Settings(_)
@@ -862,6 +909,10 @@ mod tests;
 #[cfg(test)]
 #[path = "config_login_tests.rs"]
 mod login_tests;
+
+#[cfg(test)]
+#[path = "config_logout_tests.rs"]
+mod logout_tests;
 
 #[cfg(test)]
 #[path = "config_skills_tests.rs"]
