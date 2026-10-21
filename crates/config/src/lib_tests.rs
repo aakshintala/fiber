@@ -30,6 +30,16 @@ fn layout_builds_the_approvals_and_pinned_dirs() {
 }
 
 #[test]
+fn layout_builds_the_server_project_record_dir() {
+    let home = PathBuf::from("/home");
+    let project = ProjectKey::new("key").unwrap();
+    assert_eq!(
+        super::project_servers_dir(&home, &project),
+        PathBuf::from("/home/projects/key/servers")
+    );
+}
+
+#[test]
 fn view_borrows_without_a_model() {
     let layer = json!({"model": "a/b", "models": {"a/b": {"model": "c/d"}}});
     assert!(matches!(view(&layer, None), Cow::Borrowed(_)));

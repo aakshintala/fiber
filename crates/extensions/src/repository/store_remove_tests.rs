@@ -759,3 +759,105 @@ fn a_prune_between_pinning_and_recording_keeps_the_copy() {
             .is_file()
     );
 }
+
+#[test]
+fn approving_a_server_writes_the_project_record_with_the_same_body() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, KEY).approve(&item, &digest).unwrap();
+    let home = repo.home();
+    let machine = fs::read_to_string(home.join("approvals").join(&digest)).unwrap();
+    let record = home
+        .join("projects")
+        .join(KEY)
+        .join("servers")
+        .join(&digest);
+    // The project record mirrors the machine approval byte for byte.
+    assert_eq!(fs::read_to_string(&record).unwrap(), machine);
+    let body: serde_json::Value = serde_json::from_str(&machine).unwrap();
+    assert_eq!(
+        body.get("decision").and_then(serde_json::Value::as_str),
+        Some("approve")
+    );
+    assert_eq!(
+        body.get("kind").and_then(serde_json::Value::as_str),
+        Some("mcp_server")
+    );
+    assert_eq!(
+        body.get("name").and_then(serde_json::Value::as_str),
+        Some("db")
+    );
+    assert!(body.get("declaration").is_some());
+}
+
+#[test]
+fn approving_a_hook_writes_no_server_project_record() {
+    let repo = Repo::new();
+    let item = hook(&repo);
+    let digest = approved(&repo, KEY, &item);
+    // Only a server approval writes under `servers/`: an extension or a
+    // hook leaves no record there, so it names no project owner.
+    assert!(
+        repo.home()
+            .join("projects")
+            .join(KEY)
+            .join("servers")
+            .join(&digest)
+            .symlink_metadata()
+            .is_err()
+    );
+}
+
+#[test]
+fn never_removes_the_server_project_record_and_writes_no_new_one() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, KEY).approve(&item, &digest).unwrap();
+    let record = || {
+        repo.home()
+            .join("projects")
+            .join(KEY)
+            .join("servers")
+            .join(&digest)
+    };
+    assert!(record().is_file());
+    store(&repo, KEY).never(&item, &digest).unwrap();
+    assert!(record().symlink_metadata().is_err());
+    // A never with no earlier approval writes no project record, while
+    // the machine record still stands.
+    store(&repo, "other").never(&item, &digest).unwrap();
+    assert!(
+        repo.home()
+            .join("projects")
+            .join("other")
+            .join("servers")
+            .join(&digest)
+            .symlink_metadata()
+            .is_err()
+    );
+    assert!(repo.home().join("approvals").join(&digest).is_file());
+}
+
+#[test]
+fn a_blocked_project_record_dir_errors_leaving_the_machine_approval() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    // A file where the project's `servers/` goes blocks the record
+    // write, after the machine approval is already in place.
+    let servers = repo.home().join("projects").join(KEY).join("servers");
+    fs::create_dir_all(servers.parent().unwrap()).unwrap();
+    fs::write(&servers, "not a dir").unwrap();
+    let err = store(&repo, KEY).approve(&item, &digest).unwrap_err();
+    assert!(err.to_string().contains("servers"), "{err}");
+    assert!(
+        repo.home().join("approvals").join(&digest).is_file(),
+        "the machine approval stands"
+    );
+    assert!(
+        repo.home().join("pinned").join(&digest).is_dir(),
+        "the copy stays"
+    );
+}

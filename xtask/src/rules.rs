@@ -511,6 +511,7 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/extensions/src/repository/store.rs", "fn copy_dir|root:self.home", "join:pinned", "#1720"),
     source_allowance!("crates/extensions/src/repository/store.rs", "fn ensure_copy|root:self.home", "join:pinned", "#1720"),
     source_allowance!("crates/extensions/src/repository/store.rs", "fn pin|root:self.home", "join:pinned", "#1720"),
+    source_allowance!("crates/extensions/src/repository/store.rs", "fn kept_copies|root:home", "join:servers", "#1322"),
     source_allowance!("crates/extensions/src/repository/store.rs", "fn kept_copies|root:home", "join:projects", "#653"),
     source_allowance!("crates/extensions/src/repository/store.rs", "fn kept_copies|root:home", "join:approvals", "#653"),
     source_allowance!("crates/extensions/src/repository/store.rs", "fn kept_copies|root:home", "join:pinned", "#653"),
@@ -629,6 +630,7 @@ const HOME_COMPONENTS: &[&str] = &[
     "pinned",
     "pinned.json",
     "approvals",
+    "servers",
     "docs",
     "skills",
 ];

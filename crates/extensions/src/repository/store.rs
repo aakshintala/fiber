@@ -686,6 +686,27 @@ impl Store {
         // idempotent, so a retry is safe.
         let target = dir.join(hash);
         config::write_atomic(&target, body.as_bytes(), 0o666)?;
+        if item.kind == OfferedKind::McpServer {
+            if decision == "approve" {
+                // The machine approval above is already in place, written
+                // first: a project-record failure returns the error and
+                // removes nothing, leaving a copy with no project record,
+                // which prune keeps.
+                let servers = config::project_servers_dir(home, project);
+                fs::create_dir_all(&servers).map_err(io_error(&servers))?;
+                let record = servers.join(hash);
+                config::write_atomic(&record, body.as_bytes(), 0o666)?;
+            } else {
+                // A never writes no project record: it removes one an
+                // earlier approval left, when present.
+                let record = config::project_servers_dir(home, project).join(hash);
+                match fs::remove_file(&record) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(io_error(&record)(e)),
+                }
+            }
+        }
         Ok(())
     }
 
