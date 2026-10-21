@@ -307,7 +307,8 @@ impl tui::Configure for Seam {
     }
 
     fn logout_rows(&self) -> Result<Vec<tui::LogoutRow>, ConfigureError> {
-        logout::rows(&self.home)
+        let config = self.load(&self.home)?;
+        logout::rows(&self.home, &config)
     }
 
     fn delete_stored(&self, name: &str, label: Option<String>) -> Result<String, ConfigureError> {

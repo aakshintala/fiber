@@ -6,26 +6,11 @@
 
 use std::path::Path;
 
-use config::{Config, Origin, Sources};
+use config::{Config, Origin};
 use contract::shapes::Failure;
 
 use super::{from_config, from_failure};
 use tui::{ConfigureError, LogoutRow};
-
-/// The configuration the rows read: Fiber home stands in for the
-/// workspace, so the global layer always loads; the project layer is
-/// home's own. `fiber login` writes the selected label to the global
-/// layer, so the default mark reads it here.
-fn load(home: &Path) -> Result<Config, ConfigureError> {
-    let (_, project) = ::cli::project_of(home, home).map_err(from_failure)?;
-    Config::load(Sources {
-        home: home.to_path_buf(),
-        workspace: home.to_path_buf(),
-        project,
-        overrides: Vec::new(),
-    })
-    .map_err(from_config)
-}
 
 /// Where a non-deletable label's key comes from, described without its
 /// secret: the program alone for a command, since its arguments may hold
@@ -106,19 +91,24 @@ fn secret_row(home: &Path, name: &str) -> Result<LogoutRow, ConfigureError> {
 }
 
 /// Every stored provider label and declared secret, providers in
-/// `login_targets` order then secrets.
-pub(super) fn rows(home: &Path) -> Result<Vec<LogoutRow>, ConfigureError> {
-    let targets = ::cli::login_targets(home).map_err(|e| from_failure(Failure::from(e)))?;
-    let config = load(home)?;
+/// `login_targets` order then secrets: one discovery, so the listing is
+/// a single snapshot. The order mirrors `cli::login::targets`, which owns
+/// the menu order: providers first, then the declared secrets no provider
+/// owns. Browser and key providers list alike here.
+/// The caller loads the configuration through the seam: `fiber login`
+/// writes the selected label to the global layer, so the default mark
+/// reads it there, with Fiber home standing in for the workspace.
+pub(super) fn rows(home: &Path, config: &Config) -> Result<Vec<LogoutRow>, ConfigureError> {
     let providers = ::cli::providers_in(home).map_err(|e| from_failure(Failure::from(e)))?;
     let mut rows = Vec::new();
-    for target in &targets {
-        match target {
-            ::cli::LoginName::Provider(name) | ::cli::LoginName::Browser(name) => {
-                rows.extend(provider_rows(&config, &providers, name));
-            }
-            ::cli::LoginName::Secret(name) => rows.push(secret_row(home, name)?),
-        }
+    for name in providers.names() {
+        rows.extend(provider_rows(config, &providers, name));
+    }
+    for name in providers
+        .secrets()
+        .filter(|name| providers.get(name).is_none())
+    {
+        rows.push(secret_row(home, name)?);
     }
     Ok(rows)
 }
@@ -353,6 +343,21 @@ mod tests {
     }
 
     #[test]
+    fn a_name_that_is_both_provider_and_secret_lists_no_secret_row() {
+        let setup = Setup::new();
+        setup.install("acme", None);
+        setup.declare("acme-secrets", &["acme"]);
+        let seam = setup.seam();
+        store(&seam, "acme", "default", "sk-a");
+        // The name always logs in to the provider: one provider row,
+        // no secret row for the declared name.
+        let rows = seam.logout_rows().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows[0], tui::LogoutRow::Provider { .. }));
+        assert_eq!(rows[0].name(), "acme");
+    }
+
+    #[test]
     fn configured_sources_list_dim_rows_with_their_origin() {
         for (source, origin) in [
             (json!({"env": "ACME_KEY"}), "environment variable ACME_KEY"),
@@ -513,7 +518,7 @@ mod tests {
             after[0].origin(),
             Some(format!("file {}", key_file.display()).as_str())
         );
-        let config = super::load(&setup.home()).unwrap();
+        let config = setup.seam().load(&setup.home()).unwrap();
         let providers = ::cli::providers_in(&setup.home()).unwrap();
         let data = providers.get("acme").unwrap();
         let read = config
