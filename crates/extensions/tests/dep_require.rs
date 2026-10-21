@@ -14,15 +14,17 @@
 
 mod common;
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use common::{Repos, Setup, manifest};
+use common::{Repos, Setup, approve, dep_dir, manifest, project, write};
 use config::{Config, ProjectKey, Sources};
 use contract::events::CallStatus;
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
-use extensions::{Request, SessionExtensions, plan};
+use extensions::{Fetch, RepositorySet, Request, SessionExtensions, StateSeed, plan};
 use fakes::clock::FakeClock;
+use fakes::git::git;
 use fakes::{Deadline, NoLock};
 use serde_json::Map;
 
@@ -91,15 +93,21 @@ fn install_pair(setup: &Setup, root_init: &str) {
 
 /// Loads `setup`'s home the way a session start does: on its own thread
 /// under `WAIT`, so a hang fails the test instead of hanging it.
-fn load(setup: &Setup, clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
+/// Loads `home` with `workspace` the way a session start does: on its own
+/// thread under `WAIT`, so a hang fails the test instead of hanging it.
+fn load_at(
+    home: &std::path::Path,
+    workspace: &std::path::Path,
+    clock: Arc<FakeClock>,
+) -> Arc<SessionExtensions> {
     let config = Config::load(Sources {
-        home: setup.home(),
-        workspace: setup.workspace(),
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
         project: ProjectKey::new("p").unwrap(),
         overrides: Vec::new(),
     })
     .unwrap();
-    let home = setup.home();
+    let home = home.to_path_buf();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
@@ -111,11 +119,16 @@ fn load(setup: &Setup, clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
         .expect("waited for the extensions to load")
 }
 
+fn load(setup: &Setup, clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
+    load_at(&setup.home(), &setup.workspace(), clock)
+}
+
 /// Asks the session's `after_tool` hooks about a completed call whose
-/// content is `x`, on its own thread.
-fn ask(session: &Arc<SessionExtensions>) -> mpsc::Receiver<AfterToolAnswer> {
+/// content is `content`, on its own thread.
+fn ask_with(session: &Arc<SessionExtensions>, content: &str) -> mpsc::Receiver<AfterToolAnswer> {
     let (tx, rx) = mpsc::channel();
     let session = Arc::clone(session);
+    let content = content.to_owned();
     // The call borrows the arguments map, so both are built on the worker.
     std::thread::spawn(move || {
         let arguments = Map::new();
@@ -123,7 +136,7 @@ fn ask(session: &Arc<SessionExtensions>) -> mpsc::Receiver<AfterToolAnswer> {
             tool: "read",
             arguments: &arguments,
             status: CallStatus::Completed,
-            content: "x",
+            content: &content,
             details: None,
             process: None,
             spilled: None,
@@ -135,6 +148,10 @@ fn ask(session: &Arc<SessionExtensions>) -> mpsc::Receiver<AfterToolAnswer> {
         }
     });
     rx
+}
+
+fn ask(session: &Arc<SessionExtensions>) -> mpsc::Receiver<AfterToolAnswer> {
+    ask_with(session, "x")
 }
 
 /// The hook chain's answer, failing the test on a hang instead of hanging it.
@@ -311,4 +328,291 @@ fn a_symlink_pointing_out_of_the_dependency_is_refused() {
         message.contains("outside the extension's directory"),
         "{message}"
     );
+}
+
+/// Declares `ROOT` depending on `DEP` at `minimum` in the workspace with
+/// this entry script, the way a repository package declares it.
+fn declare_copy(setup: &Setup, minimum: &str, root_init: &str) {
+    let ws = setup.workspace();
+    if !ws.join(".git").exists() {
+        git(&ws, &["init", "--quiet"]);
+    }
+    let mut root_manifest = manifest_with_provider(ROOT);
+    root_manifest["depends"] = serde_json::json!({DEP: minimum});
+    write(&ws.join("pkg/extension.json"), &root_manifest.to_string());
+    write(&ws.join("pkg/init.lua"), root_init);
+    write(
+        &ws.join(".fiber/config.json"),
+        &serde_json::json!({"repository_extensions": [{"path": "pkg"}]}).to_string(),
+    );
+}
+
+/// Tags `DEP` at `tag` holding `trim`, and approves the declared copy.
+/// Returns the repositories and the approved digest.
+fn approve_copy<'a>(setup: &'a Setup, tag: &str, trim: &str) -> (Repos<'a>, String) {
+    let mut repos = Repos::new(setup);
+    repos.tag(
+        DEP,
+        "",
+        tag,
+        &manifest_with_provider(DEP),
+        &[("trim.lua", trim), ("init.lua", "-- dependency entry\n")],
+    );
+    let digest = approve(setup, &repos);
+    (repos, digest)
+}
+
+/// Loads the approved set the way a session start does.
+fn load_set(setup: &Setup, repos: &Repos) -> Arc<SessionExtensions> {
+    let clock = FakeClock::new();
+    let set = RepositorySet::load(
+        &setup.home(),
+        &project(),
+        &setup.workspace(),
+        &BTreeSet::new(),
+        Fetch::new(repos.origin(), "0.1.0", clock.clone()),
+    );
+    let config = Config::load(Sources {
+        home: setup.home(),
+        workspace: setup.workspace(),
+        project: project(),
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    let home = setup.home();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
+        let _sent = tx.send(SessionExtensions::load_repository(
+            &home,
+            &config,
+            clock,
+            locks,
+            None,
+            StateSeed::new(),
+            set,
+        ));
+    });
+    Deadline::after(WAIT)
+        .recv(&rx)
+        .map(Arc::new)
+        .expect("waited for the extensions to load")
+}
+
+/// Approves the declared copy with `DEP` tagged at `tag` holding `trim`,
+/// and loads the approval the way a session start does.
+fn approve_and_load(setup: &Setup, tag: &str, trim: &str) -> Arc<SessionExtensions> {
+    let (repos, _) = approve_copy(setup, tag, trim);
+    load_set(setup, &repos)
+}
+
+#[test]
+fn a_repository_copy_serves_its_own_dependencies() {
+    let setup = Setup::new();
+    declare_copy(
+        &setup,
+        "1.0",
+        &root_init_require(&format!("{DEP}:trim"), "blocking"),
+    );
+    let session = approve_and_load(&setup, "v1.0.0", TRIM);
+    let AfterToolOutcome::Changed { content, .. } = answer(ask(&session)).outcome else {
+        panic!("the hook runs");
+    };
+    assert_eq!(content.as_deref(), Some("x|x"));
+}
+
+#[test]
+fn a_repository_copy_prefers_its_own_dependency_over_a_personal_install() {
+    let setup = Setup::new();
+    // A personal install of the dependency answering "personal".
+    let mut repos = Repos::new(&setup);
+    repos.tag(
+        DEP,
+        "",
+        "v1.0.0",
+        &manifest_with_provider(DEP),
+        &[(
+            "trim.lua",
+            "return { trim = function(s) return \"personal\" end }",
+        )],
+    );
+    plan(
+        &setup.home(),
+        &Request::Install(DEP.into()),
+        "0.1.0",
+        &repos.origin(),
+        &*FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    // The copy pins a newer dependency answering "copy": the copy-local
+    // one wins, so the personal install never leaks across the boundary.
+    declare_copy(
+        &setup,
+        "2.0",
+        &root_init_require(&format!("{DEP}:trim"), "blocking"),
+    );
+    let session = approve_and_load(&setup, "v2.0.0", TRIM);
+    let AfterToolOutcome::Changed { content, .. } = answer(ask(&session)).outcome else {
+        panic!("the hook runs");
+    };
+    assert_eq!(content.as_deref(), Some("x|x"));
+}
+
+#[test]
+fn a_missing_copy_local_dependency_names_the_dependency() {
+    let setup = Setup::new();
+    // A personal install that a fallback would read: the copy-local miss
+    // must name the dependency instead.
+    let mut repos = Repos::new(&setup);
+    repos.tag(
+        DEP,
+        "",
+        "v1.0.0",
+        &manifest_with_provider(DEP),
+        &[(
+            "trim.lua",
+            "return { trim = function(s) return \"personal\" end }",
+        )],
+    );
+    plan(
+        &setup.home(),
+        &Request::Install(DEP.into()),
+        "0.1.0",
+        &repos.origin(),
+        &*FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    declare_copy(
+        &setup,
+        "1.0",
+        &root_init_require(&format!("{DEP}:trim"), "non-blocking"),
+    );
+    // The copy's dependency is gone, while the personal one stays: the
+    // map still points copy-local, so the require names it with no home
+    // read. The tagged repositories stay alive for the set load, which
+    // reuses the existing copy without fetching.
+    let digest = approve(&setup, &repos);
+    std::fs::remove_dir_all(dep_dir(&setup, &digest, DEP)).unwrap();
+    let session = load_set(&setup, &repos);
+    let message = refused(&session);
+    assert!(
+        message.contains(&format!("`dependency '{DEP}' not installed`")),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_symlinked_fiber_home_serves_the_dependency() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:trim"), "blocking"),
+    );
+    // Fiber home reached through a symlink: the map keeps the alias path
+    // for its missing-directory message, while serving canonicalizes per
+    // read.
+    let linked = setup.root().join("linked-home");
+    std::os::unix::fs::symlink(setup.home(), &linked).unwrap();
+    let session = load_at(&linked, &setup.workspace(), FakeClock::new());
+    let AfterToolOutcome::Changed { content, .. } = answer(ask(&session)).outcome else {
+        panic!("the hook runs");
+    };
+    assert_eq!(content.as_deref(), Some("x|x"));
+}
+
+#[test]
+fn a_symlinked_dependency_root_loads() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:trim"), "blocking"),
+    );
+    // The installed directory moves under a data directory, with a
+    // symlink in its place: the map still authorizes the name, and the
+    // prefix check runs against the canonical target.
+    let dir = setup.home().join("extensions").join(config::dir_name(DEP));
+    let target = setup.home().join("data").join(config::dir_name(DEP));
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::rename(&dir, &target).unwrap();
+    std::os::unix::fs::symlink(&target, &dir).unwrap();
+    let session = load(&setup, FakeClock::new());
+    let AfterToolOutcome::Changed { content, .. } = answer(ask(&session)).outcome else {
+        panic!("the hook runs");
+    };
+    assert_eq!(content.as_deref(), Some("x|x"));
+}
+
+#[test]
+fn a_dependency_root_outside_fiber_home_is_served() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:trim"), "blocking"),
+    );
+    // The link target sits outside any managed root: the map entry
+    // authorizes the name, and confinement is the prefix check against the
+    // canonical target.
+    let dir = setup.home().join("extensions").join(config::dir_name(DEP));
+    let target = setup
+        .root()
+        .join("outside-home")
+        .join(config::dir_name(DEP));
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::rename(&dir, &target).unwrap();
+    std::os::unix::fs::symlink(&target, &dir).unwrap();
+    let session = load(&setup, FakeClock::new());
+    let AfterToolOutcome::Changed { content, .. } = answer(ask(&session)).outcome else {
+        panic!("the hook runs");
+    };
+    assert_eq!(content.as_deref(), Some("x|x"));
+}
+
+#[test]
+fn a_retargeted_dependency_root_follows_the_new_target() {
+    let setup = Setup::new();
+    // The hook requires the module named by the call, so each ask loads a
+    // module the earlier ask never cached.
+    install_pair(
+        &setup,
+        "fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"blocking\",\n\
+           run = function(call)\n\
+             local dep = require(\"example.com/acme/dep:\" .. call.content)\n\
+             return { content = dep.trim(\"x\") } end })\n",
+    );
+    let dir = setup.home().join("extensions").join(config::dir_name(DEP));
+    let first = setup.root().join("first");
+    let second = setup.root().join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::write(
+        first.join("one.lua"),
+        "return { trim = function(s) return \"a\" end }",
+    )
+    .unwrap();
+    std::fs::write(
+        second.join("two.lua"),
+        "return { trim = function(s) return \"b\" end }",
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(&first, &dir).unwrap();
+    let session = load(&setup, FakeClock::new());
+    let AfterToolOutcome::Changed { content, .. } = answer(ask_with(&session, "one")).outcome
+    else {
+        panic!("the hook runs");
+    };
+    assert_eq!(content.as_deref(), Some("a"));
+    // The root link moves mid-run: nothing caches the canonical root, so
+    // the next require re-resolves and serves the new target.
+    std::fs::remove_file(&dir).unwrap();
+    std::os::unix::fs::symlink(&second, &dir).unwrap();
+    let AfterToolOutcome::Changed { content, .. } = answer(ask_with(&session, "two")).outcome
+    else {
+        panic!("the hook runs");
+    };
+    assert_eq!(content.as_deref(), Some("b"));
 }
