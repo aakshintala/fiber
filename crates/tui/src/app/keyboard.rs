@@ -286,7 +286,8 @@ impl App {
     }
 
     /// The context a stroke arrives in, front to back: the quit question,
-    /// an overlay (a configuration or session view, a home modal, the key
+    /// the import report, an overlay (a configuration or session view,
+    /// a home modal, the key
     /// map above the model picker, the approval panel, an offer, the
     /// search bar), the model picker, a focused chip as the input box,
     /// the focused conversation, a completion panel, a steering
@@ -295,6 +296,7 @@ impl App {
     /// Home's arrows read it through `home_owns_arrows`.
     pub(super) fn key_context(&self) -> Context {
         if self.quit_open()
+            || self.import_report_open()
             || (self.config_view_open() && !self.credential_view_open())
             || self.session_view_open()
             || self.home_modal()

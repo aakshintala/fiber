@@ -469,6 +469,14 @@ impl App {
         self.armed_at = None;
         self.copy_owed = false;
         self.history.cancel();
+        // The open report owns every key through `route_key`, so a
+        // paste or a home-owned arrow reaching here changes neither
+        // the draft nor the report behind it. It runs ahead of the
+        // picker, the chip row and the draft, as `report_key` runs
+        // ahead of every other key path.
+        if self.import_report_open() {
+            return Effect::None;
+        }
         // The open picker owns every edit but Ctrl+C, which never
         // arrives as one.
         if let Some(effect) = self.model_picker_edit(&edit) {
