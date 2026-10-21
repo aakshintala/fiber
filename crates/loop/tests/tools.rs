@@ -771,7 +771,7 @@ fn a_second_delta_within_the_interval_waits_for_the_clock() {
         gate1.open();
         let due = clock.now() + Duration::from_millis(100);
         assert!(
-            clock.await_parked(due, Duration::from_secs(10)),
+            clock.await_parked(due, fakes::Deadline::after(Duration::from_secs(10))),
             "the loop did not park until the interval ends"
         );
         assert!(
@@ -1006,7 +1006,7 @@ fn a_large_write_paces_the_next_delta_past_100_ms() {
         gate1.open();
         let due = clock.now() + interval;
         assert!(
-            clock.await_parked(due, Duration::from_secs(10)),
+            clock.await_parked(due, fakes::Deadline::after(Duration::from_secs(10))),
             "the loop did not park until the byte-paced interval ends"
         );
         assert!(

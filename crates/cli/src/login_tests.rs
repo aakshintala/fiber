@@ -883,7 +883,7 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
     let output = fakes::rerun_prepared(
         &format!("{name}::login_of_an_unknown_provider_is_a_usage_failure"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        fakes::Deadline::after(CHILD_DEADLINE),
         |command| {
             command.env("FIBER_HOME", home.path());
         },
@@ -910,7 +910,7 @@ fn login_of_an_unknown_provider_names_the_home_installed_providers() {
     let output = fakes::rerun_prepared(
         &format!("{name}::login_of_an_unknown_provider_names_the_home_installed_providers"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        fakes::Deadline::after(CHILD_DEADLINE),
         |command| {
             command.env("FIBER_HOME", setup.home());
         },
@@ -1722,7 +1722,7 @@ fn a_preset_environment_value_skips_the_host_question() {
     let output = fakes::rerun_prepared(
         &format!("{name}::a_preset_environment_value_skips_the_host_question"),
         &[(HOST_CHILD, "1"), (HOST_ENV, "adb-9.example")],
-        CHILD_DEADLINE,
+        fakes::Deadline::after(CHILD_DEADLINE),
         |_| {},
     );
     assert!(output.status.success(), "{output:?}");
@@ -1746,7 +1746,7 @@ fn a_present_but_invalid_environment_value_asks_nothing() {
     let output = fakes::rerun_prepared(
         &format!("{name}::a_present_but_invalid_environment_value_asks_nothing"),
         &[(HOST_CHILD, "1"), (HOST_ENV, "not a host!!")],
-        CHILD_DEADLINE,
+        fakes::Deadline::after(CHILD_DEADLINE),
         |_| {},
     );
     assert!(output.status.success(), "{output:?}");

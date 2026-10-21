@@ -179,7 +179,7 @@ fn refused(setup: &Setup, server: &ProviderServer, oauth: &OauthServer) {
             break;
         }
         assert!(
-            server.await_requests(seen + 1, setup.deadline.left()),
+            server.await_requests(seen + 1, setup.deadline),
             "refused credential signal"
         );
         seen = server.requests().len();
@@ -221,7 +221,7 @@ fn an_attached_full_client_receives_the_mid_session_login_url() {
     prompt(&client, &session, "c_prompt");
     let seen = login_url(&client, &oauth);
     assert!(
-        oauth.await_requests(1, setup.deadline.left()),
+        oauth.await_requests(1, setup.deadline),
         "poll held after URL arrived"
     );
     turn(&client, seen);
@@ -322,7 +322,7 @@ fn a_resumed_session_installs_live_attendance_and_login_notices() {
     prompt(&client, &session, "c_resumed_prompt");
     let seen = login_url(&client, &oauth);
     assert!(
-        oauth.await_requests(1, setup.deadline.left()),
+        oauth.await_requests(1, setup.deadline),
         "resumed login poll held"
     );
     turn(&client, seen);

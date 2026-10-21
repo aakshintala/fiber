@@ -115,7 +115,7 @@ fn a_startup_timing_starts_at_the_clock_read_just_before_the_spawn() {
 
 #[test]
 fn a_command_run_to_its_end_returns_its_status_and_output() {
-    let finished = fakes::within("a short command", WALL, || {
+    let finished = fakes::within("a short command", Deadline::after(WALL), || {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "echo out; echo err >&2; exit 3"]);
         run_to_end(&mut command, &System, WALL, "the short command")
@@ -144,16 +144,20 @@ fn a_command_past_its_deadline_errs_and_leaves_nothing_in_its_group() {
         sleeper(dir.path(), false)
     );
     let clock = fakes::clock::FakeClock::new();
-    let err = fakes::within("a command past its deadline", WALL, move || {
-        let mut command = Command::new("/bin/sh");
-        command.args(["-c", &script]);
-        run_to_end(
-            &mut command,
-            &*clock,
-            Duration::from_millis(200),
-            "the sleeper",
-        )
-    })
+    let err = fakes::within(
+        "a command past its deadline",
+        Deadline::after(WALL),
+        move || {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", &script]);
+            run_to_end(
+                &mut command,
+                &*clock,
+                Duration::from_millis(200),
+                "the sleeper",
+            )
+        },
+    )
     .unwrap_err();
     // A slow group cleanup under load adds its own sentence after this one.
     assert!(
@@ -161,7 +165,7 @@ fn a_command_past_its_deadline_errs_and_leaves_nothing_in_its_group() {
         "{err}"
     );
     assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
-    watchdog.stand_down(READY);
+    watchdog.stand_down(fakes::Deadline::after(READY));
 }
 
 /// Waits for the child's two ready lines under one shared deadline.
@@ -178,8 +182,8 @@ fn wait_for_both_lines(ready: &std::sync::Mutex<Option<Ready>>) {
         std::thread::scope(|scope| {
             let deadline = &deadline;
             scope.spawn(move || {
-                ready.wait(deadline.left());
-                ready.wait(deadline.left());
+                ready.wait(*deadline);
+                ready.wait(*deadline);
                 match tx.send(()) {
                     Ok(()) | Err(_) => {}
                 }
@@ -233,16 +237,20 @@ fn a_deadline_error_wins_over_a_group_cleanup_error() {
         ready: std::sync::Mutex::new(Some(ready)),
         inner: fakes::clock::FakeClock::new(),
     };
-    let err = fakes::within("a deadline with a stubborn child", WALL, move || {
-        let mut command = Command::new("/bin/bash");
-        command.args(["-c", &script]);
-        run_to_end(
-            &mut command,
-            &clock,
-            Duration::from_millis(200),
-            "the sleeper",
-        )
-    })
+    let err = fakes::within(
+        "a deadline with a stubborn child",
+        Deadline::after(WALL),
+        move || {
+            let mut command = Command::new("/bin/bash");
+            command.args(["-c", &script]);
+            run_to_end(
+                &mut command,
+                &clock,
+                Duration::from_millis(200),
+                "the sleeper",
+            )
+        },
+    )
     .unwrap_err();
     assert!(
         err.starts_with("timed out waiting for the sleeper"),
@@ -270,7 +278,7 @@ fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
         escaped.display(),
         escaped.display(),
     );
-    let err = fakes::within("output held open", WALL, move || {
+    let err = fakes::within("output held open", Deadline::after(WALL), move || {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", &script]);
         run_to_end(&mut command, &System, WALL, "the holder")
@@ -278,8 +286,11 @@ fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
     .unwrap_err();
     assert_eq!(err, "the output of the holder stayed open");
     fakes::kill_matching(&marker).unwrap();
-    assert!(fakes::matching_exits(&marker, READY));
-    watchdog.stand_down(READY);
+    assert!(fakes::matching_exits(
+        &marker,
+        fakes::Deadline::after(READY)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(READY));
 }
 
 /// A clock whose second `now` read, the deadline read in `eof_once`, waits
@@ -344,7 +355,7 @@ fn timed_output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging
         inner: fakes::clock::FakeClock::new(),
     });
     let ran = std::sync::Arc::clone(&clock);
-    let err = fakes::within("timed output held open", WALL, move || {
+    let err = fakes::within("timed output held open", Deadline::after(WALL), move || {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", &script]);
         super::timed_to_end(
@@ -357,8 +368,11 @@ fn timed_output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging
     .unwrap_err();
     assert!(err.starts_with("timed out waiting for the holder"), "{err}");
     fakes::kill_matching(&marker).unwrap();
-    assert!(fakes::matching_exits(&marker, READY));
-    watchdog.stand_down(READY);
+    assert!(fakes::matching_exits(
+        &marker,
+        fakes::Deadline::after(READY)
+    ));
+    watchdog.stand_down(fakes::Deadline::after(READY));
     assert!(
         clock.passed(),
         "the deadline was read before the holder left the group"
@@ -377,12 +391,15 @@ fn a_stop_that_needs_a_second_sigkill_errs_after_the_group_empties() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let proc = Proc::spawn(&mut command, &System).unwrap();
-    let group = ready.wait(READY)[0];
+    let group = ready.wait(fakes::Deadline::after(READY))[0];
     assert_eq!(group, proc.pid());
     // The descendant ignores SIGTERM and holds the group after its leader
     // exits; it is up once its pid is written.
-    ready.wait(READY);
-    let err = fakes::within("the stop", WALL, move || proc.stop(&System)).unwrap_err();
+    ready.wait(fakes::Deadline::after(READY));
+    let err = fakes::within("the stop", Deadline::after(WALL), move || {
+        proc.stop(&System)
+    })
+    .unwrap_err();
     assert!(err.contains("left a process in its group behind"), "{err}");
     assert!(err.contains("SIGKILL emptied it"), "{err}");
     assert!(
@@ -414,7 +431,10 @@ impl Clock for AfterEof {
             std::fs::remove_file(&marker).unwrap();
             // The child writes its exit line once its loop ends; the poll
             // that follows reaps it from there.
-            self.ready.lock().unwrap().wait(READY);
+            self.ready
+                .lock()
+                .unwrap()
+                .wait(fakes::Deadline::after(READY));
         }
         self.inner.sleep(d);
     }
@@ -462,7 +482,7 @@ fn a_timed_run_ends_when_stdout_closes_not_when_the_process_exits() {
     });
     let start = clock.now();
     let ran = std::sync::Arc::clone(&clock);
-    let (finished, took) = fakes::within("a timed run", WALL, move || {
+    let (finished, took) = fakes::within("a timed run", Deadline::after(WALL), move || {
         super::timed_to_end(
             &mut eof_then_exit(&marker, &ready_path),
             ran.as_ref(),
@@ -487,14 +507,18 @@ fn a_timed_run_ends_when_stdout_closes_not_when_the_process_exits() {
         ready: std::sync::Mutex::new(ready),
         inner: fakes::clock::FakeClock::new(),
     };
-    let finished = fakes::within("the same child under run_to_end", WALL, move || {
-        run_to_end(
-            &mut eof_then_exit(&marker, &ready_path),
-            &clock,
-            WALL,
-            "the child",
-        )
-    })
+    let finished = fakes::within(
+        "the same child under run_to_end",
+        Deadline::after(WALL),
+        move || {
+            run_to_end(
+                &mut eof_then_exit(&marker, &ready_path),
+                &clock,
+                WALL,
+                "the child",
+            )
+        },
+    )
     .unwrap();
     assert_eq!(finished.status.code(), Some(0));
     assert_eq!(finished.stdout, "x");
@@ -507,20 +531,24 @@ fn a_timed_run_past_its_deadline_errs_and_leaves_nothing_behind() {
     let watchdog = Watchdog::matching(&marker);
     let clock = fakes::clock::FakeClock::new();
     let script = format!("while [ -e '{}' ]; do sleep 30; done", dir.path().display());
-    let err = fakes::within("a timed run past its deadline", WALL, move || {
-        let mut command = Command::new("/bin/sh");
-        command.args(["-c", &script]);
-        super::timed_to_end(
-            &mut command,
-            &*clock,
-            Duration::from_millis(50),
-            "the sleeper",
-        )
-    })
+    let err = fakes::within(
+        "a timed run past its deadline",
+        Deadline::after(WALL),
+        move || {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", &script]);
+            super::timed_to_end(
+                &mut command,
+                &*clock,
+                Duration::from_millis(50),
+                "the sleeper",
+            )
+        },
+    )
     .unwrap_err();
     assert_eq!(err, "timed out waiting for the sleeper");
     assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
-    watchdog.stand_down(READY);
+    watchdog.stand_down(fakes::Deadline::after(READY));
 }
 
 /// A fake clock that removes `hold` on the sleep after the old exit bound
@@ -591,9 +619,9 @@ fn waiting_for_a_process_to_exit_outlasts_fake_time_that_runs_ahead_of_it() {
     let dir = TempDir::new("fiber-bench-hold-exit");
     let (mut command, clock, ready) = held_child(dir.path());
     command.stdin(Stdio::null()).stdout(Stdio::null());
-    let exited = fakes::within("the exit wait", WALL, move || {
+    let exited = fakes::within("the exit wait", Deadline::after(WALL), move || {
         let mut proc = Proc::spawn(&mut command, &clock).unwrap();
-        ready.wait(READY);
+        ready.wait(fakes::Deadline::after(READY));
         let exited = proc.exits(&clock, WALL).unwrap();
         proc.stop(&System).unwrap();
         exited
@@ -605,7 +633,7 @@ fn waiting_for_a_process_to_exit_outlasts_fake_time_that_runs_ahead_of_it() {
 fn a_run_to_its_end_outlasts_fake_time_that_runs_ahead_of_the_child() {
     let dir = TempDir::new("fiber-bench-hold-run");
     let (mut command, clock, _ready) = held_child(dir.path());
-    let finished = fakes::within("the held run", WALL, move || {
+    let finished = fakes::within("the held run", Deadline::after(WALL), move || {
         run_to_end(&mut command, &clock, WALL, "the holder")
     })
     .unwrap();

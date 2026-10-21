@@ -170,7 +170,7 @@ fn a_code_exactly_ten_minutes_old_pairs() {
     let code = mint(&hub, "phone");
     // The counted connection keeps the idle wait free of a deadline; no waiter is released.
     assert!(
-        clock.await_parked_unbounded(DEADLINE),
+        clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
         "the idle wait parks with no deadline"
     );
     clock.advance_when_parked(
@@ -192,7 +192,7 @@ fn a_code_past_ten_minutes_fails() {
     let client = helloed(port, None);
     let code = mint(&hub, "phone");
     assert!(
-        clock.await_parked_unbounded(DEADLINE),
+        clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
         "the idle wait parks with no deadline"
     );
     clock.advance_when_parked(
@@ -561,10 +561,10 @@ fn self_revocation_waits_for_the_output_pump_before_shutting_tcp() {
         working.pairing.finish(&working, revoked);
         tx.send(()).unwrap_or(());
     });
-    assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
+    assert!(clock.await_parked_count(end, 2, fakes::Deadline::after(PAIR_WAIT)));
     assert!(!web.drained());
     let mark = clock
-        .mark_parked(end, PAIR_WAIT)
+        .mark_parked(end, fakes::Deadline::after(PAIR_WAIT))
         .expect("finish waits for the pump");
     drop(sink);
     let deadline = Deadline::after(DEADLINE);
@@ -590,7 +590,8 @@ fn self_revocation_waits_for_the_output_pump_before_shutting_tcp() {
         .recv(&rx)
         .is_ok();
     if !finished_before_deadline {
-        let reparked = clock.await_parked_since(&mark, Some(end), PAIR_WAIT);
+        let reparked =
+            clock.await_parked_since(&mark, Some(end), fakes::Deadline::after(PAIR_WAIT));
         if reparked {
             clock.advance_when_parked_threads(
                 Some(end),
@@ -629,7 +630,7 @@ fn a_local_revoke_announces_without_waiting_for_the_clock() {
     let event = match early {
         Ok(Some(line)) => serde_json::from_str::<Value>(&line).unwrap(),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            let parked = clock.await_parked_count(end, 2, PAIR_WAIT);
+            let parked = clock.await_parked_count(end, 2, fakes::Deadline::after(PAIR_WAIT));
             if parked {
                 clock.advance_when_parked_threads(
                     Some(end),
@@ -693,7 +694,7 @@ fn finishing_a_revoke_returns_at_its_deadline_with_an_undrained_web() {
         wire_value(deadline, &lines, "device revoke notice")["payload"]["change"],
         "revoked"
     );
-    assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
+    assert!(clock.await_parked_count(end, 2, fakes::Deadline::after(PAIR_WAIT)));
     client.shutdown(Shutdown::Write).unwrap_or(());
 
     clock.advance_when_parked_threads(Some(end), 2, STOP_CLOSE_WAIT, &Deadline::after(PAIR_WAIT));
@@ -753,7 +754,7 @@ fn revoke_watchdog_closes_a_live_device_at_the_deadline_while_answer_is_blocked(
         .write_all(b"{\"id\":\"r\",\"command\":\"revoke\",\"args\":{\"device\":\"phone\"}}\n")
         .unwrap();
 
-    let watchdog_waited = clock.await_parked(end, PAIR_WAIT);
+    let watchdog_waited = clock.await_parked(end, fakes::Deadline::after(PAIR_WAIT));
     let closed_before_deadline = closed_rx.try_recv().is_ok();
     let closed_at_deadline = if watchdog_waited {
         clock.advance_when_parked(
@@ -830,7 +831,7 @@ fn attach_web_stores_the_handle_finish_waits_for_its_drain() {
     });
     // The watchdog and `finish` are both parked on the clock while the
     // stored web never drains, so `finish` cannot have returned yet.
-    assert!(clock.await_parked_count(end, 2, PAIR_WAIT));
+    assert!(clock.await_parked_count(end, 2, fakes::Deadline::after(PAIR_WAIT)));
     assert!(
         rx.try_recv().is_err(),
         "finish waits for the attached web to drain"

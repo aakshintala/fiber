@@ -101,8 +101,11 @@ fn not_answerable_returns_declined_at_once() {
     );
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("go", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
         .unwrap(),
         "{\"declined\":true}"
     );
@@ -301,11 +304,11 @@ fn a_timed_out_ask_is_declined_by_fiber_and_late_answers_hand_back() {
     let deadline = clock.origin() + Duration::from_millis(200);
     let grace = clock.origin() + Duration::from_millis(1200);
     assert!(
-        clock.await_thread_parked(caller_id, Some(grace), WAIT),
+        clock.await_thread_parked(caller_id, Some(grace), fakes::Deadline::after(WAIT)),
         "the caller parks at the command deadline plus the grace"
     );
     let parked = clock
-        .mark_parked(deadline, WAIT)
+        .mark_parked(deadline, fakes::Deadline::after(WAIT))
         .expect("the scheduler parks at the command deadline");
     let parked = parked.threads();
     assert_eq!(
@@ -365,8 +368,11 @@ fn a_timer_that_asks_and_expires_is_declined_the_same_way() {
     );
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("go", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
         .unwrap(),
         "set"
     );
@@ -514,8 +520,11 @@ fn sealing_declines_new_asks_and_hands_answers_back() {
     ext.seal();
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("go", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
         .unwrap(),
         "{\"declined\":true}"
     );
@@ -559,9 +568,11 @@ fn bad_specs_raise_strings_and_nothing_reaches_the_inbox() {
         true,
     );
     let held = Arc::clone(&ext);
-    let got = fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || {
-        held.command("go", "")
-    })
+    let got = fakes::within(
+        "held.command",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || held.command("go", ""),
+    )
     .unwrap();
     for (part, key) in got
         .split('|')
@@ -594,11 +605,11 @@ fn host_ask_in_init_lua_raises_the_entry_string() {
     );
     let ext = Arc::new(ext);
     let held = Arc::clone(&ext);
-    let Err(Error::Lua { message, .. }) =
-        fakes::within("held.commands", fakes::MUST_SUCCEED_WITHIN, move || {
-            held.commands()
-        })
-    else {
+    let Err(Error::Lua { message, .. }) = fakes::within(
+        "held.commands",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || held.commands(),
+    ) else {
         panic!("the entry script fails to load");
     };
     assert_eq!(message, "host.ask: not available while init.lua runs");

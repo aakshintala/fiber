@@ -48,7 +48,7 @@ fn run_jig(dir: &Path) -> Output {
         .unwrap();
     let watchdog = fakes::Watchdog::group(child.id());
     let output = fakes::wait_output(child, "the check jig finished");
-    watchdog.stand_down(Duration::from_secs(5));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     output
 }
 

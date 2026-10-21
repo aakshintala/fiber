@@ -1165,7 +1165,11 @@ fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
             entry.name()
         );
         assert!(
-            clock.await_parked_since(mark.as_ref().expect("a first advance"), Some(due), DEADLINE),
+            clock.await_parked_since(
+                mark.as_ref().expect("a first advance"),
+                Some(due),
+                fakes::Deadline::after(DEADLINE)
+            ),
             "{}: the wait still parks at the original deadline",
             entry.name()
         );

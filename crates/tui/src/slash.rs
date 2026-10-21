@@ -16,8 +16,8 @@ pub(crate) struct Row {
     /// The name typed after `/`.
     pub(crate) name: String,
     /// A second name for the row, drawn after the name: `/exit` on the
-    /// quit row. `None` when an extension row named `exit` takes that
-    /// name, so only one `/exit` entry shows.
+    /// quit row. `None` when an extension row takes that name, so only
+    /// one entry of that name shows.
     pub(crate) alias: Option<String>,
     /// A one-line description.
     pub(crate) description: String,
@@ -56,19 +56,15 @@ pub(crate) fn is_built_in(name: &str) -> bool {
 /// `commands`, the session's `commands` answer, in order, each with the
 /// hint and tag it gives. An
 /// extension row (`extension` set) named like a drawn built-in takes that
-/// row's slot, with its own description, hint and tag; any other row named
-/// like a built-in is left out.
+/// row's slot, with its own description, hint and tag; one named like an
+/// alias takes the alias off its row; any other row named like a
+/// built-in is left out.
 pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
     let replacement = |name: &str| {
         commands
             .iter()
             .find(|command| command.name == name && command.extension)
     };
-    // An extension row named `exit` takes that name: the quit row sheds
-    // its alias so only one `/exit` entry shows.
-    let exit_taken = commands
-        .iter()
-        .any(|command| command.name == "exit" && command.extension);
     let built_ins = TABLE.iter().map(|entry| {
         if let Some(command) = replacement(entry.name) {
             Row {
@@ -81,8 +77,10 @@ pub(crate) fn rows(commands: &[CommandInfo]) -> Vec<Row> {
         } else {
             Row {
                 name: entry.name.to_owned(),
+                // An extension row named like the alias takes that
+                // name, so only one entry of it shows.
                 alias: alias_of(entry.name)
-                    .filter(|_| !exit_taken)
+                    .filter(|alias| replacement(alias).is_none())
                     .map(str::to_owned),
                 description: entry.description.to_owned(),
                 hint: entry.hint.map(str::to_owned),

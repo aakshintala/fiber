@@ -590,39 +590,43 @@ impl Drop for DropDeliver {
 
 #[test]
 fn a_disconnected_inbox_drops_a_fitting_answer_after_the_lock() {
-    fakes::within("a fitting answer past a disconnect", WAIT, || {
-        let hub = Hub::new(FakeClock::new());
-        let (tx, rx) = mpsc::channel();
-        hub.set_inbox(tx);
-        drop(rx);
-        raise(&hub, 7, "r_1");
-        let (closed_tx, closed_rx) = mpsc::channel();
-        let guard = DropDeliver {
-            hub: Arc::clone(&hub),
-            id: 7,
-            closed: closed_tx,
-        };
-        let ack = Ack(Box::new(move |_| {
-            let _guard = guard;
-        }));
-        let answer = reply(
-            "r_1",
-            contract::commands::ReplyAnswer::Confirmed { confirmed: true },
-        );
-        assert!(hub.answer(answer, ack).is_none());
-        assert_eq!(
-            Deadline::after(WAIT)
-                .recv(&closed_rx)
-                .expect("the drop answers"),
-            "closing",
-            "the dropped Resolved is dropped after the lock"
-        );
-    });
+    fakes::within(
+        "a fitting answer past a disconnect",
+        Deadline::after(WAIT),
+        || {
+            let hub = Hub::new(FakeClock::new());
+            let (tx, rx) = mpsc::channel();
+            hub.set_inbox(tx);
+            drop(rx);
+            raise(&hub, 7, "r_1");
+            let (closed_tx, closed_rx) = mpsc::channel();
+            let guard = DropDeliver {
+                hub: Arc::clone(&hub),
+                id: 7,
+                closed: closed_tx,
+            };
+            let ack = Ack(Box::new(move |_| {
+                let _guard = guard;
+            }));
+            let answer = reply(
+                "r_1",
+                contract::commands::ReplyAnswer::Confirmed { confirmed: true },
+            );
+            assert!(hub.answer(answer, ack).is_none());
+            assert_eq!(
+                Deadline::after(WAIT)
+                    .recv(&closed_rx)
+                    .expect("the drop answers"),
+                "closing",
+                "the dropped Resolved is dropped after the lock"
+            );
+        },
+    );
 }
 
 #[test]
 fn a_disconnected_flush_drops_the_buffer_after_the_lock() {
-    fakes::within("a flush past a disconnect", WAIT, || {
+    fakes::within("a flush past a disconnect", Deadline::after(WAIT), || {
         let hub = Hub::new(FakeClock::new());
         raise(&hub, 7, "r_1");
         let (closed_tx, closed_rx) = mpsc::channel();

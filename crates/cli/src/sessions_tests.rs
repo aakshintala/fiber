@@ -269,7 +269,7 @@ fn export_exits_zero_and_writes_the_export() {
     let output = fakes::rerun_prepared(
         &format!("{name}::export_exits_zero_and_writes_the_export"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -464,7 +464,7 @@ fn delete_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
         let output = fakes::rerun_prepared(
             &format!("{name}::delete_exits_zero_on_success_two_on_usage_and_one_on_refusal"),
             &[("FIBER_CLI_DELETE_CHILD", case)],
-            HUB_DEADLINE,
+            Deadline::after(HUB_DEADLINE),
             |command| {
                 command
                     .env("FIBER_HOME", setup.home())

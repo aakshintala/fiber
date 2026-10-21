@@ -173,7 +173,9 @@ pub(crate) fn close_within(session: Session, log: Arc<Log>) {
 
 /// The next line the client reads, within [`DEADLINE`].
 pub(crate) fn next(client: &Client) -> Value {
-    client.recv(DEADLINE).expect("a line arrived")
+    client
+        .recv(Deadline::after(DEADLINE))
+        .expect("a line arrived")
 }
 
 /// Lines up to and including the first one `done` accepts, read under one
@@ -189,7 +191,7 @@ pub(crate) fn until(client: &Client, mut done: impl FnMut(&Value) -> bool + Send
             let mut lines = Vec::new();
             let mut idle = 0;
             while !stop.load(Ordering::SeqCst) {
-                let Some(line) = client.recv(SLICE) else {
+                let Some(line) = client.recv(Deadline::after(SLICE)) else {
                     // A closed socket answers at once: stop instead of spinning.
                     idle += 1;
                     if idle > UNTIL.as_secs() {
@@ -261,7 +263,7 @@ pub(crate) fn subscribe_line(id: &str, level: &str) -> String {
 pub(crate) fn subscribe(client: &Client, id: &str, level: &str) -> Value {
     send(client, &subscribe_line(id, level));
     let line = client
-        .recv(UNTIL)
+        .recv(Deadline::after(UNTIL))
         .expect("the subscribe acknowledgement arrived");
     assert_eq!(kind(&line), "command_accepted", "{line}");
     assert_eq!(command_id(&line).unwrap(), id);

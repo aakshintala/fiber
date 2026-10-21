@@ -428,7 +428,7 @@ fn serve_captures_first_then_reports_the_fallback() {
     });
     let serve_id = handle.thread().id();
     assert!(
-        clock.await_parked(origin + idle, WITHIN),
+        clock.await_parked(origin + idle, fakes::Deadline::after(WITHIN)),
         "the hub idles past the capture"
     );
     clock.advance_when_parked(

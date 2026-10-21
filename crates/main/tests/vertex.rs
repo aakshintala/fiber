@@ -17,7 +17,7 @@
 
 mod support;
 
-use std::os::unix::fs::PermissionsExt as _;
+use std::path::Path;
 use std::process::Output;
 
 use fakes::{ProviderServer, Response, fingerprint};
@@ -28,6 +28,11 @@ const CALL: &[u8] = include_bytes!("../../../research/vertex-probe/raw/gemini-to
 
 /// The probe's recorded "PINEAPPLE", the instruction's own word.
 const ANSWER: &[u8] = include_bytes!("../../../research/vertex-probe/raw/gemini-sysrole-none.sse");
+
+/// The body of the probe's recorded 401 for a token Vertex does not take
+/// (`research/vertex-probe/raw/gemini-bad-token.json`), its `details`
+/// left out.
+const GEMINI_BAD_TOKEN: &str = r#"{"error":{"code":401,"message":"Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.","status":"UNAUTHENTICATED"}}"#;
 
 /// The package's endpoint origin, which the copy points at the fake server.
 const ORIGIN: &str = "https://aiplatform.googleapis.com";
@@ -63,40 +68,53 @@ fn run(setup: &Setup, args: &[&str], env: &[(&str, &str)]) -> Run {
     ))
 }
 
+/// The fake server answering with `responses`, the package installed
+/// against it, and the environment for `fiber ask`: the checked-in stand-in
+/// `gcloud` (`tests/fixtures/gcloud`) first on `PATH`, noting each run in the
+/// returned file, and the project in `GOOGLE_CLOUD_PROJECT`.
+fn vertex<const N: usize>(
+    setup: &Setup,
+    responses: [Response; N],
+) -> (
+    ProviderServer,
+    Vec<(&'static str, String)>,
+    std::path::PathBuf,
+) {
+    let server = ProviderServer::start(responses).unwrap();
+    let to = setup.root.path().join("pkg-vertex");
+    support::package::copy_package("vertex", &to, ORIGIN, &server.url());
+    let installed = run(setup, &["extension", "install", to.to_str().unwrap()], &[]);
+    assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
+
+    let ran = setup.root.path().join("gcloud-ran");
+    let mut paths = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gcloud")];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(paths).unwrap().into_string().unwrap();
+    let env = vec![
+        ("PATH", path),
+        ("FIBER_TEST_GCLOUD_RAN", ran.to_str().unwrap().to_owned()),
+        ("GOOGLE_CLOUD_PROJECT", "example-project".to_owned()),
+    ];
+    (server, env, ran)
+}
+
+fn borrowed<'a>(env: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    env.iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect()
+}
+
 #[test]
 fn a_gcloud_token_signs_every_call_of_a_turn_and_is_fetched_once() {
     let setup = Setup::new();
-    let server = ProviderServer::start([Response::stream(CALL), Response::stream(ANSWER)]).unwrap();
-    let to = setup.root.path().join("pkg-vertex");
-    support::package::copy_package("vertex", &to, ORIGIN, &server.url());
-    let installed = run(&setup, &["extension", "install", to.to_str().unwrap()], &[]);
-    assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
-
-    // A stand-in `gcloud` that notes each run and prints a token that
-    // expires long after the test.
-    let bin = setup.root.path().join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let ran = setup.root.path().join("gcloud-ran");
-    let gcloud = bin.join("gcloud");
-    std::fs::write(
-        &gcloud,
-        format!(
-            "#!/bin/sh\necho \"$@\" >> '{}'\nprintf '%s' '{{\"credential\": {{\"access_token\": \"vertex-test-token\", \"token_expiry\": \"2099-01-01T00:00:00Z\"}}}}'\n",
-            ran.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&gcloud, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let path = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let (server, env, ran) = vertex(&setup, [Response::stream(CALL), Response::stream(ANSWER)]);
 
     let run = run(
         &setup,
         &["ask", "--model", "vertex/gemini-3.1-flash-lite", "hi"],
-        &[("PATH", &path), ("GOOGLE_CLOUD_PROJECT", "example-project")],
+        &borrowed(&env),
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -153,6 +171,55 @@ fn a_gcloud_token_signs_every_call_of_a_turn_and_is_fetched_once() {
         );
         assert_eq!(sent.header("x-goog-api-key"), None);
     }
+}
+
+#[test]
+fn a_rejected_token_is_fiber_s_sentence_without_fiber_login() {
+    let setup = Setup::new();
+    let (server, env, _) = vertex(
+        &setup,
+        [Response::status(401, GEMINI_BAD_TOKEN).header("content-type", "application/json")],
+    );
+
+    let run = run(
+        &setup,
+        &["ask", "--model", "vertex/gemini-3.1-flash-lite", "hi"],
+        &borrowed(&env),
+    );
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "extension_exec",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    // `fiber login vertex` stores a key `credential()` never reads, so the
+    // sentence names no login (`docs/errors.md`, "The shape").
+    let error = &run.first("fiber_exited")["payload"]["error"];
+    assert_eq!(error["code"], "authentication_failed");
+    assert_eq!(
+        error["message"],
+        "vertex rejected the credential (HTTP 401)."
+    );
+    let said = error["provider"]["message"].as_str().unwrap();
+    assert!(
+        said.starts_with("Request had invalid authentication credentials."),
+        "{said}"
+    );
+    assert_eq!(server.requests().len(), 1);
 }
 
 #[test]

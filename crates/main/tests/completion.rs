@@ -94,6 +94,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
             "models",
             "extension",
             "mcp",
+            "setup",
             "approve",
             "config",
             "import",
@@ -125,6 +126,22 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     ("models", &[], &["--json", "-h", "--help"]),
     ("resume", &[], &["--credential", "--hub", "-h", "--help"]),
     ("continue", &[], &["-h", "--help"]),
+    (
+        "setup",
+        &[],
+        &[
+            "--provider",
+            "--model",
+            "--thinking",
+            "--import",
+            "--completions",
+            "--no-completions",
+            "--hub",
+            "--no-hub",
+            "-h",
+            "--help",
+        ],
+    ),
     ("approve", &[], &["--yes", "-h", "--help"]),
     ("login", &[], &["--as", "--device", "-h", "--help"]),
     ("logout", &[], &["--as", "--all", "-h", "--help"]),
@@ -262,12 +279,12 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         let group_gone = within_cleanup(
             &format!("{what}'s process group to empty"),
             GROUP_EMPTY,
-            move || group_empties(group, GROUP_EMPTY),
+            move || group_empties(group, fakes::Deadline::after(GROUP_EMPTY)),
         );
         let tag_gone = within_cleanup(
             &format!("processes matching {tag} to exit"),
             MATCHING_EXIT,
-            move || matching_exits(&tag_for_wait, MATCHING_EXIT),
+            move || matching_exits(&tag_for_wait, fakes::Deadline::after(MATCHING_EXIT)),
         );
         drop((group_dog, tag_dog));
         panic!(
@@ -280,23 +297,23 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     let group_gone = within_cleanup(
         &format!("{what}'s process group to empty"),
         GROUP_EMPTY,
-        move || group_empties(group, GROUP_EMPTY),
+        move || group_empties(group, fakes::Deadline::after(GROUP_EMPTY)),
     );
     let tag_gone = within_cleanup(
         &format!("processes matching {tag} to exit"),
         MATCHING_EXIT,
-        move || matching_exits(&tag_for_wait, MATCHING_EXIT),
+        move || matching_exits(&tag_for_wait, fakes::Deadline::after(MATCHING_EXIT)),
     );
     let stand_down = if group_gone.as_ref() == Ok(&true) && tag_gone.as_ref() == Ok(&true) {
         let group_stood_down =
             within_cleanup("the group watchdog to exit", GROUP_WATCHDOG, move || {
-                group_dog.stand_down(GROUP_WATCHDOG);
+                group_dog.stand_down(fakes::Deadline::after(GROUP_WATCHDOG));
             });
         let tag_stood_down = within_cleanup(
             "the matching watchdog to exit",
             MATCHING_WATCHDOG,
             move || {
-                tag_dog.stand_down(MATCHING_WATCHDOG);
+                tag_dog.stand_down(fakes::Deadline::after(MATCHING_WATCHDOG));
             },
         );
         Some((group_stood_down, tag_stood_down))

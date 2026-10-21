@@ -85,7 +85,7 @@ fn finish(running: Running) {
         "fiber left a process in its group"
     );
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn the_tools_command_gives_tokens_after_the_first_request() {
     let started = first_line(setup.deadline, &running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 
@@ -143,7 +143,7 @@ fn the_tools_command_gives_tokens_after_the_first_request() {
 
     server.release_one();
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the tool call sent a second request"
     );
 

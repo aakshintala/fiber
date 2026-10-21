@@ -208,7 +208,7 @@ fn hub_refresh_exits_zero_on_success_and_one_on_refusal() {
         let output = fakes::rerun_prepared(
             &format!("{name}::hub_refresh_exits_zero_on_success_and_one_on_refusal"),
             &[("FIBER_CLI_HUB_REFRESH_CHILD", case)],
-            DEADLINE,
+            Deadline::after(DEADLINE),
             |_| {},
         );
         assert_eq!(output.status.code(), Some(code), "{case}");

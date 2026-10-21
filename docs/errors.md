@@ -21,6 +21,14 @@ Every failure is `error { code, message }`: on `tool_call_completed`,
   fix: "OpenRouter rejected the API key (HTTP 401). Run `fiber login
   openrouter`." The terminal shows the message as it is. A headless caller reads
   the same advice.
+- A sentence about a provider's credential advises `fiber login <provider>`
+  only where `fiber login` can fix it: for a provider that reads the key
+  `fiber login` stores, and for one whose data declares `login`
+  (`docs/model-routing.md`, "What a provider extension declares"). A provider
+  with `credential()` and no `login`, such as Bedrock or Vertex, reads no
+  stored key, so its sentence carries no such advice. `provider.message`
+  below keeps the provider's own words, which for a failed `credential()`
+  name its remedy.
 
 A failed model call adds two optional fields:
 
@@ -32,7 +40,7 @@ A failed model call adds two optional fields:
   `sign()` failed, `message` is the first line of the extension's error and
   `status` is absent. Before it is stored, every credential value and every
   header value the credential, `credential()` or `sign()` supplied is replaced
-  with `[redacted]`. Fiber's `message` then names the provider and the function, such as "acme's credential() failed. Run `fiber login acme`.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
+  with `[redacted]`. Fiber's `message` then names the provider and the function, such as "codex's credential() failed. Run `fiber login codex`." or, for a provider `fiber login` cannot fix, "bedrock's credential() failed.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
 
 ## Where a code comes from
 
@@ -72,7 +80,7 @@ error, and that crate's tests check it.
 
 ### Before a session exists
 
-A failure before `fiber_started` has no session and no log. `fiber ask`
+A failure before `fiber_started` has no session and no session log. A signal before Fiber starts writing `fiber_started` writes one diagnostic line instead (`docs/state.md`, "What each part holds"). `fiber ask`
 still prints one `fiber_exited` line on stdout, carrying the exit
 code and `error`, and one sentence on stderr. The line has no `session_id`, so
 filtering stdout by session still gives each session's log byte for byte, and
@@ -366,7 +374,7 @@ the lines that carry it.
 | `session_has_dependents` | exit, hub command, driver command (`rewind`) | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") | — |
 | `session_held` | exit, hub command, notice, driver command (`rewind`) | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes"), or the terminal cannot attach: the session's schema is newer than this terminal reads | event |
 | `session_not_found` | exit, hub command, notice, driver command (`rewind`) | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running, or a hub command's `session` argument names none, or a `start` `continues` names a session whose worktree is gone (`docs/invocation.md`, "The hub" and "Lifecycle"), or the terminal has no session on screen | event |
-| `signal` | tool call, job | a process killed by a signal Fiber did not send | — |
+| `signal` | tool call, job, diagnostic log | a process killed by a signal Fiber did not send, or Fiber itself stopped by one before it started writing `fiber_started` | — |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") | event |
 | `skill_shadowed` | notice | two skills share a name, an MCP server's prompt is named like a skill, an extension's command is named like a skill or prompt template, an MCP server's prompt is named like an extension's command, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") | event |
 | `skills_large` | notice | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") | event |

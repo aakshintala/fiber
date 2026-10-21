@@ -57,9 +57,10 @@ A step is one round-trip to the model. Each step does this, in order:
 
 A reply with no tool call ends the step without a next one ("Ending a turn").
 
-During a turn the loop reads its inbox at two points only: at a step
-boundary (step 1 above, and the check before a turn ends), and while it waits
-for a person's `reply` to an approval. While it sends a request and streams the
+During a turn the loop reads its inbox at three points: at a step
+boundary (step 1 above, and the check before a turn ends), while it waits
+for a person's `reply` to an approval, and while it waits for its calls
+to return, for session messages only. While it sends a request and streams the
 reply, nothing reads the inbox. A `steer` is queued and `steering_queue`
 written at once, and a `steer_drop` takes effect at once, at any point in the
 turn: the thread reading the connection does both (`docs/architecture.md`,

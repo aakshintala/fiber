@@ -551,21 +551,25 @@ mod browser {
     #[track_caller]
     fn redirect(port: u16, target: &str) {
         let target = target.to_owned();
-        fakes::within("the callback to listen", BROWSER_WAIT, move || {
-            loop {
-                match TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
-                    Ok(mut stream) => {
-                        stream.set_read_timeout(Some(WAIT)).unwrap();
-                        write!(stream, "GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
-                        let mut reply = String::new();
-                        stream.read_to_string(&mut reply).unwrap();
-                        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-                        return;
+        fakes::within(
+            "the callback to listen",
+            Deadline::after(BROWSER_WAIT),
+            move || {
+                loop {
+                    match TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
+                        Ok(mut stream) => {
+                            stream.set_read_timeout(Some(WAIT)).unwrap();
+                            write!(stream, "GET {target} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+                            let mut reply = String::new();
+                            stream.read_to_string(&mut reply).unwrap();
+                            assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+                            return;
+                        }
+                        Err(_) => thread::yield_now(),
                     }
-                    Err(_) => thread::yield_now(),
                 }
-            }
-        });
+            },
+        );
     }
 
     fn state_of(url: &str) -> String {
@@ -725,14 +729,18 @@ mod browser {
         let global = fs::read_to_string(home.join("config.json")).unwrap_or_default();
         assert!(!global.contains("credential"), "{global}");
         drop(server);
-        fakes::within("the callback port to bind again", BROWSER_WAIT, move || {
-            loop {
-                if TcpListener::bind((Ipv4Addr::LOCALHOST, callback_port)).is_ok() {
-                    return;
+        fakes::within(
+            "the callback port to bind again",
+            Deadline::after(BROWSER_WAIT),
+            move || {
+                loop {
+                    if TcpListener::bind((Ipv4Addr::LOCALHOST, callback_port)).is_ok() {
+                        return;
+                    }
+                    thread::yield_now();
                 }
-                thread::yield_now();
-            }
-        });
+            },
+        );
     }
 
     /// A `LoginShow` that records each `open` through the production

@@ -4,6 +4,8 @@
 
 use serde_json::{Value, json};
 
+use std::cell::Cell;
+
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
@@ -71,6 +73,10 @@ pub(super) struct Home {
     subs: Subscriptions,
     /// The target the next home frame focuses, if a list open asked for it.
     focus_list: Option<ListFocus>,
+    /// The session list's scroll offset: the wheel over its rows moves
+    /// it, focus unmoved, and the frame clamps it to the rows past its
+    /// window.
+    list_scroll: Cell<usize>,
     /// A rejected `start`'s message, above the box until the next `start`
     /// goes out.
     blockers: Vec<String>,
@@ -219,6 +225,7 @@ impl App {
             recent_ask: None,
             subs: Subscriptions::default(),
             focus_list: None,
+            list_scroll: Cell::new(0),
             last_chip: Spot::Workspace,
             blockers: Vec::new(),
             chooser: Chooser::default(),
@@ -263,11 +270,29 @@ impl App {
     /// Whether a home modal holds the keyboard: the delete question,
     /// the import offer, or the workspace picker, the `home_key`
     /// branches after the quit question.
-    pub(super) fn home_modal(&self) -> bool {
+    pub(crate) fn home_modal(&self) -> bool {
         self.on_home()
             && self.home.as_ref().is_some_and(|home| {
                 home.questions.prompt().is_some() || home.chooser.picker().is_some()
             })
+    }
+
+    /// The session list's scroll offset: what the frame's window
+    /// starts at, after clamping it to the rows past the window.
+    pub(crate) fn home_list_scroll(&self) -> usize {
+        self.home
+            .as_ref()
+            .map(|home| home.list_scroll.get())
+            .unwrap_or(0)
+    }
+
+    /// Moves the session list's scroll offset, as the wheel over its
+    /// rows asks. The next frame clamps it to the rows past its
+    /// window, and pulls a focused row outside the window into view.
+    pub(crate) fn set_home_list_scroll(&self, start: usize) {
+        if let Some(home) = self.home.as_ref() {
+            home.list_scroll.set(start);
+        }
     }
 
     /// What home draws, or `None` unless [`App::on_home`] holds.
@@ -703,6 +728,18 @@ impl App {
                     }
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &envelope.payload));
+                    }
+                    // The `commands` an opening sends is answered while
+                    // its replay is still gated: the answer is no history,
+                    // and it fills the `/` list now.
+                    if accepted
+                        && self.gated(&envelope.session_id)
+                        && self.completion.awaits(id)
+                        && let Some(answer) =
+                            super::read!(envelope, contract::events::CommandAccepted)
+                    {
+                        self.commands_answered(&answer);
+                        return Some(Vec::new());
                     }
                 }
                 if envelope.kind == "notice" && self.gated(&envelope.session_id) {

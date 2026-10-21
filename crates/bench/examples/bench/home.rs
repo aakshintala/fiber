@@ -155,7 +155,7 @@ impl Home {
             fakes::kill_matching(&pattern).map_err(|err| format!("killing processes: {err}"))?;
         }
         if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(STOP);
+            watchdog.stand_down(fakes::Deadline::after(STOP));
         }
         if left.is_empty() {
             Ok(())

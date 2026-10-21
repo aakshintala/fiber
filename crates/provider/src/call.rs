@@ -257,6 +257,7 @@ pub struct Call {
     pub(crate) body: Vec<u8>,
     input_size: InputSize,
     provider: String,
+    login_advice: crate::LoginAdvice,
     signer: Option<Arc<dyn contract::signing::Signer>>,
     route: http::Route,
     cancel: Arc<Cancel>,
@@ -286,6 +287,7 @@ impl Call {
         Call {
             input_size: crate::images::input_size(&body, request, endpoint.text_only),
             provider: endpoint.provider.clone(),
+            login_advice: endpoint.login_advice,
             signer: endpoint.signer.clone(),
             route: http::Route::of(endpoint),
             cancel: Arc::default(),
@@ -473,6 +475,7 @@ impl ModelCall for Call {
                     &self.cancel,
                     self.input_size,
                     &self.provider,
+                    self.login_advice,
                     &secrets,
                     decoded,
                     should_retry,
@@ -531,6 +534,7 @@ impl Call {
         cancel: &Cancel,
         input_size: InputSize,
         provider: &str,
+        login_advice: crate::LoginAdvice,
         secrets: &Secrets,
         decoded: Result<Reply, (Error, Option<CallUsage>)>,
         should_retry: Option<bool>,
@@ -548,7 +552,7 @@ impl Call {
                 Ok(reply)
             }
             Err((error, _)) => Err(CallError::Failed {
-                failure: error.failure(provider, secrets),
+                failure: error.failure(provider, login_advice, secrets),
                 should_retry,
                 usage,
             }),
@@ -653,6 +657,7 @@ impl Call {
             &self.cancel,
             self.input_size,
             &self.provider,
+            self.login_advice,
             &secrets,
             decoded,
             should_retry,

@@ -9,6 +9,7 @@
 
 use crate::settings::block_limits;
 use crate::test_support;
+use fakes::Deadline;
 
 fn config(overrides: Vec<String>) -> config::Config {
     test_support::config("fiber-reviewer-limits", overrides)
@@ -309,7 +310,7 @@ fn the_reviewer_fetches_quota_for_the_lookup_label() {
     assert_eq!(reviewer.model.reference, "qp/m2");
     let _call = reviewer.provider.call(&reviewer_request());
     assert!(
-        server.await_requests(1, QUOTA_WAIT),
+        server.await_requests(1, fakes::Deadline::after(QUOTA_WAIT)),
         "the reviewer call never fetched quota"
     );
     let paths: Vec<String> = server
@@ -717,7 +718,7 @@ fn bounded_parts(
     let (home, workspace) = (pair.home.clone(), pair.workspace.clone());
     fakes::within(
         "the startup",
-        std::time::Duration::from_secs(20),
+        Deadline::after(std::time::Duration::from_secs(20)),
         move || {
             let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
             let reads = std::sync::Arc::new(crate::switch::Reads::default());

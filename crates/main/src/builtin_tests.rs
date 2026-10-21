@@ -7,6 +7,7 @@ use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::Event;
 use contract::tool::Cancel;
+use fakes::Deadline;
 use fakes::NoSkills;
 
 struct Never;
@@ -71,9 +72,11 @@ fn ran(
     arguments: serde_json::Map<String, serde_json::Value>,
 ) -> contract::tool::Output {
     let name = tool.definition().name;
-    fakes::within(&format!("the {name} call"), CALL_WITHIN, move || {
-        tool.run(&arguments, &Never, &Quiet)
-    })
+    fakes::within(
+        &format!("the {name} call"),
+        Deadline::after(CALL_WITHIN),
+        move || tool.run(&arguments, &Never, &Quiet),
+    )
 }
 
 #[test]
@@ -337,9 +340,11 @@ fn session_search_declares_reads_on_the_workspace_project_in_fiber_home() {
     arguments.insert("text".to_owned(), serde_json::Value::from("x"));
 
     // The identity check runs git, a child process.
-    let effects = fakes::within("the session_search effects", CALL_WITHIN, move || {
-        search.effects(&arguments)
-    })
+    let effects = fakes::within(
+        "the session_search effects",
+        Deadline::after(CALL_WITHIN),
+        move || search.effects(&arguments),
+    )
     .unwrap();
 
     let identity = root.path().canonicalize().unwrap();

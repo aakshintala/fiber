@@ -106,7 +106,7 @@ fn a_connect_tunnel_copies_both_ways_and_records_its_target() {
     assert!(blank.trim().is_empty(), "the reply ends in a blank line");
 
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
@@ -122,7 +122,7 @@ fn a_connect_tunnel_copies_both_ways_and_records_its_target() {
 
     drop(client);
     assert!(
-        proxy.await_closed(1, CLOSE_WITHIN),
+        proxy.await_closed(1, Deadline::after(CLOSE_WITHIN)),
         "the proxy saw the tunnel close"
     );
     echo.join().unwrap();
@@ -159,7 +159,7 @@ fn a_request_that_is_not_connect_gets_405_and_records_nothing() {
 fn await_connects_pins_its_boundary_and_deadline() {
     let proxy = ConnectProxy::start().unwrap();
     assert!(
-        !proxy.await_connects(1, Duration::from_millis(100)),
+        !proxy.await_connects(1, Deadline::after(Duration::from_millis(100))),
         "nothing arrived, so the wait ends false"
     );
     let (echo_addr, echo) = echo_once();
@@ -180,16 +180,16 @@ fn await_connects_pins_its_boundary_and_deadline() {
         assert_eq!(&heard, b"ping");
     });
     assert!(
-        proxy.await_connects(2, CONNECT_WITHIN),
+        proxy.await_connects(2, Deadline::after(CONNECT_WITHIN)),
         "both CONNECTs arrive"
     );
     assert_eq!(proxy.connects(), [first_target, second_target]);
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "a count already exceeded is met"
     );
     assert!(
-        !proxy.await_connects(3, Duration::from_millis(100)),
+        !proxy.await_connects(3, Deadline::after(Duration::from_millis(100))),
         "a count not yet met ends false"
     );
     // A count already met returns before the deadline: a `<=` for the `<`
@@ -198,7 +198,7 @@ fn await_connects_pins_its_boundary_and_deadline() {
         let (done, finished) = mpsc::channel();
         let waiting = &proxy;
         s.spawn(move || {
-            let met = waiting.await_connects(2, CONNECT_WITHIN);
+            let met = waiting.await_connects(2, Deadline::after(CONNECT_WITHIN));
             match done.send(met) {
                 Ok(()) | Err(_) => {}
             }
@@ -218,7 +218,7 @@ fn await_connects_pins_its_boundary_and_deadline() {
     drop(first);
     arrived.join().unwrap();
     assert!(
-        proxy.await_closed(2, CLOSE_WITHIN),
+        proxy.await_closed(2, Deadline::after(CLOSE_WITHIN)),
         "the proxy saw both tunnels close"
     );
     echo.join().unwrap();
@@ -229,7 +229,7 @@ fn await_connects_pins_its_boundary_and_deadline() {
 fn await_closed_pins_its_deadline() {
     let proxy = ConnectProxy::start().unwrap();
     assert!(
-        !proxy.await_closed(1, Duration::from_millis(100)),
+        !proxy.await_closed(1, Deadline::after(Duration::from_millis(100))),
         "nothing closed, so the wait ends false"
     );
     let (echo_addr, echo) = echo_once();
@@ -243,7 +243,7 @@ fn await_closed_pins_its_deadline() {
     assert_eq!(&heard, b"ping");
     drop(client);
     assert!(
-        proxy.await_closed(1, CLOSE_WITHIN),
+        proxy.await_closed(1, Deadline::after(CLOSE_WITHIN)),
         "the proxy saw the tunnel close"
     );
     // A count already met returns before the deadline: a `<=` for the `<`
@@ -252,7 +252,7 @@ fn await_closed_pins_its_deadline() {
         let (done, finished) = mpsc::channel();
         let waiting = &proxy;
         s.spawn(move || {
-            let closed = waiting.await_closed(1, CLOSE_WITHIN);
+            let closed = waiting.await_closed(1, Deadline::after(CLOSE_WITHIN));
             match done.send(closed) {
                 Ok(()) | Err(_) => {}
             }
@@ -354,7 +354,7 @@ fn coalesced_connect_and_payload_preserves_the_payload() {
     let mut blank = String::new();
     reader.read_line(&mut blank).unwrap();
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     // The coalesced ping went to the echo, which answered it. The reply
@@ -367,7 +367,7 @@ fn coalesced_connect_and_payload_preserves_the_payload() {
     assert_eq!(&heard, b"ping");
     drop(reader);
     assert!(
-        proxy.await_closed(1, CLOSE_WITHIN),
+        proxy.await_closed(1, Deadline::after(CLOSE_WITHIN)),
         "the proxy saw the tunnel close"
     );
     echo.join().unwrap();
@@ -491,7 +491,7 @@ fn a_localhost_target_tunnels_to_loopback() {
     let target = format!("localhost:{}", echo_addr.port());
     let mut client = open_tunnel_on(proxy.port(), &target);
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
@@ -503,7 +503,7 @@ fn a_localhost_target_tunnels_to_loopback() {
     assert_eq!(&heard, b"ping");
     drop(client);
     assert!(
-        proxy.await_closed(1, CLOSE_WITHIN),
+        proxy.await_closed(1, Deadline::after(CLOSE_WITHIN)),
         "the proxy saw the tunnel close"
     );
     echo.join().unwrap();
@@ -532,7 +532,11 @@ fn a_silent_handshake_records_nothing_on_the_injected_clock() {
         }
     };
     assert!(
-        clock.await_thread_parked(waiting.thread, waiting.until, CONNECT_WITHIN),
+        clock.await_thread_parked(
+            waiting.thread,
+            waiting.until,
+            Deadline::after(CONNECT_WITHIN)
+        ),
         "the handshake parks on the clock before it moves"
     );
     // Half the bound passes with no client bytes: the same reader
@@ -556,7 +560,7 @@ fn a_silent_handshake_records_nothing_on_the_injected_clock() {
         "only the announced sequence advances the clock"
     );
     assert!(
-        clock.await_thread_parked(still.thread, still.until, CONNECT_WITHIN),
+        clock.await_thread_parked(still.thread, still.until, Deadline::after(CONNECT_WITHIN)),
         "half the bound later the handshake is still parked on the silent peer"
     );
     assert!(
@@ -589,7 +593,7 @@ fn dropping_the_proxy_closes_every_open_tunnel() {
     // The first tunnel ends while the second stays open.
     drop(client_a);
     assert!(
-        proxy.await_closed(1, CLOSE_WITHIN),
+        proxy.await_closed(1, Deadline::after(CLOSE_WITHIN)),
         "the proxy saw the first tunnel close"
     );
     drop(proxy);

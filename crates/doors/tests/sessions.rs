@@ -141,7 +141,7 @@ fn message_on(
     let (to, from, text) = (to.clone(), from.clone(), text.to_owned());
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        tx.send(client.message(&to, &from, &text, &CancelToken::new()))
+        tx.send(client.message(&to, &from, None, &text, &CancelToken::new()))
             .unwrap();
     });
     rx
@@ -168,7 +168,7 @@ fn a_served_session_takes_the_message_into_its_inbox() {
     opened
         .session
         .run(Vec::new(), Arc::new(|| false), |inbox| {
-            let Delivery::Message(message) = Deadline::after(fakes::deadline::WAITS)
+            let Delivery::Message(message, ack) = Deadline::after(fakes::deadline::WAITS)
                 .recv(&inbox)
                 .expect("the message is delivered")
             else {
@@ -176,6 +176,8 @@ fn a_served_session_takes_the_message_into_its_inbox() {
             };
             assert_eq!(message.from_session_id, from);
             assert_eq!(message.text, "the parser is fixed");
+            // The sender's answer waits for the take's ack.
+            ack.0(Ok(None));
             delivered(&answered);
             Ok(())
         })
@@ -216,15 +218,17 @@ fn a_send_leaves_clients_and_the_status_count_unchanged() {
                 probed.iter().all(|line| support::kind(line) != "clients"),
                 "the send emits no clients line: {probed:?}"
             );
-            delivered(&answered);
             // The inbox holds the message; the loop is this closure, so it
-            // is taken and dropped here.
-            let Delivery::Message(_) = Deadline::after(fakes::deadline::WAITS)
+            // is taken and answered here, and only then is the sender
+            // answered.
+            let Delivery::Message(_, ack) = Deadline::after(fakes::deadline::WAITS)
                 .recv(&inbox)
                 .expect("the message is delivered")
             else {
                 panic!("a session message is delivered");
             };
+            ack.0(Ok(None));
+            delivered(&answered);
             Ok(())
         })
         .unwrap();

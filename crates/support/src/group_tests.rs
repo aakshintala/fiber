@@ -86,7 +86,7 @@ fn signal_kill_ends_a_live_group() {
     assert!(signal(pgid, Signal::KILL).is_ok(), "the kill landed");
     assert_eq!(reap(child).signal(), Some(9));
     assert!(!alive(pgid), "the reaped group probes empty");
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn signal_process_term_ends_a_plain_child() {
     let watchdog = Watchdog::group(pid);
     assert!(signal_process(pid, Signal::TERM).is_ok(), "the kill landed");
     assert_eq!(reap(child).signal(), Some(Signal::TERM.as_raw()));
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn spawn_lists_the_new_group() {
     assert_eq!(reap(child).signal(), Some(9));
     live().unlist(listing);
     assert!(!live().contains(pgid), "the unlisted group leaves the list");
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn spawn_takes_no_lock_across_fork_and_exec() {
     });
 
     // The child started while the guard was still held.
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     // The spawn waits only to list.
     assert!(
@@ -223,7 +223,7 @@ fn spawn_takes_no_lock_across_fork_and_exec() {
     assert!(signal(child.id(), Signal::KILL).is_ok(), "the kill landed");
     assert_eq!(reap(child).signal(), Some(9));
     live().unlist(listing);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn spawn_after_a_kill_is_killed_at_its_listing() {
         "the shutdown kill reached it"
     );
     live().unlist(listing);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -263,7 +263,7 @@ fn kill_every_group_kills_a_listed_live_group() {
     kill_every_group();
     assert!(!live().contains(pgid), "an empty group leaves the list");
     live().unlist(listing);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -308,7 +308,7 @@ fn kill_every_group_holds_the_lock_while_it_signals() {
         .expect("the kill ran after the lock released");
     assert_eq!(reap(child).signal(), Some(9));
     live().unlist(listing);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -328,7 +328,7 @@ fn detach_without_a_terminal_makes_the_child_a_session_leader() {
     assert_eq!(sid, leader, "the child leads its own session");
     assert!(signal(pid, Signal::KILL).is_ok(), "the kill landed");
     assert_eq!(reap(child).signal(), Some(9));
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Runs `sh -c script` detached with `controlling_tty`, and returns its
@@ -377,7 +377,7 @@ fn run_on_pty(
     });
     let (output, status) =
         Deadline::after(DEADLINE).recv_or_fail(&finished, "the pty child to end");
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
     (output, status)
 }
 
@@ -388,6 +388,32 @@ fn detach_with_a_terminal_gives_the_child_a_controlling_terminal() {
     assert!(
         output.contains("ok"),
         "the child read its controlling terminal: {output:?}"
+    );
+}
+
+#[test]
+fn detach_with_a_terminal_foregrounds_the_childs_group() {
+    // `ps` names the terminal's foreground group: the child's own, so a
+    // background read never stops it with `SIGTTIN` (the macOS-only hang
+    // of the install script's `/dev/tty` questions).
+    let (output, status) = run_on_pty("echo $$; ps -o tpgid= -p $$", true, true);
+    assert!(status.success(), "the pid and foreground group printed");
+    let mut lines = output.lines();
+    let pid: i32 = lines
+        .next()
+        .unwrap_or("")
+        .trim()
+        .parse()
+        .expect("the child printed its pid");
+    let foreground: i32 = lines
+        .next()
+        .unwrap_or("")
+        .trim()
+        .parse()
+        .expect("ps named the foreground group");
+    assert_eq!(
+        foreground, pid,
+        "the child leads the terminal's foreground group: {output:?}"
     );
 }
 

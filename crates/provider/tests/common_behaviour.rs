@@ -516,7 +516,7 @@ fn failures(
     protocol: &'static str,
     calls: Vec<Box<dyn ModelCall>>,
 ) -> Vec<(contract::shapes::Failure, Option<bool>)> {
-    fakes::within("the calls to fail", DEADLINE, move || {
+    fakes::within("the calls to fail", Deadline::after(DEADLINE), move || {
         calls
             .into_iter()
             .map(|call| {
@@ -622,7 +622,7 @@ fn cancelling_from_another_thread_ends_a_blocked_read_and_carries_what_it_saw() 
         );
         assert!(!usage.input_size.media, "{}", wire.protocol.name);
         assert!(
-            server.await_closed(1, DEADLINE),
+            server.await_closed(1, Deadline::after(DEADLINE)),
             "{}: waited for the server to see the client close",
             wire.protocol.name
         );
@@ -972,7 +972,11 @@ fn a_call_cancelled_before_its_generation_carries_an_unnamed_usage() {
         let (done, finished) = mpsc::channel();
         let runner = Arc::clone(&call);
         thread::spawn(move || done.send(runner.run(&mut |_| {})).unwrap());
-        assert!(server.await_partial(1, DEADLINE), "{}", wire.protocol.name);
+        assert!(
+            server.await_partial(1, Deadline::after(DEADLINE)),
+            "{}",
+            wire.protocol.name
+        );
         call.cancel();
         let result = Deadline::after(DEADLINE)
             .recv(&finished)
