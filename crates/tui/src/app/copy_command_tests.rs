@@ -231,3 +231,20 @@ fn a_key_a_click_or_a_lost_connection_drops_a_copy_waiting_on_a_pass() {
     // Only the connection's own notice shows.
     assert_eq!(app.notice(), Some("Connection lost."));
 }
+
+#[test]
+fn a_session_attaching_drops_a_copy_waiting_on_a_pass() {
+    // On home, with an earlier session's pass still running.
+    let mut app = connected();
+    app.reopen_pending(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    assert_eq!(enter(&mut app, "/copy"), Effect::None);
+    app.attach(contract::SessionId(
+        super::commands_testkit::SESSION.to_owned(),
+    ));
+    turn_starts(&mut app);
+    message(&mut app, "a_1", &["the new session's reply"]);
+    app.passes.clear();
+    assert_eq!(app.take_owed_copy(), None);
+    assert!(!app.copied());
+    assert_eq!(app.notice(), None);
+}

@@ -362,6 +362,8 @@ impl App {
     /// file is one session's stream.
     pub(crate) fn attach(&mut self, session: SessionId) {
         self.end_overlay();
+        // A `/copy` waiting on a pass was for the screen before this one.
+        self.copy_owed = false;
         self.switch_session(&session);
         // Another session's stale rows end with the attachment; the open
         // session's own notice stands until `stream_reopened` ends it.
