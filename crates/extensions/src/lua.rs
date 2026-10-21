@@ -49,14 +49,14 @@ pub(super) const CHECK_EVERY: u32 = 1000;
 
 /// The Lua half of the host's globals: `coroutine.wrap` over the armed
 /// `coroutine.create`, `require`, `fiber.command`, `fiber.provider`,
-/// `fiber.hook`, `fiber.tool` and `fiber.search_backend`, which fill the tables the prelude returns. Lua's own `wrap`
+/// `fiber.hook`, `fiber.watch`, `fiber.tool` and `fiber.search_backend`, which fill the tables the prelude returns. Lua's own `wrap`
 /// is a separate C function that would make an unarmed coroutine.
 // A callback's timeout is in milliseconds (docs/extensions.md, "How an
 // extension runs"). A hook's phase and `on_failure` are docs/extensions.md,
 // "When several hooks share a point" and "When a hook fails".
 pub(super) const PRELUDE: &str = r#"
 local create, load_module, rethrow_panic, loading = ...
-local commands, providers, hooks, problems, violations = {}, {}, {}, {}, {}
+local commands, providers, hooks, watchers, problems, violations = {}, {}, {}, {}, {}, {}
 local registered_files = {}
 
 local function refuse_registration(message, level)
@@ -180,6 +180,40 @@ local function hook(point, spec)
   list[#list + 1] = { phase = phase, on_failure = spec.on_failure, timeout = spec.timeout, run = spec.run }
 end
 
+-- A watcher that does not register leaves a problem for Fiber's notice, and the entry
+-- script goes on. The id in the problem is the watcher's place among the
+-- extension's registered watchers, from 0.
+local function watch(kinds, spec)
+  init_registration('watch')
+  local id = #watchers
+  local function refuse(why)
+    problems[#problems + 1] = "`watcher:" .. id .. "` watcher not registered: " .. why
+  end
+  if type(kinds) ~= "table" then
+    return refuse("`kinds` must be a list of event kinds")
+  end
+  local wanted = {}
+  for i = 1, #kinds do
+    local kind = kinds[i]
+    if type(kind) ~= "string" or kind == "" then
+      return refuse("`kinds` must be a list of event kinds")
+    end
+    wanted[#wanted + 1] = kind
+  end
+  if #wanted == 0 then
+    return refuse("`kinds` must be a list of event kinds")
+  end
+  if type(spec) ~= "table" then
+    return refuse("it takes a table of `timeout` and `run`")
+  end
+  if spec.timeout == nil then return refuse("missing `timeout`") end
+  if math.type(spec.timeout) ~= "integer" or spec.timeout <= 0 then
+    return refuse("`timeout` must be a whole number of milliseconds above 0")
+  end
+  if type(spec.run) ~= "function" then return refuse("`run` must be a function") end
+  watchers[#watchers + 1] = { kinds = wanted, timeout = spec.timeout, run = spec.run }
+end
+
 fiber = {
   command = function(name, spec)
     init_registration('command')
@@ -237,9 +271,10 @@ fiber = {
     providers[name] = registered
   end,
   hook = hook,
+  watch = watch,
 }
 
-return commands, providers, hooks, problems, violations
+return commands, providers, hooks, watchers, problems, violations
 "#;
 
 /// A Lua extension in a session. Creating one runs no Lua: the VM and its
@@ -609,6 +644,111 @@ impl LuaExtension {
         self.registered(|timeouts| timeouts.hooks.clone())
     }
 
+    /// Every watcher the entry script registered, and why each one it
+    /// tried and could not register was refused. Starts the extension.
+    pub(crate) fn watchers(&self) -> Result<DeclaredWatchers, Error> {
+        self.registered(|timeouts| timeouts.watchers.clone())
+    }
+
+    /// Queues a watcher delivery as `Target::Watcher`, in the ordered
+    /// stream behind whatever runs or waits. Refused while the extension
+    /// is not running: nothing is queued, so the cursor must not advance
+    /// for it.
+    /// Pushes the watcher `index` for a session-end redelivery. A `None`
+    /// push means the hub already stopped, which the drain answers as
+    /// `Stopped`. Mid-session offers ignore the id and ask time.
+    pub(crate) fn push_watcher(&self, index: usize, arg: Value) -> Option<(u64, Instant)> {
+        let mut shared = self.hub.lock();
+        if !matches!(shared.phase, Phase::Ready(_)) {
+            return None;
+        }
+        let asked = self.hub.clock().now();
+        let id = shared.push(Target::Watcher { index }, arg, asked);
+        drop(shared);
+        self.hub.notify();
+        Some((id, asked))
+    }
+
+    /// Runs the watcher `index` for the session-end drain and waits for
+    /// its end within its declared timeout: the drain's per-line wait.
+    /// The failure comes back instead of a notice, so the drain's caller
+    /// can print it under `fiber_exited` (`docs/extensions.md`, "When a
+    /// session ends"). A push the stop refused answers `Stopped`, which
+    /// ends the whole drain, and so does a wait the stop wakes.
+    pub(crate) fn drain_watcher(&self, index: usize, arg: Value) -> Result<(), Error> {
+        // The keep and the push join under one lock hold: a live delivery
+        // finishing between them would otherwise be retained under its own
+        // id with no waiter to collect it, losing its notice.
+        let pushed = {
+            let mut shared = self.hub.lock();
+            if !matches!(shared.phase, Phase::Ready(_)) {
+                None
+            } else {
+                let asked = self.hub.clock().now();
+                let id = shared.push(Target::Watcher { index }, arg, asked);
+                shared.keep_watcher_done = Some(id);
+                drop(shared);
+                self.hub.notify();
+                Some((id, asked))
+            }
+        };
+        let result = match pushed {
+            None => Err(errors::stopped(&self.name)),
+            Some((id, asked)) => {
+                let target = Target::Watcher { index };
+                let mut shared = self.hub.lock();
+                loop {
+                    let now = self.hub.clock().now();
+                    match shared.judge(&self.name, id, &target, asked, now) {
+                        (Next::Return(result), unsent) => {
+                            self.hub.notify();
+                            drop(shared);
+                            drop(unsent);
+                            break result.map(|_| ());
+                        }
+                        (Next::Sleep(until), unsent) => {
+                            drop(unsent);
+                            shared = self.hub.wait(shared, until);
+                        }
+                    }
+                }
+            }
+        };
+        self.hub.lock().keep_watcher_done = None;
+        result
+    }
+
+    /// Waits until none of this extension's watcher deliveries is queued
+    /// or running: the drain's pre-replay wait, so a durable delivery the
+    /// live offer already covered has run before the drain replays past
+    /// it (see `Hub::wait_for_watchers_idle`).
+    pub(crate) fn wait_for_watchers_idle(&self) {
+        self.hub.wait_for_watchers_idle();
+    }
+
+    /// Fires `hook` once when the drain's pre-replay wait parks with a
+    /// watcher delivery still queued or running: the test's proof the wait
+    /// engaged before it releases the parked delivery.
+    #[cfg(test)]
+    pub(crate) fn pause_at_drain_wait(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        self.hub.pause_at_windows(Arc::new(move |_, window| {
+            if matches!(window, hub::Window::DrainWait) {
+                hook();
+            }
+        }));
+    }
+
+    /// Whether the watcher has a delivery queued or running: the busy bit
+    /// the thread sets on start and clears on finish, or a queued job the
+    /// thread has not started. An ephemeral offer skips while this holds.
+    pub(crate) fn is_watcher_busy(&self, index: usize) -> bool {
+        let shared = self.hub.lock();
+        shared.watcher_busy.contains(&index)
+            || shared.queue.iter().any(
+                |job| matches!(&job.target, Target::Watcher { index: queued } if *queued == index),
+            )
+    }
+
     /// Runs the hook `index` registered at `point`, in registration order
     /// from 0, passing `arg`, and returns what its `run` returned as JSON.
     #[cfg(test)]
@@ -900,6 +1040,11 @@ pub(crate) enum Target {
         /// Its place among the hooks registered there, from 0.
         index: usize,
     },
+    /// A watcher `fiber.watch` registered.
+    Watcher {
+        /// Its place among the extension's watchers, from 0.
+        index: usize,
+    },
     /// A timer `host.after` or `host.every` set, firing on the hub's
     /// clock in the gaps of the session's stream.
     Timer {
@@ -956,7 +1101,7 @@ pub(crate) fn http_observation(hub: &Hub, target: &Target) -> Option<host::HttpO
     })
 }
 /// The callback's name as an error names it: a command's name,
-/// `<provider>.<function>`, a hook's point, a tool's name, a search
+/// `<provider>.<function>`, a hook's point, `watcher:<index>`, a tool's name, a search
 /// backend's name, or
 /// `<tool>.effects`.
 impl std::fmt::Display for Target {
@@ -965,6 +1110,7 @@ impl std::fmt::Display for Target {
             Self::Command(name) => f.write_str(name),
             Self::Provider { name, function, .. } => write!(f, "{name}.{function}"),
             Self::Hook { point, .. } => f.write_str(point),
+            Self::Watcher { index } => write!(f, "watcher:{index}"),
             Self::Timer { id } => write!(f, "timer {id}"),
             Self::Tool(name) => f.write_str(name),
             Self::Search(name) => f.write_str(name),
@@ -1001,7 +1147,7 @@ pub(crate) use host_calls::{
 };
 pub(crate) use hub::Hub;
 use hub::{CallbackTimeouts, Gate, Next, Phase, Shared};
-pub(crate) use hub::{DeclaredHooks, HookPhase};
+pub(crate) use hub::{DeclaredHooks, DeclaredWatchers, HookPhase};
 #[cfg(test)]
 pub(crate) use schedule::fail_next_spawn_for;
 pub(crate) use tool::{DeclaredTool, effects_from, urls_from};

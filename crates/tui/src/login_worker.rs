@@ -66,6 +66,10 @@ pub(crate) enum LoginStep {
     },
     /// The login ended: what `fiber login` stored.
     Done(Result<crate::configure::Stored, crate::configure::ConfigureError>),
+    /// The gaps read ended: the provider's presence-gap placeholders
+    /// after a successful `Done`, each with its declared environment
+    /// variable. Posted only when `Done` succeeded.
+    Host(Result<Vec<crate::configure::HostGap>, crate::configure::ConfigureError>),
     /// The reviewer read ended: the provider's models with the saved
     /// pick preselected, or why they could not be read. Posted after a
     /// successful `Done`, or alone for a reviewer-only job.
@@ -149,11 +153,17 @@ impl Drop for LoginWorker {
 /// Starts `start`'s job: a browser login's `browser_login` returns at
 /// once and does no I/O, so it runs here, and `run` blocks on a
 /// `tui-login` thread whose end is posted back. A successful browser
-/// credential posts its `Done` before the same thread reads the
-/// reviewer choices and posts them; a failed one posts only its `Done`.
-/// A reviewer-only job reads the choices with no credential store. A
-/// spawn failure is dropped: the view stays waiting and Esc still
-/// cancels.
+/// credential posts its `Done`, then its presence gaps. Gaps to ask
+/// post alone: the host save's own reviewer job reads the reviewer
+/// after the save, since a read now would list the models before the
+/// host exists. No gaps, or a gaps read that failed, posts the reviewer
+/// read as today; a failed gaps read posts its error between them and
+/// forwards it as the reviewer error, so the stored end names the failure
+/// without a reviewer read that could complete the login. A
+/// failed login posts only its `Done`. A reviewer-only job always reads
+/// both: after a host save the reviewer must follow even when a masked
+/// gap still reads. A spawn failure is dropped: the view stays waiting
+/// and Esc still cancels.
 pub(crate) fn start(start: LoginStart, clock: Arc<dyn Clock>, out: Sender<Input>) -> LoginWorker {
     let LoginStart {
         ticket,
@@ -191,19 +201,44 @@ fn start_browser(
                 step: LoginStep::Done(result),
             }));
             if stored {
-                let choices = seam.reviewer_models(&name, clock);
-                drop(out.send(Input::Login {
-                    ticket,
-                    step: LoginStep::Reviewer(choices),
-                }));
+                match seam.gaps(&name) {
+                    Ok(gaps) => {
+                        let read_reviewer = gaps.is_empty();
+                        drop(out.send(Input::Login {
+                            ticket,
+                            step: LoginStep::Host(Ok(gaps)),
+                        }));
+                        if read_reviewer {
+                            let choices = seam.reviewer_models(&name, clock);
+                            drop(out.send(Input::Login {
+                                ticket,
+                                step: LoginStep::Reviewer(choices),
+                            }));
+                        }
+                    }
+                    Err(error) => {
+                        drop(out.send(Input::Login {
+                            ticket,
+                            step: LoginStep::Host(Err(error.clone())),
+                        }));
+                        // The gaps failure is the reviewer result: a
+                        // reviewer success must never complete the login
+                        // while the host error is ignored. The stored end
+                        // keeps the credential and names the failure.
+                        drop(out.send(Input::Login {
+                            ticket,
+                            step: LoginStep::Reviewer(Err(error)),
+                        }));
+                    }
+                }
             }
         }
     }));
     worker
 }
 
-/// Starts only the reviewer read for `ticket`: no credential store, no
-/// cancel handle, so dismissal drops nothing.
+/// Starts only the gaps and reviewer reads for `ticket`: no credential
+/// store, no cancel handle, so dismissal drops nothing.
 fn start_reviewer(
     ticket: LoginTicket,
     name: String,
@@ -213,6 +248,11 @@ fn start_reviewer(
 ) -> LoginWorker {
     let worker = LoginWorker::reviewer(ticket);
     drop(crate::sources::builder("tui-login").spawn(move || {
+        let gaps = seam.gaps(&name);
+        drop(out.send(Input::Login {
+            ticket,
+            step: LoginStep::Host(gaps),
+        }));
         let choices = seam.reviewer_models(&name, clock);
         drop(out.send(Input::Login {
             ticket,

@@ -371,3 +371,57 @@ fn stop_for_shutdown_leaves_a_stopped_hub_unchanged() {
         "the queued call stays uncancelled"
     );
 }
+
+/// `finish_watcher` clears the abandon watch only for its own id: a finish
+/// with another id leaves the watch, its own clears it. Flipping `==` to
+/// `!=` would clear on the other id and keep on its own.
+#[test]
+fn finish_watcher_clears_the_abandon_watch_only_for_its_own_id() {
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    {
+        let mut shared = hub.lock();
+        shared.abandon = Some(AbandonWatch {
+            id: 7,
+            target: Target::Watcher { index: 0 },
+            deadline: None,
+        });
+    }
+    hub.finish_watcher("ext", 8, 0, Ok(serde_json::Value::Null));
+    assert!(
+        hub.lock()
+            .abandon
+            .as_ref()
+            .is_some_and(|watch| watch.id == 7),
+        "another watcher's finish leaves the watch"
+    );
+    hub.finish_watcher("ext", 7, 0, Ok(serde_json::Value::Null));
+    assert!(
+        hub.lock().abandon.is_none(),
+        "its own finish clears the watch"
+    );
+}
+
+/// `finish_watcher` keeps only the drain's own result for collection: a
+/// live delivery finishing while the drain keeps its call is forgotten
+/// instead of retained, so its failure still takes the notice path.
+/// Flipping `==` to `!=` would retain the live call and drop the drain's.
+#[test]
+fn finish_watcher_keeps_only_the_drains_result() {
+    let hub = Hub::new(fakes::clock::FakeClock::new());
+    {
+        let mut shared = hub.lock();
+        shared.keep_watcher_done = Some(7);
+        shared.calls.insert(7, Progress::Queued);
+        shared.calls.insert(8, Progress::Queued);
+    }
+    hub.finish_watcher("ext", 8, 0, Err(stopped("ext")));
+    assert!(
+        !hub.lock().calls.contains_key(&8),
+        "the live call is forgotten while the drain keeps its own"
+    );
+    hub.finish_watcher("ext", 7, 0, Err(stopped("ext")));
+    assert!(
+        matches!(hub.lock().calls.get(&7), Some(Progress::Done(_))),
+        "the drain's own call is kept for collection"
+    );
+}

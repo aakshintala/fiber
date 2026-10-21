@@ -693,7 +693,27 @@ model and the setting; for a value that is not a host it says so, without
 repeating the value. The model can still be named ("Naming a model"): a
 session that chooses it exits with `model_unconfigured`, and
 `fiber config set model` accepts it with that notice
-(`docs/configuration.md`, "When Fiber writes").
+(`docs/configuration.md`, "When Fiber writes"). The notice names three
+fixes, login first: run `fiber login <provider>`, which asks for the host;
+set the named setting in `config/<extension>.json` in Fiber home, for every
+project at once; or, when it names an environment variable, export that
+variable in the shell profile and run `fiber hub refresh`, since the hub
+reads its environment when it starts.
+
+`fiber login <provider>` asks for each missing value after the credential
+is stored and before the reviewer, saving each answer globally. When a
+project-layer empty hides a saved answer, the login names that file: the
+answer holds for every other project and session.
+
+#### What the login asks
+
+One question per missing value, in declaration order: the setting, with
+its declared environment variable in parentheses when one exists. An
+answer that is not a host is refused and asked again; an empty line is
+refused the same way. End of input ends the questions with nothing saved
+for the remaining values. Without a terminal the login prints one line
+per missing value instead, naming the setting with the config file that
+fills it, and the declared variable when one exists.
 
 ### openai-completions facts
 

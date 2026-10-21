@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/app/config_views_tests.rs
+expression: painted_text(&restored)
+---
+  Settings  /settings                                                Esc returns
+ handoff.tokens  400000  default
+ tui.theme       "dark"  global
+
+
+
+
+
+
+
+
+⋮
+⋮
+⋮
+
+
+
+
+
+ Applies now.
+ ↑↓ move · Enter edit · Ctrl+G open the file · Esc close
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ ›
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

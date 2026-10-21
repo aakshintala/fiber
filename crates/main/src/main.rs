@@ -10,6 +10,7 @@ mod clock;
 mod completion;
 mod configure;
 mod connect;
+mod continue_session;
 mod credential;
 mod delegates;
 mod handoff;
@@ -681,6 +682,12 @@ fn write_state_at_exit(
     Ok(())
 }
 
+/// The process exit after the session-end drain: the shutdown code when
+/// a signal stopped the drain (Ruling 19), else the `fiber_exited` code.
+fn drain_exit_code(exited: i32, cancel: &Arc<r#loop::TurnCancel>) -> i32 {
+    cancel.shutdown_code().unwrap_or(exited)
+}
+
 /// Runs one turn of the session `session` writes to `log`, once its log,
 /// model and prompt are known, shared by new and resumed sessions: sends
 /// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
@@ -706,6 +713,11 @@ fn run_turn(
     current: &session_extensions::Current,
     run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<Option<i32>, Failure>,
 ) -> i32 {
+    // The session's watchers, subscribed for the whole turn: every appended
+    // line fans out to them, until the shutdown drops the offer. Dropped
+    // before `fiber_exited` below, so the session-end drain owns the exit
+    // line.
+    let _watchers = session_extensions::subscribe(log, &current.get(), &cancel);
     let door = Arc::clone(&cancel);
     let turn = Arc::clone(&cancel);
     let mut committed: Option<i32> = None;
@@ -742,6 +754,10 @@ fn run_turn(
     session.quiesce();
     let written = write_state_at_exit(log, dir, &current.get());
     let ran = ran.and(written.map_err(|error| failed(error.code(), error)));
+    // The exit line belongs to the session-end drain, not the live fan-out:
+    // dropping the subscription keeps `fiber_exited` unoffered, so the drain
+    // replays it and collects its failures for stderr below.
+    drop(_watchers);
     // A `fiber_exited` that cannot be written leaves a log that reads as a
     // process that died, which it then is.
     match r#loop::fiber_exited(log, dir, ran, one_turn, cancel.shutdown_code()) {
@@ -753,10 +769,28 @@ fn run_turn(
             if one_turn && let Some(error) = &exited.error {
                 writeln!(io::stderr(), "fiber: {}", error.message).unwrap_or(());
             }
+            // The session-end watcher drain: every watcher's `(cursor, end]`
+            // range runs now, within its own timeout, and each failure is
+            // printed under `fiber_exited` — never as a notice, since the
+            // log is already closed to new lines (`docs/extensions.md`,
+            // "When a session ends").
+            for failure in current.get().drain_watchers(log, dir) {
+                writeln!(
+                    io::stderr(),
+                    "fiber: {} {} failed at session end: {}",
+                    failure.extension,
+                    failure.callback,
+                    failure.message
+                )
+                .unwrap_or(());
+            }
             // The process's exit sample, after its successful exit line:
             // whatever the exit code, a failed read writes nothing.
             diag.peak_memory();
-            exited.code
+            // A signal during the drain wins over the pre-signal line
+            // (Ruling 19): `fiber_exited` already holds the pre-signal
+            // code, but the process exits with the signal code.
+            drain_exit_code(exited.code, &cancel)
         }
         Err(_) => 1,
     }

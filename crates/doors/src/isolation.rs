@@ -390,6 +390,20 @@ impl Isolation {
         {
             return;
         }
+        // A session that continues in this worktree keeps it after the
+        // new session exits: its `session_started` records the same
+        // worktree path (`docs/invocation.md`, "Isolation"). The
+        // session's own row always matches, so it is excluded. While
+        // the new session lives, the exclusive take above already keeps
+        // the worktree; this covers the new session exiting first.
+        if first
+            .iter()
+            .filter(|user| user.id != self.session)
+            .filter_map(|user| user.worktree.as_deref())
+            .any(|recorded| same_worktree(recorded, &self.created.path))
+        {
+            return;
+        }
         #[cfg(test)]
         if let Some(pause) = &self.pause {
             pause();
@@ -492,6 +506,21 @@ fn users(home: &Path, canonical: &Path) -> Vec<log::Started> {
                 .is_some_and(|work| Path::new(work).starts_with(canonical))
         })
         .collect()
+}
+
+/// Whether the worktree path a session's `session_started` records names
+/// the created worktree: the exact spelling first, else both sides
+/// canonicalized, so an alias spelling of the same directory keeps. Any
+/// canonicalization failure is not a match.
+fn same_worktree(recorded: &str, created: &Path) -> bool {
+    recorded == created.to_string_lossy()
+        || match (
+            std::fs::canonicalize(recorded),
+            std::fs::canonicalize(created),
+        ) {
+            (Ok(recorded), Ok(created)) => recorded == created,
+            _ => false,
+        }
 }
 
 #[cfg(test)]

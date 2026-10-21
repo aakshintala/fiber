@@ -1126,3 +1126,100 @@ fn cut_joined_with_no_tail_adds_no_trailing_newline() {
         "head\n[5 bytes cut.]"
     );
 }
+
+/// Records each offered `(&Event, &Envelope)` pair's kind and seq.
+fn record(tx: &mpsc::Sender<(String, Option<u64>)>) -> Arc<super::Subscriber> {
+    let tx = tx.clone();
+    Arc::new(move |event: &Event, line: &Envelope| {
+        let _ignored = tx.send((event.kind().to_owned(), line.seq.map(|seq| seq.0)));
+    })
+}
+
+#[test]
+fn a_subscriber_is_offered_every_durable_append_with_its_seq() {
+    let (_sessions, log) = offer_log();
+    let (tx, rx) = mpsc::channel();
+    let _guard = log.subscribe(record(&tx));
+    let first = log
+        .append(&Event::StepStarted(Empty {}), None, None)
+        .unwrap();
+    let second = log
+        .append(&Event::StepStarted(Empty {}), None, None)
+        .unwrap();
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        ("step_started".to_owned(), first.seq.map(|seq| seq.0))
+    );
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        ("step_started".to_owned(), second.seq.map(|seq| seq.0))
+    );
+    assert!(first.seq.is_some() && second.seq.is_some());
+    assert_ne!(first.seq, second.seq);
+}
+
+#[test]
+fn a_subscriber_is_offered_ephemeral_appends_with_no_seq() {
+    let (_sessions, log) = offer_log();
+    let (tx, rx) = mpsc::channel();
+    let _guard = log.subscribe(record(&tx));
+    log.append(
+        &Event::Notice(Notice {
+            code: ErrorCode::ExtensionFailed,
+            message: "boom".to_owned(),
+            extension: None,
+        }),
+        None,
+        None,
+    )
+    .unwrap();
+    // An ephemeral offer carries no seq: the cursor has nothing to advance to.
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap(),
+        ("notice".to_owned(), None)
+    );
+}
+
+#[test]
+fn every_live_subscriber_is_offered_each_append() {
+    let (_sessions, log) = offer_log();
+    let (first_tx, first_rx) = mpsc::channel();
+    let (second_tx, second_rx) = mpsc::channel();
+    let _first = log.subscribe(record(&first_tx));
+    let _second = log.subscribe(record(&second_tx));
+    log.append(&Event::StepStarted(Empty {}), None, None)
+        .unwrap();
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&first_rx).unwrap().0,
+        "step_started".to_owned()
+    );
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&second_rx).unwrap().0,
+        "step_started".to_owned()
+    );
+}
+
+#[test]
+fn a_dropped_subscription_gets_no_further_offer() {
+    let (_sessions, log) = offer_log();
+    let (tx, rx) = mpsc::channel();
+    let guard = log.subscribe(record(&tx));
+    log.append(&Event::StepStarted(Empty {}), None, None)
+        .unwrap();
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&rx).unwrap().0,
+        "step_started".to_owned()
+    );
+    drop(guard);
+    // The drop unregisters once this append prunes the dead entry: the
+    // other subscriber still gets its offer, the dropped one gets nothing.
+    let (live_tx, live_rx) = mpsc::channel();
+    let _live = log.subscribe(record(&live_tx));
+    log.append(&Event::StepStarted(Empty {}), None, None)
+        .unwrap();
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&live_rx).unwrap().0,
+        "step_started".to_owned()
+    );
+    assert!(rx.try_recv().is_err());
+}
