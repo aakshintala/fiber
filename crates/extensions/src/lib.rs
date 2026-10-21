@@ -120,7 +120,7 @@ pub use repository::{
     pending, repository_servers,
 };
 pub use resolve::{nightly_parts, version};
-pub use startable::{context_window, protocol_refusal, takes, thinking_refusal};
+pub use startable::{context_window, takes, thinking_refusal};
 pub use update::{StagedUpdate, Target, stage_update};
 
 /// The extension API's major version this Fiber speaks
