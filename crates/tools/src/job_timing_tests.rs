@@ -337,7 +337,7 @@ fn stop_and_end(
     marker: &str,
 ) -> contract::events::JobCompleted {
     assert!(jobs.stop(id), "the stop sent");
-    match jobs.ended(STEP) {
+    match jobs.ended(fakes::Deadline::after(STEP)) {
         Some(ended) => ended,
         None => {
             let live = fakes::matching(marker).unwrap_or_default();
@@ -411,7 +411,7 @@ fn run_in_background_times_adoption_setup_only() {
     assert_eq!(job.tool.as_deref(), Some("shell"));
     // The acknowledged child is held at the release fifo until its
     // group is watched, so every path reaps it; releasing lets it exec.
-    let child = ready.wait(STEP);
+    let child = ready.wait(fakes::Deadline::after(STEP));
     assert!(!child.is_empty(), "the job's shell acknowledged its start");
     // The marker cannot match an exec'd child on Linux, so the group is
     // watched by id: the pid is the group id after `setsid`.
@@ -477,7 +477,7 @@ fn tty_times_the_start_before_the_first_output_wait() {
     assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fixture.probe.calls(), 1);
     assert_none(&fixture.records, "the start");
-    let child = ready.wait(STEP);
+    let child = ready.wait(fakes::Deadline::after(STEP));
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
     release_child(&release_path);
@@ -510,7 +510,7 @@ fn monitor_times_its_start() {
     assert_eq!((record.op, record.ms), (Op::JobsStart, 5));
     assert_eq!(record.tool, None);
     assert_eq!(record.jobs, 1);
-    let child = ready.wait(STEP);
+    let child = ready.wait(fakes::Deadline::after(STEP));
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
     release_child(&release_path);
@@ -561,7 +561,7 @@ fn a_foreground_call_moved_after_thirty_seconds_times_the_move_only() {
         (Op::JobsStart, 5),
         "the foreground's 30 seconds are never counted"
     );
-    let child = ready.wait(STEP);
+    let child = ready.wait(fakes::Deadline::after(STEP));
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
     release_child(&release_path);
@@ -589,7 +589,9 @@ fn the_background_command_moves_a_call_with_one_start() {
     let (_ids, output_rx) = run_async(shell, arguments, CancelToken::new());
     let deadline = Deadline::after(STEP);
     assert!(
-        fixture.clock.await_parked(fixture.origin + THIRTY, STEP),
+        fixture
+            .clock
+            .await_parked(fixture.origin + THIRTY, fakes::Deadline::after(STEP)),
         "the run did not park at 30 seconds"
     );
     assert_eq!(holding.background(), 1);
@@ -605,7 +607,7 @@ fn the_background_command_moves_a_call_with_one_start() {
     let record = closed(&fixture.records, deadline);
     assert_eq!((record.op, record.ms), (Op::JobsStart, 5));
     let job = started(&output);
-    let child = ready.wait(STEP);
+    let child = ready.wait(fakes::Deadline::after(STEP));
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
     release_child(&release_path);
@@ -860,7 +862,7 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
     // drive's park proves it waits in `Running`, past any fork, so
     // cancelling now stops it before any move. Each wait below keeps its
     // own wall-clock budget, so a slow spawn does not eat the result wait.
-    let child = ready.wait(STEP);
+    let child = ready.wait(fakes::Deadline::after(STEP));
     assert!(!child.is_empty(), "the child acknowledged its start");
     // `exec` drops the marker from the command line, so the group is
     // watched by id: the pid is the group id after `setsid`.
@@ -868,9 +870,11 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
     release_child(&release_path);
     let call_thread = Deadline::after(STEP).recv_or_fail(&id_rx, "the drive thread");
     assert!(
-        fixture
-            .clock
-            .await_thread_parked(call_thread, Some(fixture.origin + THIRTY), STEP),
+        fixture.clock.await_thread_parked(
+            call_thread,
+            Some(fixture.origin + THIRTY),
+            fakes::Deadline::after(STEP)
+        ),
         "the drive parked in Running"
     );
     cancel.cancel();
@@ -913,12 +917,14 @@ fn untimed_and_timed_background_receipts_agree() {
         );
         let output = Deadline::after(STEP).recv_or_fail(&output_rx, "the receipt");
         let job = started(&output);
-        let child = ready.wait(STEP);
+        let child = ready.wait(fakes::Deadline::after(STEP));
         assert!(!child.is_empty(), "the job acknowledged its start");
         let _group = Watchdog::group(child[0]);
         release_child(&release_path);
         assert!(jobs.stop(&job.job_id));
-        let ended = jobs.ended(STEP).expect("the stopped job to end");
+        let ended = jobs
+            .ended(fakes::Deadline::after(STEP))
+            .expect("the stopped job to end");
         // The receipt names the run's own directory: washed before compare.
         let washed_text = fakes::text_of(&output).replace(&washed, "DIR");
         (washed_text, job, ended.status, probe.calls())

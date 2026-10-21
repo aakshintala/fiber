@@ -108,7 +108,7 @@ fn run(exe: &Path, args: &[&str]) -> Output {
         .recv(&finished)
         .expect("the paging jig finished: the paging example")
         .unwrap();
-    watchdog.stand_down(Duration::from_secs(5));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     output
 }
 

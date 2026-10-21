@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, within};
+use fakes::{CancelToken, Deadline, within};
 
 use super::{Parked, park_until};
 use support::clock::Parker;
@@ -38,7 +38,7 @@ fn a_bump_between_check_and_park_returns_at_once() {
     // landing between the state read and the wait below would. The wait
     // must see the new generation and return at once instead of blocking
     // with no deadline; the next check then ends the wait.
-    let ended = within("the wait ends", DEADLINE, {
+    let ended = within("the wait ends", Deadline::after(DEADLINE), {
         let parker = Arc::clone(&parker);
         let clock = Arc::clone(&clock);
         move || {

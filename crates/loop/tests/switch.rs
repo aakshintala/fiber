@@ -923,7 +923,10 @@ fn an_idle_deadline_in_an_approval_wait_writes_no_model_changed() {
     let start = clock.now();
     // Wait for the approval wait to park on the idle deadline.
     assert!(
-        clock.await_parked(start + Duration::from_secs(60), DEADLINE),
+        clock.await_parked(
+            start + Duration::from_secs(60),
+            fakes::Deadline::after(DEADLINE)
+        ),
         "the approval wait parks on the idle deadline"
     );
     // A switch accepted during the wait.
@@ -2650,7 +2653,7 @@ fn run_deferred_case(case: &DeferredCase) {
     inbox_tx.send(support::delivery("next")).unwrap();
     let (_looped, outcome) = fakes::within(
         &format!("case {name}: the next turn"),
-        DEADLINE,
+        Deadline::after(DEADLINE),
         move || {
             let outcome = looped.turn().unwrap();
             (looped, outcome)

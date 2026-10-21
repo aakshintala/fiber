@@ -128,7 +128,7 @@ fn send(deadline: Deadline, client: &Client, line: &str) {
 
 fn recv(deadline: Deadline, client: &Client) -> Value {
     client
-        .recv(deadline.left())
+        .recv(deadline)
         .expect("waited until the deadline for a line")
 }
 
@@ -156,7 +156,7 @@ fn until_client(
     let mut lines = Vec::new();
     loop {
         let line = client
-            .recv(deadline.left())
+            .recv(deadline)
             .unwrap_or_else(|| panic!("waited until the deadline for {what}; got {lines:?}"));
         let stop = done(&line);
         lines.push(line);
@@ -281,7 +281,7 @@ fn two_clients_see_the_log_while_ask_is_held() {
     assert_eq!(started["kind"], "session_started");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 
@@ -423,7 +423,7 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
     let started = first_line(setup.deadline, &running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 
@@ -520,7 +520,7 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     let started = first_line(setup.deadline, &running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 
@@ -681,7 +681,7 @@ fn an_empty_args_matches_a_missing_one_on_the_socket() {
     let started = first_line(setup.deadline, &running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 
@@ -735,7 +735,7 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
     let started = first_line(setup.deadline, &running.stdout);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 
@@ -856,7 +856,7 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"go"}]}}"#,
     );
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request is in flight"
     );
     send(
@@ -1069,7 +1069,7 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"please run it"}]}}"#,
     );
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request is in flight"
     );
     // The reply after the step boundary is a call the reviewer reviews.

@@ -25,6 +25,7 @@ use contract::clock::Wake;
 use contract::session_search::{Found, Label};
 use contract::tool::Cancel;
 use fakes::CancelToken;
+use fakes::Deadline;
 use fakes::within;
 use proptest::prelude::*;
 
@@ -299,9 +300,11 @@ fn three_workers_read_three_sessions_at_once() {
         arrived: Condvar::new(),
     });
     let (scanned, held) = (Arc::clone(&scan), Arc::clone(&cancel));
-    let found = within("three workers to meet", MEET * 3, move || {
-        scanned.search(&query("needle", false, 10), &*held, threads(3))
-    });
+    let found = within(
+        "three workers to meet",
+        Deadline::after(MEET * 3),
+        move || scanned.search(&query("needle", false, 10), &*held, threads(3)),
+    );
     let state = cancel.state.lock().unwrap();
     assert!(!state.timed_out, "the workers never met");
     assert_eq!(state.seen.len(), 3);
@@ -352,9 +355,11 @@ fn a_cancel_at_any_point_returns_part_of_the_answer() {
     let checks = counted.checks.load(Ordering::SeqCst);
     for after in 0..checks + 2 {
         let scanned = Arc::clone(&scan);
-        let found = within("a cancelled scan", Duration::from_secs(10), move || {
-            scanned.search(&query("needle", true, 1000), &After::new(after), threads(3))
-        });
+        let found = within(
+            "a cancelled scan",
+            Deadline::after(Duration::from_secs(10)),
+            move || scanned.search(&query("needle", true, 1000), &After::new(after), threads(3)),
+        );
         assert!(found.total <= whole.total, "cancel after {after}");
         assert!(
             found.hits.iter().all(|hit| whole.hits.contains(hit)),

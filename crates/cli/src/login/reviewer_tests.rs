@@ -295,7 +295,7 @@ fn an_uncached_discovery_runs_once_caches_and_serves_the_cache() {
     let first = setup.choices("acme");
     assert_eq!(first.models, ["live-m"]);
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, fakes::Deadline::after(WAIT)),
         "the callback ran for the uncached list"
     );
     let cached = config::read_model_cache(&setup.home(), "acme").unwrap();
@@ -380,7 +380,7 @@ fn a_returned_empty_list_writes_its_cache_and_skips() {
     let choices = setup.choices("acme");
     assert!(choices.models.is_empty());
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, fakes::Deadline::after(WAIT)),
         "the empty discovery still ran"
     );
     let cached = config::read_model_cache(&setup.home(), "acme").unwrap();
@@ -585,7 +585,7 @@ fn only_the_requested_providers_callback_runs() {
     let choices = reviewer_models(&setup.home(), &providers, "foo", setup.clock()).unwrap();
     assert_eq!(choices.models, ["live-m"]);
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, fakes::Deadline::after(WAIT)),
         "the requested provider's callback ran"
     );
     assert_eq!(
@@ -1119,11 +1119,11 @@ impl Gated {
             );
         }
         assert!(
-            fakes::group_empties(group, GROUP_WAIT),
+            fakes::group_empties(group, fakes::Deadline::after(GROUP_WAIT)),
             "the gated group {group} emptied within {GROUP_WAIT:?}"
         );
         if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(GROUP_WAIT);
+            watchdog.stand_down(fakes::Deadline::after(GROUP_WAIT));
         }
     }
 }

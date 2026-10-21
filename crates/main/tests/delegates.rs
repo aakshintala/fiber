@@ -344,7 +344,7 @@ impl Running {
     #[track_caller]
     fn wait(self) -> (ExitStatus, Vec<Value>, String) {
         let watchdog = self._watchdog;
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         let mut out = self.taken;
         while let Ok(line) = self.lines.try_recv() {
             out.push(line);
@@ -877,21 +877,21 @@ fn a_jobs_stop_cancels_the_delegate_which_exits_143() {
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     assert!(
-        parent.await_requests(1, Duration::from_secs(5)),
+        parent.await_requests(1, setup.deadline),
         "the spawn call was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(2, Duration::from_secs(5)),
+        parent.await_requests(2, setup.deadline),
         "the verdict was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(3, Duration::from_secs(5)),
+        parent.await_requests(3, setup.deadline),
         "the stop was requested"
     );
     assert!(
-        child.await_requests(1, Duration::from_secs(5)),
+        child.await_requests(1, setup.deadline),
         "the child stalled its model call"
     );
     parent.release();
@@ -969,7 +969,7 @@ fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
         .unwrap()
         .to_owned();
     assert!(
-        child.await_requests(1, Duration::from_secs(5)),
+        child.await_requests(1, setup.deadline),
         "the child stalled its model call"
     );
     // Subscribed before the kill: the child's exit is awaited on this
@@ -1022,7 +1022,7 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
         .unwrap()
         .to_owned();
     assert!(
-        child.await_requests(1, Duration::from_secs(5)),
+        child.await_requests(1, setup.deadline),
         "the child stalled its model call"
     );
     let client = running.connect(&setup, &id);
@@ -1142,21 +1142,21 @@ fn a_turn_that_hits_the_budget_stops_its_running_delegate() {
         &["--model", "pa/m", "--prompt", "scan the tree"],
     );
     assert!(
-        parent.await_requests(1, Duration::from_secs(5)),
+        parent.await_requests(1, setup.deadline),
         "the spawn call was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(2, Duration::from_secs(5)),
+        parent.await_requests(2, setup.deadline),
         "the verdict was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(3, Duration::from_secs(5)),
+        parent.await_requests(3, setup.deadline),
         "the read was requested"
     );
     assert!(
-        child.await_requests(1, Duration::from_secs(5)),
+        child.await_requests(1, setup.deadline),
         "the child stalled its model call"
     );
     parent.release();
@@ -1237,7 +1237,7 @@ fn a_delegate_skips_repository_code_nobody_approved() {
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     assert!(
-        parent.await_requests(4, Duration::from_secs(5)),
+        parent.await_requests(4, setup.deadline),
         "the parent's ending-notice turn was requested"
     );
     child.release();
@@ -1348,12 +1348,12 @@ fn a_delegate_fails_on_a_required_server_nobody_approved() {
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     assert!(
-        parent.await_requests(1, Duration::from_secs(5)),
+        parent.await_requests(1, setup.deadline),
         "the spawn call was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(2, Duration::from_secs(5)),
+        parent.await_requests(2, setup.deadline),
         "the verdict was requested"
     );
     declare_db(setup.root.path(), &json!({"required": true}));
@@ -2091,7 +2091,7 @@ fn open_delegate(
     });
     lines.append(&mut batch);
     assert!(
-        server_b.await_requests(1, setup.deadline.left()),
+        server_b.await_requests(1, setup.deadline),
         "the delegate's turn called the model"
     );
     // A `full` subscribe folds the whole log, so a late subscriber misses
@@ -2236,7 +2236,7 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
     lines.append(&mut batch);
     server_b.release_one();
     assert!(
-        server_b.await_requests(2, setup.deadline.left()),
+        server_b.await_requests(2, setup.deadline),
         "the delegate's second model call after the steer"
     );
     let bodies: Vec<String> = server_b
@@ -3084,17 +3084,17 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
 
     let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
     assert!(
-        parent.await_requests(1, setup.deadline.left()),
+        parent.await_requests(1, setup.deadline),
         "the spawn call was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(2, setup.deadline.left()),
+        parent.await_requests(2, setup.deadline),
         "the verdict was requested"
     );
     parent.release_one();
     assert!(
-        child.await_requests(1, setup.deadline.left()),
+        child.await_requests(1, setup.deadline),
         "the delegate's first step is in flight"
     );
     parent.release();
@@ -3116,7 +3116,7 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
     });
     child.release_one();
     assert!(
-        child.await_requests(2, setup.deadline.left()),
+        child.await_requests(2, setup.deadline),
         "the delegate's second model call after the steer"
     );
     let mut ended = 0;
@@ -3343,7 +3343,7 @@ fn delegate_message_resumes_a_finished_delegate_as_a_second_run_of_the_same_job(
     });
     child.release_one();
     assert!(
-        child.await_requests(2, setup.deadline.left()),
+        child.await_requests(2, setup.deadline),
         "the resumed run's model call"
     );
     let mut re_ended = 0;
@@ -5056,7 +5056,7 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     assert_eq!(ack.last().unwrap()["kind"], "command_accepted", "{ack:?}");
     // The resume carries the verbatim answer lines as the next prompt.
     assert!(
-        child.await_requests(2, setup.deadline.left()),
+        child.await_requests(2, setup.deadline),
         "the resumed run called its model"
     );
     let bodies: Vec<String> = child

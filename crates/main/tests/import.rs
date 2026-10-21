@@ -376,7 +376,7 @@ impl Driven {
         assert!(status.success(), "{text}");
         assert!(!group_alive(deadline, group));
         std::mem::forget(guard);
-        watchdog.stand_down(deadline.cleanup());
+        watchdog.stand_down(deadline.cleanup_phase());
     }
 }
 

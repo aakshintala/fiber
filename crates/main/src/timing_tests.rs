@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::Clock;
+use fakes::Deadline;
 
 const ONE_STEP: &str = r#"{"steps": [{"text": "Hi."}]}"#;
 
@@ -93,23 +94,27 @@ fn parts(
     let started = {
         let (home, workspace) = (home.clone(), workspace.clone());
         let clock: Arc<ScriptedClock> = Arc::clone(&clock);
-        fakes::within("the startup", Duration::from_secs(20), move || {
-            crate::parts_in(
-                home,
-                workspace,
-                Vec::new(),
-                None,
-                crate::credential::Labels::default(),
-                None,
-                clock,
-                None,
-                None,
-                reads,
-                log::diag::Process::Session,
-                extensions::StateSeed::new(),
-                crate::session_extensions::RepositoryScope::default(),
-            )
-        })
+        fakes::within(
+            "the startup",
+            Deadline::after(Duration::from_secs(20)),
+            move || {
+                crate::parts_in(
+                    home,
+                    workspace,
+                    Vec::new(),
+                    None,
+                    crate::credential::Labels::default(),
+                    None,
+                    clock,
+                    None,
+                    None,
+                    reads,
+                    log::diag::Process::Session,
+                    extensions::StateSeed::new(),
+                    crate::session_extensions::RepositoryScope::default(),
+                )
+            },
+        )
     };
     (root, clock, started)
 }
@@ -160,23 +165,27 @@ fn a_malformed_config_keeps_the_load_error_and_writes_nothing() {
     let failed = {
         let (home, workspace) = (home.clone(), workspace.clone());
         let clock: Arc<ScriptedClock> = Arc::clone(&clock);
-        fakes::within("the startup", Duration::from_secs(20), move || {
-            crate::parts_in(
-                home,
-                workspace,
-                Vec::new(),
-                None,
-                crate::credential::Labels::default(),
-                None,
-                clock,
-                None,
-                None,
-                reads,
-                log::diag::Process::Session,
-                extensions::StateSeed::new(),
-                crate::session_extensions::RepositoryScope::default(),
-            )
-        })
+        fakes::within(
+            "the startup",
+            Deadline::after(Duration::from_secs(20)),
+            move || {
+                crate::parts_in(
+                    home,
+                    workspace,
+                    Vec::new(),
+                    None,
+                    crate::credential::Labels::default(),
+                    None,
+                    clock,
+                    None,
+                    None,
+                    reads,
+                    log::diag::Process::Session,
+                    extensions::StateSeed::new(),
+                    crate::session_extensions::RepositoryScope::default(),
+                )
+            },
+        )
     }
     .err()
     .unwrap();
@@ -289,9 +298,11 @@ fn bounded_prepare(
         },
         label.map(str::to_owned),
     );
-    fakes::within("the preparation", Duration::from_secs(20), move || {
-        crate::switch::prepare(&switching, &quiet_door(), &args, label.as_deref(), None)
-    })
+    fakes::within(
+        "the preparation",
+        Deadline::after(Duration::from_secs(20)),
+        move || crate::switch::prepare(&switching, &quiet_door(), &args, label.as_deref(), None),
+    )
 }
 
 /// The `switching` sharing the session's diagnostic writer: every entered

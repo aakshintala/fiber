@@ -71,10 +71,15 @@ impl Completion {
         line
     }
 
+    /// Whether `id` is the latest `commands` sent, still unanswered.
+    pub(super) fn awaits(&self, id: &str) -> bool {
+        self.commands_id.as_deref() == Some(id)
+    }
+
     /// A session's `command_accepted`: the answer to the latest `commands`
     /// sent replaces the session's rows of the `/` list.
     pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) {
-        if self.commands_id.as_deref() != Some(accepted.command_id.0.as_str()) {
+        if !self.awaits(&accepted.command_id.0) {
             return;
         }
         if let Some(CommandResult::Commands { commands }) = &accepted.result {

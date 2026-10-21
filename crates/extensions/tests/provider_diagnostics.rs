@@ -183,65 +183,89 @@ fn dispatch_all(session: &Arc<SessionExtensions>) {
     let id = session_id();
     let used = usage();
     let content = vec![ContentPart::Text { text: "hi".into() }];
-    fakes::within("session.session_start", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(session);
-        move || {
-            session.session_start(&SessionStart {
-                reason: StartReason::Start,
-                session_id: &id,
-                workspace: "/w",
-                cancel: &Never,
-            })
-        }
-    });
-    fakes::within("session.turn_start", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(session);
-        move || {
-            session.turn_start(&TurnStart {
-                input: &[],
-                cancel: &Never,
-            })
-        }
-    });
-    fakes::within("session.turn_end", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(session);
-        move || {
-            session.turn_end(&TurnEnd {
-                reply: "done",
-                cancel: &Never,
-            })
-        }
-    });
-    fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(session);
-        move || {
-            session.before_message(&BeforeMessage {
-                content: &content,
-                sender: None,
-            })
-        }
-    });
-    fakes::within("session.before_model_call", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(session);
-        move || {
-            session.before_model_call(&BeforeModelCall {
-                model: "p/m",
-                usage: &used,
-                cancel: &Never,
-            })
-        }
-    });
-    fakes::within("session.before_handoff", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(session);
-        move || {
-            session.before_handoff(&BeforeHandoff {
-                trigger: HandoffTrigger::Auto,
-                instructions: None,
-                conversation: &[],
-                cancel: &Never,
-            })
-        }
-    });
+    fakes::within(
+        "session.session_start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(session);
+            move || {
+                session.session_start(&SessionStart {
+                    reason: StartReason::Start,
+                    session_id: &id,
+                    workspace: "/w",
+                    cancel: &Never,
+                })
+            }
+        },
+    );
+    fakes::within(
+        "session.turn_start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(session);
+            move || {
+                session.turn_start(&TurnStart {
+                    input: &[],
+                    cancel: &Never,
+                })
+            }
+        },
+    );
+    fakes::within(
+        "session.turn_end",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(session);
+            move || {
+                session.turn_end(&TurnEnd {
+                    reply: "done",
+                    cancel: &Never,
+                })
+            }
+        },
+    );
+    fakes::within(
+        "session.before_message",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(session);
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
+        },
+    );
+    fakes::within(
+        "session.before_model_call",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(session);
+            move || {
+                session.before_model_call(&BeforeModelCall {
+                    model: "p/m",
+                    usage: &used,
+                    cancel: &Never,
+                })
+            }
+        },
+    );
+    fakes::within(
+        "session.before_handoff",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(session);
+            move || {
+                session.before_handoff(&BeforeHandoff {
+                    trigger: HandoffTrigger::Auto,
+                    instructions: None,
+                    conversation: &[],
+                    cancel: &Never,
+                })
+            }
+        },
+    );
 }
 
 fn ops(calls: &Scopes) -> Vec<(Op, Option<String>)> {
@@ -285,17 +309,21 @@ fn each_chain_emits_one_scope_per_dispatch() {
     );
     // Two successive dispatches emit twice.
     let id = session_id();
-    fakes::within("session.session_start", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        move || {
-            session.session_start(&SessionStart {
-                reason: StartReason::Start,
-                session_id: &id,
-                workspace: "/w",
-                cancel: &Never,
-            })
-        }
-    });
+    fakes::within(
+        "session.session_start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            move || {
+                session.session_start(&SessionStart {
+                    reason: StartReason::Start,
+                    session_id: &id,
+                    workspace: "/w",
+                    cancel: &Never,
+                })
+            }
+        },
+    );
     assert_eq!(ops(&calls).len(), 7);
     assert_eq!(ops(&calls)[6], (Op::Hook(HookChain::SessionStart), None));
 }
@@ -341,15 +369,19 @@ fn a_nil_hook_runs_once_per_dispatch() {
     let sink = Arc::new(Sink::default());
     let (session, calls) = diagnosed(session, sink);
     let content = vec![ContentPart::Text { text: "hi".into() }];
-    let answer = fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        move || {
-            session.before_message(&BeforeMessage {
-                content: &content,
-                sender: None,
-            })
-        }
-    });
+    let answer = fakes::within(
+        "session.before_message",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
+        },
+    );
     assert!(matches!(
         answer.outcome,
         BeforeMessageOutcome::Passed { .. }
@@ -380,27 +412,35 @@ fn refusal_and_failure_return_inside_the_scope() {
     let sink = Arc::new(Sink::default());
     let (session, calls) = diagnosed(session, sink);
     let content = vec![ContentPart::Text { text: "hi".into() }];
-    let refused = fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        move || {
-            session.before_message(&BeforeMessage {
-                content: &content,
-                sender: None,
-            })
-        }
-    });
+    let refused = fakes::within(
+        "session.before_message",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
+        },
+    );
     assert!(matches!(refused.outcome, BeforeMessageOutcome::Refused(_)));
     let used = usage();
-    let failed = fakes::within("session.before_model_call", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        move || {
-            session.before_model_call(&BeforeModelCall {
-                model: "p/m",
-                usage: &used,
-                cancel: &Never,
-            })
-        }
-    });
+    let failed = fakes::within(
+        "session.before_model_call",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            move || {
+                session.before_model_call(&BeforeModelCall {
+                    model: "p/m",
+                    usage: &used,
+                    cancel: &Never,
+                })
+            }
+        },
+    );
     assert!(matches!(failed.outcome, CheckOutcome::Failed(_)));
     assert_eq!(
         ops(&calls),
@@ -431,27 +471,35 @@ fn before_model_call_refusal_and_nonblocking_error_keep_their_scopes() {
     let sink = Arc::new(Sink::default());
     let (session, calls) = diagnosed(session, sink);
     let used = usage();
-    let refused = fakes::within("session.before_model_call", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        move || {
-            session.before_model_call(&BeforeModelCall {
-                model: "p/m",
-                usage: &used,
-                cancel: &Never,
-            })
-        }
-    });
+    let refused = fakes::within(
+        "session.before_model_call",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            move || {
+                session.before_model_call(&BeforeModelCall {
+                    model: "p/m",
+                    usage: &used,
+                    cancel: &Never,
+                })
+            }
+        },
+    );
     assert!(matches!(refused.outcome, CheckOutcome::Refused(_)));
     let content = vec![ContentPart::Text { text: "hi".into() }];
-    let passed = fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        move || {
-            session.before_message(&BeforeMessage {
-                content: &content,
-                sender: None,
-            })
-        }
-    });
+    let passed = fakes::within(
+        "session.before_message",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
+        },
+    );
     // A non-blocking failure drops the change, keeps a notice and passes.
     assert!(matches!(
         passed.outcome,
@@ -502,7 +550,7 @@ fn cancel_between_lifecycle_callbacks_keeps_one_scope() {
         })
     };
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the first hook suspended on HTTP"
     );
     cancel.fire();
@@ -548,37 +596,45 @@ fn tool_hooks_execute_without_timing() {
         reversible: false,
     };
     let arguments = Map::new();
-    let rewritten = fakes::within("session.before_tool", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        move || {
-            session.before_tool(&BeforeToolCall {
-                tool: "read",
-                arguments: &arguments,
-                declared: &declared,
-            })
-        }
-    });
+    let rewritten = fakes::within(
+        "session.before_tool",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            move || {
+                session.before_tool(&BeforeToolCall {
+                    tool: "read",
+                    arguments: &arguments,
+                    declared: &declared,
+                })
+            }
+        },
+    );
     assert!(matches!(
         rewritten.outcome,
         contract::hook::BeforeToolOutcome::Rewritten { .. }
     ));
-    let changed = fakes::within("session.after_tool", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        move || {
-            session.after_tool(&AfterToolCall {
-                tool: "read",
-                arguments: &Map::new(),
-                status: CallStatus::Completed,
-                content: "x",
-                details: None,
-                process: None,
-                spilled: None,
+    let changed = fakes::within(
+        "session.after_tool",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            move || {
+                session.after_tool(&AfterToolCall {
+                    tool: "read",
+                    arguments: &Map::new(),
+                    status: CallStatus::Completed,
+                    content: "x",
+                    details: None,
+                    process: None,
+                    spilled: None,
 
-                not_regular: false,
-                delivery: None,
-            })
-        }
-    });
+                    not_regular: false,
+                    delivery: None,
+                })
+            }
+        },
+    );
     assert!(matches!(changed.outcome, AfterToolOutcome::Changed { .. }));
     // Both tool chains ran their callbacks but took no P5 timer.
     assert!(ops(&calls).is_empty());
@@ -666,7 +722,10 @@ fn a_suspended_dispatch_spans_the_whole_call() {
     let id = Deadline::after(WAIT)
         .recv(&id_rx)
         .expect("waited for the dispatch thread");
-    assert!(server.await_requests(1, WAIT), "the hook suspended on HTTP");
+    assert!(
+        server.await_requests(1, Deadline::after(WAIT)),
+        "the hook suspended on HTTP"
+    );
     // The dispatch waits on the fake clock past its own check before fake
     // time moves.
     // The dispatch waits on the fake clock past its own check before fake
@@ -675,7 +734,11 @@ fn a_suspended_dispatch_spans_the_whole_call() {
     // (`docs/extensions.md`, "How an extension runs"), a stable park the
     // transient deadline wait ends in before the HTTP receipt returns.
     assert!(
-        clock.await_thread_parked(id, Some(mark + Duration::from_secs(31)), WAIT),
+        clock.await_thread_parked(
+            id,
+            Some(mark + Duration::from_secs(31)),
+            fakes::Deadline::after(WAIT)
+        ),
         "the hook caller parked past its check on the suspended callback"
     );
     clock.advance_when_parked(
@@ -745,11 +808,18 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
     let id = Deadline::after(WAIT)
         .recv(&id_rx)
         .expect("waited for the dispatch thread");
-    assert!(server.await_requests(1, WAIT), "the hook suspended on HTTP");
+    assert!(
+        server.await_requests(1, Deadline::after(WAIT)),
+        "the hook suspended on HTTP"
+    );
     // The caller waits on the suspended callback past its own check: the
     // hook's deadline plus the scheduler's grace for a suspended call.
     assert!(
-        clock.await_thread_parked(id, Some(mark + Duration::from_millis(2000)), WAIT),
+        clock.await_thread_parked(
+            id,
+            Some(mark + Duration::from_millis(2000)),
+            fakes::Deadline::after(WAIT)
+        ),
         "the hook caller parked past its check on the suspended callback"
     );
     // Past the hook's deadline but inside its grace: the caller takes the
@@ -905,17 +975,21 @@ fn provider_purposes_record_once_per_attempt() {
     let ext = observed_ext(&dir, clock, &sink);
     let models = LuaProvider::new(Arc::clone(&ext), "p");
     let credentials = LuaProvider::new(Arc::clone(&ext), "c");
-    let listed = fakes::within("models.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let models = Arc::clone(&models);
-        move || models.list_models(&ModelsArg::default())
-    })
+    let listed = fakes::within(
+        "models.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let models = Arc::clone(&models);
+            move || models.list_models(&ModelsArg::default())
+        },
+    )
     .expect("discovery succeeds");
     assert_eq!(listed.0.len(), 1);
     let pair = CredentialPair {
         credential: "c".to_owned(),
         label: "l".to_owned(),
     };
-    let quota = fakes::within("quota", fakes::MUST_SUCCEED_WITHIN, {
+    let quota = fakes::within("quota", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
         let models = Arc::clone(&models);
         let pair = pair.clone();
         move || models.quota(&pair, None)
@@ -924,16 +998,24 @@ fn provider_purposes_record_once_per_attempt() {
         quota,
         extensions::QuotaEntry::Reported(_) | extensions::QuotaEntry::NoQuota
     ));
-    let token = fakes::within("credential_token", fakes::MUST_SUCCEED_WITHIN, {
-        let credentials = Arc::clone(&credentials);
-        let pair = pair.clone();
-        move || credentials.credential_token(&pair)
-    });
+    let token = fakes::within(
+        "credential_token",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let credentials = Arc::clone(&credentials);
+            let pair = pair.clone();
+            move || credentials.credential_token(&pair)
+        },
+    );
     assert!(token.is_ok(), "the stored credential refresh succeeds");
-    let cost = fakes::within("models.cost", fakes::MUST_SUCCEED_WITHIN, {
-        let models = Arc::clone(&models);
-        move || models.cost(&GenerationId("g1".into()), &url, None)
-    })
+    let cost = fakes::within(
+        "models.cost",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let models = Arc::clone(&models);
+            move || models.cost(&GenerationId("g1".into()), &url, None)
+        },
+    )
     .expect("the cost lookup succeeds");
     assert_eq!(cost, Some(0.5));
     // One line per actual HTTP request, with the provider's registered
@@ -989,10 +1071,14 @@ fn two_calls_in_one_callback_emit_two_attempt_ones() {
     let (sink, _) = Watching::new();
     let ext = observed_ext(&dir, clock, &sink);
     let provider = LuaProvider::new(ext, "p");
-    fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(&provider);
-        move || provider.list_models(&ModelsArg::default())
-    })
+    fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
     .expect("two HTTP calls in one callback succeed");
     assert_eq!(server.requests().len(), 2);
     let records = sink.records();
@@ -1017,16 +1103,24 @@ fn cache_hits_and_scripted_replies_emit_nothing() {
     let (sink, _) = Watching::new();
     let ext = observed_ext(&dir, clock, &sink);
     let provider = LuaProvider::new(Arc::clone(&ext), "p");
-    fakes::within("provider.models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(&provider);
-        move || provider.models(&ModelsArg::default())
-    })
+    fakes::within(
+        "provider.models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.models(&ModelsArg::default())
+        },
+    )
     .expect("discovery succeeds");
     // Served from memory now: no HTTP, no record.
-    fakes::within("provider.models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(&provider);
-        move || provider.models(&ModelsArg::default())
-    })
+    fakes::within(
+        "provider.models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.models(&ModelsArg::default())
+        },
+    )
     .expect("the cached list serves");
     assert_eq!(server.requests().len(), 1);
     assert_eq!(sink.records().len(), 1);
@@ -1066,7 +1160,7 @@ fn cache_hits_and_scripted_replies_emit_nothing() {
     let quoted = LuaProvider::new(scripted_ext, "sq");
     let (listed, _) = fakes::within(
         "quoted.list_models",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || quoted.list_models(&ModelsArg::default()),
     )
     .expect("the scripted reply parses");
@@ -1110,32 +1204,44 @@ fn sign_command_and_entry_load_send_unobserved() {
     let (sink, _) = Watching::new();
     let ext = observed_ext(&dir, clock, &sink);
     // The entry script's command runs actual HTTP, unobserved.
-    let pong = fakes::within("ext.command", fakes::MUST_SUCCEED_WITHIN, {
-        let ext = Arc::clone(&ext);
-        move || ext.command("ping", "")
-    })
+    let pong = fakes::within(
+        "ext.command",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let ext = Arc::clone(&ext);
+            move || ext.command("ping", "")
+        },
+    )
     .expect("the command succeeds");
     assert_eq!(pong, "pong");
     // Signing sends actual HTTP, unobserved even with a sink installed.
     let signer = LuaProvider::new(Arc::clone(&ext), "s");
-    let signed: Vec<(String, String)> = fakes::within("signer.sign", fakes::MUST_SUCCEED_WITHIN, {
-        move || {
-            signer.sign(&SignRequest {
-                method: "GET",
-                url: "http://example.invalid/",
-                headers: &[],
-                body: b"",
-            })
-        }
-    })
+    let signed: Vec<(String, String)> = fakes::within(
+        "signer.sign",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            move || {
+                signer.sign(&SignRequest {
+                    method: "GET",
+                    url: "http://example.invalid/",
+                    headers: &[],
+                    body: b"",
+                })
+            }
+        },
+    )
     .expect("signing succeeds");
     assert!(signed.is_empty());
     // The provider file's top-level HTTP ran at first use, unobserved.
     let provider = LuaProvider::new(ext, "p");
-    fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(&provider);
-        move || provider.list_models(&ModelsArg::default())
-    })
+    fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
     .expect("discovery succeeds");
     let paths: Vec<String> = server
         .requests()
@@ -1170,15 +1276,19 @@ fn hook_http_sends_unobserved_with_a_sink_installed() {
     let sink = Arc::new(Sink::default());
     let (session, _) = diagnosed(session, Arc::clone(&sink));
     let content = vec![ContentPart::Text { text: "hi".into() }];
-    fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        move || {
-            session.before_message(&BeforeMessage {
-                content: &content,
-                sender: None,
-            })
-        }
-    });
+    fakes::within(
+        "session.before_message",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
+        },
+    );
     assert_eq!(server.requests().len(), 1);
     assert!(sink.requests.lock().unwrap().is_empty());
 }
@@ -1205,10 +1315,14 @@ fn request_lines_carry_no_url_or_content() {
     let query_dir = ext_dir(None, &[("p", &models_lua(&query_url))]);
     let (sink, _) = Watching::new();
     let query_ext = observed_ext(&query_dir, FakeClock::new(), &sink);
-    fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = LuaProvider::new(query_ext, "p");
-        move || provider.list_models(&ModelsArg::default())
-    })
+    fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = LuaProvider::new(query_ext, "p");
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
     .expect("the query-string request succeeds");
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
@@ -1221,10 +1335,14 @@ fn request_lines_carry_no_url_or_content() {
     let user_url = format!("http://USERINFO-SENTINEL:pass@127.0.0.1:{port}/models");
     let user_dir = ext_dir(None, &[("p", &models_lua(&user_url))]);
     let user_ext = observed_ext(&user_dir, FakeClock::new(), &sink);
-    fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = LuaProvider::new(user_ext, "p");
-        move || provider.list_models(&ModelsArg::default())
-    })
+    fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = LuaProvider::new(user_ext, "p");
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
     .expect("the userinfo request succeeds");
     assert_eq!(server.requests().len(), 2);
     // The request names no resolver (IP literal, refused port): the
@@ -1234,10 +1352,14 @@ fn request_lines_carry_no_url_or_content() {
         &[("p", &models_lua("http://127.0.0.1:1/secret-host"))],
     );
     let dns_ext = observed_ext(&dns_dir, FakeClock::new(), &sink);
-    let dns_err = fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = LuaProvider::new(dns_ext, "p");
-        move || provider.list_models(&ModelsArg::default())
-    })
+    let dns_err = fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = LuaProvider::new(dns_ext, "p");
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
     .unwrap_err();
     assert_eq!(dns_err.code(), contract::ErrorCode::ExtensionFailed);
     let records = sink.records();
@@ -1306,10 +1428,14 @@ fn without_a_sink_or_below_debug_nothing_records() {
         plain_dir.path(),
         FakeClock::new(),
     ));
-    fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = LuaProvider::new(plain_ext, "p");
-        move || provider.list_models(&ModelsArg::default())
-    })
+    fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = LuaProvider::new(plain_ext, "p");
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
     .expect("a request without a sink succeeds");
     assert_eq!(server.requests().len(), 1);
     // A sink that records no debug lines: the request succeeds and the
@@ -1319,10 +1445,14 @@ fn without_a_sink_or_below_debug_nothing_records() {
         extensions::LuaExtension::new("ext", dark_dir.path(), dark_dir.path(), FakeClock::new())
             .with_diagnostics(Arc::new(Dark)),
     );
-    fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = LuaProvider::new(dark_ext, "p");
-        move || provider.list_models(&ModelsArg::default())
-    })
+    fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = LuaProvider::new(dark_ext, "p");
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
     .expect("a request below debug succeeds");
     assert_eq!(server.requests().len(), 2);
 }
@@ -1339,9 +1469,11 @@ fn background_refresh_is_observed() {
     let handle = provider
         .refresh(None, ModelsArg::default())
         .expect("a stale list refreshes");
-    fakes::within("handle.join", fakes::MUST_SUCCEED_WITHIN, move || {
-        handle.join()
-    })
+    fakes::within(
+        "handle.join",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || handle.join(),
+    )
     .expect("the refresh thread joins")
     .expect("the background refresh succeeds");
     assert_eq!(server.requests().len(), 1);
@@ -1415,7 +1547,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         });
     }
     assert!(
-        held_a.await_requests(1, WAIT),
+        held_a.await_requests(1, Deadline::after(WAIT)),
         "command A suspended on HTTP"
     );
     // Provider p suspends on its first held request while A waits.
@@ -1425,7 +1557,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         let _sent = models_tx.send(provider_p.list_models(&ModelsArg::default()));
     });
     assert!(
-        held_p.await_requests(1, WAIT),
+        held_p.await_requests(1, Deadline::after(WAIT)),
         "provider p suspended on HTTP"
     );
     // Quota q runs on the same VM and completes; the second VM overlaps
@@ -1435,22 +1567,24 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         label: "l".to_owned(),
     };
     let provider_q = LuaProvider::new(Arc::clone(&ext_a), "q");
-    let quota = fakes::within("quota", fakes::MUST_SUCCEED_WITHIN, {
+    let quota = fakes::within("quota", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
         let provider_q = Arc::clone(&provider_q);
         let pair = pair.clone();
         move || provider_q.quota(&pair, None)
     });
     assert!(matches!(quota, extensions::QuotaEntry::Reported(_)));
     let provider_r = LuaProvider::new(ext_b, "r");
-    fakes::within("provider_r.models", fakes::MUST_SUCCEED_WITHIN, move || {
-        provider_r.models(&ModelsArg::default())
-    })
+    fakes::within(
+        "provider_r.models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || provider_r.models(&ModelsArg::default()),
+    )
     .expect("the second VM lists its models");
     // Release p's requests in order, then the command: p's callback issues
     // its second HTTP after its resume.
     held_p.release();
     assert!(
-        held_p.await_requests(2, WAIT),
+        held_p.await_requests(2, Deadline::after(WAIT)),
         "provider p resumed into its second HTTP"
     );
     held_a.release();
@@ -1506,10 +1640,14 @@ fn overlapping_callbacks_keep_their_own_attribution() {
     assert_eq!(other, [("r".to_owned(), "model_list".to_owned())]);
     // A following command stays unobserved: no stale context leaks
     // between callbacks.
-    fakes::within("ext_a.command", fakes::MUST_SUCCEED_WITHIN, {
-        let ext_a = Arc::clone(&ext_a);
-        move || ext_a.command("b", "")
-    })
+    fakes::within(
+        "ext_a.command",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let ext_a = Arc::clone(&ext_a);
+            move || ext_a.command("b", "")
+        },
+    )
     .expect("the following command succeeds");
     assert_eq!(sink_a.records().len(), 3);
 }
@@ -1614,10 +1752,14 @@ fn session_discovery_and_refresh_carry_the_sink() {
     let session = diagnosed_session(&setup, clock, &sink);
     // Uncached discovery is observed on its first call.
     let models = provider_named(&session, "p");
-    fakes::within("models.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let models = Arc::clone(&models);
-        move || models.list_models(&ModelsArg::default())
-    })
+    fakes::within(
+        "models.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let models = Arc::clone(&models);
+            move || models.list_models(&ModelsArg::default())
+        },
+    )
     .expect("discovery succeeds");
     // A stale-list refresh runs detached: its request is received while
     // held, and its completion is collected through its JoinHandle.
@@ -1625,20 +1767,26 @@ fn session_discovery_and_refresh_carry_the_sink() {
         .refresh(None, ModelsArg::default())
         .expect("a stale list refreshes");
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "the refresh reached its request"
     );
     server.release();
-    fakes::within("refreshed.join", fakes::MUST_SUCCEED_WITHIN, move || {
-        refreshed.join()
-    })
+    fakes::within(
+        "refreshed.join",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || refreshed.join(),
+    )
     .expect("the refresh thread joins")
     .expect("the refresh succeeds");
     // The cache serves from here: no HTTP, no record.
-    fakes::within("models.models", fakes::MUST_SUCCEED_WITHIN, {
-        let models = Arc::clone(&models);
-        move || models.models(&ModelsArg::default())
-    })
+    fakes::within(
+        "models.models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let models = Arc::clone(&models);
+            move || models.models(&ModelsArg::default())
+        },
+    )
     .expect("the cached list serves");
     assert_eq!(server.requests().len(), 2);
     let purposes: Vec<String> = sink
@@ -1728,22 +1876,30 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
         ("u", "token_refresh"),
         ("v", "cost"),
     ] {
-        let started = fakes::within("start_provider", fakes::MUST_SUCCEED_WITHIN, {
-            let session = Arc::clone(&session);
-            let config = config.clone();
-            let clock = clock.clone();
-            let locks = Arc::clone(&locks);
-            let provider = provider.to_owned();
-            move || session.start_provider(&config, clock, locks, "fiber.test/solo", &provider)
-        })
+        let started = fakes::within(
+            "start_provider",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            {
+                let session = Arc::clone(&session);
+                let config = config.clone();
+                let clock = clock.clone();
+                let locks = Arc::clone(&locks);
+                let provider = provider.to_owned();
+                move || session.start_provider(&config, clock, locks, "fiber.test/solo", &provider)
+            },
+        )
         .unwrap_or_else(|_| panic!("late start of {provider}"));
         assert_eq!(started.name(), provider);
         match purpose {
             "model_list" => {
-                fakes::within("list_models", fakes::MUST_SUCCEED_WITHIN, {
-                    let started = Arc::clone(&started);
-                    move || started.list_models(&ModelsArg::default())
-                })
+                fakes::within(
+                    "list_models",
+                    Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+                    {
+                        let started = Arc::clone(&started);
+                        move || started.list_models(&ModelsArg::default())
+                    },
+                )
                 .expect("fresh models() succeeds");
             }
             "quota" => {
@@ -1751,7 +1907,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
                     credential: "c".to_owned(),
                     label: "l".to_owned(),
                 };
-                let quota = fakes::within("quota", fakes::MUST_SUCCEED_WITHIN, {
+                let quota = fakes::within("quota", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
                     let started = Arc::clone(&started);
                     move || started.quota(&pair, None)
                 });
@@ -1762,14 +1918,18 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
                     credential: "c".to_owned(),
                     label: "l".to_owned(),
                 };
-                fakes::within("credential_token", fakes::MUST_SUCCEED_WITHIN, {
-                    let started = Arc::clone(&started);
-                    move || started.credential_token(&pair)
-                })
+                fakes::within(
+                    "credential_token",
+                    Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+                    {
+                        let started = Arc::clone(&started);
+                        move || started.credential_token(&pair)
+                    },
+                )
                 .expect("fresh credential() succeeds");
             }
             "cost" => {
-                let cost = fakes::within("cost", fakes::MUST_SUCCEED_WITHIN, {
+                let cost = fakes::within("cost", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
                     let started = Arc::clone(&started);
                     let url = url.clone();
                     move || started.cost(&GenerationId("g1".into()), &url, None)
@@ -1782,55 +1942,75 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
     }
     // Reused: the hook-held extension lends its running VM, and two
     // providers on it keep their distinct attribution.
-    let reused = fakes::within("start_provider", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        let config = config.clone();
-        let clock = clock.clone();
-        let locks = Arc::clone(&locks);
-        move || session.start_provider(&config, clock, locks, "fiber.test/diag", "p")
-    })
+    let reused = fakes::within(
+        "start_provider",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            let config = config.clone();
+            let clock = clock.clone();
+            let locks = Arc::clone(&locks);
+            move || session.start_provider(&config, clock, locks, "fiber.test/diag", "p")
+        },
+    )
     .expect("the held VM restarts its provider");
-    fakes::within("reused.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let reused = Arc::clone(&reused);
-        move || reused.list_models(&ModelsArg::default())
-    })
+    fakes::within(
+        "reused.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let reused = Arc::clone(&reused);
+            move || reused.list_models(&ModelsArg::default())
+        },
+    )
     .expect("reused models() succeeds");
     let pair = CredentialPair {
         credential: "c".to_owned(),
         label: "l".to_owned(),
     };
-    let quota = fakes::within("start_provider", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        let config = config.clone();
-        let clock = clock.clone();
-        let locks = Arc::clone(&locks);
-        let pair = pair.clone();
-        move || {
-            session
-                .start_provider(&config, clock, locks, "fiber.test/diag", "q")
-                .map(|started| started.quota(&pair, None))
-        }
-    })
+    let quota = fakes::within(
+        "start_provider",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            let config = config.clone();
+            let clock = clock.clone();
+            let locks = Arc::clone(&locks);
+            let pair = pair.clone();
+            move || {
+                session
+                    .start_provider(&config, clock, locks, "fiber.test/diag", "q")
+                    .map(|started| started.quota(&pair, None))
+            }
+        },
+    )
     .expect("the held VM restarts its second provider");
 
     assert!(matches!(quota, extensions::QuotaEntry::Reported(_)));
     // The pre-retain handles never mutated: the session, its hooks and
     // its providers all still work.
-    fakes::within("held_p.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let held_p = Arc::clone(&held_p);
-        move || held_p.list_models(&ModelsArg::default())
-    })
+    fakes::within(
+        "held_p.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let held_p = Arc::clone(&held_p);
+            move || held_p.list_models(&ModelsArg::default())
+        },
+    )
     .expect("the held provider still lists");
     let content = vec![ContentPart::Text { text: "hi".into() }];
-    let answer = fakes::within("session.before_message", fakes::MUST_SUCCEED_WITHIN, {
-        let session = Arc::clone(&session);
-        move || {
-            session.before_message(&BeforeMessage {
-                content: &content,
-                sender: None,
-            })
-        }
-    });
+    let answer = fakes::within(
+        "session.before_message",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let session = Arc::clone(&session);
+            move || {
+                session.before_message(&BeforeMessage {
+                    content: &content,
+                    sender: None,
+                })
+            }
+        },
+    );
     match answer.outcome {
         BeforeMessageOutcome::Passed { context, .. } => assert_eq!(context.len(), 1),
         BeforeMessageOutcome::Refused(refusal) => {
@@ -1895,15 +2075,19 @@ fn failed_provider_loads_record_nothing_and_silent_loads_stay_silent() {
     // A missing provider and an undeclared one fail the same way with or
     // without a sink, inventing no request record.
     for (extension, provider) in [("fiber.test/diag", "missing"), ("fiber.test/undecl", "u")] {
-        let answer = fakes::within("start_provider", fakes::MUST_SUCCEED_WITHIN, {
-            let session = Arc::clone(&session);
-            let config = config.clone();
-            let clock = clock.clone();
-            let locks = Arc::clone(&locks);
-            let extension = extension.to_owned();
-            let provider = provider.to_owned();
-            move || session.start_provider(&config, clock, locks, &extension, &provider)
-        });
+        let answer = fakes::within(
+            "start_provider",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            {
+                let session = Arc::clone(&session);
+                let config = config.clone();
+                let clock = clock.clone();
+                let locks = Arc::clone(&locks);
+                let extension = extension.to_owned();
+                let provider = provider.to_owned();
+                move || session.start_provider(&config, clock, locks, &extension, &provider)
+            },
+        );
         let err = match answer {
             Ok(_) => panic!("{extension}/{provider} loads, but must not"),
             Err(err) => err,
@@ -1922,10 +2106,14 @@ fn failed_provider_loads_record_nothing_and_silent_loads_stay_silent() {
     // request is received and no diagnostic exists to record it.
     let plain = load(&setup, FakeClock::new());
     let models = provider_named(&plain, "p");
-    fakes::within("models.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let models = Arc::clone(&models);
-        move || models.list_models(&ModelsArg::default())
-    })
+    fakes::within(
+        "models.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let models = Arc::clone(&models);
+            move || models.list_models(&ModelsArg::default())
+        },
+    )
     .expect("silent discovery succeeds");
     assert_eq!(server.requests().len(), 1);
 }
@@ -1939,10 +2127,14 @@ fn failures_retain_the_cached_list_without_observation() {
     let (diag, _) = install_session(&setup, &url, &models_file(&url));
     let (sink1, _) = Watching::new();
     let first = diagnosed_session(&setup, FakeClock::new(), &sink1);
-    let before = fakes::within("models.models", fakes::MUST_SUCCEED_WITHIN, {
-        let models = provider_named(&first, "p");
-        move || models.models(&ModelsArg::default())
-    })
+    let before = fakes::within(
+        "models.models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let models = provider_named(&first, "p");
+            move || models.models(&ModelsArg::default())
+        },
+    )
     .expect("discovery writes the cache");
     assert_eq!(server.requests().len(), 1);
     assert_eq!(sink1.records().len(), 1);
@@ -1958,10 +2150,14 @@ fn failures_retain_the_cached_list_without_observation() {
     .unwrap();
     let (sink2, _) = Watching::new();
     let second = diagnosed_session(&setup, FakeClock::new(), &sink2);
-    let after = fakes::within("models.models", fakes::MUST_SUCCEED_WITHIN, {
-        let models = provider_named(&second, "p");
-        move || models.models(&ModelsArg::default())
-    })
+    let after = fakes::within(
+        "models.models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let models = provider_named(&second, "p");
+            move || models.models(&ModelsArg::default())
+        },
+    )
     .expect("the retained list serves");
     assert_eq!(
         after.iter().map(|model| &model.id).collect::<Vec<_>>(),

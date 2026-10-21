@@ -1413,7 +1413,7 @@ fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let live = ready.wait(DEADLINE);
+    let live = ready.wait(fakes::Deadline::after(DEADLINE));
     assert_eq!(
         live.len(),
         1,
@@ -1436,10 +1436,10 @@ fn a_shutdown_signal_while_the_editor_runs_quits_with_128_plus_it() {
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
     assert!(
-        fakes::pids_exit(&live, DEADLINE),
+        fakes::pids_exit(&live, fakes::Deadline::after(DEADLINE)),
         "the editor outlived the shutdown: {live:?}"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
     crate::term::restore();
 }
 
@@ -1485,7 +1485,7 @@ fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
             Ok(()) | Err(_) => {}
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let live = ready.wait(DEADLINE);
+    let live = ready.wait(fakes::Deadline::after(DEADLINE));
     assert_eq!(
         live.len(),
         1,
@@ -1502,10 +1502,10 @@ fn a_shutdown_signal_while_a_file_editor_runs_quits_with_128_plus_it() {
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
     assert!(
-        fakes::pids_exit(&live, DEADLINE),
+        fakes::pids_exit(&live, fakes::Deadline::after(DEADLINE)),
         "the editor outlived the shutdown: {live:?}"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
     crate::term::restore();
 }
 
@@ -1633,12 +1633,12 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
         watched(&frames, "the OSC 52 bytes", &Deadline::after(DEADLINE)),
         osc
     );
-    ready.wait(DEADLINE);
+    ready.wait(fakes::Deadline::after(DEADLINE));
     assert_eq!(
         std::fs::read_to_string(&out).ok().as_deref(),
         Some("let a = 1;")
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]

@@ -422,7 +422,7 @@ fn cancellation_wakes_the_poll_without_advancing_time() {
     peer.subscribed(&deadline);
     assert!(home.clock.await_parked(
         home.clock.origin() + LIST_DEADLINE.checked_sub(CLEANUP_MARGIN).unwrap(),
-        fakes::deadline::WAITS
+        fakes::Deadline::after(fakes::deadline::WAITS)
     ));
     cancel.cancel();
     assert_eq!(
@@ -708,7 +708,7 @@ fn unending_short_lines_cannot_outlive_the_cutoff_or_cancellation() {
         if cancel_call {
             assert!(home.clock.await_parked(
                 home.clock.origin() + LIST_DEADLINE.checked_sub(CLEANUP_MARGIN).unwrap(),
-                fakes::deadline::WAITS
+                fakes::Deadline::after(fakes::deadline::WAITS)
             ));
             cancel.cancel();
             assert_eq!(
@@ -1343,7 +1343,10 @@ fn message_waits_for_the_answer_until_cancelled() {
     let (_exchange, _) = read_exchange(&stream);
     // The listener accepts and never answers; the call holds until the
     // turn is cancelled, then the listener reads end of file.
-    assert!(home.clock.await_parked_unbounded(fakes::deadline::WAITS));
+    assert!(
+        home.clock
+            .await_parked_unbounded(fakes::Deadline::after(fakes::deadline::WAITS))
+    );
     cancel.cancel();
     assert_eq!(
         deadline.recv_or_fail(&result, "cancelled wait"),

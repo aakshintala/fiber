@@ -697,13 +697,13 @@ fn two_rendered_pages_emit_three_scopes_with_no_renderer_hold() {
     // The first render starts only after the count/cut scope closed: its
     // record is already waiting, and no page scope is open during the
     // renderer's hold.
-    ready.wait(STEP);
+    ready.wait(fakes::Deadline::after(STEP));
     let count_cut = closed(&records, deadline);
     assert_eq!(count_cut.op, Op::PictureRun);
     assert!(records.try_recv().is_err(), "no guard during the hold");
     release(&mut held, 1);
     // The second render starts only after the first page's scope closed.
-    ready.wait(STEP);
+    ready.wait(fakes::Deadline::after(STEP));
     let page_one = closed(&records, deadline);
     assert_eq!(page_one.op, Op::PictureRun);
     assert!(records.try_recv().is_err(), "no guard during the hold");
@@ -832,7 +832,7 @@ fn a_cancel_during_the_count_cut_times_it() {
     let deadline = Deadline::after(STEP);
     let pid = fixture.spawned(deadline);
     let group = Fixture::watch(pid);
-    ready.wait(STEP);
+    ready.wait(fakes::Deadline::after(STEP));
     assert_eq!(probe.active(), 1, "the count/cut scope is open");
     assert!(done_rx.try_recv().is_err(), "no result before the cancel");
     cancel.cancel();
@@ -845,11 +845,8 @@ fn a_cancel_during_the_count_cut_times_it() {
     let record = closed(&records, deadline);
     assert_eq!(record.op, Op::PictureRun);
     assert_single(&records, "the count/cut");
-    assert!(
-        fakes::group_empties(pid, deadline.left()),
-        "the group emptied"
-    );
-    group.stand_down(deadline.cleanup());
+    assert!(fakes::group_empties(pid, deadline), "the group emptied");
+    group.stand_down(deadline.cleanup_phase());
 }
 
 #[test]
@@ -927,7 +924,7 @@ fn a_cancel_between_pages_adds_no_picture_scope() {
     let _count_cut = fixture.spawned(deadline);
     let renderer = fixture.spawned(deadline);
     let group = Fixture::watch(renderer);
-    ready.wait(STEP);
+    ready.wait(fakes::Deadline::after(STEP));
     // The render starts only after the count/cut scope closed.
     let count_cut = closed(&records, deadline);
     assert_eq!(count_cut.op, Op::PictureRun);
@@ -940,10 +937,10 @@ fn a_cancel_between_pages_adds_no_picture_scope() {
     assert_eq!(probe.calls(), 1, "no page scope started");
     assert_single(&records, "the count/cut");
     assert!(
-        fakes::group_empties(renderer, deadline.left()),
+        fakes::group_empties(renderer, deadline),
         "the group emptied"
     );
-    group.stand_down(deadline.cleanup());
+    group.stand_down(deadline.cleanup_phase());
 }
 
 #[test]
@@ -1689,7 +1686,7 @@ fn the_guard_is_live_while_the_child_is_held() {
         drop(done_tx.send(child.process(PNG, &CancelToken::new())));
     });
     let deadline = Deadline::after(STEP);
-    ready.wait(STEP);
+    ready.wait(fakes::Deadline::after(STEP));
     assert_eq!(probe.active(), 1, "the scope is open while held");
     assert!(
         done_rx.try_recv().is_err(),
@@ -1960,7 +1957,7 @@ fn cancelled_call(
     let deadline = Deadline::after(STEP);
     let pid = client.spawned(deadline);
     let group = Fixture::watch(pid);
-    ready.wait(STEP);
+    ready.wait(fakes::Deadline::after(STEP));
     assert!(
         done_rx.try_recv().is_err(),
         "the call ends only at the cancel"
@@ -1995,11 +1992,8 @@ fn assert_cancelled(call: CancelledCall) {
     let record = closed(&records, deadline);
     assert_eq!(record.op, Op::PictureRun);
     assert!(records.try_recv().is_err(), "one entry, one record");
-    assert!(
-        fakes::group_empties(pid, deadline.left()),
-        "the group emptied"
-    );
-    group.stand_down(deadline.cleanup());
+    assert!(fakes::group_empties(pid, deadline), "the group emptied");
+    group.stand_down(deadline.cleanup_phase());
 }
 
 #[test]

@@ -306,7 +306,7 @@ fn approve_returns_zero_on_success_and_two_on_refusal() {
         let output = fakes::rerun_prepared(
             &format!("{name}::approve_returns_zero_on_success_and_two_on_refusal"),
             &[(APPROVE_CHILD, case)],
-            CHILD_DEADLINE,
+            Deadline::after(CHILD_DEADLINE),
             |command| {
                 command
                     .env("FIBER_HOME", setup.home())

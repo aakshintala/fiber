@@ -67,7 +67,7 @@ impl Setup {
             "`fiber` left a process behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
     }
 }
@@ -243,7 +243,7 @@ fn a_repository_role_credential_is_ignored_with_a_notice_and_keeps_its_model() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing ask really asked"
     );
     let lines: Vec<Value> = String::from_utf8(output.stdout)

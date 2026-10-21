@@ -74,7 +74,7 @@ pub(crate) fn read_until(
     done: impl Fn(&Envelope) -> bool + Send + 'static,
 ) -> (Watcher, Vec<Envelope>) {
     let what_owned = what.to_owned();
-    fakes::within(what, DEADLINE, move || {
+    fakes::within(what, Deadline::after(DEADLINE), move || {
         let mut watcher = watcher;
         let mut lines = Vec::new();
         loop {
@@ -1648,7 +1648,9 @@ pub(crate) fn await_step_park(session: &Session) {
         .turn_thread
         .expect("a turn is running on its own thread");
     assert!(
-        session.clock.await_thread_parked(id, None, DEADLINE),
+        session
+            .clock
+            .await_thread_parked(id, None, fakes::Deadline::after(DEADLINE)),
         "the step thread {id:?} parked with no deadline: {:?}",
         session.clock.parked(),
     );

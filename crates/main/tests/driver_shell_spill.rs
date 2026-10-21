@@ -97,7 +97,7 @@ fn driver_shell_past_a_mebibyte_returns_its_complete_artifact() {
     let started: Value = serde_json::from_str(&first_raw).unwrap();
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 
@@ -246,7 +246,7 @@ fn driver_shell_past_a_mebibyte_returns_its_complete_artifact() {
         "fiber left a process in its group"
     );
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 
     let lines: Vec<Value> = raw
         .iter()

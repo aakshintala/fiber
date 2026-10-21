@@ -146,7 +146,7 @@ fn a_probe_on_a_live_group_is_bounded() {
         deadline.cleanup_phase().recv(&reaped).is_ok(),
         "waited until the deadline for the killed sleep to be reaped"
     );
-    assert!(fakes::group_empties(group, deadline.cleanup()));
+    assert!(fakes::group_empties(group, deadline.cleanup_phase()));
     assert!(!group_alive(deadline, group));
 
     let (mut child, group, _guard) = sleeper();
@@ -159,5 +159,5 @@ fn a_probe_on_a_live_group_is_bounded() {
         deadline.cleanup_phase().recv(&reaped).is_ok(),
         "waited until the deadline for the detached kill's sleep to be reaped"
     );
-    assert!(fakes::group_empties(group, deadline.cleanup()));
+    assert!(fakes::group_empties(group, deadline.cleanup_phase()));
 }

@@ -628,19 +628,25 @@ impl FakeClock {
             .collect()
     }
 
-    /// Waits, at most `within` of real time, until a thread is parked in
+    /// Waits, at most what remains of `deadline`, until a thread is parked in
     /// [`Clock::wait_until`] with this `until`. True once it is; false at
     /// the deadline. The bound is the condvar's timeout, so this reads no
     /// process clock.
-    pub fn await_parked(&self, until: Instant, within: Duration) -> bool {
-        self.await_parked_count(until, 1, within)
+    pub fn await_parked(&self, until: Instant, deadline: crate::deadline::Deadline) -> bool {
+        self.await_parked_count(until, 1, deadline)
     }
 
-    /// Waits, at most `within` of real time, until at least `count` threads
+    /// Waits, at most what remains of `deadline`, until at least `count` threads
     /// are parked in [`Clock::wait_until`] with this `until`. True once they
     /// are; false at the deadline. The bound is the condvar's timeout, so
     /// this reads no process clock.
-    pub fn await_parked_count(&self, until: Instant, count: usize, within: Duration) -> bool {
+    pub fn await_parked_count(
+        &self,
+        until: Instant,
+        count: usize,
+        deadline: crate::deadline::Deadline,
+    ) -> bool {
+        let within = deadline.left();
         let state = lock(&self.state);
         let (guard, _) = self
             .parked_cv
@@ -649,7 +655,7 @@ impl FakeClock {
         parked_count(&guard, until) >= count
     }
 
-    /// Waits, at most `within` of real time, until a thread in `mark` is
+    /// Waits, at most what remains of `deadline`, until a thread in `mark` is
     /// parked again, in a later park, with this `until` (`None`: no
     /// deadline). True once it is; false at the deadline. A thread that
     /// left its park before the advance matches its next park.
@@ -657,8 +663,9 @@ impl FakeClock {
         &self,
         mark: &Mark,
         until: Option<Instant>,
-        within: Duration,
+        deadline: crate::deadline::Deadline,
     ) -> bool {
+        let within = deadline.left();
         let state = lock(&self.state);
         let (guard, _) = self
             .parked_cv
@@ -728,12 +735,13 @@ impl FakeClock {
         }
     }
 
-    /// Waits, at most `within` of real time, until a thread is parked in
+    /// Waits, at most what remains of `deadline`, until a thread is parked in
     /// [`Clock::wait_until`] with this `until`, and returns a [`Mark`] of the
     /// threads parked at `until`, taken under the lock that saw the park.
     /// `None` at the deadline. A later park by one of them matches
     /// [`FakeClock::await_parked_since`], whatever woke it.
-    pub fn mark_parked(&self, until: Instant, within: Duration) -> Option<Mark> {
+    pub fn mark_parked(&self, until: Instant, deadline: crate::deadline::Deadline) -> Option<Mark> {
+        let within = deadline.left();
         let state = lock(&self.state);
         let (guard, _) = self
             .parked_cv
@@ -758,9 +766,10 @@ impl FakeClock {
         })
     }
 
-    /// Waits, at most `within` of real time, until a thread in `mark` is
+    /// Waits, at most what remains of `deadline`, until a thread in `mark` is
     /// parked again, in a later park, with any deadline.
-    pub fn await_any_parked_since(&self, mark: &Mark, within: Duration) -> bool {
+    pub fn await_any_parked_since(&self, mark: &Mark, deadline: crate::deadline::Deadline) -> bool {
+        let within = deadline.left();
         let state = lock(&self.state);
         let (guard, _) = self
             .parked_cv
@@ -774,7 +783,7 @@ impl FakeClock {
         parked_after(&guard, mark)
     }
 
-    /// Waits, at most `within` of real time, until `thread` is parked in
+    /// Waits, at most what remains of `deadline`, until `thread` is parked in
     /// [`Clock::wait_until`] with this `until`. True once it is; false at
     /// the deadline. The bound is the condvar's timeout, so this reads no
     /// process clock.
@@ -782,8 +791,9 @@ impl FakeClock {
         &self,
         thread: ThreadId,
         until: Option<Instant>,
-        within: Duration,
+        deadline: crate::deadline::Deadline,
     ) -> bool {
+        let within = deadline.left();
         let state = lock(&self.state);
         let (guard, _) = self
             .parked_cv
@@ -793,7 +803,8 @@ impl FakeClock {
     }
 
     /// [`FakeClock::await_parked`] for a park with no deadline.
-    pub fn await_parked_unbounded(&self, within: Duration) -> bool {
+    pub fn await_parked_unbounded(&self, deadline: crate::deadline::Deadline) -> bool {
+        let within = deadline.left();
         let state = lock(&self.state);
         let (guard, _) = self
             .parked_cv

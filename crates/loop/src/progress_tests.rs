@@ -380,7 +380,10 @@ fn forwarding_passes_on_a_bump_that_landed_before_it_once() {
     wake.forward(None);
     let clock = FakeClock::new();
     let parked = park_on(&wake, &clock);
-    assert!(clock.await_parked_unbounded(DEADLINE), "the park waits");
+    assert!(
+        clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
+        "the park waits"
+    );
     wake.wake();
     Deadline::after(DEADLINE)
         .recv(&parked)

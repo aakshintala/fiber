@@ -408,11 +408,13 @@ fn a_timed_out_callback_drops_the_late_reply_but_keeps_the_lines() {
     let deadline = clock.now() + Duration::from_millis(50);
     let grace = deadline + Duration::from_secs(1);
     assert!(
-        clock.mark_parked(grace, WAIT).is_some(),
+        clock
+            .mark_parked(grace, fakes::Deadline::after(WAIT))
+            .is_some(),
         "waited {WAIT:?} for the waiter to park at deadline plus grace",
     );
     let scheduler = clock
-        .mark_parked(deadline, WAIT)
+        .mark_parked(deadline, fakes::Deadline::after(WAIT))
         .expect("waited for the scheduler to park at the callback deadline")
         .threads();
     assert_eq!(

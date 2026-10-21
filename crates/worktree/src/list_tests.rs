@@ -192,7 +192,7 @@ fn a_non_utf8_worktree_name_round_trips_as_bytes() {
         "git worktree add with a non-UTF-8 name",
         child,
         &[],
-        fakes::MUST_SUCCEED_WITHIN,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert!(out.status.success(), "{out:?}");
     let listed = list(home.path()).unwrap();

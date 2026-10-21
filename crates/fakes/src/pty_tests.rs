@@ -80,9 +80,11 @@ fn disconnected<T: std::fmt::Debug>(result: Result<T, mpsc::RecvTimeoutError>, w
 
 #[test]
 fn open_passes_bytes_from_slave_to_master() {
-    let (master, slave) = within("opening a pty pair", MUST_SUCCEED_WITHIN, || {
-        open().expect("opening a pty pair")
-    });
+    let (master, slave) = within(
+        "opening a pty pair",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        || open().expect("opening a pty pair"),
+    );
     let slave = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -90,7 +92,7 @@ fn open_passes_bytes_from_slave_to_master() {
         .expect("opening the pty slave");
     within(
         "reading what the slave wrote",
-        MUST_SUCCEED_WITHIN,
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let (mut master, mut slave) = (master, slave);
             slave.write_all(b"hi").expect("writing to the pty slave");

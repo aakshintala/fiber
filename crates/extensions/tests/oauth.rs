@@ -441,7 +441,7 @@ fn lua_message(error: &Error) -> String {
 #[track_caller]
 fn get(port: u16, request: &str) -> String {
     let request = request.to_owned();
-    fakes::within("the oauth reply", WAIT, move || {
+    fakes::within("the oauth reply", Deadline::after(WAIT), move || {
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
         stream.set_read_timeout(Some(WAIT)).unwrap();
         stream.write_all(request.as_bytes()).unwrap();
@@ -456,7 +456,7 @@ fn get(port: u16, request: &str) -> String {
 #[track_caller]
 fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
     let mark = clock
-        .mark_parked(at, WAIT)
+        .mark_parked(at, fakes::Deadline::after(WAIT))
         .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
     let threads = mark.threads();
     assert_eq!(
@@ -480,11 +480,12 @@ fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
 fn await_callbacks_parked(env: &Env, deadline: Instant, callers: usize, threads: usize) {
     assert!(
         env.clock
-            .await_parked_count(deadline + GRACE, callers, WAIT),
+            .await_parked_count(deadline + GRACE, callers, fakes::Deadline::after(WAIT)),
         "the callers never began waiting past their deadline"
     );
     assert!(
-        env.clock.await_parked_count(deadline, threads, WAIT),
+        env.clock
+            .await_parked_count(deadline, threads, fakes::Deadline::after(WAIT)),
         "the callbacks never parked"
     );
 }
@@ -700,13 +701,17 @@ fn callback_skips_a_connection_that_is_not_a_request_and_a_head_that_is_too_larg
     match stream.write_all(huge.as_bytes()) {
         Ok(()) | Err(_) => {}
     }
-    let reply: String = fakes::within("the oversized-head reply", WAIT, move || {
-        let mut reply = String::new();
-        match stream.read_to_string(&mut reply) {
-            Ok(_) | Err(_) => {}
-        }
-        reply
-    });
+    let reply: String = fakes::within(
+        "the oversized-head reply",
+        Deadline::after(WAIT),
+        move || {
+            let mut reply = String::new();
+            match stream.read_to_string(&mut reply) {
+                Ok(_) | Err(_) => {}
+            }
+            reply
+        },
+    );
     assert!(
         reply.is_empty() || reply.starts_with("HTTP/1.1 431"),
         "{reply}"
@@ -825,7 +830,7 @@ fn callback_dropped_at_its_timeout_frees_the_port_from_a_client_that_keeps_sendi
         }
     });
     first.write_all(b"not http\r\n\r\n").unwrap();
-    let junk: String = fakes::within("the first reply", WAIT, move || {
+    let junk: String = fakes::within("the first reply", Deadline::after(WAIT), move || {
         let mut junk = String::new();
         first.read_to_string(&mut junk).unwrap();
         junk
@@ -926,7 +931,8 @@ fn poll_slow_down_adds_five_seconds() {
     ]);
     let rx = start(&ext, "poll", &server.url());
     assert!(
-        env.clock.await_parked(wake(&env, 10), WAIT),
+        env.clock
+            .await_parked(wake(&env, 10), fakes::Deadline::after(WAIT)),
         "the slowed poll never parked for its 10-second wake within {WAIT:?}"
     );
     let poller = thread_parked_at(&env.clock, wake(&env, 10));
@@ -938,7 +944,8 @@ fn poll_slow_down_adds_five_seconds() {
     );
     // Still waiting on the instant 10 s out.
     assert!(
-        env.clock.await_parked(wake(&env, 10), WAIT),
+        env.clock
+            .await_parked(wake(&env, 10), fakes::Deadline::after(WAIT)),
         "the slowed poll left its 10-second wake early within {WAIT:?}"
     );
     assert_eq!(server.request_count(), 1);
@@ -983,7 +990,8 @@ fn poll_that_times_out_while_sleeping_is_a_timeout() {
     let server = device_server(vec![OauthReply::pending(), OauthReply::pending()]);
     let rx = start(&ext, "poll", &server.url());
     assert!(
-        env.clock.await_parked(wake(&env, 5), WAIT),
+        env.clock
+            .await_parked(wake(&env, 5), fakes::Deadline::after(WAIT)),
         "the poll never parked for its 5-second sleep within {WAIT:?}"
     );
     // Late wake past the 5 s poll park to the 60 s deadline; the park is
@@ -1180,7 +1188,8 @@ fn a_function_the_hook_stops_leaves_the_file_and_frees_the_lock() {
     let rx = start_token(&provider);
     finish(&went, &Deadline::after(WAIT));
     assert!(
-        env.clock.await_parked(asked + TIMEOUT + GRACE, WAIT),
+        env.clock
+            .await_parked(asked + TIMEOUT + GRACE, fakes::Deadline::after(WAIT)),
         "the token call never waited past its deadline while the spin held the lock within {WAIT:?}"
     );
     env.clock.advance_when_parked(
@@ -1244,7 +1253,7 @@ fn refresh_race(
     let deadline = env.clock.now() + TIMEOUT;
     let a = start_token(first);
     assert!(
-        held.await_requests(1, WAIT),
+        held.await_requests(1, Deadline::after(WAIT)),
         "the first refresh never reached the endpoint"
     );
     let b = start_token(second);
@@ -1297,17 +1306,19 @@ fn a_refresh_that_times_out_in_its_function_leaves_the_file_and_frees_the_lock()
     let rx = start_token(&provider);
     // The function is on the wire, so it holds the lock.
     assert!(
-        hang.await_requests(1, WAIT),
+        hang.await_requests(1, Deadline::after(WAIT)),
         "the refresh never reached the endpoint"
     );
     assert!(
-        env.clock.await_parked(deadline, WAIT),
+        env.clock
+            .await_parked(deadline, fakes::Deadline::after(WAIT)),
         "the refresh never parked on its timeout while on the wire within {WAIT:?}"
     );
     // The token call waits past its deadline once the refresh function has
     // started, so the deadline park below is the scheduler's, not a queue.
     assert!(
-        env.clock.await_parked(deadline + GRACE, WAIT),
+        env.clock
+            .await_parked(deadline + GRACE, fakes::Deadline::after(WAIT)),
         "the token call never waited past its deadline while the refresh held the lock within {WAIT:?}"
     );
     let scheduler = thread_parked_at(&env.clock, deadline);
@@ -1739,7 +1750,7 @@ end } })
     let provider = LuaProvider::new(Arc::clone(&ext), "acme");
     let rx = start_token(&provider);
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the credential never reached the held endpoint"
     );
     assert_eq!(

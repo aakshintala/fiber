@@ -244,5 +244,5 @@ fn a_stalled_install_step_installs_nothing() {
         leftovers.is_empty(),
         "the stalled install step is gone: {leftovers:?}"
     );
-    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }

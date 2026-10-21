@@ -2576,7 +2576,7 @@ fn a_recorded_wrong_path_is_invalid_request() {
 #[test]
 fn a_wrong_path_failure_names_the_host_and_path_not_the_query() {
     let message = recorded("provider-errors/raw/openai-completions.wrong-path.json")
-        .failure("openai", &Secrets::default())
+        .failure("openai", crate::LoginAdvice::Advised, &Secrets::default())
         .message;
     assert_eq!(
         message,
@@ -2590,7 +2590,9 @@ fn a_wrong_path_failure_names_the_host_and_path_not_the_query() {
         url: crate::error::target("https://user:pw@host.test:8080/v1beta/m:gen?key=SECRET#frag"),
         error_type: None,
     };
-    let message = wrong_key.failure("p", &Secrets::default()).message;
+    let message = wrong_key
+        .failure("p", crate::LoginAdvice::Advised, &Secrets::default())
+        .message;
     assert_eq!(
         message,
         "p answered HTTP 404 for host.test:8080/v1beta/m:gen. Check the base URL."
@@ -2602,7 +2604,7 @@ fn a_wrong_path_failure_names_the_host_and_path_not_the_query() {
 #[test]
 fn a_404_that_names_the_model_keeps_the_provider_wording() {
     let message = recorded("provider-errors/raw/muse-messages.unknown-model.json")
-        .failure("muse", &Secrets::default())
+        .failure("muse", crate::LoginAdvice::Advised, &Secrets::default())
         .message;
     assert_eq!(message, "muse answered HTTP 404.");
     let other = Error::Status {
@@ -2614,7 +2616,9 @@ fn a_404_that_names_the_model_keeps_the_provider_wording() {
         error_type: None,
     };
     assert_eq!(
-        other.failure("p", &Secrets::default()).message,
+        other
+            .failure("p", crate::LoginAdvice::Advised, &Secrets::default())
+            .message,
         "p answered HTTP 400."
     );
 }
@@ -2748,7 +2752,7 @@ fn a_documented_stream_quota_failure_is_quota_exceeded() {
     }
     for err in &failures {
         assert_eq!(err.code(), ErrorCode::QuotaExceeded);
-        let failure = err.failure("p", &Secrets::default());
+        let failure = err.failure("p", crate::LoginAdvice::Advised, &Secrets::default());
         assert_eq!(failure.code, ErrorCode::QuotaExceeded);
         let provider = failure.provider.unwrap();
         assert_eq!(provider.status, Some(200));
@@ -2923,7 +2927,7 @@ fn a_failed_status_records_the_asked_wait_in_milliseconds_rounded_up() {
             url: String::new(),
             error_type: None,
         }
-        .failure("p", &Secrets::default());
+        .failure("p", crate::LoginAdvice::Advised, &Secrets::default());
         serde_json::to_value(&value).unwrap()
     };
     for (seconds, ms) in [
@@ -3023,7 +3027,7 @@ fn a_usage_limit_failure_names_the_reset_time() {
         url: String::new(),
         error_type: None,
     }
-    .failure("codex", &Secrets::default());
+    .failure("codex", crate::LoginAdvice::Advised, &Secrets::default());
     assert_eq!(failed.code, ErrorCode::QuotaExceeded);
     assert_eq!(failed.retry_after_ms, Some(7_200_000));
     assert_eq!(
@@ -3047,7 +3051,7 @@ fn another_quota_shape_keeps_the_generic_status_message() {
         url: String::new(),
         error_type: None,
     }
-    .failure("openai", &Secrets::default());
+    .failure("openai", crate::LoginAdvice::Advised, &Secrets::default());
 
     assert_eq!(failed.code, ErrorCode::QuotaExceeded);
     assert_eq!(failed.message, "openai answered HTTP 429.");
@@ -3069,7 +3073,7 @@ fn a_usage_limit_failure_without_a_reset_names_no_time() {
             url: String::new(),
             error_type: None,
         }
-        .failure("codex", &Secrets::default());
+        .failure("codex", crate::LoginAdvice::Advised, &Secrets::default());
         assert_eq!(failed.code, ErrorCode::QuotaExceeded);
         assert_eq!(failed.retry_after_ms, None);
         assert_eq!(failed.message, "codex reached its usage limit.");
@@ -3102,7 +3106,7 @@ fn reset_times_name_the_civil_date_in_utc() {
             url: String::new(),
             error_type: None,
         }
-        .failure("codex", &Secrets::default());
+        .failure("codex", crate::LoginAdvice::Advised, &Secrets::default());
         assert_eq!(
             failed.message,
             format!("codex reached its usage limit; it resets at {day}.")
@@ -3163,7 +3167,8 @@ fn an_aws_error_body_gives_its_message_whatever_the_keys_case() {
             "Invalid API Key format: Delimiter ':' not found",
         ),
     ] {
-        let failure = recorded(path).failure("bedrock", &Secrets::default());
+        let failure =
+            recorded(path).failure("bedrock", crate::LoginAdvice::Advised, &Secrets::default());
         assert_eq!(failure.provider.unwrap().message, said, "{path}");
     }
 }
@@ -3340,7 +3345,7 @@ fn an_aws_exception_inside_the_stream_maps_to_its_code() {
         };
         assert_eq!(error.code(), code, "{name}: {message}");
         assert_eq!(error.should_retry(), None, "{name}");
-        let failure = error.failure("bedrock", &Secrets::default());
+        let failure = error.failure("bedrock", crate::LoginAdvice::Advised, &Secrets::default());
         let said = failure.provider.unwrap();
         assert_eq!(said.status, Some(200), "{name}");
         assert_eq!(said.message, message, "{name}");

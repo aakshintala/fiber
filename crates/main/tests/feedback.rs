@@ -61,7 +61,7 @@ fn wait(setup: &Setup, what: &str, child: Child) -> Output {
         !group_alive(setup.deadline, group),
         "{what} left a process in its group behind"
     );
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     output
 }
 

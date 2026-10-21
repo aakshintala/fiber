@@ -157,6 +157,10 @@ fn build(
     diag: Option<&Arc<log::diag::Diag>>,
 ) -> Result<Built, Failure> {
     let lookup_key = key.clone();
+    let credential = match lua {
+        Some((lua, _)) => lua.registers("credential").unwrap_or(false),
+        None => false,
+    };
     let endpoint = Endpoint {
         provider: model.provider.name.clone(),
         model: model.model.id.clone(),
@@ -175,6 +179,7 @@ fn build(
         text_only: !model.model.input.iter().any(|kind| kind == "image"),
         direct: false,
         limits: net::LIMITS,
+        login_advice: crate::lua_providers::login_advice(credential, model.provider),
     };
     let cache_key_header = model
         .model
