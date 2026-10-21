@@ -5704,6 +5704,46 @@ fn a_failed_diagnostics_file_changes_no_output() {
     assert_eq!(ran, control_ran);
 }
 
+// An observed entry means the release is already queued: the hold queues
+// its release before it signals entry, so the pop below needs no wait.
+// A reviewer hold answers one tool call, then the turn completes.
+#[test]
+fn an_entered_hold_already_queues_its_release() {
+    let rules = Arc::new(FakeRules::default());
+    let atlas = Arc::new(ProbeTool::executes("atlas", "atlas run"));
+    let mut setup = Setup::new(Arc::clone(&rules));
+    setup.tools.push(Arc::clone(&atlas));
+    setup.reviewer_script = Some(vec![ReviewReply::HoldAnswer]);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    setup.reviewer_hold_entered = Some(entered_tx);
+    let home = fakes::TempDir::new("fiber-tool-timing");
+    let mut world = build(
+        &setup,
+        home,
+        vec![
+            tool_answer("atlas", json!({}), 0),
+            text_answer("Done.", 0),
+            text_answer("Spare.", 0),
+        ],
+    );
+    prompt(&world, "hi");
+    let flight = spawn_turn(&mut world);
+    let deadline = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    deadline.recv_or_fail(&entered_rx, "the held call enters");
+    let judging = world.reviewer.as_ref().expect("a reviewer");
+    let release = lock(&judging.hold_releases)
+        .pop_front()
+        .expect("an entered hold already queues its release");
+    release
+        .send(review_answers(&[review_text("allow", 0)]).remove(0))
+        .expect("the hold waits");
+    assert_eq!(
+        join_turn(&mut world, flight).unwrap(),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(atlas.ran(), 1);
+}
+
 // Three stage-1 requests fly together and resolve in request order: with
 // every first stage held, all three entries land before any answer
 // returns; releasing in reverse arrival order still resolves 1-2-3 before
