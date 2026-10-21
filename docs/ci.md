@@ -391,7 +391,10 @@ renamed in the new release fails it, because `unknown_lints` is denied
 ## Releases
 
 `.github/workflows/release.yml` runs on a push to `main` that changes the
-fiber version in `crates/main/Cargo.toml`. A `preflight` job compares the
+fiber version in `crates/main/Cargo.toml`. A nightly schedule builds a
+pre-release once a day, only when main changed since the last nightly: its
+skip-when-unchanged preflight computes the next nightly version and every
+later nightly job runs only when it publishes, reusing the same gate. A `preflight` job compares the
 version at the push's base and head, and every release job runs only when
 it changed: any other push runs no release. A version decrease, a missing
 `CHANGELOG.md` section or an existing `v<version>` fails the run before
