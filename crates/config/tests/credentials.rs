@@ -17,26 +17,30 @@ use contract::ErrorCode;
 fn acme(credential: Option<CredentialSource>) -> ProviderData {
     ProviderData {
         name: "acme".into(),
-        credential,
         credential_name: None,
         headers: Default::default(),
         placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
-        login: None,
+        credential_from: config::CredentialFrom::Stored {
+            credential,
+            login: None,
+        },
     }
 }
 
 fn shared(name: &str, stored: &str, credential: Option<CredentialSource>) -> ProviderData {
     ProviderData {
         name: name.into(),
-        credential,
         credential_name: Some(stored.into()),
         headers: Default::default(),
         placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
-        login: None,
+        credential_from: config::CredentialFrom::Stored {
+            credential,
+            login: None,
+        },
     }
 }
 
@@ -358,8 +362,14 @@ fn shared_providers_fall_back_to_their_declared_sources() {
     let providers = opencode_providers();
     let mut go = named(&providers, "opencode-go");
     let mut zen = named(&providers, "opencode-zen");
-    go.credential = command(&["printf", "go-declared"]);
-    zen.credential = command(&["printf", "zen-declared"]);
+    go.credential_from = config::CredentialFrom::Stored {
+        credential: command(&["printf", "go-declared"]),
+        login: None,
+    };
+    zen.credential_from = config::CredentialFrom::Stored {
+        credential: command(&["printf", "zen-declared"]),
+        login: None,
+    };
     assert_eq!(go.credential_name.as_deref(), Some("opencode"));
     assert_eq!(zen.credential_name.as_deref(), Some("opencode"));
     let setup = Setup::new();

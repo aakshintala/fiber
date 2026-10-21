@@ -580,13 +580,15 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
 fn credentialless_data() -> config::ProviderData {
     config::ProviderData {
         name: "p".to_owned(),
-        credential: None,
+        credential_from: config::CredentialFrom::Stored {
+            credential: None,
+            login: None,
+        },
         credential_name: None,
         headers: BTreeMap::new(),
         placeholders: BTreeMap::new(),
         models: Vec::new(),
         reviewer_model: None,
-        login: None,
     }
 }
 

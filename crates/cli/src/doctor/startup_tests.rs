@@ -703,13 +703,15 @@ fn a_windowless_model_blocks_through_the_window_check() {
     for window in [None, Some(0)] {
         let provider = ProviderData {
             name: "fake".to_owned(),
-            credential: None,
+            credential_from: config::CredentialFrom::Stored {
+                credential: None,
+                login: None,
+            },
             credential_name: None,
             headers: Default::default(),
             placeholders: Default::default(),
             models: Vec::new(),
             reviewer_model: None,
-            login: None,
         };
         let model_data = ModelData {
             id: "m".to_owned(),
