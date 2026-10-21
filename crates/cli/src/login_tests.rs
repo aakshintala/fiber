@@ -1722,7 +1722,7 @@ fn a_preset_environment_value_skips_the_host_question() {
     let output = fakes::rerun_prepared(
         &format!("{name}::a_preset_environment_value_skips_the_host_question"),
         &[(HOST_CHILD, "1"), (HOST_ENV, "adb-9.example")],
-        CHILD_DEADLINE,
+        fakes::Deadline::after(CHILD_DEADLINE),
         |_| {},
     );
     assert!(output.status.success(), "{output:?}");
@@ -1746,7 +1746,7 @@ fn a_present_but_invalid_environment_value_asks_nothing() {
     let output = fakes::rerun_prepared(
         &format!("{name}::a_present_but_invalid_environment_value_asks_nothing"),
         &[(HOST_CHILD, "1"), (HOST_ENV, "not a host!!")],
-        CHILD_DEADLINE,
+        fakes::Deadline::after(CHILD_DEADLINE),
         |_| {},
     );
     assert!(output.status.success(), "{output:?}");

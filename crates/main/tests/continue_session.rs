@@ -178,7 +178,7 @@ fn close_wait(client: &Socket, session: &str, tag: &str) {
 /// only once the process is gone.
 #[track_caller]
 fn wait_gone(setup: &Setup, id: &str) {
-    fakes::try_matching_exits(id, setup.deadline.left()).expect("the session process exits");
+    fakes::try_matching_exits(id, setup.deadline).expect("the session process exits");
 }
 
 #[test]

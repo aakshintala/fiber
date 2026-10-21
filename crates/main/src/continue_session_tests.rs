@@ -473,7 +473,7 @@ fn entry_point_with_removed_workspace_and_continues_is_not_found() {
             ("FIBER_MAIN_CONTINUES_ENTRY_OLD", OLD),
             ("FIBER_MAIN_CONTINUES_ENTRY_NEW", "s_bbbbbbbbbbbbbbbb"),
         ],
-        ENTRY_WITHIN,
+        fakes::Deadline::after(ENTRY_WITHIN),
     );
     assert_eq!(out.status.code(), Some(1), "the entry reports a failure");
     let stdout = String::from_utf8_lossy(&out.stdout);
