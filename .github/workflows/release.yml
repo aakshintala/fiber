@@ -12,7 +12,8 @@ name: Release
 # at the push's base and head; every release job runs only when it changed.
 # A daily schedule builds a nightly pre-release instead, when main moved
 # since the last nightly: the nightly preflight computes the next nightly
-# version and every later nightly job runs only when it publishes.
+# version and every later nightly job runs only when it publishes. A manual
+# dispatch (`gh workflow run release.yml`) is a nightly under the same check.
 on:
   push:
     branches: [main]
@@ -22,12 +23,15 @@ on:
   schedule:
     # The nightly pre-release (docs/releasing.md, "Cutting a release").
     - cron: '0 5 * * *'
+  # A manual nightly, for a nightly before the cron's late start.
+  workflow_dispatch:
 
-# Pushes share one group and scheduled runs share another, neither cancelling:
-# stable releases run one at a time, in push order, and a nightly never
-# blocks a stable release behind it.
+# Pushes share one group and nightlies, scheduled or manual, share another,
+# neither cancelling: stable releases run one at a time, in push order, a
+# nightly never blocks a stable release behind it, and a manual nightly never
+# overlaps a scheduled one.
 concurrency:
-  group: release-${{ github.event_name }}
+  group: release-${{ github.event_name == 'push' && 'push' || 'nightly' }}
   cancel-in-progress: false
 
 permissions:
@@ -109,7 +113,7 @@ jobs:
 
   nightly-preflight:
     name: Nightly preflight
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     # The selection job it mirrors gets 5 minutes (docs/ci.md, "Job time limits").
     timeout-minutes: 5
@@ -133,11 +137,13 @@ jobs:
           version=$(scripts/release-pack nightly-version . "$date")
           tag=v$version
           tags=$(git ls-remote --tags origin 'v*-nightly.*') || { printf 'release: %s\n' "could not list tags at origin." >&2; exit 1; }
+          # A second nightly the same day, scheduled after a manual one,
+          # skips: it would build over the first one's tag.
           if printf '%s' "$tags" | grep -q -F "refs/tags/$tag"; then
-            printf 'release: %s\n' "$tag already exists; refusing to build over it." >&2
-            exit 1
+            decision="skip: $tag already exists"
+          else
+            decision=$(printf '%s' "$tags" | scripts/release-pack nightly-needed "$HEAD")
           fi
-          decision=$(printf '%s' "$tags" | scripts/release-pack nightly-needed "$HEAD")
           echo "the nightly version is $version; $decision."
           echo "nightly-version=$version" >> "$GITHUB_OUTPUT"
           echo "nightly-needed=$decision" >> "$GITHUB_OUTPUT"
