@@ -495,9 +495,13 @@ impl Tripwire {
     /// copy) folds the copy's own delta. Either way checks the one-way
     /// trip on the current sum under the same lock hold.
     pub(crate) fn ack(&mut self, line: &UsageRecorded) -> bool {
-        if let Some(count) = self.pending.get_mut(&line.generation_id)
-            && *count > 0
-        {
+        // A present entry always counts a still-pending arrival: taps
+        // insert one and this acknowledgment removes the entry at zero,
+        // and nothing else writes the map, so there is no zero-count
+        // entry to guard against. A `count > 0` check here would leave
+        // a mutant (`>=`) no test can catch, since the comparison is
+        // always true on a present entry.
+        if let Some(count) = self.pending.get_mut(&line.generation_id) {
             *count -= 1;
             if *count == 0 {
                 self.pending.remove(&line.generation_id);
@@ -857,5 +861,23 @@ mod pending_tests {
         assert!((trip.sum - 1.0).abs() < 1e-9);
         assert!(trip.ack(&cost_line("h", Some(3.0))));
         assert!((trip.sum - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_second_ack_with_nothing_pending_folds_its_own_delta() {
+        // g tapped once at $4, then acknowledged twice with the older
+        // $1 line: the first acknowledgment consumes the pending
+        // arrival without folding, keeping $4; the second finds
+        // nothing pending and folds its own line as a correction,
+        // totaling $1. A consume that never removes the entry (`/=`)
+        // keeps consuming and never folds; one that grows the count
+        // (`+=`) does the same; both leave the sum at $4.
+        let mut trip = Tripwire::from_ledger(&Ledger::default(), None);
+        assert!(!trip.tap(&cost_line("g", Some(4.0))));
+        assert!((trip.sum - 4.0).abs() < 1e-9);
+        assert!(!trip.ack(&cost_line("g", Some(1.0))));
+        assert!((trip.sum - 4.0).abs() < 1e-9);
+        assert!(!trip.ack(&cost_line("g", Some(1.0))));
+        assert!((trip.sum - 1.0).abs() < 1e-9);
     }
 }

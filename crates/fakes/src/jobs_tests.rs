@@ -473,3 +473,20 @@ fn stop_delegates_counts_every_call() {
     assert_eq!(jobs.stop_delegates(), 2);
     assert_eq!(jobs.stop_delegates_calls(), 2);
 }
+
+#[test]
+fn installing_a_usage_tap_marks_the_fake_tapped_until_cleared() {
+    // Attaching the loop installs a tap and replacing the attachment
+    // clears it; a test tells the two states apart through
+    // `has_usage_tap`. Without the install the fake never reads
+    // tapped; without the clear it never reads untapped again.
+    use contract::events::UsageRecorded;
+
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    assert!(!jobs.has_usage_tap());
+    jobs.install_usage_tap(Some(Arc::new(|_: UsageRecorded| {})));
+    assert!(jobs.has_usage_tap());
+    jobs.install_usage_tap(None);
+    assert!(!jobs.has_usage_tap());
+}
