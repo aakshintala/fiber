@@ -105,10 +105,12 @@ One archive per target, each with a checksum file beside it:
 | Linux arm64 | `fiber-aarch64-unknown-linux-musl.tar.gz` |
 
 Each archive holds the `fiber` binary and `THIRD-PARTY-NOTICES`, the notices
-file `docs/dependencies.md` requires. Each checksum file is named after its
-archive with `.sha256` added. Each checksum file holds the archive's SHA-256
-as 64 hex digits, optionally followed by whitespace and the archive's name, as
-`sha256sum` writes it. The release also carries `install.sh`.
+file `docs/dependencies.md` requires. The template is the root `about.hbs`
+and the licence config is the root `about.toml`. Each checksum file is named
+after its archive with `.sha256` added. Each checksum file holds the
+archive's SHA-256 as 64 hex digits, optionally followed by whitespace and
+the archive's name, as `sha256sum` writes it. The release also carries
+`install.sh`.
 
 The release also carries `fiber-docs.tar.gz` and its checksum file: the
 repository's `docs/` tree at the release tag, without the documents about

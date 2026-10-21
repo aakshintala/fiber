@@ -1130,12 +1130,13 @@ fn package(name: &str) -> PathBuf {
 /// The OpenCode Go tool exchange with `muse-spark-1.3-contributor`: the
 /// recorded tool call, then the probe's answer after the tool result.
 fn go_exchange() -> [Response; 2] {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let call = root.join("crates/provider/tests/recordings/opencode-go-tool-call.sse");
-    let answer = root.join("research/opencode-probe/raw/go_stream_tools_1.sse");
     [
-        Response::stream(fs::read(call).unwrap()),
-        Response::stream(fs::read(answer).unwrap()),
+        Response::stream(
+            include_bytes!("../../provider/tests/recordings/opencode-go-tool-call.sse").to_vec(),
+        ),
+        Response::stream(
+            include_bytes!("../../../research/opencode-probe/raw/go_stream_tools_1.sse").to_vec(),
+        ),
     ]
 }
 

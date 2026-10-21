@@ -1,12 +1,7 @@
 use super::*;
-use std::fs::read_to_string;
 
 fn real_workflow() -> String {
-    read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../.github/workflows/ci.yml"
-    ))
-    .unwrap()
+    include_str!("../../.github/workflows/ci.yml").to_owned()
 }
 
 fn real_doc() -> String {

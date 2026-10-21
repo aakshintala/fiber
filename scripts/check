@@ -117,6 +117,21 @@ if [ "$scope" != platform ]; then
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
     fi
+    # The notices file the release publishes (docs/dependencies.md, "Supply
+    # chain"): the same cargo about generate the release runs, so a licence
+    # the root about.toml rejects fails the pull request, not the release.
+    # CI's lint job installs cargo-about; a local run without it skips.
+    if command -v cargo-about > /dev/null; then
+      echo "== cargo-about notices parity"
+      notices_parity=$(mktemp)
+      cargo about generate --manifest-path crates/main/Cargo.toml about.hbs --output-file "$notices_parity" ||
+        { printf 'scripts/check: %s\n' "cargo about generate failed; the release would fail the same way." >&2; exit 1; }
+      [ -s "$notices_parity" ] || { printf 'scripts/check: %s\n' "cargo about generate wrote an empty notices file." >&2; exit 1; }
+      grep -q "Apache-2.0" "$notices_parity" || { printf 'scripts/check: %s\n' "cargo about generate names no Apache-2.0 licence." >&2; exit 1; }
+      rm -f "$notices_parity"
+    else
+      echo "== cargo-about notices parity: skipped (cargo-about is not installed; CI installs it)"
+    fi
   fi
 fi
 

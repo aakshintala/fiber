@@ -300,6 +300,8 @@ pub(super) fn assembled(
         &mut providers,
         &config,
         &fakes::children::grouped_output,
+        home,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let owners = (extensions.lua_providers().iter())
@@ -1008,6 +1010,8 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         &mut providers,
         &config,
         &fakes::children::grouped_output,
+        &fixture.home,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert!(
