@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Fiber is a terminal coding agent. Choose your model, keep your sessions and send work to delegates.">
+  <title>Fiber — your work, in the terminal</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <header class="column">
+    <a class="wordmark" href="#main">fiber<span aria-hidden="true">▰</span></a>
+    <nav aria-label="Main navigation">
+      <a href="https://github.com/aakshintala/fiber/tree/main/docs/user">Docs</a>
+      <a href="https://github.com/aakshintala/fiber">GitHub</a>
+    </nav>
+  </header>
+  <main id="main">
+    <section class="hero column" aria-labelledby="pitch">
+      <p class="eyebrow">A terminal coding agent</p>
+      <h1 id="pitch">Your work, in the terminal.</h1>
+      <p class="subline">Choose your model. Keep your sessions. Send work to delegates.</p>
+      <div class="install">
+        <span class="prompt" aria-hidden="true">$</span>
+        <code id="install-command">curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install.sh | sh</code>
+        <button id="copy" type="button" hidden>Copy</button>
+      </div>
+      <p class="install-note">macOS and Linux · <a href="https://github.com/aakshintala/fiber/blob/main/docs/releasing.md#installing">Install instructions</a></p>
+    </section>
+
+    <figure class="terminal" aria-describedby="screen-caption">
+      <div class="screen">
+        <a class="image-link" href="fiber-tui.png" aria-label="Open the full-size Ghostty screenshot of Fiber">
+          <img src="fiber-tui.png" width="3140" height="2144" alt="Fiber in Ghostty: the left rail groups sessions under fiber, pi-rig and beacon. The conversation shows a finished repair with a summary table. Approval 1 of 2 waits for cargo mutants at the bottom. The right panel shows context, changed files, a reviewer delegate, jobs and quota.">
+        </a>
+        <ul class="annotations" aria-label="Screen guide">
+          <li class="rail-label">Rail · keep projects in view</li>
+          <li class="conversation-label">Conversation · follow the work</li>
+          <li class="panel-label">Panel · check your delegates</li>
+          <li class="approval-label">Approval · you decide what runs</li>
+        </ul>
+      </div>
+      <figcaption id="screen-caption"><span>The TUI prototype, captured in Ghostty</span><span>Click the image for full size ↗</span></figcaption>
+    </figure>
+
+    <section class="numbers column" aria-labelledby="numbers-title">
+      <h2 id="numbers-title">Small enough to keep open.</h2>
+      <dl>
+        <div class="number-row">
+          <dt><a href="https://github.com/aakshintala/fiber/blob/main/docs/performance.md#budgets">12,416–12,480 <span>KiB</span></a></dt>
+          <dd>Idle headless session peak RSS. CI medians on Linux x86_64, within a 13 MiB ceiling. Child processes count separately.</dd>
+        </div>
+        <div class="number-row binary-row">
+          <dt><a href="https://github.com/aakshintala/fiber/blob/main/docs/ci.md#the-backstop-on-main">Binary size</a></dt>
+          <dd>No total figure in the branch docs. CI records the stripped binary’s bytes for each main commit.</dd>
+        </div>
+        <div class="number-row providers-row">
+          <dt><a href="https://github.com/aakshintala/fiber/blob/main/docs/model-routing.md#protocols-and-providers">11 <span>providers</span></a></dt>
+          <dd>Anthropic, OpenAI, Gemini API, ChatGPT/codex, OpenRouter, OpenCode, Databricks, muse, AWS Bedrock, Google Vertex and Azure.</dd>
+        </div>
+      </dl>
+    </section>
+  </main>
+  <footer class="column"><span>Fiber · static product page prototype</span><a href="https://github.com/aakshintala/fiber">Read the source ↗</a></footer>
+  <p id="copy-status" class="sr-only" role="status" aria-live="polite"></p>
+</body>
+</html>
