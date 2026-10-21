@@ -173,10 +173,11 @@ pub fn write(
     let link = issue_link(&title(description), &report, description);
     let stamp = clock::wall_ms(ctx.clock.wall());
     let mut path = ctx.cwd.join(format!("fiber-feedback-{stamp}.md"));
-    let mut bump = 2;
-    while path.exists() {
+    for bump in 2.. {
+        if !path.exists() {
+            break;
+        }
         path = ctx.cwd.join(format!("fiber-feedback-{stamp}-{bump}.md"));
-        bump += 1;
     }
     if let Err(source) = std::fs::write(&path, report.as_bytes()) {
         // Best-effort: the report was built fully in memory, so a
