@@ -32,18 +32,6 @@ pub(crate) enum Relisted {
     },
 }
 
-/// How a re-list page ended before its last page: the Timeout/Gone/other
-/// outcome the shared paging passes through its `fail`.
-enum ListEnd {
-    /// The bound passed or the RPC timed out: the missed-deadline record.
-    Deadline,
-    /// The server died mid-list: this re-list is the first to see it, as
-    /// the entry of `serve` is for a call.
-    Death,
-    /// Any other end: a malformed page, a refused list, or an expiry.
-    Empty,
-}
-
 /// A fresh `tools/list` (`prompts/list` only for the cache write)
 /// against the running server, under the slot lease, bounded by the
 /// spec's `startup_timeout`, the same bound as the handshake's listing
@@ -104,44 +92,35 @@ pub(super) fn relist(slot: &Slot) -> Relisted {
     };
     let timeout = slot.spec.startup_timeout;
     let bound = crate::wait::deadline(slot.clock.as_ref(), timeout);
-    // The missed-deadline record, shared by the bound check and the
-    // timed-out RPC: one deadline, one record, either path.
-    let missed = || deadline_death(slot);
-    // Maps a page's end to the replace path, through the shared
-    // paging: a timeout misses the deadline, a death carries the
-    // death this re-list is the first to see, and any other end
-    // replaces with no records.
-    let replace = |end: ListEnd| match end {
-        ListEnd::Deadline => Relisted::Replace {
-            records: vec![missed()],
+    // Maps a failed page to the replace path: a timeout misses the
+    // deadline, a death carries the death this re-list is the first to
+    // see, and any other end replaces with no records.
+    let fail = |error: Option<CallError>| match error {
+        Some(CallError::Timeout) => Relisted::Replace {
+            records: vec![deadline_death(slot)],
         },
-        ListEnd::Death => {
+        Some(CallError::Gone) => {
             let death = died(&slot.spec.name, !restarted, slot.spec.remote());
             Relisted::Replace {
                 records: vec![ServerRecord::Failed(death.record)],
             }
         }
-        ListEnd::Empty => Relisted::Replace {
+        _ => Relisted::Replace {
             records: Vec::new(),
         },
     };
-    let end = |error: Option<CallError>| match error {
-        Some(CallError::Timeout) => ListEnd::Deadline,
-        Some(CallError::Gone) => ListEnd::Death,
-        _ => ListEnd::Empty,
-    };
     let tools = if list_tools {
-        match crate::server::list_pages::<ListedTool, ListEnd>(
+        match crate::server::list_pages::<ListedTool, Relisted>(
             &server,
             &slot.clock,
             "tools/list",
             "tools",
             bound,
             &crate::wait::NoCancel,
-            |error| Err(end(error)),
+            |error| Err(fail(error)),
         ) {
             Ok(tools) => tools,
-            Err(end) => return replace(end),
+            Err(relisted) => return relisted,
         }
     } else {
         Vec::new()
@@ -152,7 +131,7 @@ pub(super) fn relist(slot: &Slot) -> Relisted {
         // deadline, a death, an expiry, or a login failure falls
         // back to the replace path, so a failed listing never
         // writes a cache from an empty list.
-        match crate::server::list_pages::<ListedPrompt, ListEnd>(
+        match crate::server::list_pages::<ListedPrompt, Relisted>(
             &server,
             &slot.clock,
             "prompts/list",
@@ -161,11 +140,11 @@ pub(super) fn relist(slot: &Slot) -> Relisted {
             &crate::wait::NoCancel,
             |error| match error {
                 Some(CallError::JsonRpc { .. } | CallError::Http(_)) => Ok(Vec::new()),
-                error => Err(end(error)),
+                error => Err(fail(error)),
             },
         ) {
             Ok(prompts) => prompts,
-            Err(end) => return replace(end),
+            Err(relisted) => return relisted,
         }
     } else {
         Vec::new()

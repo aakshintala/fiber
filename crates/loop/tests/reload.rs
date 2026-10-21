@@ -246,7 +246,9 @@ fn prepared() -> ReloadPrepared {
                 started: Vec::new(),
                 stopped: Vec::new(),
             },
-            ..r#loop::ServerSync::default()
+            server_records: Vec::new(),
+            server_failures: Vec::new(),
+            new_prompts: None,
         },
         hooks: None,
         reviewer: Err(contract::shapes::Failure {

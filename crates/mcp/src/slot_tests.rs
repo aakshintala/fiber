@@ -2103,77 +2103,6 @@ fn install_relisted_refuses_a_slot_whose_server_died() {
 }
 
 #[test]
-fn commit_restarts_a_keep_that_died_between_fallback_and_install() {
-    // A keep that dies after the fallback pass checked it but before
-    // the commit installs it restarts: the install revalidates liveness
-    // and routes the dead keep through the replace path, so the new
-    // executable answers under `restarted`, never `kept` (`docs/mcp.md`,
-    // Reload step 3). The hook kills the server between the two passes,
-    // so the window is deterministic.
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let started = setup.start(vec![setup.spec("fx")]);
-    setup.running(&started);
-    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
-    let images = FakeImages::ok();
-    let staged = stage_sync(
-        rows,
-        &started.servers,
-        &setup.workspace(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.cache(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("a healthy keep stages");
-    let pid = setup.pid();
-    let slotted = started.servers.slot("fx").expect("the fx slot");
-    crate::sync::on_between_commit_phases(Box::new(move || {
-        fakes::kill_pid(pid, "KILL").expect("the server dies");
-        await_until("the killed server to be gone", move || {
-            if let State::Running { server, .. } = &*super::lock(&slotted.state) {
-                server.is_gone()
-            } else {
-                false
-            }
-        });
-    }));
-    let synced = commit_sync(
-        staged,
-        &started.servers,
-        &setup.cache(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.workspace(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the commit installs");
-    assert!(
-        crate::sync::take_between_commit_phases().is_none(),
-        "the commit ran its between-phases hook"
-    );
-    assert!(synced.servers.kept.is_empty(), "a dead keep is never kept");
-    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
-    assert_ne!(
-        setup.pid(),
-        pid,
-        "the replacement answers from its own server"
-    );
-    assert!(
-        matches!(
-            synced.records.as_slice(),
-            [ServerRecord::Failed(failed), ServerRecord::Ready(_)]
-            if failed.reason == ServerFailure::Died
-        ),
-        "the detected death rides before the ready"
-    );
-    setup.stop(started.servers);
-}
-
-#[test]
 fn commit_writes_a_prompts_only_change_for_an_unchanged_tool_list() {
     let setup = Setup::new();
     setup.tools(&serde_json::json!([{"name": "echo"}]));
@@ -2495,6 +2424,136 @@ fn commit_stages_every_fallback_before_installing_anything() {
         "the earlier tool still answers"
     );
     setup.stop(started.servers);
+}
+
+#[test]
+fn commit_keeps_a_keep_that_died_after_the_final_sweep_without_failing() {
+    // A keep that dies after the commit's final pre-install liveness
+    // sweep — while an earlier replacement's stop blocks on its
+    // grandchild — still installs its staged lists as kept instead of
+    // failing: every fallible required staging ran before the first
+    // install, so the commit itself cannot fail, and the dead keep's
+    // slot and cache stay exactly as the stage left them.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    setup.write("grandchild", "");
+    let keep_dir = fakes::TempDir::new("fiber-mcp-late-keep");
+    std::fs::write(
+        keep_dir.path().join("tools.json"),
+        serde_json::json!([{"name": "echo"}]).to_string(),
+    )
+    .expect("the keep's fixture");
+    let mut replace = setup.spec("rx");
+    replace.required = true;
+    let mut keep = setup.spec("vx");
+    keep.required = true;
+    keep.stdio_mut().args = vec![keep_dir.path().display().to_string()];
+    let images = FakeImages::ok();
+    let started = setup.start_with_images(
+        vec![replace.clone(), keep.clone()],
+        std::sync::Arc::clone(&images),
+    );
+    assert!(started.failed.is_empty());
+    // The shadow the stage starts must not inherit the grandchild:
+    // only the old server blocks the commit's stop on it.
+    std::fs::remove_file(setup.dir.path().join("grandchild")).expect("the grandchild switch");
+    // The replacement changes only the timeout, so the old server
+    // answers until the commit swaps it.
+    replace.startup_timeout += Duration::from_secs(1);
+    let rows = classify_sync(vec![replace, keep], &started.servers);
+    assert!(matches!(
+        rows.as_slice(),
+        [SyncRow::Replace { .. }, SyncRow::Keep { .. }]
+    ));
+    let cache_before = std::fs::read(setup.cache().join("vx.json")).expect("the keep's cache");
+    let staged = stage_sync(
+        rows,
+        &started.servers,
+        &setup.workspace(),
+        &setup.artifacts(),
+        &every(&images),
+        &setup.cache(),
+        &setup.clock(),
+        "test",
+    )
+    .expect("the stage installs nothing");
+    // The commit runs on its own thread; the kill below lands while its
+    // install blocks stopping the replaced server, after the sweep saw
+    // the keep alive.
+    let slots = std::sync::Arc::clone(&started.servers.slots);
+    let kept = started.servers.slot("vx").expect("the keep's slot");
+    let (done, result) = mpsc::channel();
+    let servers = started.servers;
+    let commit_workspace = setup.workspace();
+    let commit_artifacts = setup.artifacts();
+    let commit_images = every(&images);
+    let commit_cache = setup.cache();
+    let commit_clock = setup.clock();
+    std::thread::spawn(move || {
+        let synced = commit_sync(
+            staged,
+            &servers,
+            &commit_cache,
+            &commit_artifacts,
+            &commit_images,
+            &commit_workspace,
+            &commit_clock,
+            "test",
+        );
+        done.send((synced, servers)).expect("collected");
+    });
+    await_until("the replaced slot to leave", move || {
+        !slots
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|slot| slot.spec().name == "rx")
+    });
+    let pid: u32 = std::fs::read_to_string(keep_dir.path().join("pid.txt"))
+        .expect("pid.txt")
+        .trim()
+        .parse()
+        .expect("a pid");
+    fakes::kill_pid(pid, "KILL").expect("the keep dies");
+    await_until("the killed keep to be gone", move || {
+        if let State::Running { server, .. } = &*super::lock(&kept.state) {
+            server.is_gone()
+        } else {
+            false
+        }
+    });
+    setup.write("fail-start", "");
+    // The keep's server runs on its own fixture directory, so its
+    // replacement reads the fail-start there.
+    std::fs::write(keep_dir.path().join("fail-start"), "").expect("the keep's fail-start");
+    let grace = setup
+        .fake
+        .now()
+        .checked_add(support::group::GRACE)
+        .expect("grace");
+    setup.fake.advance_when_parked(
+        Some(grace),
+        None,
+        support::group::GRACE,
+        &fakes::Deadline::after(WITHIN),
+    );
+    let (outcome, servers) = fakes::Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the commit ends");
+    let synced = outcome.expect("the commit cannot fail after the sweep");
+    assert_eq!(synced.servers.restarted, vec!["rx".to_owned()]);
+    assert_eq!(synced.servers.kept, vec!["vx".to_owned()]);
+    assert!(synced.failed.is_empty());
+    assert_eq!(
+        std::fs::read(setup.cache().join("vx.json")).expect("the keep's cache"),
+        cache_before,
+        "the dead keep's slot and cache stay as the stage left them"
+    );
+    assert!(
+        servers.slot("vx").is_some_and(|slot| !slot.is_live()),
+        "the dead keep stays listed but not live"
+    );
+    setup.stop(servers);
 }
 
 #[test]

@@ -90,7 +90,6 @@ pub struct ReloadSettings {
 /// new-server prompt rows. Carried as one result from preparation
 /// through installation to the log, so the fields describing one sync
 /// never drift apart.
-#[derive(Default)]
 pub struct ServerSync {
     /// Kept, restarted, started and stopped, by name.
     pub servers: ReloadedServers,

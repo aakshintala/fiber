@@ -144,7 +144,6 @@ pub(crate) enum Served {
 /// The running-server re-list behind its own module boundary, so this
 /// file stays under the size guideline: identical shapes, reached
 /// through [`Slot::relist`], which the sync boundary calls.
-#[path = "relist.rs"]
 mod relist;
 
 pub(crate) use relist::Relisted;
@@ -791,5 +790,5 @@ fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 #[cfg(test)]
-#[path = "slot_tests.rs"]
+#[path = "../slot_tests.rs"]
 mod tests;
