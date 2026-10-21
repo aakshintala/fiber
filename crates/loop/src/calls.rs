@@ -12,8 +12,8 @@ use contract::clock::{Clock, Wake};
 use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{
     AskStep, CallStatus, DecidedBy, Decision, Event, Grant, PermissionRequested,
-    PermissionResolved, Progress, ReviewerUse, RuleOffer, StandingRule, ToolCallCompleted,
-    ToolCallRequested, ToolCallStarted, ToolReplaced,
+    PermissionResolved, Progress, ReviewerUse, RuleOffer, ToolCallCompleted, ToolCallRequested,
+    ToolCallStarted, ToolReplaced,
 };
 use contract::jobs::Taken;
 use contract::provider::ToolDefinition;
@@ -25,6 +25,7 @@ use serde_json::{Map, Value};
 
 use super::before_tool::Prepared;
 use super::completion::{completed, denied, resolved};
+use super::permission::Verdict;
 use super::reviewer::{
     First, ReviewEndpoint, Sections, Stage1Worker, StagedSecond, StagedStage1, UnderReview,
     fanout_stage1, read_first, read_second, sections, under_item,
@@ -540,8 +541,8 @@ impl Loop {
         let decided = match judged {
             // Step 7 is the reviewer: the call is judged by a separate
             // model (`docs/permissions.md`, "The reviewer").
-            Judged::Review => self.review(call, id, turn, prepared),
-            judged @ (Judged::Deny { .. } | Judged::Ask(_) | Judged::Allow(_)) => {
+            Verdict::Review => self.review(call, id, turn, prepared),
+            judged @ (Verdict::Deny { .. } | Verdict::Ask(_) | Verdict::Allow(_)) => {
                 self.decide_judged(judged, &call.name, prepared, id, turn)
             }
         };
@@ -554,14 +555,14 @@ impl Loop {
     /// The serial path, the batch's phase A and grant re-classification
     /// share it. Each caller holds its own permission guard across the call,
     /// so the timing spans the same work as before.
-    fn judge_call(&self, tool: &str, effects: &Effects) -> Judged {
+    fn judge_call(&self, tool: &str, effects: &Effects) -> Verdict {
         // The rules are read once for every call, including ones that later
         // fast-path, so a revoked rule applies to the next call judged
         // (`docs/tui.md`, "/rules"). `judge` runs the credential deny before
         // it looks at them, so an unreadable rules file never stops that
         // deny.
         let rules = self.rules.read();
-        Judged::from(super::permission::judge(
+        super::permission::judge(
             tool,
             effects,
             &rules,
@@ -571,7 +572,7 @@ impl Loop {
             &self.prompt.home,
             &self.credentials,
             &self.credential_files,
-        ))
+        )
     }
 
     /// Applies one call's judged non-`Review` verdict: the Deny, Ask and
@@ -582,14 +583,14 @@ impl Loop {
     /// arrives here.
     fn decide_judged(
         &mut self,
-        verdict: Judged,
+        verdict: Verdict,
         tool: &str,
         prepared: Prepared,
         id: &ActionId,
         turn: &TurnId,
     ) -> Result<Decided, Error> {
         match verdict {
-            Judged::Deny { by, reason, why } => {
+            Verdict::Deny { by, reason, why } => {
                 let text = format!("{why} It did not run.");
                 self.decided(
                     id,
@@ -598,7 +599,7 @@ impl Loop {
                 )?;
                 Ok(Err(denied(reason, text)))
             }
-            Judged::Ask(rule) => match self.ask(
+            Verdict::Ask(rule) => match self.ask(
                 id,
                 turn,
                 tool,
@@ -618,13 +619,13 @@ impl Loop {
                 // `permission_resolved`).
                 Asked::Closed => Ok(Err(no_person())),
             },
-            Judged::Allow(decided) => {
+            Verdict::Allow(decided) => {
                 if let Some(by) = decided {
                     self.decided(id, turn, resolved(None, Decision::Allow, by, None, None))?;
                 }
                 Ok(Ok(prepared))
             }
-            Judged::Review => {
+            Verdict::Review => {
                 unreachable!("the permission order's reviewer step never reaches the judged arms")
             }
         }
@@ -872,17 +873,17 @@ impl Loop {
         match verdict {
             // Step 7 is the reviewer: the call is judged by a separate
             // model (`docs/permissions.md`, "The reviewer").
-            Judged::Review => Ok(PendingCall {
+            Verdict::Review => Ok(PendingCall {
                 id: id.clone(),
                 tool: call.name.clone(),
                 call: call.clone(),
                 outcome: PendingOutcome::NeedsReview,
-                verdict: Some(Judged::Review),
+                verdict: Some(Verdict::Review),
                 lines: Vec::new(),
                 prepared: Some(prepared),
                 state,
             }),
-            key @ (Judged::Deny { .. } | Judged::Ask(_) | Judged::Allow(_)) => {
+            key @ (Verdict::Deny { .. } | Verdict::Ask(_) | Verdict::Allow(_)) => {
                 let stored = prepared.clone();
                 let decision = self.decide_judged(key.clone(), &call.name, prepared, id, turn)?;
                 // Classification is serial per call, so everything buffered
@@ -1124,10 +1125,10 @@ impl Loop {
                 match key {
                     // Newly bound for review: judge it serially now — its
                     // stage-1 never fanned out.
-                    Judged::Review => {
+                    Verdict::Review => {
                         Ok((self.review(&entry.call, &entry.id, turn, prepared)?, cut))
                     }
-                    key @ (Judged::Deny { .. } | Judged::Ask(_) | Judged::Allow(_)) => Ok((
+                    key @ (Verdict::Deny { .. } | Verdict::Ask(_) | Verdict::Allow(_)) => Ok((
                         self.decide_judged(key, &entry.tool, prepared, &entry.id, turn)?,
                         cut,
                     )),
@@ -1584,39 +1585,6 @@ pub(crate) fn no_person() -> Box<ToolCallCompleted> {
 /// deadline, with no completion written.
 type DecidedBatch = Vec<(ActionId, String, Decided, Vec<contract::hook::StateLine>)>;
 
-/// What phase A of a concurrent batch judged: the non-`Review` verdicts
-/// a re-classification compares, and what `decide_judged` applies. `Review`
-/// never reaches the judged arms: the caller matches it out first.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Judged {
-    /// Refused. `reason` is `tool_call_completed`'s reason; `why` is
-    /// `permission_resolved`'s reason and the model's text.
-    Deny {
-        by: DecidedBy,
-        reason: &'static str,
-        why: String,
-    },
-    /// A standing ask matched: the rule that asked.
-    Ask(StandingRule),
-    /// Allowed. `None` is a fast path, which writes no `permission_resolved`.
-    Allow(Option<DecidedBy>),
-    /// Steps 1 to 6 said nothing: the reviewer decides.
-    Review,
-}
-
-impl From<super::permission::Verdict> for Judged {
-    fn from(verdict: super::permission::Verdict) -> Self {
-        match verdict {
-            super::permission::Verdict::Deny { by, reason, why } => {
-                Judged::Deny { by, reason, why }
-            }
-            super::permission::Verdict::Ask(rule) => Judged::Ask(rule),
-            super::permission::Verdict::Allow(decided) => Judged::Allow(decided),
-            super::permission::Verdict::Review => Judged::Review,
-        }
-    }
-}
-
 /// Phase A's outcome for one call of a concurrent batch.
 enum PendingOutcome {
     /// Decided without the reviewer, or already decided: the completion.
@@ -1625,7 +1593,7 @@ enum PendingOutcome {
     NeedsReview,
     /// Re-classified after a grant or rule install moved the judgment:
     /// take the fresh path at write-back.
-    Rejudged(Judged),
+    Rejudged(Verdict),
     /// A cancel ended the approval before this call was decided.
     Cancelled,
 }
@@ -1643,7 +1611,7 @@ struct PendingCall {
     outcome: PendingOutcome,
     /// Phase A's judgment, when the call was judged: re-classification
     /// compares the fresh judgment against it.
-    verdict: Option<Judged>,
+    verdict: Option<Verdict>,
     /// The `permission_resolved` lines phase A buffered for this call.
     lines: Vec<PermissionResolved>,
     /// The prepared call, kept for review application and for a
