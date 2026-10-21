@@ -7,6 +7,7 @@
 
 mod install;
 mod login;
+mod logout;
 mod models;
 mod remote;
 mod skills;
@@ -303,6 +304,14 @@ impl tui::Configure for Seam {
 
     fn set_reviewer(&self, name: &str, id: &str) -> Result<(), ConfigureError> {
         login::set_reviewer(&self.home, name, id)
+    }
+
+    fn logout_rows(&self) -> Result<Vec<tui::LogoutRow>, ConfigureError> {
+        logout::rows(&self.home)
+    }
+
+    fn delete_stored(&self, name: &str, label: Option<String>) -> Result<String, ConfigureError> {
+        logout::delete(&self.home, name, label)
     }
 
     fn reviewer_notes(&self, workspace: &Path) -> Result<tui::ReviewerNotes, ConfigureError> {

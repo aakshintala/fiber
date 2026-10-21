@@ -1,9 +1,9 @@
 //! Validates hub answers before the configuration views consume them.
 
 use crate::configure::{
-    ConfigureError, FileOutcome, FileSaved, Layer, LoginKind, LoginTarget, NotesFile, NotesSaved,
-    ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesSection, Saved, SettingRow, Shown,
-    SkillsDisabled, Stored, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    ConfigureError, FileOutcome, FileSaved, Layer, LoginKind, LoginTarget, LogoutRow, NotesFile,
+    NotesSaved, ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesSection, Saved, SettingRow,
+    Shown, SkillsDisabled, Stored, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 use contract::{ErrorCode, HubLine};
 use serde_json::Value;
@@ -176,6 +176,32 @@ pub(super) fn stored(value: &Value) -> Option<Stored> {
         path: read!(value, "path")?,
         replaced: read!(value, "replaced")?,
     })
+}
+pub(super) fn logout_rows(value: &Value) -> Option<Vec<LogoutRow>> {
+    value
+        .get("rows")?
+        .as_array()?
+        .iter()
+        .map(|row| {
+            Some(LogoutRow {
+                name: read!(row, "name")?,
+                label: optional!(row, "label")?,
+                kind: match row.get("kind")?.as_str()? {
+                    "key" => LoginKind::Key,
+                    "browser" => LoginKind::Browser,
+                    "secret" => LoginKind::Secret,
+                    _ => return None,
+                },
+                default: read!(row, "default")?,
+                deletable: read!(row, "deletable")?,
+                origin: optional!(row, "origin")?,
+                siblings: read!(row, "siblings")?,
+            })
+        })
+        .collect()
+}
+pub(super) fn deleted(value: &Value) -> Option<String> {
+    read!(value, "path")
 }
 pub(super) fn install(value: &Value) -> Option<crate::ProviderInstall> {
     Some(crate::ProviderInstall {

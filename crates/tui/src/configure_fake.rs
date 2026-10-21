@@ -12,10 +12,10 @@ use contract::clock::Clock;
 
 use crate::ThemeSetting;
 use crate::configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, NotesFile,
-    NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope, RulesSection,
-    Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists,
-    ToolSwitches, WriteScope,
+    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, LogoutRow,
+    NotesFile, NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope,
+    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup,
+    ToolLists, ToolSwitches, WriteScope,
 };
 
 /// One notes save the view asked for: the workspace and each sent layer.
@@ -141,6 +141,12 @@ pub(crate) struct Fake {
     pub(crate) revoked: Mutex<Result<Revoked, ConfigureError>>,
     /// What `login_targets` answers.
     pub(crate) targets: Mutex<Result<Vec<LoginTarget>, ConfigureError>>,
+    /// What `logout_rows` answers.
+    pub(crate) logout: Mutex<Result<Vec<LogoutRow>, ConfigureError>>,
+    /// Every delete asked for, in order: the name and the label.
+    pub(crate) deletes: Mutex<Vec<(String, Option<String>)>>,
+    /// What `delete_stored` answers.
+    pub(crate) deleted: Mutex<Result<String, ConfigureError>>,
     /// Every key asked to store, in order: the name, the label and the key.
     pub(crate) stores: Mutex<Vec<(String, Option<String>, Secret)>>,
     /// What `store_key` answers.
@@ -211,6 +217,9 @@ impl Fake {
             revokes: Mutex::new(Vec::new()),
             revoked: Mutex::new(Ok(Revoked::Removed)),
             targets: Mutex::new(Ok(Vec::new())),
+            logout: Mutex::new(Ok(Vec::new())),
+            deletes: Mutex::new(Vec::new()),
+            deleted: Mutex::new(Ok("credentials/acme/default".to_owned())),
             stores: Mutex::new(Vec::new()),
             stored: Mutex::new(Ok(Stored {
                 path: "credentials/acme/default".to_owned(),
@@ -484,6 +493,33 @@ impl Configure for Fake {
                 })
             },
             |targets| targets.clone(),
+        )
+    }
+
+    fn logout_rows(&self) -> Result<Vec<LogoutRow>, ConfigureError> {
+        self.logout.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |rows| rows.clone(),
+        )
+    }
+
+    fn delete_stored(&self, name: &str, label: Option<String>) -> Result<String, ConfigureError> {
+        if let Ok(mut deletes) = self.deletes.lock() {
+            deletes.push((name.to_owned(), label));
+        }
+        self.deleted.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |deleted| deleted.clone(),
         )
     }
 

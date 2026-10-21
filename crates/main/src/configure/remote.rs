@@ -411,6 +411,41 @@ impl hub::Machine for Seam {
                 a.shape(&[], &[])?;
                 json!({"targets":self.login_targets().map_err(from_view)?.into_iter().map(|t|json!({"name":t.name,"kind":match t.kind{LoginKind::Key=>"key",LoginKind::Browser=>"browser",LoginKind::Secret=>"secret"}})).collect::<Vec<_>>()})
             }
+            "logout_rows" => {
+                a.shape(&[], &[])?;
+                json!({"rows":self.logout_rows().map_err(from_view)?.into_iter().map(|row|{
+                    let mut value = Map::from_iter([
+                        ("name".to_owned(), json!(row.name)),
+                        ("kind".to_owned(), json!(match row.kind {
+                            LoginKind::Key => "key",
+                            LoginKind::Browser => "browser",
+                            LoginKind::Secret => "secret",
+                        })),
+                        ("default".to_owned(), json!(row.default)),
+                        ("deletable".to_owned(), json!(row.deletable)),
+                        ("siblings".to_owned(), json!(row.siblings)),
+                    ]);
+                    if let Some(label) = row.label {
+                        drop(value.insert("label".to_owned(), json!(label)));
+                    }
+                    if let Some(origin) = row.origin {
+                        drop(value.insert("origin".to_owned(), json!(origin)));
+                    }
+                    Value::Object(value)
+                }).collect::<Vec<_>>()})
+            }
+            "delete_stored" => {
+                a.shape(&["name"], &["label"])?;
+                let label = if args.contains_key("label") {
+                    Some(a.string("label")?.to_owned())
+                } else {
+                    None
+                };
+                let path = self
+                    .delete_stored(a.string("name")?, label)
+                    .map_err(from_view)?;
+                json!({"path":path})
+            }
             "store_key" => {
                 a.shape(&["name", "key"], &["label"])?;
                 let label = if args.contains_key("label") {
