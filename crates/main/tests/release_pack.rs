@@ -1063,6 +1063,28 @@ fn nightly_version_refuses_a_bad_tree_or_date() {
     }
 }
 
+/// A version that is not three dot-separated numbers fails with exit 2
+/// naming the version: `1.2` has only two components, so the split and
+/// rejoin no longer round-trips; `1..3`, `.2.3` and `1.2.` each pin one
+/// empty-component alternative of the numeric check, while the rest fail
+/// the numeric check itself.
+#[test]
+fn nightly_version_refuses_a_non_xyz_version() {
+    for version in [
+        "1.2", "1", "1.2.3.4", "a.b.c", "1.2.x", "1..3", ".2.3", "1.2.",
+    ] {
+        let pack = Pack::start();
+        pack.manifest(version);
+        let tree = pack.path("tree").to_string_lossy().into_owned();
+        let run = pack.pack(&["nightly-version", &tree, "20261020"]);
+        assert_eq!(run.code, Some(2), "{version:?}: {}", run.stderr);
+        assert_eq!(
+            run.stderr,
+            format!("release-pack: {version} is not a version such as 0.0.0.\n")
+        );
+    }
+}
+
 const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 

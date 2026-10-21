@@ -249,8 +249,8 @@ tree_version() {
 }
 
 # Prints `<bumped>-nightly.<date>`: the patch +1 of the `fiber` crate's
-# version in the tree at $1, for the YYYYMMDD date $2. A bad tree or date
-# fails naming the fault.
+# version in the tree at $1, for the YYYYMMDD date $2. A bad tree,
+# version or date fails naming the fault.
 nightly_version() {
   version=$(tree_version "$1")
   [ -n "${version:-}" ] || fail "$1 holds no fiber version such as 0.0.0." 2
@@ -261,6 +261,10 @@ nightly_version() {
   rest=${version#*.}
   minor=${rest%%.*}
   patch=${rest#*.}
+  case $major/$minor/$patch in
+    *[!0-9/]* | *//* | /* | */) fail "$version is not a version such as 0.0.0." 2 ;;
+  esac
+  [ "$major.$minor.$patch" = "$version" ] || fail "$version is not a version such as 0.0.0." 2
   printf '%s.%s.%s-nightly.%s\n' "$major" "$minor" "$((patch + 1))" "$2"
 }
 
