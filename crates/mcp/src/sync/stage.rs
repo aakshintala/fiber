@@ -156,16 +156,9 @@ pub fn stage_sync(
             SyncRow::Keep { spec } => {
                 let name = spec.name.clone();
                 let Some(slot) = servers.slot(&name) else {
-                    // The slot left between classify and stage: start fresh.
-                    staged.push(StagedRow::Shadow(stage_shadow(
-                        &mut shadows,
-                        servers,
-                        spec,
-                        Vec::new(),
-                        true,
-                        inputs,
-                    )?));
-                    continue;
+                    unreachable!(
+                        "commit is the only remover and runs on this thread, so nothing can vanish mid-prepare"
+                    );
                 };
                 match slot.relist() {
                     Relisted::Up { listed } => {

@@ -312,13 +312,15 @@ impl Slot {
     }
 
     /// Installs re-listed `listed` on a still-running slot, refreshing the
-    /// live set the removed-tool check reads. A slot whose server died,
-    /// stopped or was replaced between the re-list and the commit keeps
-    /// what it has: the commit's replace path owns it, so a dead keep is
-    /// never marked kept with lists its server never served. Holds only
-    /// the state lock, never the lease, so it cannot wedge against a
-    /// concurrent serve or stop.
-    pub(crate) fn install_relisted(&self, listed: Cached) {
+    /// live set the removed-tool check reads, and answers whether the
+    /// install landed. A slot whose server died, stopped or was replaced
+    /// between the re-list and the commit keeps what it has and answers
+    /// false — the check and the install hold the same lock, so the
+    /// answer also covers a death racing the commit — and the commit
+    /// writes the cache only on true, so a dead keep never persists lists
+    /// its server never served. Holds only the state lock, never the
+    /// lease, so it cannot wedge against a concurrent serve or stop.
+    pub(crate) fn install_relisted(&self, listed: Cached) -> bool {
         let mut state = lock(&self.state);
         if let State::Running {
             server,
@@ -328,13 +330,15 @@ impl Slot {
         } = &mut *state
         {
             // Revalidated under the same lock: a keep that died after
-            // the commit's liveness check keeps what it has.
+            // the stage keeps what it has.
             if server.is_gone() || server.is_expired() {
-                return;
+                return false;
             }
             *live = names(&listed.tools);
             *held = listed;
+            return true;
         }
+        false
     }
 
     /// The running server, starting it first when the slot is not

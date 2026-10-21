@@ -140,6 +140,19 @@ struct Installed {
     sync: ServerSync,
 }
 
+/// One server record as its log line: the reconnect driver and the reload
+/// installer write the same lines, in the same order.
+fn record_event(record: &contract::tool::ServerRecord) -> contract::events::Event {
+    match record {
+        contract::tool::ServerRecord::Failed(failed) => {
+            contract::events::Event::McpServerFailed(failed.clone())
+        }
+        contract::tool::ServerRecord::Ready(ready) => {
+            contract::events::Event::McpServerReady(ready.clone())
+        }
+    }
+}
+
 impl Loop {
     /// Prepares reloads with `prepare`; absent this, reload is unsupported.
     pub fn reloader(mut self, prepare: PrepareReload) -> Self {
@@ -156,7 +169,6 @@ impl Loop {
 
     pub(crate) fn take_reconnect(&mut self, server: String, ack: Ack) -> Result<(), Error> {
         use crate::inbox::{CLOSING, accept, reject};
-        use contract::events::Event;
         if self.closing {
             reject(ack, contract::ErrorCode::Closing, CLOSING);
             return Ok(());
@@ -182,15 +194,7 @@ impl Loop {
                     );
                 }
                 for record in &reconnected.records {
-                    let event = match record {
-                        contract::tool::ServerRecord::Failed(failed) => {
-                            Event::McpServerFailed(failed.clone())
-                        }
-                        contract::tool::ServerRecord::Ready(ready) => {
-                            Event::McpServerReady(ready.clone())
-                        }
-                    };
-                    self.write(&event, None, None)?;
+                    self.write(&record_event(record), None, None)?;
                 }
                 accept(ack);
                 Ok(())
@@ -294,13 +298,7 @@ impl Loop {
         // The sync's records first, in sync order, then `reloaded`:
         // program order on the loop thread is the edge for that line order.
         for record in &installed.sync.server_records {
-            let event = match record {
-                contract::tool::ServerRecord::Failed(failed) => {
-                    Event::McpServerFailed(failed.clone())
-                }
-                contract::tool::ServerRecord::Ready(ready) => Event::McpServerReady(ready.clone()),
-            };
-            self.write(&event, None, None)?;
+            self.write(&record_event(record), None, None)?;
         }
         let failed = (!installed.sync.server_failures.is_empty())
             .then(|| installed.sync.server_failures.clone());

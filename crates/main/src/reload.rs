@@ -221,7 +221,10 @@ impl State {
             let reads = state.switching.reads();
             preparer(
                 move |route| {
-                    let mut prepared = state.prepare_late(route)?;
+                    // The late preparation skips the MCP sync (the `true`
+                    // below): no slot starts, and no grouping, records,
+                    // failures or carried prompt sources.
+                    let mut prepared = state.prepare_inner(route, true)?;
                     prepared.notices.retain(|notice| !written.contains(notice));
                     Ok(prepared)
                 },
@@ -236,18 +239,6 @@ impl State {
         route: &r#loop::ReloadRoute,
     ) -> Result<r#loop::ReloadPrepared, Rejection> {
         self.prepare_inner(route, false)
-    }
-
-    /// The late extension-approval preparation: the same set as an
-    /// explicit reload, but the MCP sync is skipped — no grouping,
-    /// records, failures or carried prompt sources. Every slot, tool,
-    /// cache and prompt row stays exactly as the session holds them, so
-    /// a cached, not-yet-started personal server never starts here.
-    fn prepare_late(
-        self: &Arc<Self>,
-        route: &r#loop::ReloadRoute,
-    ) -> Result<r#loop::ReloadPrepared, Rejection> {
-        self.prepare_inner(route, true)
     }
 
     fn prepare_inner(
@@ -393,9 +384,9 @@ impl State {
             .clone();
         let mut new_prompts = Vec::new();
         if let Some(synced) = &synced {
-            for prompt in &synced.prompts {
+            for prompt in synced.prompt_sources.commands() {
                 if !baseline.iter().any(|row| row.tag == prompt.tag) {
-                    new_prompts.push(prompt.clone());
+                    new_prompts.push(prompt);
                 }
             }
         }
