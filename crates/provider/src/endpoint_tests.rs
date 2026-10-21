@@ -44,6 +44,18 @@ fn compat_flags_are_read_from_data_with_thinking_budget_unset_when_absent() {
             "{data}"
         );
     }
+    assert!(!Compat::from_data(&serde_json::Map::new()).bedrock_invoke);
+    for (data, want) in [
+        (json!({"bedrock_invoke": true}), true),
+        (json!({"bedrock_invoke": false}), false),
+        (json!({"bedrock_invoke": 1}), false),
+    ] {
+        assert_eq!(
+            Compat::from_data(data.as_object().unwrap()).bedrock_invoke,
+            want,
+            "{data}"
+        );
+    }
     assert!(!Compat::from_data(&serde_json::Map::new()).vertex_raw_predict);
     for (data, want) in [
         (json!({"vertex_raw_predict": true}), true),

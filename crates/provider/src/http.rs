@@ -281,16 +281,18 @@ fn head(response: &ureq::http::Response<ureq::Body>) -> (u16, Option<bool>) {
     (response.status().as_u16(), should_retry)
 }
 
-/// One non-2xx response's retry fields: the parsed `retry-after` wait,
-/// whether the header was present at all, and the `date` value. Both send
-/// paths read them the same way, so they share this parsing.
+/// One non-2xx response's header fields: the parsed `retry-after` wait,
+/// whether the header was present at all, the `date` value, and the
+/// exception AWS names in `x-amzn-errortype`. Both send paths read them the
+/// same way, so they share this parsing.
 struct StatusMeta {
     retry_after: Option<f64>,
     has_retry_after: bool,
     date: Option<String>,
+    error_type: Option<String>,
 }
 
-/// Reads one non-2xx response's retry fields from its headers.
+/// Reads one non-2xx response's header fields.
 fn status_meta(headers: &ureq::http::HeaderMap) -> StatusMeta {
     let header = |name: &str| {
         headers
@@ -310,6 +312,15 @@ fn status_meta(headers: &ureq::http::HeaderMap) -> StatusMeta {
             .get("date")
             .and_then(|v| v.to_str().ok())
             .map(|v| v.trim().to_owned()),
+        // AWS names the exception before a `:` and the namespace it comes
+        // from, as in `ValidationException:http://internal.amazon.com/...`.
+        error_type: headers
+            .get("x-amzn-errortype")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(':').next())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned),
     }
 }
 
@@ -338,6 +349,7 @@ fn status_failure(
         retry_after,
         should_retry,
         url: crate::error::target(url),
+        error_type: meta.error_type.clone(),
     }
 }
 
@@ -449,6 +461,10 @@ pub(crate) struct ObservedSend {
 #[allow(
     clippy::too_many_arguments,
     reason = "one send with its observation inputs: the call's own plus the writer, clock and attempt"
+)]
+#[allow(
+    clippy::result_large_err,
+    reason = "the failure carries the call's error beside the send's milestones, once per call"
 )]
 pub(crate) fn post_signed_observed(
     url: &str,

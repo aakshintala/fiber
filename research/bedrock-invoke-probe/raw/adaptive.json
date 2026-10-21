@@ -1,0 +1,115 @@
+{
+  "case": "adaptive",
+  "model": "global.anthropic.claude-haiku-5-5",
+  "region": "ap-south-1",
+  "url_path": "/model/global.anthropic.claude-haiku-5-5/invoke-with-response-stream",
+  "request": {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 512,
+    "thinking": {
+      "type": "adaptive"
+    },
+    "output_config": {
+      "effort": "low"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is 17 * 23? Answer with the number."
+      }
+    ]
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "type": "message_start",
+      "message": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_bdrk_zne2rqwibpehna2vtuffz7xiotctxo5lcp6jrxno7hinvbdcqlzq",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 24,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 1,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "type": "content_block_start",
+      "index": 0,
+      "content_block": {
+        "type": "text",
+        "text": ""
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "text_delta",
+        "text": "391"
+      }
+    },
+    {
+      "type": "content_block_stop",
+      "index": 0
+    },
+    {
+      "type": "message_delta",
+      "delta": {
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "container": null
+      },
+      "usage": {
+        "input_tokens": 24,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 3,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        }
+      }
+    },
+    {
+      "type": "message_stop",
+      "amazon-bedrock-invocationMetrics": {
+        "inputTokenCount": 24,
+        "outputTokenCount": 3,
+        "invocationLatency": 809,
+        "firstByteLatency": 800
+      }
+    }
+  ],
+  "usage": {
+    "input_tokens": 24,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 3,
+    "service_tier": "standard",
+    "output_tokens_details": {
+      "thinking_tokens": 0
+    }
+  },
+  "cost_usd": 3.9e-05
+}

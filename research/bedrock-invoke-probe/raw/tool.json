@@ -1,0 +1,193 @@
+{
+  "case": "tool",
+  "model": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "region": "ap-south-1",
+  "url_path": "/model/global.anthropic.claude-haiku-4-5-20251001-v1%3A0/invoke-with-response-stream",
+  "request": {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 256,
+    "tools": [
+      {
+        "name": "get_weather",
+        "description": "Weather for a city.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the weather in Paris and in Rome? Call the tool once per city, both in this reply."
+      }
+    ]
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "type": "message_start",
+      "message": {
+        "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "id": "msg_bdrk_n5ja3wdl5xqe5sziq4oy3v2zuw6xdc7cfhxyuua6hkvi7vt4nboa",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 584,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 26,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "type": "content_block_start",
+      "index": 0,
+      "content_block": {
+        "type": "tool_use",
+        "id": "toolu_bdrk_016BjcwULmFAJLq2JVoUrN6F",
+        "name": "get_weather",
+        "input": {}
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "input_json_delta",
+        "partial_json": ""
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "input_json_delta",
+        "partial_json": "{\"city\": \"Pa"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "input_json_delta",
+        "partial_json": "ris\"}"
+      }
+    },
+    {
+      "type": "content_block_stop",
+      "index": 0
+    },
+    {
+      "type": "content_block_start",
+      "index": 1,
+      "content_block": {
+        "type": "tool_use",
+        "id": "toolu_bdrk_01UhLdMn8cSBDFYVMmRMZnky",
+        "name": "get_weather",
+        "input": {}
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 1,
+      "delta": {
+        "type": "input_json_delta",
+        "partial_json": ""
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 1,
+      "delta": {
+        "type": "input_json_delta",
+        "partial_json": "{\""
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 1,
+      "delta": {
+        "type": "input_json_delta",
+        "partial_json": "ci"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 1,
+      "delta": {
+        "type": "input_json_delta",
+        "partial_json": "ty\": \"Rome"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 1,
+      "delta": {
+        "type": "input_json_delta",
+        "partial_json": "\"}"
+      }
+    },
+    {
+      "type": "content_block_stop",
+      "index": 1
+    },
+    {
+      "type": "message_delta",
+      "delta": {
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "stop_details": null,
+        "container": null
+      },
+      "usage": {
+        "input_tokens": 584,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 90
+      }
+    },
+    {
+      "type": "message_stop",
+      "amazon-bedrock-invocationMetrics": {
+        "inputTokenCount": 584,
+        "outputTokenCount": 90,
+        "invocationLatency": 1020,
+        "firstByteLatency": 850
+      }
+    }
+  ],
+  "usage": {
+    "input_tokens": 584,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 90,
+    "service_tier": "standard"
+  },
+  "cost_usd": 0.001034
+}

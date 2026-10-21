@@ -1,0 +1,1850 @@
+{
+  "models": [
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.11,
+        "cache_write": 1.375,
+        "input": 1.1,
+        "output": 5.5
+      },
+      "id": "au.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Haiku 4.5 (AU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.011,
+        "cache_write": 0.1375,
+        "input": 0.11,
+        "output": 0.55,
+        "tiers": [
+          {
+            "cache_read": 0.055,
+            "cache_write": 0.6875,
+            "input": 0.55,
+            "input_tokens_above": 100000,
+            "output": 2.75
+          }
+        ]
+      },
+      "id": "au.anthropic.claude-haiku-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Haiku 5.5 (AU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "au.anthropic.claude-opus-4-6-v1",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "AU Anthropic Claude Opus 4.6",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "au.anthropic.claude-opus-4-7",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.7 (AU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "au.anthropic.claude-opus-4-8",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.8 (AU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "au.anthropic.claude-opus-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5 (AU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 5.5,
+        "input": 4.4,
+        "output": 22
+      },
+      "id": "au.anthropic.claude-opus-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5.5 (AU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.33,
+        "cache_write": 4.125,
+        "input": 3.3,
+        "output": 16.5
+      },
+      "id": "au.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Sonnet 4.5 (AU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.33,
+        "cache_write": 4.125,
+        "input": 3.3,
+        "output": 16.5
+      },
+      "id": "au.anthropic.claude-sonnet-4-6",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "AU Anthropic Claude Sonnet 4.6",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 11
+      },
+      "id": "au.anthropic.claude-sonnet-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5 (AU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 1.1,
+        "cache_write": 13.75,
+        "input": 11,
+        "output": 55
+      },
+      "id": "eu.anthropic.claude-fable-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Fable 5 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.11,
+        "cache_write": 1.375,
+        "input": 1.1,
+        "output": 5.5
+      },
+      "id": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Haiku 4.5 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.011,
+        "cache_write": 0.1375,
+        "input": 0.11,
+        "output": 0.55,
+        "tiers": [
+          {
+            "cache_read": 0.055,
+            "cache_write": 0.6875,
+            "input": 0.55,
+            "input_tokens_above": 100000,
+            "output": 2.75
+          }
+        ]
+      },
+      "id": "eu.anthropic.claude-haiku-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Haiku 5.5 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "eu.anthropic.claude-opus-4-5-20251101-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Opus 4.5 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "eu.anthropic.claude-opus-4-6-v1",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.6 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "eu.anthropic.claude-opus-4-7",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.7 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "eu.anthropic.claude-opus-4-8",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.8 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "eu.anthropic.claude-opus-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 5.5,
+        "input": 4.4,
+        "output": 22
+      },
+      "id": "eu.anthropic.claude-opus-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5.5 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.33,
+        "cache_write": 4.125,
+        "input": 3.3,
+        "output": 16.5
+      },
+      "id": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Sonnet 4.5 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.33,
+        "cache_write": 4.125,
+        "input": 3.3,
+        "output": 16.5
+      },
+      "id": "eu.anthropic.claude-sonnet-4-6",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 4.6 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 11
+      },
+      "id": "eu.anthropic.claude-sonnet-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.11,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 11
+      },
+      "id": "eu.anthropic.claude-sonnet-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5.5 (EU)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 1,
+        "cache_write": 12.5,
+        "input": 10,
+        "output": 50
+      },
+      "id": "global.anthropic.claude-fable-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Fable 5 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.25,
+        "cache_write": 12.5,
+        "input": 10,
+        "output": 50
+      },
+      "id": "global.anthropic.claude-fable-5-1",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Fable 5.1 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.1,
+        "cache_write": 1.25,
+        "input": 1,
+        "output": 5
+      },
+      "id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Haiku 4.5 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.01,
+        "cache_write": 0.125,
+        "input": 0.1,
+        "output": 0.5,
+        "tiers": [
+          {
+            "cache_read": 0.05,
+            "cache_write": 0.625,
+            "input": 0.5,
+            "input_tokens_above": 100000,
+            "output": 2.5
+          }
+        ]
+      },
+      "id": "global.anthropic.claude-haiku-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Haiku 5.5 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.5,
+        "cache_write": 6.25,
+        "input": 5,
+        "output": 25
+      },
+      "id": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Opus 4.5 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.5,
+        "cache_write": 6.25,
+        "input": 5,
+        "output": 25
+      },
+      "id": "global.anthropic.claude-opus-4-6-v1",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.6 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.5,
+        "cache_write": 6.25,
+        "input": 5,
+        "output": 25
+      },
+      "id": "global.anthropic.claude-opus-4-7",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.7 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.5,
+        "cache_write": 6.25,
+        "input": 5,
+        "output": 25
+      },
+      "id": "global.anthropic.claude-opus-4-8",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.8 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.5,
+        "cache_write": 6.25,
+        "input": 5,
+        "output": 25
+      },
+      "id": "global.anthropic.claude-opus-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.2,
+        "cache_write": 5,
+        "input": 4,
+        "output": 20
+      },
+      "id": "global.anthropic.claude-opus-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5.5 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.3,
+        "cache_write": 3.75,
+        "input": 3,
+        "output": 15
+      },
+      "id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Sonnet 4.5 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.3,
+        "cache_write": 3.75,
+        "input": 3,
+        "output": 15
+      },
+      "id": "global.anthropic.claude-sonnet-4-6",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 4.6 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.2,
+        "cache_write": 2.5,
+        "input": 2,
+        "output": 10
+      },
+      "id": "global.anthropic.claude-sonnet-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.1,
+        "cache_write": 2.5,
+        "input": 2,
+        "output": 10
+      },
+      "id": "global.anthropic.claude-sonnet-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5.5 (Global)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.11,
+        "cache_write": 1.375,
+        "input": 1.1,
+        "output": 5.5
+      },
+      "id": "in.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Haiku 4.5 (India)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "in.anthropic.claude-opus-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5 (India)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 11
+      },
+      "id": "in.anthropic.claude-sonnet-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5 (India)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.11,
+        "cache_write": 1.375,
+        "input": 1.1,
+        "output": 5.5
+      },
+      "id": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Haiku 4.5 (JP)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.011,
+        "cache_write": 0.1375,
+        "input": 0.11,
+        "output": 0.55,
+        "tiers": [
+          {
+            "cache_read": 0.055,
+            "cache_write": 0.6875,
+            "input": 0.55,
+            "input_tokens_above": 100000,
+            "output": 2.75
+          }
+        ]
+      },
+      "id": "jp.anthropic.claude-haiku-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Haiku 5.5 (JP)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "jp.anthropic.claude-opus-4-7",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.7 (JP)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "jp.anthropic.claude-opus-4-8",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.8 (JP)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "jp.anthropic.claude-opus-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5 (JP)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 5.5,
+        "input": 4.4,
+        "output": 22
+      },
+      "id": "jp.anthropic.claude-opus-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5.5 (JP)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.33,
+        "cache_write": 4.125,
+        "input": 3.3,
+        "output": 16.5
+      },
+      "id": "jp.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Sonnet 4.5 (JP)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.33,
+        "cache_write": 4.125,
+        "input": 3.3,
+        "output": 16.5
+      },
+      "id": "jp.anthropic.claude-sonnet-4-6",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 4.6 (JP)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 11
+      },
+      "id": "jp.anthropic.claude-sonnet-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5 (JP)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 1.1,
+        "cache_write": 13.75,
+        "input": 11,
+        "output": 55
+      },
+      "id": "us.anthropic.claude-fable-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Fable 5 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.275,
+        "cache_write": 13.75,
+        "input": 11,
+        "output": 55
+      },
+      "id": "us.anthropic.claude-fable-5-1",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Fable 5.1 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.11,
+        "cache_write": 1.375,
+        "input": 1.1,
+        "output": 5.5
+      },
+      "id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Haiku 4.5 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.011,
+        "cache_write": 0.1375,
+        "input": 0.11,
+        "output": 0.55,
+        "tiers": [
+          {
+            "cache_read": 0.055,
+            "cache_write": 0.6875,
+            "input": 0.55,
+            "input_tokens_above": 100000,
+            "output": 2.75
+          }
+        ]
+      },
+      "id": "us.anthropic.claude-haiku-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Haiku 5.5 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Opus 4.5 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "us.anthropic.claude-opus-4-6-v1",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.6 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "us.anthropic.claude-opus-4-7",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.7 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "us.anthropic.claude-opus-4-8",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 4.8 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "input": 5.5,
+        "output": 27.5
+      },
+      "id": "us.anthropic.claude-opus-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 5.5,
+        "input": 4.4,
+        "output": 22
+      },
+      "id": "us.anthropic.claude-opus-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5.5 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true,
+        "thinking_budget": true
+      },
+      "context_window": 200000,
+      "cost": {
+        "cache_read": 0.33,
+        "cache_write": 4.125,
+        "input": 3.3,
+        "output": 16.5
+      },
+      "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 64000,
+      "name": "Claude Sonnet 4.5 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.33,
+        "cache_write": 4.125,
+        "input": 3.3,
+        "output": 16.5
+      },
+      "id": "us.anthropic.claude-sonnet-4-6",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 4.6 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 11
+      },
+      "id": "us.anthropic.claude-sonnet-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "bedrock_invoke": true
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.11,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 11
+      },
+      "id": "us.anthropic.claude-sonnet-5-5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5.5 (US)",
+      "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    }
+  ],
+  "name": "bedrock",
+  "placeholders": {
+    "region": {
+      "env": "AWS_REGION"
+    }
+  },
+  "reviewer_model": "global.anthropic.claude-sonnet-5-5"
+}

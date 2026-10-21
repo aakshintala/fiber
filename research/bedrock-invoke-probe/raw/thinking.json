@@ -1,0 +1,230 @@
+{
+  "case": "thinking",
+  "model": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "region": "ap-south-1",
+  "url_path": "/model/global.anthropic.claude-haiku-4-5-20251001-v1%3A0/invoke-with-response-stream",
+  "request": {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 2048,
+    "thinking": {
+      "type": "enabled",
+      "budget_tokens": 1024
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is 17 * 23? Answer with the number."
+      }
+    ]
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "type": "message_start",
+      "message": {
+        "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "id": "msg_bdrk_uer5a2kvbatnhorratoastw7pi6kmcex6c75qbcqkfqqrbwhaloq",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 50,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 1,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "type": "content_block_start",
+      "index": 0,
+      "content_block": {
+        "type": "thinking",
+        "thinking": "",
+        "signature": ""
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": "17"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": " * 23 = ?"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": "\n\nLet"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": " me calculate this:"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": "\n17 * 23 ="
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": " 17 * (20 +"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": " 3)"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": "\n= 17 * 20"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": " + 17 * 3"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": "\n= 340 + 51"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": "\n= 391"
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "thinking_delta",
+        "thinking": ""
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "signature_delta",
+        "signature": "EsYCCoQBCBIQARgCKkBsC92PMwGarwjw6NZUNZah02AU5AwGLZmgrzdWsM1M3ixYN/kB6/RGKl+pK4W7O/zxkY+pDSvhUB1yNRz1x7yYMhljbGF1ZGUtaGFpa3UtNC01LTIwMjUxMDAxOABCCHRoaW5raW5nWgwwMDAwMDAwMDAwMDCoAav52dYGEgx2daVDshsjDU6NnPsaDD0+Dl71ONyfRAS5riIwxM5aawcyP8OfeYb2biurqJU6sS49io709gmADFKv74t7zqK7xF8X8D/wVZQKJKNBKm+Lb+86K6ny3gHzyMTcONIBtx2xR91LMjDIhYLXPbqDOvs9YpPr4Zr/yRlmNVARM7D3nR4dt+K6Ru/jBy3Ylt0T6Ywnm3XTqSkxCBl+G1AuW3qBRdPhng92Q2jKu3RSd25lupwWbRG4PLWuTH/iOgcYAQ=="
+      }
+    },
+    {
+      "type": "content_block_stop",
+      "index": 0
+    },
+    {
+      "type": "content_block_start",
+      "index": 1,
+      "content_block": {
+        "type": "text",
+        "text": ""
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 1,
+      "delta": {
+        "type": "text_delta",
+        "text": "391"
+      }
+    },
+    {
+      "type": "content_block_stop",
+      "index": 1
+    },
+    {
+      "type": "message_delta",
+      "delta": {
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "container": null
+      },
+      "usage": {
+        "input_tokens": 50,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 73,
+        "output_tokens_details": {
+          "thinking_tokens": 67
+        }
+      }
+    },
+    {
+      "type": "message_stop",
+      "amazon-bedrock-invocationMetrics": {
+        "inputTokenCount": 50,
+        "outputTokenCount": 73,
+        "invocationLatency": 1051,
+        "firstByteLatency": 789
+      }
+    }
+  ],
+  "usage": {
+    "input_tokens": 50,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 73,
+    "service_tier": "standard",
+    "output_tokens_details": {
+      "thinking_tokens": 67
+    }
+  },
+  "cost_usd": 0.000415
+}
