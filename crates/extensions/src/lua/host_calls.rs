@@ -610,7 +610,6 @@ pub(super) fn admit<'a>(
                             ))))
                         } else {
                             // Suspended before the spawn: the service calls
-                            // Suspended before the spawn: the service calls
                             // `bind` under its own start gate, so the reply can
                             // arrive before a spawn returns, and a reply for an
                             // unparked id is dropped. No off-thread wait to

@@ -338,7 +338,7 @@ pub struct Loop {
     /// The session's hooks; `None` runs none.
     hooks: Option<Arc<dyn contract::hook::Hooks>>,
     /// Forgets the normal end's extension-owned ids: `settled` calls it
-    /// with [`Loop::releasing`] at the top of its normal-end branch,
+    /// with the branch's running snapshot at the top of its normal-end branch,
     /// before the first drain, so a queued end for a released id is
     /// dropped and never runs `end_extension_job`. `None` releases
     /// nothing: every end still runs. Set by [`Loop::released`].

@@ -791,8 +791,6 @@ impl SessionExtensions {
         self.search_backend.clone()
     }
 
-    /// Offers one appended event to every watcher registered for its kind,
-    /// in extension-name order then watcher registration order: the one
     /// Offers a delegate end to the extension that binds its job: the
     /// finish is held until the completion pushes the one `run` item. A
     /// finish no loaded extension binds is not held, so model-owned
@@ -802,13 +800,16 @@ impl SessionExtensions {
     fn observe_delegate(&self, event: &Event) {
         if let Event::DelegateFinished(finished) = event {
             for extension in &self.lua {
-                if extension.hold_delegate_finish(finished) {
+                if extension.hub().hold_delegate_finish(finished) {
                     break;
                 }
             }
         } else if let Event::JobCompleted(completed) = event {
             for extension in &self.lua {
-                if extension.push_delegate_run(completed) {
+                if extension
+                    .hub()
+                    .push_delegate_run(extension.name(), completed)
+                {
                     break;
                 }
             }
@@ -1061,7 +1062,7 @@ impl SessionExtensions {
     /// job's end; never called under the hub lock.
     pub fn release_delegates(&self, jobs: &[contract::JobId]) {
         for extension in &self.lua {
-            extension.release_delegates(jobs);
+            extension.hub().release_delegates(jobs);
         }
     }
 

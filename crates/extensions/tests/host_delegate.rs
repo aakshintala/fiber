@@ -23,9 +23,6 @@ use serde_json::{Map, json};
 /// How long a test waits for one delivery before failing.
 const WAIT: Duration = Duration::from_secs(5);
 
-/// How long a test waits for a log that must never arrive.
-const QUIET: Duration = Duration::from_millis(200);
-
 /// A [`HostDelegate`] handing out queued ids, recording every start.
 struct Fake {
     next: Mutex<Vec<JobId>>,
@@ -182,11 +179,11 @@ fn a_released_completion_queues_nothing_while_a_bound_one_runs_its_run() {
         next_log(&inbox_rx, "the bound run"),
         format!("ran:{second}:completed")
     );
-    // Nothing else follows: the released run never logged.
-    assert!(
-        Deadline::after(QUIET).recv(&inbox_rx).is_err(),
-        "no released run logged"
-    );
+    // Nothing else follows: the bound run is the later ordered marker.
+    // Both completions were delivered before it, and the released one
+    // queued nothing on the delivering thread, so a non-blocking drain
+    // proves no released run is behind it.
+    assert!(inbox_rx.try_recv().is_err(), "no released run logged");
 }
 
 /// A delegate finish for `id`, as the session end writes it: durable, so
@@ -240,18 +237,22 @@ fn a_reloaded_watcher_receives_the_kept_running_delegate_finish_exactly_once() {
     drop(first);
     second.deliver(&finished(&id), None);
     second.deliver(&completed(&id, Outcome::Completed), None);
-    // The new VM never bound the id, so the queued item is the watcher's:
-    // it ran exactly once, and the old run never logged.
+    // The watcher's log is the later ordered marker: the finish queued
+    // exactly one watcher delivery and the completion queued nothing on
+    // the delivering thread, so a non-blocking drain proves it ran once.
     assert_eq!(
         next_log(&inbox2_rx, "the reloaded watcher"),
         format!("saw:{id}")
     );
     assert!(
-        Deadline::after(QUIET).recv(&inbox2_rx).is_err(),
+        inbox2_rx.try_recv().is_err(),
         "the watcher ran exactly once"
     );
+    // The dropped set held no queued or running call: no completion ever
+    // reached it, and the drop disposed its hub, so a non-blocking drain
+    // proves the old `run` never logged.
     assert!(
-        Deadline::after(QUIET).recv(&inbox_rx).is_err(),
+        inbox_rx.try_recv().is_err(),
         "the dropped set ran no old run"
     );
 }

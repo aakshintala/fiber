@@ -19,24 +19,12 @@ use crate::{Error, Loop};
 pub(crate) type ReleaseDelegates = Arc<dyn Fn(&[JobId]) + Send + Sync>;
 
 impl Loop {
-    /// Forgets the ids [`Loop::releasing`] returns through `release`:
+    /// Forgets the ids the normal-end branch releases through `release`:
     /// without it a normal end releases nothing and every queued end
     /// still runs `end_extension_job`.
     pub fn released(mut self, release: ReleaseDelegates) -> Self {
         self.release = Some(release);
         self
-    }
-
-    /// The extension-owned ids in a running list, in the same order: what
-    /// the normal end releases before its first drain. The inverse of
-    /// [`Loop::model_running`]: ended ids already left `running`, so none
-    /// is ever passed. Takes the branch's snapshot instead of reading it
-    /// again, so the drain still sees the same list.
-    pub(crate) fn releasing(&self, running: Vec<JobId>) -> Vec<JobId> {
-        running
-            .into_iter()
-            .filter(|id| self.handoff.carry.owned(&id.0))
-            .collect()
     }
 
     /// `result` once the jobs have settled. A normal end stops only
@@ -61,7 +49,14 @@ impl Loop {
         // callback nothing is released and nothing is suppressed.
         let released = match &self.release {
             Some(release) => {
-                let released = self.releasing(running.clone());
+                // The extension-owned ids in the branch's snapshot, in the
+                // same order: the inverse of `model_running`, since ended
+                // ids already left `running`.
+                let released: Vec<JobId> = running
+                    .iter()
+                    .filter(|id| self.handoff.carry.owned(&id.0))
+                    .cloned()
+                    .collect();
                 release(&released);
                 released
             }

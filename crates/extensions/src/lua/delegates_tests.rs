@@ -91,11 +91,6 @@ fn run_arg_carries_the_finish_when_held() {
             "status": "completed",
         })
     );
-}
-
-/// `failed` and `cancelled` with no held finish carry no finish fields.
-#[test]
-fn run_arg_without_finish_carries_only_job_id_and_status() {
     for (status, name) in [
         (Outcome::Failed, "failed"),
         (Outcome::Cancelled, "cancelled"),

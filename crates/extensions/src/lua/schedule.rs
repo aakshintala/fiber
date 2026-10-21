@@ -138,7 +138,7 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
         return;
     };
     let mut parked = Vec::new();
-    while let Some(work) = next(&start.name, &hub, &vm, &mut parked) {
+    while let Some(work) = next(&start.name, &hub, &mut parked) {
         // The call has started or resumed.
         hub.notify();
         let (id, target, step) = match work {
@@ -209,8 +209,9 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
         // A callback that ended in an error may have left a held credential
         // in its coroutine.
         let failed = step.is_err();
-        settle(&start, &hub, &vm, &mut parked, id, &target, step);
-        // A finished timer leaves its Lua function, which the thread frees.
+        settle(&start, &hub, &mut parked, id, &target, step);
+        // A finished timer leaves its Lua function, and a finished delegate
+        // run its stored pair, which the thread frees.
         for timer_id in hub.take_timer_cleanup() {
             match vm.timer_funcs.set(
                 i64::try_from(timer_id).unwrap_or(i64::MAX),
@@ -218,6 +219,9 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
             ) {
                 Ok(()) | Err(_) => {}
             }
+        }
+        for handle in hub.take_delegate_cleanup() {
+            vm.clear_delegate_handle(handle);
         }
         if failed {
             vm.collect();
@@ -232,7 +236,7 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
 /// failed here, a reply or a sleeper's wake resumes its callback, a queued
 /// call starts if it may, and a due timer fires in the gaps. None once the
 /// extension is stopped.
-fn next(name: &str, hub: &Hub, vm: &Vm, parked: &mut Vec<Parked>) -> Option<Work> {
+fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
     let mut shared = hub.lock();
     // Nothing runs here: an interrupt raised for the callback that just
     // ended must not stop the next one.
@@ -284,7 +288,7 @@ fn next(name: &str, hub: &Hub, vm: &Vm, parked: &mut Vec<Parked>) -> Option<Work
                 // item and is noticed as `hook_failed`, like a watcher.
                 let result = Err(timed_out(name, &p.target, p.timeout, false));
                 drop(shared);
-                hub.finish_delegate(vm, name, p.id, &p.target, result);
+                hub.finish_delegate(name, p.id, &p.target, result);
                 shared = hub.lock();
             } else if let Target::Timer { id: timer_id } = p.target {
                 // A firing past its timeout ends; an `every` keeps firing.
@@ -623,7 +627,6 @@ fn await_completion_release(extension: &str, target: &Target) {
 fn settle(
     start: &Start,
     hub: &Arc<Hub>,
-    vm: &Vm,
     parked: &mut Vec<Parked>,
     id: u64,
     target: &Target,
@@ -641,7 +644,7 @@ fn settle(
             // A delegate `run` has no waiter: its result is dropped, and
             // a failure is noticed as `hook_failed`, like a watcher.
             if let Target::Delegate { .. } = target {
-                hub.finish_delegate(vm, &start.name, id, target, Ok(value));
+                hub.finish_delegate(&start.name, id, target, Ok(value));
                 return;
             }
             #[cfg(test)]
@@ -656,7 +659,7 @@ fn settle(
         }
         Err(e) => {
             if let Target::Delegate { .. } = target {
-                hub.finish_delegate(vm, &start.name, id, target, Err(e));
+                hub.finish_delegate(&start.name, id, target, Err(e));
                 return;
             }
             #[cfg(test)]

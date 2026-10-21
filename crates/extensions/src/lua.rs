@@ -754,27 +754,10 @@ impl LuaExtension {
         }));
     }
 
-    /// Holds a delegate's finish for its job, when this extension binds it:
-    /// the completion pushes the `run` item. False when no binding names
-    /// the job, so model-owned delegates pass through.
-    pub(crate) fn hold_delegate_finish(
-        &self,
-        finished: &contract::events::DelegateFinished,
-    ) -> bool {
-        self.hub.hold_delegate_finish(finished)
-    }
-
-    /// Pushes the one stream item for an ended delegate this extension
-    /// still binds, consuming the binding and any held finish. False when
-    /// no binding names the job or the extension stopped: nothing queues.
-    pub(crate) fn push_delegate_run(&self, completed: &contract::events::JobCompleted) -> bool {
-        self.hub.push_delegate_run(self.name(), completed)
-    }
-
-    /// Forgets the delegate bindings for `jobs`, with their held finishes
-    /// and queued-but-unstarted `run` items.
-    pub(crate) fn release_delegates(&self, jobs: &[contract::JobId]) {
-        self.hub.release_delegates(jobs);
+    /// The hub every waiter and the extension's thread share: what
+    /// `SessionExtensions` reaches the delegate bindings through.
+    pub(crate) fn hub(&self) -> &Hub {
+        &self.hub
     }
 
     /// Whether the watcher has a delivery queued or running: the busy bit

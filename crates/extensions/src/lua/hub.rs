@@ -407,17 +407,14 @@ impl Hub {
     /// from the stream item's push instant.
     pub(crate) fn bind_delegate(&self, id: contract::JobId, handle: u64, timeout: Duration) {
         let mut shared = self.lock();
-        shared.delegates.insert(id, handle);
-        shared.delegate_timeout.insert(handle, timeout);
+        shared.delegates.insert(id, (handle, timeout));
     }
 
     /// Forgets the delegate `id`: its start failed after `bind` ran, so no
     /// abandon may cancel it.
     pub(crate) fn unbind_delegate(&self, id: &contract::JobId) {
         let mut shared = self.lock();
-        if let Some(handle) = shared.delegates.remove(id) {
-            shared.delegate_timeout.remove(&handle);
-        }
+        shared.delegates.remove(id);
     }
 
     /// Holds `finished` for its job when this extension binds it: the
@@ -432,7 +429,9 @@ impl Hub {
         if !shared.delegates.contains_key(&finished.job_id) {
             return false;
         }
-        super::delegates::hold(&mut shared.held_finishes, finished.clone());
+        shared
+            .held_finishes
+            .insert(finished.job_id.clone(), finished.clone());
         true
     }
 
@@ -450,38 +449,34 @@ impl Hub {
         if !matches!(shared.phase, Phase::Ready(_)) {
             return false;
         }
-        let Some(handle) = shared.delegates.remove(&completed.job_id) else {
+        let Some((handle, timeout)) = shared.delegates.remove(&completed.job_id) else {
             return false;
         };
-        let timeout = shared
-            .delegate_timeout
-            .remove(&handle)
-            .unwrap_or(Duration::ZERO);
         let finished = shared.held_finishes.remove(&completed.job_id);
-        let item = super::delegates::push_on_job_completed(
-            handle,
-            timeout,
-            finished.as_ref(),
-            name,
-            completed,
-        );
         let asked = self.clock.now();
-        shared.push(item.target, item.arg, asked);
+        shared.push(
+            super::Target::Delegate {
+                extension: name.to_owned(),
+                job_id: completed.job_id.clone(),
+                handle,
+                timeout,
+            },
+            super::delegates::run_arg(completed, finished.as_ref()),
+            asked,
+        );
         drop(shared);
         self.notify();
         true
     }
 
-    /// Forgets the bindings for `jobs`, with their timeouts, held finishes
+    /// Forgets the bindings for `jobs`, with their held finishes
     /// and queued-but-unstarted `run` items: after the normal end releases
     /// an id, its completion queues nothing and its queued item never
     /// starts. A `run` already on the thread runs out its timeout.
     pub(crate) fn release_delegates(&self, jobs: &[contract::JobId]) {
         let mut shared = self.lock();
         for id in jobs {
-            if let Some(handle) = shared.delegates.remove(id) {
-                shared.delegate_timeout.remove(&handle);
-            }
+            shared.delegates.remove(id);
             shared.held_finishes.remove(id);
         }
         let dropped: Vec<u64> = shared
@@ -499,11 +494,11 @@ impl Hub {
 
     /// Ends a delegate `run` item: no caller waits on it, so the call is
     /// forgotten rather than recorded; a failure is noticed as
-    /// `hook_failed` naming the extension, and the `run` handle is cleared
-    /// from the VM beside the hub entries. Runs on the extension's thread.
+    /// `hook_failed` naming the extension, and the `run` handle is queued
+    /// for the thread to clear from the VM beside the hub entries. Runs on
+    /// the extension's thread.
     pub(super) fn finish_delegate(
         &self,
-        vm: &super::vm::Vm,
         name: &str,
         id: u64,
         target: &super::Target,
@@ -519,13 +514,13 @@ impl Hub {
                 extension: Some(name.to_owned()),
             }));
         }
-        vm.clear_delegate_handle(*handle);
         let mut shared = self.lock();
+        // The thread clears the `run` handle from the VM after the call,
+        // beside the timer functions: the end consumed it.
+        shared.delegate_cleanup.push(*handle);
         // The push consumed the binding; this clears what a push that
         // never ran (a stop between the two) left behind.
-        if let Some(bound) = shared.delegates.remove(job_id) {
-            shared.delegate_timeout.remove(&bound);
-        }
+        shared.delegates.remove(job_id);
         shared.held_finishes.remove(job_id);
         shared.forget(id);
         drop(shared);
@@ -608,15 +603,17 @@ pub(crate) struct Shared {
     /// worker). One slot is enough: only one call runs on the thread at a
     /// time, and parking or settling the watched hook disarms it.
     pub(super) abandon: Option<AbandonWatch>,
-    /// Each started delegate job against its `run` handle, inserted by
-    /// `bind` before any child spawns. A failed start after `bind` removes
-    /// its entry; an abandon takes every entry to cancel; the push of its
-    /// `run` item consumes it, so a second completion pushes nothing.
-    pub(super) delegates: HashMap<contract::JobId, u64>,
-    /// Each bound `run` handle's per-call timeout, beside `delegates`:
-    /// what the `host.delegate` yield carried, judged from the stream
-    /// item's push instant. Consumed with the binding at the push.
-    pub(super) delegate_timeout: HashMap<u64, Duration>,
+    /// Each started delegate job against its `run` handle and the per-call
+    /// timeout the `host.delegate` yield carried, inserted by `bind` before
+    /// any child spawns. A failed start after `bind` removes its entry; an
+    /// abandon takes every entry to cancel; the push of its `run` item
+    /// consumes it, so a second completion pushes nothing. The timeout is
+    /// judged from the stream item's push instant.
+    pub(super) delegates: HashMap<contract::JobId, (u64, Duration)>,
+    /// The `run` handles whose entries the extension's thread clears from
+    /// the VM after each delegate end, beside the timer functions: the end
+    /// consumed them.
+    pub(super) delegate_cleanup: Vec<u64>,
     /// Each bound delegate job's finish, held from `delegate_finished`
     /// until its `job_completed` pushes the `run` item. A finish for a job
     /// no extension binds is never held.
