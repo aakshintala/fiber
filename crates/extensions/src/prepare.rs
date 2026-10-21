@@ -76,6 +76,19 @@ pub(crate) fn prepare(dir: &Path, manifest: &Manifest, clock: &dyn Clock) -> Res
         });
         write.map_err(crate::install::io(&path))?;
     }
+    install_step(dir, manifest, clock)
+}
+
+/// Runs the manifest's install step in `dir`, stopped at
+/// [`INSTALL_STEP_DEADLINE`] on `clock`. The step runs in Fiber's process
+/// group, so its terminal prompts still work. [`prepare`] runs this after
+/// the binary download; the update commit runs it without one, so every
+/// member-binary download finishes before the first rename.
+pub(crate) fn install_step(
+    dir: &Path,
+    manifest: &Manifest,
+    clock: &dyn Clock,
+) -> Result<(), Error> {
     if let Some(step) = &manifest.install
         && let Some((program, args)) = step.split_first()
     {
