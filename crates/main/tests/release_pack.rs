@@ -105,7 +105,54 @@ impl Pack {
         run_watched(&mut command, self.deadline, "release-pack to exit")
     }
 
-    /// The members of `archive`, sorted, as `tar -tzf` lists them.
+    /// Runs `scripts/release-pack` with `args` and `input` on stdin, with
+    /// the stubbed `gh` first on `PATH`, and waits for it under the
+    /// test's deadline.
+    #[track_caller]
+    fn pack_with_stdin(&self, args: &[&str], input: &str) -> Output {
+        let path = format!("{}:/usr/bin:/bin", fixture_bin().display());
+        let mut command = Command::new(script());
+        command
+            .args(args)
+            .current_dir(self.root.path())
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", path)
+            .env("HOME", self.root.path())
+            .env("TMPDIR", self.path("tmp"))
+            .env("RELEASE_PACK_STATE", self.state())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        use std::io::Write as _;
+        let (mut child, watchdog) = support::spawn_watched(&mut command);
+        let group = child.id();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match self.deadline.recv(&finished) {
+            Ok(output) => output.unwrap(),
+            Err(_) => support::expired(self.deadline, group, &finished, "release-pack to exit"),
+        };
+        watchdog.stand_down(self.deadline.cleanup());
+        Output::from(output)
+    }
+
+    /// Writes a `fiber` crate manifest at `tree/crates/main/Cargo.toml`
+    /// with `version`.
+    #[track_caller]
+    fn manifest(&self, version: &str) {
+        self.wfile(
+            "tree/crates/main/Cargo.toml",
+            format!("[package]\nname = \"fiber\"\nversion = \"{version}\"\n").as_bytes(),
+            0o644,
+        );
+    }
     #[track_caller]
     fn members(&self, archive: &str) -> Vec<String> {
         let at = self.path(&format!("out/{archive}"));
@@ -987,4 +1034,221 @@ fn version_prints_the_version_alone_without_a_recorded_commit() {
             "--version without a recorded commit is the version alone"
         ),
     }
+}
+
+/// `nightly-version` bumps the `fiber` crate's patch and appends the
+/// date (`docs/releasing.md`, "Cutting a release"): a tree at `0.0.0`
+/// with `20261020` prints `0.0.1-nightly.20261020`.
+#[test]
+fn nightly_version_bumps_patch_and_appends_the_date() {
+    let pack = Pack::start();
+    pack.manifest("0.0.0");
+    let tree = pack.path("tree").to_string_lossy().into_owned();
+    let run = pack.pack(&["nightly-version", &tree, "20261020"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout, "0.0.1-nightly.20261020\n");
+}
+
+/// The bump carries across `0.0.9` to `0.0.10`: the compare is numeric,
+/// not lexical.
+#[test]
+fn nightly_version_bumps_nine_to_ten() {
+    let pack = Pack::start();
+    pack.manifest("0.0.9");
+    let tree = pack.path("tree").to_string_lossy().into_owned();
+    let run = pack.pack(&["nightly-version", &tree, "20261020"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout, "0.0.10-nightly.20261020\n");
+}
+
+/// A missing manifest and a bad date fail with exit 2 naming the fault.
+#[test]
+fn nightly_version_refuses_a_bad_tree_or_date() {
+    let pack = Pack::start();
+    let tree = pack.path("tree").to_string_lossy().into_owned();
+    let run = pack.pack(&["nightly-version", &tree, "20261020"]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("holds no fiber version"),
+        "{}",
+        run.stderr
+    );
+
+    let pack = Pack::start();
+    pack.manifest("0.0.0");
+    let tree = pack.path("tree").to_string_lossy().into_owned();
+    for date in ["2026-10-20", "abcdefgh", "2026102", "202610200", ""] {
+        let run = pack.pack(&["nightly-version", &tree, date]);
+        assert_eq!(run.code, Some(2), "{date:?}: {}", run.stderr);
+        assert!(run.stderr.contains(date), "{date:?}: {}", run.stderr);
+    }
+}
+
+const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+fn tag_line(sha: &str, tag: &str) -> String {
+    format!("{sha}\trefs/tags/{tag}\n")
+}
+
+/// `nightly-needed` prints `publish` when HEAD is ahead of the newest
+/// nightly tag.
+#[test]
+fn nightly_needed_publishes_when_head_is_ahead() {
+    let pack = Pack::start();
+    let input = tag_line(SHA_A, "v0.0.1-nightly.20261018");
+    let run = pack.pack_with_stdin(&["nightly-needed", SHA_B], &input);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout, "publish\n");
+}
+
+/// `nightly-needed` prints `skip` naming the newest nightly tag if and
+/// only if HEAD equals that tag's commit.
+#[test]
+fn nightly_needed_skips_only_at_the_newest_tag() {
+    let pack = Pack::start();
+    let input = tag_line(SHA_A, "v0.0.1-nightly.20261018");
+    let run = pack.pack_with_stdin(&["nightly-needed", SHA_A], &input);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        run.stdout,
+        "skip: main unchanged since v0.0.1-nightly.20261018\n"
+    );
+}
+
+/// An older nightly tag at HEAD while a newer tag exists elsewhere still
+/// publishes: the skip compares against the newest tag only.
+#[test]
+fn nightly_needed_publishes_when_only_an_older_tag_is_at_head() {
+    let pack = Pack::start();
+    let input = format!(
+        "{}{}",
+        tag_line(SHA_A, "v0.0.1-nightly.20261018"),
+        tag_line(SHA_B, "v0.0.1-nightly.20261019")
+    );
+    let run = pack.pack_with_stdin(&["nightly-needed", SHA_A], &input);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout, "publish\n");
+}
+
+/// An empty tag list, non-nightly tags only, and malformed lines all
+/// publish: there is no nightly to be unchanged since.
+#[test]
+fn nightly_needed_publishes_without_any_nightly_tag() {
+    for input in [
+        String::new(),
+        tag_line(SHA_A, "v0.0.9"),
+        format!("{}{}", tag_line(SHA_A, "v0.0.9"), "not a ls-remote line\n"),
+    ] {
+        let pack = Pack::start();
+        let run = pack.pack_with_stdin(&["nightly-needed", SHA_A], &input);
+        assert_eq!(run.code, Some(0), "{input:?}: {}", run.stderr);
+        assert_eq!(run.stdout, "publish\n", "{input:?}");
+    }
+}
+
+/// The newest tag is the version-date maximum: `0.0.10-nightly.*` beats
+/// `0.0.9-nightly.*` whatever the dates say.
+#[test]
+fn nightly_needed_compares_versions_numerically() {
+    let pack = Pack::start();
+    let input = format!(
+        "{}{}",
+        tag_line(SHA_A, "v0.0.9-nightly.20261020"),
+        tag_line(SHA_B, "v0.0.10-nightly.20261018")
+    );
+    let at_newest = pack.pack_with_stdin(&["nightly-needed", SHA_B], &input);
+    assert_eq!(at_newest.code, Some(0), "{}", at_newest.stderr);
+    assert_eq!(
+        at_newest.stdout,
+        "skip: main unchanged since v0.0.10-nightly.20261018\n"
+    );
+    let at_older = pack.pack_with_stdin(&["nightly-needed", SHA_A], &input);
+    assert_eq!(at_older.code, Some(0), "{}", at_older.stderr);
+    assert_eq!(at_older.stdout, "publish\n");
+}
+
+/// `nightly-notes` prints the `git log` range since the stable tag, one
+/// `- <short> <subject>` line per commit. The repository is the run's
+/// own directory, as the workflow's checkout is.
+#[test]
+fn nightly_notes_prints_the_range_since_the_stable_tag() {
+    let pack = Pack::start();
+    let repo = pack.root.path().to_path_buf();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    pack.wfile("note-src/one.txt", b"one", 0o644);
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "first"]);
+    fakes::git::git(&repo, &["tag", "v0.0.9"]);
+    pack.wfile("note-src/two.txt", b"two", 0o644);
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "second"]);
+    let head = fakes::git::git(&repo, &["rev-parse", "HEAD"]);
+    let run = pack.pack(&["nightly-notes", "v0.0.9", &head]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout.lines().count(), 1);
+    assert!(run.stdout.starts_with("- "), "{}", run.stdout);
+    assert!(run.stdout.contains("second"), "{}", run.stdout);
+}
+
+/// With no stable tag yet the notes are the whole log, capped at 50.
+#[test]
+fn nightly_notes_without_a_stable_tag_prints_the_log() {
+    let pack = Pack::start();
+    let repo = pack.root.path().to_path_buf();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    pack.wfile("note-src/one.txt", b"one", 0o644);
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "first"]);
+    let head = fakes::git::git(&repo, &["rev-parse", "HEAD"]);
+    let run = pack.pack(&["nightly-notes", "", &head]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout.lines().count(), 1);
+    assert!(run.stdout.contains("first"), "{}", run.stdout);
+}
+
+/// An empty range never prints nothing: the stable tag at HEAD prints one
+/// line for HEAD itself.
+#[test]
+fn nightly_notes_at_the_stable_tag_prints_head_itself() {
+    let pack = Pack::start();
+    let repo = pack.root.path().to_path_buf();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    pack.wfile("note-src/one.txt", b"one", 0o644);
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "first"]);
+    fakes::git::git(&repo, &["tag", "v0.0.9"]);
+    let head = fakes::git::git(&repo, &["rev-parse", "HEAD"]);
+    let run = pack.pack(&["nightly-notes", "v0.0.9", &head]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout.lines().count(), 1);
+    assert!(run.stdout.contains("first"), "{}", run.stdout);
+}
+
+/// `draft-begin --prerelease` carries `--prerelease` through to the
+/// `gh release create` call.
+#[test]
+fn draft_begin_prerelease_marks_the_release() {
+    let pack = Pack::start();
+    pack.wfile("notes.md", b"notes\n", 0o644);
+    let notes = pack.path("notes.md").to_string_lossy().into_owned();
+    let run = pack.pack(&[
+        "draft-begin",
+        "--prerelease",
+        "0.0.1-nightly.20261020",
+        &"c".repeat(40),
+        &notes,
+    ]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let create = pack
+        .calls()
+        .lines()
+        .find(|line| line.starts_with("create"))
+        .unwrap()
+        .to_owned();
+    assert!(create.contains("--prerelease"), "{create}");
+    assert!(
+        create.contains("v0.0.1-nightly.20261020 --draft --prerelease"),
+        "{create}"
+    );
 }
