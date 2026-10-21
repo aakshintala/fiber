@@ -204,6 +204,22 @@ fn scrolled_ignores_repeated_missing_and_still_anchors() {
     assert!(!scrolled(&prev, &next, false));
 }
 
+#[test]
+fn step_wait_stays_pending_on_an_unrelated_frame() {
+    // The faulty wait (`next.rows != prev`) passes on any row change at
+    // all, so an unrelated frame satisfied it with no wheel step written
+    // (see #2934). The strengthened wait stays pending on that frame and
+    // passes only on the wheel-driven frame.
+    let prev = vec!["gone".to_string(), "b".to_string(), "c".to_string()];
+    let unrelated = vec!["new".to_string(), "b".to_string(), "c".to_string()];
+    assert_ne!(unrelated, prev, "the old wait passes with no step written");
+    assert!(!scrolled(&prev, &unrelated, true));
+    assert!(!scrolled(&prev, &unrelated, false));
+    let wheeled = vec!["new".to_string(), "gone".to_string(), "b".to_string()];
+    assert!(scrolled(&prev, &wheeled, true));
+    assert!(!scrolled(&prev, &wheeled, false));
+}
+
 /// One wheel step up at 160x48.
 const UP: &[u8] = b"\x1b[<64;21;11M";
 /// One wheel step down at 160x48.
