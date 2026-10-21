@@ -614,12 +614,14 @@ pub(crate) fn start_observed_tracked(
         thread::spawn(move || {
             let required = spec.required;
             let key = spec.key();
-            let staged = open_staged(
-                spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
+            let staged = stage_and_write(
+                open_staged(
+                    spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
+                ),
+                &cache,
+                &name,
+                &key,
             );
-            if let Shadowed::Up(ref opened) = staged {
-                cache::write(&cache, &name, &key, &opened.listed);
-            }
             if let Some(outstanding) = outstanding.as_ref() {
                 outstanding
                     .lock()
@@ -727,6 +729,16 @@ pub(crate) fn resources_info(definition: &ToolDefinition) -> ToolInfo {
 
 pub(crate) type Declaration = (String, Arc<dyn Tool>, ToolInfo);
 
+/// Starts one spec and stages the outcome, writing the cache only when
+/// the start listed: one helper for the session-start thread and the
+/// direct-start test path.
+fn stage_and_write(staged: Shadowed, cache: &Path, name: &str, key: &str) -> Shadowed {
+    if let Shadowed::Up(ref opened) = staged {
+        cache::write(cache, name, key, &opened.listed);
+    }
+    staged
+}
+
 /// Session start without timing: direct-start tests only.
 #[cfg(test)]
 pub(crate) fn open(
@@ -740,13 +752,14 @@ pub(crate) fn open(
 ) -> Shadowed {
     let name = spec.name.clone();
     let key = spec.key();
-    let staged = open_staged(
-        spec, workspace, artifacts, images, cache, clock, version, None,
-    );
-    if let Shadowed::Up(ref opened) = staged {
-        cache::write(cache, &name, &key, &opened.listed);
-    }
-    staged
+    stage_and_write(
+        open_staged(
+            spec, workspace, artifacts, images, cache, clock, version, None,
+        ),
+        cache,
+        &name,
+        &key,
+    )
 }
 
 /// What a shadow start holds: the running slot, its declarations, the

@@ -32,6 +32,16 @@ pub(super) enum StagedRow {
     },
 }
 
+/// Which quadrant the commit files a shadow under: a replacement lands in
+/// `restarted`, a fresh start in `started`. One variant travels from the
+/// classifying row through staging to the commit, so no boolean can
+/// disagree with the row that produced it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Disposition {
+    Restarted,
+    Started,
+}
+
 /// The staged sync: every kept re-list outcome and every shadow-started
 /// replacement, with staged tools and staged cache writes. Opaque to
 /// `main`, which passes it from stage to commit.
@@ -52,9 +62,8 @@ pub(super) enum ShadowStaged {
         used: Vec<Declaration>,
         /// The old death the commit writes before the ready.
         records: Vec<contract::tool::ServerRecord>,
-        /// Whether the commit files the shadow under `restarted` (a
-        /// replacement) or `started` (a fresh start).
-        restarted: bool,
+        /// Which quadrant the commit files the shadow under.
+        disposition: Disposition,
         /// The shadow's prompt sources, carried for servers with
         /// no startup rows.
         sources: Vec<PromptSource>,
@@ -65,9 +74,8 @@ pub(super) enum ShadowStaged {
         spec: ServerSpec,
         failure: McpServerFailed,
         records: Vec<contract::tool::ServerRecord>,
-        /// Whether the commit files the failure under `restarted`
-        /// (a replacement) or `started` (a fresh start).
-        replaces: bool,
+        /// Which quadrant the commit files the failure under.
+        disposition: Disposition,
     },
 }
 
@@ -83,7 +91,7 @@ fn required_failed(failure: &McpServerFailed) -> contract::shapes::Failure {
 }
 
 /// Shadow-starts one fresh server for a replace or start row, without
-/// touching the live slots or the cache files: `restarted` names the
+/// touching the live slots or the cache files: `disposition` names the
 /// quadrant the commit files it under, and the failure stages the old
 /// deaths beside the start failure when the shadow fails. A required
 /// failure stops every shadow started so far and propagates, so no
@@ -93,7 +101,7 @@ fn stage_shadow(
     servers: &Servers,
     spec: ServerSpec,
     records: Vec<contract::tool::ServerRecord>,
-    restarted: bool,
+    disposition: Disposition,
     inputs: &SyncInputs,
 ) -> Result<ShadowStaged, contract::shapes::Failure> {
     match open_staged(
@@ -114,7 +122,7 @@ fn stage_shadow(
                 listed: opened.listed,
                 used: opened.declared,
                 records,
-                restarted,
+                disposition,
                 sources: opened.sources,
             })
         }
@@ -129,7 +137,7 @@ fn stage_shadow(
                 spec,
                 failure,
                 records,
-                replaces: restarted,
+                disposition,
             })
         }
     }
@@ -173,7 +181,7 @@ pub fn stage_sync(
                             servers,
                             spec,
                             records,
-                            true,
+                            Disposition::Restarted,
                             inputs,
                         )?));
                     }
@@ -193,7 +201,7 @@ pub fn stage_sync(
                     servers,
                     spec,
                     records,
-                    true,
+                    Disposition::Restarted,
                     inputs,
                 )?));
             }
@@ -203,7 +211,7 @@ pub fn stage_sync(
                     servers,
                     spec,
                     Vec::new(),
-                    false,
+                    Disposition::Started,
                     inputs,
                 )?));
             }

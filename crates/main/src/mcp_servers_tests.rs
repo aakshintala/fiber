@@ -1429,36 +1429,3 @@ fn the_reader_reads_a_stored_secret_and_reports_a_missing_one() {
         mcp::SecretError::Unreadable(_)
     ));
 }
-
-fn reconnect_of(
-    sources: config::Sources,
-    servers: std::sync::Arc<mcp::Servers>,
-) -> r#loop::ReconnectServer {
-    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let declare: doors::Declare = std::sync::Arc::new(move |_name: &str, _info| {});
-    super::reconnect_server(
-        sources,
-        servers,
-        declare,
-        std::path::PathBuf::from("artifacts"),
-        std::sync::Arc::new(DummyImages),
-        clock,
-    )
-}
-
-#[test]
-fn reconnect_rejects_unknown_and_unapproved_servers() {
-    let setup = Setup::new();
-    let sources = sources_of(&setup.rig);
-    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let reconnect = reconnect_of(sources, empty_servers(&setup.rig, &clock));
-    let unknown = reconnect("missing").err().expect("unknown rejects");
-    assert_eq!(unknown.code, contract::ErrorCode::InvalidArguments);
-
-    let setup = Setup::new();
-    setup.repository(&json!({"mcp":{"servers":{"repo":{"command":"./srv/run.sh"}}}}));
-    let sources = sources_of(&setup.rig);
-    let reconnect = reconnect_of(sources, empty_servers(&setup.rig, &clock));
-    let unapproved = reconnect("repo").err().expect("unapproved rejects");
-    assert_eq!(unapproved.code, contract::ErrorCode::McpServerUnapproved);
-}

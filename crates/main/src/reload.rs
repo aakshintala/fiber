@@ -212,7 +212,7 @@ impl State {
             let state = state.clone();
             let reads = state.switching.reads();
             preparer(
-                move |route| state.prepare(route),
+                move |route| state.prepare_inner(route, false),
                 move |purpose, work| reads.run(purpose, work),
             )
         };
@@ -232,13 +232,6 @@ impl State {
             )
         };
         (reload, late)
-    }
-
-    fn prepare(
-        self: &Arc<Self>,
-        route: &r#loop::ReloadRoute,
-    ) -> Result<r#loop::ReloadPrepared, Rejection> {
-        self.prepare_inner(route, false)
     }
 
     fn prepare_inner(
@@ -344,20 +337,57 @@ impl State {
         // sync; the late preparation skips it, so no slot starts, no
         // cache writes, and the grouping, records and failures stay
         // empty.
-        let (synced, protected): (Option<mcp::Synced>, Vec<String>) = if late {
-            (None, Vec::new())
+        let (synced, protected, ready): (Option<mcp::Synced>, Vec<String>, Vec<String>) = if late {
+            (None, Vec::new(), Vec::new())
         } else {
             let specs = crate::mcp_servers::specs(&config).map_err(failure)?;
             notices.extend(specs.notices);
             // Repository servers stay with the offer flow that owns
-            // them: never synced, and never removed while still
-            // declared.
+            // them: never removed while still declared.
             let protected: Vec<String> = specs
                 .repository
                 .iter()
                 .map(|repo| repo.spec.name.clone())
                 .collect();
-            let mut rows = mcp::classify_sync(specs.specs, &self.servers);
+            // Eligible approved repository servers classify like any
+            // other server: changed takes the replace path, same-spec
+            // healthy re-lists in place, and a server approved
+            // in-session starts with its prompt sources joining the
+            // `/` list. Unapproved stay skipped exactly as before.
+            let scope = self
+                .repository
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            let prepared = crate::mcp_servers::repository_servers::prepare(
+                &self.sources.home,
+                &self.sources.project,
+                scope.workspace.as_ref().unwrap_or(&self.sources.workspace),
+                &now.loader.clock,
+                &scope.skipped,
+                specs.repository,
+            );
+            if let Some(failed) = prepared.required_failed {
+                return Err(Rejection {
+                    code: contract::ErrorCode::McpRequiredServerFailed,
+                    message: failed.error.message,
+                });
+            }
+            for failed in prepared.failed {
+                notices.push(contract::events::Notice {
+                    code: failed.error.code,
+                    message: failed.error.message,
+                    extension: None,
+                });
+            }
+            let ready: Vec<String> = prepared
+                .ready
+                .iter()
+                .map(|spec| spec.name.clone())
+                .collect();
+            let mut sync_specs = specs.specs;
+            sync_specs.extend(prepared.ready);
+            let mut rows = mcp::classify_sync(sync_specs, &self.servers);
             rows.retain(
                 |row| !matches!(row, mcp::SyncRow::Remove { name } if protected.contains(name)),
             );
@@ -369,6 +399,7 @@ impl State {
             (
                 Some(mcp::commit_sync(staged, &self.servers, &sync_inputs)),
                 protected,
+                ready,
             )
         };
         // New prompt sources join the `/` list when their server had no
@@ -414,9 +445,11 @@ impl State {
                         // The stale `mcp_resources` never carries: the sync
                         // re-adds it below when a post-sync slot offers
                         // resources, and dropping it here undeclares the stale
-                        // one when none does.
+                        // one when none does. Synced repository servers
+                        // declare fresh from the sync outcome below, so only
+                        // unsynced ones (unapproved or failed) keep theirs.
                         (owner == "builtin" && tool.definition().name != mcp::RESOURCES_TOOL)
-                            || protected.contains(owner)
+                            || (protected.contains(owner) && !ready.contains(owner))
                     })
                     .cloned()
                     .collect();
@@ -426,7 +459,9 @@ impl State {
                         && info.name != mcp::RESOURCES_TOOL
                         && match &info.source {
                             ToolSource::Builtin => true,
-                            ToolSource::Mcp { server, .. } => protected.contains(server),
+                            ToolSource::Mcp { server, .. } => {
+                                protected.contains(server) && !ready.contains(server)
+                            }
                             ToolSource::Extension { .. } => false,
                         }
                 });

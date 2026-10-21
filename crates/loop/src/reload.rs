@@ -297,16 +297,25 @@ impl Loop {
         }
         // The sync's records first, in sync order, then `reloaded`:
         // program order on the loop thread is the edge for that line order.
-        for record in &installed.sync.server_records {
+        let Installed {
+            extensions,
+            notices,
+            sync:
+                ServerSync {
+                    servers,
+                    server_records,
+                    server_failures,
+                    new_prompts: _,
+                },
+        } = installed;
+        for record in &server_records {
             self.write(&record_event(record), None, None)?;
         }
-        let failed = (!installed.sync.server_failures.is_empty())
-            .then(|| installed.sync.server_failures.clone());
+        let failed = (!server_failures.is_empty()).then_some(server_failures);
         self.write(
             &Event::Reloaded(Reloaded {
-                servers: installed.sync.servers.clone(),
-                extensions: installed
-                    .extensions
+                servers,
+                extensions: extensions
                     .iter()
                     .map(|extension| extension.name.clone())
                     .collect(),
@@ -317,13 +326,11 @@ impl Loop {
         )?;
         crate::inbox::accept(ack);
         self.write(
-            &Event::ExtensionsLoaded(ExtensionsLoaded {
-                extensions: installed.extensions,
-            }),
+            &Event::ExtensionsLoaded(ExtensionsLoaded { extensions }),
             None,
             None,
         )?;
-        for notice in installed.notices {
+        for notice in notices {
             self.write(&Event::Notice(notice), None, None)?;
         }
         if let Some(hooks) = self.hooks.clone() {

@@ -281,10 +281,13 @@ impl Fixture {
         let state = self.state.clone();
         fakes::within("reload prepared", fakes::MUST_SUCCEED_WITHIN, move || {
             state
-                .prepare(&r#loop::ReloadRoute {
-                    model: "scripted/s.json".into(),
-                    credential: None,
-                })
+                .prepare_inner(
+                    &r#loop::ReloadRoute {
+                        model: "scripted/s.json".into(),
+                        credential: None,
+                    },
+                    false,
+                )
                 .unwrap()
         })
     }
@@ -298,10 +301,13 @@ fn invalid_config_keeps_the_set_and_a_repaired_config_can_install() {
     let state = fixture.state.clone();
     let rejected = fakes::within("invalid reload", fakes::MUST_SUCCEED_WITHIN, move || {
         state
-            .prepare(&r#loop::ReloadRoute {
-                model: "scripted/s.json".into(),
-                credential: None,
-            })
+            .prepare_inner(
+                &r#loop::ReloadRoute {
+                    model: "scripted/s.json".into(),
+                    credential: None,
+                },
+                false,
+            )
             .err()
             .unwrap()
     });
@@ -567,10 +573,13 @@ fn a_rejected_reload_keeps_the_list_and_a_repaired_config_installs() {
     let state = fixture.state.clone();
     let rejected = fakes::within("invalid reload", fakes::MUST_SUCCEED_WITHIN, move || {
         state
-            .prepare(&r#loop::ReloadRoute {
-                model: "scripted/s.json".into(),
-                credential: None,
-            })
+            .prepare_inner(
+                &r#loop::ReloadRoute {
+                    model: "scripted/s.json".into(),
+                    credential: None,
+                },
+                false,
+            )
             .err()
             .unwrap()
     });
@@ -680,6 +689,41 @@ fn approve(fixture: &Fixture, name: &str) {
     store.approve(&found, &digest).expect("the approval");
 }
 
+/// Declares `servers` as the workspace repository's `mcp.servers`, as a
+/// repository checkout would.
+fn write_repo_config(fixture: &Fixture, servers: &serde_json::Value) {
+    std::fs::create_dir_all(fixture.rig.workspace.join(".fiber")).unwrap();
+    std::fs::write(
+        fixture.rig.workspace.join(".fiber/config.json"),
+        json!({"mcp": {"servers": servers}}).to_string(),
+    )
+    .unwrap();
+}
+
+/// Approves the repository's declared MCP server `name`, as an in-session
+/// `fiber approve` would: the next preparation reads the approval fresh.
+fn approve_repo_server(fixture: &Fixture, name: &str) {
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let found = extensions::declared_items(&fixture.rig.workspace, &*clock)
+        .expect("declared items")
+        .into_iter()
+        .find(|item| item.kind == contract::events::OfferedKind::McpServer && item.name == name)
+        .expect("the declared repository server");
+    let mut index = extensions::Index::load(&fixture.rig.home);
+    let digest = extensions::hash(&mut index, &found).expect("the content hash");
+    let store = extensions::Store::new(
+        &fixture.rig.home,
+        &fixture.state.sources.project,
+        std::sync::Arc::clone(&clock),
+    )
+    .fetching(extensions::Fetch::new(
+        extensions::Origin::github(),
+        env!("CARGO_PKG_VERSION"),
+        clock,
+    ));
+    store.approve(&found, &digest).expect("the approval");
+}
+
 #[test]
 fn reload_lists_an_approved_repository_package() {
     let fixture = Fixture::new();
@@ -740,10 +784,13 @@ fn reload_rejects_a_missing_required_package_and_keeps_current() {
     let state = fixture.state.clone();
     let rejected = fakes::within("required reload", fakes::MUST_SUCCEED_WITHIN, move || {
         state
-            .prepare(&r#loop::ReloadRoute {
-                model: "scripted/s.json".into(),
-                credential: None,
-            })
+            .prepare_inner(
+                &r#loop::ReloadRoute {
+                    model: "scripted/s.json".into(),
+                    credential: None,
+                },
+                false,
+            )
             .err()
             .unwrap()
     });
@@ -928,10 +975,13 @@ fn a_rejected_required_package_quotes_its_own_notice() {
     let state = fixture.state.clone();
     let rejected = fakes::within("required detail", fakes::MUST_SUCCEED_WITHIN, move || {
         state
-            .prepare(&r#loop::ReloadRoute {
-                model: "scripted/s.json".into(),
-                credential: None,
-            })
+            .prepare_inner(
+                &r#loop::ReloadRoute {
+                    model: "scripted/s.json".into(),
+                    credential: None,
+                },
+                false,
+            )
             .err()
             .unwrap()
     });
@@ -1153,10 +1203,13 @@ impl Fixture {
     fn try_prepare(&self) -> Result<r#loop::ReloadPrepared, contract::inbox::Rejection> {
         let state = self.state.clone();
         fakes::within("reload attempted", fakes::MUST_SUCCEED_WITHIN, move || {
-            state.prepare(&r#loop::ReloadRoute {
-                model: "scripted/s.json".into(),
-                credential: None,
-            })
+            state.prepare_inner(
+                &r#loop::ReloadRoute {
+                    model: "scripted/s.json".into(),
+                    credential: None,
+                },
+                false,
+            )
         })
     }
 
@@ -1492,6 +1545,124 @@ fn reload_skips_a_repository_server_without_approval() {
     assert!(
         !fixture.state.servers.has_slot("db"),
         "the unapproved server never starts"
+    );
+}
+
+#[test]
+fn reload_restarts_a_changed_approved_repository_server() {
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    let db = FakeServer::new(&fixture.rig, "db", &json!([{"name": "echo"}]));
+    db.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    write_repo_config(&fixture, &json!({"db": db.entry(json!({}))}));
+    approve_repo_server(&fixture, "db");
+    let first = fixture.prepare();
+    assert_eq!(first.server_sync.servers.started, ["db"]);
+    assert!(
+        run_named(&first.tools, &fixture, "mcp__db__echo")
+            .error
+            .is_none()
+    );
+    let pid = db.pid();
+    // A new executable under the same name, approved anew: the changed
+    // key takes the replace path and the new server answers.
+    let next = FakeServer::new(&fixture.rig, "db-next", &json!([{"name": "plus"}]));
+    next.answer("plus", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    write_repo_config(&fixture, &json!({"db": next.entry(json!({}))}));
+    approve_repo_server(&fixture, "db");
+    let prepared = fixture.prepare();
+    assert_eq!(prepared.server_sync.servers.kept, ["fx"]);
+    assert_eq!(prepared.server_sync.servers.restarted, ["db"]);
+    assert!(
+        run_named(&prepared.tools, &fixture, "mcp__db__plus")
+            .error
+            .is_none(),
+        "the new executable answers"
+    );
+    assert!(
+        prepared
+            .tools
+            .iter()
+            .all(|(_, tool)| tool.definition().name != "mcp__db__echo"),
+        "the old list is gone"
+    );
+    assert_ne!(next.pid(), pid, "the restart spawns the new executable");
+}
+
+#[test]
+fn reload_relists_an_unchanged_approved_repository_server_without_reconnecting() {
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    let db = FakeServer::new(&fixture.rig, "db", &json!([{"name": "echo"}]));
+    db.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    write_repo_config(&fixture, &json!({"db": db.entry(json!({}))}));
+    approve_repo_server(&fixture, "db");
+    let first = fixture.prepare();
+    assert_eq!(first.server_sync.servers.started, ["db"]);
+    let pid = db.pid();
+    let prepared = fixture.prepare();
+    assert_eq!(prepared.server_sync.servers.kept, ["fx", "db"]);
+    assert!(prepared.server_sync.servers.restarted.is_empty());
+    assert_eq!(db.pid(), pid, "the re-list reconnects nothing");
+    assert!(
+        run_named(&prepared.tools, &fixture, "mcp__db__echo")
+            .error
+            .is_none()
+    );
+}
+
+#[test]
+fn reload_starts_an_approved_in_session_repository_server_with_its_prompts() {
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    let db = FakeServer::new(&fixture.rig, "db", &json!([{"name": "echo"}]));
+    db.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    std::fs::write(
+        db.dir.join("prompts.json"),
+        json!([{"name": "greet", "description": "Greets."}]).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        db.dir.join("prompt-greet.json"),
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Hello, Ada."}}]}"#,
+    )
+    .unwrap();
+    write_repo_config(&fixture, &json!({"db": db.entry(json!({}))}));
+    // Unapproved, the repository server stays skipped exactly as today.
+    let skipped = fixture.prepare();
+    assert!(skipped.server_sync.servers.started.is_empty());
+    assert!(!fixture.state.servers.has_slot("db"));
+    // Approved in-session, it starts with its prompts joining the `/` list.
+    approve_repo_server(&fixture, "db");
+    let prepared = fixture.prepare();
+    assert_eq!(prepared.server_sync.servers.started, ["db"]);
+    assert!(
+        run_named(&prepared.tools, &fixture, "mcp__db__echo")
+            .error
+            .is_none()
+    );
+    let carried = prepared
+        .server_sync
+        .new_prompts
+        .as_ref()
+        .expect("the sync carries the new rows with their fetch");
+    assert_eq!(carried.0.len(), 1);
+    assert_eq!(carried.0[0].name, "greet");
+    assert_eq!(carried.0[0].tag, "db");
+    let fetch = &carried.1;
+    struct NoCancel;
+    impl contract::tool::Cancel for NoCancel {
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+
+        fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+    }
+    let fetched = fetch("db", "greet", "", &NoCancel);
+    assert!(fetched.error.is_none());
+    assert!(
+        fetched.content.iter().any(|part| matches!(
+            part,
+            contract::shapes::ContentPart::Text { text } if text.contains("Ada")
+        )),
+        "the appended prompt answers"
     );
 }
 

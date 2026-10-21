@@ -12,7 +12,7 @@ use crate::prompt::{PromptSource, Prompts};
 use crate::start::{ServerSpec, Servers, resources_info};
 
 use super::SyncInputs;
-use super::stage::{ShadowStaged, StagedRow};
+use super::stage::{Disposition, ShadowStaged, StagedRow};
 
 /// What the commit installs: the new MCP tool set, the records to write
 /// before `reloaded`, the non-required failures for its `failed` entry,
@@ -50,7 +50,7 @@ fn install_opened(
         listed,
         used,
         records: carried,
-        restarted,
+        disposition,
         sources,
     } = staged
     else {
@@ -73,7 +73,7 @@ fn install_opened(
         server: name.clone(),
     }));
     all_sources.extend(sources);
-    if restarted {
+    if disposition == Disposition::Restarted {
         installing.servers.restarted.push(name);
     } else {
         installing.servers.started.push(name);
@@ -93,10 +93,10 @@ fn install_failed(
     spec: &ServerSpec,
     carried: Vec<ServerRecord>,
     failure: McpServerFailed,
-    replaces: bool,
+    disposition: Disposition,
 ) {
     let name = spec.name.clone();
-    if replaces {
+    if disposition == Disposition::Restarted {
         // A non-required replacement still stops the old slot at
         // commit: the configuration changed, so no stale slot survives,
         // with the server showing failed.
@@ -118,7 +118,7 @@ fn install_failed(
         reason: failure.reason,
         error: failure.error,
     });
-    if replaces {
+    if disposition == Disposition::Restarted {
         installing.servers.restarted.push(name);
     } else {
         installing.servers.started.push(name);
@@ -185,9 +185,16 @@ pub fn commit_sync(
                 spec,
                 failure,
                 records: carried,
-                replaces,
+                disposition,
             }) => {
-                install_failed(&mut installing, servers, &spec, carried, failure, replaces);
+                install_failed(
+                    &mut installing,
+                    servers,
+                    &spec,
+                    carried,
+                    failure,
+                    disposition,
+                );
             }
             StagedRow::Remove { name } => {
                 servers.remove(&name);
