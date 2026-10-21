@@ -523,8 +523,8 @@ fn ask(
 }
 
 /// `fiber feedback`: resolves the description like `fiber ask` resolves
-/// its prompt, then runs the shared report writer; the path prints on
-/// stdout.
+/// its prompt, then runs the shared report writer; the path and the issue
+/// link print on stdout.
 fn feedback(arg: Option<String>, dash: bool, clock: Arc<dyn contract::clock::Clock>) -> i32 {
     let stdin = io::stdin();
     let description = match doors::prompt(arg, dash, &mut stdin.lock(), stdin.is_terminal()) {
@@ -564,7 +564,9 @@ fn feedback(arg: Option<String>, dash: bool, clock: Arc<dyn contract::clock::Clo
     match ::cli::write(&description, &context) {
         Ok(done) => {
             // A closed stdout leaves nobody to tell, as `fiber --version` does.
-            writeln!(io::stdout().lock(), "{}", done.path.display()).unwrap_or(());
+            let mut out = io::stdout().lock();
+            writeln!(out, "{}", done.path.display()).unwrap_or(());
+            writeln!(out, "{}", done.link).unwrap_or(());
             0
         }
         Err(error) => fail(error.into()),
