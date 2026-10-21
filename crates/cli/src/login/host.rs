@@ -169,17 +169,18 @@ fn remedies(
     project: &ProjectKey,
 ) -> Result<(), CliError> {
     let extension = io.providers.extension_of(name).unwrap_or(name);
+    let file = config::dir_name(extension);
     for (key, env) in gaps(io.home, io.providers, name, workspace, project) {
         match env {
             Some(variable) => writeln!(
                 io.err,
-                "fiber: `{key}` has no value; set it in `config/{extension}.json` in Fiber home, \
+                "fiber: `{key}` has no value; set it in `config/{file}.json` in Fiber home, \
                  or export `{variable}`."
             ),
             None => writeln!(
                 io.err,
                 "fiber: `{key}` has no value and no environment variable fills it; \
-                 set it in `config/{extension}.json` in Fiber home."
+                 set it in `config/{file}.json` in Fiber home."
             ),
         }
         .map_err(CliError::Terminal)?;

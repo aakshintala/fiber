@@ -203,7 +203,8 @@ pub(super) fn unconfigured(
     }
     message.push_str(&format!(
         ". Run `fiber login {provider}`, \
-         or set `{name}` in `config/{extension}.json` in Fiber home"
+         or set `{name}` in `config/{}.json` in Fiber home",
+        config::dir_name(extension)
     ));
     if env.is_some() {
         message.push_str(", or export it in your shell profile and run `fiber hub refresh`");
