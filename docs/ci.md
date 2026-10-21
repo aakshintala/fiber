@@ -473,7 +473,10 @@ computes it (`cargo xtask plan`). A job that builds the workspace is bounded at
 twice its cold-cache duration, since a pull request's first run after a cache
 eviction or a `Cargo.lock` change builds cold. The median behind each bound is a comment beside its
 `timeout-minutes` line. A job that gains work past its bound has the bound
-raised in its workflow.
+raised in its workflow. The release gates (`release-gate` and `nightly-gate`)
+bound macOS at 50 minutes because a macOS cold build plus the full suite
+measures 24-26 minutes (runs 39679547149/39660697905), twice that per the
+cold-cache rule; Linux stays at 20.
 
 Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
 `APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror

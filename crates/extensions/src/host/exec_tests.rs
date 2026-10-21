@@ -847,14 +847,13 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
     step_to_deadline(&clock, deadline);
     let kill_at = clock.now() + Duration::from_millis(800);
     let early = crate::stall::await_grace_or_answer(&clock, &done, kill_at);
-    if early.is_none() {
-        clock.advance_when_parked(
-            Some(kill_at),
-            None,
-            Duration::from_millis(800),
-            &Deadline::after(DEADLINE),
-        );
-    }
+    let early = crate::stall::advance_past_grace_or_answer(
+        &clock,
+        &done,
+        kill_at,
+        Duration::from_millis(800),
+        early,
+    );
     let outcome = match early {
         Some(outcome) => Ok(outcome),
         None => Deadline::after(DEADLINE).recv(&done),

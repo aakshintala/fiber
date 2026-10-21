@@ -1341,12 +1341,22 @@ fn fetch_true_answers_unreachable_when_shutdown_fires_while_unchecked() {
 
 #[test]
 fn a_fetched_no_quota_stays_absent() {
-    let fixture = http_fixture(vec![fakes::Response::status(200, b"null".to_vec())]);
+    let fixture = http_fixture(vec![
+        fakes::Response::status(200, b"null".to_vec()),
+        fakes::Response::status(200, b"null".to_vec()),
+    ]);
     let store = fixture.switching.quota_store();
     let (done, ended) = mpsc::channel();
     store.note_loaded(done);
     assert!(matches!(store.entries(), QuotaView::Loading));
     receive(&ended, "the loader's end");
+    // Land the loader's fetch first, so each scripted reply answers one request.
+    let lua = store.held_instance("qp");
+    assert_eq!(
+        read_to_end(Arc::clone(&lua), pair_of("work")),
+        QuotaEntry::NoQuota
+    );
+    assert_eq!(fixture.server.requests().len(), 1);
     // The forced fetch resolves no quota: the label stays absent, as in
     // the cached path, instead of answering `unreachable`.
     let empty = Arc::clone(&store);
@@ -1358,4 +1368,5 @@ fn a_fetched_no_quota_stays_absent() {
         ),
         (Vec::new(), 80.0)
     );
+    assert_eq!(fixture.server.requests().len(), 2);
 }

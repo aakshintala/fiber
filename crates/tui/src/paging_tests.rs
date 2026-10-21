@@ -4864,3 +4864,72 @@ fn carry_chain_carries_only_pins_below_the_carried_count() {
         "the carried pin moves over and the fold's own shifts past it"
     );
 }
+
+#[test]
+fn copy_finds_the_newest_reply_from_the_open_page_back() {
+    let lines = session(3, false);
+    let pages = pages_at(&lines, 80);
+    // The open page holds the last turn's last step.
+    let crate::app::copy::LastReply::Text(newest) =
+        crate::app::copy::last_reply(pages.newest_first())
+    else {
+        panic!("a reply");
+    };
+    assert!(newest.starts_with("reply 2_29: "), "{newest}");
+    // With the open page set aside, the walk goes back through the
+    // closed pages, newest first.
+    let empty: &[Turn] = &[];
+    let closed = std::iter::once(Some(empty)).chain(pages.newest_first().skip(1));
+    let crate::app::copy::LastReply::Text(older) = crate::app::copy::last_reply(closed) else {
+        panic!("a reply");
+    };
+    assert!(older.starts_with("reply 2_"), "{older}");
+    assert_ne!(older, newest);
+}
+
+/// Types `/copy` and presses Enter.
+fn copy(app: &mut App) -> Effect {
+    for ch in "/copy".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), now()), Effect::None);
+    }
+    app.on_key(Key::Enter, now())
+}
+
+#[test]
+fn copy_says_a_paged_out_reply_is_paged_out_until_the_end_loads_it() {
+    let mut stream = Stream::new(true);
+    for turn in 0..3 {
+        stream.turn(turn, 30);
+    }
+    // Two turns with no reply, long enough that the open page holds none.
+    for turn in 3..5 {
+        stream.durable(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": format!("prompt {turn}")}]}]}),
+        );
+        for _ in 0..80 {
+            stream.durable("unknown", None, json!({}));
+        }
+    }
+    let lines = stream.lines;
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    app.jump(0);
+    frame(&mut app, &lines);
+    assert_eq!(copy(&mut app), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("The last reply is paged out; jump to the end, then /copy again.")
+    );
+    assert!(!app.copied());
+    // At the end the window holds the page with the newest reply again.
+    assert_eq!(app.on_key(Key::End, now()), Effect::None);
+    frame(&mut app, &lines);
+    let Effect::Copy(text) = copy(&mut app) else {
+        panic!("copied");
+    };
+    assert!(text.starts_with("reply 2_29: "), "{text}");
+    assert!(app.copied());
+}
