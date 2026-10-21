@@ -147,8 +147,8 @@ pub(crate) enum Served {
 mod lease;
 mod relist;
 
-pub(crate) use relist::Relisted;
 use lease::lock;
+pub(crate) use relist::Relisted;
 
 impl Slot {
     /// One slot from its parts, in `state`: `resources` is fixed here
@@ -539,15 +539,6 @@ impl Slot {
                 }
             }
         }
-    }
-
-    /// A fresh `tools/list` (`prompts/list` only for the cache write)
-    /// against the running server, bounded by the spec's
-    /// `startup_timeout`. The behavior lives in the `relist` module, so
-    /// this file stays under the size guideline; this delegates without
-    /// touching the slot itself, and the sync boundary calls this.
-    pub(crate) fn relist(&self) -> Relisted {
-        relist::relist(self)
     }
 
     /// The death this check is the first to see, as the entry of `serve`

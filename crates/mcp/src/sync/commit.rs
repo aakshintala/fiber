@@ -4,12 +4,12 @@
 
 use std::sync::{Arc, PoisonError};
 
-use contract::events::{McpServerFailed, McpServerReady, ReloadedServers, ServerFailure, ToolInfo};
+use contract::events::{McpServerFailed, McpServerReady, ReloadedServers, ToolInfo};
 use contract::tool::{ServerRecord, Tool};
 
 use crate::cache;
 use crate::prompt::{PromptSource, Prompts};
-use crate::start::{ServerSpec, Servers, resources_info};
+use crate::start::{ServerSpec, Servers};
 
 use super::SyncInputs;
 use super::stage::{Disposition, ShadowStaged, StagedRow};
@@ -35,12 +35,9 @@ pub struct Synced {
 }
 
 /// Installs a non-required shadow-start failure at commit: the old slot
-/// is already gone for a replacement, the detected exits ride first and
+/// is already gone for a replacement, the carried records ride first and
 /// the failure rides its failed record and the `failed` entry, filed
-/// under `restarted` (a replacement) or `started` (a fresh start). A
-/// carried listing miss stays out: the shadow's own failure already
-/// describes the unresponsive server, while an exit would otherwise
-/// never be logged.
+/// under `restarted` (a replacement) or `started` (a fresh start).
 fn install_failed(
     installing: &mut Synced,
     servers: &Servers,
@@ -56,14 +53,7 @@ fn install_failed(
         // with the server showing failed.
         servers.remove(&name);
     }
-    installing
-        .records
-        .extend(carried.into_iter().filter(|record| {
-            matches!(
-                record,
-                ServerRecord::Failed(failed) if failed.reason == ServerFailure::Died
-            )
-        }));
+    installing.records.extend(carried);
     installing
         .records
         .push(ServerRecord::Failed(failure.clone()));
@@ -171,22 +161,10 @@ pub fn commit_sync(
     installing.prompt_sources = Prompts::collect(all_sources);
     // One `mcp_resources` when any post-sync slot offers resources, as at
     // session start: the installed hook undeclares it when none does.
-    let offering = servers
-        .slots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .any(|slot| slot.offers_resources());
-    if offering {
-        let definition = crate::resources_definition();
-        let tool: Arc<dyn Tool> = Arc::new(crate::resources::Resources::new(
-            &servers.slots,
-            inputs.artifacts,
-            inputs.images,
-        ));
-        installing
-            .tools
-            .push(("builtin".to_owned(), tool, resources_info(&definition)));
+    if let Some(declaration) =
+        crate::start::resources_declaration(&servers.slots, inputs.artifacts, inputs.images)
+    {
+        installing.tools.push(declaration);
     }
     installing
 }

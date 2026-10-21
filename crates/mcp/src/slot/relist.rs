@@ -3,13 +3,10 @@
 
 use std::sync::Arc;
 
-use contract::events::{McpServerFailed, ServerFailure};
-use contract::shapes::Failure;
 use contract::tool::ServerRecord;
 
 use super::{Slot, State, died, lock};
 use crate::cache::Cached;
-use crate::error::McpError;
 use crate::server::CallError;
 use crate::server_json::{ListedPrompt, ListedTool};
 
@@ -28,98 +25,100 @@ pub(crate) enum Relisted {
     },
 }
 
-/// Re-lists the running server under the slot lease, bounded by the spec's
-/// `startup_timeout`: installs nothing — the caller stages the outcome,
-/// and the prompt payload feeds the cache write only — and any transport
-/// failure signals the replace path instead.
-pub(super) fn relist(slot: &Slot) -> Relisted {
-    // The lease, held across the RPCs as `serve` holds it across a
-    // launch: the edge against a concurrent serve or stop.
-    let _flight = slot.acquire();
-    let (server, restarted, list_tools, list_prompts) = {
-        let state = lock(&slot.state);
-        match &*state {
-            State::Running {
-                server,
-                restarted,
-                advertises_tools,
-                advertises_prompts,
-                ..
-            } if !server.is_gone() && !server.is_expired() => {
-                // The handshake lists only advertised capabilities: the
-                // slot holds what it advertised, so an advertised-but-
-                // empty section re-lists on reload, and a server that
-                // advertised an empty list picks up a tool added since.
-                // Listing an unadvertised section would hang a server
-                // that answers it with malformed JSON.
-                (
-                    Arc::clone(server),
-                    *restarted,
-                    *advertises_tools,
-                    *advertises_prompts,
-                )
+impl Slot {
+    /// Re-lists the running server under the slot lease, bounded by the
+    /// spec's `startup_timeout`: installs nothing — the caller stages the
+    /// outcome, and the prompt payload feeds the cache write only — and
+    /// any transport failure signals the replace path instead.
+    pub(crate) fn relist(&self) -> Relisted {
+        // The lease, held across the RPCs as `serve` holds it across a
+        // launch: the edge against a concurrent serve or stop.
+        let _flight = self.acquire();
+        let (server, restarted, list_tools, list_prompts) = {
+            let state = lock(&self.state);
+            match &*state {
+                State::Running {
+                    server,
+                    restarted,
+                    advertises_tools,
+                    advertises_prompts,
+                    ..
+                } if !server.is_gone() && !server.is_expired() => {
+                    // The handshake lists only advertised capabilities: the
+                    // slot holds what it advertised, so an advertised-but-
+                    // empty section re-lists on reload, and a server that
+                    // advertised an empty list picks up a tool added since.
+                    // Listing an unadvertised section would hang a server
+                    // that answers it with malformed JSON.
+                    (
+                        Arc::clone(server),
+                        *restarted,
+                        *advertises_tools,
+                        *advertises_prompts,
+                    )
+                }
+                State::Running {
+                    server, restarted, ..
+                } if server.is_gone() => {
+                    // It died while idle: this re-list is the first to see
+                    // it, as the entry of `serve` is for a call.
+                    return replace(self, *restarted, Some(CallError::Gone));
+                }
+                State::Running { .. }
+                | State::NotStarted { .. }
+                | State::Down { .. }
+                | State::Dead { .. } => {
+                    return replace(self, false, None);
+                }
             }
-            State::Running {
-                server, restarted, ..
-            } if server.is_gone() => {
-                // It died while idle: this re-list is the first to see
-                // it, as the entry of `serve` is for a call.
-                return replace(slot, *restarted, Some(CallError::Gone));
+        };
+        let timeout = self.spec.startup_timeout;
+        let bound = crate::wait::deadline(self.clock.as_ref(), timeout);
+        // Maps a failed page to the replace path: a timeout misses the
+        // deadline, a death carries the death this re-list is the first to
+        // see, and any other end replaces with no records.
+        let fail = |error: Option<CallError>| replace(self, restarted, error);
+        let tools = if list_tools {
+            match crate::server::list_pages::<ListedTool, Relisted>(
+                &server,
+                &self.clock,
+                "tools/list",
+                "tools",
+                bound,
+                &crate::wait::NoCancel,
+                |error| Err(fail(error)),
+            ) {
+                Ok(tools) => tools,
+                Err(relisted) => return relisted,
             }
-            State::Running { .. }
-            | State::NotStarted { .. }
-            | State::Down { .. }
-            | State::Dead { .. } => {
-                return replace(slot, false, None);
+        } else {
+            Vec::new()
+        };
+        let prompts = if list_prompts {
+            // Any prompts/list error falls back to the replace path: a
+            // failed listing never writes a cache from an empty list.
+            match crate::server::list_pages::<ListedPrompt, Relisted>(
+                &server,
+                &self.clock,
+                "prompts/list",
+                "prompts",
+                bound,
+                &crate::wait::NoCancel,
+                |error| Err(fail(error)),
+            ) {
+                Ok(prompts) => prompts,
+                Err(relisted) => return relisted,
             }
+        } else {
+            Vec::new()
+        };
+        Relisted::Up {
+            listed: Cached {
+                tools,
+                prompts,
+                resources: self.resources,
+            },
         }
-    };
-    let timeout = slot.spec.startup_timeout;
-    let bound = crate::wait::deadline(slot.clock.as_ref(), timeout);
-    // Maps a failed page to the replace path: a timeout misses the
-    // deadline, a death carries the death this re-list is the first to
-    // see, and any other end replaces with no records.
-    let fail = |error: Option<CallError>| replace(slot, restarted, error);
-    let tools = if list_tools {
-        match crate::server::list_pages::<ListedTool, Relisted>(
-            &server,
-            &slot.clock,
-            "tools/list",
-            "tools",
-            bound,
-            &crate::wait::NoCancel,
-            |error| Err(fail(error)),
-        ) {
-            Ok(tools) => tools,
-            Err(relisted) => return relisted,
-        }
-    } else {
-        Vec::new()
-    };
-    let prompts = if list_prompts {
-        // Any prompts/list error falls back to the replace path: a
-        // failed listing never writes a cache from an empty list.
-        match crate::server::list_pages::<ListedPrompt, Relisted>(
-            &server,
-            &slot.clock,
-            "prompts/list",
-            "prompts",
-            bound,
-            &crate::wait::NoCancel,
-            |error| Err(fail(error)),
-        ) {
-            Ok(prompts) => prompts,
-            Err(relisted) => return relisted,
-        }
-    } else {
-        Vec::new()
-    };
-    Relisted::Up {
-        listed: Cached {
-            tools,
-            prompts,
-            resources: slot.resources,
-        },
     }
 }
 
@@ -144,15 +143,13 @@ fn replace(slot: &Slot, restarted: bool, error: Option<CallError>) -> Relisted {
 /// startup deadline the handshake's listing shares, restartable as a
 /// death the next call would restart. Built without moving the slot.
 fn deadline_death(slot: &Slot) -> ServerRecord {
-    let error = McpError::StartDeadline {
-        server: slot.spec.name.clone(),
-        required: slot.spec.required,
-        startup_ms: slot.spec.startup_timeout.as_millis(),
-    };
-    ServerRecord::Failed(McpServerFailed {
-        server: slot.spec.name.clone(),
-        reason: ServerFailure::Deadline,
-        will_restart: true,
-        error: Failure::from(&error),
-    })
+    let mut death = crate::start::not_started(
+        &slot.spec.name,
+        &crate::server::StartError::Deadline,
+        slot.spec.startup_timeout,
+        slot.spec.required,
+        slot.spec.remote(),
+    );
+    death.record.will_restart = true;
+    ServerRecord::Failed(death.record)
 }

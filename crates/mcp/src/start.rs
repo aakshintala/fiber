@@ -683,16 +683,8 @@ pub(crate) fn start_observed_tracked(
     let slots: Arc<Mutex<Vec<Arc<Slot>>>> = Arc::new(Mutex::new(slots));
     // One `mcp_resources` for every start with a server offering
     // resources, reaching the start's own slots, so it follows adoption.
-    if slots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .any(|slot| slot.offers_resources())
-    {
-        let definition = crate::resources_definition();
-        let tool: Arc<dyn Tool> =
-            Arc::new(crate::resources::Resources::new(&slots, artifacts, &images));
-        tools.push(("builtin".to_owned(), tool, resources_info(&definition)));
+    if let Some(declaration) = resources_declaration(&slots, artifacts, &images) {
+        tools.push(declaration);
     }
     tools.sort_by(|left, right| left.1.definition().name.cmp(&right.1.definition().name));
     let (pairs, infos): (Vec<_>, Vec<_>) = tools
@@ -728,6 +720,27 @@ pub(crate) fn resources_info(definition: &ToolDefinition) -> ToolInfo {
 }
 
 pub(crate) type Declaration = (String, Arc<dyn Tool>, ToolInfo);
+
+/// One `mcp_resources` declaration when any post-sync slot offers
+/// resources, as at session start: `None` when none does, so the caller
+/// declares nothing.
+pub(crate) fn resources_declaration(
+    slots: &Arc<Mutex<Vec<Arc<Slot>>>>,
+    artifacts: &Path,
+    images: &Arc<dyn Images>,
+) -> Option<Declaration> {
+    let offering = slots
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .any(|slot| slot.offers_resources());
+    if !offering {
+        return None;
+    }
+    let definition = crate::resources_definition();
+    let tool: Arc<dyn Tool> = Arc::new(crate::resources::Resources::new(slots, artifacts, images));
+    Some(("builtin".to_owned(), tool, resources_info(&definition)))
+}
 
 /// Starts one spec and stages the outcome, writing the cache only when
 /// the start listed: one helper for the session-start thread and the

@@ -97,9 +97,8 @@ pub(crate) fn list_pages<T: serde::de::DeserializeOwned, E>(
     let mut cursor: Option<String> = None;
     // The deadline maps without `fail`: every caller ends a missed bound
     // the same way, while `fail` maps the Timeout/Gone/other outcome.
-    let past = || clock.now() >= deadline;
     loop {
-        if past() {
+        if clock.now() >= deadline {
             return fail(Some(CallError::Timeout));
         }
         let params = match &cursor {
