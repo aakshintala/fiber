@@ -366,15 +366,15 @@ fn read_confined(root: &Path, path: &Path) -> Option<String> {
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 
-/// The text cut to [`TEXT_CUT`] bytes at a character boundary.
+/// The text cut to [`TEXT_CUT`] bytes at a character boundary: the longest
+/// boundary-terminated prefix, found by walking down with an iterator so a
+/// mutated step still terminates (docs/testing/mutants.md, "Code is written
+/// so a mutant fails fast").
 fn cut_text(text: &str) -> &str {
-    if text.len() <= TEXT_CUT {
-        return text;
-    }
-    let mut end = TEXT_CUT;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = (0..=TEXT_CUT.min(text.len()))
+        .rev()
+        .find(|end| text.is_char_boundary(*end))
+        .unwrap_or(0);
     &text[..end]
 }
 
