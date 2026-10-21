@@ -379,6 +379,16 @@ impl State {
                 new_prompts.push(prompt);
             }
         }
+        // The carried sources answer the new rows through the same path
+        // as a startup row: `loop` routes the new tags to this fetch.
+        let prompt_fetch: Option<r#loop::FetchPrompt> = if new_prompts.is_empty() {
+            None
+        } else {
+            let sources = synced.prompt_sources.clone();
+            Some(Arc::new(move |server, prompt, text, cancel| {
+                sources.get(server, prompt, text, cancel)
+            }))
+        };
         let mut prompt_rows = baseline;
         prompt_rows.extend(new_prompts.clone());
         let listed = r#loop::commands(
@@ -471,18 +481,14 @@ impl State {
         let carried_prompts = new_prompts.clone();
         let installed = Box::new(move || {
             // The session's current rows grow by this reload's additions,
-            // so the next preparation rebuilds from them, not from the
-            // startup snapshot alone.
+            // so the next preparation rebuilds from them: prepare already
+            // filtered the carried rows against this same baseline.
             {
                 let mut rows = shared
                     .prompt_rows
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                for prompt in &carried_prompts {
-                    if !rows.iter().any(|row| row.tag == prompt.tag) {
-                        rows.push(prompt.clone());
-                    }
-                }
+                rows.extend(carried_prompts);
             }
             extensions.emit_to(Arc::new(log::WeakEmit::new(&shared.log)));
             extensions.drive_to(shared.drive.clone());
@@ -528,6 +534,7 @@ impl State {
                 server_records: synced.records,
                 server_failures: synced.failed,
                 new_prompts,
+                prompt_fetch,
             },
             hooks: Some(hooks),
             reviewer,

@@ -8,12 +8,14 @@ use std::path::Path;
 use std::sync::{Arc, PoisonError};
 
 use contract::clock::Clock;
-use contract::events::{CommandInfo, McpServerFailed, McpServerReady, ReloadedServers, ToolInfo};
+use contract::events::{
+    CommandInfo, McpServerFailed, McpServerReady, ReloadedServers, ServerFailure, ToolInfo,
+};
 use contract::images::Images;
 use contract::tool::{ServerRecord, Tool};
 
 use crate::cache::{self, Cached};
-use crate::prompt::Prompts;
+use crate::prompt::{PromptSource, Prompts};
 use crate::slot::Slot;
 use crate::start::{
     Declaration, ServerSpec, Servers, Shadowed, declare, open_staged, resources_info,
@@ -148,13 +150,22 @@ enum StagedRow {
         /// replacement, or a fallback for a slot that left) or
         /// `started` (a fresh start).
         restarted: bool,
-        /// The shadow's runnable prompt rows, carried for servers with
+        /// The shadow's prompt sources, carried for servers with
         /// no startup rows; kept servers refresh the cache file only.
-        prompts: Vec<CommandInfo>,
+        /// The commit collects every row's sources into one listing,
+        /// whose rows ride `Synced.prompts` and whose sources ride
+        /// `Synced.prompt_sources`.
+        sources: Vec<PromptSource>,
     },
     Failed {
         spec: ServerSpec,
         failure: McpServerFailed,
+        /// The old deaths staged beside the failure: the commit writes
+        /// the detected exits among them before the failure, so an
+        /// optional replacement failure still records the death it
+        /// replaced (`docs/mcp.md`, "Each death is recorded as
+        /// `mcp_server_failed`").
+        records: Vec<contract::tool::ServerRecord>,
         /// Whether the commit files the failure under `restarted`
         /// (a replacement) or `started` (a fresh start).
         replaces: bool,
@@ -182,6 +193,69 @@ fn required_failed(failure: &McpServerFailed) -> contract::shapes::Failure {
     }
 }
 
+/// Shadow-starts one fresh server for a replace or start row, without
+/// touching the live slots or the cache files: `restarted` names the
+/// quadrant the commit files it under, and the failure row carries the
+/// old deaths beside the start failure when the shadow fails. A required
+/// failure stops every shadow started so far and propagates, so no
+/// replacement child outlives the rejected reload. Both the stage loop
+/// and the commit's fallback phase stage through here, so the two paths
+/// cannot drift apart.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one shadow's startup inputs, as at session start"
+)]
+fn stage_shadow(
+    shadows: &mut Vec<Arc<Slot>>,
+    servers: &Servers,
+    spec: ServerSpec,
+    records: Vec<contract::tool::ServerRecord>,
+    restarted: bool,
+    workspace: &Path,
+    artifacts: &Path,
+    images: &Arc<dyn Images>,
+    cache: &Path,
+    clock: &Arc<dyn Clock>,
+    version: &str,
+) -> Result<StagedRow, contract::shapes::Failure> {
+    match open_staged(
+        spec.clone(),
+        workspace,
+        artifacts,
+        images,
+        cache,
+        clock,
+        version,
+        servers.timing(),
+    ) {
+        Shadowed::Up(opened) => {
+            shadows.push(Arc::clone(&opened.slot));
+            Ok(StagedRow::Replaced {
+                spec,
+                slot: opened.slot,
+                listed: opened.listed,
+                used: opened.declared,
+                records,
+                restarted,
+                sources: opened.sources,
+            })
+        }
+        Shadowed::Down { failure } => {
+            if spec.required {
+                for shadow in shadows.iter() {
+                    shadow.stop();
+                }
+                return Err(required_failed(&failure));
+            }
+            Ok(StagedRow::Failed {
+                spec,
+                failure,
+                records,
+                replaces: restarted,
+            })
+        }
+    }
+}
 /// Stages the classified rows without touching the live slots or the cache
 /// files: kept servers re-list in place with staged installs, replacements
 /// and starts shadow-start first. Required rows already come first from
@@ -205,60 +279,25 @@ pub fn stage_sync(
 ) -> Result<StagedSync, contract::shapes::Failure> {
     let mut staged = Vec::new();
     let mut shadows: Vec<Arc<Slot>> = Vec::new();
-    // Shadow-starts one fresh server for a replace or start row, without
-    // touching the live slots or the cache files: `restarted` names the
-    // quadrant the commit files it under, and the failure row when the
-    // shadow fails. A required failure stops every shadow started so far
-    // and propagates, so no replacement child outlives the rejected reload.
-    let mut shadow = |spec: ServerSpec,
-                      records: Vec<contract::tool::ServerRecord>,
-                      restarted: bool|
-     -> Result<StagedRow, contract::shapes::Failure> {
-        match open_staged(
-            spec.clone(),
-            workspace,
-            artifacts,
-            images,
-            cache,
-            clock,
-            version,
-            servers.timing(),
-        ) {
-            Shadowed::Up(opened) => {
-                shadows.push(Arc::clone(&opened.slot));
-                let prompts = Prompts::collect(opened.sources).commands();
-                Ok(StagedRow::Replaced {
-                    spec,
-                    slot: opened.slot,
-                    listed: opened.listed,
-                    used: opened.declared,
-                    records,
-                    restarted,
-                    prompts,
-                })
-            }
-            Shadowed::Down { failure } => {
-                if spec.required {
-                    for shadow in &shadows {
-                        shadow.stop();
-                    }
-                    return Err(required_failed(&failure));
-                }
-                Ok(StagedRow::Failed {
-                    spec,
-                    failure,
-                    replaces: restarted,
-                })
-            }
-        }
-    };
     for row in rows {
         match row {
             SyncRow::Keep { spec } => {
                 let name = spec.name.clone();
                 let Some(slot) = servers.slot(&name) else {
                     // The slot left between classify and stage: start fresh.
-                    staged.push(shadow(spec, Vec::new(), true)?);
+                    staged.push(stage_shadow(
+                        &mut shadows,
+                        servers,
+                        spec,
+                        Vec::new(),
+                        true,
+                        workspace,
+                        artifacts,
+                        images,
+                        cache,
+                        clock,
+                        version,
+                    )?);
                     continue;
                 };
                 match slot.relist() {
@@ -268,7 +307,19 @@ pub fn stage_sync(
                         staged.push(StagedRow::Keep { spec, listed, used });
                     }
                     crate::slot::Relisted::Replace { records } => {
-                        staged.push(shadow(spec, records, true)?);
+                        staged.push(stage_shadow(
+                            &mut shadows,
+                            servers,
+                            spec,
+                            records,
+                            true,
+                            workspace,
+                            artifacts,
+                            images,
+                            cache,
+                            clock,
+                            version,
+                        )?);
                     }
                 }
             }
@@ -281,10 +332,34 @@ pub fn stage_sync(
                     .and_then(|slot| slot.idle_death())
                     .into_iter()
                     .collect();
-                staged.push(shadow(spec, records, true)?);
+                staged.push(stage_shadow(
+                    &mut shadows,
+                    servers,
+                    spec,
+                    records,
+                    true,
+                    workspace,
+                    artifacts,
+                    images,
+                    cache,
+                    clock,
+                    version,
+                )?);
             }
             SyncRow::Start { spec } => {
-                staged.push(shadow(spec, Vec::new(), false)?);
+                staged.push(stage_shadow(
+                    &mut shadows,
+                    servers,
+                    spec,
+                    Vec::new(),
+                    false,
+                    workspace,
+                    artifacts,
+                    images,
+                    cache,
+                    clock,
+                    version,
+                )?);
             }
             SyncRow::Remove { name } => {
                 staged.push(StagedRow::Remove { name });
@@ -312,6 +387,10 @@ pub struct Synced {
     /// servers with no startup rows; kept servers refresh the cache
     /// file only.
     pub prompts: Vec<CommandInfo>,
+    /// The shadow-started servers' prompt sources, answering through
+    /// the same path as a startup row: `main` builds the carried fetch
+    /// from these, and `loop` routes the new tags to it.
+    pub prompt_sources: Prompts,
 }
 
 /// Installs a freshly shadow-started slot at commit: swaps the stale
@@ -329,7 +408,8 @@ fn install_opened(
     listed: &Cached,
     used: Vec<Declaration>,
     carried: Vec<ServerRecord>,
-    carried_prompts: Vec<CommandInfo>,
+    sources: Vec<PromptSource>,
+    all_sources: &mut Vec<PromptSource>,
     restarted: bool,
 ) {
     let name = spec.name.clone();
@@ -348,7 +428,7 @@ fn install_opened(
     installing.records.push(ServerRecord::Ready(McpServerReady {
         server: name.clone(),
     }));
-    installing.prompts.extend(carried_prompts);
+    all_sources.extend(sources);
     if restarted {
         installing.servers.restarted.push(name);
     } else {
@@ -357,13 +437,17 @@ fn install_opened(
 }
 
 /// Installs a non-required shadow-start failure at commit: the old slot
-/// is already gone for a replacement, the failure rides a failed record
-/// and the `failed` entry, filed under `restarted` (a replacement) or
-/// `started` (a fresh start).
+/// is already gone for a replacement, the detected exits ride first and
+/// the failure rides its failed record and the `failed` entry, filed
+/// under `restarted` (a replacement) or `started` (a fresh start). A
+/// carried listing miss stays out: the shadow's own failure already
+/// describes the unresponsive server, while an exit would otherwise
+/// never be logged.
 fn install_failed(
     installing: &mut Synced,
     servers: &Servers,
     spec: &ServerSpec,
+    carried: Vec<ServerRecord>,
     failure: McpServerFailed,
     replaces: bool,
 ) {
@@ -374,6 +458,14 @@ fn install_failed(
         // with the server showing failed.
         servers.remove(&name);
     }
+    installing
+        .records
+        .extend(carried.into_iter().filter(|record| {
+            matches!(
+                record,
+                ServerRecord::Failed(failed) if failed.reason == ServerFailure::Died
+            )
+        }));
     installing
         .records
         .push(ServerRecord::Failed(failure.clone()));
@@ -389,14 +481,39 @@ fn install_failed(
     }
 }
 
+/// One kept row's fallback, staged before the commit installs anything:
+/// a slot that died (or left) after its re-list shadow-starts its
+/// replacement through the same helper the stage loop uses, so the
+/// commit installs no stale lists as kept.
+enum KeepFallback {
+    /// The slot died or left: install the fresh shadow as `restarted`.
+    Replaced {
+        slot: Arc<Slot>,
+        listed: Cached,
+        used: Vec<Declaration>,
+        carried: Vec<ServerRecord>,
+        sources: Vec<PromptSource>,
+    },
+    /// The slot died or left and its replacement failed without
+    /// `required`: the old death rides beside the failure.
+    Failed {
+        carried: Vec<ServerRecord>,
+        failure: McpServerFailed,
+    },
+}
+
 /// Commits the staged sync: stops and removes old slots, installs the new
-/// ones, writes caches, and declares. Runs only after every required serve
-/// passed, so no two slots for one name ever serve at once and no stale
-/// spec survives. A kept slot that died (or left) after its re-list takes
-/// the replacement path here instead of declaring its stale tools as kept
-/// (`docs/mcp.md`, "Reload" step 3): its old death rides the carried
-/// records and the fresh shadow installs as `restarted`. A required
-/// replacement that fails rejects with the start's code.
+/// ones, writes caches, and declares. The commit runs in two phases. The
+/// first stages every fallible replacement before anything is installed:
+/// a kept slot that died (or left) after its re-list takes the replacement
+/// path here instead of declaring its stale tools as kept (`docs/mcp.md`,
+/// "Reload" step 3), shadow-started through the same helper the stage
+/// loop uses. Only once every required shadow start has succeeded does the
+/// second phase install (stop/remove old slots, install the new ones,
+/// write caches, declare), so no two slots for one name ever serve at once
+/// and no stale spec survives. A required fallback failure stops every
+/// shadow and rejects with the start's code, leaving every slot, tool and
+/// cache byte as the stage left them.
 #[allow(
     clippy::too_many_arguments,
     reason = "one commit's startup inputs, as at session start"
@@ -422,67 +539,147 @@ pub fn commit_sync(
             stopped: Vec::new(),
         },
         prompts: Vec::new(),
+        prompt_sources: Prompts::default(),
     };
+    // The first phase: every kept slot that died (or left) after its
+    // re-list shadow-starts its replacement now, while no slot or cache
+    // has changed. Its old death rides the carried records and the fresh
+    // shadow installs as `restarted`.
+    let mut fallbacks: std::collections::HashMap<String, KeepFallback> =
+        std::collections::HashMap::new();
+    let mut extra_shadows: Vec<Arc<Slot>> = Vec::new();
+    for row in &staged.rows {
+        let StagedRow::Keep { spec, .. } = row else {
+            continue;
+        };
+        if servers.slot(&spec.name).is_some_and(|slot| slot.is_live()) {
+            continue;
+        }
+        let carried: Vec<ServerRecord> = servers
+            .slot(&spec.name)
+            .and_then(|slot| slot.idle_death())
+            .into_iter()
+            .collect();
+        match stage_shadow(
+            &mut extra_shadows,
+            servers,
+            spec.clone(),
+            carried,
+            true,
+            workspace,
+            artifacts,
+            images,
+            cache,
+            clock,
+            version,
+        ) {
+            Ok(StagedRow::Replaced {
+                slot,
+                listed,
+                used,
+                records: carried,
+                sources,
+                ..
+            }) => {
+                fallbacks.insert(
+                    spec.name.clone(),
+                    KeepFallback::Replaced {
+                        slot,
+                        listed,
+                        used,
+                        carried,
+                        sources,
+                    },
+                );
+            }
+            Ok(StagedRow::Failed {
+                failure,
+                records: carried,
+                ..
+            }) => {
+                fallbacks.insert(spec.name.clone(), KeepFallback::Failed { carried, failure });
+            }
+            Ok(_) => {
+                // `stage_shadow` stages only shadows: unreachable.
+                for shadow in &extra_shadows {
+                    shadow.stop();
+                }
+                for row in &staged.rows {
+                    if let StagedRow::Replaced { slot, .. } = row {
+                        slot.stop();
+                    }
+                }
+                return Err(contract::shapes::Failure {
+                    code: contract::ErrorCode::McpRequiredServerFailed,
+                    message: format!("the reload staged no shadow for `{}`", spec.name),
+                    retry_after_ms: None,
+                    provider: None,
+                });
+            }
+            Err(failure) => {
+                // Required: every shadow stops and nothing installs, so
+                // every earlier row's slot, tools and cache stay as the
+                // stage left them.
+                for shadow in &extra_shadows {
+                    shadow.stop();
+                }
+                for row in &staged.rows {
+                    if let StagedRow::Replaced { slot, .. } = row {
+                        slot.stop();
+                    }
+                }
+                return Err(failure);
+            }
+        }
+    }
+    // The second phase installs, now that every required shadow start
+    // has succeeded: stop/remove old slots, install the new ones, write
+    // caches, declare.
+    let mut all_sources: Vec<PromptSource> = Vec::new();
     for row in staged.rows {
         match row {
             StagedRow::Keep { spec, listed, used } => {
                 let name = spec.name.clone();
-                let live = servers.slot(&name).is_some_and(|slot| slot.is_live());
-                if !live {
-                    // The kept server died (or its slot left) after its
-                    // re-list: `install_relisted` would leave the dead
-                    // slot unchanged while the sync still declared its
-                    // tools as kept, so the replacement path restarts it
-                    // fresh instead.
-                    let carried: Vec<ServerRecord> = servers
-                        .slot(&name)
-                        .and_then(|slot| slot.idle_death())
-                        .into_iter()
-                        .collect();
-                    match open_staged(
-                        spec.clone(),
-                        workspace,
-                        artifacts,
-                        images,
-                        cache,
-                        clock,
-                        version,
-                        servers.timing(),
-                    ) {
-                        Shadowed::Up(opened) => {
-                            let carried_prompts = Prompts::collect(opened.sources).commands();
-                            install_opened(
-                                &mut installing,
-                                servers,
-                                cache,
-                                &spec,
-                                &opened.slot,
-                                &opened.listed,
-                                opened.declared,
-                                carried,
-                                carried_prompts,
-                                true,
-                            );
-                        }
-                        Shadowed::Down { failure } => {
-                            if spec.required {
-                                return Err(required_failed(&failure));
+                match fallbacks.remove(&name) {
+                    Some(KeepFallback::Replaced {
+                        slot,
+                        listed,
+                        used,
+                        carried,
+                        sources,
+                    }) => {
+                        install_opened(
+                            &mut installing,
+                            servers,
+                            cache,
+                            &spec,
+                            &slot,
+                            &listed,
+                            used,
+                            carried,
+                            sources,
+                            &mut all_sources,
+                            true,
+                        );
+                    }
+                    Some(KeepFallback::Failed { carried, failure }) => {
+                        install_failed(&mut installing, servers, &spec, carried, failure, true);
+                    }
+                    // Still running: install the staged re-list. One
+                    // state lock installs and reports what the slot held,
+                    // so the commit writes the cache exactly when the
+                    // staged lists differ: a prompts-only change rewrites
+                    // the file even when the tools stay the same.
+                    None => {
+                        if let Some(slot) = servers.slot(&name) {
+                            let held = slot.install_relisted(listed.clone());
+                            if held != listed {
+                                cache::write(cache, &name, &spec.key(), &listed);
                             }
-                            install_failed(&mut installing, servers, &spec, failure, true);
+                            installing.tools.extend(used);
+                            installing.servers.kept.push(name);
                         }
                     }
-                    continue;
-                }
-                if let Some(slot) = servers.slot(&name) {
-                    // The whole cached payload decides: a prompts-only
-                    // change rewrites the file even when the tools stay
-                    // the same.
-                    if slot.listed_snapshot() != listed {
-                        cache::write(cache, &name, &spec.key(), &listed);
-                    }
-                    slot.install_relisted(listed);
-                    installing.tools.extend(used);
-                    installing.servers.kept.push(name);
                 }
             }
             StagedRow::Replaced {
@@ -492,7 +689,7 @@ pub fn commit_sync(
                 used,
                 records: carried,
                 restarted: replaces,
-                prompts: carried_prompts,
+                sources,
             } => {
                 install_opened(
                     &mut installing,
@@ -503,16 +700,18 @@ pub fn commit_sync(
                     &listed,
                     used,
                     carried,
-                    carried_prompts,
+                    sources,
+                    &mut all_sources,
                     replaces,
                 );
             }
             StagedRow::Failed {
                 spec,
                 failure,
+                records: carried,
                 replaces,
             } => {
-                install_failed(&mut installing, servers, &spec, failure, replaces);
+                install_failed(&mut installing, servers, &spec, carried, failure, replaces);
             }
             StagedRow::Remove { name } => {
                 servers.remove(&name);
@@ -520,6 +719,14 @@ pub fn commit_sync(
             }
         }
     }
+    // Every shadow's sources join one listing, whose rows ride
+    // `prompts` and whose sources ride `prompt_sources`: `main` builds
+    // the carried fetch from the sources, and `loop` routes the new
+    // tags to it, so an appended row fetches through the same path as
+    // a startup row.
+    let collected = Prompts::collect(all_sources);
+    installing.prompts = collected.commands();
+    installing.prompt_sources = collected;
     // One `mcp_resources` when any post-sync slot offers resources, as at
     // session start: the installed hook undeclares it when none does.
     let offering = servers

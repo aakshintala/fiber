@@ -646,3 +646,68 @@ fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
     assert_eq!(failed[0].server, "flaky");
     assert_eq!(failed[0].reason, ServerFailure::StartFailed);
 }
+
+#[test]
+fn an_appended_prompt_row_fetches_through_the_carried_sources() {
+    use contract::events::CommandInfo;
+    use contract::shapes::ContentPart;
+    fn row(tag: &str, name: &str) -> CommandInfo {
+        CommandInfo {
+            name: name.into(),
+            description: "A prompt.".into(),
+            argument_hint: None,
+            tag: tag.into(),
+            extension: false,
+        }
+    }
+    let old: crate::FetchPrompt = Arc::new(|_, _, _, _| contract::tool::Output {
+        error: Some(Failure {
+            code: ErrorCode::InvalidArguments,
+            message: "the startup fetch".into(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        ..contract::tool::Output::default()
+    });
+    let extra: crate::FetchPrompt = Arc::new(|server, prompt, _, _| {
+        assert_eq!(server, "new");
+        assert_eq!(prompt, "greet");
+        contract::tool::Output {
+            content: vec![ContentPart::Text { text: "hi".into() }],
+            ..contract::tool::Output::default()
+        }
+    });
+    let mut w = world();
+    w.looped = w.looped.server_prompts(crate::ServerPrompts {
+        rows: vec![row("old", "before")],
+        fetch: old,
+    });
+    w.looped = w.looped.reloader(Arc::new(move |_| {
+        let mut p = prepared();
+        p.server_sync.new_prompts = vec![row("new", "greet")];
+        p.server_sync.prompt_fetch = Some(Arc::clone(&extra));
+        Ok(p)
+    }));
+    let (ack, rx) = ack();
+    w.looped.take_reload(ack).unwrap();
+    assert!(Deadline::after(WAIT).recv(&rx).unwrap().unwrap().is_none());
+    let prompts = w
+        .looped
+        .server_prompts
+        .as_ref()
+        .expect("prompts stay installed");
+    assert_eq!(
+        prompts.rows.len(),
+        2,
+        "the appended row joins, every startup row stays"
+    );
+    let cancel = crate::TurnCancel::default();
+    let fetched = (prompts.fetch)("new", "greet", "", &cancel);
+    assert!(fetched.error.is_none());
+    assert!(matches!(&fetched.content[..], [ContentPart::Text { text }] if text == "hi"));
+    let kept = (prompts.fetch)("old", "before", "", &cancel);
+    assert_eq!(
+        kept.error.map(|error| error.code),
+        Some(ErrorCode::InvalidArguments)
+    );
+}

@@ -446,7 +446,7 @@ impl Servers {
     /// in-flight start is stopped after that start returns, bounded by the
     /// startup deadline: the stop takes the same lease the start holds. The
     /// list lock is never held across the stop.
-    pub fn remove(&self, name: &str) {
+    pub(crate) fn remove(&self, name: &str) {
         let slot = {
             let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
             let position = slots.iter().position(|slot| slot.spec().name == name);
@@ -508,9 +508,6 @@ pub fn restart(
     })
 }
 
-/// The reload's server sync: classified, staged and committed in
-/// [](crate::sync), re-exported here so the crate root's paths
-/// stay put.
 /// The default startup deadline: 5 seconds (`docs/configuration.md`).
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_millis(5000);
 
@@ -761,8 +758,6 @@ pub(crate) struct StagedOpen {
     pub(crate) sources: Vec<PromptSource>,
 }
 
-/// Launches one spec and declares its tools without writing the cache:
-/// the commit writes once every required start succeeds.
 /// What a shadow start stages: the running slot with its declarations
 /// and cache payload, or the start failure the caller files.
 pub(crate) enum Shadowed {

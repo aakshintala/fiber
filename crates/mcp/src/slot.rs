@@ -331,20 +331,28 @@ impl Slot {
         }
     }
 
-    /// The last raw lists this slot saw, for the commit's cache write:
-    /// the running list, else empty. The re-list installs nothing until
-    /// the commit reads this back, so a prompts-only change is not lost
-    /// when the tools stay the same.
-    pub(crate) fn listed_snapshot(&self) -> Cached {
-        match &*lock(&self.state) {
-            State::Running { listed, .. }
-            | State::Down { listed }
-            | State::NotStarted { cached: listed } => listed.clone(),
-            State::Dead { .. } => Cached {
+    /// Installs re-listed `listed` on a still-running slot, refreshing the
+    /// live set the removed-tool check reads, and returns what the slot
+    /// held: the commit compares the returned lists with the staged ones
+    /// for its cache write, under one state lock. A slot that died,
+    /// stopped or was replaced between the re-list and the commit keeps
+    /// what it has: the commit's replace path owns it. Holds only the
+    /// state lock, never the lease, so it cannot wedge against a
+    /// concurrent serve or stop.
+    pub(crate) fn install_relisted(&self, listed: Cached) -> Cached {
+        let mut state = lock(&self.state);
+        if let State::Running {
+            live, listed: held, ..
+        } = &mut *state
+        {
+            *live = names(&listed.tools);
+            std::mem::replace(held, listed)
+        } else {
+            Cached {
                 tools: Vec::new(),
                 prompts: Vec::new(),
                 resources: false,
-            },
+            }
         }
     }
 
@@ -706,22 +714,6 @@ impl Slot {
         }
         let death = died(&self.spec.name, !*restarted, self.spec.remote());
         Some(ServerRecord::Failed(death.record))
-    }
-
-    /// Installs re-listed `listed` on a still-running slot, refreshing the
-    /// live set the removed-tool check reads. A slot that died, stopped or
-    /// was replaced between the re-list and the commit keeps what it has:
-    /// the commit's replace path owns it. Holds only the state lock, never
-    /// the lease, so it cannot wedge against a concurrent serve or stop.
-    pub(crate) fn install_relisted(&self, listed: Cached) {
-        let mut state = lock(&self.state);
-        if let State::Running {
-            live, listed: held, ..
-        } = &mut *state
-        {
-            *live = names(&listed.tools);
-            *held = listed;
-        }
     }
 
     /// Maps a wire outcome to its fault: the death record only when the

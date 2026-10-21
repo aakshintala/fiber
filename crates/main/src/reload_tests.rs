@@ -1288,6 +1288,16 @@ fn reload_replaces_a_dead_server_beside_the_old_slot() {
             .any(|record| matches!(record, contract::tool::ServerRecord::Ready(_))),
         "the replacement reads ready"
     );
+    assert!(
+        matches!(
+            prepared.server_sync.server_records.as_slice(),
+            [
+                contract::tool::ServerRecord::Failed(failed),
+                contract::tool::ServerRecord::Ready(_)
+            ] if failed.reason == contract::events::ServerFailure::Died
+        ),
+        "the detected death rides before the ready"
+    );
 }
 
 #[test]
@@ -1571,8 +1581,8 @@ fn reload_removes_mcp_resources_when_no_post_sync_slot_offers_them() {
 #[test]
 fn reload_appends_a_started_servers_prompts_while_keeping_every_startup_row() {
     // A started server's prompts join the `/` list while every startup
-    // row stays: bites the discard of the re-listed prompt sources,
-    // where the old code rebuilt commands from the startup snapshot.
+    // row stays: the sync carries the re-listed prompt sources, and
+    // install appends only rows no earlier row holds.
     let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     assert!(
         fixture.state.prompt_rows.lock().unwrap().is_empty(),
@@ -1595,6 +1605,11 @@ fn reload_appends_a_started_servers_prompts_while_keeping_every_startup_row() {
         json!([{"name": "greet", "description": "Greets."}]).to_string(),
     )
     .unwrap();
+    std::fs::write(
+        dir.join("prompt-greet.json"),
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Hello, Ada."}}]}"#,
+    )
+    .unwrap();
     let entry = json!({
         "command": fakes::mcp_fixture().display().to_string(),
         "args": [dir.display().to_string()],
@@ -1613,14 +1628,38 @@ fn reload_appends_a_started_servers_prompts_while_keeping_every_startup_row() {
     assert_eq!(prepared.server_sync.new_prompts.len(), 1);
     assert_eq!(prepared.server_sync.new_prompts[0].name, "greet");
     assert_eq!(prepared.server_sync.new_prompts[0].tag, "new");
+    // The appended row fetches through the carried sources, as a
+    // startup row fetches through the startup ones.
+    let fetch = prepared
+        .server_sync
+        .prompt_fetch
+        .as_ref()
+        .expect("the sync carries the new sources");
+    struct NoCancel;
+    impl contract::tool::Cancel for NoCancel {
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+
+        fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+    }
+    let fetched = fetch("new", "greet", "", &NoCancel);
+    assert!(fetched.error.is_none());
+    assert!(
+        fetched.content.iter().any(|part| matches!(
+            part,
+            contract::shapes::ContentPart::Text { text } if text.contains("Ada")
+        )),
+        "the appended prompt answers"
+    );
 }
 
 #[test]
 fn a_second_reload_retains_the_first_reloads_prompt_rows_for_kept_servers() {
     // A prompt row added by the first reload stays in the `/` list
-    // across a second reload that keeps its server: bites the rebuild
-    // from the startup snapshot, which dropped the first reload's rows
-    // when the second sync carried no new prompts for the kept server.
+    // across a second reload that keeps its server: the baseline is the
+    // session's current rows, so a sync carrying no new prompts for a
+    // kept server keeps the earlier row.
     let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     let dir = fixture.rig.root.path().join("new");
     std::fs::create_dir_all(&dir).unwrap();

@@ -1,5 +1,6 @@
 //! Reloading configuration without changing a running session's route
 //! (`docs/configuration.md`, "When Fiber reads configuration").
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -102,6 +103,11 @@ pub struct ServerSync {
     /// with no startup rows; `install` appends them, keeping every
     /// startup row.
     pub new_prompts: Vec<CommandInfo>,
+    /// Answers the carried new-server prompts through the same path as
+    /// a startup row: `install` routes the new tags here, keeping every
+    /// startup row and its fetch. `None` when the sync carried no new
+    /// rows.
+    pub prompt_fetch: Option<crate::FetchPrompt>,
 }
 
 /// A complete reload ready for an infallible field swap and installation.
@@ -255,11 +261,26 @@ impl Loop {
         (self.tools, self.replaced) = crate::calls::register(prepared.tools);
         self.hooks = prepared.hooks;
         // New servers' prompts join the `/` list; every startup row stays.
+        // Their sources join the fetch too: the new rows route to the
+        // carried fetch, so an appended row answers through the same
+        // path as a startup row, while every startup tag keeps its own.
         let mut sync = prepared.server_sync;
         if !sync.new_prompts.is_empty()
             && let Some(prompts) = self.server_prompts.as_mut()
         {
+            let tags: HashSet<String> =
+                sync.new_prompts.iter().map(|row| row.tag.clone()).collect();
             prompts.rows.append(&mut sync.new_prompts);
+            if let Some(extra) = sync.prompt_fetch.take() {
+                let old = Arc::clone(&prompts.fetch);
+                prompts.fetch = Arc::new(move |server, prompt, text, cancel| {
+                    if tags.contains(server) {
+                        extra(server, prompt, text, cancel)
+                    } else {
+                        old(server, prompt, text, cancel)
+                    }
+                });
+            }
         }
         (prepared.installed)();
         Installed {

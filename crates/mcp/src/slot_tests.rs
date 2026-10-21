@@ -1107,6 +1107,51 @@ fn echo_call(req: &fakes::Request) -> fakes::Response {
     )
 }
 
+/// A remote fake answering every method through the caller's closures,
+/// beside `remote_server`: each list closure answers with the id-echoing
+/// `result` wrapper, so no test repeats the handshake framing. The
+/// `prompts` closure answers `prompts/list`; a test whose server
+/// advertises no prompts passes one that panics, since the re-list never
+/// asks an unadvertised section.
+fn remote_responding(
+    initialize: impl Fn(&dyn Fn(serde_json::Value) -> fakes::Response) -> fakes::Response
+    + Send
+    + Sync
+    + 'static,
+    tools_list: impl Fn(&dyn Fn(serde_json::Value) -> fakes::Response) -> fakes::Response
+    + Send
+    + Sync
+    + 'static,
+    prompts_list: impl Fn(&dyn Fn(serde_json::Value) -> fakes::Response) -> fakes::Response
+    + Send
+    + Sync
+    + 'static,
+    calls: impl Fn(&fakes::Request) -> fakes::Response + Send + Sync + 'static,
+) -> fakes::ProviderServer {
+    fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
+        use serde_json::Value;
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result =
+            |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
+        let status = |payload: Value| fakes::Response::status(200, result(payload));
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => initialize(&status),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => tools_list(&status),
+            Some("prompts/list") => prompts_list(&status),
+            Some("tools/call") => calls(req),
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap()
+}
+
 #[test]
 fn a_mid_session_login_failure_is_a_tool_error_and_keeps_the_slot_running() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1297,48 +1342,35 @@ fn a_failed_renewal_after_a_restart_leaves_the_slot_dead() {
     let setup = Setup::new();
     let inits = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
-    let server = fakes::ProviderServer::start_responding({
-        let inits = Arc::clone(&inits);
-        let calls = Arc::clone(&calls);
-        move |req: &fakes::Request| {
-            use serde_json::Value;
-            if req.method == "DELETE" {
-                return fakes::Response::status(200, "");
+    let server = remote_responding(
+        {
+            let inits = Arc::clone(&inits);
+            move |result: &dyn Fn(serde_json::Value) -> fakes::Response| match inits
+                .fetch_add(1, Ordering::SeqCst)
+            {
+                0 | 1 => result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                }))
+                .header("mcp-session-id", "1868a90c"),
+                _ => fakes::Response::status(500, "down"),
             }
-            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
-            let id = body.get("id").cloned().unwrap_or(Value::Null);
-            let result = |result: Value| {
-                json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
-            };
-            match body.get("method").and_then(Value::as_str) {
-                Some("initialize") => match inits.fetch_add(1, Ordering::SeqCst) {
-                    0 | 1 => fakes::Response::status(
-                        200,
-                        result(json!({
-                            "protocolVersion": "2025-06-18",
-                            "capabilities": {"tools": {}},
-                            "serverInfo": {"name": "remote", "version": "1"},
-                        })),
-                    )
-                    .header("mcp-session-id", "1868a90c"),
-                    _ => fakes::Response::status(500, "down"),
-                },
-                Some("notifications/initialized") | Some("notifications/cancelled") | None => {
-                    fakes::Response::status(202, "")
-                }
-                Some("tools/list") => fakes::Response::status(
-                    200,
-                    result(json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]})),
-                ),
-                Some("tools/call") => match calls.fetch_add(1, Ordering::SeqCst) {
-                    0 => fakes::Response::drop_connection(),
-                    _ => fakes::Response::status(404, "ended"),
-                },
-                Some(other) => panic!("unexpected method {other}"),
+        },
+        |result| {
+            result(
+                json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
+            )
+        },
+        |_| panic!("an unadvertised section is never asked"),
+        {
+            let calls = Arc::clone(&calls);
+            move |_| match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => fakes::Response::drop_connection(),
+                _ => fakes::Response::status(404, "ended"),
             }
-        }
-    })
-    .unwrap();
+        },
+    );
     let url = format!("{}/mcp", server.url());
     let started = setup.start(vec![setup.remote_spec("fx", &url)]);
     assert!(started.failed.is_empty());
@@ -1584,48 +1616,32 @@ fn relist_with_login_prompts_signals_replace_without_a_cache_write() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let setup = Setup::new();
     let prompts_calls = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&prompts_calls);
-    let server = fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
-        use serde_json::Value;
-        if req.method == "DELETE" {
-            return fakes::Response::status(200, "");
-        }
-        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
-        let id = body.get("id").cloned().unwrap_or(Value::Null);
-        let result = |result: Value| {
-            json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
-        };
-        match body.get("method").and_then(Value::as_str) {
-            Some("initialize") => fakes::Response::status(
-                200,
-                result(json!({
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {"tools": {}, "prompts": {}},
-                    "serverInfo": {"name": "remote", "version": "1"},
-                })),
+    let server = remote_responding(
+        |result| {
+            result(json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {}, "prompts": {}},
+                "serverInfo": {"name": "remote", "version": "1"},
+            }))
+            .header("mcp-session-id", "1868a90c")
+        },
+        |result| {
+            result(
+                json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
             )
-            .header("mcp-session-id", "1868a90c"),
-            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
-                fakes::Response::status(202, "")
-            }
-            Some("tools/list") => fakes::Response::status(
-                200,
-                result(json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]})),
-            ),
-            Some("prompts/list") => {
+        },
+        {
+            let counted = Arc::clone(&prompts_calls);
+            move |result: &dyn Fn(serde_json::Value) -> fakes::Response| {
                 if counted.fetch_add(1, Ordering::SeqCst) == 0 {
-                    fakes::Response::status(
-                        200,
-                        result(json!({"prompts": [{"name": "old", "description": "Old."}]})),
-                    )
+                    result(json!({"prompts": [{"name": "old", "description": "Old."}]}))
                 } else {
                     fakes::Response::status(401, "secret")
                 }
             }
-            Some(other) => panic!("unexpected method {other}"),
-        }
-    })
-    .unwrap();
+        },
+        |_| panic!("no call answers during a re-list"),
+    );
     let started = setup.start(vec![
         setup.remote_spec("fx", &format!("{}/mcp", server.url())),
     ]);
@@ -1755,47 +1771,30 @@ fn relist_dying_mid_tools_list_carries_the_same_restarting_death() {
     let setup = Setup::new();
     let lists = Arc::new(AtomicUsize::new(0));
     // The handshake lists once; the re-list's list drops instead.
-    let server = fakes::ProviderServer::start_responding({
-        let lists = Arc::clone(&lists);
-        move |req: &fakes::Request| {
-            use serde_json::Value;
-            if req.method == "DELETE" {
-                return fakes::Response::status(200, "");
-            }
-            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
-            let id = body.get("id").cloned().unwrap_or(Value::Null);
-            let result = |result: Value| {
-                json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
-            };
-            match body.get("method").and_then(Value::as_str) {
-                Some("initialize") => fakes::Response::status(
-                    200,
-                    result(json!({
-                        "protocolVersion": "2025-06-18",
-                        "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "remote", "version": "1"},
-                    })),
-                )
-                .header("mcp-session-id", "1868a90c"),
-                Some("notifications/initialized") | Some("notifications/cancelled") | None => {
-                    fakes::Response::status(202, "")
+    let server = remote_responding(
+        |result| {
+            result(json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "remote", "version": "1"},
+            }))
+            .header("mcp-session-id", "1868a90c")
+        },
+        {
+            let lists = Arc::clone(&lists);
+            move |result: &dyn Fn(serde_json::Value) -> fakes::Response| {
+                if lists.fetch_add(1, Ordering::SeqCst) == 0 {
+                    result(
+                        json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
+                    )
+                } else {
+                    fakes::Response::drop_connection()
                 }
-                Some("tools/list") => {
-                    if lists.fetch_add(1, Ordering::SeqCst) == 0 {
-                        fakes::Response::status(
-                            200,
-                            result(json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]})),
-                        )
-                    } else {
-                        fakes::Response::drop_connection()
-                    }
-                }
-                Some("tools/call") => echo_call(req),
-                Some(other) => panic!("unexpected method {other}"),
             }
-        }
-    })
-    .expect("the fake serves");
+        },
+        |_| panic!("an unadvertised section is never asked"),
+        echo_call,
+    );
     let url = format!("{}/mcp", server.url());
     let started = setup.start(vec![setup.remote_spec("fx", &url)]);
     assert!(started.failed.is_empty());
@@ -1947,169 +1946,6 @@ fn relist_pages_only_until_the_bound() {
 }
 
 #[test]
-fn classify_keeps_identical_specs() {
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let started = setup.start(vec![setup.spec("fx")]);
-    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
-    setup.stop(started.servers);
-}
-
-#[test]
-fn classify_replaces_a_changed_executable() {
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let started = setup.start(vec![setup.spec("fx")]);
-    let mut changed = setup.spec("fx");
-    changed.stdio_mut().args = vec!["/elsewhere".to_owned()];
-    let rows = classify_sync(vec![changed], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Replace { .. }]));
-    setup.stop(started.servers);
-}
-
-#[test]
-fn classify_replaces_a_timeout_only_change() {
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let started = setup.start(vec![setup.spec("fx")]);
-    let mut changed = setup.spec("fx");
-    changed.startup_timeout = crate::start::DEFAULT_STARTUP_TIMEOUT
-        .checked_add(Duration::from_secs(1))
-        .expect("a longer deadline");
-    let rows = classify_sync(vec![changed], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Replace { .. }]));
-    setup.stop(started.servers);
-}
-
-#[test]
-fn classify_replaces_a_required_only_change() {
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let started = setup.start(vec![setup.spec("fx")]);
-    let mut changed = setup.spec("fx");
-    changed.required = true;
-    let rows = classify_sync(vec![changed], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Replace { .. }]));
-    setup.stop(started.servers);
-}
-
-#[test]
-fn classify_replaces_a_dead_slot() {
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let started = setup.start(vec![setup.spec("fx")]);
-    setup.running(&started);
-    setup.kill(&started);
-    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Replace { .. }]));
-    setup.stop(started.servers);
-}
-
-#[test]
-fn classify_starts_an_undeclared_name() {
-    let setup = Setup::new();
-    let started = setup.start(vec![]);
-    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Start { .. }]));
-    setup.stop(started.servers);
-}
-
-#[test]
-fn classify_removes_a_dropped_name() {
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let started = setup.start(vec![setup.spec("fx")]);
-    let rows = classify_sync(Vec::new(), &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Remove { .. }]));
-    setup.stop(started.servers);
-}
-
-#[test]
-fn classify_runs_required_rows_first() {
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let mut fx = setup.spec("fx");
-    fx.required = true;
-    let gx = setup.spec("gx");
-    let started = setup.start(vec![fx, gx]);
-    let mut changed = setup.spec("gx");
-    changed.stdio_mut().args = vec!["/elsewhere".to_owned()];
-    let mut required = setup.spec("fx");
-    required.required = true;
-    let rows = classify_sync(vec![changed, required], &started.servers);
-    let names: Vec<(&str, &str)> = rows
-        .iter()
-        .map(|row| match row {
-            SyncRow::Keep { spec } => ("keep", spec.name.as_str()),
-            SyncRow::Replace { spec } => ("replace", spec.name.as_str()),
-            SyncRow::Start { spec } => ("start", spec.name.as_str()),
-            SyncRow::Remove { name } => ("remove", name.as_str()),
-        })
-        .collect();
-    assert_eq!(names, vec![("keep", "fx"), ("replace", "gx")]);
-    setup.stop(started.servers);
-}
-
-#[test]
-fn stage_and_commit_keep_a_healthy_server_on_its_new_lists() {
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
-    setup.result("plus", r#"{"content":[{"type":"text","text":"plus"}]}"#);
-    let images = FakeImages::ok();
-    let started = setup.start_with_images(vec![setup.spec("fx")], std::sync::Arc::clone(&images));
-    let slot = setup.running(&started);
-    let pid = setup.pid();
-    setup.tools(&serde_json::json!([{"name": "echo"}, {"name": "plus"}]));
-    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
-    let staged = stage_sync(
-        rows,
-        &started.servers,
-        &setup.workspace(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.cache(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("a healthy keep stages");
-    let synced = commit_sync(
-        staged,
-        &started.servers,
-        &setup.cache(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.workspace(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the commit installs");
-    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
-    assert!(synced.records.is_empty(), "a clean keep writes no records");
-    assert_eq!(setup.pid(), pid, "the keep reconnects nothing");
-    assert_eq!(
-        initializes(setup.dir.path()),
-        1,
-        "the keep reconnects nothing"
-    );
-    assert_eq!(
-        setup.cached_names(),
-        vec!["echo".to_owned(), "plus".to_owned()]
-    );
-    assert!(slot.is_running(), "the keep stops nothing");
-    let plus = synced
-        .tools
-        .iter()
-        .find(|(_, _, info)| info.name == "mcp__fx__plus")
-        .expect("the added tool is declared");
-    let output = setup.run(&plus.1);
-    assert!(output.error.is_none());
-    setup.stop(started.servers);
-}
-
-#[test]
 fn relist_lists_an_advertised_empty_tool_section() {
     let setup = Setup::new();
     setup.tools(&serde_json::json!([]));
@@ -2130,8 +1966,8 @@ fn relist_lists_an_advertised_empty_tool_section() {
 
 #[test]
 fn commit_installs_the_keep_lists_back_on_its_slot() {
-    // Bites `install_relisted` with (): the committed keep refreshes
-    // the slot's held lists, so what it holds is what it listed.
+    // The committed keep refreshes the slot's held lists, so what the
+    // slot holds after the commit is what the re-list staged.
     let setup = Setup::new();
     setup.tools(&serde_json::json!([{"name": "echo"}]));
     let started = setup.start(vec![setup.spec("fx")]);
@@ -2163,12 +1999,17 @@ fn commit_installs_the_keep_lists_back_on_its_slot() {
     )
     .expect("the commit installs");
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
-    let held: Vec<String> = slot
-        .listed_snapshot()
-        .tools
-        .iter()
-        .map(|tool| tool.name.clone())
-        .collect();
+    // The commit installs the new lists: installing again returns what
+    // the commit installed, and reinstalls the same lists.
+    let held = slot.install_relisted(crate::cache::Cached {
+        tools: vec![
+            serde_json::from_value(json!({"name": "echo"})).expect("listed"),
+            serde_json::from_value(json!({"name": "plus"})).expect("listed"),
+        ],
+        prompts: Vec::new(),
+        resources: false,
+    });
+    let held: Vec<String> = held.tools.iter().map(|tool| tool.name.clone()).collect();
     assert_eq!(
         held,
         vec!["echo".to_owned(), "plus".to_owned()],
@@ -2256,65 +2097,6 @@ fn commit_writes_a_prompts_only_change_for_an_unchanged_tool_list() {
         .map(|prompt| prompt.name.clone())
         .collect();
     assert_eq!(names, vec!["new".to_owned()]);
-    setup.stop(started.servers);
-}
-
-#[test]
-fn stage_and_commit_replace_a_dead_slot_carrying_its_death() {
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
-    let images = FakeImages::ok();
-    let started = setup.start_with_images(vec![setup.spec("fx")], std::sync::Arc::clone(&images));
-    setup.running(&started);
-    setup.kill(&started);
-    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Replace { .. }]));
-    let staged = stage_sync(
-        rows,
-        &started.servers,
-        &setup.workspace(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.cache(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("a dead slot replaces");
-    let synced = commit_sync(
-        staged,
-        &started.servers,
-        &setup.cache(),
-        &setup.artifacts(),
-        &every(&images),
-        &setup.workspace(),
-        &setup.clock(),
-        "test",
-    )
-    .expect("the commit installs");
-    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
-    assert_eq!(synced.records.len(), 2, "the exit and the ready");
-    let contract::tool::ServerRecord::Failed(exit) = &synced.records[0] else {
-        panic!("the old death comes first")
-    };
-    assert_eq!(exit.server, "fx");
-    assert_eq!(exit.reason, contract::events::ServerFailure::Died);
-    assert!(exit.will_restart, "a first death carries its restart");
-    assert!(
-        matches!(&synced.records[1], contract::tool::ServerRecord::Ready(_)),
-        "the ready comes second"
-    );
-    assert_eq!(
-        initializes(setup.dir.path()),
-        2,
-        "the replacement starts once"
-    );
-    let echo = synced
-        .tools
-        .iter()
-        .find(|(_, _, info)| info.name == "mcp__fx__echo")
-        .expect("the new server is declared");
-    assert!(setup.run(&echo.1).error.is_none());
     setup.stop(started.servers);
 }
 
@@ -2532,17 +2314,30 @@ fn commit_replaces_a_keep_that_died_after_its_re_list() {
 }
 
 #[test]
-fn stage_and_commit_remove_a_dropped_name() {
+fn commit_stages_every_fallback_before_installing_anything() {
+    // A required fallback failure rejects with the start's code while
+    // every earlier row stays as the stage left it: the commit stages
+    // all fallible replacements before installing anything, so no slot
+    // or cache changes until every required shadow start has succeeded.
     let setup = Setup::new();
     setup.tools(&serde_json::json!([{"name": "echo"}]));
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
-    let started = setup.start(vec![setup.spec("fx")]);
-    let slot = setup.running(&started);
-    let tool = setup.tool(&started, "mcp__fx__echo");
-    assert!(setup.run(&tool).error.is_none());
-    let rows = classify_sync(Vec::new(), &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Remove { .. }]));
+    let mut fx = setup.spec("fx");
+    fx.required = true;
+    let mut gx = setup.spec("gx");
+    gx.required = true;
     let images = FakeImages::ok();
+    let started =
+        setup.start_with_images(vec![fx.clone(), gx.clone()], std::sync::Arc::clone(&images));
+    assert!(started.failed.is_empty());
+    // The earlier row's re-list stages a change its install would write.
+    setup.tools(&serde_json::json!([{"name": "echo"}, {"name": "plus"}]));
+    let rows = classify_sync(vec![fx, gx], &started.servers);
+    assert!(matches!(
+        rows.as_slice(),
+        [SyncRow::Keep { .. }, SyncRow::Keep { .. }]
+    ));
+    let cache_before = setup.cache_bytes();
     let staged = stage_sync(
         rows,
         &started.servers,
@@ -2553,8 +2348,11 @@ fn stage_and_commit_remove_a_dropped_name() {
         &setup.clock(),
         "test",
     )
-    .expect("a removal stages");
-    let synced = commit_sync(
+    .expect("the keeps stage");
+    // The later row's slot leaves, and its replacement cannot start.
+    started.servers.remove("gx");
+    setup.write("fail-start", "");
+    let failure = commit_sync(
         staged,
         &started.servers,
         &setup.cache(),
@@ -2564,24 +2362,42 @@ fn stage_and_commit_remove_a_dropped_name() {
         &setup.clock(),
         "test",
     )
-    .expect("the commit installs");
-    assert_eq!(synced.servers.stopped, vec!["fx".to_owned()]);
-    assert!(synced.records.is_empty(), "a removal writes no records");
-    assert!(started.servers.slot("fx").is_none());
-    assert!(!slot.is_running(), "the removal stops the slot");
-    let output = setup.run(&tool);
-    assert!(output.error.is_some(), "the removed tool fails");
+    .err()
+    .expect("a required fallback failure rejects");
+    assert_eq!(failure.code, contract::ErrorCode::McpRequiredServerFailed);
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "no slot or cache changes until every required shadow succeeds"
+    );
+    assert!(
+        started.servers.running("fx"),
+        "the earlier slot keeps serving"
+    );
+    let echo = setup.tool(&started, "mcp__fx__echo");
+    assert!(
+        setup.run(&echo).error.is_none(),
+        "the earlier tool still answers"
+    );
     setup.stop(started.servers);
 }
 
 #[test]
-fn stage_and_commit_start_an_undeclared_name() {
+fn an_optional_replacement_failure_still_writes_the_detected_death() {
+    // An optional replacement whose shadow fails still records the death
+    // the sync detected: the failure row carries the old deaths, and the
+    // commit writes them before the failure (`docs/mcp.md`, "Each death
+    // is recorded as `mcp_server_failed`").
     let setup = Setup::new();
     setup.tools(&serde_json::json!([{"name": "echo"}]));
-    setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
-    let started = setup.start(vec![]);
+    let started = setup.start(vec![setup.spec("fx")]);
+    assert!(started.failed.is_empty());
+    setup.running(&started);
+    setup.kill(&started);
+    // The replacement cannot start, but the death is already detected.
+    setup.write("fail-start", "");
     let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Start { .. }]));
+    assert!(matches!(rows.as_slice(), [SyncRow::Replace { .. }]));
     let images = FakeImages::ok();
     let staged = stage_sync(
         rows,
@@ -2593,7 +2409,7 @@ fn stage_and_commit_start_an_undeclared_name() {
         &setup.clock(),
         "test",
     )
-    .expect("a fresh name starts");
+    .expect("an optional shadow failure stages");
     let synced = commit_sync(
         staged,
         &started.servers,
@@ -2605,18 +2421,25 @@ fn stage_and_commit_start_an_undeclared_name() {
         "test",
     )
     .expect("the commit installs");
-    assert_eq!(synced.servers.started, vec!["fx".to_owned()]);
-    assert_eq!(synced.records.len(), 1, "the ready");
-    assert!(
-        matches!(&synced.records[0], contract::tool::ServerRecord::Ready(_)),
-        "a fresh start is ready"
+    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
+    assert_eq!(
+        synced.records.len(),
+        2,
+        "the death rides beside the failure"
     );
-    let echo = synced
-        .tools
+    let reasons: Vec<ServerFailure> = synced
+        .records
         .iter()
-        .find(|(_, _, info)| info.name == "mcp__fx__echo")
-        .expect("the new server is declared");
-    assert!(setup.run(&echo.1).error.is_none());
+        .map(|record| match record {
+            ServerRecord::Failed(failed) => failed.reason,
+            ServerRecord::Ready(_) => panic!("a failure installs no ready"),
+        })
+        .collect();
+    assert_eq!(
+        reasons,
+        vec![ServerFailure::Died, ServerFailure::StartFailed]
+    );
+    assert_eq!(synced.failed.len(), 1, "the failure rides the entry");
     setup.stop(started.servers);
 }
 
