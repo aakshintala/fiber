@@ -293,14 +293,13 @@ fn stable_already_newest_keeps_the_binary_but_moves_members_and_docs() {
         .count();
     assert_eq!(docs, 2, "{err}");
     assert!(err.contains("fiber: updated docs"), "{err}");
-    // An already-newest run replaces no binary, so it stages none
-    // beside it: the binary's directory holds only the binary itself.
-    let mut names: Vec<String> = fs::read_dir(world.binary.parent().unwrap())
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    assert_eq!(names, ["fiber"], "{err}");
+    assert_eq!(
+        fs::read_dir(world.binary.parent().unwrap())
+            .unwrap()
+            .count(),
+        1,
+        "{err}"
+    );
 }
 
 /// An already-newest run with its docs present stages no docs: the

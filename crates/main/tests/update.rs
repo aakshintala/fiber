@@ -222,13 +222,14 @@ fn await_live(client: &support::Socket, session: &str) {
 
 /// A copy of the built `fiber` on another filesystem than the home, so
 /// the final rename into place must not cross filesystems: `/dev/shm`
-/// is a separate mount from the test root on Linux. Skipped only where
-/// `/dev/shm` is absent.
+/// is a separate mount from the test root on Linux.
+#[cfg(target_os = "linux")]
 #[track_caller]
-fn copy_binary_other_filesystem() -> Option<(PathBuf, PathBuf)> {
-    if !Path::new("/dev/shm").is_dir() {
-        return None;
-    }
+fn copy_binary_other_filesystem() -> PathBuf {
+    assert!(
+        Path::new("/dev/shm").is_dir(),
+        "`/dev/shm` is absent: the cross-filesystem update test needs it"
+    );
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let dir = PathBuf::from(format!(
         "/dev/shm/fiber-update-{}-{}",
@@ -238,16 +239,16 @@ fn copy_binary_other_filesystem() -> Option<(PathBuf, PathBuf)> {
     fs::create_dir_all(&dir).unwrap();
     let copy = dir.join("fiber");
     fs::copy(env!("CARGO_BIN_EXE_fiber"), &copy).unwrap();
-    Some((dir, copy))
+    dir
 }
 
 /// The staged binary sits beside the installed one, so the rename into
 /// place stays on one filesystem even when the home lives elsewhere.
+#[cfg(target_os = "linux")]
 #[test]
 fn update_across_filesystems_replaces_the_running_copy() {
-    let Some((dir, copy)) = copy_binary_other_filesystem() else {
-        return;
-    };
+    let dir = copy_binary_other_filesystem();
+    let copy = dir.join("fiber");
     let setup = Setup::new();
     let server = serve();
     let github = Github::new(&setup);
