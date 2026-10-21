@@ -629,7 +629,7 @@ fn spawn_child(
     fakes::rerun_prepared(
         &child_test_name(function),
         &pairs,
-        CHILD_DEADLINE,
+        fakes::Deadline::after(CHILD_DEADLINE),
         |command| {
             for (key, value) in vars {
                 command.env(key, value);

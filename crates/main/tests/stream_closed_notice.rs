@@ -97,7 +97,7 @@ fn finish(running: Running) {
         "fiber left a process in its group"
     );
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 }
 
 /// The session id of a started `fiber ask`: its first stdout line.
@@ -153,7 +153,7 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     let running = start(&setup, &["ask", PROMPT]);
     let id = session_of(&running, "the session_started");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 

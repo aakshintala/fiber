@@ -352,7 +352,7 @@ fn directories_over_serve_accepts_home_and_rejects_relative() {
     // departure below: only a park with no deadline proves the hub saw a
     // client open, which its idle wait takes only after the count left 0.
     assert!(
-        clock.await_parked_unbounded(WITHIN),
+        clock.await_parked_unbounded(fakes::Deadline::after(WITHIN)),
         "the hub parks with no deadline while the client is open"
     );
     writer
@@ -394,7 +394,7 @@ fn directories_over_serve_accepts_home_and_rejects_relative() {
     Deadline::after(WITHIN).recv_or_fail(&reader_done_rx, "the reader thread to end");
     let serve_id = handle.thread().id();
     assert!(
-        clock.await_parked(origin + idle_exit, WITHIN),
+        clock.await_parked(origin + idle_exit, fakes::Deadline::after(WITHIN)),
         "the hub parks for its idle exit"
     );
     clock.advance_when_parked(

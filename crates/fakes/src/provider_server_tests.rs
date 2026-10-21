@@ -35,7 +35,7 @@ fn a_dropped_connection_records_the_request_and_answers_nothing() {
     });
 
     assert!(
-        server.await_requests(1, READ_WITHIN),
+        server.await_requests(1, Deadline::after(READ_WITHIN)),
         "the request is recorded before the connection drops"
     );
     let (read, body) = Deadline::after(READ_WITHIN)
@@ -69,7 +69,7 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
     });
 
     assert!(
-        server.await_requests(1, READ_WITHIN),
+        server.await_requests(1, Deadline::after(READ_WITHIN)),
         "the request is recorded while the response is held"
     );
     assert!(
@@ -114,7 +114,7 @@ fn hold_from_answers_earlier_requests_and_holds_the_rest_until_release() {
         .unwrap_or_else(|_| panic!("the first request is answered at once"));
     assert!(body.ends_with(b"one"), "{name}");
     get_on(server.addr, "b", tx);
-    assert!(server.await_requests(2, READ_WITHIN));
+    assert!(server.await_requests(2, Deadline::after(READ_WITHIN)));
     assert!(
         Deadline::after(Duration::from_millis(200))
             .recv(&rx)
@@ -142,7 +142,7 @@ fn a_held_reply_nobody_releases_becomes_a_500_at_its_deadline() {
     let (tx, rx) = mpsc::channel();
     get_on(server.addr, "a", tx);
     assert!(
-        server.await_requests(1, READ_WITHIN),
+        server.await_requests(1, Deadline::after(READ_WITHIN)),
         "the held request is recorded"
     );
     // The hold waits on the injected clock: the test advances only past
@@ -150,7 +150,7 @@ fn a_held_reply_nobody_releases_becomes_a_500_at_its_deadline() {
     let ack = Deadline::after(READ_WITHIN).recv_or_fail(&acks, "the held response's wait");
     assert_eq!(ack.phase, "to wait out the held response");
     assert!(
-        clock.await_thread_parked(ack.thread, ack.until, READ_WITHIN),
+        clock.await_thread_parked(ack.thread, ack.until, Deadline::after(READ_WITHIN)),
         "the hold parks on the clock before it moves"
     );
     clock.advance(Duration::from_secs(5));
@@ -184,7 +184,10 @@ fn release_one_sends_one_held_response_and_keeps_holding_the_rest() {
             tx.send((name, body)).unwrap();
         });
         // One request at a time, so the script's order is known.
-        assert!(server.await_requests(if name == "a" { 1 } else { 2 }, READ_WITHIN));
+        assert!(server.await_requests(
+            if name == "a" { 1 } else { 2 },
+            Deadline::after(READ_WITHIN)
+        ));
     }
     assert!(
         Deadline::after(Duration::from_millis(200))
@@ -330,7 +333,7 @@ fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
         .unwrap_or_else(|e| panic!("the stall's body prefix arrives within {READ_WITHIN:?}: {e}"));
     assert_eq!(prefix, b"partial");
     assert!(
-        server.await_partial(1, READ_WITHIN),
+        server.await_partial(1, Deadline::after(READ_WITHIN)),
         "the partial response was sent"
     );
     assert_eq!(server.requests().len(), 1);
@@ -345,7 +348,7 @@ fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
     drop(reader);
     drop(stream);
     assert!(
-        server.await_closed(1, READ_WITHIN),
+        server.await_closed(1, Deadline::after(READ_WITHIN)),
         "the client close ends the stall"
     );
 }
@@ -371,10 +374,13 @@ fn a_scripted_content_length_past_the_body_without_stall_is_sent_and_closed() {
         panic!("the short body arrives before the close within {READ_WITHIN:?}: {e}")
     });
     assert!(text.ends_with("ok"), "{text}");
-    assert!(!server.await_partial(1, Duration::from_millis(200)));
-    assert!(!server.await_closed(1, Duration::from_millis(200)));
+    assert!(!server.await_partial(1, Deadline::after(Duration::from_millis(200))));
+    assert!(!server.await_closed(1, Deadline::after(Duration::from_millis(200))));
     // Past the count the wait is already over, as at it.
-    assert!(server.await_closed(0, READ_WITHIN), "zero closes needed");
+    assert!(
+        server.await_closed(0, Deadline::after(READ_WITHIN)),
+        "zero closes needed"
+    );
 }
 
 #[test]
@@ -406,19 +412,22 @@ fn await_partial_needs_every_counted_partial() {
         .unwrap_or_else(|e| panic!("the stall's body prefix arrives within {READ_WITHIN:?}: {e}"));
     assert_eq!(prefix, b"partial");
     assert!(
-        server.await_partial(1, READ_WITHIN),
+        server.await_partial(1, Deadline::after(READ_WITHIN)),
         "the one partial arrived"
     );
     // Past the count the wait is already over, as at it.
-    assert!(server.await_partial(0, READ_WITHIN), "zero partials needed");
     assert!(
-        !server.await_partial(2, Duration::from_millis(200)),
+        server.await_partial(0, Deadline::after(READ_WITHIN)),
+        "zero partials needed"
+    );
+    assert!(
+        !server.await_partial(2, Deadline::after(Duration::from_millis(200))),
         "no second partial is coming"
     );
     drop(reader);
     drop(stream);
     assert!(
-        server.await_closed(1, READ_WITHIN),
+        server.await_closed(1, Deadline::after(READ_WITHIN)),
         "the client close ends the stall"
     );
 }
@@ -483,27 +492,44 @@ fn waits_count_stalls_already_past_their_event() {
     );
 
     let (first_stream, first_reader) = stalled_client(server.addr);
-    assert!(server.await_partial(1, READ_WITHIN), "one partial arrived");
-    assert!(answered_within(&server, move |s| s.await_partial(1, event_within)));
+    assert!(
+        server.await_partial(1, Deadline::after(READ_WITHIN)),
+        "one partial arrived"
+    );
+    assert!(answered_within(&server, move |s| s
+        .await_partial(1, Deadline::after(event_within))));
 
     let (second_stream, second_reader) = stalled_client(server.addr);
-    assert!(server.await_partial(2, READ_WITHIN), "two partials arrived");
-    assert!(answered_within(&server, move |s| s.await_partial(1, event_within)));
-    assert!(answered_within(&server, move |s| s.await_partial(2, event_within)));
     assert!(
-        !server.await_partial(3, Duration::from_millis(50)),
+        server.await_partial(2, Deadline::after(READ_WITHIN)),
+        "two partials arrived"
+    );
+    assert!(answered_within(&server, move |s| s
+        .await_partial(1, Deadline::after(event_within))));
+    assert!(answered_within(&server, move |s| s
+        .await_partial(2, Deadline::after(event_within))));
+    assert!(
+        !server.await_partial(3, Deadline::after(Duration::from_millis(50))),
         "no third partial is coming"
     );
 
     drop(first_reader);
     drop(first_stream);
-    assert!(server.await_closed(1, READ_WITHIN), "one client closed");
-    assert!(answered_within(&server, move |s| s.await_closed(1, event_within)));
+    assert!(
+        server.await_closed(1, Deadline::after(READ_WITHIN)),
+        "one client closed"
+    );
+    assert!(answered_within(&server, move |s| s
+        .await_closed(1, Deadline::after(event_within))));
 
     drop(second_reader);
     drop(second_stream);
-    assert!(server.await_closed(2, READ_WITHIN), "both clients closed");
-    assert!(answered_within(&server, move |s| s.await_closed(2, event_within)));
+    assert!(
+        server.await_closed(2, Deadline::after(READ_WITHIN)),
+        "both clients closed"
+    );
+    assert!(answered_within(&server, move |s| s
+        .await_closed(2, Deadline::after(event_within))));
 }
 
 /// Idle windows never expire the provider: with no client for longer
@@ -569,7 +595,7 @@ fn dropping_releases_holds_and_reaps_stalls() {
         });
     }
     assert!(
-        server.await_requests(2, READ_WITHIN),
+        server.await_requests(2, Deadline::after(READ_WITHIN)),
         "both requests are recorded while held"
     );
     drop(server);
@@ -727,7 +753,7 @@ fn dropped_bodies_keep_the_count_and_the_lengths_but_not_the_bytes() {
     post(addr, &first);
     post(addr, &second);
     assert!(
-        server.await_requests(2, READ_WITHIN),
+        server.await_requests(2, Deadline::after(READ_WITHIN)),
         "both requests are recorded"
     );
     let requests = server.requests();
@@ -753,7 +779,7 @@ fn a_responder_sees_the_full_body_while_dropped_bodies_store_none() {
     let response = post(addr, &body);
     assert!(response.ends_with(b"saw 100000"), "{response:?}");
     assert!(
-        server.await_requests(1, READ_WITHIN),
+        server.await_requests(1, Deadline::after(READ_WITHIN)),
         "the request is recorded"
     );
     let requests = server.requests();
@@ -801,7 +827,7 @@ fn hold_gates_a_responded_answer_as_it_does_a_scripted_one() {
     });
 
     assert!(
-        server.await_requests(1, READ_WITHIN),
+        server.await_requests(1, Deadline::after(READ_WITHIN)),
         "the request is recorded while the response is held"
     );
     assert!(
@@ -1009,7 +1035,7 @@ fn a_large_fixed_body_costs_one_bound_check_per_fill_not_per_byte() {
     assert!(response.ends_with(b"ok"), "{text}");
 
     assert!(
-        server.await_requests(1, READ_WITHIN),
+        server.await_requests(1, Deadline::after(READ_WITHIN)),
         "the request is recorded"
     );
     let requests = server.requests();
@@ -1060,7 +1086,7 @@ fn a_fixed_body_followed_by_pipelined_bytes_keeps_only_its_length() {
         .unwrap();
     stream.write_all(&body).unwrap();
     assert!(
-        server.await_requests(1, READ_WITHIN),
+        server.await_requests(1, Deadline::after(READ_WITHIN)),
         "the request is recorded"
     );
 
@@ -1266,7 +1292,7 @@ fn busy_shaped_posts_sleep_only_when_idle() {
         total_passed += passed;
     }
     assert!(
-        server.await_requests(CALLS, READ_WITHIN),
+        server.await_requests(CALLS, Deadline::after(READ_WITHIN)),
         "every request is recorded"
     );
     let requests = server.requests();
@@ -1336,7 +1362,7 @@ fn growing_fixed_bodies_bypass_the_lookahead() {
         assert!(response.ends_with(b"{}\n\n"), "{text}");
     }
     assert!(
-        server.await_requests(CALLS, READ_WITHIN),
+        server.await_requests(CALLS, Deadline::after(READ_WITHIN)),
         "every request is recorded"
     );
     let requests = server.requests();
@@ -1421,7 +1447,7 @@ fn a_fixed_body_buffered_with_its_head_keeps_only_its_length() {
     assert!(response.ends_with(b"ok"), "{text}");
 
     assert!(
-        server.await_requests(1, READ_WITHIN),
+        server.await_requests(1, Deadline::after(READ_WITHIN)),
         "the request is recorded"
     );
     let requests = server.requests();
@@ -1493,7 +1519,7 @@ fn a_connect_payload_larger_than_the_head_read_reaches_its_origin() {
         panic!("the blank line and the payload arrive within {READ_WITHIN:?}: {e}")
     });
     assert!(
-        proxy.await_connects(1, READ_WITHIN),
+        proxy.await_connects(1, Deadline::after(READ_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     let mut reader = std::io::BufReader::new(client.try_clone().unwrap());

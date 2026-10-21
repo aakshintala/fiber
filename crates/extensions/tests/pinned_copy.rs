@@ -339,7 +339,7 @@ fn pinning_runs_on_the_fetch_clock_not_the_construction_clock() {
         leftovers.is_empty(),
         "the stalled install step is gone: {leftovers:?}"
     );
-    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]

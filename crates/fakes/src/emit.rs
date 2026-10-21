@@ -4,7 +4,8 @@
 //! ephemeral and durable alike, in arrival order.
 
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+
+use crate::deadline::Deadline;
 
 use contract::emit::Emit;
 use contract::events::{Class, Event};
@@ -28,10 +29,11 @@ impl Recorder {
         text_of(&lock(&self.inner))
     }
 
-    /// Waits, at most `within` of real time, until the recorded delta text
+    /// Waits, at most what remains of `deadline`, until the recorded delta text
     /// contains `needle`. True once it does; false at the deadline. The
     /// bound is the condvar's timeout, so this reads no process clock.
-    pub fn wait_for_text(&self, needle: &str, within: Duration) -> bool {
+    pub fn wait_for_text(&self, needle: &str, deadline: Deadline) -> bool {
+        let within = deadline.left();
         let inner = lock(&self.inner);
         let (inner, _) = self
             .changed

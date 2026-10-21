@@ -576,7 +576,9 @@ fn a_job_that_never_ends_keeps_the_wait_open_until_its_end_arrives() {
         .expect("the job is stopped");
     // The wait parks with no deadline of its own.
     assert!(
-        session.clock.await_parked_unbounded(DEADLINE),
+        session
+            .clock
+            .await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
         "the stop wait parked with no deadline"
     );
     assert!(
@@ -1155,7 +1157,9 @@ fn a_job_ending_during_the_rewind_stop_wait_is_redacted_in_its_end_and_its_file(
         .expect("the job is stopped");
     // The wait parks with no deadline of its own.
     assert!(
-        session.clock.await_parked_unbounded(DEADLINE),
+        session
+            .clock
+            .await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
         "the stop wait parked with no deadline"
     );
     jobs.end_with_tail(
@@ -1245,7 +1249,9 @@ fn a_withheld_job_end_during_the_rewind_stop_wait_withholds_its_file_and_notice(
         .recv(&stops)
         .expect("the job is stopped");
     assert!(
-        session.clock.await_parked_unbounded(DEADLINE),
+        session
+            .clock
+            .await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
         "the stop wait parked with no deadline"
     );
     jobs.end_with_tail(
@@ -1318,7 +1324,9 @@ fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted()
         .recv(&stops)
         .expect("the job is stopped");
     assert!(
-        session.clock.await_parked_unbounded(DEADLINE),
+        session
+            .clock
+            .await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
         "the stop wait parked with no deadline"
     );
     let long = format!("token TOKEN-1234 {}\n", "x".repeat(20 * 1024));

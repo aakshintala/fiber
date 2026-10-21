@@ -163,7 +163,7 @@ impl Setup {
         );
         assert!(terminal.echoes(), "echo was not restored");
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
     }
 
@@ -191,7 +191,7 @@ impl Setup {
             "`fiber` left a process behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
     }
 
@@ -438,7 +438,7 @@ impl OnTerminal {
         self.watchdog
             .take()
             .unwrap()
-            .stand_down(self.deadline.cleanup());
+            .stand_down(self.deadline.cleanup_phase());
         status
     }
 }
@@ -1022,7 +1022,7 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceH
         "`fiber` left a process behind"
     );
     std::mem::forget(guard);
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     Output {
         code: output.status.code(),
         stdout: String::from_utf8(output.stdout).unwrap(),
@@ -1622,7 +1622,7 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
     run.screen
         .wait_for("fiber: stored credentials/held/default");
     assert!(
-        held.await_requests(1, setup.deadline.left()),
+        held.await_requests(1, setup.deadline),
         "discovery requested while the reviewer prompt was still down"
     );
     assert!(

@@ -371,10 +371,10 @@ fn a_short_write_emits_its_append_and_no_fsync() {
     assert!(status.success(), "{status:?}");
     drop(fakes::kill_group(group, "KILL"));
     assert!(
-        fakes::group_empties(group, WITHIN),
+        fakes::group_empties(group, fakes::Deadline::after(WITHIN)),
         "the short-write child left its process group {group} alive"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
     // Two small appends, then exactly one append for the oversized
     // write and no fsync for it.
     let lines = op_lines(&dir);

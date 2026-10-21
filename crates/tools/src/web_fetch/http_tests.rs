@@ -101,7 +101,7 @@ fn a_deadline_one_tick_ahead_runs_the_work() {
 /// check is `done`. Only the check after the join can then catch the stop.
 fn miss_the_watcher(fake: &FakeClock, hop: &Hop, deadline: std::time::Instant) {
     assert!(
-        fake.await_parked(deadline, Duration::from_secs(10)),
+        fake.await_parked(deadline, fakes::Deadline::after(Duration::from_secs(10))),
         "the watcher parks at the deadline"
     );
     hop.lock().done = true;
@@ -167,7 +167,7 @@ fn pair() -> (TcpStream, TcpStream) {
     let addr = listener.local_addr().unwrap();
     let (client, server) = fakes::within(
         "the client to connect and the listener to accept it",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             let client = TcpStream::connect(addr).unwrap();
             let (server, _) = listener.accept().unwrap();
@@ -332,7 +332,10 @@ fn park_waits_for_a_wake_before_the_deadline() {
         parked.park(timed.as_ref(), until, 0);
         tx.send(()).unwrap_or(());
     });
-    assert!(fake.await_parked(until, SIGNAL), "park waits on the clock");
+    assert!(
+        fake.await_parked(until, fakes::Deadline::after(SIGNAL)),
+        "park waits on the clock"
+    );
     hop.wake();
     Deadline::after(SIGNAL)
         .recv(&rx)
@@ -386,7 +389,7 @@ fn park_returns_at_once_for_a_finished_hop() {
 #[track_caller]
 fn head_of(address: SocketAddr, uri: &str) -> super::Head {
     let uri: Uri = uri.parse().unwrap();
-    fakes::within("the head of one GET", SIGNAL, move || {
+    fakes::within("the head of one GET", Deadline::after(SIGNAL), move || {
         let request = super::Get {
             uri: &uri,
             pinned: Some(&[address]),
@@ -419,6 +422,9 @@ fn the_head_of_a_body_with_no_stated_length_carries_none() {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
         &format!("http://127.0.0.1:{port}/"),
     );
-    assert!(server.await_replies(1, SIGNAL), "the server answered");
+    assert!(
+        server.await_replies(1, Deadline::after(SIGNAL)),
+        "the server answered"
+    );
     assert_eq!(head.content_length, None);
 }

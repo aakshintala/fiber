@@ -111,7 +111,7 @@ impl Setup {
             "`fiber {}` left a process in its group behind",
             args.join(" ")
         );
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         let lines = String::from_utf8(output.stdout)
             .unwrap()
             .lines()
@@ -200,14 +200,14 @@ impl Hub {
                 ),
             }
         }
-        fakes::try_matching_exits(&self.workspace, self.deadline.left()).unwrap_or_else(|err| {
+        fakes::try_matching_exits(&self.workspace, self.deadline).unwrap_or_else(|err| {
             panic!("waited until the deadline for every session to exit: {err}")
         });
         if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(self.deadline.cleanup());
+            watchdog.stand_down(self.deadline.cleanup_phase());
         }
         if let Some(watchdog) = self.sessions.take() {
-            watchdog.stand_down(self.deadline.cleanup());
+            watchdog.stand_down(self.deadline.cleanup_phase());
         }
     }
 }
@@ -365,9 +365,9 @@ fn until_exited(client: &Socket, setup: &Setup) -> Vec<Value> {
     let lines = until_hub(client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
-    fakes::try_matching_exits(&setup.workspace_text(), setup.deadline.left()).unwrap_or_else(
-        |err| panic!("waited until the deadline for the session process to exit: {err}"),
-    );
+    fakes::try_matching_exits(&setup.workspace_text(), setup.deadline).unwrap_or_else(|err| {
+        panic!("waited until the deadline for the session process to exit: {err}")
+    });
     lines
 }
 

@@ -35,12 +35,19 @@ fn a_second_update_waits_for_the_files_lock_then_keeps_both_writes() {
     let dir = TempDir::new("fiber-write-lock");
     let file = dir.path().join("fiber-acme.json");
     let setup = file.clone();
-    fakes::within("update", fakes::MUST_SUCCEED_WITHIN, move || {
-        update(&setup, &["a".to_owned()], Value::from(1), false)
-    })
+    fakes::within(
+        "update",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || update(&setup, &["a".to_owned()], Value::from(1), false),
+    )
     .unwrap();
     let setup = file.clone();
-    let held = fakes::within("locked", fakes::MUST_SUCCEED_WITHIN, move || locked(&setup)).unwrap();
+    let held = fakes::within(
+        "locked",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || locked(&setup),
+    )
+    .unwrap();
     let (started, started_rx) = mpsc::channel();
     let (done, done_rx) = mpsc::channel();
     let worker_file = file.clone();
@@ -79,7 +86,12 @@ fn a_remove_waits_for_the_files_lock_then_keeps_the_other_write() {
     let file = dir.path().join("rules");
     fs::write(&file, "{\"gone\": 1}\n").unwrap();
     let setup = file.clone();
-    let held = fakes::within("locked", fakes::MUST_SUCCEED_WITHIN, move || locked(&setup)).unwrap();
+    let held = fakes::within(
+        "locked",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || locked(&setup),
+    )
+    .unwrap();
     let (started, started_rx) = mpsc::channel();
     let (done, done_rx) = mpsc::channel();
     let worker_file = file.clone();
@@ -551,7 +563,12 @@ fn replace_global_waits_for_the_lock_then_rejects_a_concurrent_non_object() {
     let file = home.join("config.json");
     fs::write(&file, "{\"reviewer\": {\"model\": \"all/a\"}}\n").unwrap();
     let setup = file.clone();
-    let held = fakes::within("locked", fakes::MUST_SUCCEED_WITHIN, move || locked(&setup)).unwrap();
+    let held = fakes::within(
+        "locked",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || locked(&setup),
+    )
+    .unwrap();
     let (started, started_rx) = mpsc::channel();
     let (done, done_rx) = mpsc::channel();
     let worker_home = home.clone();

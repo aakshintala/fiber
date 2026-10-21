@@ -363,7 +363,7 @@ fn settle_group_rekills_until_the_bound() {
         match keeper.wait() {
             Ok(_) | Err(_) => {}
         }
-        watchdog.stand_down(DEADLINE);
+        watchdog.stand_down(fakes::Deadline::after(DEADLINE));
     }
 }
 
@@ -435,7 +435,7 @@ fn answered(
 /// Starts the watchdog for the group the ready FIFO's first line names,
 /// returning the watchdog and the group id.
 fn watch(test: &ChildTest) -> (Watchdog, u32) {
-    let ids = test.ready.wait(DEADLINE);
+    let ids = test.ready.wait(fakes::Deadline::after(DEADLINE));
     let pgid = ids
         .first()
         .copied()
@@ -446,10 +446,10 @@ fn watch(test: &ChildTest) -> (Watchdog, u32) {
 /// The group emptied after the read, then the watchdog stands down.
 fn reaped(watchdog: Watchdog, pgid: u32, what: &str) {
     assert!(
-        group_empties(pgid, DEADLINE),
+        group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "{what} left its group behind"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -619,7 +619,7 @@ fn parked_again(
     what: &str,
 ) {
     assert!(
-        clock.await_parked_since(mark, Some(end), DEADLINE),
+        clock.await_parked_since(mark, Some(end), fakes::Deadline::after(DEADLINE)),
         "{what}: the read never parked again before its deadline"
     );
     assert!(
@@ -728,8 +728,11 @@ fn event_wakes_the_worker_before_the_advance(
         tx.send(read(&reader, &clock, LIMIT, cap)).unwrap();
     });
     let (watchdog, pgid) = watch(test);
-    let _ = test.ready.wait(DEADLINE);
-    assert!(fake.await_parked(end, DEADLINE), "{what}: never parked");
+    let _ = test.ready.wait(fakes::Deadline::after(DEADLINE));
+    assert!(
+        fake.await_parked(end, fakes::Deadline::after(DEADLINE)),
+        "{what}: never parked"
+    );
     held.armed.store(true, std::sync::atomic::Ordering::SeqCst);
     std::thread::spawn(move || std::fs::write(go, "go\n").unwrap());
     match Deadline::after(DEADLINE).recv(&left) {
@@ -935,7 +938,7 @@ fn a_descendant_that_escapes_the_group_cannot_hold_the_read() {
     };
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     let (watchdog, pgid) = watch(&test);
-    let escaped = test.ready.wait(DEADLINE);
+    let escaped = test.ready.wait(fakes::Deadline::after(DEADLINE));
     let escaped = escaped
         .first()
         .copied()
@@ -952,11 +955,11 @@ fn a_descendant_that_escapes_the_group_cannot_hold_the_read() {
         answered(&rx, "the escaped descendant", &Deadline::after(DEADLINE)),
         Err(Failed::TimedOut)
     );
-    assert!(group_empties(pgid, DEADLINE));
+    assert!(group_empties(pgid, fakes::Deadline::after(DEADLINE)));
     assert!(kill_pid(escaped, "0").unwrap());
     drop(marker);
-    assert!(pids_exit(&[escaped], DEADLINE));
-    watchdog.stand_down(DEADLINE);
+    assert!(pids_exit(&[escaped], fakes::Deadline::after(DEADLINE)));
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -974,7 +977,7 @@ fn an_exited_shell_whose_child_holds_stdout_waits_for_the_limit() {
     let reader = test.reader(&body, Decode::Raw);
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     let (watchdog, pgid) = watch(&test);
-    let _ = test.ready.wait(DEADLINE);
+    let _ = test.ready.wait(fakes::Deadline::after(DEADLINE));
     waiting(&rx, &clock, end, "the exited shell");
     clock.advance_when_parked(
         Some(end),
@@ -1003,7 +1006,7 @@ fn a_successful_read_kills_what_the_command_left_behind() {
     let reader = test.reader(&body, Decode::Raw);
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     let (watchdog, pgid) = watch(&test);
-    let left = test.ready.wait(DEADLINE);
+    let left = test.ready.wait(fakes::Deadline::after(DEADLINE));
     let sleep = left
         .first()
         .copied()
@@ -1012,9 +1015,9 @@ fn a_successful_read_kills_what_the_command_left_behind() {
         answered(&rx, "the successful read", &Deadline::after(DEADLINE)),
         Ok(PIXEL.to_vec())
     );
-    assert!(group_empties(pgid, DEADLINE));
-    assert!(pids_exit(&[sleep], DEADLINE));
-    watchdog.stand_down(DEADLINE);
+    assert!(group_empties(pgid, fakes::Deadline::after(DEADLINE)));
+    assert!(pids_exit(&[sleep], fakes::Deadline::after(DEADLINE)));
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1198,8 +1201,8 @@ fn signal_pid_kills_the_child() {
         ),
         Err(_) => panic!("waited {DEADLINE:?} for signal_pid to kill the child"),
     }
-    assert!(group_empties(pid, DEADLINE));
-    watchdog.stand_down(DEADLINE);
+    assert!(group_empties(pid, fakes::Deadline::after(DEADLINE)));
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1318,7 +1321,7 @@ fn read_stdout_waits_for_data_without_eof() {
         }
         read_stdout(&mut stdout, &mut out, &mut eof, 1024);
     }
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]

@@ -16,6 +16,7 @@ use proptest::prelude::*;
 
 use super::hidden::Hidden;
 use super::{Stream, convert, to_markdown};
+use fakes::Deadline;
 
 /// Link inputs with the exact markdown the converter writes.
 fn links() -> Vec<(&'static str, &'static str)> {
@@ -517,22 +518,26 @@ fn half_a_million_unmatched_hidden_closes_stay_linear() {
         (false, "noscript", "svg"),
         (false, "template", "svg"),
     ] {
-        fakes::within("the hidden closes", HIDDEN_LINEAR, move || {
-            let mut hidden = Hidden::default();
-            if svg {
-                hidden.open("svg", &start("svg", false, vec![]));
-            }
-            let tag = start(open, false, vec![]);
-            for _ in 0..n {
-                hidden.open(open, &tag);
-            }
-            let before = hidden.above_counts();
-            for _ in 0..n {
-                assert!(hidden.end(close), "{close}");
-            }
-            assert!(hidden.is_hidden(), "{open} {close}");
-            assert_eq!(hidden.above_counts(), before, "{open} {close}");
-        });
+        fakes::within(
+            "the hidden closes",
+            Deadline::after(HIDDEN_LINEAR),
+            move || {
+                let mut hidden = Hidden::default();
+                if svg {
+                    hidden.open("svg", &start("svg", false, vec![]));
+                }
+                let tag = start(open, false, vec![]);
+                for _ in 0..n {
+                    hidden.open(open, &tag);
+                }
+                let before = hidden.above_counts();
+                for _ in 0..n {
+                    assert!(hidden.end(close), "{close}");
+                }
+                assert!(hidden.is_hidden(), "{open} {close}");
+                assert_eq!(hidden.above_counts(), before, "{open} {close}");
+            },
+        );
     }
 }
 
@@ -693,26 +698,30 @@ const HIDDEN_POP_HANG: Duration = Duration::from_secs(10);
 /// the test within seconds instead of hanging the job.
 #[test]
 fn growing_the_above_count_hangs_the_next_noscript_close() {
-    fakes::within("the inflated noscript close", HIDDEN_POP_HANG, move || {
-        let mut hidden = Hidden::default();
-        let mut oracle = oracle::Oracle::default();
-        for name in ["svg", "noscript", "noscript"] {
-            let tag = start(name, false, vec![]);
-            hidden.open(name, &tag);
-            oracle.open(name, &tag);
-        }
-        hidden.end("noscript");
-        oracle.end("noscript");
-        hidden.end("noscript");
-        oracle.end("noscript");
-        assert_eq!(hidden.above_counts(), oracle.above_counts());
-        hidden.end("noscript");
-        oracle.end("noscript");
-        assert_eq!(hidden.is_hidden(), oracle.is_hidden());
-        assert_eq!(hidden.in_svg(), oracle.in_svg());
-        assert!(hidden.is_hidden());
-        assert!(hidden.in_svg());
-    });
+    fakes::within(
+        "the inflated noscript close",
+        Deadline::after(HIDDEN_POP_HANG),
+        move || {
+            let mut hidden = Hidden::default();
+            let mut oracle = oracle::Oracle::default();
+            for name in ["svg", "noscript", "noscript"] {
+                let tag = start(name, false, vec![]);
+                hidden.open(name, &tag);
+                oracle.open(name, &tag);
+            }
+            hidden.end("noscript");
+            oracle.end("noscript");
+            hidden.end("noscript");
+            oracle.end("noscript");
+            assert_eq!(hidden.above_counts(), oracle.above_counts());
+            hidden.end("noscript");
+            oracle.end("noscript");
+            assert_eq!(hidden.is_hidden(), oracle.is_hidden());
+            assert_eq!(hidden.in_svg(), oracle.in_svg());
+            assert!(hidden.is_hidden());
+            assert!(hidden.in_svg());
+        },
+    );
 }
 
 /// Asserts `markdown` is at most 14 times its page, naming the ratio.

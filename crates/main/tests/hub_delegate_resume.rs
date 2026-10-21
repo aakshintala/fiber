@@ -300,7 +300,7 @@ fn a_summary_subscription_through_the_hub_follows_a_delegate_into_its_resumed_ru
     let job = started["payload"]["job_id"].as_str().unwrap().to_owned();
     // Run 1 called its model, so its socket is bound.
     assert!(
-        server_b.await_requests(1, setup.deadline.left()),
+        server_b.await_requests(1, setup.deadline),
         "run 1 called its model"
     );
     // The summary subscription replays the latest status and the run's
@@ -349,7 +349,7 @@ fn a_summary_subscription_through_the_hub_follows_a_delegate_into_its_resumed_ru
     });
     let m = marker.last().unwrap()["seq"].as_u64().unwrap();
     assert!(
-        server_b.await_requests(2, setup.deadline.left()),
+        server_b.await_requests(2, setup.deadline),
         "the resumed run called its model"
     );
     let bodies: Vec<String> = server_b

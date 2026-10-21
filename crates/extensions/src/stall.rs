@@ -34,7 +34,7 @@ pub(crate) fn await_grace_or_answer<T>(
     kill_at: Instant,
 ) -> Option<T> {
     for _ in 0..ROUNDS {
-        if clock.await_parked(kill_at, SIGHT) {
+        if clock.await_parked(kill_at, fakes::Deadline::after(SIGHT)) {
             return match done.try_recv() {
                 Ok(done) => Some(done),
                 Err(mpsc::TryRecvError::Empty) => None,
@@ -89,7 +89,7 @@ mod tests {
             let _sent = exited_tx.send(());
         });
         assert!(
-            clock.await_parked(until, TEST_GUARD),
+            clock.await_parked(until, fakes::Deadline::after(TEST_GUARD)),
             "waited {TEST_GUARD:?} for the thread to park at the grace"
         );
         (release_tx, exited_rx)

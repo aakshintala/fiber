@@ -14,6 +14,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use contract::clock::{Clock, wall_ms};
+use fakes::Deadline;
 use serde_json::json;
 
 use super::*;
@@ -531,33 +532,37 @@ const _: () = assert!(
 #[test]
 fn a_git_redirect_keeps_selection_scoped_to_the_workspace_project() {
     if std::env::var("FIBER_CLI_PRUNE_SESSIONS_REDIRECT_CHILD").is_ok() {
-        fakes::within("the child's redirect checks", REDIRECT_CHILD_BUDGET, || {
-            let home =
-                PathBuf::from(std::env::var("FIBER_CLI_PRUNE_SESSIONS_REDIRECT_HOME").unwrap());
-            let workspace = PathBuf::from(
-                std::env::var("FIBER_CLI_PRUNE_SESSIONS_REDIRECT_WORKSPACE").unwrap(),
-            );
-            let selected = select(
-                &home,
-                &log::started_sessions(&home),
-                &workspace,
-                Some(older_than()),
-                false,
-                wall(),
-            );
-            let mut deletes = selected
-                .deletes
-                .iter()
-                .map(|d| d.id.0.clone())
-                .collect::<Vec<_>>();
-            deletes.sort();
-            assert_eq!(deletes, ["s_00000000000000a1"]);
-        });
+        fakes::within(
+            "the child's redirect checks",
+            Deadline::after(REDIRECT_CHILD_BUDGET),
+            || {
+                let home =
+                    PathBuf::from(std::env::var("FIBER_CLI_PRUNE_SESSIONS_REDIRECT_HOME").unwrap());
+                let workspace = PathBuf::from(
+                    std::env::var("FIBER_CLI_PRUNE_SESSIONS_REDIRECT_WORKSPACE").unwrap(),
+                );
+                let selected = select(
+                    &home,
+                    &log::started_sessions(&home),
+                    &workspace,
+                    Some(older_than()),
+                    false,
+                    wall(),
+                );
+                let mut deletes = selected
+                    .deletes
+                    .iter()
+                    .map(|d| d.id.0.clone())
+                    .collect::<Vec<_>>();
+                deletes.sort();
+                assert_eq!(deletes, ["s_00000000000000a1"]);
+            },
+        );
         return;
     }
     fakes::within(
         "a_git_redirect_keeps_selection_scoped_to_the_workspace_project",
-        REDIRECT_RERUN_OUTER,
+        Deadline::after(REDIRECT_RERUN_OUTER),
         || {
             let root = fakes::TempDir::new("cli-prune-sessions-redirect");
             let repo = root.path().join("repo");
@@ -602,7 +607,7 @@ fn a_git_redirect_keeps_selection_scoped_to_the_workspace_project() {
                     ("GIT_DIR", decoy_git.as_str()),
                     ("GIT_WORK_TREE", decoy_str.as_str()),
                 ],
-                REDIRECT_RERUN_WITHIN,
+                Deadline::after(REDIRECT_RERUN_WITHIN),
                 |_| {},
             );
             assert!(

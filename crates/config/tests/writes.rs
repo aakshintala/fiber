@@ -14,6 +14,7 @@ use config::{
     set_global_if_unset, settings_file,
 };
 use contract::ErrorCode;
+use fakes::Deadline;
 use serde_json::json;
 
 const ACME: &str = "github.com/acme/fiber-acme";
@@ -22,7 +23,7 @@ const ACME: &str = "github.com/acme/fiber-acme";
 fn segments_read_addresses_unparseable_names_and_preserves_layers_and_aliases() {
     fakes::within(
         "segments configuration read",
-        std::time::Duration::from_secs(10),
+        Deadline::after(std::time::Duration::from_secs(10)),
         || {
             let setup = Setup::new();
             setup.write(
@@ -70,7 +71,7 @@ fn segments_read_addresses_unparseable_names_and_preserves_layers_and_aliases() 
 fn set_preserves_equivalent_extension_leaf_spellings_in_person_layers() {
     fakes::within(
         "alias writes and effective reads",
-        std::time::Duration::from_secs(10),
+        Deadline::after(std::time::Duration::from_secs(10)),
         || {
             let full = "github.com/aakshintala/fiber/providers/opencode";
             for layer in [Layer::Global, Layer::Project] {
@@ -122,7 +123,7 @@ fn set_preserves_equivalent_extension_leaf_spellings_in_person_layers() {
 fn set_joins_an_existing_extension_spelling_without_checking_unrelated_values() {
     fakes::within(
         "new alias leaf writes",
-        std::time::Duration::from_secs(10),
+        Deadline::after(std::time::Duration::from_secs(10)),
         || {
             let setup = Setup::new();
             let full = "github.com/aakshintala/fiber/providers/opencode";
@@ -153,7 +154,7 @@ fn set_joins_an_existing_extension_spelling_without_checking_unrelated_values() 
 fn set_refuses_duplicate_extension_leaves_without_changing_the_file() {
     fakes::within(
         "duplicate alias refusal",
-        std::time::Duration::from_secs(10),
+        Deadline::after(std::time::Duration::from_secs(10)),
         || {
             let setup = Setup::new();
             let text = r#"{"extensions":{"opencode":{"enabled":true},"github.com/aakshintala/fiber/providers/opencode":{"enabled":false}}}"#;
@@ -181,7 +182,7 @@ fn set_refuses_duplicate_extension_leaves_without_changing_the_file() {
 fn set_keeps_disjoint_alias_leaves_and_uses_requested_spelling_for_new_extensions() {
     fakes::within(
         "disjoint alias and fresh writes",
-        std::time::Duration::from_secs(10),
+        Deadline::after(std::time::Duration::from_secs(10)),
         || {
             let setup = Setup::new();
             let full = "github.com/aakshintala/fiber/providers/opencode";

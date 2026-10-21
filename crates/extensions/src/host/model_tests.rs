@@ -12,6 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use contract::shapes::{ContentPart, Tokens};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use mlua::{Lua, Value as LuaValue};
 
@@ -38,9 +39,11 @@ fn run(body: &str) -> String {
         clocked(&clock),
     ));
     let held = Arc::clone(&ext);
-    fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || {
-        held.command("go", "")
-    })
+    fakes::within(
+        "held.command",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || held.command("go", ""),
+    )
     .unwrap()
 }
 
@@ -182,9 +185,11 @@ fn model_in_the_entry_script_raises_closing() {
     );
     let ext = Arc::new(ext);
     let held = Arc::clone(&ext);
-    match fakes::within("held.commands", fakes::MUST_SUCCEED_WITHIN, move || {
-        held.commands()
-    }) {
+    match fakes::within(
+        "held.commands",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || held.commands(),
+    ) {
         Err(Error::Lua { message, .. }) => {
             assert_eq!(message, "host.model: not available while init.lua runs");
         }

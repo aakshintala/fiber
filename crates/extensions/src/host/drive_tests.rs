@@ -137,8 +137,11 @@ fn drive_returns_true_with_no_result() {
     );
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("go", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
         .unwrap(),
         "true"
     );
@@ -167,8 +170,11 @@ fn drive_returns_the_result_table() {
     );
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("go", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
         .unwrap(),
         "sync"
     );
@@ -188,8 +194,11 @@ fn drive_rejection_raises_code_and_message_for_pcall() {
     // `pcall` catches the table with exactly `code` and `message`.
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("go", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
         .unwrap(),
         "false busy a turn is running"
     );
@@ -205,9 +214,11 @@ fn drive_rejection_uncaught_fails_with_the_message() {
     );
     // Uncaught, the callback fails with the message text, never a table dump.
     let held = Arc::clone(&ext);
-    match fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || {
-        held.command("go", "")
-    }) {
+    match fakes::within(
+        "held.command",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || held.command("go", ""),
+    ) {
         Err(Error::Lua { message, .. }) => assert_eq!(message, "a turn is running"),
         other => panic!("the drive fails its callback: {other:?}"),
     }
@@ -234,8 +245,11 @@ fn drive_before_drive_to_raises_closing() {
     ));
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("go", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
         .unwrap(),
         "closing"
     );
@@ -256,8 +270,11 @@ fn drive_argument_errors_raise_strings() {
     // A wrong argument is an error in the calling code: a string, not a table.
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("go", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
         .unwrap(),
         "string/string/true/true"
     );
@@ -282,9 +299,11 @@ fn drive_in_the_entry_script_raises_closing() {
     // `drive_to` is set only after the entry script runs.
     let ext = Arc::new(ext);
     let held = Arc::clone(&ext);
-    match fakes::within("held.commands", fakes::MUST_SUCCEED_WITHIN, move || {
-        held.commands()
-    }) {
+    match fakes::within(
+        "held.commands",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || held.commands(),
+    ) {
         Err(Error::Lua { message, .. }) => {
             assert_eq!(message, "host.drive: not available while init.lua runs");
         }
@@ -323,11 +342,11 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     let deadline = clock.origin() + Duration::from_millis(200);
     let grace = clock.origin() + Duration::from_millis(1200);
     assert!(
-        clock.await_thread_parked(caller_id, Some(grace), WAIT),
+        clock.await_thread_parked(caller_id, Some(grace), fakes::Deadline::after(WAIT)),
         "the caller parks at the slow command deadline plus the grace"
     );
     let parked = clock
-        .mark_parked(deadline, WAIT)
+        .mark_parked(deadline, fakes::Deadline::after(WAIT))
         .expect("the scheduler parks at the slow command deadline");
     let parked = parked.threads();
     assert_eq!(
@@ -355,8 +374,11 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     drive.answer_parked(Ok(None));
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("fast", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("fast", "")
+        )
         .unwrap(),
         "fast"
     );
@@ -432,7 +454,7 @@ fn a_provider_runs_while_a_driven_command_is_held() {
     let caller = Arc::clone(&ext);
     fakes::within(
         "caller.provider_call",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             caller
                 .provider_call("p", "sign", Value::Null)

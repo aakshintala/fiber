@@ -231,7 +231,7 @@ impl Fiber {
             "fiber left a process in its group"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(deadline.cleanup());
+        watchdog.stand_down(deadline.cleanup_phase());
         Ended {
             code: status.code(),
             raw: raw
@@ -357,7 +357,7 @@ fn held_ask(signal: &'static str, code: i32) {
     setup.provider(&server);
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived"
     );
     fiber.signal(signal);
@@ -450,7 +450,7 @@ fn a_shutdown_stops_a_background_job_before_fiber_exited() {
     // The prompt's turn, then the ending notice's: the session now waits
     // for the job.
     fiber.wait_for("turn_completed", 2);
-    let job_group = ready.wait(setup.deadline.left())[0];
+    let job_group = ready.wait(setup.deadline)[0];
     let job_watchdog = Watchdog::group(job_group);
     fiber.signal("TERM");
     let ended = fiber.end();
@@ -509,7 +509,7 @@ fn a_shutdown_stops_a_background_job_before_fiber_exited() {
         !support::group_alive(setup.deadline, job_group),
         "the job's group outlived fiber"
     );
-    job_watchdog.stand_down(setup.deadline.cleanup());
+    job_watchdog.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -558,7 +558,7 @@ fn sigterm_mid_turn_of_a_resumed_session_exits_143() {
     server.hold();
     let fiber = setup.start(&["ask", "--resume", &id, "again"], Stdio::null());
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the resumed request arrived"
     );
     fiber.signal("TERM");
@@ -642,7 +642,7 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     );
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     // The server runs, so the signals were armed before it started.
-    let _pid = ready.wait(setup.deadline.left())[0];
+    let _pid = ready.wait(setup.deadline)[0];
     let pid = fiber.child.id();
     fiber.signal("TERM");
     // Before `end`, whose group check would otherwise catch a server
@@ -715,7 +715,7 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     // The server runs past its trap, so the signals were armed before
     // it started.
-    let _pid = ready.wait(setup.deadline.left())[0];
+    let _pid = ready.wait(setup.deadline)[0];
     // The server's `read` opened the FIFO, so the write end is open:
     // holding it parks the server until the signal or the test's end.
     let _writer = setup

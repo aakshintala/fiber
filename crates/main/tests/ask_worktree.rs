@@ -315,7 +315,7 @@ fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
         "a recorded signal writes nothing to stderr"
     );
     assert!(
-        fakes::group_empties(hook_group, setup.deadline.left()),
+        fakes::group_empties(hook_group, setup.deadline),
         "the hook's group is gone"
     );
     let key = key_of(setup.deadline, &setup.workspace());
@@ -340,7 +340,7 @@ fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
             .exists(),
         "no session directory exists"
     );
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     assert!(!group_alive(setup.deadline, fiber_pid));
 }
 
@@ -534,7 +534,7 @@ fn resume_held(
     .spawn()
     .unwrap();
     assert!(
-        server.await_requests(requests, setup.deadline.left()),
+        server.await_requests(requests, setup.deadline),
         "the resume reached the provider"
     );
     lock_held(&first.path);
@@ -946,7 +946,7 @@ fn a_signal_during_the_recreating_add_leaves_nothing() {
         "a recorded signal writes nothing to stderr"
     );
     assert!(
-        fakes::group_empties(hook_group, setup.deadline.left()),
+        fakes::group_empties(hook_group, setup.deadline),
         "the hook's group is gone"
     );
     assert!(!first.path.exists());
@@ -956,7 +956,7 @@ fn a_signal_during_the_recreating_add_leaves_nothing() {
         &first.branch
     ));
     assert_eq!(session_log(&setup, &first.id).1, before);
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     assert!(!group_alive(setup.deadline, fiber_pid));
 }
 

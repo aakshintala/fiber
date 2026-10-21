@@ -12,6 +12,7 @@ use super::{Request, contents, page, request, servers_text};
 use crate::error::McpError;
 use crate::start::{DEFAULT_CALL_TIMEOUT, ServerSpec};
 use crate::test_support::{FakeImages, Setup, WITHIN};
+use fakes::Deadline;
 
 fn args(value: Value) -> Map<String, Value> {
     value.as_object().expect("an object").clone()
@@ -474,9 +475,11 @@ fn dead_spec(setup: &Setup, name: &str, resources: bool) -> ServerSpec {
 fn run(tool: &Arc<super::Resources>, arguments: Value) -> contract::tool::Output {
     let tool = Arc::clone(tool);
     let tool_arguments = args(arguments);
-    fakes::within("the mcp_resources call", WITHIN, move || {
-        tool.run(&tool_arguments, &cancel(), &emit())
-    })
+    fakes::within(
+        "the mcp_resources call",
+        Deadline::after(WITHIN),
+        move || tool.run(&tool_arguments, &cancel(), &emit()),
+    )
 }
 
 #[test]
@@ -688,7 +691,7 @@ fn live(setup: &Setup, server: &fakes::ProviderServer, name: &str) -> crate::sta
     let cache = setup.cache();
     let clock = setup.clock();
     std::fs::create_dir_all(&artifacts).expect("artifacts dir");
-    fakes::within("the start", WITHIN, move || {
+    fakes::within("the start", Deadline::after(WITHIN), move || {
         crate::start::start(
             vec![spec],
             &workspace,
@@ -1134,7 +1137,7 @@ fn read_asking_answers_an_elicitation_and_reads() {
     let cache = setup.cache();
     let clock = setup.clock();
     std::fs::create_dir_all(&artifacts).expect("artifacts dir");
-    let started = fakes::within("the start", WITHIN, move || {
+    let started = fakes::within("the start", Deadline::after(WITHIN), move || {
         crate::start::start(
             vec![spec],
             &workspace,

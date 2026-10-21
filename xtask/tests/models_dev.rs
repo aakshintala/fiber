@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use fakes::{TempDir, finished};
+use fakes::{Deadline, TempDir, finished};
 
 /// How long a test waits for one child to exit: generation from the
 /// checked-in snapshot is far quicker; this only bounds a hang.
@@ -140,7 +140,7 @@ fn models_dev(dir: &TempDir, args: &[&str]) -> (i32, String) {
         .process_group(0)
         .spawn()
         .unwrap();
-    let output = finished("xtask models-dev", child, &[], WITHIN);
+    let output = finished("xtask models-dev", child, &[], Deadline::after(WITHIN));
     let text =
         String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap();
     (output.status.code().unwrap(), text)

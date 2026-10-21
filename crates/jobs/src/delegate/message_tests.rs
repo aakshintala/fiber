@@ -15,7 +15,7 @@ use contract::shapes::Failure;
 use contract::tool::{Output, Tool};
 use contract::{ErrorCode, SessionId};
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, Recorder, TempDir};
+use fakes::{CancelToken, Deadline, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 
 use super::{Attempt, DelegateMessage, Launch, Steer, Steered};
@@ -326,7 +326,7 @@ fn depth_refuses_before_steering_or_resuming_with_the_same_definition() {
         );
         for call in [args(&id.0, "hello"), Map::new()] {
             let tool = Arc::clone(&rig.tool);
-            let output = fakes::within("depth refusal", DEADLINE, move || {
+            let output = fakes::within("depth refusal", Deadline::after(DEADLINE), move || {
                 tool.run(&call, &CancelToken::new(), &Recorder::default())
             });
             assert_eq!(code_of(&output), ErrorCode::DepthExceeded);
@@ -627,7 +627,8 @@ fn gone_backs_off_doubling_to_a_capped_second() {
     {
         let until = at + Duration::from_millis(wait);
         assert!(
-            rig.clock.await_parked(until, DEADLINE),
+            rig.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the call parks its backoff"
         );
         let mark = rig.clock.advance_when_parked(
@@ -642,7 +643,8 @@ fn gone_backs_off_doubling_to_a_capped_second() {
             "no attempt before its backoff"
         );
         assert!(
-            rig.clock.await_parked_since(&mark, Some(until), DEADLINE),
+            rig.clock
+                .await_parked_since(&mark, Some(until), fakes::Deadline::after(DEADLINE)),
             "the call re-parks its backoff"
         );
         rig.clock.advance_when_parked(
@@ -693,7 +695,8 @@ fn a_committed_gone_resends_with_the_same_id() {
     );
     let backoff = rig.clock.now() + Duration::from_millis(50);
     assert!(
-        rig.clock.await_parked(backoff, DEADLINE),
+        rig.clock
+            .await_parked(backoff, fakes::Deadline::after(DEADLINE)),
         "the call parks its backoff"
     );
     rig.clock.advance_when_parked(
@@ -751,8 +754,10 @@ fn a_committed_send_to_an_ended_run_fails_indeterminate_without_resuming() {
     );
     assert!(rig.script.await_calls(1, DEADLINE), "the attempt committed");
     assert!(
-        rig.clock
-            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
+        rig.clock.await_parked(
+            rig.clock.now() + Duration::from_millis(50),
+            fakes::Deadline::after(DEADLINE)
+        ),
         "the call parks its backoff"
     );
     // The run ends under the committed attempt, as another call's resume
@@ -784,8 +789,10 @@ fn a_run_that_changes_under_a_committed_attempt_is_not_sent_twice() {
     );
     assert!(rig.script.await_calls(1, DEADLINE), "the attempt committed");
     assert!(
-        rig.clock
-            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
+        rig.clock.await_parked(
+            rig.clock.now() + Duration::from_millis(50),
+            fakes::Deadline::after(DEADLINE)
+        ),
         "the call parks its backoff"
     );
     // Another call ends run 1 and resumes it to run 2.
@@ -827,7 +834,8 @@ fn a_stale_commit_is_withheld_and_never_resent() {
     );
     let backoff = rig.clock.now() + Duration::from_millis(50);
     assert!(
-        rig.clock.await_parked(backoff, DEADLINE),
+        rig.clock
+            .await_parked(backoff, fakes::Deadline::after(DEADLINE)),
         "the call parks its backoff"
     );
     rig.clock.advance_when_parked(
@@ -931,7 +939,7 @@ fn closing_while_the_run_lives_fails_closing_at_the_bound() {
     );
     let at = rig.clock.now() + BOUND;
     assert!(
-        rig.clock.await_parked(at, DEADLINE),
+        rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
         "the call parks its closing wait"
     );
     let mark = rig.clock.advance_when_parked(
@@ -946,7 +954,8 @@ fn closing_while_the_run_lives_fails_closing_at_the_bound() {
     // past its own clock check. Only then is "still parked" decided,
     // by a state check, never a sleep.
     assert!(
-        rig.clock.await_parked_since(&mark, Some(at), DEADLINE),
+        rig.clock
+            .await_parked_since(&mark, Some(at), fakes::Deadline::after(DEADLINE)),
         "the call re-parks its closing wait"
     );
     assert!(rx.try_recv().is_err(), "bound minus 1 ms still parked");
@@ -1064,8 +1073,10 @@ fn a_cancel_during_the_backoff_delivers_nothing() {
         Arc::new(Recorder::default()),
     );
     assert!(
-        rig.clock
-            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
+        rig.clock.await_parked(
+            rig.clock.now() + Duration::from_millis(50),
+            fakes::Deadline::after(DEADLINE)
+        ),
         "the call parks its backoff"
     );
     cancel.cancel();

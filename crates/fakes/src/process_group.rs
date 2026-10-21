@@ -125,7 +125,7 @@ fn signal_named(name: &str) -> io::Result<Option<Signal>> {
     }
 }
 
-/// Waits up to `deadline` on the wall clock for process group `group` to
+/// Waits up to what remains of `deadline` on the wall clock for process group `group` to
 /// empty, and returns whether it did. One probe right after the group's
 /// leader exits is a race: a transient child, such as a `cat` in a command
 /// substitution, can outlive it for a moment under load. The probes run on
@@ -137,7 +137,7 @@ fn signal_named(name: &str) -> io::Result<Option<Signal>> {
 /// When `group` is 1 or less (see [`kill_group`]), on the probe thread, so the
 /// wait then returns `false`.
 #[must_use]
-pub fn group_empties(group: u32, deadline: Duration) -> bool {
+pub fn group_empties(group: u32, deadline: Deadline) -> bool {
     let (emptied, empty) = mpsc::channel();
     let (stop, stopped) = mpsc::channel::<()>();
     thread::spawn(move || {
@@ -150,7 +150,7 @@ pub fn group_empties(group: u32, deadline: Duration) -> bool {
             Ok(()) | Err(_) => {}
         }
     });
-    let result = Deadline::after(deadline).recv(&empty).is_ok();
+    let result = deadline.recv(&empty).is_ok();
     drop(stop);
     result
 }
@@ -421,12 +421,12 @@ fn wait_exits(pids: &[u32], stop: &mpsc::Receiver<()>, mut probe: impl FnMut(u32
     }
 }
 
-/// Waits up to `deadline` on the wall clock for every pid in `pids` to exit,
+/// Waits up to what remains of `deadline` on the wall clock for every pid in `pids` to exit,
 /// probing with kill(pid, 0) and starting no process. Runs on a thread.
 /// Panics (on that thread, so the result is `false`) when a pid is 1 or
 /// less.
 #[must_use]
-pub fn pids_exit(pids: &[u32], deadline: Duration) -> bool {
+pub fn pids_exit(pids: &[u32], deadline: Deadline) -> bool {
     let pids = pids.to_vec();
     let (done, finished) = mpsc::channel::<bool>();
     let (stop, stopped) = mpsc::channel::<()>();
@@ -436,9 +436,7 @@ pub fn pids_exit(pids: &[u32], deadline: Duration) -> bool {
             Ok(()) | Err(_) => {}
         }
     });
-    let result = Deadline::after(deadline)
-        .recv(&finished)
-        .unwrap_or_default();
+    let result = deadline.recv(&finished).unwrap_or_default();
     drop(stop);
     result
 }
@@ -590,7 +588,7 @@ fn listed_exit(
     result
 }
 
-/// Waits up to `deadline` on the wall clock for every process whose command
+/// Waits up to what remains of `deadline` on the wall clock for every process whose command
 /// line contains `text` to exit: one `pgrep` lists the matches, the probes
 /// wait for each listed pid, and `pgrep` lists again after every wait until
 /// nothing matches. One thread, one deadline; a process that starts after
@@ -600,14 +598,15 @@ fn listed_exit(
 ///
 /// When a `pgrep` fails or when the deadline expires first. The message
 /// names the path; the expiry names the holders too.
-pub fn try_matching_exits(text: &str, deadline: Duration) -> io::Result<()> {
+pub fn try_matching_exits(text: &str, deadline: Deadline) -> io::Result<()> {
+    let within = deadline.left();
     let text = text.to_owned();
-    listed_exit(move || matching(&text), deadline)
+    listed_exit(move || matching(&text), within)
 }
 
 /// [`try_matching_exits`] as a boolean: `false` on any failure path.
 #[must_use]
-pub fn matching_exits(text: &str, deadline: Duration) -> bool {
+pub fn matching_exits(text: &str, deadline: Deadline) -> bool {
     try_matching_exits(text, deadline).is_ok()
 }
 

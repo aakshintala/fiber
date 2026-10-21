@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::NoSkills;
 use serde_json::json;
 
@@ -1128,8 +1129,10 @@ fn wired(
     let workspace = rig.workspace.clone();
     let delegates = delegates();
     let skills = skills();
-    let (tools, _infos, _driver, servers) =
-        fakes::within("the session tools", WIRING_WITHIN, move || {
+    let (tools, _infos, _driver, servers) = fakes::within(
+        "the session tools",
+        Deadline::after(WIRING_WITHIN),
+        move || {
             super::session_tools(
                 Ok(fiber),
                 &home,
@@ -1150,7 +1153,8 @@ fn wired(
                 Default::default(),
             )
             .expect("the session builds")
-        });
+        },
+    );
     (tools, servers)
 }
 
@@ -1199,14 +1203,18 @@ fn loaded(session: super::SessionServers, key: r#loop::OfferKey) -> Vec<(String,
     let super::SessionServers { later, servers, .. } = session;
     let declare: doors::Declare = std::sync::Arc::new(move |_name: &str, _info| {});
     let load = later.into_load(declare, std::collections::BTreeMap::new());
-    let approved = fakes::within("the post-offer load", WIRING_WITHIN, move || {
-        load(&r#loop::OfferOutcome {
-            skipped: vec![],
-            reported: vec![key],
-            held: vec![],
-        })
-        .expect("the load runs")
-    });
+    let approved = fakes::within(
+        "the post-offer load",
+        Deadline::after(WIRING_WITHIN),
+        move || {
+            load(&r#loop::OfferOutcome {
+                skipped: vec![],
+                reported: vec![key],
+                held: vec![],
+            })
+            .expect("the load runs")
+        },
+    );
     let names: Vec<(String, String)> = approved
         .tools
         .iter()
@@ -1240,7 +1248,7 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
     let delegates = delegates();
     let (_, _, _, session) = fakes::within(
         "session with a failed optional server",
-        WIRING_WITHIN,
+        Deadline::after(WIRING_WITHIN),
         move || {
             super::session_tools(
                 Ok(fiber),

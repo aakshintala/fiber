@@ -246,7 +246,7 @@ fn a_fiber_ask_session_messages_a_hub_started_session_and_a_fiber_ask_target_is_
     let b_id = b_first["session_id"].as_str().unwrap().to_owned();
     *b_cell.lock().unwrap() = Some(b_id.clone());
     assert!(
-        server.await_requests(3, deadline.left()),
+        server.await_requests(3, deadline),
         "T, E and B each called the model"
     );
     // The sender calls session_message once per step: T, B, E, then random.
@@ -326,7 +326,7 @@ fn a_fiber_ask_session_messages_a_hub_started_session_and_a_fiber_ask_target_is_
     // Nothing is left behind: B's group, the hub with T, and the guard.
     support::kill_group(deadline, b_group.0, "TERM").unwrap();
     b.wait().unwrap();
-    b_watchdog.stand_down(deadline.cleanup());
+    b_watchdog.stand_down(deadline.cleanup_phase());
     let t_closer = Socket::connect(deadline, &setup.session_socket(&t_id));
     support::close_session(&t_closer);
     let hub = hub.lock().unwrap().take().expect("the hub started");
@@ -752,7 +752,7 @@ fn delivered_is_answered_only_after_the_hook_returns() {
     });
     // The hook parked on the hole: the entered request names that signal.
     assert!(
-        hole.await_requests(1, deadline.left()),
+        hole.await_requests(1, deadline),
         "the hook parked on its blocking read"
     );
     // While it is parked the sender's answer stays pending: no line up
@@ -871,7 +871,7 @@ fn delivered_is_answered_only_after_the_hook_returns() {
         Ok(_) | Err(_) => {}
     }
     s.wait().unwrap();
-    s_watchdog.stand_down(deadline.cleanup());
+    s_watchdog.stand_down(deadline.cleanup_phase());
     let t_closer = Socket::connect(deadline, &setup.session_socket(&t_id));
     support::close_session(&t_closer);
     let (status, _, stderr) = target.wait();

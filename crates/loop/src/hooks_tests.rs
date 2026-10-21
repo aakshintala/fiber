@@ -439,7 +439,7 @@ fn run_in(
     // too.
     let streamed = fakes::within(
         "a turn_completed line or the log's end",
-        TURN_DEADLINE,
+        Deadline::after(TURN_DEADLINE),
         move || {
             let mut streamed = Vec::new();
             while let Ok(Some(line)) = watcher.recv() {
@@ -452,7 +452,7 @@ fn run_in(
             streamed
         },
     );
-    watchdog.stand_down(TURN_DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(TURN_DEADLINE));
     let session = home.path().join("s_test");
     Ran {
         turn,
@@ -1188,7 +1188,7 @@ fn extensions_loaded_writes_the_set_then_each_notice() {
     drop(log);
     let streamed = fakes::within(
         "the log's remaining lines (extensions)",
-        TURN_DEADLINE,
+        Deadline::after(TURN_DEADLINE),
         move || {
             let mut streamed = Vec::new();
             loop {
@@ -1241,7 +1241,7 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
     drop(log);
     let streamed = fakes::within(
         "the log's remaining lines (MCP servers)",
-        TURN_DEADLINE,
+        Deadline::after(TURN_DEADLINE),
         move || {
             let mut streamed = Vec::new();
             loop {
