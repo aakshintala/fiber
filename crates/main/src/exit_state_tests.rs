@@ -217,3 +217,13 @@ fn drain_exit_prefers_the_shutdown_code() {
     stopped.shutdown(143);
     assert_eq!(super::drain_exit_code(0, &stopped), 143);
 }
+
+/// A shutdown that arrives after the drain already finished changes
+/// nothing: the drain was not stopped, so the exit stays the
+/// `fiber_exited` code even though a shutdown code is recorded.
+#[test]
+fn drain_exit_ignores_a_shutdown_after_the_drain_finished() {
+    let late = Arc::new(r#loop::TurnCancel::default());
+    late.shutdown(129);
+    assert_eq!(super::drain_exit_code(0, &late), 0);
+}
