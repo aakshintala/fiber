@@ -150,6 +150,33 @@ fn started_with_continues(hub: Hub, workspace: String, continues: Option<Session
 /// The old session the `continues` tests name.
 const OLD: &str = "s_aaaaaaaaaaaaaaaa";
 
+/// A session id that is never the old session, for the self-naming check.
+fn other() -> SessionId {
+    SessionId("s_bbbbbbbbbbbbbbbb".to_owned())
+}
+
+#[test]
+fn a_continues_naming_the_new_session_is_invalid_arguments() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    // No log for the new session: the self check fires before any log
+    // is read, so a missing log still refuses `invalid_arguments`.
+    let workspace = temp.workspace();
+    let new = other();
+    let Err(Outcome::Rejected(refused)) = check_continues(&hub, &new, &workspace, &new) else {
+        panic!("a session continuing itself is refused");
+    };
+    assert_eq!(refused.code, ErrorCode::InvalidArguments);
+    assert!(
+        refused.message.contains(&new.0),
+        "the refusal names the session: {}",
+        refused.message
+    );
+    assert!(starter.started_continues().is_empty());
+    assert!(starter.started_worktrees().is_empty());
+}
+
 #[test]
 fn an_accepted_continues_reaches_the_starter() {
     let temp = Temp::new();

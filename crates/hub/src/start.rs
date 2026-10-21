@@ -59,11 +59,12 @@ pub(crate) struct Held {
 /// `worktree` (`docs/invocation.md`, "Isolation"). `workspace` is
 /// absolute and an existing directory; anything else is
 /// `invalid_arguments`. With `continues` naming a session, the session
-/// runs in that session's recorded worktree instead: `continues` with
-/// `worktree` true, a session the hub does not know, a session with no
-/// recorded worktree, or a worktree that is not the workspace is
-/// `invalid_arguments`, while a missing or unreadable log is
-/// `session_not_found` and an unreadable first line is `log_corrupt`.
+/// runs in that session's recorded worktree instead: `continues` naming
+/// the new session itself, `continues` with `worktree` true, a session
+/// the hub does not know, a session with no recorded worktree, or a
+/// worktree that is not the workspace is `invalid_arguments`, while a
+/// missing or unreadable log is `session_not_found` and an unreadable
+/// first line is `log_corrupt`.
 /// With `content`, the
 /// prompt is held, not sent: the caller answers first, then sends it with
 /// [`prompt`].
@@ -91,17 +92,17 @@ pub(crate) fn run(
     if !workspace_path.is_dir() {
         return invalid("The workspace is not an existing directory.");
     }
+    let id = SessionId(mint("s_"));
     if let Some(old) = continues {
         if worktree {
             return invalid(
                 "A start that continues a session keeps that session's worktree: it takes no new one.",
             );
         }
-        if let Err(outcome) = check_continues(hub, workspace, old) {
+        if let Err(outcome) = check_continues(hub, &id, workspace, old) {
             return outcome;
         }
     }
-    let id = SessionId(mint("s_"));
     let started =
         match hub
             .starter
@@ -371,14 +372,27 @@ pub(crate) fn io_failed(hub: &Hub, id: &SessionId, detail: &str) -> Outcome {
     })
 }
 
-/// Checks the `continues` session `old` names: its log's recorded
-/// worktree must identify `workspace`, so the new session runs where the
-/// old one does (`docs/invocation.md`, "Isolation"). `Ok` carries
-/// nothing; `Err` carries the refusal. A session the hub does not know,
-/// or whose first line is still being written, is `session_not_found`,
-/// as for a missing log; an unreadable first line is `log_corrupt`;
-/// anything else that is not the workspace is `invalid_arguments`.
-fn check_continues(hub: &Hub, workspace: &str, old: &SessionId) -> Result<(), Outcome> {
+/// Checks the `continues` session `old` names for the new session `new`:
+/// naming itself is `invalid_arguments`, before any log is read. Its
+/// log's recorded worktree must identify `workspace`, so the new session
+/// runs where the old one does (`docs/invocation.md`, "Isolation").
+/// `Ok` carries nothing; `Err` carries the refusal. A session the hub
+/// does not know, or whose first line is still being written, is
+/// `session_not_found`, as for a missing log; an unreadable first line
+/// is `log_corrupt`; anything else that is not the workspace is
+/// `invalid_arguments`.
+fn check_continues(
+    hub: &Hub,
+    new: &SessionId,
+    workspace: &str,
+    old: &SessionId,
+) -> Result<(), Outcome> {
+    if old == new {
+        return Err(invalid(&format!(
+            "Session `{}` cannot continue itself.",
+            new.0
+        )));
+    }
     let Some((_, dir)) = crate::recent::lookup_logged(&hub.home, old) else {
         return Err(Outcome::Rejected(crate::resume::not_found(old)));
     };

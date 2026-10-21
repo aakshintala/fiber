@@ -61,11 +61,33 @@ fn old() -> SessionId {
     SessionId(OLD.to_owned())
 }
 
+/// A session id that is never the old session, for the self-naming check.
+fn new() -> SessionId {
+    SessionId("s_bbbbbbbbbbbbbbbb".to_owned())
+}
+
+#[test]
+fn self_continuation_is_invalid_and_names_the_id() {
+    // No old directory at all: the self check fires before any disk is
+    // touched, so even a missing log refuses `invalid_arguments`.
+    let home = fakes::TempDir::new("main-continues-self");
+    let workspace = home.path().join("wt");
+    std::fs::create_dir(&workspace).unwrap();
+    let missing = home.path().join("sessions").join(OLD);
+    let error = resolve(&old(), &old(), &missing, &workspace).unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+    assert!(
+        error.message.contains(OLD),
+        "the refusal names the session: {}",
+        error.message
+    );
+}
+
 #[test]
 fn unknown_id_is_not_found_and_names_the_id() {
     let home = fakes::TempDir::new("main-continues-unknown");
     let missing = home.path().join("sessions").join(OLD);
-    let error = resolve(&old(), &missing, home.path()).unwrap_err();
+    let error = resolve(&new(), &old(), &missing, home.path()).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::SessionNotFound);
     assert!(
         error.message.contains(OLD),
@@ -77,7 +99,7 @@ fn unknown_id_is_not_found_and_names_the_id() {
 #[test]
 fn missing_log_is_not_found() {
     let (_home, old_dir, workspace) = fixture("main-continues-missing", None);
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::SessionNotFound);
 }
 
@@ -89,7 +111,7 @@ fn a_longer_old_log_resolves_on_its_first_line() {
     let mut log = started(&workspace, Some(worktree(&workspace)));
     log.extend_from_slice(b"{\"kind\":\"fiber_started\"}\n{\"kind\":\"turn_completed\"}\n");
     std::fs::write(old_dir.join("events.jsonl"), log).unwrap();
-    let recorded = resolve(&old(), &old_dir, &workspace).unwrap();
+    let recorded = resolve(&new(), &old(), &old_dir, &workspace).unwrap();
     assert_eq!(recorded.path, workspace.to_string_lossy());
 }
 
@@ -98,14 +120,14 @@ fn torn_first_line_is_not_found() {
     let mut first = started(Path::new("/wt"), None);
     first.pop();
     let (_home, old_dir, workspace) = fixture("main-continues-torn", Some(&first));
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::SessionNotFound);
 }
 
 #[test]
 fn empty_log_is_not_found() {
     let (_home, old_dir, workspace) = fixture("main-continues-empty", Some(b""));
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::SessionNotFound);
 }
 
@@ -115,14 +137,14 @@ fn unreadable_first_line_is_corrupt() {
     // A directory where the log should be: reading fails however the
     // tests run, even as root, unlike a mode-bit fixture.
     std::fs::create_dir(old_dir.join("events.jsonl")).unwrap();
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
 }
 
 #[test]
 fn unparseable_first_line_is_corrupt() {
     let (_home, old_dir, workspace) = fixture("main-continues-unparseable", Some(b"{nope}\n"));
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
 }
 
@@ -138,7 +160,7 @@ fn wrong_kind_first_line_is_corrupt() {
     .unwrap();
     line.push(b'\n');
     std::fs::write(old_dir.join("events.jsonl"), line).unwrap();
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
 }
 
@@ -148,7 +170,7 @@ fn missing_workspace_is_corrupt() {
     let mut bytes = serde_json::to_vec(&line).unwrap();
     bytes.push(b'\n');
     let (_home, old_dir, workspace) = fixture("main-continues-workspace", Some(&bytes));
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
 }
 
@@ -157,7 +179,7 @@ fn no_recorded_worktree_is_invalid() {
     let (_home, old_dir, workspace) = fixture("main-continues-noworktree", None);
     let first = started(&workspace, None);
     std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
 }
 
@@ -166,7 +188,7 @@ fn non_object_worktree_is_invalid() {
     let (_home, old_dir, workspace) = fixture("main-continues-worktree-shape", None);
     let first = started(&workspace, Some(json!("/wt")));
     std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
 }
 
@@ -180,7 +202,7 @@ fn malformed_worktree_object_is_corrupt() {
         Some(json!({"path": workspace.to_string_lossy()})),
     );
     std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
 }
 
@@ -190,7 +212,7 @@ fn mismatched_worktree_is_invalid() {
     let (_home, old_dir, workspace) = fixture("main-continues-mismatch", None);
     let first = started(&workspace, Some(worktree(elsewhere)));
     std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
-    let error = resolve(&old(), &old_dir, &workspace).unwrap_err();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
     assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
 }
 
@@ -199,7 +221,7 @@ fn matching_worktree_resolves_with_its_record() {
     let (_home, old_dir, workspace) = fixture("main-continues-match", None);
     let first = started(&workspace, Some(worktree(&workspace)));
     std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
-    let recorded = resolve(&old(), &old_dir, &workspace).unwrap();
+    let recorded = resolve(&new(), &old(), &old_dir, &workspace).unwrap();
     assert_eq!(recorded.path, workspace.to_string_lossy());
     assert_eq!(recorded.branch, "fiber/x");
     assert_eq!(recorded.repository.as_deref(), Some("/repo"));
@@ -222,7 +244,7 @@ fn alias_spellings_of_the_workspace_refuse() {
         };
         let first = started(&workspace, Some(worktree(&workspace)));
         std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
-        let error = resolve(&old(), &old_dir, &current).unwrap_err();
+        let error = resolve(&new(), &old(), &old_dir, &current).unwrap_err();
         assert_eq!(error.code, contract::ErrorCode::InvalidArguments, "{alias}");
     }
 }
@@ -241,6 +263,6 @@ fn a_valid_continues_reaches_run_new_with_model_and_overrides_in_the_layer() {
     );
     // The fixture validates, so the layer reaches `run_new`: an empty
     // layer, or a fixture refusal, never gets there.
-    let recorded = resolve(&old(), &old_dir, &workspace).unwrap();
+    let recorded = resolve(&new(), &old(), &old_dir, &workspace).unwrap();
     assert_eq!(recorded.path, workspace.to_string_lossy());
 }

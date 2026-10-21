@@ -19,7 +19,8 @@ use serde_json::Value;
 use crate::{ask_failed, failed};
 
 /// The internal session command with `--continues`: starts `new` where
-/// `old` ran. A missing old log, or a first line still being written, is
+/// `old` ran. A session continuing itself is `invalid_arguments`. A
+/// missing old log, or a first line still being written, is
 /// `session_not_found`, as a rewind names a missing session; an
 /// unreadable, unparseable, not-`session_started`, or workspace-less
 /// first line, and a worktree record the session cannot read, is
@@ -52,7 +53,7 @@ pub(crate) fn session_continues(
         }
     };
     let sessions = log::sessions_dir(&home, &doors::project(&workspace));
-    let recorded = match resolve(&old, &sessions.join(&old.0), &workspace) {
+    let recorded = match resolve(&new, &old, &sessions.join(&old.0), &workspace) {
         Ok(recorded) => recorded,
         Err(e) => return ask_failed(e),
     };
@@ -83,8 +84,9 @@ pub(crate) fn session_continues(
     }
 }
 
-/// Checks the `continues` session `old` names in `old_dir`: its log must
-/// open on `session_started` with a worktree identifying `workspace`. The
+/// Checks the `continues` session `old` names in `old_dir` for the new
+/// session `new`: naming itself is `invalid_arguments`, before any log
+/// is read. Past that its log must open on `session_started` with a worktree identifying `workspace`. The
 /// mapping mirrors the hub's scan (`crates/hub/src/start.rs`): a missing
 /// log or a first line still being written reads as missing, an
 /// unreadable or unparseable first line as corrupt. Past the first line
@@ -93,7 +95,18 @@ pub(crate) fn session_continues(
 /// path is not a string, is no worktree to continue; a worktree record
 /// the session cannot read is corrupt; a worktree that is not the
 /// workspace refuses, aliases accepted.
-fn resolve(old: &SessionId, old_dir: &Path, workspace: &Path) -> Result<Worktree, Failure> {
+fn resolve(
+    new: &SessionId,
+    old: &SessionId,
+    old_dir: &Path,
+    workspace: &Path,
+) -> Result<Worktree, Failure> {
+    if new == old {
+        return Err(failed(
+            ErrorCode::InvalidArguments,
+            format!("Session `{}` cannot continue itself.", new.0),
+        ));
+    }
     if !old_dir.is_dir() {
         return Err(not_found(old));
     }
