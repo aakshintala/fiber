@@ -769,6 +769,7 @@ Sessions:
   models [<search>] [--json]                                                                                      List the models the installed providers serve
 
 Fiber itself:
+  setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code | codex>]... [--completions <shell> | --no-completions] [--hub | --no-hub]  Ask the questions a new install needs, applying each answer
   update                                    Update the Fiber binary and every installed extension together; `upgrade` runs the same command, with `--channel stable|nightly`
   approve [--yes]                           Show what this repository ships and approve it
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret

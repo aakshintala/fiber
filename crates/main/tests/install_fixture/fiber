@@ -2,7 +2,9 @@
 # Stands in for the released binary in crates/main/tests/install_script.rs.
 # `--version` prints the version in $FIBER_HOME/version. `release-install`
 # appends its arguments to $FIBER_HOME/calls and exits with the number in
-# $FIBER_HOME/exit, or 0 when that file is missing.
+# $FIBER_HOME/exit, or 0 when that file is missing. `setup` appends its
+# arguments to $FIBER_HOME/setup-calls and exits with the number in
+# $FIBER_HOME/exit-setup, or 0 when that file is missing.
 case ${1-} in
   --version)
     printf 'fiber %s (abc1234)\n' "$(cat "$FIBER_HOME/version")"
@@ -11,6 +13,12 @@ case ${1-} in
     printf '%s\n' "$*" >>"$FIBER_HOME/calls"
     if [ -f "$FIBER_HOME/exit" ]; then
       exit "$(cat "$FIBER_HOME/exit")"
+    fi
+    ;;
+  setup)
+    printf '%s\n' "$*" >>"$FIBER_HOME/setup-calls"
+    if [ -f "$FIBER_HOME/exit-setup" ]; then
+      exit "$(cat "$FIBER_HOME/exit-setup")"
     fi
     ;;
   *)
