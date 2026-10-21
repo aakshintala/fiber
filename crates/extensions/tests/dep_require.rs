@@ -246,6 +246,21 @@ fn an_empty_module_is_refused_as_an_unknown_dependency() {
 }
 
 #[test]
+fn a_trailing_colon_after_a_module_names_the_module() {
+    let setup = Setup::new();
+    install_pair(
+        &setup,
+        &root_init_require(&format!("{DEP}:a:"), "non-blocking"),
+    );
+    let session = load(&setup, FakeClock::new());
+    // The remainder past the matched key is `a:`, not empty, so the
+    // loader reports the missing module file rather than the
+    // dependency.
+    let message = refused(&session);
+    assert!(message.contains("`a:.lua`"), "{message}");
+}
+
+#[test]
 fn an_empty_name_is_refused_as_an_unknown_dependency() {
     let setup = Setup::new();
     install_pair(&setup, &root_init_require("", "non-blocking"));

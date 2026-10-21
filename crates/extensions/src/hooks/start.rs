@@ -18,6 +18,13 @@ use crate::host::Session;
 use crate::lua::LuaExtension;
 use crate::{Error, LuaProvider};
 
+/// Whether `dir` is a pinned repository copy: it lives under the pinned
+/// directory, where repository copies live, so a pinned copy never reads
+/// a personal install of the same dependency.
+pub fn is_repository_copy(dir: &Path, home: &Path) -> bool {
+    dir.starts_with(config::pinned_dir(home))
+}
+
 /// Where each manifest `depends` entry lives, by its name: the directory
 /// a qualified `require` loads from. Every key is mapped, including one
 /// holding a colon: matching, not the map, decides, so the longest key
@@ -72,10 +79,10 @@ pub(super) fn start_vm(
             locks,
         })
         .with_secrets(manifest.secrets.clone());
-    // A repository copy reads its own `.fiber-depends`: the pinned
-    // directory prefix below is where those copies live, so a pinned copy
-    // never reads a personal install of the same dependency.
-    let is_repository_copy = dir.starts_with(config::pinned_dir(home));
+    // A repository copy reads its own `.fiber-depends`: the predicate
+    // below is where those copies live, so a pinned copy never reads a
+    // personal install of the same dependency.
+    let is_repository_copy = is_repository_copy(dir, home);
     extension =
         extension.with_dependencies(dep_dirs(home, dir, &manifest.depends, is_repository_copy));
     if let Some(cap) = manifest

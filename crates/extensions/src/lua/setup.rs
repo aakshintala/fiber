@@ -65,8 +65,8 @@ pub(crate) fn install(
         // so a symlinked home still serves through the same link; a
         // missing directory fails here, naming the dependency, without
         // reaching the file loader. A mapped directory whose final
-        // component is a symlink, or a root whose canonical target leaves
-        // the managed extensions root, is refused below.
+        // component is a symlink is refused below; any other escape
+        // is refused by the file loader's serving-root check.
         if name.is_empty() {
             return Ok((None, Some("`dependency '' not installed`".to_owned())));
         }
@@ -87,14 +87,12 @@ pub(crate) fn install(
                 best = Some((key, mapped));
             }
         }
-        // A name that is exactly a key plus a colon has an empty
-        // remainder: it names the dependency it matched, if any.
-        if name.ends_with(':') {
-            if let Some((key, _)) = &best {
-                let dep = (*key).clone();
-                return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
-            }
-        } else if let Some((key, mapped)) = best {
+        // A qualified name whose remainder past its matched key is
+        // empty names the dependency it matched: `dep:` with key `dep`
+        // is an unknown dependency, and a remainder that only looks
+        // empty (`dep:a:` with only key `dep` leaves `a:`) loads as a
+        // module, so a trailing colon alone never decides.
+        if let Some((key, mapped)) = best {
             let module = name[key.len() + 1..].to_owned();
             let dep = key.clone();
             if module.is_empty() {
@@ -111,29 +109,13 @@ pub(crate) fn install(
             // the final component is checked before any read, so a
             // symlinked FIBER_HOME still serves (its final component is
             // a real directory) while a symlinked dependency root is
-            // refused with the same outside-directory error below. The
-            // canonical serving root stays inside the managed
-            // extensions root the map was built under: the lexical
-            // parent of the mapped directory, canonicalized so a
-            // symlinked home passes on both sides. A root whose link
-            // target leaves that tree is refused here, before the file
-            // loader runs, with the same outside-directory error it
-            // reports. The root re-resolves on every require, so a link
-            // retargeted mid-run refuses its new target.
+            // refused with the outside-directory error the file loader
+            // also reports. The root re-resolves on every require, so a
+            // link retargeted mid-run refuses its new target.
             if mapped
                 .symlink_metadata()
                 .is_ok_and(|meta| meta.file_type().is_symlink())
             {
-                return Ok((
-                    None,
-                    Some(format!("`{file}` is outside the extension's directory")),
-                ));
-            }
-            let confined = mapped
-                .parent()
-                .and_then(|parent| parent.canonicalize().ok())
-                .is_some_and(|parent| root.starts_with(&parent));
-            if !confined {
                 return Ok((
                     None,
                     Some(format!("`{file}` is outside the extension's directory")),

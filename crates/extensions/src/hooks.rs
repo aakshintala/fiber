@@ -37,7 +37,7 @@ mod handoff;
 mod lifecycle;
 mod settle;
 mod start;
-pub use start::dep_dirs;
+pub use start::{dep_dirs, is_repository_copy};
 #[cfg(test)]
 mod state_tests;
 
