@@ -821,3 +821,83 @@ fn a_failed_ignored_listing_is_uncertain() {
     let err = super::listed_ignored(home.path()).unwrap_err();
     assert!(err.starts_with("git cannot read it: "), "{err}");
 }
+
+/// A re-run child's own bound: it fires before the parent's wait, so the
+/// two no longer contradict.
+const REDIRECT_CHILD_BUDGET: Duration = Duration::from_secs(20);
+
+/// A parent's wait for a re-run child: inside half of nextest's per-test
+/// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
+const REDIRECT_RERUN_WITHIN: Duration = Duration::from_secs(30);
+
+/// The outer wait around a test that re-runs a child: at least twice the
+/// parent's wait (`docs/testing.md`, "Waits and timeouts").
+const REDIRECT_RERUN_OUTER: Duration = Duration::from_secs(60);
+
+/// Re-run bounds keep their margins: the child's budget is below the
+/// parent's wait, the wait stays inside half of nextest's per-test timeout,
+/// and the outer wrapper is at least twice the wait.
+const _: () = assert!(
+    REDIRECT_CHILD_BUDGET.as_secs() < REDIRECT_RERUN_WITHIN.as_secs()
+        && REDIRECT_RERUN_WITHIN.as_secs() <= 30
+        && REDIRECT_RERUN_OUTER.as_secs() >= 2 * REDIRECT_RERUN_WITHIN.as_secs()
+);
+
+#[test]
+fn a_git_redirect_keeps_scope_on_the_workspace_repository() {
+    if std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_CHILD").is_ok() {
+        fakes::within("the child's redirect checks", REDIRECT_CHILD_BUDGET, || {
+            let home = PathBuf::from(std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_HOME").unwrap());
+            let workspace =
+                PathBuf::from(std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_WORKSPACE").unwrap());
+            let expected = std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_EXPECTED").unwrap();
+            assert_eq!(super::scope_keys(&home, &workspace), vec![expected]);
+        });
+        return;
+    }
+    fakes::within(
+        "a_git_redirect_keeps_scope_on_the_workspace_repository",
+        REDIRECT_RERUN_OUTER,
+        || {
+            let root = fakes::TempDir::new("cli-prune-scope-redirect");
+            let repo = root.path().join("repo");
+            fs::create_dir_all(&repo).unwrap();
+            git(&repo, &["init", "--quiet"]);
+            let decoy = root.path().join("decoy");
+            fs::create_dir_all(&decoy).unwrap();
+            git(&decoy, &["init", "--quiet"]);
+            let workspace = fs::canonicalize(&repo).unwrap();
+            let decoy_canon = fs::canonicalize(&decoy).unwrap();
+            let home = root.path().join("home");
+            fs::create_dir_all(home.join("projects")).unwrap();
+            let expected = log::project_key(&doors::project(&workspace));
+            let home_str = home.to_str().unwrap().to_owned();
+            let workspace_str = workspace.to_str().unwrap().to_owned();
+            let decoy_git = decoy_canon.join(".git").to_str().unwrap().to_owned();
+            let decoy_str = decoy_canon.to_str().unwrap().to_owned();
+            let name = module_path!().split_once("::").unwrap().1.to_owned()
+                + "::a_git_redirect_keeps_scope_on_the_workspace_repository";
+            let out = fakes::rerun_prepared(
+                &name,
+                &[
+                    ("FIBER_CLI_PRUNE_SCOPE_REDIRECT_CHILD", "1"),
+                    ("FIBER_CLI_PRUNE_SCOPE_REDIRECT_HOME", home_str.as_str()),
+                    (
+                        "FIBER_CLI_PRUNE_SCOPE_REDIRECT_WORKSPACE",
+                        workspace_str.as_str(),
+                    ),
+                    ("FIBER_CLI_PRUNE_SCOPE_REDIRECT_EXPECTED", expected.as_str()),
+                    ("GIT_DIR", decoy_git.as_str()),
+                    ("GIT_WORK_TREE", decoy_str.as_str()),
+                ],
+                REDIRECT_RERUN_WITHIN,
+                |_| {},
+            );
+            assert!(
+                out.status.success(),
+                "scope must stay on the workspace repository:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        },
+    );
+}
