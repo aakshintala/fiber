@@ -88,7 +88,6 @@ pub(crate) fn required(
 /// skip: when a signal stops Fiber, no watcher runs. Records the log end
 /// as the watermark first, so the drain defaults unset cursors to the
 /// post-registration range. Dropping the returned guard unregisters.
-#[allow(dead_code, reason = "run_turn wires the session fan-out in T4")]
 pub(crate) fn subscribe(
     log: &Arc<Log>,
     extensions: &Arc<SessionExtensions>,

@@ -2860,3 +2860,257 @@ fn a_watcher_refuses_host_tool_but_runs_host_exec() {
         "exec:true"
     );
 }
+
+/// A watcher pushed after `seal()` still runs: the seal drops routing, not
+/// the stream. Service calls answer `closing`, local calls succeed, and the
+/// late-bound emitter is gone, so the run reports through the filesystem.
+#[test]
+fn a_sealed_watchers_run_with_closing_services_and_closed_state() {
+    use contract::extension::ExtensionDoor as _;
+    let home = Home::new();
+    let probe = home.root.path().join("seal-probe");
+    home.install(
+        "sealed",
+        Some(&format!(
+            "fiber.watch({{\"notice\"}}, {{ timeout = 2000, run = function(ev)\n\
+             local out = {{}}\n\
+             local function probe(name, fn)\n\
+             local ok, err = pcall(fn)\n\
+             local detail = ok and \"ok\" or tostring((type(err) == \"table\" and (err.message or err.code)) or err)\n\
+             out[#out + 1] = name .. \":\" .. detail\n\
+             end\n\
+             probe(\"model\", function() host.model({{ model = \"fake/m\", messages = {{ {{ role = \"user\", content = \"hi\" }} }}, max_tokens = 16 }}) end)\n\
+             probe(\"drive\", function() host.drive(\"tools\", {{}}) end)\n\
+             probe(\"delegate\", function() host.delegate({{ description = \"s\", prompt = \"p\", model = \"m\" }}, {{ timeout = 5000, run = function() end }}) end)\n\
+             probe(\"state\", function() state.set(\"k\", 1) end)\n\
+             probe(\"fs\", function() host.fs.write({probe:?}, \"wrote\") end)\n\
+             probe(\"data_dir\", function() host.fs.write(host.data_dir(\"machine\") .. \"/wrote\", \"wrote\") end)\n\
+             host.fs.write({probe:?} .. \".out\", table.concat(out, \"\\n\"))\n\
+             end }})\n",
+            probe = probe.display().to_string()
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    // Production order at session end: the seal drops routing, then the
+    // state close lands with the lines it holds.
+    session.seal();
+    session.close_state();
+    session.deliver(&noticed("sealed"), Some(contract::Seq(0)));
+    // The write creates the file before its content lands, so the wait
+    // only accepts non-empty content, never a bare existence.
+    let out = Deadline::after(WAIT)
+        .recv(&{
+            let (tx, rx) = mpsc::channel();
+            let probe = probe.with_extension("out");
+            thread::spawn(move || {
+                let deadline = Deadline::after(WAIT);
+                loop {
+                    if let Ok(text) = fs::read_to_string(&probe)
+                        && !text.is_empty()
+                    {
+                        let _ignored = tx.send(text);
+                        return;
+                    }
+                    if deadline.left().is_zero() {
+                        return;
+                    }
+                    thread::yield_now();
+                }
+            });
+            rx
+        })
+        .expect("waited for the sealed watcher to run");
+    assert!(
+        out.contains("model:host.model: the session is closing"),
+        "{out:?}"
+    );
+    assert!(
+        out.contains("drive:host.drive: the session is closing"),
+        "{out:?}"
+    );
+    assert!(
+        out.contains("delegate:host.delegate: not available here"),
+        "{out:?}"
+    );
+    assert!(out.contains("state:extension state is closed"), "{out:?}");
+    assert!(out.contains("fs:ok"), "{out:?}");
+    assert!(out.contains("data_dir:ok"), "{out:?}");
+    assert_eq!(fs::read_to_string(&probe).unwrap(), "wrote");
+}
+
+/// A watcher queued when the signal stops the hub never starts: the stop
+/// settles the parked delivery first, so the queued one stays queued.
+#[test]
+fn a_watcher_queued_at_a_signal_never_starts() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
+    let home = Home::new();
+    let second = home.root.path().join("second");
+    home.install(
+        "stopped",
+        Some(&format!(
+            "fiber.watch({{\"notice\"}}, {{ timeout = 5000, run = function(ev) host.http({{ url = \"{url}\" }}) end }})\n\
+             fiber.watch({{\"notice\"}}, {{ timeout = 5000, run = function(ev) host.fs.write({second:?}, \"second\") end }})\n"
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    session.deliver(&noticed("park"), None);
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for the first watcher to park on host.http"
+    );
+    // The one worker is parked on the first delivery, so the second stays
+    // queued behind it; the stop lands before it can ever start. The stop
+    // is synchronous, so no settle-signal is needed: after it returns the
+    // hub takes no more jobs. A parked watcher delivery has no waiter, so
+    // its abandoned run settles nothing visible.
+    session.deliver(&noticed("queued"), None);
+    crate::lua::hub::stop_every_callback();
+    server.release();
+    assert!(!second.exists(), "the queued watcher never started");
+}
+
+/// One durable `text_completed` line: notices are ephemeral and never
+/// reach the log file, so the drain's fixtures are text lines.
+fn texted(text: &str) -> contract::events::Event {
+    contract::events::Event::TextCompleted(contract::events::TextCompleted {
+        text: text.to_owned(),
+        provider_item: None,
+    })
+}
+
+/// A session-dir log holding nothing yet: the test appends after recording
+/// the watermark, so the drain's range is exactly what followed
+/// registration. The root keeps the log alive.
+fn empty_log() -> (fakes::TempDir, Arc<log::Log>, PathBuf) {
+    let root = fakes::TempDir::new("fiber-watch-drain");
+    let sessions = root.path().join("sessions");
+    let log = Arc::new(
+        log::Log::create(
+            &sessions,
+            contract::SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    (root, log, sessions.join("s_1"))
+}
+
+/// The drain replays each watcher's `(cursor, end]` range in log order on
+/// the one worker, advancing cursors and collecting nothing on success.
+#[test]
+fn drain_watchers_replays_each_watchers_range_in_order() {
+    let home = Home::new();
+    let first = home.root.path().join("first");
+    let second = home.root.path().join("second");
+    home.install(
+        "drained",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, seen = pcall(host.fs.read, {first:?}) if not ok or seen == nil then seen = \"\" end host.fs.write({first:?}, seen .. ev.payload.text .. \"\\n\") end }}) fiber.watch({{\"step_started\"}}, {{ timeout = 2000, run = function(ev) host.fs.write({second:?}, \"second\") end }})"
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&texted("a"), None, None).unwrap();
+    log.append(&texted("b"), None, None).unwrap();
+    log.append(&stepped(), None, None).unwrap();
+    let errors = session.drain_watchers(&log, &dir);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(fs::read_to_string(&first).unwrap(), "a\nb\n");
+    assert_eq!(fs::read_to_string(&second).unwrap(), "second");
+    assert_eq!(
+        *session
+            .cursors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        [
+            (("fiber.test/drained".to_owned(), 0), 1),
+            (("fiber.test/drained".to_owned(), 1), 2)
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+/// A watcher with no live offers drains exactly its post-watermark range:
+/// lines before registration never reach it.
+#[test]
+fn a_late_watcher_drains_only_its_post_watermark_range() {
+    let home = Home::new();
+    let seen = home.root.path().join("seen");
+    home.install(
+        "late",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, old = pcall(host.fs.read, {seen:?}) if not ok or old == nil then old = \"\" end host.fs.write({seen:?}, old .. ev.payload.text .. \"\\n\") end }})"
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    log.append(&texted("before"), None, None).unwrap();
+    // Registered after the last live offer: nothing was ever offered live,
+    // so the cursor stays unset and the drain starts at the watermark.
+    session.set_watermark(log.count());
+    log.append(&texted("after"), None, None).unwrap();
+    let errors = session.drain_watchers(&log, &dir);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(fs::read_to_string(&seen).unwrap(), "after\n");
+}
+
+/// A signal during the drain stops it at once: the parked delivery's wait
+/// answers `Stopped`, pre-signal errors still come back, and later
+/// watchers never start.
+#[test]
+fn a_signal_during_the_drain_stops_it_at_once() {
+    let home = Home::new();
+    let later = home.root.path().join("later");
+    home.install(
+        "draining",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) error('pre-signal') end }}) fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) host.status('parked') host.exec('sleep', {{'30'}}) end }}) fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) host.fs.write({later:?}, \"later\") end }})"
+        )),
+        &[],
+    );
+    let clock = FakeClock::new();
+    let session = home.load_with_clock(&[], Arc::clone(&clock));
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&texted("drain-me"), None, None).unwrap();
+    let draining = Arc::clone(&session);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ignored = done_tx.send(draining.drain_watchers(&log, &dir));
+    });
+    // The fake clock is held, never advanced: only the stop can wake the
+    // parked delivery's wait.
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the draining watcher to park"),
+        "parked"
+    );
+    crate::lua::hub::stop_every_callback();
+    // Far under the 2000 ms fixture timeout: waiting the timeout out would
+    // miss this bound, so only `Stopped` wakes it in time.
+    let errors = Deadline::after(Duration::from_secs(1))
+        .recv(&done_rx)
+        .expect("waited for the drain to answer the stop");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].extension.contains("fiber.test/draining"),
+        "{errors:?}"
+    );
+    assert!(errors[0].message.contains("pre-signal"), "{errors:?}");
+    assert!(!later.exists(), "no later watcher starts after the stop");
+}

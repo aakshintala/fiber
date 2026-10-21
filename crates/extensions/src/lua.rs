@@ -655,16 +655,54 @@ impl LuaExtension {
     /// stream behind whatever runs or waits. Refused while the extension
     /// is not running: nothing is queued, so the cursor must not advance
     /// for it.
-    pub(crate) fn push_watcher(&self, index: usize, arg: Value) -> bool {
+    /// Pushes the watcher `index` for a session-end redelivery. A `None`
+    /// push means the hub already stopped, which the drain answers as
+    /// `Stopped`. Mid-session offers ignore the id and ask time.
+    pub(crate) fn push_watcher(&self, index: usize, arg: Value) -> Option<(u64, Instant)> {
         let mut shared = self.hub.lock();
         if !matches!(shared.phase, Phase::Ready(_)) {
-            return false;
+            return None;
         }
         let asked = self.hub.clock().now();
-        shared.push(Target::Watcher { index }, arg, asked);
+        let id = shared.push(Target::Watcher { index }, arg, asked);
         drop(shared);
         self.hub.notify();
-        true
+        Some((id, asked))
+    }
+
+    /// Runs the watcher `index` for the session-end drain and waits for
+    /// its end within its declared timeout: the drain's per-line wait.
+    /// The failure comes back instead of a notice, so the drain's caller
+    /// can print it under `fiber_exited` (`docs/extensions.md`, "When a
+    /// session ends"). A push the stop refused answers `Stopped`, which
+    /// ends the whole drain, and so does a wait the stop wakes.
+    pub(crate) fn drain_watcher(&self, index: usize, arg: Value) -> Result<(), Error> {
+        self.hub.lock().keep_watcher_done = true;
+        let pushed = self.push_watcher(index, arg);
+        let result = match pushed {
+            None => Err(errors::stopped(&self.name)),
+            Some((id, asked)) => {
+                let target = Target::Watcher { index };
+                let mut shared = self.hub.lock();
+                loop {
+                    let now = self.hub.clock().now();
+                    match shared.judge(&self.name, id, &target, asked, now) {
+                        (Next::Return(result), unsent) => {
+                            self.hub.notify();
+                            drop(shared);
+                            drop(unsent);
+                            break result.map(|_| ());
+                        }
+                        (Next::Sleep(until), unsent) => {
+                            drop(unsent);
+                            shared = self.hub.wait(shared, until);
+                        }
+                    }
+                }
+            }
+        };
+        self.hub.lock().keep_watcher_done = false;
+        result
     }
 
     /// Whether the watcher has a delivery queued or running: the busy bit

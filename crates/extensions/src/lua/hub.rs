@@ -263,7 +263,15 @@ impl Hub {
         index: usize,
         result: Result<Value, Error>,
     ) {
-        if let Err(e) = &result {
+        // The session-end drain waits on its own delivery, so the result
+        // is recorded for its waiter and no notice is emitted: the log is
+        // already closed to new lines. A mid-session delivery has no
+        // waiter, so its failure is noticed and the call forgotten.
+        if self.lock().keep_watcher_done {
+            if let Some(progress) = self.lock().calls.get_mut(&id) {
+                *progress = Progress::Done(result);
+            }
+        } else if let Err(e) = &result {
             self.emit(Event::Notice(Notice {
                 code: ErrorCode::ExtensionFailed,
                 message: format!(
