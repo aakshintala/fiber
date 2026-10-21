@@ -1,5 +1,10 @@
 # docs/dependencies.md, "Supply chain".
 
+# The allow list below and the accepted list in about.toml carry the same
+# set of licences (docs/dependencies.md, "Supply chain"). Keep them in
+# step: scripts/check runs `cargo about generate` on every pull request,
+# so a licence allowed here but missing there fails the pull request.
+
 [licenses]
 unused-allowed-license = "allow"
 allow = [
