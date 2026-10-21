@@ -21,6 +21,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
     worktrees/<id>/               one git worktree per session that asked for one
     worktrees/<id>.lock           its lock file, held while a process runs in it
     approvals/<content-hash>      one file per extension or hook approval or never
+    servers/<content-hash>        one record per MCP server copy this project approved
     data/<extension>/             an extension's data for this project
   extensions/<name>/              installed extensions, one directory each
   docs/                           Fiber's docs for the installed version (docs/releasing.md)
@@ -162,9 +163,12 @@ terminal.
 copies it to `pinned/<content-hash>/`: an extension's whole package, with its
 dependencies and what its install step built, or the files a hook or an MCP
 server declaration names. Sessions run the copy, never the repository's files.
-Every approved version is kept until no worktree's files match it, when
+Approving a server declaration also writes a project record at
+`projects/<key>/servers/<content-hash>`, naming this project as one that
+approved that copy. Every approved version is kept until no worktree's files match it, when
 `fiber sessions prune` removes it (`docs/extensions.md`, "Code a repository
-ships"). `pinned.json` records each declared path's size, modification time
+ships"), and a server copy is judged by its project records exactly as an
+extension copy is judged (`docs/invocation.md`, "Deleting and pruning"). `pinned.json` records each declared path's size, modification time
 and hash, so a session hashes a file again only when one of the first two
 changed. It is an index: deleting it costs a re-hash and nothing else.
 
@@ -180,7 +184,12 @@ again. An extension's or a hook's is per project, at
 `projects/<key>/approvals/<content-hash>`, as its install is. An MCP server's
 is per machine, at `approvals/<content-hash>`, so a declaration approved in one
 repository is not asked about again in another (`docs/mcp.md`, "A repository's
-servers"). A repository can neither write nor read them.
+servers"), and each approving project also holds a record at
+`projects/<key>/servers/<content-hash>`, written when the approval is. A `never`
+writes no project record, and removes one an earlier approval left. Only a
+changed declaration or files, or a deleted record, offers approved content
+again, so a server copy approved before the project record existed has no
+record, and stays until a new approval writes one. A repository can neither write nor read them.
 
 **Credentials.** One file per stored provider credential at
 `credentials/<name>/<label>`, one per credential label, and one file per
