@@ -688,6 +688,7 @@ fn on_command(
         },
         "start" => on_start(&line.id, &line.args, hub, writer, relays),
         "status" => on_status(&line.id, &line.args, hub, writer),
+        "placeholder_env" => on_placeholder_env(&line.id, &line.args, hub, writer),
         "refresh" => answer(
             writer,
             hub,
@@ -906,6 +907,59 @@ fn on_status(
         id,
         serde_json::to_value(&result).unwrap_or(Value::Null),
     );
+}
+
+/// Answers `placeholder_env` with the hub's captured values for the
+/// requested placeholder variable names, absent names omitted: the names
+/// cross, never the whole environment, and the values are never logged.
+fn on_placeholder_env(
+    id: &CommandId,
+    args: &Map<String, Value>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+) {
+    let Some(names) = placeholder_names(args) else {
+        reject(
+            writer,
+            hub,
+            Some(id),
+            &ErrorCode::InvalidArguments,
+            "The arguments do not fit this command.",
+        );
+        return;
+    };
+    let environment = hub.environments.get();
+    let mut values = std::collections::BTreeMap::new();
+    for name in &names {
+        if let Some(value) = environment.value(name) {
+            values.insert(name.clone(), value);
+        }
+    }
+    let result = CommandResult::PlaceholderEnv { values };
+    accept_result(
+        writer,
+        hub,
+        id,
+        serde_json::to_value(&result).unwrap_or(Value::Null),
+    );
+}
+
+/// The requested placeholder variable names: `names`, an array of
+/// strings, and no other key. A missing or misshaped `names`, an extra
+/// key or an explicit `null` is `None`.
+fn placeholder_names(args: &Map<String, Value>) -> Option<Vec<String>> {
+    if contains_null(&Value::Object(args.clone())) {
+        return None;
+    }
+    if args.len() != 1 {
+        return None;
+    }
+    let names = args.get("names")?;
+    let names = names.as_array()?;
+    names
+        .iter()
+        .map(|name| name.as_str().map(str::to_owned))
+        .collect()
 }
 
 /// `start`'s `args`: `workspace` (required string), `model` (optional

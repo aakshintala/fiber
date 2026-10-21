@@ -232,9 +232,15 @@ impl tui::Configure for Seam {
         key: &str,
         text: &str,
     ) -> Result<Saved, ConfigureError> {
-        let (warnings, file) =
-            ::cli::config_set_text(&self.home, workspace, layer_to(layer), key, text)
-                .map_err(from_failure)?;
+        let (warnings, file) = ::cli::config_set_text(
+            &self.home,
+            workspace,
+            layer_to(layer),
+            key,
+            text,
+            &crate::clock::System,
+        )
+        .map_err(from_failure)?;
         Ok(Saved { file, warnings })
     }
 
