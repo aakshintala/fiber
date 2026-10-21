@@ -64,6 +64,14 @@ fn run_get(
         notices.extend(loading);
     }
     print_notices(err, &notices);
+    // An extension's own setting never lives in `config.json`: it reads
+    // from the extension's settings files, with the layer each value came
+    // from, as `set` writes them.
+    if let Some((extension, relative)) = config::settings_key(key) {
+        return run_get_extension(
+            home, workspace, &project, &config, key, &extension, &relative, out, err,
+        );
+    }
     // The notes print as the reviewer reads them: each layer's text under
     // its heading, with no layer named (`docs/permissions.md`, "What the
     // person tells it").
@@ -88,6 +96,58 @@ fn run_get(
         None if !config::known_key(key) => Err(CliError::ConfigKeyUnknown {
             key: key.to_owned(),
         }),
+        None => {
+            writeln!(err, "`{key}` is not set.").map_err(CliError::StandardError)?;
+            Ok(())
+        }
+    }
+}
+
+/// The effective value of an extension's own setting and the settings file
+/// it came from (`docs/configuration.md`, "Extension settings"). The
+/// repository filter reads the manifest of the installed or approved copy:
+/// the approved copy wins, the personal install is the fallback, and
+/// neither is today's unknown key. The empty rest takes the unknown-key
+/// path too, as `set` refuses it as usage.
+fn run_get_extension(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    config: &Config,
+    key: &str,
+    extension: &str,
+    relative: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), CliError> {
+    if relative.is_empty() {
+        return Err(CliError::ConfigKeyUnknown {
+            key: key.to_owned(),
+        });
+    }
+    let dir = workspace_providers(home, workspace, project)
+        .ok()
+        .and_then(|(providers, _)| providers.extension_source_dir(extension))
+        .or_else(|| config::installed_dir(home, extension));
+    let Some(dir) = dir else {
+        return Err(CliError::ConfigKeyUnknown {
+            key: key.to_owned(),
+        });
+    };
+    let declared = config::declared_settings_in(&dir)?;
+    let repo: Vec<&str> = declared.repo_settings.iter().map(String::as_str).collect();
+    match config
+        .extensions()
+        .get_layered(extension, &repo, &config::path::display(relative))?
+    {
+        Some((value, source)) => {
+            let text = serde_json::to_string(&value).map_err(|source| CliError::ConfigValue {
+                key: key.to_owned(),
+                source,
+            })?;
+            write_line(out, &format!("{text} from {source}")).map_err(CliError::from)?;
+            Ok(())
+        }
         None => {
             writeln!(err, "`{key}` is not set.").map_err(CliError::StandardError)?;
             Ok(())
@@ -127,6 +187,24 @@ fn run_set(
         }) {
             notices.extend(config.notices().iter().cloned());
         }
+    }
+    // A repository-layer settings key resolves the approved-or-installed
+    // directory the caller alone may resolve — the approved copy wins,
+    // the personal install is the fallback — and writes through the narrow
+    // settings API. Global and project keys fall through to `set`, which
+    // resolves the installed copy internally, and a key no copy resolves
+    // falls through to `set`'s refusal.
+    if matches!(layer, Layer::Repository)
+        && let Some((extension, _)) = config::settings_key(key)
+        && let Some(dir) = workspace_providers(home, workspace, &project)
+            .ok()
+            .and_then(|(providers, _)| providers.extension_source_dir(&extension))
+            .or_else(|| config::installed_dir(home, &extension))
+    {
+        let file =
+            config::set_repo_extension_setting(home, workspace, &project, &dir, key, parsed)?;
+        print_notices(err, &notices);
+        return Ok(file);
     }
     let file = config::set(home, workspace, &project, layer, key, parsed)?;
     print_notices(err, &notices);

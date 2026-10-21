@@ -486,7 +486,7 @@ fn object_get_merges_the_global_and_project_settings_files() {
     install(&setup.home(), "acme", "acme");
     setup.write_settings(
         &setup.home().join("config").join("acme.json"),
-        &json!({"x": 1}),
+        &json!({"obj": {"x": 1}}),
     );
     let project_file = setup
         .home()
@@ -494,13 +494,27 @@ fn object_get_merges_the_global_and_project_settings_files() {
         .join(setup.project_key().as_str())
         .join("config")
         .join("acme.json");
-    setup.write_settings(&project_file, &json!({"y": 2}));
-    let (result, out, err) = setup.get("extensions.\"acme\".settings");
+    setup.write_settings(&project_file, &json!({"obj": {"y": 2}}));
+    let (result, out, err) = setup.get("extensions.\"acme\".settings.obj");
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
         out,
         format!("{{\"x\":1,\"y\":2}} from {}\n", project_file.display())
+    );
+}
+
+#[test]
+fn get_with_empty_settings_rest_is_not_a_configuration_key() {
+    let setup = Setup::new();
+    install(&setup.home(), "acme", "acme");
+    let (result, _, _) = setup.get("extensions.\"acme\".settings");
+    assert!(
+        matches!(
+            result,
+            Err(CliError::ConfigKeyUnknown { ref key }) if key == "extensions.\"acme\".settings"
+        ),
+        "{result:?}"
     );
 }
 
