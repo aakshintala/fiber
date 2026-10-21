@@ -715,6 +715,79 @@ fn install_with_an_answering_hub_sends_stop_before_any_manager_call() {
 }
 
 #[test]
+fn a_second_identical_launchd_install_with_an_answering_hub_sends_no_stop() {
+    let setup = Setup::new();
+    let service = setup.service(launchd());
+    setup
+        .install(&service, None, &Stub::unloaded(), false)
+        .0
+        .unwrap();
+    let events: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _hub = stopping_hub(&setup.home(), Arc::clone(&events));
+    let stub_events = Arc::clone(&events);
+    let stub = Stub::new(move |line| {
+        stub_events.lock().unwrap().push(format!("manager:{line}"));
+        Ok(ok())
+    });
+    let (result, out) = setup.install(&service, None, &stub, true);
+    result.unwrap();
+    assert_eq!(out, installed_line(&service));
+    let events = events.lock().unwrap();
+    assert!(
+        events.iter().all(|event| event.starts_with("manager:")),
+        "an unchanged loaded install sends no stop: {events:?}"
+    );
+    assert_eq!(stub.calls(), [print(&service)]);
+}
+
+#[test]
+fn a_second_identical_systemd_install_with_an_answering_hub_sends_no_stop() {
+    let setup = Setup::new();
+    let service = setup.service(Manager::Systemd);
+    setup.install(&service, None, &Stub::ok(), false).0.unwrap();
+    let events: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _hub = stopping_hub(&setup.home(), Arc::clone(&events));
+    let stub = Stub::ok();
+    let (result, out) = setup.install(&service, None, &stub, true);
+    result.unwrap();
+    assert_eq!(out, installed_line(&service));
+    assert_eq!(
+        stub.calls(),
+        [systemctl(&format!("enable --now {}.service", service.name))]
+    );
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "an unchanged loaded install sends no stop"
+    );
+}
+
+#[test]
+fn an_unchanged_unloaded_launchd_install_with_an_answering_hub_sends_stop() {
+    let setup = Setup::new();
+    let service = setup.service(launchd());
+    fs::write(&service.unit, service.render(None).unwrap()).unwrap();
+    let events: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hub = stopping_hub(&setup.home(), Arc::clone(&events));
+    let stub_events = Arc::clone(&events);
+    let stub = Stub::new(move |line| {
+        stub_events.lock().unwrap().push(format!("manager:{line}"));
+        Ok(if line.contains(" print ") { no() } else { ok() })
+    });
+    let (result, out) = setup.install(&service, None, &stub, true);
+    result.unwrap();
+    assert_eq!(out, installed_line(&service));
+    hub.join().unwrap();
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 3, "print, stop, bootstrap: {events:?}");
+    assert_eq!(events[0], format!("manager:{}", print(&service)));
+    assert!(
+        events[1].starts_with("hub:") && events[1].contains("\"command\":\"stop\""),
+        "the unchanged unloaded install still stops the hub: {events:?}"
+    );
+    assert_eq!(events[2], format!("manager:{}", bootstrap(&service)));
+}
+
+#[test]
 fn install_without_an_answering_hub_connects_to_nothing() {
     let setup = Setup::new();
     let service = setup.service(launchd());

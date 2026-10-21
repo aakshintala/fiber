@@ -151,20 +151,24 @@ pub(crate) fn install(
     run: &ManagerRun,
     row: InstallRow<'_>,
 ) -> Result<(), Failure> {
-    if row.hub_answers {
+    let previous = read_unit(&service.unit)?;
+    let rendered = service.render(row.port)?;
+    let changed = previous.as_deref() != Some(rendered.as_bytes());
+    if row.hub_answers && changed {
         // The installed hub takes over at once through the `run/` lock
-        // handoff, so no wait follows the send.
+        // handoff, so no wait follows the send. A second install of an
+        // unchanged unit sends nothing, so the running hub keeps its pid.
         stop_running_hub(row.home, row.clock);
     }
     config::replace_global(row.home, "hub.port", row.port.map(Value::from))
         .map_err(|e| failed(e.code(), e))?;
-    let previous = read_unit(&service.unit)?;
-    let rendered = service.render(row.port)?;
-    let changed = previous.as_deref() != Some(rendered.as_bytes());
     let loaded = match service.manager {
         Manager::Launchd { uid } => call(run, "launchctl", &print_args(service, uid))?.success,
         Manager::Systemd => previous.is_some(),
     };
+    if row.hub_answers && !changed && !loaded {
+        stop_running_hub(row.home, row.clock);
+    }
     if changed && let Err(error) = (row.write)(&service.unit, rendered.as_bytes()) {
         return Err(restore_or_rerun(&service.unit, previous.as_deref(), error));
     }
