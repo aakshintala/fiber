@@ -2621,6 +2621,10 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
     );
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
+    // The Job can precede the watcher's forwards (see #3005): both
+    // streamed lines always follow on the inbox, so the boundary
+    // assertion reads them only after they land.
+    let usages = drain_streamed_usages(&rig, usages, 2);
     let generations: Vec<&str> = usages
         .iter()
         .map(|(_, _, generation)| generation.as_str())
@@ -2704,6 +2708,32 @@ fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(JobId, Se
     })
 }
 
+/// Collects streamed `DelegateUsage` deliveries until `want` have
+/// arrived, after the run already reported: the watcher's forwards
+/// always follow on the inbox (the tap runs before each offer), so a
+/// Job that precedes them (see #3005) only delays this drain. The
+/// bound is the existing report deadline, loosened nowhere.
+fn drain_streamed_usages(
+    rig: &Rig,
+    mut usages: Vec<(JobId, SessionId, String)>,
+    want: usize,
+) -> Vec<(JobId, SessionId, String)> {
+    while usages.len() < want {
+        match Deadline::after(DEADLINE).recv(&rig.inbox) {
+            Ok(Delivery::DelegateUsage {
+                job_id,
+                session,
+                line,
+            }) => {
+                usages.push((job_id, session, line.generation_id.0.clone()));
+            }
+            Ok(other) => panic!("expected the streamed usage, got {other:?}"),
+            Err(_) => panic!("the streamed usage never arrived"),
+        }
+    }
+    usages
+}
+
 #[test]
 fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     let rig = rig(vec![WatchReply::Exited(vec![
@@ -2727,6 +2757,9 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     let (notice, usages) = reported_with_usage(&rig);
     // The well-formed line reaches the tap with the delegate's session id;
     // the malformed one never does, and `fiber_exited` still ends watch.
+    // The Job can precede the watcher's forward, so the tap is read
+    // only after the streamed line lands on the inbox.
+    let usages = drain_streamed_usages(&rig, usages, 1);
     assert_eq!(seen.lock().unwrap().as_slice(), ["g_1"]);
     assert_eq!(usages.len(), 1);
     assert_eq!(usages[0].0, rig.job);
