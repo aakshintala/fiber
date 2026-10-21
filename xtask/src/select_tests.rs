@@ -969,6 +969,23 @@ fn a_bound_name_filters_absolute_and_escaping_joins() {
 }
 
 #[test]
+fn a_bound_name_with_a_marker_suffix_is_not_a_run_time_read() {
+    // The manifest marker is a junk suffix, not a file: the bound-name
+    // filter drops it, so no read reports. Flipping either `&&` around
+    // the marker check to `||` reports it, so this pins both mutants.
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet k = base.join(\"CARGO_MANIFEST_DIR\");\nlet b = std::fs::read(&k).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn a_read_dir_inside_a_read_argument_never_reports() {
     // The directory read forces its argument out of read mode, so the
     // manifest-rooted join inside it never reports.

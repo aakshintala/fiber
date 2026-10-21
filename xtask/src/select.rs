@@ -226,6 +226,9 @@ fn all_literals(stream: TokenStream, out: &mut Vec<String>) {
     }
 }
 
+// debt: the walker stays in select.rs near 1000 lines while
+// runtime_read_mismatches is its only caller; a second caller splits it
+// into select/runtime_read.rs.
 /// Failures where a crate's Rust source reads a repository file at run
 /// time instead of compiling it in, one line each; empty when every read
 /// is compiled in (`docs/ci.md`, "Selection"). A file has a run-time
@@ -344,6 +347,8 @@ pub(crate) fn runtime_read_mismatches(
             TokenTree::Punct(_) | TokenTree::Literal(_) => None,
         })
     }
+    // debt: join_on_joined repeats join_on_root's receiver walk by hand;
+    // a third join walker shares the loop.
     /// The chained value of a `let` holding a single top-level `join`
     /// onto a joined name: the full suffix chain from the
     /// manifest directory for the containment check, and the join's own
@@ -473,6 +478,8 @@ pub(crate) fn runtime_read_mismatches(
         }
         (!reported.is_empty()).then_some(reported)
     }
+    // debt: format! in a read argument keeps its own windows(3) scan;
+    // a second scanned macro moves both into the walk.
     /// The literals a `format!` in a read's argument group reports: only
     /// `format!` calls directly in the group count, so the thousands of
     /// `format!` calls elsewhere never report.
@@ -494,6 +501,8 @@ pub(crate) fn runtime_read_mismatches(
         }
         out
     }
+    // debt: each read arm repeats the junk, marker, absolute, resolve and
+    // yield checks by hand; a new arm centralizes them into one helper.
     /// The literals a read reports through a bound name: when the
     /// argument of a read is one name, directly or behind `&` with an
     /// optional trailing comma. A one-level join reports the literals
