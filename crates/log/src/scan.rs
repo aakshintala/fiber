@@ -94,6 +94,9 @@ pub struct SessionStarted {
     /// A parent of any other shape counts, so a malformed one is never
     /// resumed.
     pub delegate: bool,
+    /// `payload.parent.session_id` when it is a string: the session that
+    /// delegated this one, if any.
+    parent: Option<SessionId>,
     /// `payload.forked_from`, raw: the two pointer policies read it
     /// differently.
     forked_from: Option<Value>,
@@ -122,6 +125,11 @@ impl SessionStarted {
             delegate: payload
                 .get("parent")
                 .is_some_and(|parent| !parent.is_null()),
+            parent: payload
+                .get("parent")
+                .and_then(|parent| parent.get("session_id"))
+                .and_then(Value::as_str)
+                .map(|id| SessionId(id.to_owned())),
             forked_from: payload.get("forked_from").cloned(),
             worktree_raw: payload.get("worktree").cloned(),
         }
@@ -136,6 +144,12 @@ impl SessionStarted {
             return None;
         }
         Some(Self::of(line.get("payload")?))
+    }
+
+    /// `payload.parent.session_id` when it is a string: the session that
+    /// delegated this one, if any.
+    pub(crate) fn parent(&self) -> Option<SessionId> {
+        self.parent.clone()
     }
 
     /// `forked_from.session_id` when it is a string: the lenient policy

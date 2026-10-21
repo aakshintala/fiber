@@ -1,5 +1,7 @@
 //! A session message from another session (`docs/tools.md`, "Messaging other
-//! sessions"): answered by the door once it is in the inbox, taken as a
+//! sessions"): the `before_message` hook runs on its raw text before the
+//! sender is answered, so a refusal or a blocking failure rejects the
+//! sender and nothing is logged; a passed or replaced text is taken as a
 //! steering message during a turn and as a turn's input between turns. It
 //! never makes an unattended session attended, and it is never the person's
 //! voice.
@@ -49,7 +51,7 @@ impl Loop {
         ack: contract::inbox::Ack,
         input: &mut TurnInput,
     ) -> Result<(), crate::Error> {
-        let Some((passed, hooked, ack)) = self.hooked_message(sent.clone(), ack, None)? else {
+        let Some((passed, hooked, ack)) = self.hooked_message(&sent, ack, None)? else {
             return Ok(());
         };
         input.pieces.push(Queued::Steer(passed, hooked));
@@ -72,7 +74,7 @@ impl Loop {
         turn: &TurnId,
     ) -> Result<(), crate::Error> {
         let id = sent.command_id.clone();
-        let Some((passed, hooked, ack)) = self.hooked_message(sent, ack, Some(turn))? else {
+        let Some((passed, hooked, ack)) = self.hooked_message(&sent, ack, Some(turn))? else {
             return Ok(());
         };
         let staged = contract::steering::Staged {
@@ -113,7 +115,7 @@ impl Loop {
     /// already answered.
     fn hooked_message(
         &mut self,
-        sent: SessionMessage,
+        sent: &SessionMessage,
         ack: contract::inbox::Ack,
         turn: Option<&TurnId>,
     ) -> Result<Option<(Message, Hooked, contract::inbox::Ack)>, crate::Error> {
@@ -222,14 +224,14 @@ pub(super) fn is_session(message: &Message) -> bool {
 /// `message` as the model sees it: the post-hook `text` framed with the
 /// sender's id and latest `session_named` name, one text part. The fill
 /// runs once, so a name or text holding a placeholder stays literal.
-fn framed(sent: SessionMessage, text: &str) -> Message {
+fn framed(sent: &SessionMessage, text: &str) -> Message {
     let SessionMessage {
         from_session_id,
         command_id,
         name,
         ..
     } = sent;
-    let filled = match &name {
+    let filled = match name {
         Some(name) => fill(
             message("session-message").trim_end(),
             &[
@@ -246,8 +248,10 @@ fn framed(sent: SessionMessage, text: &str) -> Message {
     Message {
         content: vec![ContentPart::Text { text: filled }],
         sender: Sender {
-            origin: Origin::Session { from_session_id },
-            command_id: Some(command_id),
+            origin: Origin::Session {
+                from_session_id: from_session_id.clone(),
+            },
+            command_id: Some(command_id.clone()),
         },
     }
 }

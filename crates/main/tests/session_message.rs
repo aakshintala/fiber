@@ -471,6 +471,49 @@ fn gatekeeper_lua(target: &str) -> String {
     )
 }
 
+/// A `fiber ask` sender's complete ordered kinds through one
+/// session-message call: the reviewer allows the call, the call
+/// completes, and the turn ends after the model sees it. The second
+/// `usage_recorded` is the reviewer's own request.
+const ASK_SEND_KINDS: [&str; 24] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// No attach writes no `clients` line.
+fn assert_no_clients(lines: &[Value]) {
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        0,
+        "no attach writes no clients line: {lines:?}"
+    );
+}
+
 /// The event kinds of `lines` in order, setting aside `clients` and
 /// `session_status`, which the contract writes on their own trigger
 /// (`docs/testing.md`, "Event streams").
@@ -554,45 +597,12 @@ fn a_target_hook_refuses_sibling_senders_and_rewrites_its_children() {
     );
     // The sibling's event stream, in full: the reviewer allows the call,
     // the refusal fails it, and the turn ends after the model sees it.
-    // The second `usage_recorded` is the reviewer's own request.
     assert_eq!(
         ordered_kinds(&s_lines),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "usage_recorded",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ],
+        ASK_SEND_KINDS,
         "the sibling's complete ordered kinds: {s_lines:?}"
     );
-    assert_eq!(
-        s_lines
-            .iter()
-            .filter(|line| line["kind"] == "clients")
-            .count(),
-        0,
-        "no attach writes no clients line: {s_lines:?}"
-    );
+    assert_no_clients(&s_lines);
     let t_log = read_log(&setup, &t_id);
     assert!(
         message_input(&t_log, s_id).is_none(),
@@ -624,45 +634,12 @@ fn a_target_hook_refuses_sibling_senders_and_rewrites_its_children() {
     assert_eq!(completed_text(&c_completed), "delivered");
     // The child's event stream, in full: the reviewer allows the call,
     // the rewrite is delivered, and the turn ends after the model sees it.
-    // The second `usage_recorded` is the reviewer's own request.
     assert_eq!(
         ordered_kinds(&c_lines),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "usage_recorded",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ],
+        ASK_SEND_KINDS,
         "the child's complete ordered kinds: {c_lines:?}"
     );
-    assert_eq!(
-        c_lines
-            .iter()
-            .filter(|line| line["kind"] == "clients")
-            .count(),
-        0,
-        "no attach writes no clients line: {c_lines:?}"
-    );
+    assert_no_clients(&c_lines);
     let t_log = read_log(&setup, &t_id);
     let input = message_input(&t_log, &c_id).expect("the target takes the child's message");
     let content = input["content"].as_array().unwrap();
@@ -851,6 +828,17 @@ fn delivered_is_answered_only_after_the_hook_returns() {
             "the sender waits for the hook: {line}"
         );
     }
+    // While the hook stays held on the hole's `/hold` signal, no
+    // completion may arrive: a bounded receive on the sender's
+    // `tool_call_completed` signal must time out (`docs/testing.md`,
+    // "Waits and timeouts"). A premature completion after the marker
+    // above would fail here instead of passing the post-release check.
+    assert!(
+        fakes::Deadline::after(std::time::Duration::from_millis(100))
+            .recv(&s_rx)
+            .is_err(),
+        "no tool_call_completed while the hook stays held on the hole's /hold signal"
+    );
     hole.release();
     // Released, the hook answers and the sender is delivered.
     let completed = loop {

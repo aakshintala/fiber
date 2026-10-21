@@ -243,7 +243,10 @@ pub struct MessageSender<'a> {
 }
 
 /// What a `before_message` hook is given (`docs/extensions.md`, "The hook
-/// points"): a person's or a driver's message, before it is logged.
+/// points"): a person's, a driver's, or another session's message, before
+/// it is logged. A session message carries its sender; the loop answers
+/// the sender only after the hook passes, so a refusal or a blocking
+/// failure rejects the sender and nothing is logged or sent.
 #[derive(Debug, Clone, Copy)]
 pub struct BeforeMessage<'a> {
     /// The message's content parts.
