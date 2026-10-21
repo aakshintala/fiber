@@ -672,6 +672,30 @@ a click on it returns too. The views are:
   Opening the view sends `quota` with `fetch: true`.
   The view draws the cached answer at once and redraws on the fetch's
   answer, which also updates the panel card.
+- **The status view,** `/status`: what the terminal already holds about the
+  session on screen, asking nothing. The top row reads "Status" bold, "  /status"
+  dim and "Esc returns" dim, right-aligned. Each row is a name dim, padded to
+  one column, then the value:
+  - "session": the session's id, then " · " and its name;
+  - "workspace": its workspace, then " · branch " and the branch in a git
+    repository, or " · detached" when HEAD is detached;
+  - "model": the model, then " · thinking " and the level when it has one;
+  - "credential": the label the session's requests use, or "none" when its
+    provider takes no credential;
+  - "permissions": "auto", the one mode (`docs/permissions.md`, "One mode");
+  - "hub": "this machine", or the listed hub's name on a remote terminal;
+  - "version": Fiber's version;
+  - "context": the context's size and the model's window, "268k of 1M
+    tokens";
+  - "spend": "$1.35 billed · $0.00 subscription", delegates included;
+  - "turns": "3 turns · 12 calls", or the calls alone when the session
+    reports no turn count;
+  - "clients": the `full` connections attached.
+
+  The session's rows come from its latest `session_status`, and "credential"
+  from its latest `preamble_built` or `model_changed` (`docs/events.md`); a
+  value not received yet reads "not known yet", dim. The view redraws as
+  they change.
 - **The context breakdown:** one bar of context by category against the
   handoff point, with the largest tool results. The categories are the
   system prompt, tool definitions, tool results since the handoff in force,
@@ -1757,6 +1781,7 @@ later release still applies.
 | `/context` | Opens the context breakdown. |
 | `/usage`, `/cost` | Opens the usage view. |
 | `/quota` | Opens the quota view and fetches every label's quota. |
+| `/status` | Opens the status view ("Swapped views"). |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |

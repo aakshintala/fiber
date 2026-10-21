@@ -61,6 +61,7 @@ const DRAWN_ORDER: &[&str] = &[
     "context",
     "usage",
     "quota",
+    "status",
     "diff",
     "panel",
     "rail",
