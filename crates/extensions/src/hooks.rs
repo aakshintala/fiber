@@ -10,9 +10,10 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use config::Config;
 use contract::ErrorCode;
+use contract::Seq;
 use contract::clock::Clock;
 use contract::diag::{DebugLog, HookChain, Op, Timing};
-use contract::events::{Event, LoadedExtension, Notice};
+use contract::events::{Class, Event, LoadedExtension, Notice};
 use contract::files::PathLock;
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
@@ -78,6 +79,18 @@ pub struct SessionExtensions {
     required: Vec<String>,
     /// The started Lua extensions.
     lua: Vec<Arc<LuaExtension>>,
+    /// Every watcher the loaded extensions registered, in extension-name
+    /// order then registration order: what [`SessionExtensions::deliver`]
+    /// fans an appended event out to.
+    watchers: Vec<WatcherRegistration>,
+    /// The last offered `seq` per watcher, keyed by extension name and
+    /// watcher index: unset until its first offer, when it bases on that
+    /// offer. A watcher registered mid-session never catches up from the
+    /// log: events before it existed are not in its stream.
+    cursors: Mutex<BTreeMap<(String, usize), u64>>,
+    /// The log end when the subscription was recorded: what an unset
+    /// cursor defaults to at the drain.
+    watermark: Mutex<Option<u64>>,
     /// One provider per `fiber.provider` registration, in provider-name
     /// order: the extension's name beside its provider.
     lua_providers: Vec<(String, Arc<LuaProvider>)>,
@@ -143,6 +156,37 @@ struct Started {
     tools: Vec<LuaTool>,
     backends: Vec<String>,
     providers: Vec<String>,
+}
+
+/// One session-end watcher failure: what the drain collects for `run_turn`
+/// to print under `fiber_exited`. A notice cannot carry it: the log is
+/// already closed to new lines.
+#[derive(Debug)]
+pub struct WatcherError {
+    /// The extension that owns the watcher.
+    pub extension: String,
+    /// The watcher that failed, as `watcher:{index}`.
+    pub callback: String,
+    /// The failure's message.
+    pub message: String,
+}
+
+/// The watcher's one argument: its `kind` beside its `payload`, serialized
+/// once per event (`run` receives `{"kind": ..., "payload": ...}`).
+fn watcher_arg(event: &Event) -> Value {
+    serde_json::json!({
+        "kind": event.kind(),
+        "payload": Value::Object(event.payload().unwrap_or_default()),
+    })
+}
+
+/// One watcher `fiber.watch` registered: its extension's name and handle,
+/// its place in registration order, and the event kinds it wants.
+struct WatcherRegistration {
+    name: String,
+    extension: Arc<LuaExtension>,
+    index: usize,
+    kinds: Vec<String>,
 }
 
 impl SessionExtensions {
@@ -523,6 +567,38 @@ impl SessionExtensions {
                     session.lua.push(Arc::clone(lua));
                 }
             }
+            // An extension with only watchers is used by the session too:
+            // its watchers join the fan-out, and its VM stays for them.
+            // Reading them here boots nothing new: `hooks`, `commands`,
+            // `tools` and `search_backends` above already waited on the
+            // same registration.
+            if let Some(lua) = &s.extension
+                && let Ok(declared) = lua.watchers()
+            {
+                // A watch refusal surfaces as the registration notice,
+                // as hooks do (Ruling 6): even when no watcher survived,
+                // the problems still name the extension.
+                for problem in &declared.problems {
+                    session.notices.push(notice(
+                        ErrorCode::ExtensionFailed,
+                        problem.clone(),
+                        Some(&s.name),
+                    ));
+                }
+                if !declared.watchers.is_empty() {
+                    for (index, watcher) in declared.watchers.iter().enumerate() {
+                        session.watchers.push(WatcherRegistration {
+                            name: s.name.clone(),
+                            extension: Arc::clone(lua),
+                            index,
+                            kinds: watcher.kinds.clone(),
+                        });
+                    }
+                    if !session.lua.iter().any(|held| Arc::ptr_eq(held, lua)) {
+                        session.lua.push(Arc::clone(lua));
+                    }
+                }
+            }
             if let Some(opening) = s.manifest.opening {
                 session.openings.push((s.name.clone(), s.slug, opening));
             }
@@ -540,6 +616,11 @@ impl SessionExtensions {
         session
             .lua_providers
             .sort_by(|a, b| a.1.name().cmp(b.1.name()));
+        // The fan-out order: extension-name order, watcher registration
+        // order within each extension.
+        session
+            .watchers
+            .sort_by(|a, b| (&a.name, a.index).cmp(&(&b.name, b.index)));
         session
     }
 
@@ -706,6 +787,190 @@ impl SessionExtensions {
     /// The same `Arc` for the whole session.
     pub fn search_backend(&self) -> Option<Arc<dyn SearchBackend>> {
         self.search_backend.clone()
+    }
+
+    /// Offers one appended event to every watcher registered for its kind,
+    /// in extension-name order then watcher registration order: the one
+    /// `Log::append` offer fans out here. An ephemeral event skips a
+    /// watcher with a delivery queued or running — a watcher that falls
+    /// behind loses ephemeral events — while a durable one always queues,
+    /// never losing one. On `Some` seq the cursor of every watcher offered
+    /// advances to it; an ephemeral offer carries none. No-op when the
+    /// session holds no watchers.
+    pub fn deliver(&self, event: &Event, seq: Option<Seq>) {
+        if self.watchers.is_empty() {
+            return;
+        }
+        let arg = watcher_arg(event);
+        let ephemeral = event.class() == Class::Ephemeral;
+        let seq = seq.map(|seq| seq.0);
+        // The cursor lock is the leaf: the hub lock joins it per push,
+        // never the reverse.
+        let mut cursors = self.cursors.lock().unwrap_or_else(PoisonError::into_inner);
+        for watcher in &self.watchers {
+            if !watcher.kinds.iter().any(|kind| kind == event.kind()) {
+                continue;
+            }
+            if ephemeral && watcher.extension.is_watcher_busy(watcher.index) {
+                continue;
+            }
+            if watcher
+                .extension
+                .push_watcher(watcher.index, arg.clone())
+                .is_some()
+                && let Some(seq) = seq
+            {
+                cursors.insert((watcher.name.clone(), watcher.index), seq);
+            }
+        }
+    }
+
+    /// Records the log end when the subscription is registered: what an
+    /// unset cursor defaults to at the drain.
+    pub fn set_watermark(&self, count: u64) {
+        *self
+            .watermark
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(count);
+    }
+
+    /// Replays each watcher's `(cursor, end]` log range after `fiber_exited`
+    /// was written: what outlives the session's turn. Watchers run in
+    /// extension-name order then registration order, each within its own
+    /// declared timeout, and every offered line advances its cursor. A
+    /// failure is collected, never noticed — the log is closed to new
+    /// lines — except a stop, which ends the drain at once and comes back
+    /// as what the wait answered. A watcher with no cursor drains from the
+    /// watermark, so lines before registration never reach it. No-op when
+    /// the session holds no watchers.
+    pub fn drain_watchers(&self, log: &log::Log, dir: &Path) -> Vec<WatcherError> {
+        if self.watchers.is_empty() {
+            return Vec::new();
+        }
+        // A durable delivery the live offer already covered runs before the
+        // drain replays past it: the cursor advanced when it queued, so the
+        // drain's range skips it, and the teardown after the drain would lose
+        // it still queued or running. One wait per extension; the hub wakes
+        // on every finish and on the stop, which ends the wait and is then
+        // refused as `Stopped` by the drain's own push, never lost silent.
+        let mut extensions: Vec<Arc<LuaExtension>> = Vec::new();
+        for watcher in &self.watchers {
+            if !extensions
+                .iter()
+                .any(|held| Arc::ptr_eq(held, &watcher.extension))
+            {
+                extensions.push(Arc::clone(&watcher.extension));
+            }
+        }
+        for extension in &extensions {
+            extension.wait_for_watchers_idle();
+        }
+        let offered = self
+            .cursors
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let watermark = *self
+            .watermark
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut errors = Vec::new();
+        let mut replay = Vec::new();
+        // The range the drain replays: what the log held when the session
+        // ended, so nothing appended after — there is nothing after — can
+        // slip in while the drain runs.
+        let end = log.count();
+        // A log the drain cannot read replays nothing, and the failure is
+        // collected like a watcher failure: the drain is the report, since
+        // the log is closed to new lines.
+        let lines = match log::lines(dir) {
+            Ok(lines) => lines,
+            Err(error) => {
+                errors.push(WatcherError {
+                    extension: "log".to_owned(),
+                    callback: "drain".to_owned(),
+                    message: format!("the session-end drain could not read the log: {error}"),
+                });
+                return errors;
+            }
+        };
+        for line in lines {
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => {
+                    errors.push(WatcherError {
+                        extension: "log".to_owned(),
+                        callback: "drain".to_owned(),
+                        message: format!(
+                            "the session-end drain skipped an unreadable log line: {error}"
+                        ),
+                    });
+                    continue;
+                }
+            };
+            let Some(seq) = line.seq.map(|seq| seq.0) else {
+                continue;
+            };
+            if seq >= end {
+                continue;
+            }
+            let event = match Event::from_envelope(&line) {
+                Ok(Some(event)) => event,
+                // A kind this build does not know is none of this session's
+                // watchers' business (`docs/events.md`, "Versioning").
+                Ok(None) => continue,
+                Err(error) => {
+                    errors.push(WatcherError {
+                        extension: "log".to_owned(),
+                        callback: "drain".to_owned(),
+                        message: format!(
+                            "the session-end drain skipped a line it could not read as an event: {error}"
+                        ),
+                    });
+                    continue;
+                }
+            };
+            replay.push((seq, event));
+        }
+        let mut advanced = BTreeMap::new();
+        'watchers: for watcher in &self.watchers {
+            let key = (watcher.name.clone(), watcher.index);
+            // A cursor names the last offered `seq`, so the next one is
+            // the bound; the watermark is already the log count at
+            // registration, so the first line after it is the bound.
+            let Some(mut from) = offered
+                .get(&key)
+                .copied()
+                .map(|offered| offered + 1)
+                .or(watermark)
+            else {
+                continue;
+            };
+            for (seq, event) in &replay {
+                if *seq < from || !watcher.kinds.iter().any(|kind| kind == event.kind()) {
+                    continue;
+                }
+                match watcher
+                    .extension
+                    .drain_watcher(watcher.index, watcher_arg(event))
+                {
+                    Ok(()) => {}
+                    Err(Error::Stopped { .. }) => break 'watchers,
+                    Err(error) => errors.push(WatcherError {
+                        extension: watcher.name.clone(),
+                        callback: format!("watcher:{}", watcher.index),
+                        message: error.to_string(),
+                    }),
+                }
+                from = *seq;
+                advanced.insert(key.clone(), *seq);
+            }
+        }
+        self.cursors
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(advanced);
+        errors
     }
 
     /// Hands the ephemeral emitter to every extension's `host.status`,
