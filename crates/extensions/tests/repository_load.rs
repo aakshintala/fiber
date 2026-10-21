@@ -1938,3 +1938,385 @@ fn a_lingering_approval_for_a_removed_declaration_does_not_list() {
     assert_eq!(tree(&setup.home()), before);
     assert!(!setup.home().join("pinned.json").exists());
 }
+
+/// Every file under Fiber home, sorted: a read-only load writes nothing,
+/// so the tree before and after it is identical.
+fn home_files(setup: &Setup) -> Vec<String> {
+    let home = setup.home();
+    let mut found = Vec::new();
+    let mut dirs = vec![home.clone()];
+    while let Some(dir) = dirs.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                found.push(
+                    path.strip_prefix(&home)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// A declared provider package: `fiber.test/<short>` at `version`
+/// registering `provider` with these model ids.
+fn provider_pkgs(setup: &Setup, pkgs: &[(&str, &str, &str, &[&str], bool)]) {
+    let mut owned: Vec<(String, Value, Vec<(String, String)>, bool)> = Vec::new();
+    for (short, version, provider_name, ids, required) in pkgs {
+        let mut m = package(short, version);
+        m["providers"] = json!({*provider_name: ["http://127.0.0.1:1/v1"]});
+        owned.push((
+            (*short).to_owned(),
+            m,
+            vec![(
+                format!("providers/{provider_name}.json"),
+                provider(provider_name, ids).to_string(),
+            )],
+            *required,
+        ));
+    }
+    let specs: Vec<(&str, Value, Vec<(&str, &str)>, bool)> = owned
+        .iter()
+        .map(|(short, m, files, required)| {
+            (
+                short.as_str(),
+                m.clone(),
+                files
+                    .iter()
+                    .map(|(path, data)| (path.as_str(), data.as_str()))
+                    .collect(),
+                *required,
+            )
+        })
+        .collect();
+    let refs: Vec<(&str, Value, &[(&str, &str)], bool)> = specs
+        .iter()
+        .map(|(short, m, files, required)| (*short, m.clone(), files.as_slice(), *required))
+        .collect();
+    declare_pkgs(setup, &refs);
+}
+
+#[test]
+fn load_pinned_skips_a_missing_copy_without_building_or_writing() {
+    let setup = Setup::new();
+    let repos = Repos::new(&setup);
+    provider_pkgs(&setup, &[("acme", "v1.0.0", "acme", &["repo-model"], true)]);
+    let clock = FakeClock::new();
+    let digest = approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/acme",
+    );
+    // A prune collects a finished copy no worktree matches any more:
+    // the copy and its marker go, the approval record stays.
+    fs::remove_dir_all(copy(&setup, &digest)).unwrap();
+    fs::remove_file(ready(&setup, &digest)).unwrap();
+    let before = home_files(&setup);
+    let set =
+        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let (providers, notices) = load_providers(&setup, &set, &[]);
+    assert!(providers.names().next().is_none());
+    assert!(notices.is_empty(), "{notices:?}");
+    // Nothing was rebuilt and nothing was written.
+    assert!(
+        !setup.home().join("pinned").join(&digest).exists(),
+        "a missing copy is skipped, never rebuilt"
+    );
+    assert_eq!(home_files(&setup), before);
+    // The required extension never loaded, so the session still reports
+    // it missing.
+    let session = load_session(&setup, set, &[]);
+    assert_eq!(
+        session.missing_required(),
+        vec!["fiber.test/acme".to_owned()]
+    );
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+}
+
+#[test]
+fn load_pinned_gives_the_empty_set_when_the_marker_is_held() {
+    let setup = Setup::new();
+    let repos = Repos::new(&setup);
+    provider_pkgs(
+        &setup,
+        &[("acme", "v1.0.0", "acme", &["repo-model"], false)],
+    );
+    let clock = FakeClock::new();
+    let digest = approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/acme",
+    );
+    // An approval rebuilding the copy holds the marker exclusively: the
+    // read-only load waits on its own clock instead of on that process.
+    let held = File::options()
+        .read(true)
+        .write(true)
+        .open(ready(&setup, &digest))
+        .unwrap();
+    held.lock().unwrap();
+    let start = clock.now();
+    let home = setup.home();
+    let workspace = setup.workspace();
+    let key = project();
+    let worker_clock = clock.clone();
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(RepositorySet::load_pinned(
+            &home,
+            &key,
+            &workspace,
+            worker_clock,
+        ))
+        .unwrap();
+    });
+    let set = Deadline::after(WAIT).recv_or_fail(&finished, "the read-only load");
+    let (providers, notices) = load_providers(&setup, &set, &[]);
+    assert!(providers.names().next().is_none());
+    assert!(notices.is_empty(), "{notices:?}");
+    // Fifty tries, ten milliseconds apart, on the store's clock.
+    assert_eq!(clock.now().duration_since(start), BUSY_WITHIN);
+    drop(held);
+}
+
+#[test]
+fn load_pinned_skips_a_copy_without_its_dependency_marker_but_expands_others() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    tag_helper(&mut repos, "h");
+    let a = named("fiber.test/a", &[("zzz.test/owner/helper", "1.0")]);
+    let b = named("fiber.test/b", &[("zzz.test/owner/helper", "1.0")]);
+    declare_pkgs(
+        &setup,
+        &[
+            (
+                "a",
+                a,
+                &[(
+                    "init.lua",
+                    "fiber.command('pa', {timeout=1000, run=function() return 'pa' end})\n",
+                )],
+                false,
+            ),
+            (
+                "b",
+                b,
+                &[(
+                    "init.lua",
+                    "fiber.command('pb', {timeout=1000, run=function() return 'pb' end})\n",
+                )],
+                false,
+            ),
+        ],
+    );
+    let clock = FakeClock::new();
+    approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/a",
+    );
+    let b_digest = approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/b",
+    );
+    // A dependency-bearing copy without its completion marker is legacy:
+    // the session path would rebuild it, so the read-only load skips it.
+    fs::remove_file(copy(&setup, &b_digest).join(".fiber-depends/.complete")).unwrap();
+    let set =
+        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let session = load_session(&setup, set, &[]);
+    // The skipped copy stays silent, while the held copy's dependencies
+    // still expand.
+    assert_eq!(
+        loaded_names(&session),
+        vec![
+            ("fiber.test/a".to_owned(), "v1.0.0".to_owned()),
+            ("zzz.test/owner/helper".to_owned(), "v1.2.0".to_owned()),
+        ]
+    );
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+}
+
+#[test]
+fn load_pinned_reads_neither_unapproved_nor_never_content_and_writes_nothing() {
+    let setup = Setup::new();
+    let repos = Repos::new(&setup);
+    provider_pkgs(
+        &setup,
+        &[
+            ("acme", "v1.0.0", "acme", &["repo-model"], false),
+            ("bravo", "v1.0.0", "bravo", &["other-model"], false),
+        ],
+    );
+    let clock = FakeClock::new();
+    // Approved for another project only: the copy exists, but this
+    // project approved nothing, so it must not load here.
+    let (acme, acme_digest) = digest_of(&setup, &clock, OfferedKind::Extension, "fiber.test/acme");
+    Store::new(
+        &setup.home(),
+        &ProjectKey::new("other").unwrap(),
+        clock.clone(),
+    )
+    .approve(&acme, &acme_digest)
+    .unwrap();
+    approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/bravo",
+    );
+    // Never after approving keeps the finished copy: the decision still
+    // bars it, so the copy sitting there must not load.
+    let (item, digest) = digest_of(&setup, &clock, OfferedKind::Extension, "fiber.test/bravo");
+    Store::new(&setup.home(), &project(), clock.clone())
+        .never(&item, &digest)
+        .unwrap();
+    let copy = copy(&setup, &digest);
+    assert!(copy.is_dir());
+    let before = home_files(&setup);
+    let set =
+        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let (providers, notices) = load_providers(&setup, &set, &[]);
+    assert!(providers.names().next().is_none());
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(home_files(&setup), before);
+    assert!(copy.is_dir(), "a barred copy is left alone, never removed");
+}
+
+#[test]
+fn try_hold_finished_refuses_a_non_hash_and_an_empty_declaration_writes_nothing() {
+    let setup = Setup::new();
+    let clock = FakeClock::new();
+    let before = home_files(&setup);
+    // A name that is not a content hash is refused before anything is
+    // read or locked.
+    assert!(matches!(
+        Store::new(&setup.home(), &project(), clock.clone()).try_hold_finished("not-a-hash"),
+        Err(extensions::Error::Pin { .. })
+    ));
+    assert_eq!(home_files(&setup), before);
+    // A workspace declaring no extension touches nothing in Fiber home.
+    declare_pkgs(&setup, &[]);
+    let set =
+        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let (providers, notices) = load_providers(&setup, &set, &[]);
+    assert!(providers.names().next().is_none());
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(home_files(&setup), before);
+    assert!(!setup.home().join("pinned").exists());
+    assert!(!setup.home().join("pinned.json").exists());
+}
+
+#[test]
+fn load_pinned_skips_an_unfinished_copy_and_a_file_where_the_copy_goes() {
+    let setup = Setup::new();
+    let repos = Repos::new(&setup);
+    provider_pkgs(
+        &setup,
+        &[
+            ("acme", "v1.0.0", "acme", &["repo-model"], false),
+            ("bravo", "v1.0.0", "bravo", &["other-model"], false),
+        ],
+    );
+    let clock = FakeClock::new();
+    let a_digest = approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/acme",
+    );
+    let b_digest = approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/bravo",
+    );
+    // An unfinished copy keeps its directory but no marker; a stray file
+    // where the copy goes keeps the marker but no directory.
+    fs::remove_file(ready(&setup, &a_digest)).unwrap();
+    fs::remove_dir_all(copy(&setup, &b_digest)).unwrap();
+    write(&copy(&setup, &b_digest), "not a directory");
+    let before = home_files(&setup);
+    let set =
+        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let (providers, notices) = load_providers(&setup, &set, &[]);
+    assert!(providers.names().next().is_none());
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(home_files(&setup), before);
+}
+
+#[test]
+fn load_pinned_keeps_the_first_declared_copy_of_one_name_silently() {
+    let setup = Setup::new();
+    let repos = Repos::new(&setup);
+    // Two directories declare one extension name with different versions
+    // and models, so the loaded models tell which declaration won.
+    let mut first = manifest("fiber.test/dup");
+    first["providers"] = json!({"dup": ["http://127.0.0.1:1/v1"]});
+    let mut second = first.clone();
+    second["version"] = json!("v2.0.0");
+    declare_pkgs(
+        &setup,
+        &[
+            (
+                "d1",
+                first,
+                &[(
+                    "providers/dup.json",
+                    &provider("dup", &["v1-model"]).to_string(),
+                )],
+                false,
+            ),
+            (
+                "d2",
+                second,
+                &[(
+                    "providers/dup.json",
+                    &provider("dup", &["v2-model"]).to_string(),
+                )],
+                false,
+            ),
+        ],
+    );
+    let clock = FakeClock::new();
+    let store = common::store(&setup, &repos, &clock);
+    for item in declared_items(&setup.workspace(), &*clock)
+        .unwrap()
+        .into_iter()
+        .filter(|found| found.kind == OfferedKind::Extension)
+    {
+        let digest = hash(&mut Index::load(&setup.home()), &item).unwrap();
+        store.approve_on_worker(&item, &digest).unwrap();
+    }
+    let set =
+        RepositorySet::load_pinned(&setup.home(), &project(), &setup.workspace(), clock.clone());
+    let (providers, notices) = load_providers(&setup, &set, &[]);
+    // Settling keeps the first declared copy, with no notice: the
+    // read-only load never reports the set.
+    let data = providers.data("dup");
+    let ids: Vec<&str> = data.models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["v1-model"]);
+    assert!(notices.is_empty(), "{notices:?}");
+}
