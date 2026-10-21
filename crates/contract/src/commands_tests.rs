@@ -119,6 +119,9 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "rewind", "args": {"from_session_id": "s", "seq": 7,
             "summarise": true}}),
         json!({"id": "c", "command": "shell", "args": {"command": "git status", "send": true}}),
+        json!({"id": "c", "command": "propose_notes", "args": {"topic": "routine_actions"}}),
+        json!({"id": "c", "command": "propose_notes", "args": {"topic": "routine_actions",
+            "answer": "I merge my own PRs", "earlier": ["github.com/acme/* are ours"]}}),
         json!({"id": "c", "command": "command", "args": {"name": "review", "text": "all"}}),
         json!({"id": "c", "command": "close", "args": {"now": true}}),
         json!({"id": "c", "command": "close", "args": {"now": false}}),
@@ -411,6 +414,7 @@ fn a_missing_args_on_a_command_with_a_required_key_is_refused() {
         "model",
         "name",
         "shell",
+        "propose_notes",
     ] {
         let line = format!(r#"{{"id":"c","command":"{command}"}}"#);
         assert!(parse(&line).is_err(), "{command} without args");
@@ -442,6 +446,57 @@ fn mcp_login_and_reconnect_read_their_server_and_refuse_the_rest() {
         let missing = format!(r#"{{"id":"c","command":"{command}","args":{{}}}}"#);
         assert!(parse(&missing).is_err(), "{missing}");
     }
+}
+
+/// `propose_notes` takes a topic and two optional keys: anything else is
+/// refused, and a missing or null `topic` with it.
+#[test]
+fn propose_notes_reads_its_topic_and_refuses_the_rest() {
+    let line = parse(
+        r#"{"id":"c","command":"propose_notes","args":{"topic":"routine_actions","answer":"I merge my own PRs","earlier":["github.com/acme/* are ours"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        line.command,
+        Command::ProposeNotes(crate::notes::ProposeNotesArgs {
+            topic: crate::notes::Topic::RoutineActions,
+            answer: Some("I merge my own PRs".into()),
+            earlier: vec!["github.com/acme/* are ours".into()],
+        })
+    );
+    assert_eq!(
+        serde_json::to_string(&line).unwrap(),
+        r#"{"id":"c","command":"propose_notes","args":{"topic":"routine_actions","answer":"I merge my own PRs","earlier":["github.com/acme/* are ours"]}}"#
+    );
+    let line = parse(r#"{"id":"c","command":"propose_notes","args":{"topic":"never"}}"#).unwrap();
+    assert_eq!(
+        line.command,
+        Command::ProposeNotes(crate::notes::ProposeNotesArgs {
+            topic: crate::notes::Topic::Never,
+            answer: None,
+            earlier: Vec::new(),
+        })
+    );
+    assert_eq!(
+        serde_json::to_string(&line).unwrap(),
+        r#"{"id":"c","command":"propose_notes","args":{"topic":"never"}}"#
+    );
+    for args in [
+        // An unknown topic, a missing one, a key the command does not
+        // take, a null in place of a key, and missing `args` outright.
+        json!({"topic": "budgets"}),
+        json!({"answer": "yes"}),
+        json!({}),
+        json!({"topic": "never", "future": 1}),
+        json!({"topic": null}),
+        json!({"topic": "never", "answer": null}),
+        json!({"topic": "never", "earlier": null}),
+        json!({"topic": "never", "earlier": ["kept", null]}),
+    ] {
+        let line = json!({"id": "c", "command": "propose_notes", "args": args});
+        assert!(parse(&line.to_string()).is_err(), "{line}");
+    }
+    assert!(parse(r#"{"id":"c","command":"propose_notes"}"#).is_err());
 }
 
 #[test]

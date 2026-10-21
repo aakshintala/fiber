@@ -68,8 +68,8 @@ not parse as JSON: `-c handoff.tokens=200000`, `-c model=openai/gpt-5.6`. It
 may be given more than once. A named flag such as `--model` is shorthand for
 the same thing, read before every `-c`, so `-c model=` wins over `--model`.
 `FIBER_HOME` is the only environment variable of its own that a person sets
-for the `fiber` binary (`install.sh` also reads `FIBER_INSTALL_DIR` and
-`FIBER_VERSION`, `docs/releasing.md`); the shell tool sets `FIBER_GREP_MATCHES`
+for the `fiber` binary (`install.sh` also reads `FIBER_INSTALL_DIR`,
+`FIBER_VERSION` and `FIBER_CHANNEL`, `docs/releasing.md`); the shell tool sets `FIBER_GREP_MATCHES`
 for the built-in `grep` it runs (`docs/tools.md`, "Shell"); no
 environment variable overrides a key. Fiber also honours the platform's proxy
 variables (`docs/dependencies.md`, "Proxies").
@@ -261,6 +261,15 @@ holds"). The layers merge exactly as Fiber's own keys do.
 
 A separate file means an extension never rewrites the person's `config.json`.
 
+The first-party `bedrock` extension has one setting, `region`: the AWS region
+its models' base URL names, read from `AWS_REGION` when it is unset
+(`docs/model-routing.md`, "A per-account host"). Its credential is not a key
+source. Its `credential()` reads `AWS_BEARER_TOKEN_BEDROCK`, AWS keys from the
+environment, or what `aws configure export-credentials` prints, and the
+credential label is the AWS profile name: `providers."bedrock".credential`
+set to `my-profile` reads that profile, and `/credential` switches it
+(`docs/model-routing.md`, "Protocols and providers").
+
 The first-party `vertex` extension has one setting, `project`: the Google
 Cloud project its models' base URL names, read from `GOOGLE_CLOUD_PROJECT`
 when it is unset (`docs/model-routing.md`, "A per-account host"). Its
@@ -346,6 +355,9 @@ provider has several labels, it refuses unless given `--as <label>` or `--all`.
 When the key comes from an environment variable, a file outside Fiber home or
 a command, `fiber logout` cannot remove it: it names the source and exits
 non-zero.
+A live session keeps its cached key: only sessions started after the delete fail
+with `credential_missing`, unless a configured source covers the label, which
+later sessions then use.
 
 ## When Fiber reads configuration
 
@@ -613,7 +625,10 @@ declares") lists:
   | `cache_key_header` | string | `openai-responses`, `openai-completions`, `anthropic-messages`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |
   | `thinking_budget` | boolean | `anthropic-messages` | the thinking level goes in `thinking: {type: "enabled", budget_tokens}` (`docs/model-routing.md`, "Thinking"); absent, it goes in `thinking: {type: "adaptive"}` and `output_config: {effort}` |
   | `bearer` | boolean | `anthropic-messages` | the key goes in `authorization: Bearer`; absent, it goes in `x-api-key` |
+  | `bedrock_invoke` | boolean | `anthropic-messages` | the model is Claude on AWS Bedrock's Invoke API: the request goes to `<base_url>/model/<id>/invoke-with-response-stream` with `anthropic_version` in the body and no `model` or `stream`, the key goes in `authorization: Bearer`, and the reply is read in AWS event-stream framing (`docs/model-routing.md`, "Bedrock Invoke wire facts") |
   | `vertex_raw_predict` | boolean | `anthropic-messages` | the model is Claude on Google Vertex: the request goes to `<base_url>/models/<id>:streamRawPredict` with `anthropic_version` in the body and no `model`, and an error body that is a list of one object is read as that object (`docs/model-routing.md`, "Google Vertex wire facts") |
+  | `cache_point` | boolean | `bedrock-converse` | the model takes `cachePoint` blocks: requests carry them where Anthropic's cache markers go, each after a text block (`docs/prompt-cache.md`, "Cache markers and keys"); absent, no marker is sent |
+  | `reasoning_field` | string | `bedrock-converse` | the `additionalModelRequestFields` field that carries the thinking level, `reasoning_effort` or `reasoningConfig` (`docs/model-routing.md`, "Thinking"); absent or any other value, no level is sent |
 
   `openai-completions` always sends `stream_options.include_usage: true`,
   because OpenAI sends no usage without it (`docs/model-routing.md`,

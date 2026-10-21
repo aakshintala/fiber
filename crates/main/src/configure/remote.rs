@@ -411,6 +411,44 @@ impl hub::Machine for Seam {
                 a.shape(&[], &[])?;
                 json!({"targets":self.login_targets().map_err(from_view)?.into_iter().map(|t|json!({"name":t.name,"kind":match t.kind{LoginKind::Key=>"key",LoginKind::Browser=>"browser",LoginKind::Secret=>"secret"}})).collect::<Vec<_>>()})
             }
+            "logout_rows" => {
+                a.shape(&[], &[])?;
+                json!({"rows":self.logout_rows().map_err(from_view)?.into_iter().map(|row|{
+                    match row {
+                        tui::LogoutRow::Provider { name, label, default, deletable, origin, siblings } => {
+                            let mut value = Map::from_iter([
+                                ("row".to_owned(), json!("provider")),
+                                ("name".to_owned(), json!(name)),
+                                ("label".to_owned(), json!(label)),
+                                ("default".to_owned(), json!(default)),
+                                ("deletable".to_owned(), json!(deletable)),
+                                ("siblings".to_owned(), json!(siblings)),
+                            ]);
+                            if let Some(origin) = origin {
+                                drop(value.insert("origin".to_owned(), json!(origin)));
+                            }
+                            Value::Object(value)
+                        }
+                        tui::LogoutRow::Secret { name, deletable } => json!({
+                            "row": "secret",
+                            "name": name,
+                            "deletable": deletable,
+                        }),
+                    }
+                }).collect::<Vec<_>>()})
+            }
+            "delete_stored" => {
+                a.shape(&["name"], &["label"])?;
+                let label = if args.contains_key("label") {
+                    Some(a.string("label")?.to_owned())
+                } else {
+                    None
+                };
+                let path = self
+                    .delete_stored(a.string("name")?, label)
+                    .map_err(from_view)?;
+                json!({"path":path})
+            }
             "store_key" => {
                 a.shape(&["name", "key"], &["label"])?;
                 let label = if args.contains_key("label") {

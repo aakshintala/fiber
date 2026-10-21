@@ -1,0 +1,146 @@
+{
+  "case": "redacted-replay",
+  "model": "global.xai.grok-4.7",
+  "region": "ap-south-1",
+  "url_path": "/model/global.xai.grok-4.7/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "What is 17 * 23? Answer with the number."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "reasoningContent": {
+              "redactedContent": "cnNuX2pRenlYWklGSkxscEt5ZmxZa0NmdndJRmVLYTA0SkIra2ZSTmpFYTd6b1lpZlhqTlByY0NKKzVub1I1a2V6WE1nTy9oQUY4QUFRQVZZWGR6TFdOeWVYQjBieTF3ZFdKc2FXTXRhMlY1QUVSQmJFbHFlakp0WVc1SmRIUlVRbFl5WldnM1ZEUllhVTlxV2tGalZVbE5aR1J5YlVKUlpYTTNaWGhzSzNKUmFWUkJPV3N2TURWeVZHbFBUSEJZYzBsNlpGRTlQUUFCQUJGaGQzTXRhMjF6TFdocFpYSmhjbU5vZVFBS1ltVnliUzF6ZEc5eVpRQmNBL2FtK2dWcm9BVVdvbEdXSUY0Q2RMQ2hJNUR2UFRmL3JsUlB1ZFYwWXJ0MlowNkxpMXpVK1ZFZFFSVC9odjhQM2RuTDIxU3ZNUU5IOVlDcmIreXl3RUFEQlVEN1g3RERTc3dsSDR0QnZLbUtTZ0gyczNPUEVZSXBhUXdDQUFBUUFBMmYwOWRNTHRkZDkvS0pONitCOVMrWTZ4ZlhUdHBKS1ROeFFDSXdNY3FnQzNjTUdMcjY2YjJRekpLS0l0enFaUC8vLy84QUFBQUJBQUFBQUFBQUFBQUFBQUFCQUFBQnYzbHJ6WURJOHRkN0NqNDJWMVFSZU9CV1RocC8xdnFlaks3bEVWS3huQlZTTFpacDhjNThyREdzUUg0RFRPdWRxNnNZdFlEbHRDSktLZGN6ZmVPalk0WWQ3emlJWTEwdjNodTNabC9xS2NGSWcyb0FpNG1MeUFtanpBd3lyL2pPNW5MaWcrWlFmak5qOGx4enU1anFuN1JlbngyazRYWnJyWDN6M0pEVHNoaTdLUElnT0hqMlBTaVhLWWpwQTN2cUVvdmxOSStaWW1mb3VDWDBZVlUza3V6TUllQkJ3Zi9CRCtDcnZWRGpzM09GbzdWN25NWDI2aVkvUkplWlc2YXBBSnpRK25QMlRsSTFLdzJyY2pWems4ZHA0TTg4aXkyVExOUEo4ZDBob1R1SjVFY2MySkFkMTRnbUIzeXJFTTZxdE5BZ09wOEhvRWs0TWRMYlJUcXhlTXpzNm5JWVVwdEgxeW9ZOVJiMURHcUNqS3F5N3FhRFVKamRTM3Q4eTFxRGJISjlYbS9LNksyRnNSc3ROK3ovZzJUVTFlbzJkV2t2Y1hicDRoWmxDTXUrWjJmS1N2ZmNtQzVSeUZJTGNoQW96b0N0Ymg4aWZNVTZ3RnJ5REt3b3RHZUM3dWZ2Q1FDTzlHclNFRGpnUVdYVHNjSUltVVhHRG1CZC9LdllhUERpL1NxckJGc09ZbGJTRE9TVDdKYU9JcEJmcDBiTHBWV2NCb2pMQmM0THJJU2Z4R1lJcTcxOTRLU1dLSy9PUzM4Tnpudm80M0puNDhZeDhHaWtlelE4M3pDYnljenBJdXBtdGhnTnozSDZTUnNBWnpCbEFqRUF0TzNGSlJNdERoVnQ0czRDUUFMMkZRUjh1YVJMSzgralcyMERvUllNdHVXU1ZUL1lQMDVvZUFZM1NqQkFuSS9UQWpCUTdGS1hGV1JRN1IzT1IwRnJXM1JLakw2bWUvQlFUYzJ5Rk40RFA2ZXExZFFwT0FtMGJ6KzBFaUc1Z0NVYmMxOD0="
+            }
+          },
+          {
+            "text": "391"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "And 18 * 23?"
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 200
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ]
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "redactedContent": "cnNuX2pRenlYWklGSkxscEt5ZmxZa0NmdndJRmVMa3FvWElydHFpWnZXUFN1S2I2Nk5lYm1IS291Ui9KcnUvNXdvWWZlamlyQUY4QUFRQVZZWGR6TFdOeWVYQjBieTF3ZFdKc2FXTXRhMlY1QUVSQmEydDZhMGRNYmpobVVFa3pUa1kzTlRGNlkwVXphV3MwTTNCbUwzbGxObmRoVDFWb1dEZElWV2xqVERSSUswaHFRMWczV0hCRFRXeHlXVzlNTlU5WWIxRTlQUUFCQUJGaGQzTXRhMjF6TFdocFpYSmhjbU5vZVFBS1ltVnliUzF6ZEc5eVpRQmM2dzNQcHlMT0JjN3N4MGFWRXlUK3dMZ3FOQjRjc3VYYStmRTVOdFYwWXJ0MlowNkxpMXpVK1ZFZFFSVHg2aGpjelRpM3V5aWEyaHlURlpjc1R1aG5Yb1pKK2NNZ0k1SWxvM281TDVMeFJQQ0htYjBkU3ZoeXJGMXk0bzhDQUFBUUFPVzYzd1l1S1g5d2V6OTNCR0JqSDU0OC8rcy9VbUZ3d3k5RFUwVFkybGZkRUFaeWdHRkxVUGN0K25sbWlpNmU2Zi8vLy84QUFBQUJBQUFBQUFBQUFBQUFBQUFCQUFBQjVrM05WcCtBbmlIQXhGNFc4SVc0SGFvTWJjUzZka1FrdXhyVllXYkZlb3ZmNUNVTjBRMHREbmloc2lmRzBBMUdSV1Bpa0tCdmkvL08xdFdYMjF1MlNZdDNwdkhwRXBYdW5Eam9BclI2ZHF5Qmh1NlBxYmw0Zk5rRTBEanJmTVJFTFg5SUZ0ODB2eG9FT2pGaHhxTzAxTElqTHNycVdNSldNK2JIK25RUmJOOWc4T2d0ZjFHY01ZOFpnU1gzakE0V0s4RE1McU56U3lVT29VdkZhV3BBR1d6MTcyZFM1cUM2Ynd5YlVkQ2x3UU5IdnJlejlxWVdmNHdqZzl0MTdIZThXUzJsY2tHNzdMMkxQQjNmNjNVTzUzMFVXa05uT1QzM1U4c1lhYytHVjRSTkNUd1gyUjAzRzIrcDNJZ3c0SnFjVEFYSkJhb1kxQXdsSFg2Z0FvenRTamxmcXIyQytRWk1wQVZoMXVsc1c0T3BZcE9ZZkRDSC9xdzNtRW1ETkk5QWNmeXliMzZ5NkJkNGp5WFZndTJRY3dGM3RYc21MN2hYYWd4WnlVaUtSeUVQNUFDQmZYM0VubVBRcm5BTW9wN25UT0VjZFVXOHIrUG05d1BoNEgvMzlxK012OC9MeFNrclViSTR1bHkwYnZZUzhGSHBieU1GOWY0ZG5taFU3UTRzazl6REdLL1JQaW9oYjd0SVFMdGdZOTNQRzVIVHVkN1U5VVB5enlaTWFRTmI5VW5taGNGdkh6NjlWcU5QM1J2a2JQdUFiSi95dzRTWDZZQ0JIcy9sQXhSbHhqSDJUUXdsKzZPMlZhVkVZcWdMeVlMTGdHL2t4aHViNldzZERkN0tQUUdLUWJTOGpYcWQ1eEx0L0Z1ajhrcmhBMklLNnhrQVp6QmxBakJhVllvUUtKd1ZIc1IxbG1KZyt1M21zYXFPT2h1NWY3MnovNmxObUNTZlJkNVAyOThERUNNWjh2WmhLZWFBSVFJQ01RQ1BVaHZPci85Q2lvbi9OVnU4R3Vha1R5Znp6YkxzOUtxTlA0ZmFhbU12SjdPUWNIQUxnWkl4SGRPSDBWaGkzRm89"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "text": "414"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "end_turn"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 3007
+        },
+        "usage": {
+          "inputTokens": 176,
+          "outputTokens": 137,
+          "serverToolUsage": {},
+          "totalTokens": 313
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 176,
+    "outputTokens": 137,
+    "serverToolUsage": {},
+    "totalTokens": 313
+  },
+  "cost_usd": 0.001174
+}

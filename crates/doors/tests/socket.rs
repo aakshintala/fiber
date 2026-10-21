@@ -5861,6 +5861,236 @@ fn shell_unsaved_left_removal_failure_without_log_rejects_io_failed() {
     close_within(session, reopened_log(sessions, id, timed));
 }
 
+#[test]
+fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
+    let opened = Opened::open(vec![]);
+    let work = Temp::new();
+    let workspace = work.0.clone();
+    // A git workspace whose remote URL carries userinfo, with one CI file.
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    git(&["init", "--quiet"]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://user:token@github.com/acme/fiber.git",
+    ]);
+    fs::write(
+        workspace.join(".gitlab-ci.yml"),
+        "job:\n  script: make lint\n",
+    )
+    .unwrap();
+    // One seeded session in this session's project records the workspace
+    // and holds one escalation answered allow.
+    let seed = opened
+        .home
+        .join("projects")
+        .join("p")
+        .join("sessions")
+        .join("s_seed00000001");
+    fs::create_dir_all(&seed).unwrap();
+    let mut log = serde_json::json!({"kind": "session_started",
+        "payload": {"workspace": workspace.to_str().unwrap()}})
+    .to_string();
+    log.push('\n');
+    for (seq, kind, payload) in [
+        (
+            1,
+            "permission_requested",
+            serde_json::json!({"request_id": "r1", "step": "review",
+                "escalation": {"cause": "consecutive_blocks", "reason": "blocked"},
+                "rule": {"subject": "gh pr merge", "prefix": "gh pr merge"}}),
+        ),
+        (
+            2,
+            "permission_resolved",
+            serde_json::json!({"request_id": "r1", "decision": "allow",
+                "decided_by": "person"}),
+        ),
+    ] {
+        log.push_str(
+            &serde_json::json!({"kind": kind, "session_id": "s_seed00000001",
+                "ts": seq, "schema_version": 1, "seq": seq, "payload": payload})
+            .to_string(),
+        );
+        log.push('\n');
+    }
+    fs::write(seed.join("events.jsonl"), log).unwrap();
+    opened.session.notes_workspace(workspace);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"propose_notes","args":{"topic":"routine_actions","answer":"I merge my own PRs"}}"#,
+            );
+            match Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("propose_notes is delivered")
+            {
+                Delivery::ProposeNotes(ask, ack) => {
+                    assert_eq!(ask.args.topic, contract::notes::Topic::RoutineActions);
+                    assert_eq!(ask.args.answer.as_deref(), Some("I merge my own PRs"));
+                    assert!(ask.args.earlier.is_empty());
+                    assert_eq!(ask.evidence.len(), 3);
+                    match &ask.evidence[0] {
+                        contract::notes::Evidence::Files { text } => {
+                            assert_eq!(
+                                text,
+                                "git remote origin: https://github.com/acme/fiber.git"
+                            );
+                        }
+                        contract::notes::Evidence::Session(_)
+                        | contract::notes::Evidence::Answer { .. } => {
+                            panic!("the remote item arrives first")
+                        }
+                    }
+                    match &ask.evidence[1] {
+                        contract::notes::Evidence::Files { text } => {
+                            assert!(
+                                text.starts_with("CI configuration .gitlab-ci.yml:"),
+                                "{text}"
+                            );
+                        }
+                        contract::notes::Evidence::Session(_)
+                        | contract::notes::Evidence::Answer { .. } => {
+                            panic!("the CI item arrives second")
+                        }
+                    }
+                    match &ask.evidence[2] {
+                        contract::notes::Evidence::Session(tally) => {
+                            assert_eq!(tally.prefix(), "gh pr merge");
+                            assert_eq!(tally.count(), 1);
+                            assert_eq!(tally.here(), 1);
+                        }
+                        contract::notes::Evidence::Files { .. }
+                        | contract::notes::Evidence::Answer { .. } => {
+                            panic!("session evidence arrives as a session item")
+                        }
+                    }
+                    ack.0(Ok(None));
+                }
+                Delivery::Prompt(..)
+                | Delivery::Steer(..)
+                | Delivery::SteerDrop(..)
+                | Delivery::Name(..)
+                | Delivery::Handoff(..)
+                | Delivery::Credential(..)
+                | Delivery::Reload(..)
+                | Delivery::McpReconnect(..)
+                | Delivery::Reply(..)
+                | Delivery::Rewind(..)
+                | Delivery::Close(_)
+                | Delivery::Job(_)
+                | Delivery::JobLine(_)
+                | Delivery::Interaction(_)
+                | Delivery::Resolved(..)
+                | Delivery::ExtensionExec(_)
+                | Delivery::Message(_)
+                | Delivery::InnerCall(_)
+                | Delivery::ExtensionLog(_)
+                | Delivery::ExtensionJob(..)
+                | Delivery::ExtensionUsage(_)
+                | Delivery::Model(..)
+                | Delivery::Shell(..)
+                | Delivery::Cancelled => panic!("propose_notes arrives as itself"),
+            }
+            let accepted = response(&client, "c_1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+    // Without a wired workspace the same command is unknown.
+    let bare = Opened::open(vec![]);
+    let bare_socket = bare.socket.clone();
+    bare.session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&bare_socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_1","command":"propose_notes","args":{"topic":"never"}}"#,
+            );
+            let line = response(&client, "c_1");
+            assert_eq!(
+                rejection(&line),
+                (
+                    "unknown_command",
+                    "`propose_notes` is not built in this Fiber yet."
+                )
+            );
+            Ok(())
+        })
+        .unwrap();
+    bare.close();
+}
+
+#[test]
+fn an_undelivered_ack_answers_after_the_inbox_guard_releases() {
+    // R42: dropping an undeliverable delivery answers `closing` only after
+    // the inbox guard releases, so an answer that delivers again on the
+    // same thread cannot deadlock on it.
+    let opened = Opened::open(vec![]);
+    let work = Temp::new();
+    opened.session.notes_workspace(work.0.clone());
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            // Only the receiver is gone: the slot stays `Some`, and the
+            // connections are not yet stopped.
+            drop(inbox);
+            let (notes_tx, notes_rx) = mpsc::channel();
+            let (model_tx, model_rx) = mpsc::channel();
+            let mut args = Map::new();
+            args.insert("topic".to_owned(), Value::String("never".to_owned()));
+            let inner = Arc::clone(&driver);
+            driver.drive(
+                "fiber.test/a",
+                "propose_notes",
+                args,
+                Ack(Box::new(move |answer| {
+                    // From inside the answer, `model` delivers again on
+                    // this same thread: under the old `deliver` this
+                    // deadlocked on the inbox guard.
+                    let mut model = Map::new();
+                    model.insert("model".to_owned(), Value::String("fake/n".to_owned()));
+                    inner.drive(
+                        "fiber.test/a",
+                        "model",
+                        model,
+                        Ack(Box::new(move |answer| match model_tx.send(answer) {
+                            Ok(()) | Err(_) => {}
+                        })),
+                    );
+                    match notes_tx.send(answer) {
+                        Ok(()) | Err(_) => {}
+                    }
+                })),
+            );
+            let notes = Deadline::after(DEADLINE).recv_or_fail(&notes_rx, "the notes answer");
+            assert_eq!(notes.unwrap_err().code, ErrorCode::Closing);
+            let model = Deadline::after(DEADLINE).recv_or_fail(&model_rx, "the model answer");
+            assert_eq!(model.unwrap_err().code, ErrorCode::Closing);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
 /// The `import` driver command answers what a direct shared import
 /// reports: the same files plus the same left-behind items, on identical
 /// fixtures (`docs/testing.md`, "Levels"). The child re-run carries a

@@ -1,0 +1,258 @@
+{
+  "case": "classify/nvidia.nemotron-nano-9b-v2",
+  "model": "nvidia.nemotron-nano-9b-v2",
+  "region": "ap-south-1",
+  "url_path": "/model/nvidia.nemotron-nano-9b-v2/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "Call get_weather for Paris."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 200
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ],
+    "toolConfig": {
+      "tools": [
+        {
+          "toolSpec": {
+            "name": "get_weather",
+            "description": "Weather for a city.",
+            "inputSchema": {
+              "json": {
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": ""
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": "Okay, the user wants me to call the get_weather function for Paris. Let me check the tools available. There's a function called get_weather"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": " that takes a city parameter. The required parameter is city, and it's a string. Since the user specified Paris, I need to make sure to"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": " format the tool call correctly. The function doesn't have any other parameters, so I just need to pass \"Paris\" as the city. I should"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": " return the tool call in the specified JSON format within the XML tags. Let me double-check the syntax to ensure there are no errors. Yep,"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": " looks good. I'll generate the tool call with the city set to Paris.\n"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": "</think>\n\n"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "start": {
+          "toolUse": {
+            "name": "get_weather",
+            "toolUseId": "tooluse_lXLKf4GcSo2kp1byZhq1bw"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "toolUse": {
+            "input": "{\"city\": \"Paris"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "toolUse": {
+            "input": "\"}"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "tool_use"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 1316
+        },
+        "usage": {
+          "inputTokens": 244,
+          "outputTokens": 170,
+          "serverToolUsage": {},
+          "totalTokens": 414
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 244,
+    "outputTokens": 170,
+    "serverToolUsage": {},
+    "totalTokens": 414
+  },
+  "cost_usd": 5.4e-05
+}
