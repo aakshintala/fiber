@@ -141,6 +141,13 @@ pub(crate) enum Effect {
     /// Read an image from the clipboard for this ticket, off the loop
     /// thread: the worker posts the base64 or the notice to show.
     ReadImage(u64),
+    /// Write a feedback report for `description`, off the loop thread:
+    /// the worker posts the path with the issue link, or the notice
+    /// saying why there is none.
+    Feedback {
+        /// The description `/feedback` ran with.
+        description: String,
+    },
     /// Open this file in the editor (`docs/tui.md`, "Swapped views").
     OpenFile(PathBuf),
 }

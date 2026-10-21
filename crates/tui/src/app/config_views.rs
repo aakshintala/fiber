@@ -23,7 +23,7 @@ use crate::login_worker::{LoginJob, LoginStart, LoginStep, LoginTicket, LoginWor
 use crate::logout_view::Logout;
 use crate::mcp_view::Mcp;
 use crate::rules_view::Rules;
-use crate::settings_view::{Act, Ctx, Settings};
+use crate::settings_view::{Act, BUILT_IN_THEMES, Ctx, Settings, THEME};
 use crate::skills_view::Skills;
 use crate::swapped::{Frame, List, Spot};
 use crate::tools_view::Tools;
@@ -36,6 +36,8 @@ const UNAVAILABLE: &str = "Not available in this terminal.";
 pub(crate) enum ConfigView {
     /// `/settings`.
     Settings,
+    /// `/theme`: the theme picker, opened on its choices.
+    Theme,
     /// `/tools`.
     Tools,
     /// `/skills`.
@@ -117,6 +119,9 @@ pub(in crate::app) struct ConfigViews {
     /// The model-list reader the loop thread and the start pick read
     /// through: the same function take_reads hands the thread.
     models: Option<crate::ReadModels>,
+    /// The feedback report writer `main` injected: the loop thread
+    /// writes through it, and none writes nothing.
+    feedback: Option<crate::WriteFeedback>,
     /// The sole owner of an outstanding hub editor copy.
     copy: Option<crate::remote::RemoteCopy>,
     /// The open view.
@@ -147,6 +152,16 @@ impl App {
         self.config_views.models = models;
     }
 
+    /// Sets the feedback report writer the loop writes through.
+    pub(crate) fn set_feedback(&mut self, writer: Option<crate::WriteFeedback>) {
+        self.config_views.feedback = writer;
+    }
+
+    /// The feedback report writer, absent with nothing to write through.
+    pub(crate) fn feedback_writer(&self) -> Option<crate::WriteFeedback> {
+        self.config_views.feedback.clone()
+    }
+
     /// The model-list reader, absent with no list to read.
     pub(in crate::app) fn models_reader(&self) -> Option<crate::ReadModels> {
         self.config_views.models.clone()
@@ -166,6 +181,52 @@ impl App {
     /// The seam the views and the model picker write through, if any.
     pub(crate) fn configure_seam(&self) -> Option<Arc<dyn Configure>> {
         self.config_views.seam.clone()
+    }
+
+    /// Runs `/theme <name>`: saves the named theme to the global file
+    /// and applies it at once, without opening the picker. The whole
+    /// name is matched exactly against the built-ins and the seam's
+    /// file themes, so `solar dawn` is one theme and `Light` is
+    /// unknown; an unknown name is refused with a notice naming it,
+    /// and nothing changes. With no seam, or nothing addressable, a
+    /// notice says so and nothing changes.
+    pub(in crate::app) fn theme_command(&mut self, name: &str) -> Effect {
+        self.draft.clear();
+        let Some(seam) = self.configure_seam() else {
+            self.push_notice("io_failed", UNAVAILABLE.to_owned());
+            return Effect::None;
+        };
+        let Some(workspace) = self.view_workspace() else {
+            // A failed remote read already pushed its notice; a local
+            // terminal with no workspace says the view is unavailable.
+            if self.remote().is_none() {
+                self.push_notice("io_failed", UNAVAILABLE.to_owned());
+            }
+            return Effect::None;
+        };
+        let known = BUILT_IN_THEMES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .chain(seam.themes(&workspace));
+        if !known.into_iter().any(|known| known == name) {
+            self.push_notice("invalid_arguments", format!("Unknown theme \"{name}\"."));
+            return Effect::None;
+        }
+        let text = Value::String(name.to_owned()).to_string();
+        match self.write_global(THEME, &text) {
+            Some(Ok(_)) => self.config_act(Act::Theme(seam.theme(&workspace, name))),
+            Some(Err(error)) => {
+                self.push_notice(
+                    "io_failed",
+                    format!("Could not save {THEME}: {}", error.message),
+                );
+                Effect::None
+            }
+            None => {
+                self.push_notice("io_failed", UNAVAILABLE.to_owned());
+                Effect::None
+            }
+        }
     }
 
     /// Saves one setting's text to the global configuration through the
@@ -267,6 +328,14 @@ impl App {
                 };
                 Open::Settings(Settings::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
+            (Some(seam), ConfigView::Theme) => {
+                let Some(workspace) = self.view_workspace() else {
+                    return Effect::None;
+                };
+                Open::Settings(Settings::open_theme(
+                    &self.config_ctx(seam.as_ref(), &workspace),
+                ))
+            }
             (Some(seam), ConfigView::Tools) => {
                 return self.open_asking(seam, "tools", build_tools);
             }
@@ -295,6 +364,7 @@ impl App {
                 Open::Logout(Logout::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
             (None, ConfigView::Settings) => Open::Unavailable("Settings", "/settings"),
+            (None, ConfigView::Theme) => Open::Unavailable("Themes", "/theme"),
             (None, ConfigView::Tools) => Open::Unavailable("Tools", "/tools"),
             (None, ConfigView::Skills) => Open::Unavailable("Skills", "/skills"),
             (None, ConfigView::Rules) => Open::Unavailable("Rules", "/rules"),
@@ -475,7 +545,19 @@ impl App {
             return self.credential_pick(pick);
         }
         let act = match (self.config_views.seam.clone(), spot) {
-            (_, Spot::Close) => Act::Close,
+            // The picker's `x` cancels like Esc: with the theme choices
+            // open the capture is queued first, then the view closes.
+            (_, Spot::Close) => {
+                let restore = match &self.config_views.open {
+                    Some(Open::Settings(settings)) => settings.choices_entry(),
+                    _ => None,
+                };
+                self.config_views.open = None;
+                if let Some(entry) = restore {
+                    return self.config_act(Act::Theme(entry));
+                }
+                return Effect::None;
+            }
             (Some(seam), Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;

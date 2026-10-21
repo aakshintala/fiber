@@ -7,8 +7,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 
 use super::super::{App, Effect};
 use super::ConfigView;
@@ -548,6 +550,7 @@ fn sent(effect: Effect) -> Vec<serde_json::Value> {
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -1138,4 +1141,364 @@ fn failed_copy_cleanup_does_not_prevent_store_or_view_reread() {
             std::fs::remove_dir_all(dir).unwrap();
         },
     );
+}
+
+/// A seam with an unset `tui.theme` and file themes `solar` and `solar dawn`.
+fn theme_fake() -> Fake {
+    let mut fake = Fake::new(vec![
+        row(
+            "handoff.tokens",
+            Shown::Value("400000".to_owned()),
+            "default",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "tui.theme",
+            Shown::Unset,
+            "default",
+            WriteScope::Any { repo: false },
+        ),
+    ]);
+    fake.themes = vec!["solar".to_owned(), "solar dawn".to_owned()];
+    fake
+}
+
+/// Types `/theme` and presses Enter.
+fn slash_theme(app: &mut App) -> Effect {
+    for ch in "/theme".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    app.on_key(Key::Enter, now())
+}
+
+/// The open theme picker's choice names, in order.
+fn theme_choices(app: &App) -> Vec<String> {
+    app.config_view_screen()
+        .map(|frame| {
+            frame
+                .rows
+                .iter()
+                .map(|row| {
+                    row.first()
+                        .map(|(text, _, _)| text.clone())
+                        .unwrap_or_default()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Paints `app` whole in `setting`, through the same two steps the
+/// loop's theme apply performs, on an 80x24 test screen.
+fn painted(app: &mut App, setting: crate::ThemeSetting) -> crate::screen::Screen<TestBackend> {
+    let vars = [("COLORTERM".to_owned(), "truecolor".to_owned())];
+    let (look, _) = crate::look::Look::new(setting, &|name| {
+        vars.iter()
+            .find(|(set, _)| set == name)
+            .map(|(_, value)| value.clone())
+    });
+    let mut screen =
+        crate::screen::Screen::new(TestBackend::new(80, 24), 80, 24).expect("a screen");
+    screen.set_look(look);
+    screen
+        .draw_with(app, None, crate::view::render)
+        .expect("a draw");
+    screen
+}
+
+/// A painted screen's text, one row per line.
+fn painted_text(screen: &crate::screen::Screen<TestBackend>) -> String {
+    let buf = screen.backend().buffer();
+    (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol().to_owned())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn slash_theme_opens_the_picker_with_live_preview_and_esc_restore() {
+    // A non-default entry theme: `tui.theme` saved as dark, so a restore
+    // of `Default::default()` (`Follow`) cannot pass for the capture.
+    let mut base = theme_fake();
+    base.rows = std::sync::Mutex::new(Ok(vec![
+        row(
+            "handoff.tokens",
+            Shown::Value("400000".to_owned()),
+            "default",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "tui.theme",
+            Shown::Value("\"dark\"".to_owned()),
+            "global",
+            WriteScope::Any { repo: false },
+        ),
+    ]));
+    let seam = Arc::new(base);
+
+    // The picker lists the built-ins plus the seam's file themes, marking
+    // the saved entry.
+    let mut app = attached(Some(Arc::clone(&seam)));
+    assert_eq!(slash_theme(&mut app), Effect::None);
+    assert!(app.config_view_open());
+    assert_eq!(
+        theme_choices(&app),
+        ["auto", "dark  (current)", "light", "solar", "solar dawn"]
+    );
+    let open = painted(&mut app, crate::ThemeSetting::Follow);
+    insta::assert_snapshot!("theme_picker_open", painted_text(&open));
+
+    // Moving focus previews each focused theme live. The saved dark entry
+    // opens focused on dark; up previews auto, then down walks back.
+    app.on_key(Key::Char('x'), now());
+    assert_eq!(app.take_theme_choice(), None);
+    app.on_key(Key::Up, now());
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Follow));
+    app.on_key(Key::Down, now());
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
+    app.on_key(Key::Down, now());
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Light));
+    let lit = painted(&mut app, crate::ThemeSetting::Light);
+    assert!(
+        lit.backend()
+            .buffer()
+            .content
+            .iter()
+            .any(|cell| cell.bg == Color::Rgb(0xff, 0xff, 0xff)),
+        "the light theme paints its own page"
+    );
+    insta::assert_snapshot!("theme_picker_light_preview", painted_text(&lit));
+    app.on_key(Key::Down, now());
+    assert!(
+        matches!(app.take_theme_choice(), Some(crate::ThemeSetting::File { ref name, .. }) if name == "solar")
+    );
+    app.on_key(Key::Down, now());
+    assert!(
+        matches!(app.take_theme_choice(), Some(crate::ThemeSetting::File { ref name, .. }) if name == "solar dawn")
+    );
+
+    // Esc queues the non-default entry setting and returns to the rows,
+    // writing nothing.
+    assert!(seam.writes().is_empty());
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.config_view_open());
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
+    assert!(seam.writes().is_empty());
+    let restored = painted(&mut app, crate::ThemeSetting::Dark);
+    assert!(
+        restored
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .all(|cell| cell.bg != Color::Rgb(0xff, 0xff, 0xff)),
+        "esc repaints the entry theme"
+    );
+    insta::assert_snapshot!("theme_picker_esc_restored", painted_text(&restored));
+
+    // The picker's `x` cancels like Esc: the non-default capture is queued,
+    // then closed. Queuing `Follow` here would be the default, not the capture.
+    app.on_key(Key::Esc, now());
+    assert_eq!(slash_theme(&mut app), Effect::None);
+    app.on_key(Key::Down, now());
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Light));
+    assert_eq!(app.on_click(TargetId::View(Spot::Close)), Effect::None);
+    assert!(!app.config_view_open());
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
+    assert!(seam.writes().is_empty());
+
+    // A theme file changing between preview and Esc does not leak into
+    // the restore: the queued setting equals the capture (dark), not the
+    // re-read (light).
+    let mut other = theme_fake();
+    other.rows = std::sync::Mutex::new(Ok(vec![row(
+        "tui.theme",
+        Shown::Value("\"light\"".to_owned()),
+        "global",
+        WriteScope::Any { repo: false },
+    )]));
+    assert_eq!(slash_theme(&mut app), Effect::None);
+    app.on_key(Key::Down, now());
+    app.set_configure(Some(Arc::new(other) as Arc<dyn Configure>));
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
+
+    // Enter saves the focused theme globally and queues it live: from the
+    // saved dark entry one step down focuses light.
+    let mut app = attached(Some(Arc::clone(&seam)));
+    assert_eq!(slash_theme(&mut app), Effect::None);
+    app.on_key(Key::Down, now());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        seam.writes(),
+        [(
+            PathBuf::from("/w"),
+            Layer::Global,
+            "tui.theme".to_owned(),
+            "\"light\"".to_owned()
+        )]
+    );
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Light));
+    let saved = painted(&mut app, crate::ThemeSetting::Light);
+    assert!(
+        saved
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .any(|cell| cell.bg == Color::Rgb(0xff, 0xff, 0xff)),
+        "enter leaves the saved theme painted"
+    );
+    insta::assert_snapshot!("theme_picker_enter_saved", painted_text(&saved));
+}
+
+#[test]
+fn slash_theme_without_a_theme_row_opens_the_rows() {
+    // With no `tui.theme` row the picker has nothing to choose from:
+    // `/theme` opens the rows, as `/settings` does, and queues nothing.
+    let seam = Arc::new(Fake::new(vec![row(
+        "handoff.tokens",
+        Shown::Value("400000".to_owned()),
+        "default",
+        WriteScope::Any { repo: true },
+    )]));
+    let mut app = attached(Some(Arc::clone(&seam)));
+    assert_eq!(slash_theme(&mut app), Effect::None);
+    assert!(app.config_view_open());
+    assert_eq!(
+        app.config_view_screen().map(|frame| frame.title),
+        Some("Settings".to_owned())
+    );
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.config_view_open());
+    assert_eq!(app.take_theme_choice(), None);
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn slash_theme_restores_the_saved_entry_theme() {
+    // The cancel restores the resolved entry setting, not a re-read:
+    // with `tui.theme` saved as dark, Esc queues dark.
+    let seam = Arc::new(Fake::new(vec![row(
+        "tui.theme",
+        Shown::Value("\"dark\"".to_owned()),
+        "global",
+        WriteScope::Any { repo: false },
+    )]));
+    let mut app = attached(Some(Arc::clone(&seam)));
+    assert_eq!(slash_theme(&mut app), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
+    assert!(seam.writes().is_empty());
+}
+
+/// Types `text` and presses Enter, returning the sent lines parsed.
+fn enter_text(app: &mut App, text: &str) -> Vec<serde_json::Value> {
+    for ch in text.chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    match app.on_key(Key::Enter, now()) {
+        Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_default())
+            .collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => Vec::new(),
+    }
+}
+
+#[test]
+fn slash_theme_name_saves_applies_and_refuses() {
+    let seam = Arc::new(theme_fake());
+
+    // `/theme light` saves globally and queues the live theme, opening
+    // nothing.
+    let mut app = attached(Some(Arc::clone(&seam)));
+    assert!(enter_text(&mut app, "/theme light").is_empty());
+    assert!(!app.config_view_open());
+    assert_eq!(
+        seam.writes(),
+        [(
+            PathBuf::from("/w"),
+            Layer::Global,
+            "tui.theme".to_owned(),
+            "\"light\"".to_owned()
+        )]
+    );
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Light));
+    assert_eq!(app.input().expand(), "");
+    let saved = painted(&mut app, crate::ThemeSetting::Light);
+    assert!(
+        saved
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .any(|cell| cell.bg == Color::Rgb(0xff, 0xff, 0xff)),
+        "the named save paints the light page"
+    );
+    insta::assert_snapshot!("theme_named_light_saved", painted_text(&saved));
+
+    // A spaced file theme saves whole.
+    let mut app = attached(Some(Arc::clone(&seam)));
+    assert!(enter_text(&mut app, "/theme solar dawn").is_empty());
+    assert_eq!(
+        seam.writes().last(),
+        Some(&(
+            PathBuf::from("/w"),
+            Layer::Global,
+            "tui.theme".to_owned(),
+            "\"solar dawn\"".to_owned()
+        ))
+    );
+    assert!(
+        matches!(app.take_theme_choice(), Some(crate::ThemeSetting::File { ref name, .. }) if name == "solar dawn")
+    );
+
+    // An unknown name is refused with a notice naming it, changing nothing.
+    let mut app = attached(Some(Arc::clone(&seam)));
+    let writes = seam.writes().len();
+    assert!(enter_text(&mut app, "/theme nope").is_empty());
+    assert!(
+        app.notices().iter().any(
+            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if code == "invalid_arguments" && text == "Unknown theme \"nope\".")
+        ),
+        "the refusal names the typed text"
+    );
+    assert_eq!(seam.writes().len(), writes);
+    assert_eq!(app.take_theme_choice(), None);
+    assert_eq!(app.input().expand(), "");
+
+    // Case folds nothing: `Light` is unknown. Esc dismisses the
+    // completion panel first: with it open, Enter would accept the
+    // shown `light` candidate instead, as the accepted-name test proves.
+    let mut app = attached(Some(Arc::clone(&seam)));
+    for ch in "/theme Light".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(
+        app.notices().iter().any(
+            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if code == "invalid_arguments" && text == "Unknown theme \"Light\".")
+        )
+    );
+    assert_eq!(seam.writes().len(), writes);
+    assert_eq!(app.take_theme_choice(), None);
 }

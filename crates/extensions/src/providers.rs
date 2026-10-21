@@ -60,6 +60,10 @@ pub struct Providers {
     /// without running code; a process-only package supplies no Lua, and
     /// disabled, damaged or incompatible extensions record nothing.
     code_candidates: BTreeSet<String>,
+    /// Each loaded candidate's directory, by extension name: the pinned
+    /// copy for a repository entry, the personal install otherwise. What
+    /// [`Providers::provider_source_dir`] resolves a login to.
+    source_dirs: BTreeMap<String, std::path::PathBuf>,
 }
 
 // `Arc<LuaProvider>` has no `Debug`: the registry prints its names.
@@ -300,6 +304,17 @@ impl Providers {
         )
     }
 
+    /// Reads every installed provider merged with the repository set,
+    /// with no enabled filter: every personal install loads, as
+    /// [`Providers::load`] reads, with approved repository entries merged
+    /// in. An empty set loads what `load` loads.
+    pub fn load_all_repository(
+        home: &Path,
+        repository: &crate::RepositorySet,
+    ) -> Result<(Self, Vec<Notice>), Error> {
+        Self::load_with(home, |_: &str| true, repository)
+    }
+
     /// Reads the provider table an install will put in place before committing.
     pub fn load_planned(home: &Path, plan: &crate::Plan<'_>) -> Result<(Self, Vec<Notice>), Error> {
         let mut entries = crate::installed::read_entries(home)?;
@@ -392,6 +407,11 @@ impl Providers {
             }
             // Secrets do not depend on the provider files, so they are kept
             // even when those files leave the extension's providers out.
+            // The candidate's directory is what a login resolves the
+            // extension to: the pinned copy for a repository entry.
+            providers
+                .source_dirs
+                .insert(manifest.name.clone(), dir.clone());
             providers
                 .secrets_by_extension
                 .entry(manifest.name.clone())
@@ -848,9 +868,52 @@ impl Providers {
         Ok(notices)
     }
 
+    /// Each declared placeholder of provider `name` with no present
+    /// value: its name with its declared environment variable, in
+    /// declaration order. A gap exists exactly when
+    /// [`placeholders::value`] returns nothing — no setting string and
+    /// no environment-variable string — regardless of validity, so a
+    /// present-but-invalid value is no gap. Read through the same lookup
+    /// [`Providers::fill_placeholders`] uses.
+    pub fn unset_placeholders(
+        &self,
+        config: &Config,
+        env: &dyn Fn(&str) -> Option<String>,
+        name: &str,
+    ) -> Result<Vec<(String, Option<String>)>, Error> {
+        let data = self.data(name);
+        let extension = self.extension_of(name).unwrap_or(name);
+        let mut gaps = Vec::new();
+        for (key, declared) in &data.placeholders {
+            if placeholders::value(config, extension, &data.placeholders, key, env)?.is_none() {
+                gaps.push((key.clone(), declared.env.clone()));
+            }
+        }
+        Ok(gaps)
+    }
+
+    /// `value` stripped as [`placeholders::host`] strips it: at most one
+    /// leading `https://` and one trailing `/`, then a host with an
+    /// optional port. The prompt answers are validated only through here,
+    /// never by widening `placeholders::host`, so the prompt and the model
+    /// list can never disagree.
+    pub fn validate_host(value: &str) -> Option<&str> {
+        placeholders::host(value)
+    }
+
     /// The extension that registered `name`, if a Lua extension did.
     pub fn extension_of(&self, name: &str) -> Option<&str> {
         self.extension_of.get(name).map(String::as_str)
+    }
+
+    /// The directory of the loaded candidate that registered `provider`:
+    /// the pinned copy for a repository entry, the personal install
+    /// otherwise. `None` when the provider's extension never loaded as a
+    /// candidate, so the caller falls back to the home layout.
+    pub fn provider_source_dir(&self, provider: &str) -> Option<std::path::PathBuf> {
+        self.extension_of(provider)
+            .and_then(|extension| self.source_dirs.get(extension))
+            .cloned()
     }
 
     /// The installed data of `name`: the data file's, else one naming only

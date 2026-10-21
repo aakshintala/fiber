@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use support::repo_provider::{declare_repo_provider, git_init};
 use support::write_record;
 
 use fakes::{ProviderServer, Response, Watchdog};
@@ -1651,4 +1652,188 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
             .is_some_and(|provider| provider.contains_key("reviewer_model")),
         "no reviewer was written"
     );
+}
+
+/// Installs the `acme` provider with one data model whose base URL names
+/// `placeholders`, read from the global `config/acme.json`.
+fn install_host_provider_with(setup: &Setup, placeholders: Value) {
+    let dir = setup.home().join("extensions").join("acme");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    let mut manifest = json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    manifest["providers"] = serde_json::Value::Object(
+        [("acme".to_owned(), json!(["https://{workspace}/v1"]))]
+            .into_iter()
+            .collect(),
+    );
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    write_record(&dir);
+    fs::write(
+        dir.join("providers").join("acme.json"),
+        json!({
+            "name": "acme",
+            "placeholders": placeholders,
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+/// Installs the `acme` provider with the `workspace` placeholder and no
+/// environment fallback.
+fn install_host_provider(setup: &Setup) {
+    install_host_provider_with(setup, json!({"workspace": {}}));
+}
+
+/// Runs `fiber models` on pipes, returning its exit code and streams.
+fn list_models(setup: &Setup) -> Output {
+    let mut command = setup.command(&["models"]);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    setup.run_piped(&mut command, &["models"], "")
+}
+
+#[test]
+fn a_terminal_login_asks_for_the_host_and_lists_the_models_after() {
+    let setup = Setup::new_with_fl_root();
+    install_host_provider(&setup);
+    let mut run = setup.on_terminal(&["login", "acme"]);
+    run.screen.wait_for("Key for acme: ");
+    run.screen.type_text(&format!("{KEY}\n"));
+    run.screen.type_text("https://adb-1.example.test/\n");
+    run.screen
+        .wait_for("fiber: stored credentials/acme/default");
+    run.screen.wait_for("Reviewer, by number or name: ");
+    run.screen.type_text("1\n");
+    run.screen.wait_for("fiber: reviewer acme m");
+    let status = run.finish();
+    let shown = &run.screen.seen;
+    assert_eq!(status.code(), Some(0), "{shown:?}");
+    assert!(shown.contains("`workspace`"), "{shown:?}");
+    let saved: Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config/acme.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved, json!({"workspace": "adb-1.example.test"}));
+    let models = list_models(&setup);
+    assert_eq!(models.code, Some(0), "{}", models.stderr);
+    assert!(models.stdout.contains("acme/m"), "{}", models.stdout);
+}
+
+#[test]
+fn without_a_terminal_a_login_names_the_setting_and_variable_that_fill_the_host() {
+    let setup = Setup::new_with_fl_root();
+    install_host_provider_with(
+        &setup,
+        json!({"workspace": {"env": "FIBER_TEST_2909_UNSET_HOST"}}),
+    );
+    let output = setup.run_with_input(&["login", "acme"], &format!("{KEY}\n"));
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    assert!(
+        output.stderr.contains(
+            "fiber: `workspace` has no value; set it in `config/acme.json` in Fiber home, \
+             or export `FIBER_TEST_2909_UNSET_HOST`."
+        ),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stderr
+            .contains("fiber: stored credentials/acme/default\n"),
+        "{}",
+        output.stderr
+    );
+    assert!(!setup.home().join("config/acme.json").exists());
+}
+
+#[test]
+fn a_project_empty_hides_the_saved_host_and_names_its_file() {
+    let setup = Setup::new_with_fl_root();
+    install_host_provider(&setup);
+    let workspace = setup.root.path().join("w");
+    let (_, project) = cli::project_of(&setup.home(), &workspace).unwrap();
+    let dir = setup
+        .home()
+        .join("projects")
+        .join(project.as_str())
+        .join("config");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("acme.json"), r#"{"workspace":""}"#).unwrap();
+    let mut run = setup.on_terminal(&["login", "acme"]);
+    run.screen.wait_for("Key for acme: ");
+    run.screen.type_text(&format!("{KEY}\n"));
+    run.screen.type_text("adb-1.example.test\n");
+    run.screen
+        .wait_for("fiber: stored credentials/acme/default");
+    run.screen.wait_for("Reviewer, by number or name: ");
+    run.screen.type_text("1\n");
+    run.screen.wait_for("fiber: reviewer acme m");
+    let status = run.finish();
+    let shown = &run.screen.seen;
+    assert_eq!(status.code(), Some(0), "{shown:?}");
+    let saved: Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config/acme.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved, json!({"workspace": "adb-1.example.test"}));
+    let file = dir.join("acme.json");
+    assert!(shown.contains("sets it empty and hides it"), "{shown:?}");
+    assert!(shown.contains(&file.display().to_string()), "{shown:?}");
+    // The mask holds: the model stays out of the list.
+    let models = list_models(&setup);
+    assert_eq!(models.code, Some(0), "{}", models.stderr);
+    assert!(!models.stdout.contains("acme/m"), "{}", models.stdout);
+}
+
+#[test]
+fn login_stores_a_key_for_an_approved_repository_provider() {
+    let setup = Setup::new_with_fl_root();
+    git_init(&setup.workspace());
+    declare_repo_provider(
+        &setup.workspace(),
+        "fiber.test/acme",
+        "acme",
+        &json!([{"id": "m", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]),
+    );
+    let approved = setup.run_with_input(&["approve", "--yes"], "");
+    assert_eq!(approved.code, Some(0), "{}", approved.stderr);
+    let login = setup.run_with_input(&["login", "acme"], &format!("{KEY}\n"));
+    assert_eq!(login.code, Some(0), "{}", login.stderr);
+    assert_eq!(login.stdout, "");
+    assert_eq!(login.stderr, "fiber: stored credentials/acme/default\n");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/acme/default")).unwrap(),
+        KEY
+    );
+}
+
+#[test]
+fn login_outside_the_project_finds_no_repository_provider() {
+    let setup = Setup::new_with_fl_root();
+    git_init(&setup.workspace());
+    declare_repo_provider(
+        &setup.workspace(),
+        "fiber.test/acme",
+        "acme",
+        &json!([{"id": "m", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]),
+    );
+    let approved = setup.run_with_input(&["approve", "--yes"], "");
+    assert_eq!(approved.code, Some(0), "{}", approved.stderr);
+    let outside = fakes::TempDir::new("fl-outside");
+    // The workspace run's command anywhere else: the approved provider is
+    // no login target there.
+    let mut command = setup.command(&["login", "acme"]);
+    command
+        .current_dir(outside.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let login = setup.run_piped(&mut command, &["login", "acme"], &format!("{KEY}\n"));
+    assert_ne!(login.code, Some(0), "{}", login.stderr);
+    assert!(!login.stderr.contains("stored"), "{}", login.stderr);
+    assert!(!setup.home().join("credentials/acme/default").exists());
 }

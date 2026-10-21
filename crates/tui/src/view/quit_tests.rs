@@ -231,6 +231,7 @@ fn stripped(effect: &Effect) -> Effect {
         | Effect::FindPause { .. }
         | Effect::OpenLink(_)
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::OpenFile(_) => panic!("unexpected effect: {effect:?}"),
     }
 }

@@ -773,6 +773,7 @@ Fiber itself:
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   doctor                                    Says whether a session can start, and how to fix it when it cannot
+  feedback [<prompt>] [-]                   Write a feedback report and print the issue link.
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
   version                                   Print the version
@@ -1128,12 +1129,13 @@ fn package(name: &str) -> PathBuf {
 /// The OpenCode Go tool exchange with `muse-spark-1.3-contributor`: the
 /// recorded tool call, then the probe's answer after the tool result.
 fn go_exchange() -> [Response; 2] {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let call = root.join("crates/provider/tests/recordings/opencode-go-tool-call.sse");
-    let answer = root.join("research/opencode-probe/raw/go_stream_tools_1.sse");
     [
-        Response::stream(fs::read(call).unwrap()),
-        Response::stream(fs::read(answer).unwrap()),
+        Response::stream(
+            include_bytes!("../../provider/tests/recordings/opencode-go-tool-call.sse").to_vec(),
+        ),
+        Response::stream(
+            include_bytes!("../../../research/opencode-probe/raw/go_stream_tools_1.sse").to_vec(),
+        ),
     ]
 }
 

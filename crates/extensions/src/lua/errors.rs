@@ -37,6 +37,7 @@ pub(super) fn not_registered(name: &str, target: &Target) -> Error {
         },
         Target::Provider { .. }
         | Target::Hook { .. }
+        | Target::Watcher { .. }
         | Target::Timer { .. }
         | Target::Search(_)
         | Target::Tool(_)

@@ -1756,6 +1756,7 @@ later release still applies.
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
 | `/settings` | Opens the configuration keys. |
+| `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
 | `/keys` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
@@ -1766,6 +1767,7 @@ later release still applies.
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/close` | Stops the session on screen ("Quit"). |
+| `/feedback <description>` | Writes a feedback report with the description, version, platform and doctor output, and prints its path and the issue link. |
 | `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
 | `/?`, `/help` | Opens the key map. |
@@ -2063,7 +2065,10 @@ the model picker inside its view.
 
 Fiber ships a dark and a light theme. A person adds their own as files in
 Fiber home, an installed extension can carry more, and either is picked in
-`/settings`, which writes `tui.theme`. With no
+`/settings`, which writes `tui.theme`. `/theme` opens the same theme picker:
+moving focus previews each theme live, Enter saves the choice, and Esc or
+the close button restores the theme that was showing.
+`/theme <name>` sets the named theme at once, saving `tui.theme`. With no
 theme set, the theme follows the terminal's light or dark appearance and
 switches when the terminal reports a change.
 

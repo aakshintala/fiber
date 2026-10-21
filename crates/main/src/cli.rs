@@ -31,6 +31,7 @@ Fiber itself:
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   doctor                                    Says whether a session can start, and how to fix it when it cannot
+  feedback [<prompt>] [-]                   Write a feedback report and print the issue link.
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
   version                                   Print the version
@@ -82,6 +83,8 @@ Examples:
 const HELP_SUFFIX: &str = " Run `fiber --help` for usage.";
 
 const ASK_SHAPE: &str = "`fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.";
+
+pub(crate) const FEEDBACK_SHAPE: &str = "`fiber feedback` takes one description, then an optional `-`; quote the description. Run `fiber --help` for usage.";
 
 /// What `fiber` was asked to do, or the parse error.
 #[allow(
@@ -198,6 +201,8 @@ pub(crate) enum Commands {
     Logout(LogoutArgs),
     /// Say whether a session can start, and how to fix it when it cannot
     Doctor,
+    /// Write a feedback report and print the issue link
+    Feedback(FeedbackArgs),
     /// Print a completion script for bash, zsh or fish
     Completion {
         /// The shell to complete in.
@@ -729,10 +734,21 @@ pub(crate) struct SessionArgs {
         value_name = "session_id",
         value_parser = parse_session_id,
         hide = true,
-        conflicts_with_all = ["resume", "prompt", "model", "overrides", "worktree", "parent", "delegate_id", "forked_from", "forked_seq"]
+        conflicts_with_all = ["resume", "prompt", "model", "overrides", "worktree", "parent", "delegate_id", "forked_from", "forked_seq", "continues"]
     )]
     pub(crate) rewound_from: Option<String>,
 
+    /// Continue in the worktree of the session `start` names: hidden
+    /// and free to change, passed by the hub that starts a session with
+    /// `continues` (`docs/invocation.md`, "Isolation").
+    #[arg(
+        long = "continues",
+        value_name = "session_id",
+        value_parser = parse_session_id,
+        hide = true,
+        conflicts_with_all = ["resume", "rewound_from", "parent", "forked_from", "forked_seq"]
+    )]
+    pub(crate) continues: Option<String>,
     /// Continue the session this fork names from its point: hidden and
     /// free to change, passed by the parent that starts a fork's new
     /// session. Requires its sequence, the parent, the delegate job and
@@ -746,7 +762,7 @@ pub(crate) struct SessionArgs {
         requires = "parent",
         requires = "delegate_id",
         requires = "prompt",
-        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from"]
+        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from", "continues"]
     )]
     pub(crate) forked_from: Option<String>,
 
@@ -760,7 +776,7 @@ pub(crate) struct SessionArgs {
         requires = "parent",
         requires = "delegate_id",
         requires = "prompt",
-        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from"]
+        conflicts_with_all = ["resume", "model", "overrides", "worktree", "rewound_from", "continues"]
     )]
     pub(crate) forked_seq: Option<u64>,
 
@@ -808,6 +824,7 @@ impl From<&SessionArgs> for contract::session_argv::SessionArgv {
             credential: args.credential.clone(),
             worktree: args.worktree,
             rewound_from: args.rewound_from.clone().map(contract::SessionId),
+            continues: args.continues.clone().map(contract::SessionId),
             forked_from: args.forked_from.clone().map(contract::SessionId),
             forked_seq: args.forked_seq,
             parent: args.parent.clone().map(contract::SessionId),
@@ -845,6 +862,14 @@ pub(crate) struct AskArgs {
     pub(crate) worktree: bool,
 
     /// The prompt. A final `-` reads stdin.
+    #[arg(value_name = "prompt", num_args = 0..)]
+    pub(crate) prompt: Vec<String>,
+}
+
+/// The `feedback` command: its description, resolved like `ask`'s prompt.
+#[derive(Debug, clap::Args)]
+pub(crate) struct FeedbackArgs {
+    /// The description. A final `-` reads stdin.
     #[arg(value_name = "prompt", num_args = 0..)]
     pub(crate) prompt: Vec<String>,
 }

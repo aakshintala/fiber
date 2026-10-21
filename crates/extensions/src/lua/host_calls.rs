@@ -429,6 +429,7 @@ pub(super) fn admit<'a>(
                 Target::Tool(_) | Target::Command(_) => shared.runners.get(&id).cloned(),
                 Target::Provider { .. }
                 | Target::Hook { .. }
+                | Target::Watcher { .. }
                 | Target::Timer { .. }
                 | Target::Search(_)
                 | Target::Effects(_) => None,
@@ -477,6 +478,7 @@ pub(super) fn admit<'a>(
                 Target::Tool(_)
                 | Target::Command(_)
                 | Target::Hook { .. }
+                | Target::Watcher { .. }
                 | Target::Timer { .. } => {
                     match model {
                         Some(model) => {
@@ -557,7 +559,10 @@ pub(super) fn admit<'a>(
             // provider function, a search function or an effects function
             // never reaches the service.
             match target {
-                Target::Provider { .. } | Target::Search(_) | Target::Effects(_) => {
+                Target::Provider { .. }
+                | Target::Watcher { .. }
+                | Target::Search(_)
+                | Target::Effects(_) => {
                     drop(shared);
                     Admitted::Replied(Reply::Delegate(Err((
                         contract::ErrorCode::InvalidArguments,
@@ -705,6 +710,10 @@ pub(super) fn admit<'a>(
                 Target::Hook { .. } => {
                     drop(shared);
                     Admitted::Replied(Reply::Lock(Err(no_credential("hook"))))
+                }
+                Target::Watcher { .. } => {
+                    drop(shared);
+                    Admitted::Replied(Reply::Lock(Err(no_credential("watcher"))))
                 }
                 Target::Timer { .. } => {
                     drop(shared);

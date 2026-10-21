@@ -712,6 +712,7 @@ fn open(app: &mut App, key: u64) -> Vec<Value> {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::OpenFile(_) => panic!("opening sends"),
     }
 }
@@ -1589,6 +1590,7 @@ fn the_quota_spot_opens_the_view_and_fetches() {
         | Effect::Quit
         | Effect::ListFiles
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }

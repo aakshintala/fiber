@@ -12,8 +12,8 @@ use contract::clock::{Clock, Wake};
 use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{
     AskStep, CallStatus, DecidedBy, Decision, Event, Grant, PermissionRequested,
-    PermissionResolved, Progress, RuleOffer, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
-    ToolReplaced,
+    PermissionResolved, Progress, ReviewerUse, RuleOffer, ToolCallCompleted, ToolCallRequested,
+    ToolCallStarted, ToolReplaced,
 };
 use contract::jobs::Taken;
 use contract::provider::ToolDefinition;
@@ -25,6 +25,11 @@ use serde_json::{Map, Value};
 
 use super::before_tool::Prepared;
 use super::completion::{completed, denied, resolved};
+use super::permission::Verdict;
+use super::reviewer::{
+    First, ReviewEndpoint, Sections, Stage1Worker, StagedSecond, StagedStage1, UnderReview,
+    fanout_stage1, read_first, read_second, sections, under_item,
+};
 use crate::asking::Release;
 use crate::inner_calls::{InnerRunning, InnerSlot};
 use crate::interactions::Suspend;
@@ -261,40 +266,30 @@ impl Loop {
         calls: Vec<(ActionId, ToolCallRequested, Option<Decided>)>,
         turn: &TurnId,
         reraise: Option<(ActionId, RequestId)>,
-        mut carried: Option<(ActionId, Vec<contract::hook::StateLine>)>,
+        carried: Option<(ActionId, Vec<contract::hook::StateLine>)>,
     ) -> Result<bool, Error> {
-        let mut decided = Vec::with_capacity(calls.len());
-        for (id, call, already) in calls {
-            // Deciding stops at the first cancel: a call approved but not
-            // yet started, and every call not yet decided, completes
-            // `cancelled` with no `tool_call_started` and no permission
-            // lines. A decision line already written stays.
-            if self.turn_cancelled() {
-                decided.push((id, call.name, Err(self.cancelled_before_ran()), Vec::new()));
-                continue;
-            }
-            let (decision, state) = match already {
-                Some(decision) => {
-                    let state = if carried.as_ref().is_some_and(|(action, _)| *action == id) {
-                        carried.take().map(|(_, state)| state).unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
-                    (decision, state)
-                }
-                None => self.decide(&call, &id, turn)?,
-            };
-            // An idle deadline ended the approval. Drop the decision: no
+        let undecided = calls
+            .iter()
+            .filter(|(_, _, already)| already.is_none())
+            .count();
+        let endpoint = if undecided > 1 && self.budget.is_none() {
+            self.review_endpoint()
+        } else {
+            None
+        };
+        let decided = match endpoint {
+            // More than one call still to judge, with no budget to spend:
+            // the batch sends every review's first stage at once, then
+            // writes everything back in request order. A reviewer that
+            // could not be set up falls back to the serial path.
+            Some(endpoint) => self.decide_concurrent(calls, turn, carried, endpoint)?,
+            None => self.decide_serial(calls, turn, carried)?,
+        };
+        let Some(decided) = decided else {
+            // An idle deadline ended an approval. Drop the decision: no
             // completion is written, including for calls already decided.
-            if self.idle_left {
-                return Ok(false);
-            }
-            if self.turn_cancelled() {
-                decided.push((id, call.name, Err(self.cancelled_before_ran()), Vec::new()));
-                continue;
-            }
-            decided.push((id, call.name, decision, state));
-        }
+            return Ok(false);
+        };
         let cancel = Arc::clone(&self.cancel);
         thread::scope(|scope| {
             let wake = Arc::new(SharedWake::default());
@@ -542,15 +537,34 @@ impl Loop {
         let _permission = self
             .diag
             .timed_tool(contract::diag::Op::ToolPermission, &call.name);
+        let judged = self.judge_call(&call.name, &prepared.effects);
+        let decided = match judged {
+            // Step 7 is the reviewer: the call is judged by a separate
+            // model (`docs/permissions.md`, "The reviewer").
+            Verdict::Review => self.review(call, id, turn, prepared),
+            judged @ (Verdict::Deny { .. } | Verdict::Ask(_) | Verdict::Allow(_)) => {
+                self.decide_judged(judged, &call.name, prepared, id, turn)
+            }
+        };
+        decided.map(|decision| (decision, state))
+    }
+
+    /// Steps 1 to 6 over one prepared call: the credential deny, the standing
+    /// rules and fast paths, and the session grants — everything before the
+    /// reviewer (`docs/permissions.md`, "The order a call is judged in").
+    /// The serial path, the batch's phase A and grant re-classification
+    /// share it. Each caller holds its own permission guard across the call,
+    /// so the timing spans the same work as before.
+    fn judge_call(&self, tool: &str, effects: &Effects) -> Verdict {
         // The rules are read once for every call, including ones that later
         // fast-path, so a revoked rule applies to the next call judged
         // (`docs/tui.md`, "/rules"). `judge` runs the credential deny before
         // it looks at them, so an unreadable rules file never stops that
         // deny.
         let rules = self.rules.read();
-        let decided = match super::permission::judge(
-            &call.name,
-            &prepared.effects,
+        super::permission::judge(
+            tool,
+            effects,
             &rules,
             &self.grants,
             &self.known_hosts,
@@ -558,8 +572,25 @@ impl Loop {
             &self.prompt.home,
             &self.credentials,
             &self.credential_files,
-        ) {
-            super::permission::Verdict::Deny { by, reason, why } => {
+        )
+    }
+
+    /// Applies one call's judged non-`Review` verdict: the Deny, Ask and
+    /// Allow arms of the permission order. The serial path, the batch's
+    /// phase A and grant re-classification share it: `decided` writes to
+    /// the phase's sink — the phase-A line buffer, or the log at
+    /// write-back. The caller matches `Review` out first; it never
+    /// arrives here.
+    fn decide_judged(
+        &mut self,
+        verdict: Verdict,
+        tool: &str,
+        prepared: Prepared,
+        id: &ActionId,
+        turn: &TurnId,
+    ) -> Result<Decided, Error> {
+        match verdict {
+            Verdict::Deny { by, reason, why } => {
                 let text = format!("{why} It did not run.");
                 self.decided(
                     id,
@@ -568,10 +599,10 @@ impl Loop {
                 )?;
                 Ok(Err(denied(reason, text)))
             }
-            super::permission::Verdict::Ask(rule) => match self.ask(
+            Verdict::Ask(rule) => match self.ask(
                 id,
                 turn,
-                &call.name,
+                tool,
                 &prepared.effects,
                 AskStep::StandingAsk {
                     standing_rule: rule,
@@ -588,20 +619,553 @@ impl Loop {
                 // `permission_resolved`).
                 Asked::Closed => Ok(Err(no_person())),
             },
-            super::permission::Verdict::Allow(decided) => {
+            Verdict::Allow(decided) => {
                 if let Some(by) = decided {
                     self.decided(id, turn, resolved(None, Decision::Allow, by, None, None))?;
                 }
                 Ok(Ok(prepared))
             }
-            // Step 7 is the reviewer: the call is judged by a separate
-            // model (`docs/permissions.md`, "The reviewer").
-            super::permission::Verdict::Review => self.review(call, id, turn, prepared),
-        };
-        decided.map(|decision| (decision, state))
+            Verdict::Review => {
+                unreachable!("the permission order's reviewer step never reaches the judged arms")
+            }
+        }
     }
 
-    /// Writes a `permission_resolved` line for `id`.
+    /// Today's decide loop, one call at a time: a single undecided call —
+    /// or a reply under a budget, or with no reviewer — keeps this path
+    /// bit for bit. `None` unwinds on an idle deadline, with no completion
+    /// written.
+    fn decide_serial(
+        &mut self,
+        calls: Vec<(ActionId, ToolCallRequested, Option<Decided>)>,
+        turn: &TurnId,
+        mut carried: Option<(ActionId, Vec<contract::hook::StateLine>)>,
+    ) -> Result<Option<DecidedBatch>, Error> {
+        let mut decided = Vec::with_capacity(calls.len());
+        for (id, call, already) in calls {
+            // Deciding stops at the first cancel: a call approved but not
+            // yet started, and every call not yet decided, completes
+            // `cancelled` with no `tool_call_started` and no permission
+            // lines. A decision line already written stays.
+            if self.turn_cancelled() {
+                decided.push((id, call.name, Err(self.cancelled_before_ran()), Vec::new()));
+                continue;
+            }
+            let (decision, state) = match already {
+                Some(decision) => {
+                    let state = if carried.as_ref().is_some_and(|(action, _)| *action == id) {
+                        carried.take().map(|(_, state)| state).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    (decision, state)
+                }
+                None => self.decide(&call, &id, turn)?,
+            };
+            // An idle deadline ended the approval. Drop the decision: no
+            // completion is written, including for calls already decided.
+            if self.idle_left {
+                return Ok(None);
+            }
+            if self.turn_cancelled() {
+                decided.push((id, call.name, Err(self.cancelled_before_ran()), Vec::new()));
+                continue;
+            }
+            decided.push((id, call.name, decision, state));
+        }
+        Ok(Some(decided))
+    }
+
+    /// Decides one batch's calls when today's serial path does not apply:
+    /// more than one call still to judge, with no budget to spend and a
+    /// reviewer set up. Phase A classifies every call in order, phase B
+    /// sends every reviewed call's first stage at once, and phase C writes
+    /// everything back in request order. `None` unwinds on an idle
+    /// deadline, as the serial path does.
+    fn decide_concurrent(
+        &mut self,
+        calls: Vec<(ActionId, ToolCallRequested, Option<Decided>)>,
+        turn: &TurnId,
+        carried: Option<(ActionId, Vec<contract::hook::StateLine>)>,
+        endpoint: ReviewEndpoint,
+    ) -> Result<Option<DecidedBatch>, Error> {
+        // Phase A: classify every call in order — hooks and `judge` —
+        // buffering every pending decision. Non-`Review` verdicts are
+        // classified, not decided: their `permission_resolved` lines wait
+        // for phase-C write-back. Hook notices, hook state handling and
+        // the standing-ask round-trip stay immediate inline exactly as
+        // today.
+        self.decision_buffer = Some(Vec::new());
+        let mut carried = carried;
+        let pending = self.classify_batch(calls, turn, &mut carried);
+        self.decision_buffer = None;
+        let Some(mut pending) = pending? else {
+            // An idle deadline ended an approval: phase A already flushed
+            // what it buffered, in order. No completion is written.
+            return Ok(None);
+        };
+        // Phase B: send every reviewed call's first stage at once.
+        // Requests are prebuilt in request order over the fixed `reviewed`
+        // vec, so their bytes match the serial path's; only the provider
+        // round trips overlap.
+        let prompt = sections();
+        let worker = Stage1Worker {
+            provider: Arc::clone(&endpoint.provider),
+            observe: self.reviewer_observe.clone(),
+            cancel: Arc::clone(&self.cancel),
+        };
+        let mut sent = self.reviewer_sent;
+        let mut requests = Vec::new();
+        let mut metas: Vec<(ReviewerUse, usize)> = Vec::new();
+        for entry in pending.iter() {
+            if !matches!(entry.outcome, PendingOutcome::NeedsReview) {
+                continue;
+            }
+            let Some(prepared) = entry.prepared.as_ref() else {
+                unreachable!("phase A prepares every call it binds for review");
+            };
+            let under = UnderReview {
+                call: &entry.call,
+                id: &entry.id,
+                turn,
+                prepared,
+            };
+            let built =
+                self.build_stage1(&under, &endpoint, &prompt.shared, &prompt.first, None, sent);
+            sent = Some(built.cut);
+            requests.push(built.request);
+            metas.push((built.reviewer_use, built.cut));
+        }
+        let replies = fanout_stage1(&worker, requests);
+        let mut made = metas
+            .into_iter()
+            .zip(replies)
+            .map(|((reviewer_use, cut), reply)| StagedStage1 {
+                reply,
+                resent: None,
+                second: None,
+                reviewer_use,
+                cut,
+            });
+        let mut staged: Vec<Option<StagedStage1>> = Vec::with_capacity(pending.len());
+        for entry in pending.iter() {
+            if !matches!(entry.outcome, PendingOutcome::NeedsReview) {
+                staged.push(None);
+                continue;
+            }
+            staged.push(made.next());
+        }
+        // Phase C1: pre-send every second stage the first stages asked
+        // for, in request order. Phase C2 writes everything back.
+        self.prefetch_seconds(&pending, &mut staged, &endpoint, &prompt, turn)?;
+        // Phase C2: write everything back in request order.
+        self.write_back(&mut pending, staged, &endpoint, turn)
+    }
+
+    /// Phase A of a concurrent batch: classifies every call in order and
+    /// buffers every pending decision. `None` unwinds on an idle deadline:
+    /// earlier calls' buffered lines flush in order, and no completion is
+    /// written.
+    fn classify_batch(
+        &mut self,
+        calls: Vec<(ActionId, ToolCallRequested, Option<Decided>)>,
+        turn: &TurnId,
+        carried: &mut Option<(ActionId, Vec<contract::hook::StateLine>)>,
+    ) -> Result<Option<Vec<PendingCall>>, Error> {
+        let mut pending = Vec::with_capacity(calls.len());
+        for (id, call, already) in calls {
+            // Deciding stops at the first cancel: a call approved but not
+            // yet started, and every call not yet decided, completes
+            // `cancelled` with no `tool_call_started` and no permission
+            // lines. A decision line already written stays.
+            if self.turn_cancelled() {
+                pending.push(PendingCall {
+                    id,
+                    tool: call.name.clone(),
+                    call,
+                    outcome: PendingOutcome::Cancelled,
+                    verdict: None,
+                    lines: Vec::new(),
+                    prepared: None,
+                    state: Vec::new(),
+                });
+                continue;
+            }
+            let mut entry = match already {
+                Some(decision) => {
+                    let state = if carried.as_ref().is_some_and(|(action, _)| *action == id) {
+                        carried.take().map(|(_, state)| state).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    PendingCall {
+                        id,
+                        tool: call.name.clone(),
+                        call,
+                        outcome: PendingOutcome::Decided(decision),
+                        verdict: None,
+                        lines: Vec::new(),
+                        prepared: None,
+                        state,
+                    }
+                }
+                None => self.classify_one(&call, &id, turn)?,
+            };
+            // An idle deadline ended the approval. Flush what phase A
+            // buffered so far, in order, and unwind with no completion
+            // written. Later calls were never decided, so their lines
+            // stay out.
+            if self.idle_left {
+                pending.push(entry);
+                for entry in &mut pending {
+                    for line in entry.lines.drain(..) {
+                        self.append(&Event::PermissionResolved(line), turn, Some(&entry.id))?;
+                    }
+                }
+                return Ok(None);
+            }
+            // A cancel that landed while this call classified discards its
+            // decision; lines already buffered stay and flush in order.
+            if self.turn_cancelled() {
+                entry.outcome = PendingOutcome::Cancelled;
+                entry.state = Vec::new();
+            }
+            pending.push(entry);
+        }
+        Ok(Some(pending))
+    }
+
+    /// Classifies one undecided call for the batch's phase A: hooks and
+    /// `judge`, exactly as the serial path judges them. Non-`Review`
+    /// verdicts are classified, not decided: their lines buffer for
+    /// write-back. Returns the call's entry with its drained lines.
+    fn classify_one(
+        &mut self,
+        call: &ToolCallRequested,
+        id: &ActionId,
+        turn: &TurnId,
+    ) -> Result<PendingCall, Error> {
+        let (prepared, state) = self.prepared(call, Some(turn))?;
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(failed) => {
+                return Ok(PendingCall {
+                    id: id.clone(),
+                    tool: call.name.clone(),
+                    call: call.clone(),
+                    outcome: PendingOutcome::Decided(Err(failed)),
+                    verdict: None,
+                    lines: Vec::new(),
+                    prepared: None,
+                    state,
+                });
+            }
+        };
+        // The permission order starts once the call names a registered
+        // tool and fits its schema: the guard spans the judge and a
+        // person's wait, and closes at the decision, before any run.
+        // `call.name` is the session map's key: `checked` above refused
+        // anything else, so no lookup or allocation here.
+        let _permission = self
+            .diag
+            .timed_tool(contract::diag::Op::ToolPermission, &call.name);
+        let verdict = self.judge_call(&call.name, &prepared.effects);
+        match verdict {
+            // Step 7 is the reviewer: the call is judged by a separate
+            // model (`docs/permissions.md`, "The reviewer").
+            Verdict::Review => Ok(PendingCall {
+                id: id.clone(),
+                tool: call.name.clone(),
+                call: call.clone(),
+                outcome: PendingOutcome::NeedsReview,
+                verdict: Some(Verdict::Review),
+                lines: Vec::new(),
+                prepared: Some(prepared),
+                state,
+            }),
+            key @ (Verdict::Deny { .. } | Verdict::Ask(_) | Verdict::Allow(_)) => {
+                let stored = prepared.clone();
+                let decision = self.decide_judged(key.clone(), &call.name, prepared, id, turn)?;
+                // Classification is serial per call, so everything buffered
+                // is this call's.
+                let lines = match self.decision_buffer.as_mut() {
+                    Some(buffer) => std::mem::take(buffer),
+                    None => {
+                        unreachable!("phase A buffers every decision it classifies")
+                    }
+                };
+                Ok(PendingCall {
+                    id: id.clone(),
+                    tool: call.name.clone(),
+                    call: call.clone(),
+                    outcome: PendingOutcome::Decided(decision),
+                    verdict: Some(key),
+                    lines,
+                    prepared: Some(stored),
+                    state,
+                })
+            }
+        }
+    }
+
+    /// Phase C1 of a concurrent batch: pre-sends every second stage the
+    /// fanned-out first stages asked for, in request order, before any
+    /// call applies. Requests build from the fixed `reviewed` vec exactly
+    /// as the serial path builds them, so the bytes match; nothing
+    /// records here. A grant installed while an earlier call applies
+    /// moots an already sent reply instead of preventing its send.
+    fn prefetch_seconds(
+        &mut self,
+        pending: &[PendingCall],
+        staged: &mut [Option<StagedStage1>],
+        endpoint: &ReviewEndpoint,
+        prompt: &Sections,
+        turn: &TurnId,
+    ) -> Result<(), Error> {
+        for (entry, slot) in pending.iter().zip(staged.iter_mut()) {
+            if !matches!(entry.outcome, PendingOutcome::NeedsReview) {
+                continue;
+            }
+            let Some(prepared) = entry.prepared.as_ref() else {
+                unreachable!("phase A prepares every call it binds for review");
+            };
+            let under = UnderReview {
+                call: &entry.call,
+                id: &entry.id,
+                turn,
+                prepared,
+            };
+            let Some(staged) = slot.as_mut() else {
+                unreachable!("phase B fans out every call bound for review");
+            };
+            // Resolve the first stage, re-asking once when unreadable,
+            // exactly as the serial path's first ask does.
+            let check = match &staged.reply {
+                Err(_) => false,
+                Ok(first) => match read_first(&first.text()) {
+                    Ok(First::Allow) => false,
+                    Ok(First::Check) => true,
+                    Err(unread) => {
+                        let note = format!(
+                            "Your reply could not be read: {unread}. Reply in the form the instructions give."
+                        );
+                        let resent =
+                            self.resend_stage1(&under, endpoint, prompt, &note, staged.cut);
+                        let needs = matches!(&resent, Ok(second)
+                            if matches!(read_first(&second.text()), Ok(First::Check)));
+                        staged.resent = Some(resent);
+                        needs
+                    }
+                },
+            };
+            if !check {
+                continue;
+            }
+            // The first stage asked for more: pre-send the second stage,
+            // re-asking once when unreadable.
+            let item = under_item(prepared, &entry.call.name, &self.workspace_label);
+            let reply = self.send_stage2(endpoint, prompt, &item, staged.cut, None);
+            let second = match reply {
+                reply @ Err(_) => StagedSecond {
+                    reply,
+                    resent: None,
+                },
+                Ok(first) => match read_second(&first.text()) {
+                    Ok(_) => StagedSecond {
+                        reply: Ok(first),
+                        resent: None,
+                    },
+                    Err(unread) => {
+                        let note = format!(
+                            "Your reply could not be read: {unread}. Reply in the form the instructions give."
+                        );
+                        let resent =
+                            self.send_stage2(endpoint, prompt, &item, staged.cut, Some(&note));
+                        StagedSecond {
+                            reply: Ok(first),
+                            resent: Some(resent),
+                        }
+                    }
+                },
+            };
+            staged.second = Some(second);
+        }
+        Ok(())
+    }
+
+    /// Phase C of a concurrent batch: writes everything back in request
+    /// order — buffered non-review lines, then per call its stage-1 and
+    /// pre-sent stage-2 `usage_recorded` lines and `permission_resolved`.
+    /// Escalations are answered here in order, and a grant or rule
+    /// installed by an answer re-classifies the remaining calls under
+    /// fresh rules. The shared cursor commits past the whole batch once,
+    /// after write-back. `None` unwinds on an idle deadline, as the
+    /// serial path does.
+    fn write_back(
+        &mut self,
+        pending: &mut [PendingCall],
+        staged: Vec<Option<StagedStage1>>,
+        endpoint: &ReviewEndpoint,
+        turn: &TurnId,
+    ) -> Result<Option<DecidedBatch>, Error> {
+        let mut decided = Vec::with_capacity(pending.len());
+        let mut staged = staged;
+        let mut committed = self.reviewer_sent;
+        let mut index = 0;
+        while index < pending.len() {
+            // A cancel that landed while an earlier call applied ends this
+            // call before it starts: no `tool_call_started`, completed
+            // `cancelled`. A decision line already buffered stays and
+            // flushes in order.
+            if self.turn_cancelled() {
+                let Some(entry) = pending.get_mut(index) else {
+                    unreachable!("write-back visits each classified call once, in order");
+                };
+                for line in entry.lines.drain(..) {
+                    self.append(&Event::PermissionResolved(line), turn, Some(&entry.id))?;
+                }
+                decided.push((
+                    entry.id.clone(),
+                    entry.tool.clone(),
+                    Err(self.cancelled_before_ran()),
+                    Vec::new(),
+                ));
+                index += 1;
+                continue;
+            }
+            let Some(entry) = pending.get_mut(index) else {
+                unreachable!("write-back visits each classified call once, in order");
+            };
+            let staged = staged.get_mut(index).and_then(Option::take);
+            let (decision, cut) = self.apply_entry(entry, staged, endpoint, turn)?;
+            if let Some(cut) = cut {
+                committed = Some(cut);
+            }
+            let Some(entry) = pending.get_mut(index) else {
+                unreachable!("write-back visits each classified call once, in order");
+            };
+            let state = std::mem::take(&mut entry.state);
+            decided.push((entry.id.clone(), entry.tool.clone(), decision, state));
+            // An idle deadline ended an approval. No completion is
+            // written, including for calls already decided — but a
+            // decision line already written stays.
+            if self.idle_left {
+                if committed != self.reviewer_sent {
+                    self.reviewer_sent = committed;
+                }
+                return Ok(None);
+            }
+            self.rejudge_remaining(not_yet_applied(&mut *pending, index))?;
+            index += 1;
+        }
+        // One commit past the whole batch, after write-back.
+        if committed != self.reviewer_sent {
+            self.reviewer_sent = committed;
+        }
+        Ok(Some(decided))
+    }
+
+    /// Applies one classified call at write-back and returns its decision
+    /// with the staged cut when a fanned-out stage-1 went out for it.
+    /// The entry's outcome is spent: later re-classification only visits
+    /// calls this loop has not applied yet.
+    fn apply_entry(
+        &mut self,
+        entry: &mut PendingCall,
+        staged: Option<StagedStage1>,
+        endpoint: &ReviewEndpoint,
+        turn: &TurnId,
+    ) -> Result<(Decided, Option<usize>), Error> {
+        match std::mem::replace(&mut entry.outcome, PendingOutcome::Cancelled) {
+            PendingOutcome::Decided(decision) => {
+                for line in entry.lines.drain(..) {
+                    self.append(&Event::PermissionResolved(line), turn, Some(&entry.id))?;
+                }
+                Ok((decision, None))
+            }
+            PendingOutcome::Cancelled => {
+                for line in entry.lines.drain(..) {
+                    self.append(&Event::PermissionResolved(line), turn, Some(&entry.id))?;
+                }
+                Ok((Err(self.cancelled_before_ran()), None))
+            }
+            PendingOutcome::NeedsReview => {
+                let Some(prepared) = entry.prepared.as_ref() else {
+                    unreachable!("phase A prepares every call it binds for review");
+                };
+                let under = UnderReview {
+                    call: &entry.call,
+                    id: &entry.id,
+                    turn,
+                    prepared,
+                };
+                let Some(staged) = staged else {
+                    unreachable!("phase B fans out every call bound for review");
+                };
+                let cut = staged.cut;
+                let decision = self.apply_stage1(&under, endpoint, staged, turn)?;
+                Ok((decision, Some(cut)))
+            }
+            PendingOutcome::Rejudged(key) => {
+                let cut = staged.as_ref().map(|staged| staged.cut);
+                if let Some(staged) = staged {
+                    // The stage-1 request already went out in phase B: its
+                    // usage still records at write-back, before the fresh
+                    // path judges.
+                    let reviewer = ReviewerUse::Stage1 {
+                        action_id: entry.id.clone(),
+                    };
+                    self.record_review_usage(&staged.reply, endpoint, reviewer, turn)?;
+                }
+                let Some(prepared) = entry.prepared.take() else {
+                    unreachable!("phase A prepares every call grant re-classification judges");
+                };
+                match key {
+                    // Newly bound for review: judge it serially now — its
+                    // stage-1 never fanned out.
+                    Verdict::Review => {
+                        Ok((self.review(&entry.call, &entry.id, turn, prepared)?, cut))
+                    }
+                    key @ (Verdict::Deny { .. } | Verdict::Ask(_) | Verdict::Allow(_)) => Ok((
+                        self.decide_judged(key, &entry.tool, prepared, &entry.id, turn)?,
+                        cut,
+                    )),
+                }
+            }
+        }
+    }
+
+    /// Re-classifies every not-yet-applied call under fresh rules: a grant
+    /// or rule installed by an answer only reaches later calls when they
+    /// are judged again. A call still bound for review keeps its buffered
+    /// first-stage outcome; any other moved judgment re-takes the serial
+    /// path at write-back.
+    fn rejudge_remaining(&mut self, remaining: &mut [PendingCall]) -> Result<(), Error> {
+        for entry in remaining.iter_mut() {
+            // Already decided or cancelled: the judgment is final.
+            let Some(stored) = entry.verdict.as_ref() else {
+                continue;
+            };
+            let Some(prepared) = entry.prepared.as_ref() else {
+                continue;
+            };
+            let fresh = self.judge_call(&entry.tool, &prepared.effects);
+            if fresh == *stored {
+                continue;
+            }
+            // The judgment moved: drop the buffered lines and take the
+            // fresh path at write-back. A call still bound for review
+            // keeps its buffered first-stage outcome.
+            entry.lines.clear();
+            entry.verdict = Some(fresh.clone());
+            entry.outcome = PendingOutcome::Rejudged(fresh);
+        }
+        Ok(())
+    }
+
+    /// Writes a `permission_resolved` line for `id`: appended, or buffered
+    /// while a concurrent batch classifies, for phase-C write-back in
+    /// request order.
     pub(crate) fn decided(
         &mut self,
         id: &ActionId,
@@ -613,6 +1177,10 @@ impl Loop {
         #[cfg(test)]
         if crate::tool_timing_tests::take_fail_decision_write() {
             return Err(crate::tool_timing_tests::log_fault());
+        }
+        if let Some(buffer) = self.decision_buffer.as_mut() {
+            buffer.push(resolved);
+            return Ok(());
         }
         self.append(&Event::PermissionResolved(resolved), turn, Some(id))
     }
@@ -999,6 +1567,20 @@ impl Loop {
     }
 }
 
+/// The calls write-back has not applied yet: everything after `index`.
+/// A mutant of `+` to `*` re-includes the call just applied, whose buffered
+/// lines already flushed and whose decision already pushed, so re-judging it
+/// changes nothing a consumer sees; the remaining calls' re-judgment is
+/// tested through the grant re-classification tests in
+/// `crates/loop/tests/permissions.rs`.
+#[cfg_attr(false, mutants::skip)]
+fn not_yet_applied(pending: &mut [PendingCall], index: usize) -> &mut [PendingCall] {
+    let Some(tail) = pending.get_mut(index + 1..) else {
+        unreachable!("write-back visits each classified call once, in order");
+    };
+    tail
+}
+
 /// The completion of a call whose request the close denied by `cancel`:
 /// no person can answer it (`docs/permissions.md`, "Headless"). What
 /// [`Loop::unanswerable`] completes a headless call with, without its
@@ -1008,6 +1590,47 @@ pub(crate) fn no_person() -> Box<ToolCallCompleted> {
         "no_person",
         "No person can answer an approval in this session. It did not run.".to_owned(),
     )
+}
+
+/// What deciding hands the run phase: each call's action, tool name,
+/// decision and hook state, in request order. `None` unwinds on an idle
+/// deadline, with no completion written.
+type DecidedBatch = Vec<(ActionId, String, Decided, Vec<contract::hook::StateLine>)>;
+
+/// Phase A's outcome for one call of a concurrent batch.
+enum PendingOutcome {
+    /// Decided without the reviewer, or already decided: the completion.
+    Decided(Decided),
+    /// Bound for the reviewer: everything phase B builds from.
+    NeedsReview,
+    /// Re-classified after a grant or rule install moved the judgment:
+    /// take the fresh path at write-back.
+    Rejudged(Verdict),
+    /// A cancel ended the approval before this call was decided.
+    Cancelled,
+}
+
+/// One call classified by the batch's phase A: its outcome, and everything
+/// write-back needs in request order.
+struct PendingCall {
+    /// The call's action.
+    id: ActionId,
+    /// The tool's registered name, for asks and judgments.
+    tool: String,
+    /// The model's call.
+    call: ToolCallRequested,
+    /// What phase A found: decided, bound for review, or cancelled.
+    outcome: PendingOutcome,
+    /// Phase A's judgment, when the call was judged: re-classification
+    /// compares the fresh judgment against it.
+    verdict: Option<Verdict>,
+    /// The `permission_resolved` lines phase A buffered for this call.
+    lines: Vec<PermissionResolved>,
+    /// The prepared call, kept for review application and for a
+    /// fresh-`Review` re-classification.
+    prepared: Option<Prepared>,
+    /// Hook state the run carries.
+    state: Vec<contract::hook::StateLine>,
 }
 
 /// What waiting for a person's answer came back with. The decision line is

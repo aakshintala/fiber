@@ -62,6 +62,7 @@ fn sent(effect: Effect) -> Vec<String> {
         | Effect::Exit(_)
         | Effect::ListFiles
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::FindPause { .. }
         | Effect::Search { .. }
         | Effect::Editor { .. }
@@ -217,6 +218,7 @@ fn enter_on_the_focused_image_opens_it() {
             | Effect::Exit(_)
             | Effect::ListFiles
             | Effect::ReadImage(_)
+            | Effect::Feedback { .. }
             | Effect::FindPause { .. }
             | Effect::Search { .. }
             | Effect::Editor { .. }

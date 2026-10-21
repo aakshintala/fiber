@@ -408,6 +408,58 @@ impl Store {
         self.copy_wait(item, hash, Wait::Tries(&*self.clock))
     }
 
+    /// Holds a finished copy without building it: only a real directory
+    /// with a regular-file `.ready` marker is held, through a shared lock
+    /// on the marker tried `installed::LOCK_TRIES` times, 10 ms apart on
+    /// the store's clock, then `Error::Busy`. Nothing is created or
+    /// written: no `pinned/` directory, no `.lock` file, no copy and no
+    /// approval. A missing copy, an unfinished copy, a link or an
+    /// unholdable marker is the caller's error to skip.
+    pub fn try_hold_finished(&self, hash: &str) -> Result<CopyHold, Error> {
+        if !is_hash(hash) {
+            return Err(Error::Pin {
+                item: hash.to_owned(),
+                why: "that is not a content hash".to_owned(),
+            });
+        }
+        let copy = self.copy_dir(hash);
+        // Read-only checks before any lock: only a real directory is a
+        // copy, so a link or a file where it goes is refused, never
+        // followed; only a regular-file marker proves it finished.
+        match fs::symlink_metadata(&copy) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => return Err(refused(hash, &copy, "is a symbolic link or a file")),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(refused(hash, &copy, "has no pinned copy"));
+            }
+            Err(e) => return Err(io_error(&copy)(e)),
+        }
+        let marker = config::pinned_dir(&self.home).join(format!("{hash}.ready"));
+        if !marker_state(hash, &marker)? {
+            return Err(refused(hash, &marker, "has no finished copy"));
+        }
+        // Read-write without create: macOS refuses `O_CREAT` on a
+        // read-only open, and create would forge what ownership is being
+        // proved.
+        let ready = File::options()
+            .read(true)
+            .write(true)
+            .open(&marker)
+            .map_err(io_error(&marker))?;
+        // The shared hold, tried without ever blocking: another session
+        // holding the copy shares the marker, while an approval
+        // rebuilding it holds the marker exclusively, so a held marker
+        // waits on the store's clock instead of on another process.
+        for _ in 0..LOCK_TRIES {
+            match ready.try_lock_shared() {
+                Ok(()) => return Ok(CopyHold { _ready: ready }),
+                Err(TryLockError::WouldBlock) => self.clock.sleep(Duration::from_millis(10)),
+                Err(TryLockError::Error(e)) => return Err(io_error(&marker)(e)),
+            }
+        }
+        Err(Error::Busy)
+    }
+
     /// One copy through one wait for `pinned/.lock`: blocking for an
     /// approval or a person-waiting caller, bounded for a session start
     /// or reload that must never wait on another process.
@@ -569,8 +621,9 @@ impl Store {
     /// or server (which has no dependencies), or an extension whose
     /// manifest names none, or whose dependency completion marker is
     /// present. A dependency-bearing copy without one is legacy and
-    /// rebuilds.
-    fn finished(&self, item: &RepoItem, copy: &Path) -> Result<bool, Error> {
+    /// rebuilds. Any failure reads as unfinished to a read-only caller,
+    /// which skips the copy.
+    pub(crate) fn finished(&self, item: &RepoItem, copy: &Path) -> Result<bool, Error> {
         if item.kind != OfferedKind::Extension {
             return Ok(true);
         }

@@ -860,11 +860,17 @@ fn known_hosts_reviewer_allow_is_visible_to_the_next_call_in_the_step_and_next_s
         let reviewer = session.reviewer(vec![Scripted::text("allow"), Scripted::text("allow")]);
         let lines = go(&mut session);
         let expected = if same_step {
+            // Both calls fan out their first stages; the first call's
+            // reviewer allow is visible to the second, so the second
+            // resolves without a second stage — but its already-sent
+            // first stage still records its usage, as a billed request
+            // is never hidden from the usage fold.
             network_steps(&[(
                 2,
                 &[
                     "usage_recorded",
                     "permission_resolved",
+                    "usage_recorded",
                     "tool_call_started",
                     "tool_call_started",
                     "tool_call_completed",
@@ -886,7 +892,9 @@ fn known_hosts_reviewer_allow_is_visible_to_the_next_call_in_the_step_and_next_s
             ])
         };
         assert_eq!(kinds(&lines), expected);
-        assert_eq!(reviewer.requests().len(), 1);
+        // In one step both first stages fan out; across steps the
+        // second call never needs the reviewer.
+        assert_eq!(reviewer.requests().len(), if same_step { 2 } else { 1 });
         assert_eq!(
             line(&lines, "permission_resolved").payload["hosts"],
             json!(["https://example.com/"])

@@ -1461,8 +1461,27 @@ code `closing`. A process extension then has its manifest's
 `exit_timeout_ms` to finish, and after that gets the shutdown sequence every
 child gets: SIGTERM, 800 ms, then SIGKILL (`docs/invocation.md`, "Shutdown").
 
+Before replaying, the drain waits until no watcher delivery is still
+queued or running: a durable delivery the live fan-out already covered
+runs first, so tearing the session down after the drain cannot lose it.
+The drain replays each watcher's `(cursor, end]` log range — every line at
+or after the registration end the live fan-out did not already offer — in
+extension-name order, then watcher registration order. Each watcher runs
+once per line within its declared timeout; one past it fails, and the
+stream continues with the next watcher. A failure never becomes a `notice`:
+the log already holds `fiber_exited`, so it is printed on stderr under it,
+in every session, naming the watcher and its failure. A log the drain
+cannot read, or a line it cannot read, is collected and printed the same
+way, naming the drain instead of a watcher. `host.fs` and
+`host.data_dir` keep working through the drain; `host.model` and
+`host.drive` answer `closing`, and `host.delegate` stays refused to
+watchers, as ever.
+
 When a signal stops Fiber, no extension code runs, as no hook does. The
-5-second shutdown bound has no room for it.
+5-second shutdown bound has no room for it. A signal that stops the
+drain makes Fiber exit with the signal's code; `fiber_exited` keeps the
+line it already wrote. A signal after the drain finished changes
+nothing.
 
 ## Notes for authors
 
@@ -1810,6 +1829,16 @@ first-party extensions too. A `notice` with code `extension_shadowed` names both
 versions, so a personal install that is newer than the repository's copy is
 visible. Two repository copies of one name load the same way: the first
 declared loads, and the same notice names both versions.
+
+**Commands that read an approved copy.** A session loads its project's
+approved, pinned copies. Three commands read the same set when run in the
+project: `fiber models` lists the providers the approved copies register
+and runs their model lists, `fiber login` logs into those providers, and
+`fiber config` checks a `config set model` reference against them and
+prints their load notices. Run outside the project, each reads the personal
+installs only. No other user-facing command reads approved copies: the hidden
+`fiber refresh-model-lists` child reloads the same set to refresh the providers'
+cached lists.
 
 **An extension can be scoped to projects.** `fiber extension install --project`
 installs it for the current project only: it loads in that project's sessions
