@@ -266,6 +266,18 @@ impl Setup {
         Self { root, deadline }
     }
 
+    /// Starts the test's deadline before any setup work, rooting the
+    /// temporary directories under `parent`: a root holding live
+    /// session sockets must sit under a short parent such as `/tmp`,
+    /// since socket paths are limited to SUN_LEN bytes.
+    pub(crate) fn new_under(parent: &Path) -> Self {
+        let deadline = Deadline::start();
+        let root = fakes::TempDir::under(parent, "fh");
+        fs::create_dir_all(root.path().join("h")).unwrap();
+        fs::create_dir_all(root.path().join("w")).unwrap();
+        Self { root, deadline }
+    }
+
     pub(crate) fn home(&self) -> PathBuf {
         self.root.path().join("h")
     }
