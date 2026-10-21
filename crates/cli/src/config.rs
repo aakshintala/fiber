@@ -155,7 +155,7 @@ pub fn config_set_text(
 }
 
 /// Checks a `model` value against the installed providers' cached model
-/// lists, by the rules in `docs/model-routing.md`, "Naming a model"
+/// lists merged with the workspace's approved repository set, by the rules in `docs/model-routing.md`, "Naming a model"
 /// (`docs/configuration.md`, "When Fiber writes"). With no cached list
 /// the value is accepted, and no network is touched for any key. The typed
 /// text is written as typed, never normalised. Returns every notice the

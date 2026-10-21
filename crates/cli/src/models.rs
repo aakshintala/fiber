@@ -1,5 +1,6 @@
 //! `fiber models` (`docs/invocation.md`, "Commands and flags"): lists the
-//! models the installed providers serve, one row each, with the configured
+//! models the installed providers serve merged with the workspace's
+//! approved repository set, one row each, with the configured
 //! default marked. It reads each provider's cached list through
 //! [`Providers`], which serves `cache/models/<name>.json` when there is one,
 //! and runs each Lua provider's `models()` when there is none, as at startup
@@ -176,7 +177,8 @@ pub(crate) fn providers_config_and_set(
     Ok((providers, config, set, notices))
 }
 
-/// Lists the installed providers' models in `home`, marking the configured
+/// Lists the models of the installed providers merged with the workspace's
+/// approved repository set in `home`, marking the configured
 /// default, filtered by `search` and printed as text or JSON Lines.
 #[allow(
     clippy::too_many_arguments,
@@ -284,7 +286,8 @@ fn run(
 }
 
 /// `fiber models [--json] [<search>]` in the current directory: lists the
-/// models the installed providers serve.
+/// models the installed providers serve merged with the current workspace's
+/// approved repository set.
 pub fn models(
     search: Option<&str>,
     json: bool,

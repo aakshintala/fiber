@@ -290,12 +290,6 @@ fn a_repository_role_without_a_credential_raises_no_notice() {
     );
 }
 
-/// Inits git in `workspace`, so it reads as a project repository.
-#[track_caller]
-fn git_init(workspace: &std::path::Path) {
-    fakes::git::git(workspace, &["init", "--quiet"]);
-}
-
 /// Declares the repository extension package `repo` registering the data
 /// provider `acme` serving `big`, and lists it under
 /// `repository_extensions`.
@@ -331,7 +325,8 @@ fn declare_repo_provider(workspace: &std::path::Path) {
 #[test]
 fn set_model_checks_against_an_approved_repository_provider() {
     let setup = Setup::new_with_fc_root();
-    git_init(&setup.workspace());
+    // Inits git in the workspace, so it reads as a project repository.
+    fakes::git::git(&setup.workspace(), &["init", "--quiet"]);
     declare_repo_provider(&setup.workspace());
     let approved = setup.run_in_workspace(&["approve", "--yes"]);
     assert_eq!(

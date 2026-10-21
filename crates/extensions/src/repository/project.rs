@@ -183,7 +183,9 @@ impl RepositorySet {
                 Ok(hold) => hold,
                 Err(_) => continue,
             };
-            if !store.is_finished(item, &copy) {
+            // Any failure reads as unfinished: the copy is skipped
+            // silently, never rebuilt.
+            if !store.finished(item, &copy).unwrap_or(false) {
                 continue;
             }
             set.pinned(item, &copy, hold);

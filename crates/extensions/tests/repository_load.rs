@@ -2228,6 +2228,81 @@ fn try_hold_finished_refuses_a_non_hash_and_an_empty_declaration_writes_nothing(
 }
 
 #[test]
+fn try_hold_finished_refuses_a_file_or_a_link_where_the_copy_goes() {
+    let setup = Setup::new();
+    let repos = Repos::new(&setup);
+    provider_pkgs(
+        &setup,
+        &[("acme", "v1.0.0", "acme", &["repo-model"], false)],
+    );
+    let clock = FakeClock::new();
+    let digest = approve_kind(
+        &setup,
+        &repos,
+        &clock,
+        OfferedKind::Extension,
+        "fiber.test/acme",
+    );
+    let store = Store::new(&setup.home(), &project(), clock.clone());
+    // A stray file where the copy goes is refused, never followed: with
+    // the directory check removed the hold would take the marker instead.
+    fs::remove_dir_all(copy(&setup, &digest)).unwrap();
+    write(&copy(&setup, &digest), "not a directory");
+    match store.try_hold_finished(&digest) {
+        Err(extensions::Error::Pin { why, .. }) => assert!(
+            why.contains("is a symbolic link or a file"),
+            "a file copy is refused, got {why:?}"
+        ),
+        other => panic!("a file copy is refused, got {other:?}"),
+    }
+    #[cfg(unix)]
+    {
+        fs::remove_file(copy(&setup, &digest)).unwrap();
+        std::os::unix::fs::symlink("elsewhere", copy(&setup, &digest)).unwrap();
+        match store.try_hold_finished(&digest) {
+            Err(extensions::Error::Pin { why, .. }) => assert!(
+                why.contains("is a symbolic link or a file"),
+                "a linked copy is refused, got {why:?}"
+            ),
+            other => panic!("a linked copy is refused, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn try_hold_finished_reports_a_missing_copy_as_having_no_pinned_copy() {
+    let setup = Setup::new();
+    let clock = FakeClock::new();
+    let store = Store::new(&setup.home(), &project(), clock);
+    // A valid hash with no copy on disk names the missing copy: with the
+    // `NotFound` check inverted or removed it reports a generic IO error.
+    let missing = "a".repeat(64);
+    match store.try_hold_finished(&missing) {
+        Err(extensions::Error::Pin { why, .. }) => assert!(
+            why.contains("has no pinned copy"),
+            "a missing copy names itself, got {why:?}"
+        ),
+        other => panic!("a missing copy names itself, got {other:?}"),
+    }
+}
+
+#[test]
+fn try_hold_finished_reports_an_unreadable_copy_path_as_an_io_error() {
+    let setup = Setup::new();
+    let clock = FakeClock::new();
+    // A NUL byte in the home path fails the copy's metadata read with
+    // `InvalidInput`, never `NotFound`: with every metadata error reading
+    // as a missing copy it would report "has no pinned copy".
+    let mut home = setup.home();
+    home.push("ho\0me");
+    let store = Store::new(&home, &project(), clock);
+    match store.try_hold_finished(&"b".repeat(64)) {
+        Err(extensions::Error::Io { .. }) => {}
+        other => panic!("an unreadable copy path is an IO error, got {other:?}"),
+    }
+}
+
+#[test]
 fn load_pinned_skips_an_unfinished_copy_and_a_file_where_the_copy_goes() {
     let setup = Setup::new();
     let repos = Repos::new(&setup);

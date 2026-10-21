@@ -451,15 +451,6 @@ impl Store {
         Err(Error::Busy)
     }
 
-    /// Whether the held copy is finished without building: the same rule
-    /// [`Store::finished`] keeps a copy by, read without writing
-    /// anything. A dependency-bearing copy without its completion marker
-    /// is legacy, not finished. Any failure reads as unfinished: the
-    /// caller skips the copy.
-    pub(crate) fn is_finished(&self, item: &RepoItem, copy: &Path) -> bool {
-        self.finished(item, copy).unwrap_or(false)
-    }
-
     /// One copy through one wait for `pinned/.lock`: blocking for an
     /// approval or a person-waiting caller, bounded for a session start
     /// or reload that must never wait on another process.
@@ -621,8 +612,9 @@ impl Store {
     /// or server (which has no dependencies), or an extension whose
     /// manifest names none, or whose dependency completion marker is
     /// present. A dependency-bearing copy without one is legacy and
-    /// rebuilds.
-    fn finished(&self, item: &RepoItem, copy: &Path) -> Result<bool, Error> {
+    /// rebuilds. Any failure reads as unfinished to a read-only caller,
+    /// which skips the copy.
+    pub(crate) fn finished(&self, item: &RepoItem, copy: &Path) -> Result<bool, Error> {
         if item.kind != OfferedKind::Extension {
             return Ok(true);
         }

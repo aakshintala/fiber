@@ -1817,7 +1817,9 @@ project: `fiber models` lists the providers the approved copies register
 and runs their model lists, `fiber login` logs into those providers, and
 `fiber config` checks a `config set model` reference against them and
 prints their load notices. Run outside the project, each reads the personal
-installs only. No other command reads approved copies.
+installs only. No other user-facing command reads approved copies: the hidden
+`fiber refresh-model-lists` child reloads the same set to refresh the providers'
+cached lists.
 
 **An extension can be scoped to projects.** `fiber extension install --project`
 installs it for the current project only: it loads in that project's sessions
