@@ -1756,6 +1756,7 @@ later release still applies.
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
 | `/settings` | Opens the configuration keys. |
+| `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
 | `/keys` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
@@ -2064,7 +2065,8 @@ the model picker inside its view.
 
 Fiber ships a dark and a light theme. A person adds their own as files in
 Fiber home, an installed extension can carry more, and either is picked in
-`/settings`, which writes `tui.theme`. With no
+`/settings`, which writes `tui.theme`. `/theme` opens the same theme picker,
+and `/theme <name>` sets the named theme at once, saving `tui.theme`. With no
 theme set, the theme follows the terminal's light or dark appearance and
 switches when the terminal reports a change.
 
