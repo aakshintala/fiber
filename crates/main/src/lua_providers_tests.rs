@@ -65,6 +65,8 @@ fn an_unconfigured_model_is_left_out_and_a_setting_fills_it() {
         &mut providers,
         &config,
         &fakes::children::grouped_output,
+        &home,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert!(
@@ -94,6 +96,8 @@ fn an_unconfigured_model_is_left_out_and_a_setting_fills_it() {
         &mut providers,
         &config,
         &fakes::children::grouped_output,
+        &home,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert_eq!(
@@ -122,6 +126,8 @@ fn a_settings_file_that_cannot_be_read_fails_with_config_invalid() {
         &mut providers,
         &config,
         &fakes::children::grouped_output,
+        &home,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap_err();
     assert_eq!(err.code, ErrorCode::ConfigInvalid);
@@ -175,6 +181,8 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
         &mut providers,
         &config,
         &fakes::children::grouped_output,
+        &home,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let data = providers.data("acme");

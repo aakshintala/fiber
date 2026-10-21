@@ -142,8 +142,8 @@ fn the_hub_answer_fills_a_value_the_client_lacks() {
             "adb-1.example.test".to_owned()
         )]))
     );
-    let request: Value = serde_json::from_str(&Deadline::after(DEADLINE).recv(&got).unwrap())
-        .unwrap();
+    let request: Value =
+        serde_json::from_str(&Deadline::after(DEADLINE).recv(&got).unwrap()).unwrap();
     assert_eq!(
         request,
         json!({"id": "c_env", "command": "placeholder_env",

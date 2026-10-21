@@ -64,9 +64,18 @@ pub(crate) fn add_lua(
     providers: &mut Providers,
     config: &Config,
     run: config::Runner<'_>,
+    home: &std::path::Path,
+    clock: &dyn contract::clock::Clock,
 ) -> Result<AddedLua, Failure> {
-    let mut notices =
-        providers.add_session(extensions, config, run, &|name| std::env::var(name).ok());
+    // The session resolves placeholders from the hub's captured
+    // environment when a hub answers, falling back to the process
+    // environment: `fiber ask` runs in the caller's process, so process
+    // env alone would disagree with `fiber models` (issue #2909). A hub
+    // that spawned this session answers its own environment, which is
+    // this process's, so those sessions resolve exactly as before.
+    let answered = ::cli::hub_env(home, &::cli::declared_names(providers), clock);
+    let lookup = |name: &str| ::cli::lookup(&answered, &|name| std::env::var(name).ok(), name);
+    let mut notices = providers.add_session(extensions, config, run, &lookup);
     let naming: Vec<(String, String)> = providers
         .names()
         .flat_map(|name| {
@@ -83,7 +92,7 @@ pub(crate) fn add_lua(
         .collect();
     notices.extend(
         providers
-            .fill_placeholders(config, &|name| std::env::var(name).ok())
+            .fill_placeholders(config, &lookup)
             .map_err(|e| failed(e.code(), e))?,
     );
     // Detached: nothing joins them, and `fiber ask` does not wait on them
@@ -98,7 +107,7 @@ pub(crate) fn add_lua(
         config,
         Some(config::refresh_after(config)),
         run,
-        &|name| std::env::var(name).ok(),
+        &lookup,
     );
     let _detached = started;
     Ok((naming, notices))

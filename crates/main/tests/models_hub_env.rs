@@ -33,11 +33,7 @@ fn install(setup: &Setup) {
     let output = run_to_exit(
         setup.deadline,
         "fiber extension install",
-        setup.fiber(&[
-            "extension",
-            "install",
-            to.to_str().unwrap(),
-        ]),
+        setup.fiber(&["extension", "install", to.to_str().unwrap()]),
     );
     assert_eq!(
         output.status.code(),
@@ -85,7 +81,11 @@ fn connect_when_bound(setup: &Setup) {
 fn run(setup: &Setup, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
     let mut command: Command = setup.fiber(args);
     command.envs(env.iter().copied());
-    run_to_exit(setup.deadline, &format!("fiber {}", args.join(" ")), command)
+    run_to_exit(
+        setup.deadline,
+        &format!("fiber {}", args.join(" ")),
+        command,
+    )
 }
 
 /// The hub-environment message Part 1 prints for an unset placeholder.
@@ -131,7 +131,12 @@ fn models_leaves_out_what_the_hub_lacks_and_the_session_names_it() {
 
     let ask = run(
         &setup,
-        &["ask", "--model", "databricks/databricks-claude-opus-5", "hi"],
+        &[
+            "ask",
+            "--model",
+            "databricks/databricks-claude-opus-5",
+            "hi",
+        ],
         &client,
     );
     assert_eq!(ask.status.code(), Some(1), "ask output: {ask:?}");

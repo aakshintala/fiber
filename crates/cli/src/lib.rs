@@ -49,10 +49,10 @@ mod extension_test;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod feedback;
+mod hub_env;
 mod hub_list;
 mod hub_pair;
 mod hub_refresh;
-mod hub_env;
 mod hub_service;
 mod hub_status;
 mod hub_token;
@@ -126,6 +126,7 @@ pub use extension::{
 };
 pub use extension_test::extension_test;
 pub use feedback::{FeedbackError, ReportContext, build_report, write};
+pub use hub_env::{declared_names, hub_env, lookup};
 pub use hub_list::{hub_add, hub_remove};
 pub use hub_pair::{Address, hub_pair};
 pub use hub_refresh::hub_refresh;

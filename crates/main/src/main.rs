@@ -262,7 +262,7 @@ fn run() -> i32 {
                 } else {
                     Layer::Global
                 };
-                ::cli::config_set(layer, &key, &value)
+                ::cli::config_set(layer, &key, &value, clock.as_ref())
             }
         },
         cli::Invocation::Run(Some(cli::Commands::Login(args)), _) => ::cli::run_login(

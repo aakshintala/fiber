@@ -5,12 +5,21 @@
 //! the caller falls back to the process environment, as before.
 
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
+use contract::commands::hub::{HubCommand, HubCommandLine, PlaceholderEnvArgs};
+use contract::{CommandId, HubLine};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::fd::{AsFd, BorrowedFd};
 
-/// How long the hub query waits for its answer: the connect deadline plus
+/// The `id` of the one command the hub query sends.
+const ENV_ID: &str = "c_env";
+
+/// How long the hub query waits for the answer: the connect deadline plus
 /// the login-shell capture's 10-second limit, since a hub in its first
 /// seconds answers only after its first capture (`docs/invocation.md`,
 /// "A session's environment"). `cli` declares it because `cli` may not
@@ -21,8 +30,10 @@ pub(crate) const HUB_ENV_WITHIN: Duration =
 /// The hub's captured values for the requested placeholder variable
 /// names, or `None` when no hub answers: absent, refusing or silent. The
 /// caller falls back to the process environment on `None`, so today's
-/// offline behaviour is unchanged.
-pub(crate) fn hub_env(
+/// offline behaviour is unchanged. `pub` for the session startup in
+/// `main`, which fills placeholders from the same hub values so a
+/// session choosing a model agrees with `fiber models`.
+pub fn hub_env(
     home: &Path,
     names: &[String],
     clock: &dyn Clock,
@@ -33,21 +44,46 @@ pub(crate) fn hub_env(
 /// [`hub_env`] with hooks for tests: `before_read` runs just before each
 /// answer read, and `before_wait` after each wait's deadline check, just
 /// before [`Clock::wait_until`].
-fn hub_env_with(
-    _home: &Path,
-    _names: &[String],
-    _clock: &dyn Clock,
-    _before_read: &mut dyn FnMut(),
-    _before_wait: &mut dyn FnMut(),
+pub(crate) fn hub_env_with(
+    home: &Path,
+    names: &[String],
+    clock: &dyn Clock,
+    before_read: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
 ) -> Option<BTreeMap<String, String>> {
-    None
+    if names.is_empty() {
+        return None;
+    }
+    let deadline = clock.now() + HUB_ENV_WITHIN;
+    let connected = doors::hub::probe_until(home, clock, deadline);
+    let stream = match connected {
+        doors::hub::Probe::Absent => return None,
+        doors::hub::Probe::Failed(_) => return None,
+        doors::hub::Probe::Connected(Err(_)) => return None,
+        doors::hub::Probe::Connected(Ok((stream, _))) => stream,
+    };
+    ask(&stream, deadline, names, clock, before_read, before_wait)
+}
+
+/// Every placeholder variable name the installed providers declare,
+/// sorted, each once: the only names the hub is ever asked for, never the
+/// whole environment.
+pub fn declared_names(providers: &extensions::Providers) -> Vec<String> {
+    let mut names: Vec<String> = providers
+        .names()
+        .flat_map(|name| providers.data(name).placeholders.into_values())
+        .filter_map(|placeholder| placeholder.env)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// One placeholder value for `fill_placeholders`: the hub's answer when
 /// one arrived, else the process environment. A name the hub answered
 /// without stays a gap even when the process environment holds it, so a
 /// stale client export cannot revive a value the hub never saw.
-pub(crate) fn lookup(
+pub fn lookup(
     answered: &Option<BTreeMap<String, String>>,
     process: &dyn Fn(&str) -> Option<String>,
     name: &str,
@@ -55,6 +91,153 @@ pub(crate) fn lookup(
     match answered {
         Some(values) => values.get(name).cloned(),
         None => process(name),
+    }
+}
+
+/// Sends `placeholder_env` and reads lines until its answer, failing once
+/// `deadline` passes on `clock`: the write and every read are
+/// non-blocking under the same deadline, so unrelated lines, trickled
+/// bytes and silence all end there. `before_read` runs just before each
+/// answer read; `before_wait` runs after each wait's deadline check, just
+/// before [`Clock::wait_until`]. The stream comes back blocking with no
+/// read timeout, as it arrived. A refusal or a missing answer is `None`,
+/// so the caller falls back to the process environment.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call of the one-shot query: home, deadline, names, clock and hooks"
+)]
+fn ask(
+    stream: &UnixStream,
+    deadline: Instant,
+    names: &[String],
+    clock: &dyn Clock,
+    before_read: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
+) -> Option<BTreeMap<String, String>> {
+    let result = exchange(stream, deadline, names, clock, before_read, before_wait);
+    // macOS refuses the option once the peer has closed, while its
+    // buffered bytes stay readable; ignoring that refusal keeps a
+    // close-after-answer a reply.
+    let restore = match stream.set_nonblocking(false) {
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+        other => other,
+    };
+    match result {
+        // The exchange's own answer wins over a restore failure.
+        Err(()) => None,
+        Ok(values) => restore.map(|()| Some(values)).unwrap_or(None),
+    }
+}
+
+/// The exchange `ask` wraps: it sends `placeholder_env` and reads lines
+/// until its answer, failing once `deadline` passes on `clock`. It leaves
+/// the stream's mode alone; `ask` restores blocking after.
+fn exchange(
+    mut stream: &UnixStream,
+    deadline: Instant,
+    names: &[String],
+    clock: &dyn Clock,
+    before_read: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
+) -> Result<BTreeMap<String, String>, ()> {
+    stream.set_nonblocking(true).map_err(|_| ())?;
+    let mut request = serde_json::to_vec(&HubCommandLine {
+        id: CommandId(ENV_ID.to_owned()),
+        command: HubCommand::PlaceholderEnv(PlaceholderEnvArgs {
+            names: names.to_vec(),
+        }),
+    })
+    .map_err(|_| ())?;
+    request.push(b'\n');
+    let mut sent = 0;
+    while sent < request.len() {
+        match stream.write(request.get(sent..).unwrap_or_default()) {
+            Ok(0) => return Err(()),
+            Ok(wrote) => sent += wrote,
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::WouldBlock {
+                    return Err(());
+                }
+                if clock.now() >= deadline {
+                    return Err(());
+                }
+                before_wait();
+                wait_clock(clock, deadline, stream.as_fd(), PollFlags::OUT);
+            }
+        }
+    }
+    let mut pending = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        if clock.now() >= deadline {
+            return Err(());
+        }
+        before_read();
+        match stream.read(&mut chunk) {
+            Ok(0) => return Err(()),
+            Ok(read) => {
+                pending.extend_from_slice(chunk.get(..read).unwrap_or_default());
+            }
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::WouldBlock {
+                    return Err(());
+                }
+                if clock.now() >= deadline {
+                    return Err(());
+                }
+                before_wait();
+                wait_clock(clock, deadline, stream.as_fd(), PollFlags::IN);
+            }
+        }
+        while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            if let Some(values) = answer(&line)? {
+                return Ok(values);
+            }
+        }
+    }
+}
+
+/// Parks `clock` until `until`, waiting on `fd` for real while parked:
+/// the full bound on a real clock, a short slice on a fake one, which the
+/// caller re-checks against the fake deadline after.
+fn wait_clock(clock: &dyn Clock, until: Instant, fd: BorrowedFd, events: PollFlags) {
+    clock.wait_until(Some(until), &mut |bound| {
+        let wait = bound.or(Some(Duration::from_millis(10)));
+        let spec = wait.map(|wait| Timespec {
+            tv_sec: wait.as_secs().min(i64::MAX as u64).cast_signed(),
+            tv_nsec: wait.subsec_nanos() as _,
+        });
+        let mut fds = [PollFd::new(&fd, events)];
+        // The park itself is the wait: a signal delivery or a woken fd
+        // both end it, so the count is discarded.
+        #[allow(
+            clippy::let_underscore_must_use,
+            reason = "a woken fd and an expired wait both end the park: the count is unused"
+        )]
+        let _ = poll(&mut fds, spec.as_ref());
+    });
+}
+
+/// The hub's captured values for the requested names, from its answer to
+/// `ENV_ID`; `None` for any other line. A refusal or a missing or
+/// malformed answer is `None`, so the caller falls back to the process
+/// environment.
+fn answer(line: &[u8]) -> Result<Option<BTreeMap<String, String>>, ()> {
+    let Ok(line) = serde_json::from_slice::<HubLine>(line) else {
+        return Ok(None);
+    };
+    let Some(result) = crate::sessions::answer_of(&line, ENV_ID, "placeholder_env") else {
+        return Ok(None);
+    };
+    let Ok(result) = result else {
+        return Err(());
+    };
+    match result.get("values") {
+        None => Err(()),
+        Some(values) => serde_json::from_value(values.clone())
+            .map(Some)
+            .map_err(|_| ()),
     }
 }
 
