@@ -120,6 +120,7 @@ fn built(id: &str, from: Option<&str>) -> Started {
         id: SessionId(id.to_owned()),
         dir: std::path::PathBuf::from(format!("/sessions/{id}")),
         workspace: Some("/w".to_owned()),
+        worktree: None,
         forked_from: from.map(|parent| SessionId(parent.to_owned())),
     }
 }
