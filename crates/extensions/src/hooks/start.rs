@@ -19,15 +19,15 @@ use crate::lua::LuaExtension;
 use crate::{Error, LuaProvider};
 
 /// Where each manifest `depends` entry lives, by its name: the directory
-/// a qualified `require` loads from. A key holding a colon is never
-/// addressable by the first-colon grammar, so it stays out of the map and
-/// its lookup fails as an unknown dependency. A repository copy reads its
-/// own `.fiber-depends`, never Fiber home, so a missing entry still names
-/// the dependency there instead of leaking across the boundary.
-pub(crate) fn dep_dirs(
+/// a qualified `require` loads from. Every key is mapped, including one
+/// holding a colon: matching, not the map, decides, so the longest key
+/// prefix wins. A repository copy reads its own `.fiber-depends`, never
+/// Fiber home, so a missing entry still names the dependency there
+/// instead of leaking across the boundary.
+pub fn dep_dirs(
     home: &Path,
     dir: &Path,
-    manifest: &Manifest,
+    depends: &BTreeMap<String, String>,
     is_repository_copy: bool,
 ) -> BTreeMap<String, PathBuf> {
     let root = if is_repository_copy {
@@ -36,10 +36,7 @@ pub(crate) fn dep_dirs(
         config::extensions_dir(home)
     };
     let mut deps = BTreeMap::new();
-    for name in manifest.depends.keys() {
-        if name.contains(':') {
-            continue;
-        }
+    for name in depends.keys() {
         if let Ok(slug) = crate::install::slug(name) {
             deps.insert(name.clone(), root.join(slug));
         }
@@ -79,7 +76,8 @@ pub(super) fn start_vm(
     // directory prefix below is where those copies live, so a pinned copy
     // never reads a personal install of the same dependency.
     let is_repository_copy = dir.starts_with(config::pinned_dir(home));
-    extension = extension.with_dependencies(dep_dirs(home, dir, manifest, is_repository_copy));
+    extension =
+        extension.with_dependencies(dep_dirs(home, dir, &manifest.depends, is_repository_copy));
     if let Some(cap) = manifest
         .memory_mib
         .and_then(|mib| usize::try_from(mib).ok())
@@ -268,7 +266,7 @@ mod tests {
         let home = fakes::TempDir::new("fiber-dep-dirs-personal");
         let dir = home.path().join("extensions").join("fiber.test-root");
         let manifest = manifest_with_depends(&dir, r#"{"example.com/acme/strings":"1.0"}"#);
-        let deps = dep_dirs(home.path(), &dir, &manifest, false);
+        let deps = dep_dirs(home.path(), &dir, &manifest.depends, false);
         assert_eq!(
             deps.get(DEP),
             Some(
@@ -285,7 +283,7 @@ mod tests {
         let home = fakes::TempDir::new("fiber-dep-dirs-copy");
         let dir = home.path().join("pinned").join("abc123");
         let manifest = manifest_with_depends(&dir, r#"{"example.com/acme/strings":"1.0"}"#);
-        let deps = dep_dirs(home.path(), &dir, &manifest, true);
+        let deps = dep_dirs(home.path(), &dir, &manifest.depends, true);
         assert_eq!(
             deps.get(DEP),
             Some(
@@ -305,19 +303,28 @@ mod tests {
         // there, so a require names the dependency instead of reading
         // a personal install of the same name.
         assert!(!dir.join(".fiber-depends").exists());
-        let deps = dep_dirs(home.path(), &dir, &manifest, true);
+        let deps = dep_dirs(home.path(), &dir, &manifest.depends, true);
         let mapped = deps.get(DEP).unwrap();
         assert!(mapped.starts_with(dir.join(".fiber-depends")));
         assert!(!mapped.starts_with(config::extensions_dir(home.path())));
     }
 
     #[test]
-    fn a_depends_key_holding_a_colon_is_unaddressable() {
+    fn a_depends_key_holding_a_colon_is_mapped_for_longest_prefix_matching() {
         let home = fakes::TempDir::new("fiber-dep-dirs-colon");
         let dir = home.path().join("extensions").join("fiber.test-root");
         let manifest = manifest_with_depends(&dir, r#"{"github.com/acme/lib:aux":"1.0"}"#);
-        // The first-colon grammar can never match this key, so it stays
-        // out of the map and its lookup fails as unknown.
-        assert!(dep_dirs(home.path(), &dir, &manifest, false).is_empty());
+        // Matching, not the map, decides: the colon-holding key stays in
+        // the map so the longest prefix wins at require time.
+        let deps = dep_dirs(home.path(), &dir, &manifest.depends, false);
+        assert_eq!(
+            deps.get("github.com/acme/lib:aux"),
+            Some(
+                &home
+                    .path()
+                    .join("extensions")
+                    .join(config::dir_name("github.com/acme/lib:aux"))
+            )
+        );
     }
 }

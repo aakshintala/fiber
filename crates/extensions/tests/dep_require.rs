@@ -272,9 +272,9 @@ fn a_second_colon_stays_in_the_module() {
 }
 
 #[test]
-fn a_colon_holding_depends_key_is_unaddressable() {
+fn a_colon_holding_depends_key_loads_through_the_longest_match() {
     let setup = Setup::new();
-    install_pair(&setup, &root_init_require("weird:key:trim", "non-blocking"));
+    install_pair(&setup, &root_init_require("weird:key:trim", "blocking"));
     // The installed manifest gains a colon-holding key after the install:
     // the manifest is what the session reads, not the install record.
     let manifest = setup
@@ -289,14 +289,61 @@ fn a_colon_holding_depends_key_is_unaddressable() {
         .unwrap()
         .insert("weird:key".to_owned(), serde_json::json!("1.0"));
     std::fs::write(&manifest, root.to_string()).unwrap();
+    // The dependency directory is created by hand: the loader serves the
+    // filesystem, so no install record is needed for the mapped name.
+    let dep = setup
+        .home()
+        .join("extensions")
+        .join(config::dir_name("weird:key"));
+    std::fs::create_dir_all(&dep).unwrap();
+    std::fs::write(&dep.join("trim.lua"), TRIM).unwrap();
     let session = load(&setup, FakeClock::new());
-    // The split is at the first colon: the head `weird` never equals the
-    // colon-holding key, so the lookup fails as an unknown dependency.
-    let message = refused(&session);
-    assert!(
-        message.contains("`dependency 'weird' not installed`"),
-        "{message}"
-    );
+    // The longest prefix `weird:key` wins over the shorter head `weird`,
+    // which no key holds, so the module serves.
+    let AfterToolOutcome::Changed { content, .. } = answer(ask(&session)).outcome else {
+        panic!("the hook runs");
+    };
+    assert_eq!(content.as_deref(), Some("x|x"));
+}
+
+#[test]
+fn overlapping_depends_keys_pin_the_longest_win() {
+    let setup = Setup::new();
+    install_pair(&setup, &root_init_require("dep:a:trim", "blocking"));
+    let manifest = setup
+        .home()
+        .join("extensions")
+        .join(config::dir_name(ROOT))
+        .join("extension.json");
+    let mut root: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest).unwrap()).unwrap();
+    let depends = root["depends"].as_object_mut().unwrap();
+    depends.insert("dep".to_owned(), serde_json::json!("1.0"));
+    depends.insert("dep:a".to_owned(), serde_json::json!("1.0"));
+    std::fs::write(&manifest, root.to_string()).unwrap();
+    // The shorter key holds a decoy answering "wrong": the longest match
+    // must serve the `dep:a` directory instead.
+    let short = setup
+        .home()
+        .join("extensions")
+        .join(config::dir_name("dep"));
+    std::fs::create_dir_all(&short).unwrap();
+    std::fs::write(
+        &short.join("trim.lua"),
+        "return { trim = function(s) return \"wrong\" end }",
+    )
+    .unwrap();
+    let long = setup
+        .home()
+        .join("extensions")
+        .join(config::dir_name("dep:a"));
+    std::fs::create_dir_all(&long).unwrap();
+    std::fs::write(&long.join("trim.lua"), TRIM).unwrap();
+    let session = load(&setup, FakeClock::new());
+    let AfterToolOutcome::Changed { content, .. } = answer(ask(&session)).outcome else {
+        panic!("the hook runs");
+    };
+    assert_eq!(content.as_deref(), Some("x|x"));
 }
 
 #[test]

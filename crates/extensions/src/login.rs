@@ -32,7 +32,7 @@ pub fn login_provider(
     let manifest = config::read_manifest(&dir)?;
     // A login runs a personal install only, never a repository copy: the
     // same dependency map shape the session builds for that layout.
-    let deps = crate::hooks::dep_dirs(home, &dir, &manifest, false);
+    let deps = crate::hooks::dep_dirs(home, &dir, &manifest.depends, false);
     let mut extension = LuaExtension::new(extension_name, dir, home, clock)
         .with_dependencies(deps)
         .with_browser(browser)

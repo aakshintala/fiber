@@ -56,34 +56,62 @@ pub(crate) fn install(
     })?;
     let load_module = lua.create_function(move |lua, name: String| {
         // A qualified name loads from the named dependency's directory:
-        // the text before the first colon must exactly equal a manifest
-        // depends key, and the text after it maps to a file exactly as an
-        // unqualified name does. Anything else is the same backtick-file
-        // error the loader already reports. The serving root is the mapped
-        // directory canonicalized per read, so a symlinked home or root
-        // still serves; a missing directory fails here, naming the
-        // dependency, without reaching the file loader.
-        let (root, file) = match name.split_once(':') {
-            None => (dir.clone(), format!("{}.lua", name.replace('.', "/"))),
-            Some((dep, module)) => {
-                if dep.is_empty() || module.is_empty() {
-                    return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
-                }
-                let Some(mapped) = deps.get(dep) else {
-                    return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
-                };
-                match mapped.canonicalize() {
-                    Ok(root) => (root, format!("{}.lua", module.replace('.', "/"))),
-                    Err(_) => {
-                        return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
-                    }
-                }
+        // the longest manifest depends key K such that the name starts
+        // with K plus a colon wins, and the remainder maps to a file
+        // exactly as an unqualified name does. An empty name, an empty
+        // remainder, or no prefix match is the same backtick-file error
+        // the loader already reports, naming the unknown dependency. The
+        // serving root is the mapped directory canonicalized per read,
+        // so a symlinked home or root still serves; a missing directory
+        // fails here, naming the dependency, without reaching the file
+        // loader.
+        if name.is_empty() {
+            return Ok((None, Some("`dependency '' not installed`".to_owned())));
+        }
+        if !name.contains(':') {
+            let (root, file) = (dir.clone(), format!("{}.lua", name.replace('.', "/")));
+            return Ok(match load_file(lua, &root, &file, memory_cap)? {
+                Ok(chunk) => (Some(chunk), None),
+                Err(message) => (None, Some(message)),
+            });
+        }
+        let mut best: Option<(&String, &PathBuf)> = None;
+        for (key, mapped) in &deps {
+            if name.len() > key.len()
+                && name.starts_with(key.as_str())
+                && name.as_bytes()[key.len()] == b':'
+                && best.is_none_or(|(found, _)| key.len() > found.len())
+            {
+                best = Some((key, mapped));
             }
-        };
-        Ok(match load_file(lua, &root, &file, memory_cap)? {
-            Ok(chunk) => (Some(chunk), None),
-            Err(message) => (None, Some(message)),
-        })
+        }
+        // A name that is exactly a key plus a colon has an empty
+        // remainder: it names the dependency it matched, if any.
+        if name.ends_with(':') {
+            if let Some((key, _)) = &best {
+                let dep = (*key).clone();
+                return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
+            }
+        } else if let Some((key, mapped)) = best {
+            let module = name[key.len() + 1..].to_owned();
+            let dep = key.clone();
+            if module.is_empty() {
+                return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
+            }
+            let root = match mapped.canonicalize() {
+                Ok(root) => root,
+                Err(_) => {
+                    return Ok((None, Some(format!("`dependency '{dep}' not installed`"))));
+                }
+            };
+            let file = format!("{}.lua", module.replace('.', "/"));
+            return Ok(match load_file(lua, &root, &file, memory_cap)? {
+                Ok(chunk) => (Some(chunk), None),
+                Err(message) => (None, Some(message)),
+            });
+        }
+        let head = name.split_once(':').map_or(name.as_str(), |(head, _)| head);
+        Ok((None, Some(format!("`dependency '{head}' not installed`"))))
     })?;
     let failures = crate::host::failure::install(lua)?;
     let loading = lua.create_function(move |_, ()| Ok(loading.borrow().clone()))?;

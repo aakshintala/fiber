@@ -323,9 +323,10 @@ impl LuaExtension {
     }
 
     /// Sets where each manifest `depends` entry lives, so a qualified
-    /// `require` loads from the dependency's directory. Session start and
-    /// login attach it; without it only unqualified requires resolve.
-    pub(crate) fn with_dependencies(mut self, deps: BTreeMap<String, PathBuf>) -> Self {
+    /// `require` loads from the dependency's directory. Session start,
+    /// login and the case runner attach it; without it only unqualified
+    /// requires resolve.
+    pub fn with_dependencies(mut self, deps: BTreeMap<String, PathBuf>) -> Self {
         self.deps = deps;
         self
     }

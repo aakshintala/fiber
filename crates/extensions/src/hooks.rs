@@ -37,7 +37,7 @@ mod handoff;
 mod lifecycle;
 mod settle;
 mod start;
-pub(crate) use start::dep_dirs;
+pub use start::dep_dirs;
 #[cfg(test)]
 mod state_tests;
 
