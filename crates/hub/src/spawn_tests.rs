@@ -646,6 +646,28 @@ fn the_session_command_rewinds_with_the_old_session_and_no_model() {
 }
 
 #[test]
+fn resume_of_a_missing_target_fails_naming_the_path_before_binding() {
+    let root = fakes::TempDir::new("hresumegone");
+    // The target is never created: the resume fails before spawning, so
+    // the recorder fixture never runs and writes nothing.
+    let target = root.path().join("gone");
+    let starter = starter_with(recorder_fixture(), VariablesSource::Inherited, &root);
+    let error = match Starter::resume(&starter, &SessionId("s1".to_owned()), &target, None) {
+        Ok(_) => panic!("a missing launch target fails before binding"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(
+        error.to_string(),
+        format!("{} no longer exists", target.display())
+    );
+    assert!(
+        !root.path().join("args").exists(),
+        "no process spawned behind the refusal"
+    );
+}
+
+#[test]
 fn resume_spawns_with_the_given_workspace() {
     let root = fakes::TempDir::new("hresumews");
     let workspace = workspace(&root);

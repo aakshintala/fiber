@@ -2307,21 +2307,46 @@ fn a_present_workspace_resumes_in_the_workspace_whatever_repository_is_recorded(
 }
 
 #[test]
-fn a_removed_workspace_without_a_repository_resumes_in_the_workspace() {
+fn a_removed_workspace_without_a_repository_is_refused_before_any_start() {
     let temp = Temp::new();
     let workspace = temp.dir.join(format!("w-{SECRET}"));
     let (workspace, _) = temp.worktree_log(false, json!({"path": workspace, "branch": "fiber/s"}));
-    // The workspace is gone, but with no recorded repository there is
-    // nowhere else to start: the starter gets the workspace and reports
-    // the missing path itself.
-    let starter = FakeStarter::exit_with(
-        &temp.dir,
-        crate::fake::failure(contract::ErrorCode::IoFailed, "The workspace is gone."),
-    );
+    // The workspace is gone, and with no recorded repository there is
+    // nowhere to make it from: the hub refuses before starting a process.
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());
     let refused = refused(resumed(&hub));
     assert_eq!(refused.code, contract::ErrorCode::IoFailed);
-    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Session {SID} could not resume: {} no longer exists",
+            workspace.display()
+        )
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+#[test]
+fn a_removed_plain_workspace_is_refused_before_any_start() {
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    fs::remove_dir_all(&workspace).unwrap();
+    // A plain directory records no worktree, so the missing workspace
+    // cannot be made again: the hub refuses before starting a process.
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let refused = refused(resumed(&hub));
+    assert_eq!(refused.code, contract::ErrorCode::IoFailed);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Session {SID} could not resume: {} no longer exists",
+            workspace.display()
+        )
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
     assert!(!temp.hub_log().contains(SECRET), "no path in the log");
 }
 
@@ -2334,10 +2359,22 @@ fn a_repository_that_is_not_a_string_is_ignored_and_the_log_is_not_corrupt() {
             false,
             json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
         );
+        // A repository that is not a string is no repository: the missing
+        // workspace cannot be made again, so the resume is refused before
+        // any start, and the log is still not corrupt.
         let starter = FakeStarter::bind_and_hold(&temp.dir);
         let hub = temp.hub(starter.clone());
-        assert!(resumed(&hub).is_ok(), "{repository}");
-        assert_eq!(starter.resumed(), [(sid(), workspace)], "{repository}");
+        let refused = refused(resumed(&hub));
+        assert_eq!(refused.code, contract::ErrorCode::IoFailed, "{repository}");
+        assert_eq!(
+            refused.message,
+            format!(
+                "Session {SID} could not resume: {} no longer exists",
+                workspace.display()
+            ),
+            "{repository}"
+        );
+        assert!(starter.resumed().is_empty(), "{repository}");
         assert!(!temp.hub_log().contains(SECRET), "no path in the log");
     }
     // A `worktree` that is not an object holds no repository either.
@@ -2345,8 +2382,16 @@ fn a_repository_that_is_not_a_string_is_ignored_and_the_log_is_not_corrupt() {
     let (workspace, _) = temp.worktree_log(false, json!("x"));
     let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());
-    assert!(resumed(&hub).is_ok());
-    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    let refused = refused(resumed(&hub));
+    assert_eq!(refused.code, contract::ErrorCode::IoFailed);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Session {SID} could not resume: {} no longer exists",
+            workspace.display()
+        )
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
     assert!(!temp.hub_log().contains(SECRET), "no path in the log");
 }
 
