@@ -579,6 +579,18 @@ fn the_four_quoted_commands_read() {
 }
 
 #[test]
+fn head_and_tail_count_forms_read() {
+    for command in [
+        "ls src | head -n 5",
+        "ls src | head -5",
+        "grep -rn \"def \" src | head -20",
+        "tail -n +3 f",
+    ] {
+        assert_reads(command);
+    }
+}
+
+#[test]
 fn only_echo_and_pwd_declare_no_paths() {
     for command in COMMANDS {
         let declares =

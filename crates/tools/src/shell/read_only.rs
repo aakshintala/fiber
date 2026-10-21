@@ -295,7 +295,7 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern_flags: &[],
         ends_flags: true,
         prints: false,
-        counts: false,
+        counts: true,
     },
     Command {
         name: "tail",
@@ -305,7 +305,7 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern_flags: &[],
         ends_flags: true,
         prints: false,
-        counts: false,
+        counts: true,
     },
     Command {
         name: "wc",
