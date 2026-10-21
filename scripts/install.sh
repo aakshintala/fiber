@@ -116,14 +116,31 @@ elif [ "$channel" = nightly ]; then
   # with `"prerelease": true`, `"draft": false` and a nightly tag. A
   # tied entry loses to the later one, so a repeated list entry changes
   # nothing. The list is pretty-printed JSON, one field per line, as the
-  # API writes it. Depth is counted in braces outside strings, so nested
+  # API writes it. Commas split fields only outside strings, so a comma
+  # in a body never splits its string before the closing quote. Depth is
+  # counted in braces outside strings, so nested
   # author and asset objects never reset the candidate: fields count only
   # at the release entry's own depth, and only its closing brace decides.
   # The strip is escape-aware, so an escaped quote in a body never ends a
   # string early and its braces never count.
   list=$(curl -fsSL --proto-redir =https "$list_url") ||
     fail "the nightly release list could not be downloaded from $list_url."
-  tag=$(printf '%s' "$list" | tr ',' '\n' | awk '
+  tag=$(printf '%s' "$list" | awk '
+    {
+      out = ""
+      in_str = 0
+      esc = 0
+      for (i = 1; i <= length($0); i++) {
+        c = substr($0, i, 1)
+        if (esc) { out = out c; esc = 0; continue }
+        if (in_str && c == "\\") { out = out c; esc = 1; continue }
+        if (c == "\"") { in_str = !in_str; out = out c; continue }
+        if (c == "," && !in_str) { print out; out = ""; continue }
+        out = out c
+      }
+      print out
+    }
+  ' | awk '
     {
       line = $0
       stripped = line

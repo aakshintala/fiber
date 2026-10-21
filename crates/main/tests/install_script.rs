@@ -633,6 +633,47 @@ fn the_nightly_channel_survives_escaped_quotes_in_a_body() {
     );
 }
 
+/// The nightly pick splits fields only outside strings
+/// (`docs/releasing.md`, "Installing"): a comma in a release body never
+/// splits its string before the closing quote, so the body's `{` never
+/// counts as structure. Without that, the brace pairs with the entry's
+/// own closing brace, swallowing the entry boundary and missing every
+/// release in the list.
+#[test]
+fn the_nightly_channel_survives_a_comma_and_brace_in_a_body() {
+    let setup = Setup::new_with_stub_version("0.0.10-nightly.20261018");
+    for tag in ["v0.0.9-nightly.20261019", "v0.0.10-nightly.20261018"] {
+        setup.publish_nightly(tag, &TARGETS);
+    }
+    let json = concat!(
+        "[\n",
+        "  {\n",
+        "    \"tag_name\": \"v0.0.10-nightly.20261018\",\n",
+        "    \"prerelease\": true,\n",
+        "    \"draft\": false,\n",
+        "    \"body\": \"See, { in body\"\n",
+        "  },\n",
+        "  {\n",
+        "    \"tag_name\": \"v0.0.9-nightly.20261019\",\n",
+        "    \"prerelease\": true,\n",
+        "    \"draft\": false,\n",
+        "    \"body\": \"plain\"\n",
+        "  }\n",
+        "]\n",
+    );
+    fs::write(setup.path("release/releases.json"), json).unwrap();
+    let run = setup.install_args(&LINUX_X86_64, &["--channel", "nightly"], &[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    setup.assert_installed(&setup.dest());
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!(
+            "release-install 0.0.10-nightly.20261018 --base-url {}\n",
+            setup.base()
+        )
+    );
+}
+
 /// An empty list and a stable-only list fail naming the nightly channel:
 /// there is no nightly to install.
 #[test]
