@@ -13,10 +13,9 @@ use contract::clock::Clock;
 use crate::ThemeSetting;
 use crate::configure::{
     BrowserLogin, Configure, ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginShow,
-    LoginTarget, NotesFile,
-    NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope, RulesSection,
-    Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists,
-    ToolSwitches, WriteScope,
+    LoginTarget, NotesFile, NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked,
+    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
+    ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 /// One notes save the view asked for: the workspace and each sent layer.
@@ -659,12 +658,7 @@ impl Configure for Fake {
         )
     }
 
-    fn save_host(
-        &self,
-        name: &str,
-        key: &str,
-        value: &str,
-    ) -> Result<HostSaved, ConfigureError> {
+    fn save_host(&self, name: &str, key: &str, value: &str) -> Result<HostSaved, ConfigureError> {
         if let Ok(mut saves) = self.host_saves.lock() {
             saves.push((name.to_owned(), key.to_owned(), value.to_owned()));
         }

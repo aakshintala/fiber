@@ -486,12 +486,7 @@ pub trait Configure: Send + Sync {
     /// not a host is refused with a usage error naming the setting, never
     /// the value, and nothing is written. A project-layer empty masking
     /// the saved value comes back as the project settings file hiding it.
-    fn save_host(
-        &self,
-        name: &str,
-        key: &str,
-        value: &str,
-    ) -> Result<HostSaved, ConfigureError>;
+    fn save_host(&self, name: &str, key: &str, value: &str) -> Result<HostSaved, ConfigureError>;
 
     /// Both person layers' notes for `workspace`'s project, each with its
     /// file, its own `reviewer.context` and its version.
