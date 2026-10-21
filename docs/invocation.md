@@ -1282,7 +1282,12 @@ git library is linked in. `git worktree add` runs the repository's hooks, so
 a `post-checkout` hook can set up the new tree. Every other git command the
 `worktree` module runs, including those of `fiber sessions prune`, runs with
 the repository's hooks off (`-c core.hooksPath=/dev/null`), so removing a
-worktree can't hang on a hook. A supervisor that wants its own tree still makes it
+worktree can't hang on a hook. Every git `fiber sessions prune` runs, discovery
+and worktree reads alike, carries the scrubbed environment as well:
+`core.fsmonitor` off (`-c core.fsmonitor=false`), `GIT_OPTIONAL_LOCKS` and
+`GIT_TERMINAL_PROMPT` pinned to `0`, and `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_COMMON_DIR` and `GIT_INDEX_FILE` removed, so a redirected environment
+cannot move the prune to another repository. A supervisor that wants its own tree still makes it
 and passes the path.
 
 ## Deleting and pruning
