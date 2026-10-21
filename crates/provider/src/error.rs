@@ -8,6 +8,32 @@ use serde_json::Value;
 use crate::redact::Secrets;
 use crate::wire::str_at;
 
+/// Whether a failure's sentence about the credential advises `fiber login
+/// <provider>`: only where `fiber login` can fix it (`docs/errors.md`, "The
+/// shape").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LoginAdvice {
+    /// `fiber login` can fix it: the provider reads the key it stores, as an
+    /// endpoint with no `credential()` does, or its data declares `login`.
+    #[default]
+    Advised,
+    /// It cannot: the provider's `credential()` reads no stored key and its
+    /// data declares no `login`. The provider's own words stay in
+    /// `provider.message`.
+    Omitted,
+}
+
+impl LoginAdvice {
+    /// The advice to append to a sentence about `provider`'s credential:
+    /// " Run `fiber login <provider>`." when advised, nothing otherwise.
+    fn sentence(self, provider: &str) -> String {
+        match self {
+            Self::Advised => format!(" Run `fiber login {provider}`."),
+            Self::Omitted => String::new(),
+        }
+    }
+}
+
 /// A failed model call. Each message is a phrase that follows the
 /// provider's name, as [`Error::failure`] writes it.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -121,11 +147,12 @@ impl Error {
         }
     }
 
-    /// The failure as a failed model call records it, naming `provider`.
+    /// The failure as a failed model call records it, naming `provider`,
+    /// whose credential sentences advise `fiber login` as `login` says.
     /// The stored provider message holds no secret value: every value in
     /// `secrets` is replaced with `[redacted]`; the code and retry advice
     /// read the original body unchanged.
-    pub fn failure(&self, provider: &str, secrets: &Secrets) -> Failure {
+    pub fn failure(&self, provider: &str, login: LoginAdvice, secrets: &Secrets) -> Failure {
         let code = self.code();
         let (retry_after_ms, said) = match self {
             Self::Status {
@@ -154,7 +181,7 @@ impl Error {
             | Self::Sign(_) => (None, None),
         };
         let message = match (self, &code) {
-            (Self::Sign(sign), _) => sign_sentence(provider, sign, secrets),
+            (Self::Sign(sign), _) => sign_sentence(provider, login, sign, secrets),
             // A usage-limit reply names its reset time; any other quota or
             // billing shape keeps the provider's wording.
             (Self::Status { body, .. }, ErrorCode::QuotaExceeded) if usage_limit_body(body) => {
@@ -166,10 +193,15 @@ impl Error {
                     None => format!("{provider} reached its usage limit."),
                 }
             }
-            (Self::Status { status, .. }, ErrorCode::AuthenticationFailed) => format!(
-                "{provider} rejected the credential (HTTP {status}). Check the key it is \
-                 configured with, or log in again with `fiber login {provider}`."
-            ),
+            (Self::Status { status, .. }, ErrorCode::AuthenticationFailed) => match login {
+                LoginAdvice::Advised => format!(
+                    "{provider} rejected the credential (HTTP {status}). Check the key it is \
+                     configured with, or log in again with `fiber login {provider}`."
+                ),
+                LoginAdvice::Omitted => {
+                    format!("{provider} rejected the credential (HTTP {status}).")
+                }
+            },
             // A 404 that does not name the model is often a wrong base URL.
             (
                 Self::Status {
@@ -210,46 +242,35 @@ fn wait_ms(seconds: f64) -> Option<u64> {
 
 /// Fiber's own sentence for a signing failure (`docs/errors.md`, "The
 /// shape"): it names the provider and the function, never the signer's
-/// text, which stays in `provider.message`, redacted.
-fn sign_sentence(provider: &str, error: &contract::signing::Error, secrets: &Secrets) -> String {
+/// text, which stays in `provider.message`, redacted, and advises `fiber
+/// login` as `login` says.
+fn sign_sentence(
+    provider: &str,
+    login: LoginAdvice,
+    error: &contract::signing::Error,
+    secrets: &Secrets,
+) -> String {
     use contract::signing::Error as Sign;
+    let advice = login.sentence(provider);
     match error {
         Sign::Failed(_) => format!("{provider}'s sign() failed."),
-        Sign::LoginTimedOut { .. } => format!(
-            "{provider}'s credential() failed: the login did not finish in time. Run \
-             `fiber login {provider}`."
-        ),
-        Sign::Unattended { .. } => format!(
-            "{provider}'s credential() failed: logging in needs a person, and nobody is attached. \
-             Run `fiber login {provider}`."
-        ),
-        Sign::Credential { code, login, .. } if *code == ErrorCode::AuthenticationFailed => {
-            format!(
-                "{provider}'s credential() failed: the token endpoint rejected the refresh.{}",
-                login_advice(provider, *login)
-            )
+        Sign::LoginTimedOut { .. } => {
+            format!("{provider}'s credential() failed: the login did not finish in time.{advice}")
         }
+        Sign::Unattended { .. } => format!(
+            "{provider}'s credential() failed: logging in needs a person, and nobody is \
+             attached.{advice}"
+        ),
+        Sign::Credential { code, .. } if *code == ErrorCode::AuthenticationFailed => format!(
+            "{provider}'s credential() failed: the token endpoint rejected the refresh.{advice}"
+        ),
         Sign::Credential { code, .. } if *code == ErrorCode::ConnectionFailed => {
             format!("{provider}'s credential() failed: the token endpoint could not be reached.")
         }
-        Sign::Credential { login, .. } => format!(
-            "{provider}'s credential() failed.{}",
-            login_advice(provider, *login)
-        ),
+        Sign::Credential { .. } => format!("{provider}'s credential() failed.{advice}"),
         // Today's wording, redacted: the interpolated header name can carry
         // a known secret.
         Sign::NotHeaders(_) => secrets.redact(&format!("{provider} could not be signed: {error}")),
-    }
-}
-
-/// The advice to run `fiber login`, for a provider whose data declares
-/// `login`; nothing for any other, whose `fiber login` stores a key its
-/// `credential()` never reads (`docs/errors.md`, "The shape").
-fn login_advice(provider: &str, login: bool) -> String {
-    if login {
-        format!(" Run `fiber login {provider}`.")
-    } else {
-        String::new()
     }
 }
 

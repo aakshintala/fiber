@@ -57,7 +57,7 @@ fn signer_of(provider: &Arc<LuaProvider>) -> Arc<dyn Signer> {
         let provider = Arc::clone(provider);
         move || {
             provider
-                .signer(pair(provider.name(), "default"), None)
+                .signer(pair(provider.name(), "default"))
                 .unwrap()
                 .unwrap()
         }
@@ -263,7 +263,7 @@ fn a_clashing_credential_header_is_credential_failed() {
             let headers = signed.unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert_eq!(header(&headers, name), Some("s3cr3t-v".to_owned()));
         } else {
-            let Err(contract::signing::Error::Credential { code, message, .. }) = signed else {
+            let Err(contract::signing::Error::Credential { code, message }) = signed else {
                 panic!("{name}: a clashing header must fail the sign");
             };
             assert_eq!(code, ErrorCode::CredentialFailed, "{name}");
@@ -356,7 +356,7 @@ fn credential_header_shapes() {
                 assert_eq!(rest, want, "{returned}");
             }
             (Err(e), None) => {
-                let contract::signing::Error::Credential { code, message, .. } = e else {
+                let contract::signing::Error::Credential { code, message } = e else {
                     panic!("{returned}: a bad `headers` shape must fail the sign: {e:?}");
                 };
                 assert_eq!(code, ErrorCode::CredentialFailed, "{returned}");

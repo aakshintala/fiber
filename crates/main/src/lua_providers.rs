@@ -6,11 +6,12 @@
 
 use std::sync::Arc;
 
-use config::{Config, Login, ProviderData, Secret};
+use config::{Config, ProviderData, Secret};
 use contract::events::Notice;
 use contract::shapes::Failure;
 use contract::signing::Signer;
 use extensions::{CredentialPair, LuaProvider, Providers, SessionExtensions};
+use provider::LoginAdvice;
 use provider::redact::Secrets;
 
 use crate::failed;
@@ -142,27 +143,39 @@ pub(crate) fn session_credential(
                 .registers("credential")
                 .map_err(|e| failed(e.code(), e))? =>
         {
-            lua.credential_token(&pair, provider.login)
-                .map(|_| ())
-                .map_err(|e| {
-                    provider::Error::Sign(e).failure(&provider.name, &Secrets::default())
-                })?;
+            lua.credential_token(&pair).map(|_| ()).map_err(|e| {
+                provider::Error::Sign(e).failure(
+                    &provider.name,
+                    login_advice(true, provider),
+                    &Secrets::default(),
+                )
+            })?;
             None
         }
         _ => Some(key()?),
     };
-    Ok((key, signer(lua, pair, provider.login)?))
+    Ok((key, signer(lua, pair)?))
+}
+
+/// Whether `provider`'s credential sentences advise `fiber login`, given
+/// whether its Lua registers `credential`: not when it does and its data
+/// declares no `login`, since `fiber login` then stores a key nothing reads
+/// (`docs/errors.md`, "The shape").
+pub(crate) fn login_advice(credential: bool, provider: &ProviderData) -> LoginAdvice {
+    if credential && provider.login.is_none() {
+        LoginAdvice::Omitted
+    } else {
+        LoginAdvice::Advised
+    }
 }
 
 /// Signs `lua`'s requests; `Some` when it registered `credential` or `sign`.
-/// `login` is the provider data's (`docs/errors.md`, "The shape").
 pub(crate) fn signer(
     lua: Option<&Arc<LuaProvider>>,
     pair: CredentialPair,
-    login: Option<Login>,
 ) -> Result<Option<Arc<dyn Signer>>, Failure> {
     match lua {
-        Some(lua) => lua.signer(pair, login).map_err(|e| failed(e.code(), e)),
+        Some(lua) => lua.signer(pair).map_err(|e| failed(e.code(), e)),
         None => Ok(None),
     }
 }

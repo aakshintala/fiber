@@ -16,7 +16,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use config::{Config, Login, ModelData, ProviderData, Secret};
+use config::{Config, ModelData, ProviderData, Secret};
 use contract::ErrorCode;
 use contract::signing::{self, SignRequest, Signer};
 #[cfg(test)]
@@ -264,13 +264,10 @@ impl LuaProvider {
     }
 
     /// Signs this provider's requests: `None` when it registered neither
-    /// `credential` nor `sign`. `login` is the provider data's, which a
-    /// failed `credential()` carries for Fiber's sentence
-    /// (`docs/errors.md`, "The shape").
+    /// `credential` nor `sign`.
     pub fn signer(
         self: &Arc<Self>,
         pair: CredentialPair,
-        login: Option<Login>,
     ) -> Result<Option<Arc<dyn Signer>>, Error> {
         let functions = self.functions()?;
         let credential = functions.iter().any(|f| f == "credential");
@@ -283,7 +280,6 @@ impl LuaProvider {
             pair,
             credential,
             sign,
-            login: login.is_some(),
         })))
     }
 
@@ -561,25 +557,17 @@ impl LuaProvider {
         )
     }
 
-    /// The token `token()` returns; a failure as the signing seam carries
-    /// it, with `login`, the provider data's, as [`LuaProvider::signer`]
-    /// takes it.
+    /// The token `token()` returns; a failure as the signing seam carries it.
     pub fn credential_token(
         self: &Arc<Self>,
         pair: &CredentialPair,
-        login: Option<Login>,
     ) -> Result<Secret, signing::Error> {
-        Ok(self.signing_token(pair, login.is_some())?.secret)
+        Ok(self.signing_token(pair)?.secret)
     }
 
     /// The token and headers `LuaSigner::sign` sends; a failure as the
-    /// signing seam carries it, with `login`, whether the provider's data
-    /// declares `login`.
-    fn signing_token(
-        self: &Arc<Self>,
-        pair: &CredentialPair,
-        login: bool,
-    ) -> Result<Token, signing::Error> {
+    /// signing seam carries it.
+    fn signing_token(self: &Arc<Self>, pair: &CredentialPair) -> Result<Token, signing::Error> {
         self.current(pair).map_err(|e| {
             let message = detail(&e);
             if matches!(e, Error::Unattended { .. }) {
@@ -590,7 +578,6 @@ impl LuaProvider {
                 signing::Error::Credential {
                     code: e.code(),
                     message,
-                    login,
                 }
             }
         })
@@ -801,9 +788,6 @@ struct LuaSigner {
     pair: CredentialPair,
     credential: bool,
     sign: bool,
-    /// Whether the provider's data declares `login` (`docs/errors.md`,
-    /// "The shape").
-    login: bool,
 }
 
 impl Signer for LuaSigner {
@@ -812,7 +796,7 @@ impl Signer for LuaSigner {
         let mut values = Vec::new();
         let mut _used = None;
         let current = if self.credential {
-            let current = self.provider.signing_token(&self.pair, self.login)?;
+            let current = self.provider.signing_token(&self.pair)?;
             values.push(current.secret.clone());
             values.extend(current.headers.iter().map(|(_, value)| value.clone()));
             _used = Some(self.provider.hold_used(&self.pair, &values));
@@ -840,7 +824,6 @@ impl Signer for LuaSigner {
                                 "`{}`'s credential() returned `headers` with a name Fiber already sends: {name:?}.",
                                 self.provider.name(),
                             ),
-                            login: self.login,
                         });
                     }
                 }
@@ -894,14 +877,9 @@ fn redact_signing_error(error: signing::Error, values: &[Secret]) -> signing::Er
     match error {
         signing::Error::Failed(message) => signing::Error::Failed(redact(message)),
         signing::Error::NotHeaders(message) => signing::Error::NotHeaders(redact(message)),
-        signing::Error::Credential {
-            code,
-            message,
-            login,
-        } => signing::Error::Credential {
+        signing::Error::Credential { code, message } => signing::Error::Credential {
             code,
             message: redact(message),
-            login,
         },
         signing::Error::Unattended { message } => signing::Error::Unattended {
             message: redact(message),

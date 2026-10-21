@@ -154,7 +154,7 @@ fn a_signer_sends_its_own_pairs_token() {
     let signed = |pair: CredentialPair| {
         let echo = Arc::clone(&echo);
         let signer = fakes::within("echo.signer", fakes::MUST_SUCCEED_WITHIN, move || {
-            echo.signer(pair, None)
+            echo.signer(pair)
         })
         .unwrap()
         .unwrap();

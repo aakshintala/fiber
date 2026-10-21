@@ -980,9 +980,13 @@ fn a_stalled_error_body_keeps_a_no_retry_veto() {
     assert_eq!(err.code(), contract::ErrorCode::ConnectionFailed);
     assert_eq!(err.should_retry(), Some(false));
     assert!(
-        err.failure("test", &crate::redact::Secrets::default())
-            .provider
-            .is_none()
+        err.failure(
+            "test",
+            crate::LoginAdvice::Advised,
+            &crate::redact::Secrets::default()
+        )
+        .provider
+        .is_none()
     );
 }
 

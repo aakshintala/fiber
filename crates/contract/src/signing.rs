@@ -22,9 +22,6 @@ pub enum Error {
         code: ErrorCode,
         /// The first line of the credential failure's own text.
         message: String,
-        /// Whether the provider's data declares `login`: Fiber's sentence
-        /// advises `fiber login` only then (`docs/errors.md`, "The shape").
-        login: bool,
     },
     /// A login the credential needed a person for, and nobody was attached; it reports `authentication_failed`. `message` is the first line of the failure's own text.
     #[error("{message}")]

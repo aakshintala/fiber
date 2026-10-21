@@ -29,6 +29,11 @@ const CALL: &[u8] = include_bytes!("../../../research/vertex-probe/raw/gemini-to
 /// The probe's recorded "PINEAPPLE", the instruction's own word.
 const ANSWER: &[u8] = include_bytes!("../../../research/vertex-probe/raw/gemini-sysrole-none.sse");
 
+/// The body of the probe's recorded 401 for a token Vertex does not take
+/// (`research/vertex-probe/raw/gemini-bad-token.json`), its `details`
+/// left out.
+const GEMINI_BAD_TOKEN: &str = r#"{"error":{"code":401,"message":"Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.","status":"UNAUTHENTICATED"}}"#;
+
 /// The package's endpoint origin, which the copy points at the fake server.
 const ORIGIN: &str = "https://aiplatform.googleapis.com";
 
@@ -63,17 +68,20 @@ fn run(setup: &Setup, args: &[&str], env: &[(&str, &str)]) -> Run {
     ))
 }
 
-#[test]
-fn a_gcloud_token_signs_every_call_of_a_turn_and_is_fetched_once() {
-    let setup = Setup::new();
-    let server = ProviderServer::start([Response::stream(CALL), Response::stream(ANSWER)]).unwrap();
+/// The fake server answering with `responses`, the package installed
+/// against it, and a stand-in `gcloud` first on the returned `PATH` that
+/// notes each run in the returned file and prints a token that expires long
+/// after the test.
+fn vertex<const N: usize>(
+    setup: &Setup,
+    responses: [Response; N],
+) -> (ProviderServer, String, std::path::PathBuf) {
+    let server = ProviderServer::start(responses).unwrap();
     let to = setup.root.path().join("pkg-vertex");
     support::package::copy_package("vertex", &to, ORIGIN, &server.url());
-    let installed = run(&setup, &["extension", "install", to.to_str().unwrap()], &[]);
+    let installed = run(setup, &["extension", "install", to.to_str().unwrap()], &[]);
     assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
 
-    // A stand-in `gcloud` that notes each run and prints a token that
-    // expires long after the test.
     let bin = setup.root.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let ran = setup.root.path().join("gcloud-ran");
@@ -92,6 +100,13 @@ fn a_gcloud_token_signs_every_call_of_a_turn_and_is_fetched_once() {
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    (server, path, ran)
+}
+
+#[test]
+fn a_gcloud_token_signs_every_call_of_a_turn_and_is_fetched_once() {
+    let setup = Setup::new();
+    let (server, path, ran) = vertex(&setup, [Response::stream(CALL), Response::stream(ANSWER)]);
 
     let run = run(
         &setup,
@@ -153,6 +168,55 @@ fn a_gcloud_token_signs_every_call_of_a_turn_and_is_fetched_once() {
         );
         assert_eq!(sent.header("x-goog-api-key"), None);
     }
+}
+
+#[test]
+fn a_rejected_token_is_fiber_s_sentence_without_fiber_login() {
+    let setup = Setup::new();
+    let (server, path, _) = vertex(
+        &setup,
+        [Response::status(401, GEMINI_BAD_TOKEN).header("content-type", "application/json")],
+    );
+
+    let run = run(
+        &setup,
+        &["ask", "--model", "vertex/gemini-3.1-flash-lite", "hi"],
+        &[("PATH", &path), ("GOOGLE_CLOUD_PROJECT", "example-project")],
+    );
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "extension_exec",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    // `fiber login vertex` stores a key `credential()` never reads, so the
+    // sentence names no login (`docs/errors.md`, "The shape").
+    let error = &run.first("fiber_exited")["payload"]["error"];
+    assert_eq!(error["code"], "authentication_failed");
+    assert_eq!(
+        error["message"],
+        "vertex rejected the credential (HTTP 401)."
+    );
+    let said = error["provider"]["message"].as_str().unwrap();
+    assert!(
+        said.starts_with("Request had invalid authentication credentials."),
+        "{said}"
+    );
+    assert_eq!(server.requests().len(), 1);
 }
 
 #[test]
