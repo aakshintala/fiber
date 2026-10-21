@@ -248,8 +248,12 @@ impl Hooks for FakeHooks {
             .unwrap()
             .push(crate::conversation::text(message.content));
         self.seen_ids.lock().unwrap().push((
-            message.from_session_id.map(|id| id.0.clone()),
-            message.parent_session_id.map(|id| id.0.clone()),
+            message
+                .sender
+                .map(|sender| sender.from_session_id.0.clone()),
+            message
+                .sender
+                .and_then(|sender| sender.parent_session_id.map(|id| id.0.clone())),
         ));
         if let Some(park) = self.park.lock().unwrap().take() {
             // Parked: the test moves the fake clock past the registered

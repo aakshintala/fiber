@@ -186,6 +186,21 @@ fn a_missing_log_has_no_parent() {
 }
 
 #[test]
+fn a_torn_first_line_reads_as_no_parent() {
+    let home = fakes::TempDir::new("log-parent-torn-first");
+    let dir = home.path().join("projects/-a/sessions").join(SENDER);
+    fs::create_dir_all(&dir).unwrap();
+    // No closing newline: a torn write reads as nothing, so the parent
+    // it names is not read.
+    fs::write(
+        dir.join("events.jsonl"),
+        started(Some(delegated("s_parent00000001"))),
+    )
+    .unwrap();
+    assert_eq!(session_parent(home.path(), &id(SENDER)), None);
+}
+
+#[test]
 fn an_unreadable_first_line_has_no_parent() {
     let home = fakes::TempDir::new("log-parent-unreadable");
     plant(home.path(), "-a", SENDER, &["not json".to_owned()]);

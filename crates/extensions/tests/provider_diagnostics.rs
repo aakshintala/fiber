@@ -217,8 +217,7 @@ fn dispatch_all(session: &Arc<SessionExtensions>) {
         move || {
             session.before_message(&BeforeMessage {
                 content: &content,
-                from_session_id: None,
-                parent_session_id: None,
+                sender: None,
             })
         }
     });
@@ -347,8 +346,7 @@ fn a_nil_hook_runs_once_per_dispatch() {
         move || {
             session.before_message(&BeforeMessage {
                 content: &content,
-                from_session_id: None,
-                parent_session_id: None,
+                sender: None,
             })
         }
     });
@@ -387,8 +385,7 @@ fn refusal_and_failure_return_inside_the_scope() {
         move || {
             session.before_message(&BeforeMessage {
                 content: &content,
-                from_session_id: None,
-                parent_session_id: None,
+                sender: None,
             })
         }
     });
@@ -451,8 +448,7 @@ fn before_model_call_refusal_and_nonblocking_error_keep_their_scopes() {
         move || {
             session.before_message(&BeforeMessage {
                 content: &content,
-                from_session_id: None,
-                parent_session_id: None,
+                sender: None,
             })
         }
     });
@@ -662,8 +658,7 @@ fn a_suspended_dispatch_spans_the_whole_call() {
             let content = vec![ContentPart::Text { text: "hi".into() }];
             let answer = session.before_message(&BeforeMessage {
                 content: &content,
-                from_session_id: None,
-                parent_session_id: None,
+                sender: None,
             });
             let _sent = tx.send(answer);
         })
@@ -742,8 +737,7 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
             let content = vec![ContentPart::Text { text: "hi".into() }];
             let answer = session.before_message(&BeforeMessage {
                 content: &content,
-                from_session_id: None,
-                parent_session_id: None,
+                sender: None,
             });
             let _sent = tx.send(answer);
         })
@@ -1181,8 +1175,7 @@ fn hook_http_sends_unobserved_with_a_sink_installed() {
         move || {
             session.before_message(&BeforeMessage {
                 content: &content,
-                from_session_id: None,
-                parent_session_id: None,
+                sender: None,
             })
         }
     });
@@ -1834,8 +1827,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
         move || {
             session.before_message(&BeforeMessage {
                 content: &content,
-                from_session_id: None,
-                parent_session_id: None,
+                sender: None,
             })
         }
     });

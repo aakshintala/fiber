@@ -237,8 +237,7 @@ fn before_message(
     bounded(move || {
         session.before_message(&BeforeMessage {
             content: &content,
-            from_session_id: None,
-            parent_session_id: None,
+            sender: None,
         })
     })
 }

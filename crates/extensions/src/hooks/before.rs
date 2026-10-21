@@ -263,11 +263,14 @@ fn shown_message(content: &[ContentPart], message: &BeforeMessage<'_>) -> Value 
                 .collect(),
         ),
     );
-    if let Some(from) = message.from_session_id {
-        shown.insert("from_session_id".into(), Value::String(from.0.clone()));
-    }
-    if let Some(parent) = message.parent_session_id {
-        shown.insert("parent_session_id".into(), Value::String(parent.0.clone()));
+    if let Some(sender) = message.sender {
+        shown.insert(
+            "from_session_id".into(),
+            Value::String(sender.from_session_id.0.clone()),
+        );
+        if let Some(parent) = sender.parent_session_id {
+            shown.insert("parent_session_id".into(), Value::String(parent.0.clone()));
+        }
     }
     Value::Object(shown)
 }

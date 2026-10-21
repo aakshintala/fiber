@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use contract::events::{Event, Notice};
-use contract::hook::{BeforeMessage, BeforeMessageOutcome, Context, StateLine};
+use contract::hook::{BeforeMessage, BeforeMessageOutcome, Context, MessageSender, StateLine};
 use contract::inbox::{Ack, Message};
 use contract::shapes::ContentPart;
 use contract::steering;
@@ -23,17 +23,6 @@ use crate::{Error, Loop};
 /// The door records it in the prompt history before the prompt's
 /// acceptance (`docs/state.md`, "Prompt history").
 pub type OnRewrite = Arc<dyn Fn(&CommandId, &[ContentPart]) + Send + Sync>;
-
-/// A session message's sender: who sent it and who sent the sender. A
-/// person's or a driver's message carries neither, so those takes pass
-/// `None` for the whole struct.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct SessionIds<'a> {
-    /// The sending session.
-    pub(crate) from: &'a contract::SessionId,
-    /// The sender's parent session, when the sender has one.
-    pub(crate) parent: Option<&'a contract::SessionId>,
-}
 
 /// What the `before_message` chain left on an admitted message: who
 /// replaced its content, and the contexts its hooks added, in run order.
@@ -69,7 +58,7 @@ impl Loop {
     pub(crate) fn admitted(
         &mut self,
         message: Message,
-        session: Option<SessionIds<'_>>,
+        sender: Option<MessageSender<'_>>,
         ack: Ack,
         turn: Option<&TurnId>,
     ) -> Result<Option<(Message, Hooked, Ack)>, Error> {
@@ -82,8 +71,7 @@ impl Loop {
         }
         let answer = hooks.before_message(&BeforeMessage {
             content: &message.content,
-            from_session_id: session.map(|ids| ids.from),
-            parent_session_id: session.and_then(|ids| ids.parent),
+            sender,
         });
         let state = hooks.take_change_state();
         self.drain_state(&hooks, turn)?;

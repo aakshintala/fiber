@@ -23,7 +23,7 @@ use contract::clock::Wake;
 use contract::events::{CallStatus, HandoffTrigger, InputItem, Notice};
 use contract::hook::{
     AfterToolCall, BeforeHandoff, BeforeMessage, BeforeModelCall, BeforeToolCall, Hooks,
-    SessionStart, StartReason, TurnEnd, TurnStart,
+    MessageSender, SessionStart, StartReason, TurnEnd, TurnStart,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Process, Tokens, Usage};
 use contract::tool::Cancel;
@@ -283,8 +283,10 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
             session
                 .before_message(&BeforeMessage {
                     content: &content,
-                    from_session_id: Some(&from),
-                    parent_session_id: Some(&parent),
+                    sender: Some(MessageSender {
+                        from_session_id: &from,
+                        parent_session_id: Some(&parent),
+                    }),
                 })
                 .notices
         }
@@ -393,8 +395,7 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
             session
                 .before_message(&BeforeMessage {
                     content: &content,
-                    from_session_id: None,
-                    parent_session_id: None,
+                    sender: None,
                 })
                 .notices
         }

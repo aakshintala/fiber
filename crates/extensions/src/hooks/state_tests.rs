@@ -539,8 +539,7 @@ fn dispatch(session: &SessionExtensions, point: &str) -> Vec<Context> {
         "before_message" => {
             let answer = session.before_message(&BeforeMessage {
                 content: &[],
-                from_session_id: None,
-                parent_session_id: None,
+                sender: None,
             });
             return match answer.outcome {
                 BeforeMessageOutcome::Passed { context, .. } => context,

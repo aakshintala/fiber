@@ -3815,9 +3815,16 @@ fn message_and_close_race_in_both_lock_orders() {
                     panic!("the message is delivered as a message");
                 };
                 assert_eq!(message.command_id.0, "c_m1");
-                // The take proves admission finished: drain any session
-                // chatter and prove the message itself is still unanswered.
-                while let Some(line) = first.recv(Duration::from_millis(10)) {
+                // The take proves admission finished: read up to a second
+                // subscribe's acknowledgement and prove the message itself
+                // is still unanswered. The reader answers lines in order,
+                // so the acknowledgement arrives after anything admission
+                // sent; the take's ack is still uncalled, so the round
+                // trip orders the check instead of a wall-clock wait.
+                first.send(&subscribe_line("c_probe", "full")).unwrap();
+                for line in support::until(&first, |line| {
+                    support::command_id(line) == Some("c_probe")
+                }) {
                     assert_ne!(
                         support::command_id(&line),
                         Some("c_m1"),

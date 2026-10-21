@@ -16,8 +16,9 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
-use support::{Setup, Socket, function_call, hello};
+use support::{Deadline, Setup, Socket, function_call, hello};
 
 /// Installs provider `pa/m` on `openai-responses` at the server, and makes
 /// it the session model and the reviewer, with idle exit far out so an idle
@@ -672,15 +673,26 @@ fn delivered_is_answered_only_after_the_hook_returns() {
             "the sender waits for the hook: {line}"
         );
     }
-    // Still parked, so the take cannot have answered: anything queued
-    // behind the call completes nothing. The hook holds the ack, so no
-    // completion can be in flight past this check.
-    while let Ok(text) = s_rx.try_recv() {
-        let line: Value = serde_json::from_str(&text).unwrap();
-        assert!(
-            line["kind"] != "tool_call_completed",
-            "the sender waits for the hook: {line}"
-        );
+    // Still parked, so the take cannot have answered: read under a second
+    // deadline, which must pass with no completion. The bound orders the
+    // check after any premature completion already in flight: the sender
+    // writes one before the hook is released, so it arrives within the
+    // bound, and the hook still holds the ack past it.
+    let quiet = Deadline::after(Duration::from_secs(2));
+    loop {
+        match quiet.recv(&s_rx) {
+            Ok(text) => {
+                let line: Value = serde_json::from_str(&text).unwrap();
+                assert!(
+                    line["kind"] != "tool_call_completed",
+                    "the sender waits for the hook: {line}"
+                );
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the sender's stdout ended while the hook was parked")
+            }
+        }
     }
     hole.release();
     // Released, the hook answers and the sender is delivered.

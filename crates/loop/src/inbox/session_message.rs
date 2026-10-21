@@ -17,7 +17,7 @@ use support::admission::Admission;
 use super::TurnInput;
 use super::accept;
 use crate::Loop;
-use crate::before_message::{Hooked, SessionIds};
+use crate::before_message::Hooked;
 use crate::jobs::Queued;
 use crate::prompt::{fill, message};
 
@@ -130,9 +130,9 @@ impl Loop {
                 command_id: Some(sent.command_id.clone()),
             },
         };
-        let session = SessionIds {
-            from: &from,
-            parent: parent.as_ref(),
+        let session = contract::hook::MessageSender {
+            from_session_id: &from,
+            parent_session_id: parent.as_ref(),
         };
         let Some((passed, hooked, ack)) = self.admitted(raw, Some(session), ack, turn)? else {
             return Ok(None);

@@ -230,16 +230,26 @@ pub struct CheckAnswer {
     pub notices: Vec<Notice>,
 }
 
+/// Who sent a session message: the sending session and its parent, if
+/// the sender has one. `BeforeMessage.sender` holds this for a session
+/// message and is absent for a person's or a driver's message, so a
+/// parent without a sender cannot be written.
+#[derive(Debug, Clone, Copy)]
+pub struct MessageSender<'a> {
+    /// The sending session.
+    pub from_session_id: &'a SessionId,
+    /// The sender's parent session, when the sender has one.
+    pub parent_session_id: Option<&'a SessionId>,
+}
+
 /// What a `before_message` hook is given (`docs/extensions.md`, "The hook
 /// points"): a person's or a driver's message, before it is logged.
 #[derive(Debug, Clone, Copy)]
 pub struct BeforeMessage<'a> {
     /// The message's content parts.
     pub content: &'a [ContentPart],
-    /// The sending session, for a session message; absent otherwise.
-    pub from_session_id: Option<&'a SessionId>,
-    /// The sender's parent session, for a session message; absent otherwise.
-    pub parent_session_id: Option<&'a SessionId>,
+    /// Who sent it, for a session message; absent otherwise.
+    pub sender: Option<MessageSender<'a>>,
 }
 
 /// A `before_message` replacement: the content and who changed it.
