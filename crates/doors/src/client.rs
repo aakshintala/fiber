@@ -375,6 +375,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Reload(ack));
         }
+        Command::Import(args) => import(conn, id, &args),
         Command::McpServers => {
             let Some(refresh) = conn.gate.servers_refresh() else {
                 unknown(conn, id, name);
@@ -423,6 +424,74 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         Command::Unknown => unknown(conn, id, name),
         Command::ArtifactPage(args) => crate::artifact::run(conn, id, args),
     }
+}
+
+/// Copies another harness's configuration into Fiber home, once
+/// (`docs/configuration.md`, "Importing"): the same shared import `fiber
+/// import` runs, answered at once on the reader thread. With no `source`
+/// both sources run, each independent: one source's completed receipt
+/// short-circuits only that source, and the first failure rejects, so a
+/// retry short-circuits what landed and completes the rest.
+fn import(conn: &mut Conn, id: CommandId, args: &contract::commands::ImportArgs) {
+    use config::{ImportSource, source_home};
+    let sources: &[ImportSource] = match args.source.as_deref() {
+        None => &[ImportSource::ClaudeCode, ImportSource::Codex],
+        Some("claude-code") => &[ImportSource::ClaudeCode],
+        Some("codex") => &[ImportSource::Codex],
+        Some(_) => {
+            reject(
+                conn,
+                Some(id),
+                ErrorCode::InvalidArguments,
+                "`source` must be `claude-code` or `codex`.",
+            );
+            return;
+        }
+    };
+    let Some(home_env) = std::env::var_os("HOME") else {
+        reject(
+            conn,
+            Some(id),
+            ErrorCode::IoFailed,
+            "HOME is not set, so the source home cannot be found.",
+        );
+        return;
+    };
+    let clock = Arc::clone(&conn.gate.clock);
+    let mut imported = contract::events::ImportedNames::default();
+    let mut left_behind = Vec::new();
+    for source in sources {
+        let report = match config::import_source(
+            &conn.gate.home,
+            &source_home(std::path::Path::new(&home_env), *source),
+            *source,
+            clock.as_ref(),
+        ) {
+            Ok(report) => report,
+            Err(error) => {
+                reject(conn, Some(id), error.code(), &error.to_string());
+                return;
+            }
+        };
+        imported.mcp_servers.extend(report.imported.mcp_servers);
+        imported.skills.extend(report.imported.skills);
+        imported.commands.extend(report.imported.commands);
+        imported.instructions.extend(report.imported.instructions);
+        left_behind.extend(report.left_behind.into_iter().map(|left| {
+            contract::events::LeftBehindEntry {
+                item: left.item,
+                reason: left.reason,
+            }
+        }));
+    }
+    accept(
+        conn,
+        id,
+        Some(CommandResult::Import {
+            imported,
+            left_behind,
+        }),
+    );
 }
 
 /// Accepted when `done`, else rejected `stale_request` with `message`. For

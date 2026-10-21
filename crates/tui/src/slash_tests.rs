@@ -71,6 +71,7 @@ const DRAWN_ORDER: &[&str] = &[
     "name",
     "login",
     "reload",
+    "import",
     "close",
     "quit",
     "approvals",
@@ -134,7 +135,7 @@ fn built_ins_are_drawn_built_ins_plus_rewind() {
         .iter()
         .filter(|name| !table_names().contains(name))
         .collect();
-    assert_eq!(extra, [&"rewind", &"import", &"exit"]);
+    assert_eq!(extra, [&"rewind", &"exit"]);
     let rows = rows(&[]);
     let credential = rows.iter().find(|row| row.name == "credential").unwrap();
     assert!(credential.line().contains("/credential [<label>]"));

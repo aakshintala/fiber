@@ -143,6 +143,35 @@ impl Recorder {
     }
 }
 
+/// The first-run import offer's title: fresh bench homes hold no
+/// receipts, so a bare home terminal always opens it over the prompt.
+pub(crate) const OFFER_NEEDLE: &str = "Import settings";
+/// The home prompt marker, drawn once the offer is gone.
+const PROMPT_NEEDLE: &str = "\u{203a}";
+
+/// What a bare home terminal shows while its first-run offer may be up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Offer {
+    /// The offer is up: Esc dismisses it for the run.
+    Up,
+    /// The prompt is already there: no offer to dismiss.
+    Gone,
+    /// Neither marker yet: keep waiting.
+    Waiting,
+}
+
+/// Which of the three the screen shows: the offer wins, since it covers
+/// the prompt it opens over.
+pub(crate) fn offer_state(screen: &Screen) -> Offer {
+    if screen.holds(OFFER_NEEDLE) {
+        Offer::Up
+    } else if screen.holds(PROMPT_NEEDLE) {
+        Offer::Gone
+    } else {
+        Offer::Waiting
+    }
+}
+
 /// The timeout error with what the terminal had drawn: its byte count, the
 /// last 3000 bytes as lossy text, and the screen's rows as text, so a
 /// failed wait shows where the replay stood.
@@ -212,6 +241,13 @@ impl Terminal {
         let proc = Proc::spawn(&mut command, clock)?;
         drop(command);
         drop(terminal);
+        Self::watch(proc, main, cols, rows)
+    }
+
+    /// Watches `proc`'s pty `main` with the reader thread feeding the
+    /// screen: what `spawn` hands a started child, and what the bench
+    /// tests hand a fake one.
+    pub(crate) fn watch(proc: Proc, main: fs::File, cols: u16, rows: u16) -> Result<Self, String> {
         let reader = main
             .try_clone()
             .map_err(|e| format!("cloning the pty master: {e}"))?;
@@ -246,6 +282,60 @@ impl Terminal {
             output,
             wakes,
         })
+    }
+
+    /// Dismisses the first-run import offer the way a person does: waits
+    /// until the offer draws and sends Esc, or returns at once when the
+    /// prompt is already there. Fresh bench homes hold no receipts, so
+    /// the offer always opens; Esc on a plain home is a no-op in the
+    /// harness, so the dismissal never disturbs a terminal with nothing
+    /// to dismiss.
+    pub(crate) fn dismiss_first_run_offer(
+        &mut self,
+        clock: &dyn Clock,
+        until: Instant,
+    ) -> Result<(), String> {
+        let what = format!("{OFFER_NEEDLE:?} or {PROMPT_NEEDLE:?} on the terminal");
+        loop {
+            if let Some(done) = self.offer() {
+                return done;
+            }
+            let wait = match left(clock, until, &what) {
+                Ok(wait) => wait,
+                Err(expired) => {
+                    return Err(match self.output.lock() {
+                        Ok(output) => timeout_note(expired, &output.raw, &output.screen),
+                        Err(_) => expired,
+                    });
+                }
+            };
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "the bench's wait, computed from its injected clock"
+            )]
+            let woke = self.wakes.recv_timeout(wait);
+            match woke {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(format!("the terminal closed before {what}"));
+                }
+            }
+        }
+    }
+
+    /// The offer's state now: Esc on `Up`, done on `Gone`, and `None`
+    /// while neither marker shows.
+    fn offer(&mut self) -> Option<Result<(), String>> {
+        match self
+            .output
+            .lock()
+            .ok()
+            .map(|output| offer_state(&output.screen))?
+        {
+            Offer::Up => Some(self.write(b"\x1b")),
+            Offer::Gone => Some(Ok(())),
+            Offer::Waiting => None,
+        }
     }
 
     fn holds(&self, needle: &str) -> bool {
