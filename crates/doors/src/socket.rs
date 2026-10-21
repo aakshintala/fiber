@@ -20,7 +20,7 @@ pub const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 1
 /// under `home` is too long to bind. Sessions and doctor share it, so the
 /// report names the same cause a session start would fail with.
 pub fn check_socket_path(home: &Path, file_name: &str) -> Result<(), Failure> {
-    let socket = home.join("run").join(file_name);
+    let socket = config::run_dir(home).join(file_name);
     if socket.as_os_str().len() > SOCKET_PATH_MAX {
         return Err(failure(
             ErrorCode::Usage,
