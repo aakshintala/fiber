@@ -130,17 +130,25 @@ fn ask(
     before_wait: &mut dyn FnMut(),
 ) -> Option<BTreeMap<String, String>> {
     let result = exchange(stream, deadline, names, clock, before_read, before_wait);
-    // macOS refuses the option once the peer has closed, while its
-    // buffered bytes stay readable; ignoring that refusal keeps a
-    // close-after-answer a reply.
-    let restore = match stream.set_nonblocking(false) {
-        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
-        other => other,
-    };
+    let restored = restore_blocking(stream);
     match result {
         // The exchange's own answer wins over a restore failure.
         Err(()) => None,
-        Ok(values) => restore.map(|()| Some(values)).unwrap_or(None),
+        Ok(values) => restored.map(|()| Some(values)).unwrap_or(None),
+    }
+}
+
+// Restores the blocking mode `exchange` lifted: macOS refuses the option
+// once the peer has closed, while its buffered bytes stay readable, so
+// that refusal still keeps a close-after-answer a reply. Exempt from
+// mutation testing: the `InvalidInput` refusal happens only on macOS,
+// and mutants run on Linux, where no test through this seam can produce
+// it (docs/testing/mutants.md).
+#[cfg_attr(false, mutants::skip)]
+fn restore_blocking(stream: &UnixStream) -> std::io::Result<()> {
+    match stream.set_nonblocking(false) {
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+        other => other,
     }
 }
 
