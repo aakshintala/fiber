@@ -8,8 +8,10 @@ use std::sync::Arc;
 use contract::clock::Clock;
 use contract::shapes::Failure;
 
-use super::from_failure;
-use tui::{BrowserLogin, ConfigureError, LoginKind, LoginShow, LoginTarget, Stored};
+use super::{from_config, from_failure};
+use tui::{
+    BrowserLogin, ConfigureError, HostGap, HostSaved, LoginKind, LoginShow, LoginTarget, Stored,
+};
 
 /// The login's browser: `open` shows the URL and asks the terminal to open
 /// it, `show` shows the device code, and a person ran `/login`, so one is
@@ -119,6 +121,47 @@ pub(super) fn reviewer_models(
 /// write. Save errors name the key.
 pub(super) fn set_reviewer(home: &Path, name: &str, id: &str) -> Result<(), ConfigureError> {
     cli::set_reviewer(home, name, id).map_err(|e| super::from_failure(Failure::from(e)))
+}
+
+/// The presence gaps for the installed provider `name`, in declaration
+/// order: the same query as `fiber login`'s host step, without asking.
+/// The hub has no terminal and no workspace argument, so the project
+/// layer is read from the hub's own working directory, and the hub's
+/// own environment answers the variable reads.
+pub(super) fn gaps(home: &Path, name: &str) -> Result<Vec<HostGap>, ConfigureError> {
+    let providers = cli::providers_in(home).map_err(|e| super::from_failure(Failure::from(e)))?;
+    let workspace = std::env::current_dir()
+        .map_err(|e| from_failure(Failure::from(cli::CliError::CurrentDirectory(e))))?;
+    let (_, project) = ::cli::project_of(home, &workspace).map_err(from_failure)?;
+    let config = config::Config::load(config::Sources {
+        home: home.to_path_buf(),
+        workspace,
+        project,
+        overrides: Vec::new(),
+    })
+    .map_err(from_config)?;
+    Ok(providers
+        .unset_placeholders(&config, &|var| std::env::var(var).ok(), name)
+        .map(|gaps| {
+            gaps.into_iter()
+                .map(|(name, env)| HostGap { name, env })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// Saves `value` as `key`'s answer for provider `name`: the same global
+/// write `fiber login` makes, reporting the project file hiding it.
+pub(super) fn save_host(
+    home: &Path,
+    name: &str,
+    key: &str,
+    value: &str,
+) -> Result<HostSaved, ConfigureError> {
+    let providers = cli::providers_in(home).map_err(|e| super::from_failure(Failure::from(e)))?;
+    let masked = cli::save_host(home, &providers, name, key, value)
+        .map_err(|e| super::from_failure(Failure::from(e)))?;
+    Ok(tui::HostSaved { masked })
 }
 
 /// The installed providers as key rows, then the declared secrets.

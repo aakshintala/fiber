@@ -19,8 +19,8 @@ use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
 use tui::{
     ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginTarget, Revoked, RuleRow, RulesScope,
-    RulesSection, Saved,
-    SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches, WriteScope,
+    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup,
+    ToolSwitches, WriteScope,
 };
 
 use crate::switch::Reads;
@@ -306,17 +306,12 @@ impl tui::Configure for Seam {
         login::set_reviewer(&self.home, name, id)
     }
 
-    fn gaps(&self, _name: &str) -> Result<Vec<HostGap>, ConfigureError> {
-        todo!("task 7 serves the gaps read from the hub")
+    fn gaps(&self, name: &str) -> Result<Vec<HostGap>, ConfigureError> {
+        login::gaps(&self.home, name)
     }
 
-    fn save_host(
-        &self,
-        _name: &str,
-        _key: &str,
-        _value: &str,
-    ) -> Result<HostSaved, ConfigureError> {
-        todo!("task 7 serves the host save from the hub")
+    fn save_host(&self, name: &str, key: &str, value: &str) -> Result<HostSaved, ConfigureError> {
+        login::save_host(&self.home, name, key, value)
     }
 
     fn reviewer_notes(&self, workspace: &Path) -> Result<tui::ReviewerNotes, ConfigureError> {
