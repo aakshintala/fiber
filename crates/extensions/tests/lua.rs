@@ -330,23 +330,46 @@ fn a_stuck_provider_load_abandons_its_mixed_extension_after_grace() {
     let asked = clock.now();
     let provider = start_provider(&ext);
     Deadline::after(WAIT).recv_or_fail(&held, "provider blocked in C read");
-    let park = asked + LOAD + GRACE;
-    let mark = clock.advance_when_parked(
-        Some(park),
-        None,
-        (LOAD + GRACE)
-            .checked_sub(Duration::from_millis(1))
-            .unwrap(),
-        &Deadline::after(WAIT),
-    );
-    assert!(clock.await_parked_since(&mark, Some(park), fakes::Deadline::after(WAIT)));
+    let early = asked + LOAD;
+    let grace = asked + LOAD + GRACE;
+    // The provider caller parks at its load deadline while the load is
+    // still queued; on a fast run it has already moved on to the grace park.
+    let caller = match clock.mark_parked(early, fakes::Deadline::after(WAIT)) {
+        Some(early_mark) => {
+            let parked = early_mark.threads();
+            assert_eq!(
+                parked.len(),
+                1,
+                "only the provider caller parks at its load deadline"
+            );
+            let caller = parked
+                .into_iter()
+                .next()
+                .expect("the provider caller thread");
+            let mark = clock.advance_when_parked(
+                Some(early),
+                Some(caller),
+                LOAD.checked_sub(Duration::from_millis(1)).unwrap(),
+                &Deadline::after(WAIT),
+            );
+            assert!(clock.await_parked_since(&mark, Some(grace), fakes::Deadline::after(WAIT)));
+            Some(caller)
+        }
+        None => None,
+    };
+    let short = grace
+        .checked_duration_since(clock.now())
+        .and_then(|left| left.checked_sub(Duration::from_millis(1)))
+        .expect("the grace park is still ahead");
+    let mark = clock.advance_when_parked(Some(grace), caller, short, &Deadline::after(WAIT));
+    assert!(clock.await_parked_since(&mark, Some(grace), fakes::Deadline::after(WAIT)));
     assert!(matches!(
         provider.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
     clock.advance_when_parked(
-        Some(park),
-        None,
+        Some(grace),
+        caller,
         Duration::from_millis(1),
         &Deadline::after(WAIT),
     );
