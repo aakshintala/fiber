@@ -576,11 +576,12 @@ fn a_hub_resume_with_the_repository_gone_is_io_failed_naming_it_and_changes_noth
     assert_eq!(rejected["payload"]["command_id"], "c_sub");
     assert_eq!(rejected["payload"]["code"], "io_failed");
     let message = rejected["payload"]["message"].as_str().unwrap().to_owned();
-    // The starter-error wrapper ends the ruled message with its period.
+    // The confirmed launch-target failure takes the ruled shape: the hub
+    // names it without the starter-error wrapper's period.
     assert_eq!(
         message,
         format!(
-            "Session {} could not resume: {} no longer exists.",
+            "Session {} could not resume: {} no longer exists",
             first.id, first.repository
         ),
         "{message}"

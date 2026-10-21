@@ -976,41 +976,38 @@ fn an_open_from_a_held_full_sends_summary_then_the_raise_later() {
 
 #[test]
 fn a_missing_workspace_refusal_names_the_path_with_no_rail_card() {
-    // The hub's guard refuses without its starter-error wrapper's
-    // trailing period; the recorded-repository path carries it. Both
-    // render the same ruled sentence.
-    for message in [
-        "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists",
-        "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists.",
-    ] {
-        let mut app = home_with_row();
-        let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
-        let first = lines[0]["id"]
-            .as_str()
-            .unwrap_or_else(|| panic!("first id"));
-        assert!(
-            app.on_line(refused_code(first, "io_failed", message))
-                .is_empty()
-        );
-        assert!(app.session().is_none());
-        assert!(app.on_home());
-        let ruled = "Cannot resume: /w no longer exists. Delete removes the session.";
-        assert_eq!(app.notice(), Some(ruled), "{message}");
-        let sessions = &app.home.as_ref().unwrap_or_else(|| panic!("home")).sessions;
-        let row = sessions
-            .row(&id("s_aaaaaaaaaaaaaaaa"))
-            .unwrap_or_else(|| panic!("the row stays: {message}"));
-        assert!(
-            matches!(row.left, Some(crate::home::Left::Exited)),
-            "the row stays under exited: {message}"
-        );
-        assert_eq!(
-            row.note.as_deref(),
-            Some(ruled),
-            "the row's note: {message}"
-        );
-        assert!(sessions.cards().is_empty(), "no rail card: {message}");
-    }
+    // The hub sends one exact shape for the confirmed case, from its
+    // guard and from a starter failure on an already-missing target:
+    // no trailing period. The race keeps the wrapper's period and
+    // renders verbatim, as the near-miss test pins.
+    let message = "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists";
+    let mut app = home_with_row();
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(refused_code(first, "io_failed", message))
+            .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    let ruled = "Cannot resume: /w no longer exists. Delete removes the session.";
+    assert_eq!(app.notice(), Some(ruled), "{message}");
+    let sessions = &app.home.as_ref().unwrap_or_else(|| panic!("home")).sessions;
+    let row = sessions
+        .row(&id("s_aaaaaaaaaaaaaaaa"))
+        .unwrap_or_else(|| panic!("the row stays: {message}"));
+    assert!(
+        matches!(row.left, Some(crate::home::Left::Exited)),
+        "the row stays under exited: {message}"
+    );
+    assert_eq!(
+        row.note.as_deref(),
+        Some(ruled),
+        "the row's note: {message}"
+    );
+    assert!(sessions.cards().is_empty(), "no rail card: {message}");
 }
 
 #[test]
@@ -1028,6 +1025,12 @@ fn a_near_miss_io_failed_refusal_renders_verbatim() {
         (
             "io_failed",
             "Session s_aaaaaaaaaaaaaaaa could not resume:  no longer exists",
+        ),
+        // The race keeps the starter-error wrapper's trailing period,
+        // so it renders verbatim like any other refusal.
+        (
+            "io_failed",
+            "Session s_aaaaaaaaaaaaaaaa could not resume: /w no longer exists.",
         ),
         (
             "session_not_found",

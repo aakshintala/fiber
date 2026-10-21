@@ -399,15 +399,15 @@ impl App {
     /// The workspace path a missing-workspace resume refusal names, when
     /// `code` and `message` have exactly the hub's unrecoverable-workspace
     /// shape (`docs/invocation.md`, "Lifecycle"): `io_failed` with
-    /// `Session <id> could not resume: <path> no longer exists`. The
-    /// recorded-repository refusal carries the starter-error wrapper's
-    /// trailing period, so one trailing period is forgiven. Else `None`.
+    /// `Session <id> could not resume: <path> no longer exists`, with no
+    /// trailing period. A refusal carrying the starter-error wrapper's
+    /// trailing period is the race the ruling leaves alone, which renders
+    /// like any other refusal. Else `None`.
     fn missing_workspace<'message>(code: &str, message: &'message str) -> Option<&'message str> {
         if code != "io_failed" {
             return None;
         }
-        let shaped = message.strip_suffix('.').unwrap_or(message);
-        let rest = shaped
+        let rest = message
             .strip_prefix("Session ")?
             .strip_suffix(" no longer exists")?;
         let (id, path) = rest.split_once(" could not resume: ")?;
@@ -422,6 +422,11 @@ impl App {
     /// note and a notice. A missing-workspace refusal renders the ruled
     /// sentence instead, naming the path. A rejection of an earlier step
     /// changes nothing by itself.
+    //
+    // `vec![]` is exactly `Vec::new()`: no test can tell the spellings
+    // apart, so the empty-vector mutant is exempted here instead of
+    // pinned (`docs/testing/mutants.md`, "Proving a test bites").
+    #[cfg_attr(false, mutants::skip)]
     fn fail_open(&mut self, code: &str, message: String) -> Vec<String> {
         let session = self
             .home
