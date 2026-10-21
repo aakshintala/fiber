@@ -858,9 +858,10 @@ of them runs"). It stops its jobs and exits with `suspended_on` naming the
 request, as it does when the idle delay passes ("Lifecycle"), and resuming
 raises the request again.
 
-A signal that arrives before `fiber_started` is written exits with the code
-and writes no durable event; an ephemeral `clients` line already sent to a
-client that attached stays sent. Once `fiber_started` is written,
+A signal that arrives before Fiber starts writing `fiber_started` exits with the code
+and writes no durable event; one that arrives while it is being written takes effect once it is written, as the started process's shutdown. An ephemeral `clients` line already sent to a
+client that attached stays sent. A signal that arrives before Fiber starts writing `fiber_started` also writes one diagnostic line (`docs/state.md`, "What each part holds").
+Once `fiber_started` is written,
 `fiber_exited` always is, unless the process dies or reaches its kill point.
 
 **The bound is 5 seconds** from the signal to exit, per process. The
