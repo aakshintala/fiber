@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 
 use super::super::{App, Effect};
 use crate::Configure;
-use crate::configure::{ConfigureError, LoginKind, LogoutRow};
+use crate::configure::{ConfigureError, LogoutRow};
 use crate::configure_fake::Fake;
 use crate::home::Launch;
 use crate::keys::Key;
@@ -34,10 +34,9 @@ fn logout_seam(rows: Vec<LogoutRow>) -> Arc<Fake> {
 
 /// A deletable stored label row.
 fn stored(name: &str, label: &str, default: bool, siblings: &[&str]) -> LogoutRow {
-    LogoutRow {
+    LogoutRow::Provider {
         name: name.to_owned(),
-        label: Some(label.to_owned()),
-        kind: LoginKind::Key,
+        label: label.to_owned(),
         default,
         deletable: true,
         origin: None,
@@ -50,10 +49,9 @@ fn stored(name: &str, label: &str, default: bool, siblings: &[&str]) -> LogoutRo
 
 /// A label whose key comes from elsewhere: no delete can take it.
 fn dim(name: &str, label: &str, origin: &str) -> LogoutRow {
-    LogoutRow {
+    LogoutRow::Provider {
         name: name.to_owned(),
-        label: Some(label.to_owned()),
-        kind: LoginKind::Key,
+        label: label.to_owned(),
         default: false,
         deletable: false,
         origin: Some(origin.to_owned()),
@@ -388,14 +386,9 @@ fn the_confirm_names_siblings_and_the_removed_line_keeps_them() {
 
 #[test]
 fn a_secret_row_confirms_by_name_and_deletes_with_no_label() {
-    let seam = logout_seam(vec![LogoutRow {
+    let seam = logout_seam(vec![LogoutRow::Secret {
         name: "acme.api_key".to_owned(),
-        label: None,
-        kind: LoginKind::Secret,
-        default: false,
         deletable: true,
-        origin: None,
-        siblings: Vec::new(),
     }]);
     if let Ok(mut deleted) = seam.deleted.lock() {
         *deleted = Ok("credentials/acme.api_key".to_owned());

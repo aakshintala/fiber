@@ -9,7 +9,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use crate::configure::{LoginKind, LogoutRow};
+use crate::configure::LogoutRow;
 use crate::format;
 use crate::keys::Key;
 use crate::mouse::{Target, TargetId};
@@ -18,6 +18,11 @@ use crate::swapped::Spot;
 use crate::view::overlay;
 
 /// A heading's group.
+// debt: Group, Item, rows_key, target_rows, the list assembly in draw,
+// list_chrome, shown_body_rows, window_start, text_row, blank_row and
+// wrapped_rows mirror login_view.rs; share one list both views call once
+// login_view.rs is in the fence. Upgrade trigger: the next ticket that
+// touches login_view.rs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Group {
     /// The stored and configured provider labels.
@@ -93,7 +98,7 @@ impl Logout {
             .items
             .iter()
             .position(|item| match item {
-                Item::Target(at) => self.rows.get(*at).is_some_and(|row| row.deletable),
+                Item::Target(at) => self.rows.get(*at).is_some_and(|row| row.deletable()),
                 Item::Heading(_) | Item::Gap | Item::Note => false,
             })
             .or_else(|| {
@@ -127,7 +132,7 @@ impl Logout {
         if *key == Key::Enter {
             if let Some(Item::Target(at)) = self.selected()
                 && let Some(row) = self.rows.get(at)
-                && row.deletable
+                && row.deletable()
             {
                 // Enter on a heading, the gap, the note or a dim row
                 // does nothing: only a deletable row confirms.
@@ -220,11 +225,14 @@ impl Logout {
             self.mode = Mode::Rows;
             return;
         };
-        match ctx.seam.delete_stored(&row.name, row.label.clone()) {
+        match ctx
+            .seam
+            .delete_stored(row.name(), row.label().map(str::to_owned))
+        {
             Ok(path) => {
                 let mut line = format!("Removed {path}");
-                if !row.siblings.is_empty() {
-                    line.push_str(&format!(", which {} also reads", row.siblings.join(", ")));
+                if !row.siblings().is_empty() {
+                    line.push_str(&format!(", which {} also reads", row.siblings().join(", ")));
                 }
                 line.push('.');
                 match ctx.seam.logout_rows() {
@@ -237,8 +245,9 @@ impl Logout {
                     Err(error) => {
                         // The delete landed but the re-list failed: the
                         // row is gone, and both lines stay to say so.
-                        self.rows
-                            .retain(|kept| kept.name != row.name || kept.label != row.label);
+                        self.rows.retain(|kept| {
+                            kept.name() != row.name() || kept.label() != row.label()
+                        });
                         self.items = build(&self.rows);
                         self.refocus();
                         self.said = vec![line, error.message];
@@ -274,7 +283,7 @@ impl Logout {
                 }
                 match self.items.get(at) {
                     Some(Item::Target(t)) => {
-                        let deletable = self.rows.get(*t).is_some_and(|row| row.deletable);
+                        let deletable = self.rows.get(*t).is_some_and(|row| row.deletable());
                         if deletable {
                             self.selected = at;
                             self.said.clear();
@@ -291,7 +300,7 @@ impl Logout {
 /// Whether the row lists under Providers: a provider's label, stored or
 /// configured. Secrets list under Secrets.
 fn is_provider(row: &LogoutRow) -> bool {
-    !matches!(row.kind, LoginKind::Secret)
+    matches!(row, LogoutRow::Provider { .. })
 }
 
 fn build(rows: &[LogoutRow]) -> Vec<Item> {
@@ -344,7 +353,7 @@ impl Logout {
             if let Item::Target(t) = *item
                 && let Some(row) = self.rows.get(t)
             {
-                cut.push((at, format::cut(&row_text(row), budget), !row.deletable));
+                cut.push((at, format::cut(&row_text(row), budget), !row.deletable()));
             }
         }
         let listed: Vec<(&str, &str)> =
@@ -440,17 +449,10 @@ impl Logout {
         overlay::draw(buf, area, &framed, overlay::Place::Centre, targets);
     }
 
-    /// The confirm body's row count: the list's body rows when no read
-    /// error exists, at least three.
-    fn body_count(&self) -> usize {
-        self.items.len().max(3)
-    }
-
     /// Draws the confirm over `area`: one overlay titled with the
     /// provider or secret name, naming the label it deletes and the
-    /// providers reading the same stored directory, the body exactly
-    /// the list's row count and the footer padded to the shared width,
-    /// so the overlay never jumps between the steps.
+    /// providers reading the same stored directory. The body holds the
+    /// confirm's own lines only, never the list's row count or width.
     fn draw_confirm(&self, area: Rect, buf: &mut Buffer, targets_out: &mut Vec<Target>) {
         let Mode::Confirm { target } = &self.mode else {
             return;
@@ -458,36 +460,20 @@ impl Logout {
         let Some(row) = self.rows.get(*target) else {
             return;
         };
-        let content = confirm_content_width(row, &self.rows);
-        let content_u16 = u16::try_from(content).unwrap_or(u16::MAX);
-        let slab_w = overlay::width(content_u16, 96, area.width);
-        let inner = usize::from(overlay::inner(slab_w));
-        let mut content_rows = wrapped_rows(&delete_line(row), inner, Style::new());
-        if !row.siblings.is_empty() {
-            content_rows.extend(wrapped_rows(
-                &format!("Also used by: {}", row.siblings.join(", ")),
+        let width = overlay::width(u16::MAX, 96, area.width);
+        let inner = usize::from(overlay::inner(width));
+        let mut body = wrapped_rows(&delete_line(row), inner, Style::new());
+        if !row.siblings().is_empty() {
+            body.extend(wrapped_rows(
+                &format!("Also used by: {}", row.siblings().join(", ")),
                 inner,
                 Style::new(),
             ));
         }
-        let kept = self.body_count();
-        let mut body = content_rows;
-        body.truncate(kept);
-        while body.len() < kept {
-            body.push(blank_row());
-        }
         body.truncate(shown_body_rows(usize::from(area.height)));
-        let mut footer = overlay::legend(&[("Enter", "confirm"), ("Esc", "back")]);
-        let have: usize = footer
-            .spans
-            .iter()
-            .map(|span| format::width(&span.content))
-            .sum();
-        footer
-            .spans
-            .push(Span::raw(" ".repeat(content.saturating_sub(have))));
+        let footer = overlay::legend(&[("Enter", "confirm"), ("Esc", "back")]);
         let framed = overlay::Overlay {
-            title: Some((row.name.clone(), Some(Span::raw("✕")))),
+            title: Some((row.name().to_owned(), Some(Span::raw("✕")))),
             close: Some(TargetId::View(Spot::Close)),
             body,
             footer: Some(footer),
@@ -538,71 +524,39 @@ fn window_start(focused: usize, shown: usize, rows: usize) -> usize {
     }
 }
 
-/// One row's text as drawn: the provider and its label, or the secret,
-/// the default mark, and the origin a dim row's key comes from.
+/// One row's text as drawn: the provider and its label with the
+/// default mark, and the origin a dim row's key comes from; or the
+/// secret's name.
 fn row_text(row: &LogoutRow) -> String {
-    let mut text = match &row.label {
-        Some(label) => format!("{} {label}", row.name),
-        None => row.name.clone(),
-    };
-    if row.default {
-        text.push_str(" (default)");
+    match row {
+        LogoutRow::Provider {
+            name,
+            label,
+            default,
+            deletable,
+            origin,
+            ..
+        } => {
+            let mut text = format!("{name} {label}");
+            if *default {
+                text.push_str(" (default)");
+            }
+            if !deletable && let Some(origin) = origin {
+                text.push_str(&format!(" ({origin})"));
+            }
+            text
+        }
+        LogoutRow::Secret { name, .. } => name.clone(),
     }
-    if !row.deletable
-        && let Some(origin) = &row.origin
-    {
-        text.push_str(&format!(" ({origin})"));
-    }
-    text
 }
 
 /// The confirm's first line: the exact provider and label, or the
 /// secret, the delete names.
 fn delete_line(row: &LogoutRow) -> String {
-    match &row.label {
-        Some(label) => format!("Delete {}/{}?", row.name, label),
-        None => format!("Delete {}?", row.name),
+    match row {
+        LogoutRow::Provider { name, label, .. } => format!("Delete {name}/{label}?"),
+        LogoutRow::Secret { name, .. } => format!("Delete {name}?"),
     }
-}
-
-/// The widest row the provider list shows, measured as drawn: the
-/// headings and the uncut row texts, so the confirm width never depends
-/// on what the list clips away.
-fn list_widest(rows: &[LogoutRow]) -> usize {
-    let mut wide = 0;
-    if rows.iter().any(is_provider) {
-        wide = wide.max(format::width("Providers"));
-    }
-    if rows.iter().any(|row| !is_provider(row)) {
-        wide = wide.max(format::width("Secrets"));
-    }
-    for row in rows {
-        wide = wide.max(format::width(&row_text(row)));
-    }
-    wide
-}
-
-/// The confirm slab's content width: the title, the widest list row,
-/// every fixed line and every footer. Nothing typed or received counts,
-/// so nothing moves the overlay.
-fn confirm_content_width(row: &LogoutRow, rows: &[LogoutRow]) -> usize {
-    let mut wide = 0;
-    wide = wide.max(format::width(&row.name).saturating_add(2));
-    wide = wide.max(list_widest(rows));
-    wide = wide.max(format::width(&delete_line(row)));
-    if !row.siblings.is_empty() {
-        wide = wide.max(format::width(&format!(
-            "Also used by: {}",
-            row.siblings.join(", ")
-        )));
-    }
-    for footer in [
-        "↑↓ move · Enter delete · Esc close",
-        "Enter confirm · Esc back",
-    ] {
-        wide = wide.max(format::width(footer));
-    }
-    wide
 }
 
 /// One overlay body row holding `text` in `style`.

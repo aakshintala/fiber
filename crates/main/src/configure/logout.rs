@@ -10,7 +10,7 @@ use config::{Config, Origin, Sources};
 use contract::shapes::Failure;
 
 use super::{from_config, from_failure};
-use tui::{ConfigureError, LoginKind, LogoutRow};
+use tui::{ConfigureError, LogoutRow};
 
 /// The configuration the rows read: Fiber home stands in for the
 /// workspace, so the global layer always loads; the project layer is
@@ -42,12 +42,7 @@ fn describe(origin: &Origin) -> String {
 /// One provider's rows: one per label it has, stored or configured, the
 /// selected label first and the rest sorted. A label whose file vanished
 /// between the listing and the check lists nothing.
-fn provider_rows(
-    config: &Config,
-    providers: &extensions::Providers,
-    name: &str,
-    kind: LoginKind,
-) -> Vec<LogoutRow> {
+fn provider_rows(config: &Config, providers: &extensions::Providers, name: &str) -> Vec<LogoutRow> {
     let Some(data) = providers.get(name) else {
         return Vec::new();
     };
@@ -80,19 +75,17 @@ fn provider_rows(
     labels
         .into_iter()
         .filter_map(|(label, origin)| match origin {
-            Ok(Origin::Stored) => Some(LogoutRow {
+            Ok(Origin::Stored) => Some(LogoutRow::Provider {
                 name: name.to_owned(),
-                label: Some(label.clone()),
-                kind,
+                label: label.clone(),
                 default: label == selected,
                 deletable: true,
                 origin: None,
                 siblings: siblings.clone(),
             }),
-            Ok(origin) => Some(LogoutRow {
+            Ok(origin) => Some(LogoutRow::Provider {
                 name: name.to_owned(),
-                label: Some(label.clone()),
-                kind,
+                label: label.clone(),
                 default: label == selected,
                 deletable: false,
                 origin: Some(describe(&origin)),
@@ -106,14 +99,9 @@ fn provider_rows(
 /// One declared secret's row: deletable only while a secret is stored.
 fn secret_row(home: &Path, name: &str) -> Result<LogoutRow, ConfigureError> {
     let stored = config::read_secret(home, name).map_err(from_config)?;
-    Ok(LogoutRow {
+    Ok(LogoutRow::Secret {
         name: name.to_owned(),
-        label: None,
-        kind: LoginKind::Secret,
-        default: false,
         deletable: stored.is_some(),
-        origin: None,
-        siblings: Vec::new(),
     })
 }
 
@@ -126,11 +114,8 @@ pub(super) fn rows(home: &Path) -> Result<Vec<LogoutRow>, ConfigureError> {
     let mut rows = Vec::new();
     for target in &targets {
         match target {
-            ::cli::LoginName::Provider(name) => {
-                rows.extend(provider_rows(&config, &providers, name, LoginKind::Key));
-            }
-            ::cli::LoginName::Browser(name) => {
-                rows.extend(provider_rows(&config, &providers, name, LoginKind::Browser));
+            ::cli::LoginName::Provider(name) | ::cli::LoginName::Browser(name) => {
+                rows.extend(provider_rows(&config, &providers, name));
             }
             ::cli::LoginName::Secret(name) => rows.push(secret_row(home, name)?),
         }
@@ -199,7 +184,7 @@ mod tests {
     use std::path::PathBuf;
 
     use serde_json::{Value, json};
-    use tui::{Configure, LoginKind};
+    use tui::Configure;
 
     use super::super::Seam;
     use crate::test_support::install_extension;
@@ -288,44 +273,30 @@ mod tests {
         let rows = seam.logout_rows().unwrap();
         assert_eq!(
             rows.iter()
-                .map(|row| (
-                    row.name.as_str(),
-                    row.label.as_deref(),
-                    row.kind,
-                    row.default,
-                    row.deletable,
-                    row.origin.clone(),
-                    row.siblings.clone(),
-                ))
+                .map(|row| match row {
+                    tui::LogoutRow::Provider {
+                        name,
+                        label,
+                        default,
+                        deletable,
+                        origin,
+                        siblings,
+                    } => (
+                        name.as_str(),
+                        Some(label.as_str()),
+                        *default,
+                        *deletable,
+                        origin.clone(),
+                        siblings.clone(),
+                    ),
+                    tui::LogoutRow::Secret { name, deletable } =>
+                        (name.as_str(), None, false, *deletable, None, Vec::new(),),
+                })
                 .collect::<Vec<_>>(),
             [
-                (
-                    "acme",
-                    Some("work"),
-                    LoginKind::Key,
-                    true,
-                    true,
-                    None,
-                    vec![]
-                ),
-                (
-                    "acme",
-                    Some("home"),
-                    LoginKind::Key,
-                    false,
-                    true,
-                    None,
-                    vec![]
-                ),
-                (
-                    "acme.api_key",
-                    None,
-                    LoginKind::Secret,
-                    false,
-                    true,
-                    None,
-                    vec![]
-                ),
+                ("acme", Some("work"), true, true, None, vec![]),
+                ("acme", Some("home"), false, true, None, vec![]),
+                ("acme.api_key", None, false, true, None, vec![]),
             ]
         );
     }
@@ -374,14 +345,9 @@ mod tests {
         // nothing.
         assert_eq!(
             seam.logout_rows().unwrap(),
-            [tui::LogoutRow {
+            [tui::LogoutRow::Secret {
                 name: "acme.api_key".to_owned(),
-                label: None,
-                kind: LoginKind::Secret,
-                default: false,
                 deletable: false,
-                origin: None,
-                siblings: Vec::new(),
             }]
         );
     }
@@ -404,12 +370,7 @@ mod tests {
             let rows = setup.seam().logout_rows().unwrap();
             assert_eq!(
                 rows.iter()
-                    .map(|row| (
-                        row.name.as_str(),
-                        row.label.as_deref(),
-                        row.deletable,
-                        row.origin.as_deref()
-                    ))
+                    .map(|row| (row.name(), row.label(), row.deletable(), row.origin()))
                     .collect::<Vec<_>>(),
                 [("acme", Some("work"), false, Some(origin))],
                 "{source:?}"
@@ -417,8 +378,7 @@ mod tests {
             // A command's arguments may hold a key: only its program shows.
             assert!(
                 rows.iter().all(|row| row
-                    .origin
-                    .as_deref()
+                    .origin()
                     .is_none_or(|text| !text.contains("sk-live-secret-arg"))),
                 "{rows:?}"
             );
@@ -507,7 +467,7 @@ mod tests {
         let rows = seam.logout_rows().unwrap();
         assert_eq!(
             rows.iter()
-                .map(|row| (row.name.as_str(), row.siblings.clone()))
+                .map(|row| (row.name(), row.siblings().to_owned()))
                 .collect::<Vec<_>>(),
             [
                 ("acme", vec!["beta".to_owned()]),
@@ -537,7 +497,7 @@ mod tests {
         assert!(
             before
                 .iter()
-                .any(|row| row.label.as_deref() == Some("work") && row.deletable),
+                .any(|row| row.label() == Some("work") && row.deletable()),
             "{before:?}"
         );
         assert_eq!(
@@ -548,9 +508,9 @@ mod tests {
         // remains, and later sessions read the source.
         let after = seam.logout_rows().unwrap();
         assert_eq!(after.len(), 1);
-        assert!(!after[0].deletable);
+        assert!(!after[0].deletable());
         assert_eq!(
-            after[0].origin.as_deref(),
+            after[0].origin(),
             Some(format!("file {}", key_file.display()).as_str())
         );
         let config = super::load(&setup.home()).unwrap();

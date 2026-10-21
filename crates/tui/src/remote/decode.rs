@@ -182,21 +182,20 @@ pub(super) fn logout_rows(value: &Value) -> Option<Vec<LogoutRow>> {
         .get("rows")?
         .as_array()?
         .iter()
-        .map(|row| {
-            Some(LogoutRow {
+        .map(|row| match row.get("row")?.as_str()? {
+            "provider" => Some(LogoutRow::Provider {
                 name: read!(row, "name")?,
-                label: optional!(row, "label")?,
-                kind: match row.get("kind")?.as_str()? {
-                    "key" => LoginKind::Key,
-                    "browser" => LoginKind::Browser,
-                    "secret" => LoginKind::Secret,
-                    _ => return None,
-                },
+                label: read!(row, "label")?,
                 default: read!(row, "default")?,
                 deletable: read!(row, "deletable")?,
                 origin: optional!(row, "origin")?,
                 siblings: read!(row, "siblings")?,
-            })
+            }),
+            "secret" => Some(LogoutRow::Secret {
+                name: read!(row, "name")?,
+                deletable: read!(row, "deletable")?,
+            }),
+            _ => None,
         })
         .collect()
 }

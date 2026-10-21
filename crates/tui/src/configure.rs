@@ -143,26 +143,79 @@ pub struct LoginTarget {
 
 /// One `/logout` row: a provider's label or a declared secret, by name.
 /// A provider lists one row per label it has, stored or configured; a
-/// secret lists one row with no label.
+/// secret lists one row. Separate variants keep contradictory states
+/// unbuildable: a secret has no label, no default mark, no origin and
+/// no siblings (`docs/code-quality.md`, "Types").
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LogoutRow {
+pub enum LogoutRow {
+    /// One of a provider's labels, stored or configured.
+    Provider {
+        /// The provider's name.
+        name: String,
+        /// The provider's label.
+        label: String,
+        /// Whether this is the provider's selected label.
+        default: bool,
+        /// Whether Enter may delete it: false for a key from an
+        /// environment variable, a file or a command.
+        deletable: bool,
+        /// Where a non-deletable key comes from, described without its
+        /// secret; `None` on a deletable row.
+        origin: Option<String>,
+        /// The other providers reading the same stored directory.
+        siblings: Vec<String>,
+    },
+    /// One declared secret.
+    Secret {
+        /// The secret's name.
+        name: String,
+        /// Whether Enter may delete it: false with nothing stored.
+        deletable: bool,
+    },
+}
+
+impl LogoutRow {
     /// The provider or secret's name.
-    pub name: String,
+    pub fn name(&self) -> &str {
+        match self {
+            LogoutRow::Provider { name, .. } | LogoutRow::Secret { name, .. } => name,
+        }
+    }
+
     /// The provider's label; a secret has none.
-    pub label: Option<String>,
-    /// How the row logs in.
-    pub kind: LoginKind,
-    /// Whether this is the provider's selected label.
-    pub default: bool,
-    /// Whether Enter may delete it: false for a key from an environment
-    /// variable, a file or a command, and for a secret with nothing
-    /// stored.
-    pub deletable: bool,
-    /// Where a non-deletable key comes from, described without its
-    /// secret; `None` on a deletable row and on an unstored secret.
-    pub origin: Option<String>,
-    /// The other providers reading the same stored directory.
-    pub siblings: Vec<String>,
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            LogoutRow::Provider { label, .. } => Some(label),
+            LogoutRow::Secret { .. } => None,
+        }
+    }
+
+    /// Whether Enter may delete it.
+    pub fn deletable(&self) -> bool {
+        match self {
+            LogoutRow::Provider { deletable, .. } | LogoutRow::Secret { deletable, .. } => {
+                *deletable
+            }
+        }
+    }
+
+    /// Where a non-deletable provider key comes from; `None` on a
+    /// deletable row and on a secret.
+    pub fn origin(&self) -> Option<&str> {
+        match self {
+            LogoutRow::Provider { origin, .. } => origin.as_deref(),
+            LogoutRow::Secret { .. } => None,
+        }
+    }
+
+    /// The other providers reading the same stored directory; empty on
+    /// a secret.
+    pub fn siblings(&self) -> &[String] {
+        match self {
+            LogoutRow::Provider { siblings, .. } => siblings,
+            LogoutRow::Secret { .. } => &[],
+        }
+    }
 }
 
 /// What a login stored: the file under Fiber home, and whether it replaced one.

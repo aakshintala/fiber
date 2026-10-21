@@ -561,9 +561,12 @@ impl Configure for Fake {
             drop(std::fs::remove_file(file));
             if let Ok(mut rows) = self.logout.lock()
                 && let Ok(rows) = rows.as_mut()
-                && let Some(at) = rows
-                    .iter()
-                    .position(|row| row.name == name && row.label == label)
+                && let Some(at) = rows.iter().position(|row| match row {
+                    LogoutRow::Provider {
+                        name: n, label: l, ..
+                    } => n == name && Some(l.as_str()) == label.as_deref(),
+                    LogoutRow::Secret { name: n, .. } => n == name && label.is_none(),
+                })
             {
                 rows.remove(at);
             }

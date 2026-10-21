@@ -414,24 +414,27 @@ impl hub::Machine for Seam {
             "logout_rows" => {
                 a.shape(&[], &[])?;
                 json!({"rows":self.logout_rows().map_err(from_view)?.into_iter().map(|row|{
-                    let mut value = Map::from_iter([
-                        ("name".to_owned(), json!(row.name)),
-                        ("kind".to_owned(), json!(match row.kind {
-                            LoginKind::Key => "key",
-                            LoginKind::Browser => "browser",
-                            LoginKind::Secret => "secret",
-                        })),
-                        ("default".to_owned(), json!(row.default)),
-                        ("deletable".to_owned(), json!(row.deletable)),
-                        ("siblings".to_owned(), json!(row.siblings)),
-                    ]);
-                    if let Some(label) = row.label {
-                        drop(value.insert("label".to_owned(), json!(label)));
+                    match row {
+                        tui::LogoutRow::Provider { name, label, default, deletable, origin, siblings } => {
+                            let mut value = Map::from_iter([
+                                ("row".to_owned(), json!("provider")),
+                                ("name".to_owned(), json!(name)),
+                                ("label".to_owned(), json!(label)),
+                                ("default".to_owned(), json!(default)),
+                                ("deletable".to_owned(), json!(deletable)),
+                                ("siblings".to_owned(), json!(siblings)),
+                            ]);
+                            if let Some(origin) = origin {
+                                drop(value.insert("origin".to_owned(), json!(origin)));
+                            }
+                            Value::Object(value)
+                        }
+                        tui::LogoutRow::Secret { name, deletable } => json!({
+                            "row": "secret",
+                            "name": name,
+                            "deletable": deletable,
+                        }),
                     }
-                    if let Some(origin) = row.origin {
-                        drop(value.insert("origin".to_owned(), json!(origin)));
-                    }
-                    Value::Object(value)
                 }).collect::<Vec<_>>()})
             }
             "delete_stored" => {
