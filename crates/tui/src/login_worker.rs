@@ -153,12 +153,15 @@ impl Drop for LoginWorker {
 /// Starts `start`'s job: a browser login's `browser_login` returns at
 /// once and does no I/O, so it runs here, and `run` blocks on a
 /// `tui-login` thread whose end is posted back. A successful browser
-/// credential posts its `Done`, then its presence gaps, before the same
-/// thread reads the reviewer choices and posts them; a failed one posts
-/// only its `Done`. A failed gaps read posts its error between them: the
-/// reviewer read still runs. A reviewer-only job reads the gaps, then the
-/// choices, with no credential store. A spawn failure is dropped: the
-/// view stays waiting and Esc still cancels.
+/// credential posts its `Done`, then its presence gaps. Gaps to ask
+/// post alone: the host save's own reviewer job reads the reviewer
+/// after the save, since a read now would list the models before the
+/// host exists. No gaps, or a gaps read that failed, posts the reviewer
+/// read as today; a failed gaps read posts its error between them. A
+/// failed login posts only its `Done`. A reviewer-only job always reads
+/// both: after a host save the reviewer must follow even when a masked
+/// gap still reads. A spawn failure is dropped: the view stays waiting
+/// and Esc still cancels.
 pub(crate) fn start(start: LoginStart, clock: Arc<dyn Clock>, out: Sender<Input>) -> LoginWorker {
     let LoginStart {
         ticket,
@@ -197,15 +200,21 @@ fn start_browser(
             }));
             if stored {
                 let gaps = seam.gaps(&name);
+                let read_reviewer = match &gaps {
+                    Ok(gaps) => gaps.is_empty(),
+                    Err(_) => true,
+                };
                 drop(out.send(Input::Login {
                     ticket,
                     step: LoginStep::Host(gaps),
                 }));
-                let choices = seam.reviewer_models(&name, clock);
-                drop(out.send(Input::Login {
-                    ticket,
-                    step: LoginStep::Reviewer(choices),
-                }));
+                if read_reviewer {
+                    let choices = seam.reviewer_models(&name, clock);
+                    drop(out.send(Input::Login {
+                        ticket,
+                        step: LoginStep::Reviewer(choices),
+                    }));
+                }
             }
         }
     }));
