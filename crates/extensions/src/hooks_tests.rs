@@ -3195,7 +3195,10 @@ fn drain_watchers_collects_a_log_it_cannot_open() {
         errors[0].message.contains("could not read the log"),
         "{errors:?}"
     );
-    assert!(!ran.exists(), "nothing replays from a log that cannot be read");
+    assert!(
+        !ran.exists(),
+        "nothing replays from a log that cannot be read"
+    );
 }
 
 /// A log line that does not parse is collected, and the lines before it
