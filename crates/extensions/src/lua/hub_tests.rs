@@ -416,7 +416,7 @@ fn finish_watcher_keeps_only_the_drains_result() {
     }
     hub.finish_watcher("ext", 8, 0, Err(stopped("ext")));
     assert!(
-        hub.lock().calls.get(&8).is_none(),
+        !hub.lock().calls.contains_key(&8),
         "the live call is forgotten while the drain keeps its own"
     );
     hub.finish_watcher("ext", 7, 0, Err(stopped("ext")));
