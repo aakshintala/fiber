@@ -333,9 +333,13 @@ fn a_stuck_provider_load_abandons_its_mixed_extension_after_grace() {
     let early = asked + LOAD;
     let grace = asked + LOAD + GRACE;
     // The provider caller parks at its load deadline while the load is
-    // still queued; on a fast run it has already moved on to the grace park.
-    let caller = match clock.mark_parked(early, fakes::Deadline::after(WAIT)) {
-        Some(early_mark) => {
+    // still queued; on a fast run it parks straight at the grace park once
+    // schedule.rs has dispatched the load to Running. The soft wait reports
+    // either park as positive evidence: `Ok` advanced exactly to the early
+    // park, `Mismatch` names the grace park it found instead. `NoPark` is a
+    // hang, not a path, and fails the test.
+    let caller = match clock.try_advance_when_parked(Some(early), None, LOAD, WAIT) {
+        Ok(early_mark) => {
             let parked = early_mark.threads();
             assert_eq!(
                 parked.len(),
@@ -346,16 +350,24 @@ fn a_stuck_provider_load_abandons_its_mixed_extension_after_grace() {
                 .into_iter()
                 .next()
                 .expect("the provider caller thread");
-            let mark = clock.advance_when_parked(
-                Some(early),
-                Some(caller),
-                LOAD.checked_sub(Duration::from_millis(1)).unwrap(),
-                &Deadline::after(WAIT),
-            );
-            assert!(clock.await_parked_since(&mark, Some(grace), fakes::Deadline::after(WAIT)));
+            assert!(clock.await_parked_since(
+                &early_mark,
+                Some(grace),
+                fakes::Deadline::after(WAIT)
+            ));
             Some(caller)
         }
-        None => None,
+        Err(fakes::clock::Miss::Mismatch { watched, parked }) => {
+            assert_eq!(
+                watched.1,
+                Some(grace),
+                "the fast path parks the provider caller at its grace, found {watched:?} in {parked:?}"
+            );
+            None
+        }
+        Err(fakes::clock::Miss::NoPark) => {
+            panic!("the provider caller never parked at its load deadline or its grace");
+        }
     };
     let short = grace
         .checked_duration_since(clock.now())
