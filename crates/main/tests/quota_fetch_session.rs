@@ -133,7 +133,7 @@ fn a_model_call_through_an_open_session_fetches_lua_quota() {
             break;
         }
         assert!(
-            server.await_requests(seen + 1, setup.deadline.left()),
+            server.await_requests(seen + 1, setup.deadline),
             "waited until the deadline for the /lua-quota request after the turn"
         );
         seen = server.requests().len();

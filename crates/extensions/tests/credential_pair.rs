@@ -296,7 +296,7 @@ fn a_background_refresh_of_one_pair_leaves_another_pair_alone() {
         "the request still gets the token it has while the refresh runs"
     );
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "waited for the refresh request"
     );
     // While the refresh is held, the other pair answers from its own entry:

@@ -473,7 +473,7 @@ fn quota_now_returns_while_the_vm_is_busy_and_starts_only_one_fetch() {
         QuotaEntry::Unreachable { last: None }
     );
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the fetch reached the held server"
     );
     assert_eq!(
@@ -523,7 +523,7 @@ fn quota_now_refetches_only_after_the_freshness_boundary() {
     server.hold();
     assert_eq!(provider.quota_now(&pair(), None), value);
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "the overdue cache started a fetch"
     );
     assert_eq!(server.requests().len(), 2);
@@ -579,7 +579,7 @@ fn quota_cached_never_starts_a_fetch_even_after_the_freshness_boundary() {
     server.hold();
     assert_eq!(provider.quota_now(&pair(), None), value);
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "quota_now starts the overdue fetch"
     );
     server.release();
@@ -652,7 +652,7 @@ fn concurrent_readers_share_one_fetch() {
     }
     drop(tx);
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the shared fetch never reached the server"
     );
     assert!(
@@ -694,7 +694,7 @@ fn a_fetch_times_out_at_exactly_eight_seconds() {
         std::thread::spawn(move || tx.send(provider.quota(&pair(), None)))
     };
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "the second fetch never reached the server"
     );
     assert!(
@@ -967,7 +967,7 @@ fn a_model_call_fetches_off_the_request_path_without_waiting() {
         "the call reached the inner provider"
     );
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the model call never started the fetch"
     );
     server.release();
@@ -1006,7 +1006,7 @@ fn a_model_call_refetches_only_past_five_minutes() {
     clock.advance(Duration::from_nanos(1));
     let _call = wrapped.call(&crate::test_support::request());
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "the model call never started the refetch"
     );
     assert_eq!(
@@ -1120,7 +1120,7 @@ fn sign_runs_while_a_quota_fetch_is_held() {
     let wrapped = quoted(&lua, inner);
     let _call = wrapped.call(&crate::test_support::request());
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the quota fetch never reached the server"
     );
     // The fetch is parked on `host.http`, which does not hold the extension's
@@ -1249,7 +1249,7 @@ fn a_model_call_fetches_with_the_bound_key() {
     };
     let _call = wrapped.call(&crate::test_support::request());
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the model call never started the fetch"
     );
     assert_eq!(
@@ -1497,7 +1497,7 @@ fn the_observed_factory_respects_freshness_for_its_bound_pair() {
     clock.advance(Duration::from_nanos(1));
     let _observed = trigger(3);
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "the factory never started the refetch"
     );
     assert_eq!(
@@ -1655,7 +1655,7 @@ fn force_start_fetches_whatever_the_cache_age() {
     // would never refetch. Only the force-start starts a new fetch.
     let wait = provider.force_start_quota(&pair(), None);
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "the force-start never reached the server"
     );
     assert_eq!(
@@ -1673,7 +1673,7 @@ fn force_start_shares_an_in_flight_flight() {
     let provider = http_quota_provider(&root, &server.url(), FakeClock::new());
     let first = provider.force_start_quota(&pair(), None);
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the first force-start never reached the server"
     );
     // The flight is still held open: the second force-start shares it,

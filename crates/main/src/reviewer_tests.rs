@@ -309,7 +309,7 @@ fn the_reviewer_fetches_quota_for_the_lookup_label() {
     assert_eq!(reviewer.model.reference, "qp/m2");
     let _call = reviewer.provider.call(&reviewer_request());
     assert!(
-        server.await_requests(1, QUOTA_WAIT),
+        server.await_requests(1, fakes::Deadline::after(QUOTA_WAIT)),
         "the reviewer call never fetched quota"
     );
     let paths: Vec<String> = server

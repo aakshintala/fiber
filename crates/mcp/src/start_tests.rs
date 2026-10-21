@@ -112,7 +112,7 @@ fn an_unusable_token_before_initialized_fails_the_public_start_with_login_advice
     let worker = std::thread::spawn(move || {
         done.send(setup.start(vec![spec])).unwrap();
     });
-    assert!(fake.await_requests(1, WITHIN));
+    assert!(fake.await_requests(1, Deadline::after(WITHIN)));
     files.state.lock().unwrap().records.get_mut(&key).unwrap()["access_token"] = json!("bad\r\n");
     fake.release_one();
     let started = Deadline::after(WITHIN)

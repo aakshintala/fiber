@@ -728,7 +728,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
     assert!(
-        server.await_requests(1, WAIT_UNTIL),
+        server.await_requests(1, Deadline::after(WAIT_UNTIL)),
         "waited for hold to reach the server"
     );
     assert!(until(&hub, |s| matches!(
@@ -768,7 +768,7 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
     assert!(
-        server.await_requests(1, WAIT_UNTIL),
+        server.await_requests(1, Deadline::after(WAIT_UNTIL)),
         "waited for hold to reach the server"
     );
     assert!(until(&hub, |s| matches!(
@@ -910,12 +910,12 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     let asked = clock.now();
     run("park", |e| e.command("park", "").map(Value::String));
     assert!(
-        park.await_requests(1, WAIT_SERVER),
+        park.await_requests(1, Deadline::after(WAIT_SERVER)),
         "waited for park to reach the server"
     );
     run("models", |e| e.provider_call("p", "models", Value::Null));
     assert!(
-        models.await_requests(1, WAIT_SERVER),
+        models.await_requests(1, Deadline::after(WAIT_SERVER)),
         "waited for models to reach the server"
     );
     run("queued", |e| e.command("queued", "").map(Value::String));
@@ -1037,7 +1037,7 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
     assert!(
-        server.await_requests(1, WAIT_UNTIL),
+        server.await_requests(1, Deadline::after(WAIT_UNTIL)),
         "waited for hold to reach the server"
     );
     assert!(until(&hub, |s| matches!(
@@ -1149,7 +1149,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
         Some(hub::ProviderLoad::Loaded)
     )));
     assert!(
-        server.await_requests(1, WAIT_UNTIL),
+        server.await_requests(1, Deadline::after(WAIT_UNTIL)),
         "waited for the hook to reach the server"
     );
     assert!(until(&hub, |s| matches!(

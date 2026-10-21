@@ -687,7 +687,7 @@ fn an_idle_session_exits_with_a_client_still_connected() {
     // reply writes nothing until it is released.
     let client = running.connect(&setup.socket(&id));
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
     send(
@@ -770,7 +770,7 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
 
     let client = running.connect(&setup.socket(&id));
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held first response was requested"
     );
     send(
@@ -805,7 +805,7 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"again"}]}}"#,
     );
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the held second response was requested"
     );
     server.release();
@@ -1901,7 +1901,7 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"go"}]}}"#,
     );
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request is in flight"
     );
     send(
@@ -2219,7 +2219,7 @@ fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
     // The first response is through, the job runs, and the second request
     // is held: the turn is in flight.
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the held second response was requested"
     );
     send_close_now(&client);

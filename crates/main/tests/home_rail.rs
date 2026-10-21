@@ -184,7 +184,7 @@ fn home_lists_live_and_exited_projects_and_keeps_the_box_at_the_bottom() {
     let first = start_session(&control, &launch_text, "first live");
     let second = start_session(&control, &git_text, "second live");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both live sessions reach the held provider"
     );
 

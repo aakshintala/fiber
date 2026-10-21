@@ -482,7 +482,7 @@ fn cancel_between_lifecycle_callbacks_keeps_one_scope() {
         })
     };
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the first hook suspended on HTTP"
     );
     cancel.fire();
@@ -643,7 +643,10 @@ fn a_suspended_dispatch_spans_the_whole_call() {
     let id = Deadline::after(WAIT)
         .recv(&id_rx)
         .expect("waited for the dispatch thread");
-    assert!(server.await_requests(1, WAIT), "the hook suspended on HTTP");
+    assert!(
+        server.await_requests(1, Deadline::after(WAIT)),
+        "the hook suspended on HTTP"
+    );
     // The dispatch waits on the fake clock past its own check before fake
     // time moves.
     // The dispatch waits on the fake clock past its own check before fake
@@ -719,7 +722,10 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
     let id = Deadline::after(WAIT)
         .recv(&id_rx)
         .expect("waited for the dispatch thread");
-    assert!(server.await_requests(1, WAIT), "the hook suspended on HTTP");
+    assert!(
+        server.await_requests(1, Deadline::after(WAIT)),
+        "the hook suspended on HTTP"
+    );
     // The caller waits on the suspended callback past its own check: the
     // hook's deadline plus the scheduler's grace for a suspended call.
     assert!(
@@ -1384,7 +1390,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         });
     }
     assert!(
-        held_a.await_requests(1, WAIT),
+        held_a.await_requests(1, Deadline::after(WAIT)),
         "command A suspended on HTTP"
     );
     // Provider p suspends on its first held request while A waits.
@@ -1394,7 +1400,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         let _sent = models_tx.send(provider_p.list_models(&ModelsArg::default()));
     });
     assert!(
-        held_p.await_requests(1, WAIT),
+        held_p.await_requests(1, Deadline::after(WAIT)),
         "provider p suspended on HTTP"
     );
     // Quota q runs on the same VM and completes; the second VM overlaps
@@ -1419,7 +1425,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
     // its second HTTP after its resume.
     held_p.release();
     assert!(
-        held_p.await_requests(2, WAIT),
+        held_p.await_requests(2, Deadline::after(WAIT)),
         "provider p resumed into its second HTTP"
     );
     held_a.release();
@@ -1594,7 +1600,7 @@ fn session_discovery_and_refresh_carry_the_sink() {
         .refresh(None, ModelsArg::default())
         .expect("a stale list refreshes");
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "the refresh reached its request"
     );
     server.release();

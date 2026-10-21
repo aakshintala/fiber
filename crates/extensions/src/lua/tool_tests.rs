@@ -570,7 +570,7 @@ fn a_hook_runs_to_completion_while_a_tool_call_is_parked() {
     let holding = Arc::clone(&ext);
     let _held = on_thread(move || holding.tool_run("hold", json!({}), &fakes::CancelToken::new()));
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the tool call to reach the server"
     );
     assert!(until(&ext, parked), "waited for the tool call to park");

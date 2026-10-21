@@ -153,7 +153,7 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     let running = start(&setup, &["ask", PROMPT]);
     let id = session_of(&running, "the session_started");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 

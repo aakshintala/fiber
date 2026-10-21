@@ -906,7 +906,7 @@ fn a_start_with_content_that_never_subscribes_runs_unattended() {
     // The offer is decided once, before the first model request: by then
     // the session has decided with nobody to answer.
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the turn's model request within the deadline"
     );
     subscribe(&client, &id);

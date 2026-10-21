@@ -104,7 +104,7 @@ fn connect_fetches_quota_for_its_label() {
         .unwrap();
     let _call = provider.call(&request());
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, fakes::Deadline::after(WAIT)),
         "the model call never fetched quota"
     );
     let paths: Vec<String> = server

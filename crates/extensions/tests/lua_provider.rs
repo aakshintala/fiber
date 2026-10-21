@@ -411,7 +411,7 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
         "t1"
     );
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "waited for the refresh request"
     );
     let (tx, rx) = mpsc::channel();
@@ -659,7 +659,7 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
     let provider = LuaProvider::new(extension, "fixture");
     let refresh = provider.refresh(None, ModelsArg::default()).unwrap();
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for models() to reach the server"
     );
     let signer = Arc::clone(&provider);
@@ -814,7 +814,7 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(call.command("get", "")));
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for get to reach the server"
     );
     // The caller waits out the grace. The extension thread fails a parked

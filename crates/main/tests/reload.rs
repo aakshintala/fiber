@@ -333,7 +333,7 @@ fn reload_is_busy_during_a_request_and_changes_nothing() {
     server.hold();
     let mut session = Session::start(setup);
     session.send_prompt();
-    assert!(server.await_requests(1, session.setup.deadline.left()));
+    assert!(server.await_requests(1, session.setup.deadline));
     session.client.send(r#"{"id":"reload","command":"reload"}"#);
     session.client.send(r#"{"id":"barrier","command":"tools"}"#);
     session

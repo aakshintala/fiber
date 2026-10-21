@@ -741,7 +741,7 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
     // The hook signals it reached its gate with its recorded request;
     // anything else, such as an early answer, fails the test.
     assert!(
-        server.await_requests(1, GATE_WAIT),
+        server.await_requests(1, Deadline::after(GATE_WAIT)),
         "waited for the hook to reach its gate"
     );
     assert!(
@@ -773,7 +773,7 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
         let _sent = done_tx.send(answer);
     });
     assert!(
-        server.await_requests(2, GATE_WAIT),
+        server.await_requests(2, Deadline::after(GATE_WAIT)),
         "waited for the second hook to reach its gate"
     );
     let answer: BeforeHandoffAnswer = Deadline::after(GATE_WAIT)

@@ -816,7 +816,7 @@ fn a_command_queued_behind_a_parked_command_runs_once_it_finishes() {
     let ext = extension("ext", dir, setup.home(), FakeClock::new());
     let first = start(&ext, "first");
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the first command to reach the server"
     );
     let (listed_tx, listed_rx) = mpsc::channel();
@@ -863,7 +863,7 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let slow = start(&ext, "slow");
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the slow command to reach the server"
     );
     let asked = clock.now();
@@ -996,7 +996,7 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
     assert_eq!(*timeout_ms, 400);
     assert!(ext.is_running());
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for hold to reach the server"
     );
     server.release();
@@ -1030,7 +1030,7 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     let asked = clock.now();
     let ran = start(&ext, "p.sign");
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for p.sign to reach the server"
     );
     let grace = asked + Duration::from_millis(30000) + GRACE;

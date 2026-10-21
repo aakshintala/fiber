@@ -419,6 +419,9 @@ fn the_head_of_a_body_with_no_stated_length_carries_none() {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
         &format!("http://127.0.0.1:{port}/"),
     );
-    assert!(server.await_replies(1, SIGNAL), "the server answered");
+    assert!(
+        server.await_replies(1, Deadline::after(SIGNAL)),
+        "the server answered"
+    );
     assert_eq!(head.content_length, None);
 }

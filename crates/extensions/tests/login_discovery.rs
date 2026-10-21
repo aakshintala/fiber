@@ -145,7 +145,7 @@ fn discover(stuck: Stuck, wait_until: Duration) -> (Vec<(ErrorCode, Option<Strin
         tx.send((notices, models))
     });
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "{stuck:?}: waited for the stuck call to reach the server"
     );
     assert!(

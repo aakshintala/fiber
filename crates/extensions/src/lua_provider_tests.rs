@@ -314,7 +314,7 @@ fn credential_idle_distinguishes_idle_fetching_and_completed() {
         drop(sent.send(other.token(&other_pair)));
     });
     assert!(
-        tokens.await_requests(1, WAIT),
+        tokens.await_requests(1, Deadline::after(WAIT)),
         "fetch reaches the held server"
     );
     assert!(!provider.await_idle(&pair, Duration::ZERO));
@@ -404,7 +404,7 @@ fn a_second_token_waits_for_the_fetch_in_flight() {
         let _sent = first_tx.send(first_provider.token(&first_pair));
     });
     assert!(
-        tokens.await_requests(1, WAIT),
+        tokens.await_requests(1, Deadline::after(WAIT)),
         "the first fetch reaches the server"
     );
     let (second_tx, second_rx) = mpsc::channel();
@@ -455,7 +455,7 @@ fn a_waiter_woken_by_a_failure_fetches_for_itself() {
         let _sent = first_tx.send(first_provider.token(&first_pair));
     });
     assert!(
-        tokens.await_requests(1, WAIT),
+        tokens.await_requests(1, Deadline::after(WAIT)),
         "the first fetch reaches the server"
     );
     let (second_tx, second_rx) = mpsc::channel();
@@ -518,7 +518,7 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
         let _sent = first_tx.send(first_provider.token(&first_pair));
     });
     assert!(
-        tokens.await_requests(1, WAIT),
+        tokens.await_requests(1, Deadline::after(WAIT)),
         "the first fetch reaches the server"
     );
     // Caller 2 waits on it.
@@ -544,14 +544,14 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
         let _sent = third_tx.send(third_provider.token(&third_pair));
     });
     assert!(
-        tokens.await_requests(2, WAIT),
+        tokens.await_requests(2, Deadline::after(WAIT)),
         "the third caller fetches without waiting on the held waiter"
     );
     // Caller 2 fetches for itself while caller 3's fetch is still held: no
     // release went out since, so the third request is still unanswered.
     release_tx.send(()).unwrap();
     assert!(
-        tokens.await_requests(3, WAIT),
+        tokens.await_requests(3, Deadline::after(WAIT)),
         "the woken waiter fetches without waiting on the third caller"
     );
     tokens.release();

@@ -1649,7 +1649,7 @@ fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
         let _sent = done_tx.send(lua.command("hold", ""));
     });
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the command to park on host.http"
     );
     contract::extension::ExtensionDoor::seal(&*session);

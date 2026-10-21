@@ -1244,7 +1244,7 @@ fn refresh_race(
     let deadline = env.clock.now() + TIMEOUT;
     let a = start_token(first);
     assert!(
-        held.await_requests(1, WAIT),
+        held.await_requests(1, Deadline::after(WAIT)),
         "the first refresh never reached the endpoint"
     );
     let b = start_token(second);
@@ -1297,7 +1297,7 @@ fn a_refresh_that_times_out_in_its_function_leaves_the_file_and_frees_the_lock()
     let rx = start_token(&provider);
     // The function is on the wire, so it holds the lock.
     assert!(
-        hang.await_requests(1, WAIT),
+        hang.await_requests(1, Deadline::after(WAIT)),
         "the refresh never reached the endpoint"
     );
     assert!(
@@ -1739,7 +1739,7 @@ end } })
     let provider = LuaProvider::new(Arc::clone(&ext), "acme");
     let rx = start_token(&provider);
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the credential never reached the held endpoint"
     );
     assert_eq!(

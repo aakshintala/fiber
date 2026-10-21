@@ -15,7 +15,7 @@ mod harness;
 use std::time::Duration;
 
 use contract::ErrorCode;
-use fakes::{ProviderServer, Response};
+use fakes::{Deadline, ProviderServer, Response};
 use provider::Endpoint;
 use provider::anthropic_messages::Messages;
 
@@ -60,7 +60,7 @@ fn a_stream_that_stops_after_one_event_fails_the_call_and_closes_the_socket() {
     assert_eq!(failure.code, ErrorCode::ConnectionFailed);
     assert_eq!(should_retry, None);
     assert!(
-        server.await_closed(1, fakes::MUST_SUCCEED_WITHIN),
+        server.await_closed(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the server saw the socket close"
     );
 }

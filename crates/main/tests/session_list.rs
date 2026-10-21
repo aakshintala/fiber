@@ -89,7 +89,7 @@ fn lists_running_sessions_marks_itself_and_waits_out_a_silent_one() {
         serde_json::from_str(&deadline.recv_or_fail(&rx, "B session started")).unwrap();
     assert_eq!(first["kind"], "session_started");
     let b_id = first["session_id"].as_str().unwrap().to_owned();
-    assert!(server.await_requests(1, deadline.left()));
+    assert!(server.await_requests(1, deadline));
     let socket = Socket::connect(deadline, &setup.session_socket(&b_id));
     socket.send(
         &json!({"id":doors::mint("c_"),"command":"subscribe","args":{"level":"summary"}})

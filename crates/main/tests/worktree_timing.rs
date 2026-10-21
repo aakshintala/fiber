@@ -193,7 +193,7 @@ fn a_debug_worktree_run_writes_one_create_in_the_pid_file() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     let found = lines(&out);
@@ -231,7 +231,7 @@ fn an_info_worktree_run_writes_no_timing() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     assert!(all_op_lines(&setup).is_empty(), "no timing at info");

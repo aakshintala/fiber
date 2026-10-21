@@ -92,10 +92,7 @@ fn hover_chips_look(config: serde_json::Value, surface: Colour, lifted: Colour, 
     let control = support::Socket::connect(setup.deadline, &setup.hub_socket());
     assert_eq!(recv(&control, "hub_hello")["kind"], "hub_hello");
     start_session(&control, &here, "first");
-    assert!(
-        server.await_requests(1, setup.deadline.left()),
-        "the turn runs"
-    );
+    assert!(server.await_requests(1, setup.deadline), "the turn runs");
     // Home lists the live session; the entry bar has focus at launch.
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();

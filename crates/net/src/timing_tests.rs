@@ -815,7 +815,7 @@ fn an_observed_proxy_call_times_its_one_socket() {
     });
     assert_eq!(text, "{}", "the proxy call reached the origin");
     assert!(
-        proxy.await_connects(1, EACH_WITHIN),
+        proxy.await_connects(1, Deadline::after(EACH_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);

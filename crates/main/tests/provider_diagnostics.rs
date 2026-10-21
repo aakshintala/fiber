@@ -100,7 +100,7 @@ fn ask_debug_writes_one_provider_request_and_two_peak_memory_lines() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     let id = run.session_id().to_owned();
@@ -202,7 +202,7 @@ fn a_retried_call_writes_one_line_per_attempt() {
     );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both attempts arrived"
     );
     let id = run.session_id().to_owned();
@@ -254,7 +254,7 @@ fn two_logical_calls_restart_attempts_at_one() {
     let run = ask_debug(&setup, &server, json!({}));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both logical calls arrived"
     );
     let id = run.session_id().to_owned();
@@ -276,7 +276,7 @@ fn at_default_no_provider_request_is_written() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     let lines = log_lines(&setup);
@@ -304,7 +304,7 @@ fn a_repository_level_is_ignored_for_native_requests() {
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     assert!(
@@ -374,7 +374,7 @@ fn a_query_bearing_url_is_logged_without_it() {
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived"
     );
     let id = run.session_id().to_owned();
@@ -418,7 +418,7 @@ fn an_orderly_model_failure_still_writes_final_memory() {
         run.kinds()
     );
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both attempts arrived"
     );
     let id = run.session_id().to_owned();
@@ -514,7 +514,7 @@ fn a_resumed_ask_keeps_the_ask_process_and_restarts_attempts() {
     let second = ask_with(&setup, &["ask", "--resume", &id, "again"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both asks arrived"
     );
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
@@ -617,8 +617,7 @@ fn a_delegate_child_uses_its_own_process_and_id() {
     let run = ask_with(&setup, &["ask", "scan the tree"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        parent.await_requests(1, setup.deadline.left())
-            && child.await_requests(1, setup.deadline.left()),
+        parent.await_requests(1, setup.deadline) && child.await_requests(1, setup.deadline),
         "both sides asked"
     );
     let parent_id = run.session_id().to_owned();
@@ -707,7 +706,7 @@ fn with_cache_diagnostics_a_turns_line_carries_hashes_and_reported_use() {
     let run = ask_debug_diagnostics(&setup, &server, json!({}));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived"
     );
     let line = the_request(&setup, &run);
@@ -742,7 +741,7 @@ fn without_the_setting_the_line_holds_what_it_always_held() {
     let run = ask_debug(&setup, &server, json!({}));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived"
     );
     let line = the_request(&setup, &run);
@@ -766,7 +765,7 @@ fn a_retried_call_with_diagnostics_joins_by_session_and_attempt() {
     );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both attempts arrived"
     );
     let id = run.session_id().to_owned();
@@ -843,7 +842,7 @@ fn a_second_turn_keeps_the_first_turns_prefix_hashes() {
     let second = ask_with(&setup, &["ask", "--resume", &id, "again"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both turns arrived"
     );
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
@@ -908,7 +907,7 @@ fn a_changed_system_prompt_shifts_the_system_digest() {
     let second = ask(&setup);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both runs arrived"
     );
     let second_line = the_request(&setup, &second);
@@ -949,7 +948,7 @@ fn each_protocol_writes_one_diagnostics_line() {
         let run = ask(&setup);
         assert_eq!(run.code, Some(0), "stderr on {protocol}: {}", run.stderr);
         assert!(
-            server.await_requests(1, setup.deadline.left()),
+            server.await_requests(1, setup.deadline),
             "the model request arrived on {protocol}"
         );
         let line = the_request(&setup, &run);

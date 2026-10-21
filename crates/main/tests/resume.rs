@@ -988,7 +988,7 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     assert_eq!(started["kind"], "session_started");
     let id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
 

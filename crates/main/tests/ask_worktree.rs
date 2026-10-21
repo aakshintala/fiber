@@ -531,7 +531,7 @@ fn resume_held(
     .spawn()
     .unwrap();
     assert!(
-        server.await_requests(requests, setup.deadline.left()),
+        server.await_requests(requests, setup.deadline),
         "the resume reached the provider"
     );
     lock_held(&first.path);

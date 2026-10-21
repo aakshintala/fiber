@@ -144,7 +144,7 @@ fn a_debug_ask_times_its_preamble_requests_and_attempts() {
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both model requests arrived: a passing test really asked twice"
     );
     let session_id = run.session_id().to_owned();
@@ -200,7 +200,7 @@ fn at_default_no_part7_line_is_written() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     assert!(op_lines(&setup).is_empty());
@@ -224,7 +224,7 @@ fn a_repository_debug_level_stays_silent_with_its_notice() {
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     assert!(run.kinds().contains(&"fiber_exited"), "{:?}", run.kinds());
@@ -256,7 +256,7 @@ fn a_debug_retry_times_one_request_and_two_attempts() {
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both attempts arrived"
     );
     let session_id = run.session_id().to_owned();
@@ -309,7 +309,7 @@ fn a_debug_tool_handoff_times_one_handoff_with_no_note_request() {
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the tool call and the final request arrived, with no note request"
     );
     assert_eq!(server.requests().len(), 2);

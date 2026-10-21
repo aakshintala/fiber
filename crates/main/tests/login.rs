@@ -1622,7 +1622,7 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
     run.screen
         .wait_for("fiber: stored credentials/held/default");
     assert!(
-        held.await_requests(1, setup.deadline.left()),
+        held.await_requests(1, setup.deadline),
         "discovery requested while the reviewer prompt was still down"
     );
     assert!(

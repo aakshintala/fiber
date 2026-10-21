@@ -21,6 +21,7 @@ use contract::clock::Clock;
 use common::{Repos, Setup, drive, manifest, write};
 use contract::ErrorCode;
 use extensions::{Error, Installed, Origin, Provenance, Request, SHORT_NAMES, list, plan, removal};
+use fakes::Deadline;
 use fakes::git::git;
 use serde_json::{Value, json};
 
@@ -1923,7 +1924,7 @@ fn this_platforms_binary_is_downloaded_checked_and_made_executable() {
     let source = setup.source("local", &m, &[]);
     common::install(&setup.home(), &source, FIBER).unwrap();
     assert!(
-        server.await_requests(1, Duration::from_secs(10)),
+        server.await_requests(1, Deadline::after(Duration::from_secs(10))),
         "waited for the binary to be downloaded"
     );
     let file = setup.home().join("extensions/acme/bin/acme");
@@ -1945,7 +1946,7 @@ fn a_binary_whose_checksum_differs_aborts_with_nothing_installed() {
     assert!(matches!(err, Error::BinaryChecksum { .. }), "{err}");
     assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
     assert!(
-        server.await_requests(1, Duration::from_secs(10)),
+        server.await_requests(1, Deadline::after(Duration::from_secs(10))),
         "waited for the binary download"
     );
     assert!(dirs(&setup).is_empty());

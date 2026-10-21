@@ -1218,7 +1218,7 @@ fn gated_park_holds_the_hub_guard() {
         let _sent = tx.send(provider.list_models(&ModelsArg::default()));
     });
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "the worker suspended on HTTP"
     );
     assert!(
@@ -1476,7 +1476,7 @@ fn late_workers_emit_once_and_drop_late_replies() {
         })
     };
     assert!(
-        hook_server.await_requests(1, WAIT),
+        hook_server.await_requests(1, Deadline::after(WAIT)),
         "the hook suspended on HTTP"
     );
     assert!(
@@ -1519,7 +1519,7 @@ fn late_workers_emit_once_and_drop_late_replies() {
         let _sent = models_tx.send(observer.list_models(&ModelsArg::default()));
     });
     assert!(
-        models_server.await_requests(1, WAIT),
+        models_server.await_requests(1, Deadline::after(WAIT)),
         "the provider suspended on HTTP"
     );
     ext.dispose();

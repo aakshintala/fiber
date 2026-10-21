@@ -98,17 +98,14 @@ fn rail_cards_match_the_doc() {
     assert_eq!(recv(&control, "hub_hello")["kind"], "hub_hello");
     start_session(&control, &here, "first");
     start_session(&control, &away, "second");
-    assert!(
-        server.await_requests(2, setup.deadline.left()),
-        "both turns run"
-    );
+    assert!(server.await_requests(2, setup.deadline), "both turns run");
     // The terminal's own session is the third live session, in the
     // launch project's workspace: two projects on the rail.
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
     assert!(
-        server.await_requests(3, setup.deadline.left()),
+        server.await_requests(3, setup.deadline),
         "all three turns run"
     );
     let grid = run.wait_screen("the rail with three sessions", |grid| {

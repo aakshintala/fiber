@@ -183,7 +183,7 @@ fn a_poll_sleep_past_the_credential_deadline_is_not_wrapped() {
             .unwrap_or(());
     });
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "poll request arrived; early result: {:?}",
         rx.try_recv()
     );
@@ -420,7 +420,7 @@ fn attended_device_login_delivers_url_before_the_held_poll() {
         notice.message,
         format!("Open {}/verify to log in.", server.url())
     );
-    assert!(server.await_requests(1, WAIT));
+    assert!(server.await_requests(1, Deadline::after(WAIT)));
     server.release();
     assert_eq!(
         Deadline::after(WAIT)
@@ -524,7 +524,7 @@ fn failed_refresh_waits_for_interactive_login_before_returning_a_token() {
     let rx = env.start();
     let notice = env.notice();
     assert_eq!(notice.code, ErrorCode::LoginUrl);
-    assert!(server.await_requests(1, WAIT));
+    assert!(server.await_requests(1, Deadline::after(WAIT)));
     assert!(
         matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "held login has not returned"
@@ -577,7 +577,7 @@ fn a_provider_started_after_a_model_switch_gets_the_browser_and_emitter() {
         env.notice().message,
         format!("Open {}/verify to log in.", server.url())
     );
-    assert!(server.await_requests(1, WAIT));
+    assert!(server.await_requests(1, Deadline::after(WAIT)));
     server.release();
     assert_eq!(
         Deadline::after(WAIT)

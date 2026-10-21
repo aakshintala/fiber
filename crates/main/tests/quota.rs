@@ -133,7 +133,7 @@ fn a_scripted_session_answers_every_codex_label_without_a_model_switch() {
     let first = quota(&client, "first");
     assert_eq!(first["notice_at"], 80.0);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both labels requested usage"
     );
     let mut next = 0;

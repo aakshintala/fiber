@@ -590,7 +590,7 @@ fn a_held_tool_list_measures_the_advance_and_prompts_add_nothing() {
     // The held `initialize`: the handshake worker waits on the fake
     // clock before it moves.
     assert!(
-        fake.await_requests(1, test_deadline.left()),
+        fake.await_requests(1, test_deadline),
         "the initialize arrives"
     );
     let mark = setup.fake.advance_when_parked(
@@ -602,7 +602,7 @@ fn a_held_tool_list_measures_the_advance_and_prompts_add_nothing() {
     fake.release_one();
     // The held `notifications/initialized`, then the held `tools/list`.
     assert!(
-        fake.await_requests(2, test_deadline.left()),
+        fake.await_requests(2, test_deadline),
         "the initialized notice arrives"
     );
     assert!(
@@ -613,7 +613,7 @@ fn a_held_tool_list_measures_the_advance_and_prompts_add_nothing() {
     );
     fake.release_one();
     assert!(
-        fake.await_requests(3, test_deadline.left()),
+        fake.await_requests(3, test_deadline),
         "the tools/list arrives"
     );
     assert!(
@@ -626,7 +626,7 @@ fn a_held_tool_list_measures_the_advance_and_prompts_add_nothing() {
     // The held `prompts/list`: the tool boundary already completed at
     // exactly the advance.
     assert!(
-        fake.await_requests(4, test_deadline.left()),
+        fake.await_requests(4, test_deadline),
         "the prompts/list arrives"
     );
     assert!(
@@ -669,7 +669,7 @@ fn a_failed_prompt_list_after_a_held_tool_list_writes_no_second_line() {
         .expect("startup deadline");
     let (result, worker) = held_launch(&test_deadline, &setup, spec, &capture);
     assert!(
-        fake.await_requests(1, test_deadline.left()),
+        fake.await_requests(1, test_deadline),
         "the initialize arrives"
     );
     let mark = setup.fake.advance_when_parked(
@@ -680,7 +680,7 @@ fn a_failed_prompt_list_after_a_held_tool_list_writes_no_second_line() {
     );
     fake.release_one();
     assert!(
-        fake.await_requests(2, test_deadline.left()),
+        fake.await_requests(2, test_deadline),
         "the initialized notice arrives"
     );
     assert!(
@@ -691,7 +691,7 @@ fn a_failed_prompt_list_after_a_held_tool_list_writes_no_second_line() {
     );
     fake.release_one();
     assert!(
-        fake.await_requests(3, test_deadline.left()),
+        fake.await_requests(3, test_deadline),
         "the tools/list arrives"
     );
     assert!(
@@ -1145,17 +1145,17 @@ fn concurrent_first_starts_share_one_spawn_and_one_timer() {
     // handshake reaches its held list instead of parking on the
     // initialized acknowledgement behind the held notice.
     assert!(
-        fake.await_requests(1, test_deadline.left()),
+        fake.await_requests(1, test_deadline),
         "the first attempt dials"
     );
     fake.release_one();
     assert!(
-        fake.await_requests(2, test_deadline.left()),
+        fake.await_requests(2, test_deadline),
         "the initialized notice arrives"
     );
     fake.release_one();
     assert!(
-        fake.await_requests(3, test_deadline.left()),
+        fake.await_requests(3, test_deadline),
         "the tools/list arrives"
     );
     let (wait_tx, waited) = mpsc::channel();
@@ -1212,18 +1212,15 @@ fn stop_during_a_held_start_reaps_without_respawn() {
     thread::spawn(move || {
         start_done.send(starting.serve()).unwrap_or(());
     });
-    assert!(
-        fake.await_requests(1, test_deadline.left()),
-        "the attempt dials"
-    );
+    assert!(fake.await_requests(1, test_deadline), "the attempt dials");
     fake.release_one();
     assert!(
-        fake.await_requests(2, test_deadline.left()),
+        fake.await_requests(2, test_deadline),
         "the initialized notice arrives"
     );
     fake.release_one();
     assert!(
-        fake.await_requests(3, test_deadline.left()),
+        fake.await_requests(3, test_deadline),
         "the tools/list arrives held"
     );
     // The stop waits on the lease, signaled before the release: it stops

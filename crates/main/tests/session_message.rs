@@ -244,7 +244,7 @@ fn a_fiber_ask_session_messages_a_hub_started_session_and_a_fiber_ask_target_is_
     let b_id = b_first["session_id"].as_str().unwrap().to_owned();
     *b_cell.lock().unwrap() = Some(b_id.clone());
     assert!(
-        server.await_requests(3, deadline.left()),
+        server.await_requests(3, deadline),
         "T, E and B each called the model"
     );
     // The sender calls session_message once per step: T, B, E, then random.

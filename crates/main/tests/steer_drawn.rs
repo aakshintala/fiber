@@ -153,7 +153,7 @@ fn a_steer_draws_its_queue_row_then_its_card_rule() {
     run.write(b"go\r");
     // The first request in flight on the held reply proves the turn runs.
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request to reach the server"
     );
     // The working line proves the turn is busy, so Enter steers.

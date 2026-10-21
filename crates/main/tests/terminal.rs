@@ -1221,7 +1221,7 @@ fn journey_prompt_answer_approval_resize_quit() {
     let first_from = run.output().len();
     run.write(b"say hi\r");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request to reach the server"
     );
     server.release_one();
@@ -1235,7 +1235,7 @@ fn journey_prompt_answer_approval_resize_quit() {
     let asking = run.output().len();
     run.write(b"run it\r");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the second request to reach the server"
     );
     server.release_one();
@@ -1253,7 +1253,7 @@ fn journey_prompt_answer_approval_resize_quit() {
     let allowed = run.output().len();
     run.write(b"\r");
     assert!(
-        server.await_requests(3, setup.deadline.left()),
+        server.await_requests(3, setup.deadline),
         "the follow-up request to reach the server"
     );
     server.release_one();
@@ -1305,7 +1305,7 @@ fn journey_quit_resume_answer_again() {
     let first_from = run.output().len();
     run.write(b"first\r");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request to reach the server"
     );
     server.release_one();
@@ -1351,7 +1351,7 @@ fn journey_quit_resume_answer_again() {
     // A new prompt on the resumed session is answered.
     run.write(b"second\r");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the second request to reach the server"
     );
     server.release_one();
@@ -1383,7 +1383,7 @@ fn journey_quit_just_resumed_session_prints_its_resume_line() {
     let first_from = run.output().len();
     run.write(b"first\r");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request to reach the server"
     );
     server.release_one();
@@ -1768,7 +1768,7 @@ fn resume_with_a_credential_switches_an_exited_session_to_the_asked_label() {
     let from = run.output().len();
     run.write(b"second\r");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the second request to reach the server"
     );
     run.turn_finished(from);
@@ -1828,7 +1828,7 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
     let first_from = first.output().len();
     first.write(b"first\r");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request to reach the server"
     );
     assert_fingerprint(&server.requests()[0], "Bearer home-key");
@@ -1861,7 +1861,7 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
     let second_from = second.output().len();
     second.write(b"second\r");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the second request to reach the server"
     );
     server.release_one();
@@ -1943,7 +1943,7 @@ fn resume_with_a_credential_second_turn_outlives_a_stale_completed_paint() {
     let first_from = first.output().len();
     first.write(b"first\r");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request to reach the server"
     );
     let id = only_session(&setup);
@@ -1960,7 +1960,7 @@ fn resume_with_a_credential_second_turn_outlives_a_stale_completed_paint() {
     first.turn_finished(first_from);
     second.write(b"second\r");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the second request to reach the server"
     );
     // Turn 2's reply stays held: nothing of turn 2 can arrive, so this
@@ -2011,7 +2011,7 @@ fn resume_with_a_credential_after_the_recorded_key_was_deleted() {
     let from = run.output().len();
     run.write(b"second\r");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the second request to reach the server"
     );
     run.turn_finished(from);
@@ -2122,7 +2122,7 @@ fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
     let first_from = first.output().len();
     first.write(b"first\r");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request to reach the server"
     );
     first.turn_finished(first_from);
@@ -2184,7 +2184,7 @@ fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
     let second_from = second.output().len();
     second.write(b"second\r");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the second request to reach the server"
     );
     second.turn_finished(second_from);
@@ -2233,7 +2233,7 @@ fn resume_with_the_recorded_credential_records_nothing() {
     let from = run.output().len();
     run.write(b"second\r");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the second request to reach the server"
     );
     run.turn_finished(from);
@@ -2269,7 +2269,7 @@ fn resume_with_the_current_credential_on_a_running_session_records_nothing() {
     let first_from = first.output().len();
     first.write(b"first\r");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request to reach the server"
     );
     first.turn_finished(first_from);
@@ -2284,7 +2284,7 @@ fn resume_with_the_current_credential_on_a_running_session_records_nothing() {
     let second_from = second.output().len();
     second.write(b"second\r");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the second request to reach the server"
     );
     second.turn_finished(second_from);
@@ -2800,7 +2800,7 @@ fn credential_journey(pick: Option<&[u8]>) {
     let second = run.output().len();
     run.write(b"second\r");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the second request"
     );
     run.wait_screen("the second answer", |grid| {
@@ -2970,13 +2970,13 @@ fn credential_after_a_queued_model_switch_saves_to_the_queued_provider() {
     run.write(b"\r");
     run.turn_finished(first);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the first turn's follow-up"
     );
     let second = run.output().len();
     run.write(b"second\r");
     assert!(
-        server.await_requests(3, setup.deadline.left()),
+        server.await_requests(3, setup.deadline),
         "the second turn's request"
     );
     run.wait_screen("the queued credential answer", |grid| {

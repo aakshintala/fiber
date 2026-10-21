@@ -246,7 +246,7 @@ fn an_in_window_token_sends_before_its_background_refresh_finishes() {
     let (written, received) = std::sync::mpsc::channel();
     files.state.lock().unwrap().written = Some(written);
     let opened = token_start(&setup, url, files.clone()).unwrap();
-    assert!(auth.await_requests(1, WITHIN));
+    assert!(auth.await_requests(1, Deadline::after(WITHIN)));
     assert_eq!(
         fake.requests()[0].header("authorization"),
         Some(fakes::fingerprint("Bearer at-1").as_str())
@@ -584,7 +584,7 @@ fn a_call_answered_by_a_stream_with_a_ping_returns_and_answers_it() {
         Some(&json!({"type": "text", "text": "hi"}))
     );
     assert!(
-        server.await_requests(5, WITHIN),
+        server.await_requests(5, Deadline::after(WITHIN)),
         "the ping answer is POSTed too"
     );
     let pinged = server
@@ -956,7 +956,7 @@ fn initialized_ack_wait_ends_at_the_startup_deadline() {
         ))
         .unwrap();
     });
-    assert!(fake.await_requests(2, WITHIN));
+    assert!(fake.await_requests(2, Deadline::after(WITHIN)));
     setup
         .fake
         .advance_when_parked(Some(deadline), None, startup, &Deadline::after(WITHIN));
@@ -1106,7 +1106,7 @@ fn startup_deadlines_end_both_token_lock_waits_and_stalled_token_posts() {
             Deadline::after(WITHIN)
                 .recv_or_fail(&received_busy, "startup refresh polls the held lock");
         } else {
-            assert!(auth.await_requests(1, WITHIN));
+            assert!(auth.await_requests(1, Deadline::after(WITHIN)));
         }
         setup.fake.advance_when_parked(
             Some(deadline),
@@ -1340,7 +1340,7 @@ fn a_timed_out_call_shuts_its_socket_and_leaves_the_server_live() {
         done.send(answer).expect("collected");
     });
     assert!(
-        server.await_partial(1, WITHIN),
+        server.await_partial(1, Deadline::after(WITHIN)),
         "the stalled answer starts within {WITHIN:?}"
     );
     setup
@@ -1353,7 +1353,7 @@ fn a_timed_out_call_shuts_its_socket_and_leaves_the_server_live() {
         Err(CallError::Timeout),
     );
     assert!(
-        server.await_closed(1, WITHIN),
+        server.await_closed(1, Deadline::after(WITHIN)),
         "the abandon shut the socket within {WITHIN:?}"
     );
     assert!(!remote.is_gone(), "a timeout is no death");
@@ -1404,7 +1404,7 @@ fn a_cancelled_call_sends_cancelled_and_shuts_its_socket() {
         done.send(answer).expect("collected");
     });
     assert!(
-        server.await_partial(1, WITHIN),
+        server.await_partial(1, Deadline::after(WITHIN)),
         "the stalled answer starts within {WITHIN:?}"
     );
     cancel.cancel();
@@ -1415,7 +1415,7 @@ fn a_cancelled_call_sends_cancelled_and_shuts_its_socket() {
         Err(CallError::Cancelled),
     );
     assert!(
-        server.await_requests(5, WITHIN),
+        server.await_requests(5, Deadline::after(WITHIN)),
         "the cancel notice is POSTed within {WITHIN:?}"
     );
     let requests = server.requests();
@@ -1437,7 +1437,7 @@ fn a_cancelled_call_sends_cancelled_and_shuts_its_socket() {
         "the notice names the call"
     );
     assert!(
-        server.await_closed(1, WITHIN),
+        server.await_closed(1, Deadline::after(WITHIN)),
         "the abandon shut the socket within {WITHIN:?}"
     );
     assert!(!remote.is_gone(), "a cancel is no death");
@@ -1467,7 +1467,7 @@ fn a_stalled_handshake_misses_its_startup_deadline_and_shuts_its_socket() {
         done.send(answer).expect("collected");
     });
     assert!(
-        server.await_partial(1, WITHIN),
+        server.await_partial(1, Deadline::after(WITHIN)),
         "the stalled answer starts within {WITHIN:?}"
     );
     setup
@@ -1481,7 +1481,7 @@ fn a_stalled_handshake_misses_its_startup_deadline_and_shuts_its_socket() {
         Some(StartError::Deadline),
     );
     assert!(
-        server.await_closed(1, WITHIN),
+        server.await_closed(1, Deadline::after(WITHIN)),
         "the abandon shut the socket within {WITHIN:?}"
     );
 }
@@ -1886,7 +1886,7 @@ fn a_404_read_after_its_call_ended_marks_nothing() {
             &Deadline::after(WITHIN),
         );
         assert!(
-            server.await_closed(1, WITHIN),
+            server.await_closed(1, Deadline::after(WITHIN)),
             "the abandon shut the socket within {WITHIN:?}"
         );
     });
@@ -1979,7 +1979,7 @@ fn a_404_to_a_pump_post_changes_nothing() {
         done.send(answer).expect("collected");
     });
     assert!(
-        server.await_partial(1, WITHIN),
+        server.await_partial(1, Deadline::after(WITHIN)),
         "the stalled answer starts within {WITHIN:?}"
     );
     cancel.cancel();
@@ -1990,7 +1990,7 @@ fn a_404_to_a_pump_post_changes_nothing() {
         Err(CallError::Cancelled),
     );
     assert!(
-        server.await_requests(5, WITHIN),
+        server.await_requests(5, Deadline::after(WITHIN)),
         "the cancel notice is recorded within {WITHIN:?}"
     );
     server.release();
@@ -2073,7 +2073,7 @@ fn a_call_queued_behind_a_stalled_notice_is_never_sent_once_timed_out() {
         stalled.send(answer).expect("collected");
     });
     assert!(
-        server.await_partial(1, WITHIN),
+        server.await_partial(1, Deadline::after(WITHIN)),
         "the stalled answer starts within {WITHIN:?}"
     );
     cancel.cancel();
@@ -2084,7 +2084,7 @@ fn a_call_queued_behind_a_stalled_notice_is_never_sent_once_timed_out() {
         Err(CallError::Cancelled),
     );
     assert!(
-        server.await_requests(5, WITHIN),
+        server.await_requests(5, Deadline::after(WITHIN)),
         "the cancel notice is recorded within {WITHIN:?}"
     );
     // The second call queues behind the held notice: parked, never sent.
@@ -2399,7 +2399,7 @@ fn a_stop_during_a_stalled_handshake_shuts_it_down() {
         done.send(answer).expect("collected");
     });
     assert!(
-        server.await_partial(1, WITHIN),
+        server.await_partial(1, Deadline::after(WITHIN)),
         "the stalled answer starts within {WITHIN:?}"
     );
     crate::registry::stop_every_start();
@@ -2413,7 +2413,7 @@ fn a_stop_during_a_stalled_handshake_shuts_it_down() {
         )),
     );
     assert!(
-        server.await_closed(1, WITHIN),
+        server.await_closed(1, Deadline::after(WITHIN)),
         "the abandon shut the socket within {WITHIN:?}"
     );
 }
@@ -2446,7 +2446,7 @@ fn a_start_through_a_proxy_tunnels_to_the_server() {
     let port = server.url().rsplit(':').next().unwrap().to_owned();
     let target = format!("127.0.0.1:{port}");
     assert!(
-        proxy.await_connects(1, WITHIN),
+        proxy.await_connects(1, Deadline::after(WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     // One tunnel per request: each exchange runs its own agent, so the
@@ -2480,7 +2480,7 @@ fn the_pump_posts_in_order_before_starting_exchanges() {
     // pump takes tools/list.
     server.release_one();
     assert!(
-        server.await_requests(2, WITHIN),
+        server.await_requests(2, Deadline::after(WITHIN)),
         "initialize and initialized arrive within {WITHIN:?}"
     );
     assert_eq!(
@@ -2491,7 +2491,7 @@ fn the_pump_posts_in_order_before_starting_exchanges() {
     );
     server.release_one();
     assert!(
-        server.await_requests(3, WITHIN),
+        server.await_requests(3, Deadline::after(WITHIN)),
         "tools/list follows within {WITHIN:?}"
     );
     server.release_one();

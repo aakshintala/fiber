@@ -316,7 +316,7 @@ fn held_ask(signal: &'static str, code: i32) {
     setup.provider(&server);
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived"
     );
     fiber.signal(signal);
@@ -509,7 +509,7 @@ fn sigterm_mid_turn_of_a_resumed_session_exits_143() {
     server.hold();
     let fiber = setup.start(&["ask", "--resume", &id, "again"], Stdio::null());
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the resumed request arrived"
     );
     fiber.signal("TERM");

@@ -15,6 +15,7 @@ use std::time::Duration;
 use contract::clock::Clock;
 
 use crate::clock::SystemClock;
+use crate::deadline::Deadline;
 #[cfg(test)]
 use crate::http_server::WaitAck;
 use crate::http_server::server::DropProbe;
@@ -379,10 +380,11 @@ impl ProviderServer {
         lock(&self.state).drop_bodies = true;
     }
 
-    /// Waits, at most `within` of real time, until at least `count` requests
-    /// are recorded. True once they are; false at the deadline. Dropping the
-    /// server ends no wait early.
-    pub fn await_requests(&self, count: usize, within: Duration) -> bool {
+    /// Waits, at most what remains of `deadline`, until at least `count`
+    /// requests are recorded. True once they are; false at the deadline.
+    /// Dropping the server ends no wait early.
+    pub fn await_requests(&self, count: usize, deadline: Deadline) -> bool {
+        let within = deadline.left();
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived
@@ -431,10 +433,11 @@ impl ProviderServer {
         self.arrived.notify_all();
     }
 
-    /// Waits, at most `within` of real time, until at least `count` stalled
-    /// responses have sent their partial body. True once they have; false
-    /// at the deadline.
-    pub fn await_partial(&self, count: usize, within: Duration) -> bool {
+    /// Waits, at most what remains of `deadline`, until at least `count`
+    /// stalled responses have sent their partial body. True once they have;
+    /// false at the deadline.
+    pub fn await_partial(&self, count: usize, deadline: Deadline) -> bool {
+        let within = deadline.left();
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived
@@ -443,10 +446,11 @@ impl ProviderServer {
         guard.partial >= count
     }
 
-    /// Waits, at most `within` of real time, until at least `count` stalled
-    /// connections saw their client side close. True once they did; false
-    /// at the deadline.
-    pub fn await_closed(&self, count: usize, within: Duration) -> bool {
+    /// Waits, at most what remains of `deadline`, until at least `count`
+    /// stalled connections saw their client side close. True once they did;
+    /// false at the deadline.
+    pub fn await_closed(&self, count: usize, deadline: Deadline) -> bool {
+        let within = deadline.left();
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived

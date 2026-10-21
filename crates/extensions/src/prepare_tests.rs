@@ -149,7 +149,7 @@ fn download_tunnels_through_the_proxy_environment() {
     let port = server.url().rsplit(':').next().unwrap().to_owned();
     let target = format!("127.0.0.1:{port}");
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
@@ -219,7 +219,7 @@ fn a_stalled_download_body_fails_and_closes() {
         "a stalled download fails as its download failed: {err}"
     );
     assert!(
-        server.await_closed(1, WITHIN),
+        server.await_closed(1, Deadline::after(WITHIN)),
         "the server saw the stalled download close"
     );
 }

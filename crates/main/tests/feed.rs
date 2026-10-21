@@ -250,7 +250,7 @@ fn the_feed_shows_sessions_across_projects_and_recent_lists_the_exited() {
     ask.current_dir(&outside);
     let asking = std::thread::spawn(move || run_to_exit(setup.deadline, "fiber ask", ask));
     assert!(
-        server.await_requests(3, setup.deadline.left()),
+        server.await_requests(3, setup.deadline),
         "all three turns run"
     );
     let mut seen = std::collections::BTreeSet::new();
@@ -356,10 +356,7 @@ fn a_killed_session_is_crashed_until_dismissed() {
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let control = client(&setup);
     let id = start_session(&control, &workspace, "doomed");
-    assert!(
-        server.await_requests(1, setup.deadline.left()),
-        "the turn runs"
-    );
+    assert!(server.await_requests(1, setup.deadline), "the turn runs");
     until(&watch, "the session's status", |line| {
         line["kind"] == "session_status" && line["session_id"] == id.as_str()
     });

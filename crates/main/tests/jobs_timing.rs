@@ -202,7 +202,7 @@ fn shell_journey(setup: &Setup, sentinel: &str, extra: &Value) -> Run {
     );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     run
@@ -242,8 +242,7 @@ fn delegate_journey(
     let run = ask_with(setup, &["ask", "scan the tree"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        parent.await_requests(1, setup.deadline.left())
-            && child.await_requests(1, setup.deadline.left()),
+        parent.await_requests(1, setup.deadline) && child.await_requests(1, setup.deadline),
         "both sides asked"
     );
     run

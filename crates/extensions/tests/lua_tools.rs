@@ -568,7 +568,7 @@ fiber.tool("wait", {{
     let deadline = clock.now().checked_add(Duration::from_millis(100)).unwrap();
     let first = run(&tools["wait"], json!({}));
     assert!(
-        held.await_requests(1, WAIT),
+        held.await_requests(1, Deadline::after(WAIT)),
         "waited for the request to reach the server"
     );
     // The caller of a parked call waits to the deadline plus the grace,
@@ -621,10 +621,13 @@ fiber.tool("fetch", {
     );
     let tools = by_name(&ext);
     let first = run(&tools["fetch"], json!({ "url": one.url() }));
-    assert!(one.await_requests(1, WAIT), "waited for the first request");
+    assert!(
+        one.await_requests(1, Deadline::after(WAIT)),
+        "waited for the first request"
+    );
     let second = run(&tools["fetch"], json!({ "url": two.url() }));
     assert!(
-        two.await_requests(1, WAIT),
+        two.await_requests(1, Deadline::after(WAIT)),
         "waited for the second request while the first is parked"
     );
     two.release();
@@ -1171,7 +1174,7 @@ fiber.tool("wait", {{
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["wait"], &cancel);
     assert!(
-        held.await_requests(1, WAIT),
+        held.await_requests(1, Deadline::after(WAIT)),
         "waited for the request to reach the server"
     );
     cancel.cancel();
@@ -1433,7 +1436,7 @@ fiber.tool("find", {{
     let cancel = CancelToken::new();
     let waiting = run_cancellable(&tools["wait"], &cancel);
     assert!(
-        held.await_requests(1, WAIT),
+        held.await_requests(1, Deadline::after(WAIT)),
         "waited for the request to reach the server"
     );
     let asked = clock.now();

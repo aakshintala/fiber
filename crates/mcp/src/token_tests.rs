@@ -442,7 +442,7 @@ fn background_refresh_clears_its_flag_after_each_completion() {
     server.hold();
     let (finished, receiver) = mpsc::channel();
     bearer.refresh_in_background(Box::new(DoneRefresh(finished)));
-    assert!(server.await_requests(1, WITHIN));
+    assert!(server.await_requests(1, Deadline::after(WITHIN)));
     assert_eq!(
         auth(bearer.clone()).unwrap(),
         Authorization::Send("Bearer at-1".into())
@@ -524,7 +524,7 @@ fn competing_refreshers_reread_the_generation_including_wrap_and_short_expiry() 
         let a = std::thread::spawn(move || {
             finished_a.send(first.authorization(&TestRefresh)).unwrap();
         });
-        assert!(server.await_requests(1, WITHIN));
+        assert!(server.await_requests(1, Deadline::after(WITHIN)));
         let (busy, receive_busy) = mpsc::channel();
         files.state.lock().unwrap().busy = Some(busy);
         let (finished_b, receive_b) = mpsc::channel();

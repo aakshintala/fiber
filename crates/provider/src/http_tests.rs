@@ -308,7 +308,7 @@ fn cancelling_a_call_mid_stream_closes_the_socket_without_a_proxy() {
         }
     });
     assert!(
-        server.await_requests(1, REQUEST_WITHIN),
+        server.await_requests(1, Deadline::after(REQUEST_WITHIN)),
         "the server saw the call before it was cancelled"
     );
     cancel.cancel();
@@ -360,7 +360,7 @@ fn a_call_with_a_proxy_value_tunnels_through_the_proxy() {
     let (text, _) = sent.unwrap();
     assert_eq!(text, "{}");
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
@@ -441,7 +441,7 @@ fn tls_runs_end_to_end_inside_the_tunnel() {
         "a TLS ClientHello opens the tunnelled bytes"
     );
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     let result = Deadline::after(CALL_WITHIN)
@@ -488,11 +488,11 @@ fn cancelling_a_call_mid_stream_through_the_proxy_closes_the_tunnel() {
         }
     });
     assert!(
-        server.await_requests(1, REQUEST_WITHIN),
+        server.await_requests(1, Deadline::after(REQUEST_WITHIN)),
         "the server saw the tunnelled call before it was cancelled"
     );
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     cancel.cancel();
@@ -504,7 +504,7 @@ fn cancelling_a_call_mid_stream_through_the_proxy_closes_the_tunnel() {
         "a cancelled tunnelled call fails to connect: {result:?}"
     );
     assert!(
-        proxy.await_closed(1, CLOSE_WITHIN),
+        proxy.await_closed(1, Deadline::after(CLOSE_WITHIN)),
         "the proxy saw the tunnel close"
     );
 }
@@ -561,7 +561,7 @@ fn a_proxy_that_refuses_connect_fails_the_call() {
     };
     assert!(why.contains("403"), "the refusal names its status: {why}");
     assert!(
-        proxy.await_replies(1, CONNECT_WITHIN),
+        proxy.await_replies(1, Deadline::after(CONNECT_WITHIN)),
         "the refusing proxy answered"
     );
     let requests = proxy.requests();
@@ -636,7 +636,7 @@ fn the_proxy_environment_reaches_model_calls() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
@@ -934,7 +934,7 @@ fn a_stream_stalled_mid_body_fails_the_read_and_closes_the_socket() {
         "a stalled stream fails the read: {result:?}"
     );
     assert!(
-        server.await_closed(1, REQUEST_WITHIN),
+        server.await_closed(1, Deadline::after(REQUEST_WITHIN)),
         "the server saw the socket close while the call's cancel is still alive"
     );
 }
@@ -2804,7 +2804,7 @@ fn an_observed_proxy_send_times_its_one_socket() {
     let text = body.unwrap();
     assert_eq!(text, "{}", "the proxy send reached the origin");
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
@@ -2843,7 +2843,7 @@ fn the_net_scope_ends_while_the_response_is_held() {
         }
     });
     assert!(
-        server.await_requests(1, REQUEST_WITHIN),
+        server.await_requests(1, Deadline::after(REQUEST_WITHIN)),
         "the server saw the call while holding its response"
     );
     assert_connector_scope(&net);

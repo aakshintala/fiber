@@ -459,7 +459,7 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
         .unwrap_or(());
     });
     assert!(
-        blocking.await_requests(1, CALL_DEADLINE),
+        blocking.await_requests(1, Deadline::after(CALL_DEADLINE)),
         "the call with seventeen values reaches its held sign request"
     );
 
@@ -560,7 +560,7 @@ fn a_running_call_values_are_reported_until_it_finishes() {
         done.send(result).unwrap_or(());
     });
     assert!(
-        blocking.await_requests(1, WAIT),
+        blocking.await_requests(1, Deadline::after(WAIT)),
         "waited for the first sign to block on the held server"
     );
     // Seventeen synchronous refreshes while the first call runs: its two
@@ -690,7 +690,7 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
     let asked1 = clock.now();
     let held1 = launch(1, Arc::clone(&signer), done.clone());
     assert!(
-        first_call.await_requests(1, CALL_DEADLINE),
+        first_call.await_requests(1, Deadline::after(CALL_DEADLINE)),
         "call 1 reached its held sign request"
     );
     for call in 2..=17 {
@@ -707,7 +707,7 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
         );
         let _held = launch(call, Arc::clone(&signer), done.clone());
         assert!(
-            later_calls.await_requests(call - 1, CALL_DEADLINE),
+            later_calls.await_requests(call - 1, Deadline::after(CALL_DEADLINE)),
             "call {call} reached its held sign request"
         );
     }
@@ -830,7 +830,7 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
         .unwrap_or(());
     });
     assert!(
-        blocking.await_requests(1, WAIT),
+        blocking.await_requests(1, Deadline::after(WAIT)),
         "waited for the first sign to block on the held server"
     );
     // Call 2 signs with the same token and starts the background refresh.
@@ -840,7 +840,7 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
         Some("Bearer tok-A-value".to_owned())
     );
     assert!(
-        tokens.await_requests(2, WAIT),
+        tokens.await_requests(2, Deadline::after(WAIT)),
         "waited for the background refresh to return the new token"
     );
     // The refresh replaced the cache: a new sign carries the new token.
@@ -984,16 +984,16 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
             // round, so every call is in flight at once.
             if round == calls {
                 assert!(
-                    blocking.await_requests(calls - 1, CALL_DEADLINE),
+                    blocking.await_requests(calls - 1, Deadline::after(CALL_DEADLINE)),
                     "calls {calls}: earlier signs reach their held requests"
                 );
                 assert!(
-                    last.await_requests(1, CALL_DEADLINE),
+                    last.await_requests(1, Deadline::after(CALL_DEADLINE)),
                     "calls {calls}: latest cached token reaches its held request"
                 );
             } else {
                 assert!(
-                    blocking.await_requests(round, CALL_DEADLINE),
+                    blocking.await_requests(round, Deadline::after(CALL_DEADLINE)),
                     "calls {calls}: sign {round} reaches its held request"
                 );
             }
@@ -1087,7 +1087,7 @@ fn a_held_fetch_never_holds_the_token_lock() {
         let _sent = done_tx.send(fetching.token(&worker_pair));
     });
     assert!(
-        tokens.await_requests(1, WAIT),
+        tokens.await_requests(1, Deadline::after(WAIT)),
         "the first fetch reaches the server"
     );
     // The fetch is held, yet the cache reads return at once.
