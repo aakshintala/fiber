@@ -83,24 +83,27 @@ pub(crate) fn required(
 
 /// Registers the session's one watcher fan-out on `log`: every event
 /// appended from now on — durable and ephemeral, from every source — is
-/// offered to `extensions.deliver` with its seq, in the one place all
-/// session lines pass through. While a shutdown code is set the offers
-/// skip: when a signal stops Fiber, no watcher runs. Records the log end
-/// as the watermark first, so the drain defaults unset cursors to the
-/// post-registration range. Dropping the returned guard unregisters.
+/// offered to the current set's `deliver` with its seq, in the one place
+/// all session lines pass through. The offer resolves the set per event,
+/// so after a reload's `swap` the fan-out reaches the reloaded set with
+/// no second subscription and no ordering gap. While a shutdown code is
+/// set the offers skip: when a signal stops Fiber, no watcher runs.
+/// Records the log end as the watermark first, so the drain defaults
+/// unset cursors to the post-registration range. Dropping the returned
+/// guard unregisters.
 pub(crate) fn subscribe(
     log: &Arc<Log>,
-    extensions: &Arc<SessionExtensions>,
+    current: &Arc<Current>,
     cancel: &Arc<r#loop::TurnCancel>,
 ) -> log::Subscription {
-    extensions.set_watermark(log.count());
-    let extensions = Arc::clone(extensions);
+    current.get().set_watermark(log.count());
+    let current = Arc::clone(current);
     let cancel = Arc::clone(cancel);
     log.subscribe(Arc::new(move |event, line| {
         if cancel.shutdown_code().is_some() {
             return;
         }
-        extensions.deliver(event, line.seq);
+        current.get().deliver(event, line.seq);
     }))
 }
 
@@ -147,6 +150,16 @@ pub(crate) fn fetch(clock: &Arc<dyn contract::clock::Clock>) -> extensions::Fetc
         env!("CARGO_PKG_VERSION"),
         Arc::clone(clock),
     )
+}
+
+/// Releases the normal end's extension-owned ids through the current set:
+/// the loop forgets those bindings at its top, so their completions queue
+/// no `run`. Resolves the set per call, so a reload between the wiring
+/// and the end still releases through the reloaded set.
+pub(crate) fn released(looped: Loop, current: Arc<Current>) -> Loop {
+    looped.released(Arc::new(move |ids: &[contract::JobId]| {
+        current.get().release_delegates(ids);
+    }))
 }
 
 /// Attaches loaded extensions, including empty hook chains whose state

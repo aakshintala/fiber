@@ -684,6 +684,7 @@ fn resumed_session(
                         looped.jobs(jobs).quota(notice),
                         &current,
                     );
+                    let looped = crate::session_extensions::released(looped, Arc::clone(&current));
                     looped
                         .diagnostics(Arc::clone(&diag))
                         .observed(observe)

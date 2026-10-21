@@ -84,4 +84,3 @@ fn run_arg(completed: &JobCompleted, finished: Option<&DelegateFinished>) -> Val
 #[cfg(test)]
 #[path = "delegates_tests.rs"]
 mod tests;
-
