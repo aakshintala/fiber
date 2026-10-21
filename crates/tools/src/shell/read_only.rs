@@ -124,6 +124,10 @@ const FIND: &[Flag] = &[
     value("-mindepth"),
     value("-newer"),
     flag("-print"),
+    flag("-not"),
+    flag("-a"),
+    flag("-o"),
+    flag("-prune"),
 ];
 
 const SORT: &[Flag] = &[

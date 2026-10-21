@@ -504,6 +504,22 @@ fn hostile_git_forms_execute() {
 }
 
 #[test]
+fn find_selection_operators_read() {
+    for command in [
+        "find . -name \"*.py\" -not -path \"./.git/*\"",
+        "find . -path ./.git -prune -o -name \"*.py\" -print",
+    ] {
+        assert_reads(command);
+    }
+    for command in [
+        "find . -name x -delete",
+        "find . \\( -name a -o -name b \\) -exec rm {} \\;",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
 fn echo_reads_text_and_only_n_counts_as_a_flag() {
     for command in [
         "echo ---",
