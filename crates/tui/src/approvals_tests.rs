@@ -1057,6 +1057,7 @@ mod through_the_app {
             | Effect::Quit
             | Effect::ListFiles
             | Effect::ReadImage(_)
+            | Effect::Feedback { .. }
             | Effect::FindPause { .. }
             | Effect::Search { .. }
             | Effect::Editor { .. }

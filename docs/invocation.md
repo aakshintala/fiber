@@ -146,6 +146,7 @@ credential a session uses"). A new session takes its label from
 | `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `import <claude-code \| codex>` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
+| `feedback [<prompt>] [-]` | Writes a feedback report with the description, version, platform and `fiber doctor` output, and prints the issue link. |
 | `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
 | `help [<command>]` | Prints the menu, or a command's help. |
 | `version` | Prints the version. |
@@ -168,6 +169,10 @@ age (`docs/state.md`, "What each part holds"). When `docs/` is missing from
 Fiber home, it says `` user guide not installed: run `fiber update` ``
 (`docs/releasing.md`). It never touches the network, so it does not check that
 a key is valid.
+
+`fiber feedback` takes its description as `fiber ask` takes its prompt
+("Getting a prompt in"): the argument is the description, else stdin, and `-`
+is accepted only as the last positional.
 
 **Setting up.** `fiber setup` asks, in this order, and each answer runs the
 command that already does that job:
