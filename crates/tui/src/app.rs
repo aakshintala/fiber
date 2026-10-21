@@ -1712,7 +1712,6 @@ impl App {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
             }
-            "skills_changed" => self.completion.skills_changed(),
             "usage_recorded" => self.config_views_usage(envelope),
             "session_named" => {
                 if let Some(named) = read!(envelope, SessionNamed) {

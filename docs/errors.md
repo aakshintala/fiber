@@ -381,7 +381,7 @@ the lines that carry it.
 | `too_large` | extension call, tool call, hub command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB; or Ctrl+G configuration text exceeds 64 KiB | — |
 | `tool_error` | tool call, extension call | the tool itself failed, or its effects function errored | — |
 | `unauthenticated` | hub connection | a remote connection's first message presented no valid device token; the hub closes the connection (`docs/invocation.md`, "Remote clients") | — |
-| `unknown_command` | driver command, hub command, notice | a driver or hub command Fiber does not have, or a `command` naming one no extension registered (`docs/invocation.md`, "Driver commands"), or a `/name` the terminal's `/` list does not hold (`docs/tui.md`, "Slash commands") | event |
+| `unknown_command` | driver command, hub command | a driver or hub command Fiber does not have, or a `command` naming one no extension registered (`docs/invocation.md`, "Driver commands") | — |
 | `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map | — |
 | `unknown_tool` | tool call | the model named a tool that does not exist | — |
 | `unreachable` | tool call | `session_message` named an id no running session has | — |

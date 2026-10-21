@@ -1181,7 +1181,6 @@ and an expiry wakes the loop even with no input.
 | `stream_closed` | condition | The session reopens; opening another session drops other sessions' rows. |
 | `switch_pending` | condition | The turn ends and the switch applies; rejecting a pending command voids its claim. |
 | `tool_definitions_large` | event | Fades 10 s after it shows. |
-| `unknown_command` | event | Fades 10 s after it shows. |
 | `web_search_unavailable` | event | Fades 10 s after it shows. |
 
 Codes no table lists — a refusal or driver code the hub names
@@ -1793,24 +1792,6 @@ fills the list from the answer to the latest one it sent; until that answer
 arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
-
-Enter on a draft whose first word is `/` and a name runs that name's command.
-Once the list holds the session's latest answer, a name the list does not hold
-is refused: nothing is sent, the draft stays for the person to correct, and an
-`unknown_command` notice says "Unknown command /<name>. Type / to see the
-list." A first word that is `/` alone, or has a second `/` in it, such as a
-path, names no command, and the draft goes out as written. The draft also goes
-out as written wherever the list may lack a name the session runs: on home,
-while a session opens and its answer has not arrived, and from a
-`skills_changed` until the answer to a `commands` sent after it, since a skill
-added or switched on at a turn start runs at once while the session's
-`commands` answer stays as it was until it reloads (`docs/system-prompt.md`,
-"Added and removed skills"). The session then runs the skill or prompt
-template the first word names (`docs/invocation.md`, "Getting a prompt in"). A
-prompt template added while the session runs writes no `skills_changed`, so it
-is refused until the session reloads, as with `/reload`. In a delegate's view
-the draft steers the delegate, whose commands this list does not hold, so
-nothing there is refused.
 
 ### Clearing
 

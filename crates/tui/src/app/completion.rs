@@ -19,24 +19,6 @@ pub(super) struct FilePanel {
     pub(super) result: Option<Result<Vec<String>, String>>,
 }
 
-/// Where the `/` list stands on the attached session's `commands`.
-#[derive(Debug)]
-pub(super) enum Answer {
-    /// None asked: home, or a session still opening.
-    Unasked,
-    /// Sent with `id`; only its answer fills the list. `stale` once a
-    /// `skills_changed` arrived while it was out: its answer may have
-    /// been built before the change.
-    Asked { id: String, stale: bool },
-    /// Answered: the list holds every `/name` the session runs.
-    Answered,
-    /// Answered, with a `skills_changed` since or while it was out: the
-    /// session's skills moved on at a turn start, while its `commands`
-    /// answer stays as it was until it reloads, so the list may lack a
-    /// name the session runs.
-    Stale,
-}
-
 /// The `/` and `@` panels' state.
 #[derive(Debug)]
 pub(super) struct Completion {
@@ -46,8 +28,8 @@ pub(super) struct Completion {
     /// The extension commands of the latest `commands` answer, in answer
     /// order: only its answer fills the list.
     pub(super) extensions: Vec<String>,
-    /// The latest `commands` sent, and whether it answered.
-    pub(super) answer: Answer,
+    /// The id of the latest `commands` sent; only its answer fills the list.
+    pub(super) commands_id: Option<String>,
     /// Esc closed the `/` panel for this draft.
     pub(super) slash_closed: bool,
     /// Esc closed the `/theme ` panel for this draft.
@@ -66,7 +48,7 @@ impl Default for Completion {
         Self {
             slash_rows: slash::rows(&[]),
             extensions: Vec::new(),
-            answer: Answer::Unasked,
+            commands_id: None,
             slash_closed: false,
             theme_closed: false,
             selected: 0,
@@ -85,23 +67,13 @@ impl Completion {
         let line = session_command(&id, "commands", session, None).to_string();
         self.slash_rows = slash::rows(&[]);
         self.extensions.clear();
-        self.answer = Answer::Asked { id, stale: false };
+        self.commands_id = Some(id);
         line
     }
 
     /// Whether `id` is the latest `commands` sent, still unanswered.
     pub(super) fn awaits(&self, id: &str) -> bool {
-        matches!(&self.answer, Answer::Asked { id: asked, .. } if asked == id)
-    }
-
-    /// A `skills_changed`: an answered list may now lack a skill the
-    /// session runs, and so may the answer to a question still out.
-    pub(super) fn skills_changed(&mut self) {
-        match &mut self.answer {
-            Answer::Answered => self.answer = Answer::Stale,
-            Answer::Asked { stale, .. } => *stale = true,
-            Answer::Unasked | Answer::Stale => {}
-        }
+        self.commands_id.as_deref() == Some(id)
     }
 
     /// A session's `command_accepted`: the answer to the latest `commands`
@@ -110,15 +82,10 @@ impl Completion {
         if !self.awaits(&accepted.command_id.0) {
             return;
         }
-        let stale = matches!(self.answer, Answer::Asked { stale: true, .. });
         if let Some(CommandResult::Commands { commands }) = &accepted.result {
             self.slash_rows = slash::rows(commands);
             self.extensions = slash::extensions(commands);
-            self.answer = if stale {
-                Answer::Stale
-            } else {
-                Answer::Answered
-            };
+            self.commands_id = None;
         }
     }
 }

@@ -62,7 +62,6 @@ const KINDS: &[(&str, Kind)] = &[
     ("stream_closed", Kind::Condition),
     ("switch_pending", Kind::Condition),
     ("tool_definitions_large", Kind::Event),
-    ("unknown_command", Kind::Event),
     ("web_search_unavailable", Kind::Event),
 ];
 
