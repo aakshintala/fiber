@@ -1,0 +1,167 @@
+{
+  "case": "classify/global.xai.grok-4.7",
+  "model": "global.xai.grok-4.7",
+  "region": "ap-south-1",
+  "url_path": "/model/global.xai.grok-4.7/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "Call get_weather for Paris."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 48
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ],
+    "toolConfig": {
+      "tools": [
+        {
+          "toolSpec": {
+            "name": "get_weather",
+            "description": "Weather for a city.",
+            "inputSchema": {
+              "json": {
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "redactedContent": "cnNuX2pRenlYWklGSkxscEt5ZmxZa0NmdndJRmVOdUw1Y0pwRjRvK1B2bk1DK3d4blB2dEtBNmd2eE5hdWhZQ0NWSUNmRmNTQUY4QUFRQVZZWGR6TFdOeWVYQjBieTF3ZFdKc2FXTXRhMlY1QUVSQmVGVTFOVWhzTjNVd1FqaHViMFF5Y2xWd1JHOHZUMk42V0ZCVk1FeFJSeTlaTlhaNVJURTJOblYyYkhkS1lXdDNiM1FyVjFJNGRrTmxSRUY0ZWxkcFZtYzlQUUFCQUJGaGQzTXRhMjF6TFdocFpYSmhjbU5vZVFBS1ltVnliUzF6ZEc5eVpRQmN2aTA3QUxSM3pKNkY0eE1iRFk2RCtMNmVtZU5MQkVSNWM5NUx4TlYwWXJ0MlowNkxpMXpVK1ZFZFFSUm1qRlFXQ1ZQZGFWLy9qWkFSVEgvekFRVW5qdnZ6OHB2bFM3UHZDNUlKUHVINExteUgyU3R4Z0NpVnZyWVpwT1VDQUFBUUFCNXZBdVczTWRYTWd2aXRRSzQwV1dYVnVKVGZXK3kwQnRzQTFyQVM1MEdabnYxSlNic0hTVk90YnM0bjVpSzdzdi8vLy84QUFBQUJBQUFBQUFBQUFBQUFBQUFCQUFBQkdzWGs5N0l5UHNyb0FMay9kT3dId0U3VS9LcGwrZk0yS0s3cmthM2JKL2Z0T2pnTVkzNExKbUZjL1BrRnhwc081MGl0bVFUT1E2OUFqdEVKSkQvcmdKdTMvbzdweWlIVnc4TlUxZGZUVmxVZXJ4UGFpa3VBZzdjSnBtak81TEJPM3N1eU9OZ0wwUUNKT3l3NmZFY2VJNk9QQzZTdzZKbVlNTi82blNBb0dyc2krMWh5T2oweVgxTmJBVXN0TFBrYm0yV3BkcDdTbmY1RjdaUVBFT3d6ZENZcHdEcFJBbmI5N0xzZXc5UjdOckM2a1hnbEkrQk1JTzRSM2J3bXE1Yk1EaWZDSnY2VThFbTlyZkFFb1hBUmZvVGVHS1RyMEE3aENEUVBUd0tPODhtK016V0pISnAzendmZUZpbkxWMXNud2VZSG56TWZ4VjdCYjJXeDJUUmtDN1EvQkE0MmcyOFZGUkhlQ2Qxd1pPTjNXZG9odFFuSFVtMlFjUE1iZGM0aFFyUEFZU01qQ1ozTFVDMEFaekJsQWpFQXFSM0ZicnVlVEpJeG1jT2VkclNhb3VOYXN6UmNQMXkzQzRrV1VjaytkT3Y5SmprdWJYWTJMeUN2ZHo5dlVGc0xBakJ5aFNxc0hNU2ZlZnIveHluVkVuSGxBYUlnV0VzWDU2Ujk4cFdwR01UK1Z1STBPMDRTR0pFM1NHOTZrTVhOWjlFPQ=="
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "start": {
+          "toolUse": {
+            "name": "get_weather",
+            "toolUseId": "call_604126f6b6265806b4ed07f179d488c4"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "toolUse": {
+            "input": "{\"city\":\"Paris\"}"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "tool_use"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 1325
+        },
+        "usage": {
+          "inputTokens": 114,
+          "outputTokens": 33,
+          "serverToolUsage": {},
+          "totalTokens": 147
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 114,
+    "outputTokens": 33,
+    "serverToolUsage": {},
+    "totalTokens": 147
+  },
+  "cost_usd": 0.000426
+}

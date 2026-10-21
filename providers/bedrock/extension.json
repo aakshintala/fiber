@@ -1,0 +1,11 @@
+{
+  "name": "github.com/aakshintala/fiber/providers/bedrock",
+  "version": "0.0.0",
+  "fiber": "0.0.0",
+  "api": 1,
+  "providers": {
+    "bedrock": [
+      "https://bedrock-runtime.{region}.amazonaws.com"
+    ]
+  }
+}

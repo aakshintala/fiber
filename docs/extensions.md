@@ -590,7 +590,8 @@ A provider may have five pieces of Lua:
 
 Each function is `{ timeout, run }`, like `fiber.command`: `timeout` in
 milliseconds, `run` the function Fiber calls. Only `sign()` runs while a
-request is being sent. It sees the body's SHA-256, never the body. A `sign()`
+request is being sent. It sees the body's SHA-256, never the body, and the
+time in whole Unix seconds as `time`. A `sign()`
 that errors or returns unusable headers fails the call with `credential_failed`
 (`docs/errors.md`). Here is `providers/acme.lua` for a gateway that lists its
 models at `/models`:
@@ -717,8 +718,9 @@ The credential functions take these arguments:
   returned email, or `default`
 - `credential`: `{}`, with an optional `label`; returns
   `{token, expires_at, headers}` from the provider's credential cache
-- `sign`: `{method, url, headers}`; signs an empty-body request and returns
-  the headers the signer adds
+- `sign`: `{method, url, headers}`; signs an empty-body request at the case
+  clock's time, which starts at 1,700,000,000 Unix seconds, and returns the
+  headers the signer adds
 
 `credentials` maps `<credential>/<label>` to stored JSON, written before the
 first call. `expect_credentials` checks those files after the calls, using
@@ -1819,6 +1821,16 @@ first-party extensions too. A `notice` with code `extension_shadowed` names both
 versions, so a personal install that is newer than the repository's copy is
 visible. Two repository copies of one name load the same way: the first
 declared loads, and the same notice names both versions.
+
+**Commands that read an approved copy.** A session loads its project's
+approved, pinned copies. Three commands read the same set when run in the
+project: `fiber models` lists the providers the approved copies register
+and runs their model lists, `fiber login` logs into those providers, and
+`fiber config` checks a `config set model` reference against them and
+prints their load notices. Run outside the project, each reads the personal
+installs only. No other user-facing command reads approved copies: the hidden
+`fiber refresh-model-lists` child reloads the same set to refresh the providers'
+cached lists.
 
 **An extension can be scoped to projects.** `fiber extension install --project`
 installs it for the current project only: it loads in that project's sessions

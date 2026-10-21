@@ -589,40 +589,6 @@ fn a_set_env_source_is_no_blocker() {
 }
 
 #[test]
-fn a_bedrock_model_gives_the_protocol_line() {
-    let setup = Setup::new();
-    setup.place(
-        "bed",
-        &[provider(
-            "bed",
-            &[model("m", "bedrock-converse", 1_000, None)],
-            None,
-            None,
-        )],
-        manifest("bed"),
-    );
-    setup.write_config(&json!({"model": "bed/m"}));
-    setup.store("bed", "default", "k");
-    let checked = setup.check(&[], &env_of(&[]));
-    let blocker = checked.blocker.unwrap();
-    assert_eq!(blocker.code, ErrorCode::ProtocolUnsupported);
-    assert!(
-        blocker.line.starts_with(
-            "The model `bed/m` speaks a protocol this Fiber does not speak yet; pick another model."
-        ),
-        "{}",
-        blocker.line
-    );
-    assert!(
-        blocker.line.ends_with(
-            "Run `fiber models` and set another with `fiber config set model <provider/model>`."
-        ),
-        "{}",
-        blocker.line
-    );
-}
-
-#[test]
 fn a_thinking_suffix_names_a_level_the_model_takes() {
     let setup = Setup::new();
     setup.place(

@@ -186,6 +186,57 @@ fn rules_tools_targets_stores_and_reviewer_answers() {
 }
 
 #[test]
+fn logout_rows_decode_each_variant_and_reject_an_unknown_row() {
+    let rows = logout_rows(&json!({"rows":[
+        {"row":"provider","name":"acme","label":"work","default":true,"deletable":true,"siblings":["beta"]},
+        {"row":"provider","name":"acme","label":"prod","default":false,"deletable":false,"origin":"environment variable ACME_KEY","siblings":[]},
+        {"row":"secret","name":"acme.api_key","deletable":true},
+    ]}))
+    .unwrap();
+    assert_eq!(
+        rows,
+        [
+            LogoutRow::Provider {
+                name: "acme".into(),
+                label: "work".into(),
+                default: true,
+                deletable: true,
+                origin: None,
+                siblings: vec!["beta".into()],
+            },
+            LogoutRow::Provider {
+                name: "acme".into(),
+                label: "prod".into(),
+                default: false,
+                deletable: false,
+                origin: Some("environment variable ACME_KEY".into()),
+                siblings: Vec::new(),
+            },
+            LogoutRow::Secret {
+                name: "acme.api_key".into(),
+                deletable: true,
+            },
+        ]
+    );
+    // Flipping a variant arm decodes nothing: a secret row holds no
+    // label, and neither does an unknown row nor a row with no marker.
+    assert!(
+        logout_rows(&json!({"rows":[{"row":"other","name":"acme","deletable":true}]})).is_none(),
+        "an unknown row decodes nothing"
+    );
+    assert!(logout_rows(&json!({"rows":[{"name":"acme","deletable":true}]})).is_none());
+}
+
+#[test]
+fn deleted_carries_the_hubs_path_and_rejects_a_missing_one() {
+    assert_eq!(
+        deleted(&json!({"path": "credentials/acme/work"})),
+        Some("credentials/acme/work".to_owned())
+    );
+    assert_eq!(deleted(&json!({})), None);
+}
+
+#[test]
 fn notes_answers_carry_each_layers_file_text_and_version() {
     let parsed = notes(&json!({"global":{"file":"/hub/config.json","text":"global notes","version":"abc123"},"project":{"file":"/hub/projects/p/config.json","text":"","version":"absent"}})).unwrap();
     assert_eq!(parsed.global.file, PathBuf::from("/hub/config.json"));

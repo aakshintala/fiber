@@ -1,0 +1,34 @@
+{
+  "call": {
+    "provider": "bedrock",
+    "function": "sign",
+    "arg": {
+      "method": "POST",
+      "url": "https://bedrock-runtime.ap-south-1.amazonaws.com/model/global.anthropic.claude-haiku-4-5-20251001-v1%3A0/invoke-with-response-stream",
+      "headers": {
+        "content-type": "application/json",
+        "accept": "application/vnd.amazon.eventstream",
+        "user-agent": "fiber/0.0.0"
+      }
+    }
+  },
+  "host": {
+    "exec": [
+      {
+        "request": {
+          "program": "/bin/sh"
+        },
+        "reply": {
+          "code": 0,
+          "stdout": "\u0000AKIDEXAMPLE\u0000wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY\u0000session-token-example",
+          "stderr": ""
+        }
+      }
+    ]
+  },
+  "returns": {
+    "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20231114/ap-south-1/bedrock/aws4_request, SignedHeaders=accept;content-type;host;x-amz-date;x-amz-security-token, Signature=b4e1731286ad6929441c40e8d53f09ba919ef1ca6b6b64f249e57da382e4f2ff",
+    "x-amz-date": "20231114T221320Z",
+    "x-amz-security-token": "session-token-example"
+  }
+}

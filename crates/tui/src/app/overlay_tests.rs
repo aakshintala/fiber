@@ -1449,6 +1449,7 @@ fn a_refusal_recorded_at_one_id_holds_after_the_swap() {
         | Effect::FindPause { .. }
         | Effect::OpenLink(_)
         | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
         | Effect::OpenFile(_) => panic!("a read for X"),
     };
     assert_eq!(lines.len(), 1);

@@ -311,6 +311,7 @@ fn identity(input: &Input) -> String {
         | Input::Files { .. }
         | Input::FindDue(_)
         | Input::Image { .. }
+        | Input::Feedback(_)
         | Input::Viewed { .. }
         | Input::Models(_)
         | Input::Login { .. } => panic!("a hub line, not another input"),

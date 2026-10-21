@@ -1,8 +1,11 @@
-//! The `anthropic-messages` reply decoder: the server-sent event stream
-//! into a `Reply` (`anthropic_messages`).
+//! The `anthropic-messages` reply decoder: the server-sent event stream, or
+//! Bedrock's AWS event-stream framing of the same events, into a `Reply`
+//! (`anthropic_messages`).
 
 use std::collections::BTreeMap;
 use std::io::BufRead;
+
+use base64::Engine;
 
 use contract::ProviderCallId;
 use contract::events::{
@@ -21,7 +24,7 @@ use crate::wire::{args_value, str_at};
 /// returns the reply once `message_stop` arrives. A stream that fails keeps
 /// nothing it streamed, finished tool calls included.
 pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply, Error> {
-    read(false, stream, sink).map_err(|(error, _)| error)
+    read(false, Framing::Sse, stream, sink).map_err(|(error, _)| error)
 }
 
 /// As [`decode`], also carrying what the stream had seen when it failed:
@@ -34,7 +37,29 @@ pub(crate) fn decode_tracked(
     stream: impl BufRead,
     sink: &mut dyn FnMut(Delta),
 ) -> Result<Reply, (Error, Option<CallUsage>)> {
-    read(true, stream, sink)
+    read(true, Framing::Sse, stream, sink)
+}
+
+/// As [`decode_tracked`], for a Bedrock Invoke reply: the same events, each
+/// one `chunk` message of AWS event-stream framing.
+#[allow(
+    clippy::result_large_err,
+    reason = "the decode carries its partial alongside the error for the call's usage"
+)]
+pub(crate) fn decode_bedrock_tracked(
+    stream: impl BufRead,
+    sink: &mut dyn FnMut(Delta),
+) -> Result<Reply, (Error, Option<CallUsage>)> {
+    read(true, Framing::AwsEventStream, stream, sink)
+}
+
+/// How a reply's events arrive.
+#[derive(Clone, Copy)]
+enum Framing {
+    /// One server-sent event's `data` per event.
+    Sse,
+    /// One AWS event-stream `chunk` message per event, Bedrock Invoke's.
+    AwsEventStream,
 }
 
 /// Reads one reply stream; `keep_orphans` keeps a hosted result whose call
@@ -46,6 +71,7 @@ pub(crate) fn decode_tracked(
 )]
 fn read(
     keep_orphans: bool,
+    framing: Framing,
     stream: impl BufRead,
     sink: &mut dyn FnMut(Delta),
 ) -> Result<Reply, (Error, Option<CallUsage>)> {
@@ -54,12 +80,21 @@ fn read(
         ..Decoder::default()
     };
     let mut end = None;
-    let read = crate::sse::read(stream, |data| {
-        let event: Value = serde_json::from_str(data)
-            .map_err(|e| Error::StreamIncomplete(format!("an event is not JSON ({e})")))?;
-        end = reply.event(&event, sink)?;
-        Ok(end.is_some())
-    });
+    let read = match framing {
+        Framing::Sse => crate::sse::read(stream, |data| {
+            let event: Value = serde_json::from_str(data)
+                .map_err(|e| Error::StreamIncomplete(format!("an event is not JSON ({e})")))?;
+            end = reply.event(&event, sink)?;
+            Ok(end.is_some())
+        }),
+        Framing::AwsEventStream => crate::event_stream::read(stream, |message| {
+            let Some(event) = bedrock_event(&message)? else {
+                return Ok(false);
+            };
+            end = reply.event(&event, sink)?;
+            Ok(end.is_some())
+        }),
+    };
     if let Err(error) = read {
         return Err((error, Some(reply.partial())));
     }
@@ -70,6 +105,32 @@ fn read(
             Some(reply.partial()),
         )),
     }
+}
+
+/// The Anthropic event one Bedrock Invoke message carries. A `chunk`
+/// event's payload is `{"bytes": "<base64>"}` wrapped around one event's
+/// JSON (`research/bedrock-invoke-probe`); an exception or error message
+/// fails the reply; any other message carries nothing Fiber acts on.
+fn bedrock_event(message: &crate::event_stream::Message) -> Result<Option<Value>, Error> {
+    if let Some(failure) = message.failure() {
+        return Err(failure);
+    }
+    if message.header(":event-type") != Some("chunk") {
+        return Ok(None);
+    }
+    let unreadable = |why: String| Error::StreamIncomplete(format!("a chunk {why}"));
+    let payload: Value = serde_json::from_slice(&message.payload)
+        .map_err(|e| unreadable(format!("is not JSON ({e})")))?;
+    let bytes = payload
+        .get("bytes")
+        .and_then(Value::as_str)
+        .ok_or_else(|| unreadable("holds no `bytes`".into()))?;
+    let event = base64::engine::general_purpose::STANDARD
+        .decode(bytes)
+        .map_err(|e| unreadable(format!("holds `bytes` that are not base64 ({e})")))?;
+    serde_json::from_slice(&event)
+        .map(Some)
+        .map_err(|e| Error::StreamIncomplete(format!("an event is not JSON ({e})")))
 }
 
 /// One content block as it streams in.
