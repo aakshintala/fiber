@@ -4556,3 +4556,468 @@ fn a_depth_one_delegates_fork_starts_depth_two_on_the_root_key() {
     // grandchild starts.
     assert_depth_refusal(&fork_lines, false, true, "delegate_fork");
 }
+
+/// The delegate's one question to its driver: a free-text question with a
+/// short header and unique text, so the wake line matches whole.
+const ASK_COLOR_HEADER: &str = "Color";
+const ASK_COLOR_TEXT: &str = "Which color for the porch light, teal or amber?";
+/// The parent's relay question to the person, carrying the delegate's
+/// question.
+const RELAY_HEADER: &str = "Relay";
+const RELAY_TEXT: &str = "The delegate asks: which color for the porch light, teal or amber?";
+/// The person's answer as the result line the parent forwards verbatim.
+const ANSWER_LINE: &str = "Relay: \"blue\"";
+/// The answer line as a provider request body carries it: JSON escapes the
+/// quotes.
+const ANSWER_LINE_BODY: &str = "Relay: \\\"blue\\\"";
+/// The delegate's final message once resumed.
+const PORCH_DONE: &str = "porch-light-done-7f3a9c1e";
+
+/// The delegate's first run, pinned from a real run: its one `ask_user`
+/// call ends the turn `completed` with the questions, and the run exits.
+const ASK_CHILD_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// The parent's durable kinds, pinned from a real run: the spawn turn,
+/// the wake turn carrying the delegate's questions with the person's form
+/// and the resume, and the final wake. A hub-started session idles
+/// after its turn instead of taking an ending-notice turn, so the
+/// delegate's finish wakes a turn of its own. The log is read before the
+/// test closes the parent, so it ends with the last wake turn.
+const ASK_WAKE_PARENT_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "interaction_requested",
+    "interaction_resolved",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+#[test]
+fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
+    let setup = support::Setup::new();
+    let guard = arm(&setup);
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        if text.contains(PORCH_DONE) {
+            return support::hello();
+        }
+        if text.contains("Resumed delegate") {
+            return support::hello();
+        }
+        if text.contains(ANSWER_LINE_BODY) {
+            let job = job_id(&text);
+            return support::stream(&[function_call(
+                "call_resume",
+                "delegate_message",
+                &json!({"id": job, "message": ANSWER_LINE}),
+            )]);
+        }
+        if text.contains("It ended waiting for answers") {
+            return support::stream(&[function_call(
+                "call_relay",
+                "ask_user",
+                &json!({"questions": [{"header": RELAY_HEADER, "question": RELAY_TEXT}]}),
+            )]);
+        }
+        if text.contains("Started delegate") {
+            return support::hello();
+        }
+        support::stream(&[spawn_call("fiber:pb/m")])
+    })
+    .unwrap();
+    let child = ProviderServer::start([
+        support::stream(&[function_call(
+            "call_ask",
+            "ask_user",
+            &json!({"questions": [{"header": ASK_COLOR_HEADER, "question": ASK_COLOR_TEXT}]}),
+        )]),
+        text_reply(PORCH_DONE),
+    ])
+    .unwrap();
+    child.hold();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    let hub = Arc::new(Mutex::new(None));
+    let main = support::connect_hub(&setup, &hub).0;
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let parent_id = support::start_session(&main, &workspace, "scan the tree");
+    main.send(&format!(
+        "{{\"id\":\"c_sub\",\"session_id\":\"{parent_id}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
+    ));
+    let mut lines = support::until(&main, "the parent subscribe acknowledgement", |line| {
+        is_answer(line, "c_sub")
+    });
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
+    let mut batch = support::until(&main, "the parent's delegate_started", |line| {
+        line["kind"] == "delegate_started" && is_session(line, &parent_id)
+    });
+    let started = batch.last().unwrap();
+    let delegate = started["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let job = started["payload"]["job_id"].as_str().unwrap().to_owned();
+    lines.append(&mut batch);
+    // The spawn turn ends while the delegate's first model call stays
+    // held; the parent idles, so the delegate's finish wakes a turn of
+    // its own.
+    let mut ended = 0;
+    let mut batch = support::until(&main, "the spawn turn's end", |line| {
+        ended += usize::from(line["kind"] == "turn_completed" && is_session(line, &parent_id));
+        ended == 1
+    });
+    lines.append(&mut batch);
+    // A second client subscribes, so it can answer the person's form:
+    // the hub rejects any other command before the first subscribe.
+    let other = direct_client(&setup);
+    other.send(&format!(
+        "{{\"id\":\"c_sub_b\",\"session_id\":\"{parent_id}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}"
+    ));
+    let subbed = support::until(
+        &other,
+        "the second client's subscribe acknowledgement",
+        |line| is_answer(line, "c_sub_b"),
+    );
+    assert_eq!(
+        subbed.last().unwrap()["kind"],
+        "command_accepted",
+        "{subbed:?}"
+    );
+    child.release_one();
+    // The delegate ends its first turn asking: the parent's wake carries
+    // the questions, and the parent asks the person first.
+    let mut batch = support::until(&main, "the parent's interaction_requested", |line| {
+        line["kind"] == "interaction_requested" && is_session(line, &parent_id)
+    });
+    let requested = batch.last().unwrap().clone();
+    lines.append(&mut batch);
+    assert_eq!(requested["payload"]["kind"], "form");
+    assert_eq!(
+        requested["payload"]["fields"],
+        json!([{"header": RELAY_HEADER, "question": RELAY_TEXT}])
+    );
+    let form = requested["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The delegate saw no second request across the form window: its run
+    // ended asking, and only the resume starts another.
+    assert_eq!(
+        child.requests().len(),
+        1,
+        "the delegate was not asked again meanwhile"
+    );
+    // A second client answers the person's form.
+    other.send(&format!(
+        "{{\"id\":\"c_reply\",\"session_id\":\"{parent_id}\",\"command\":\"reply\",\"args\":{{\"request_id\":\"{form}\",\"answers\":[{{\"labels\":[],\"text\":\"blue\"}}]}}}}"
+    ));
+    let mut batch = support::until(&main, "the parent's interaction_resolved", |line| {
+        line["kind"] == "interaction_resolved" && is_session(line, &parent_id)
+    });
+    let resolved = batch.last().unwrap().clone();
+    lines.append(&mut batch);
+    assert_eq!(resolved["payload"]["request_id"], form.as_str());
+    assert_eq!(resolved["payload"]["by"], "person");
+    assert_eq!(
+        resolved["payload"]["answers"],
+        json!([{"labels": [], "text": "blue"}])
+    );
+    let ack = support::until(&other, "the reply acknowledgement", |line| {
+        is_answer(line, "c_reply")
+    });
+    assert_eq!(ack.last().unwrap()["kind"], "command_accepted", "{ack:?}");
+    // The resume carries the verbatim answer lines as the next prompt.
+    assert!(
+        child.await_requests(2, setup.deadline.left()),
+        "the resumed run called its model"
+    );
+    let bodies: Vec<String> = child
+        .requests()
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect();
+    assert_eq!(bodies.len(), 2, "{bodies:?}");
+    assert!(
+        bodies[0].contains("say hello"),
+        "the first call carries the opening prompt"
+    );
+    assert!(
+        bodies[1].contains(ANSWER_LINE_BODY),
+        "the resumed run carries the verbatim answer line"
+    );
+    child.release();
+    // The resumed run ends on its final message, and the parent's last
+    // wake turn ends on its own: three turns in all.
+    let mut turns = 1;
+    let mut batch = support::until(&main, "the parent's last turn ends", |line| {
+        turns += usize::from(line["kind"] == "turn_completed" && is_session(line, &parent_id));
+        turns == 3
+    });
+    lines.append(&mut batch);
+    drop(other);
+
+    // The wake request carries the delegate's question whole: header and
+    // text on one line.
+    let wake_line = format!("{ASK_COLOR_HEADER}: {ASK_COLOR_TEXT}");
+    let carrying: Vec<String> = parent
+        .requests()
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .filter(|body| body.contains("It ended waiting for answers"))
+        .collect();
+    assert!(!carrying.is_empty(), "a wake request carries the questions");
+    for body in &carrying {
+        assert!(
+            body.contains(&wake_line),
+            "the wake carries the whole question line: {body}"
+        );
+    }
+    // Six session requests and two reviewer verdicts: the spawn, the
+    // receipt, the wake, the answer, the resume receipt, and the final
+    // wake. The person's form is never reviewed.
+    assert_eq!(parent.requests().len(), 8, "two reviews and six turns");
+
+    let parent_log = sessions_in(&setup.home(), &setup.workspace())
+        .join(&parent_id)
+        .join("events.jsonl");
+    let parent_lines = read_lines(&parent_log);
+    // One job for life: two runs, each writing its start pair before its
+    // finish pair, the second through `delegate_message`.
+    let of_kind = |kind: &str| {
+        parent_lines
+            .iter()
+            .filter(|line| line["kind"] == kind)
+            .collect::<Vec<&Value>>()
+    };
+    for kind in [
+        "job_started",
+        "delegate_started",
+        "delegate_finished",
+        "job_completed",
+    ] {
+        let found = of_kind(kind);
+        assert_eq!(
+            found.len(),
+            2,
+            "{kind} wrote {:?}",
+            owned_kinds(&parent_lines)
+        );
+        for line in &found {
+            assert_eq!(line["payload"]["job_id"], job.as_str());
+        }
+    }
+    let starts = of_kind("job_started");
+    assert_eq!(starts[1]["payload"]["tool"], "delegate_message");
+    // The first finish carries the questions; the asking run said no
+    // text, so its final message is empty. The second carries the
+    // resumed run's final message.
+    let finished = of_kind("delegate_finished");
+    assert_eq!(
+        finished[0]["payload"]["questions"],
+        json!([{"header": ASK_COLOR_HEADER, "question": ASK_COLOR_TEXT}])
+    );
+    assert_eq!(finished[0]["payload"]["text"], "");
+    assert_eq!(finished[1]["payload"]["text"], PORCH_DONE);
+    for done in of_kind("job_completed") {
+        assert_eq!(done["payload"]["status"], "completed");
+    }
+    // The wake turn's input holds one jobs item naming the job, and the
+    // parent's own form resolved by the person with one result line.
+    let turns: Vec<&Value> = parent_lines
+        .iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .collect();
+    assert_eq!(turns.len(), 3, "{:?}", owned_kinds(&parent_lines));
+    assert_eq!(
+        turns[1]["payload"]["input"],
+        json!([{"type": "jobs", "job_ids": [job]}])
+    );
+    let asked = parent_lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested" && line["payload"]["name"] == "ask_user")
+        .expect("the parent asked the person");
+    let ask_action = asked["action_id"].as_str().unwrap();
+    let ask_done = parent_lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == ask_action)
+        .unwrap();
+    assert_eq!(ask_done["payload"]["status"], "completed");
+    assert_eq!(ask_done["payload"]["content"][0]["text"], ANSWER_LINE);
+    assert!(
+        parent_lines.iter().all(|line| !(
+            line["kind"] == "permission_resolved" && line["action_id"] == ask_action
+        )),
+        "the person's form is never reviewed"
+    );
+    let messaged = parent_lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "tool_call_requested" && line["payload"]["name"] == "delegate_message"
+        })
+        .expect("the parent resumed the delegate");
+    let message_action = messaged["action_id"].as_str().unwrap();
+    let decided = parent_lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved" && line["action_id"] == message_action)
+        .expect("the reviewer decided the resume");
+    assert_eq!(decided["payload"]["decided_by"], "reviewer");
+    let spawned = parent_lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "tool_call_requested" && line["payload"]["name"] == "delegate_spawn"
+        })
+        .unwrap();
+    let spawn_action = spawned["action_id"].as_str().unwrap();
+    let spawn_decided = parent_lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved" && line["action_id"] == spawn_action)
+        .unwrap();
+    assert_eq!(spawn_decided["payload"]["decided_by"], "reviewer");
+    // The person's form was raised in the parent session: exactly one
+    // request and one resolution there.
+    assert_eq!(of_kind("interaction_requested").len(), 1);
+    assert_eq!(of_kind("interaction_resolved").len(), 1);
+
+    // The delegate's log: the asking run, then the resumed run carrying
+    // the answers in its second turn's input. No form was ever raised
+    // there: the delegate is unanswerable end to end.
+    let child_lines = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(&delegate)
+            .join("events.jsonl"),
+    );
+    let mut expected: Vec<String> = ASK_CHILD_DURABLE
+        .iter()
+        .map(|kind| kind.to_string())
+        .collect();
+    expected.extend(RESUMED_CHILD_DURABLE.iter().map(|kind| kind.to_string()));
+    assert_eq!(durable_kinds(&child_lines), expected);
+    let asking = child_lines
+        .iter()
+        .filter(|line| line["kind"] == "turn_completed")
+        .collect::<Vec<&Value>>();
+    assert_eq!(asking.len(), 2);
+    assert_eq!(asking[0]["payload"]["outcome"], "completed");
+    assert_eq!(
+        asking[0]["payload"]["questions"],
+        json!([{"header": ASK_COLOR_HEADER, "question": ASK_COLOR_TEXT}])
+    );
+    let runs: Vec<&Value> = child_lines
+        .iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .collect();
+    assert_eq!(runs.len(), 2);
+    assert!(
+        serde_json::to_string(&runs[1]["payload"]["input"])
+            .unwrap()
+            .contains(ANSWER_LINE_BODY),
+        "{}",
+        runs[1]["payload"]["input"]
+    );
+    assert!(
+        child_lines
+            .iter()
+            .all(|line| line["kind"] != "interaction_requested"),
+        "no form was raised in the delegate"
+    );
+    for exited in child_lines
+        .iter()
+        .filter(|line| line["kind"] == "fiber_exited")
+    {
+        assert_eq!(exited["payload"]["exit_code"], 0);
+    }
+    assert_eq!(durable_kinds(&parent_lines), ASK_WAKE_PARENT_DURABLE);
+
+    // Closing the parent ends it; its sessions leave no process behind.
+    main.send(&format!(
+        "{{\"id\":\"c_pclose\",\"session_id\":\"{parent_id}\",\"command\":\"close\",\"args\":{{\"now\":false}}}}"
+    ));
+    let mut batch = support::until(&main, "the parent's fiber_exited", |line| {
+        line["kind"] == "fiber_exited" && is_session(line, &parent_id)
+    });
+    lines.append(&mut batch);
+    drop(main);
+    drop(lines);
+    guard.wait_gone();
+    stop_hub(&hub);
+}
