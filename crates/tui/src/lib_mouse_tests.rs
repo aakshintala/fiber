@@ -352,7 +352,7 @@ fn the_wheel_one_column_past_the_conversation_scrolls_nothing() {
 /// focus stays where it was.
 #[test]
 fn the_wheel_over_home_list_scrolls_it_three_rows() {
-    let mut lp = home_list(60, 12, &["one", "two", "three", "four", "five", "six"]);
+    let mut lp = tall_home();
     assert!(shown(&lp).contains("6 live"), "{}", shown(&lp));
     assert_eq!(lp.app.focused(), None);
     feed(&mut lp, vec![wheel_down(10, 5)]);
