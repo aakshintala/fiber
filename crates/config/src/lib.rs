@@ -92,7 +92,7 @@ pub use write::{
     FileOutcome, FileSaved, Layer, ListChange, ListEdit, NotesSaved, NotesWrite, Scope,
     clear_global_if_equals, edit_list, get_global, insert_entry, remove_entry,
     remove_extension_settings, replace_global, save_reviewer_notes, set, set_global_if_unset,
-    settings_file, update_global_entries, version, write_atomic,
+    set_repo_extension_setting, settings_file, update_global_entries, version, write_atomic,
 };
 
 pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};

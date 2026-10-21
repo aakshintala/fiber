@@ -132,10 +132,10 @@ fn declare_and_approve(setup: &Setup, extension: &str, name: &str) {
     approve_repo(&setup.home(), &setup.workspace(), extension);
 }
 
-/// The `Refused` refusal `set` gave: its file and its static reason.
-fn refused(result: Result<PathBuf, CliError>) -> (PathBuf, &'static str) {
+/// The `Refused` refusal `set` gave: its key, its file and its static reason.
+fn refused(result: Result<PathBuf, CliError>) -> (String, PathBuf, &'static str) {
     match result {
-        Err(CliError::Config(ConfigError::Refused { file, why, .. })) => (file, why),
+        Err(CliError::Config(ConfigError::Refused { key, file, why })) => (key, file, why),
         other => panic!("a refused set names its file and reason: {other:?}"),
     }
 }
@@ -202,6 +202,15 @@ fn project_set_writes_the_project_settings_file() {
     let written: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&expected).unwrap()).unwrap();
     assert_eq!(written, json!({"region": "example.com"}));
+    assert!(
+        !setup
+            .home()
+            .join("projects")
+            .join(setup.project_key().as_str())
+            .join("config.json")
+            .exists(),
+        "the project's config.json is untouched"
+    );
 }
 
 #[test]
@@ -237,25 +246,28 @@ fn get_reads_the_project_layer_with_its_settings_file() {
 fn unknown_setting_of_a_known_extension_is_refused_naming_the_extension() {
     let setup = Setup::new();
     install(&setup.home(), "acme", "acme");
-    let (file, why) = refused(setup.set(
+    let (key, file, why) = refused(setup.set(
         Layer::Global,
         "extensions.\"acme\".settings.bogus",
         "example.com",
     ));
+    assert!(key.contains("acme"), "{key:?}");
     assert_eq!(file, setup.home().join("config").join("acme.json"));
-    assert!(why.contains("acme"), "{why:?}");
+    assert_eq!(why, "the extension declares no such setting");
     assert!(!setup.home().join("config").join("acme.json").exists());
 }
 
 #[test]
 fn set_for_an_uninstalled_extension_is_refused_naming_its_settings_file() {
     let setup = Setup::new();
-    let (file, _) = refused(setup.set(
+    let (key, file, why) = refused(setup.set(
         Layer::Global,
         "extensions.\"nobody\".settings.region",
         "example.com",
     ));
+    assert!(key.contains("nobody"), "{key:?}");
     assert_eq!(file, setup.home().join("config").join("nobody.json"));
+    assert_eq!(why, "the extension is not installed");
     assert!(!setup.home().join("config").join("nobody.json").exists());
     assert!(!setup.home().join("config.json").exists());
 }
@@ -264,7 +276,7 @@ fn set_for_an_uninstalled_extension_is_refused_naming_its_settings_file() {
 fn non_host_region_is_refused_and_names_a_host() {
     let setup = Setup::new();
     install(&setup.home(), "acme", "acme");
-    let (file, why) = refused(setup.set(
+    let (_, file, why) = refused(setup.set(
         Layer::Global,
         "extensions.\"acme\".settings.region",
         "not a host!!",
@@ -278,13 +290,14 @@ fn non_host_region_is_refused_and_names_a_host() {
 fn placeholder_descendant_is_refused_leaving_the_file_unchanged() {
     let setup = Setup::new();
     install(&setup.home(), "acme", "acme");
-    let (file, why) = refused(setup.set(
+    let (key, file, why) = refused(setup.set(
         Layer::Global,
         "extensions.\"acme\".settings.region.sub",
         "example.com",
     ));
+    assert!(key.contains("region"), "{key:?}");
     assert_eq!(file, setup.home().join("config").join("acme.json"));
-    assert!(why.contains("region"), "{why:?}");
+    assert_eq!(why, "a placeholder setting holds no object below it");
     assert!(!setup.home().join("config").join("acme.json").exists());
 }
 
@@ -347,13 +360,21 @@ fn repo_set_of_a_repo_setting_writes_the_repository_settings_file() {
     let written: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&expected).unwrap()).unwrap();
     assert_eq!(written, json!({"workspace_url": "repo-wire"}));
+    let repo_config: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(setup.workspace().join(".fiber").join("config.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        repo_config.get("extensions").is_none(),
+        "the repository's config.json is untouched: {repo_config:?}"
+    );
 }
 
 #[test]
 fn repo_set_of_a_placeholder_is_refused_naming_repo_settings() {
     let setup = Setup::new();
     declare_and_approve(&setup, "acme", "acme");
-    let (file, why) = refused(setup.set(
+    let (_, file, why) = refused(setup.set(
         Layer::Repository,
         "extensions.\"acme\".settings.region",
         "example.com",
@@ -381,12 +402,13 @@ fn repo_set_of_a_placeholder_is_refused_naming_repo_settings() {
 fn repo_set_of_an_undeclared_key_is_refused_naming_the_extension() {
     let setup = Setup::new();
     declare_and_approve(&setup, "acme", "acme");
-    let (_, why) = refused(setup.set(
+    let (key, _, why) = refused(setup.set(
         Layer::Repository,
         "extensions.\"acme\".settings.bogus",
         "example.com",
     ));
-    assert!(why.contains("acme"), "{why:?}");
+    assert!(key.contains("acme"), "{key:?}");
+    assert_eq!(why, "the extension does not list it under repo_settings");
 }
 
 #[test]

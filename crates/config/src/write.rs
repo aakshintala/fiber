@@ -12,6 +12,8 @@ use contract::events::Notice;
 
 use self::atomic::locked;
 use crate::error::ConfigError;
+use crate::extension::{declared_settings_in, host_shape, installed_dir};
+use crate::extension_settings::settings_key;
 use crate::home::{ProjectKey, plain, read};
 use crate::layout::{global_config_file, project_config_file, repository_config_file};
 use crate::{Source, keys, path};
@@ -50,6 +52,14 @@ pub fn set(
     key: &str,
     value: Value,
 ) -> Result<PathBuf, ConfigError> {
+    // An extension's own setting never lives in `config.json`: route
+    // every `extensions.<name>.settings` shape, the empty rest included,
+    // to the settings write, which holds every gate in one order.
+    if let Some((extension, relative)) = settings_key(key) {
+        return set_extension_setting(
+            home, workspace, project, layer, key, &extension, &relative, value, None,
+        );
+    }
     let (file, source) = layer_file(home, workspace, project, layer)?;
     let (segments, notices) = checked(key, value.clone(), &source)?;
     if !notices.is_empty() {
@@ -69,6 +79,181 @@ pub fn set(
     path::set(&mut root, &resolved, value);
     write_root(&file, &root)?;
     Ok(file)
+}
+
+/// Why an extension-settings write is refused: one static reason per
+/// gate, so no exhaustive match in the repo gains a case. The refusal's
+/// key names the typed extension; no reason ever repeats a value.
+/// The extension is neither installed nor approved where `set` can see.
+const UNINSTALLED: &str = "the extension is not installed";
+/// The key's first segment is in neither declared list.
+const UNKNOWN_SETTING: &str = "the extension declares no such setting";
+/// A repository's file names a key outside the manifest's list.
+const NOT_REPO_SETTING: &str = "the extension does not list it under repo_settings";
+/// Below a placeholder name sits an object, never a host.
+const PLACEHOLDER_DESCENDANT: &str = "a placeholder setting holds no object below it";
+/// A single-segment placeholder key holds no host.
+const NOT_A_HOST: &str = "the value is not a host";
+
+/// Writes one extension-settings key for a global or project layer, or
+/// refuses a repository-layer key `set` cannot resolve: only the narrow
+/// [`set_repo_extension_setting`] takes the caller-resolved
+/// approved-or-installed directory, since this crate never resolves an
+/// approved copy itself. `extension_dir` is `Some` only for the narrow
+/// repository path; `None` resolves the installed copy internally.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one shared edge for every settings write; the narrow repository path adds its directory"
+)]
+fn set_extension_setting(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    layer: Layer,
+    key: &str,
+    extension: &str,
+    relative: &[String],
+    value: Value,
+    extension_dir: Option<&Path>,
+) -> Result<PathBuf, ConfigError> {
+    // The empty rest is usage, as an empty `-c` rest is.
+    let [first, ..] = relative else {
+        return Err(ConfigError::Override { arg: key.into() });
+    };
+    let repository = matches!(layer, Layer::Repository);
+    if repository && extension_dir.is_none() {
+        // No caller passes a directory for any other layer, and this
+        // crate resolves no approved copy itself: a repository key
+        // reaching `set` directly names no directory this crate may use.
+        return Err(ConfigError::Refused {
+            key: key.into(),
+            file: settings_file(&workspace.join(".fiber"), extension),
+            why: UNINSTALLED,
+        });
+    }
+    if repository {
+        // Someone else's text: a link, or anything but a directory and
+        // a regular file, is refused before the lock is taken, as
+        // `Config::load` refuses to read it.
+        plain(&workspace.join(".fiber"), true)?;
+        plain(&workspace.join(".fiber").join("config"), true)?;
+        plain(&settings_file(&workspace.join(".fiber"), extension), false)?;
+    }
+    let dir = match extension_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => installed_dir(home, extension).ok_or_else(|| ConfigError::Refused {
+            key: key.into(),
+            file: settings_layer_file(home, workspace, project, layer, extension),
+            why: UNINSTALLED,
+        })?,
+    };
+    // An unreadable manifest or provider file fails the write before
+    // anything is written.
+    let declared = declared_settings_in(&dir)?;
+    if repository && !declared.repo_settings.iter().any(|name| name == first) {
+        return Err(ConfigError::Refused {
+            key: key.into(),
+            file: settings_layer_file(home, workspace, project, layer, extension),
+            why: NOT_REPO_SETTING,
+        });
+    }
+    let declared_names: Vec<&str> = declared
+        .repo_settings
+        .iter()
+        .map(String::as_str)
+        .chain(declared.placeholders.keys().map(String::as_str))
+        .collect();
+    if !declared_names.contains(&first.as_str()) {
+        return Err(ConfigError::Refused {
+            key: key.into(),
+            file: settings_layer_file(home, workspace, project, layer, extension),
+            why: UNKNOWN_SETTING,
+        });
+    }
+    if declared.placeholders.contains_key(first) && relative.len() > 1 {
+        return Err(ConfigError::Refused {
+            key: key.into(),
+            file: settings_layer_file(home, workspace, project, layer, extension),
+            why: PLACEHOLDER_DESCENDANT,
+        });
+    }
+    if declared.placeholders.contains_key(first)
+        && relative.len() == 1
+        && !matches!(&value, Value::String(text) if host_shape(text).is_some())
+    {
+        return Err(ConfigError::Refused {
+            key: key.into(),
+            file: settings_layer_file(home, workspace, project, layer, extension),
+            why: NOT_A_HOST,
+        });
+    }
+    let file = settings_layer_file(home, workspace, project, layer, extension);
+    set_settings_file(&file, relative, value)?;
+    Ok(file)
+}
+
+/// The settings file `layer` writes for `extension`: `config/<slug>.json`
+/// under Fiber home, the workspace's `.fiber/`, or the project.
+fn settings_layer_file(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    layer: Layer,
+    extension: &str,
+) -> PathBuf {
+    match layer {
+        Layer::Global => settings_file(home, extension),
+        Layer::Project => settings_file(&home.join("projects").join(project.as_str()), extension),
+        Layer::Repository => settings_file(&workspace.join(".fiber"), extension),
+    }
+}
+
+/// Writes one extension's settings key for the repository layer only,
+/// against the caller-resolved approved-or-installed directory: the
+/// approved copy wins, the personal install is the fallback, and neither
+/// means uninstalled and refused by the caller. Holds the same gates in
+/// the same order as the global and project path. Never resolves a
+/// directory itself.
+///
+/// Returns the settings file it wrote: `.fiber/config/<slug>.json`.
+pub fn set_repo_extension_setting(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    extension_dir: &Path,
+    key: &str,
+    value: Value,
+) -> Result<PathBuf, ConfigError> {
+    let Some((extension, relative)) = settings_key(key) else {
+        return Err(ConfigError::Override { arg: key.into() });
+    };
+    set_extension_setting(
+        home,
+        workspace,
+        project,
+        Layer::Repository,
+        key,
+        &extension,
+        &relative,
+        value,
+        Some(extension_dir),
+    )
+}
+
+/// Reads the settings file under its lock, sets one relative key and
+/// writes the whole file back. A concurrent write that replaced the whole
+/// document with a non-object shape fails with the `top_level` shape
+/// error, leaving the file byte-identical.
+fn set_settings_file(file: &Path, relative: &[String], value: Value) -> Result<(), ConfigError> {
+    let _lock = locked(file)?;
+    let mut root = match read(file)? {
+        None => Value::Object(Map::new()),
+        Some(Value::Object(map)) => Value::Object(map),
+        Some(_) => return Err(crate::top_level(&file.display().to_string())),
+    };
+    path::set(&mut root, relative, value);
+    write_root(file, &root)?;
+    Ok(())
 }
 
 /// One change to a list of names in one layer's file (`/tools`, `/skills`).
