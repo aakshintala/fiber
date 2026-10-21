@@ -20,6 +20,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use support::repo_provider::{declare_repo_provider, git_init};
 use support::write_record;
 
 use fakes::Watchdog;
@@ -713,37 +714,6 @@ fn models_leaves_out_a_model_whose_base_url_is_not_listed() {
     assert!(run.stdout.contains("fake/m"), "stdout: {}", run.stdout);
     assert!(!run.stdout.contains("fake/n"), "stdout: {}", run.stdout);
     assert!(run.stderr.contains("fake/n"), "stderr: {}", run.stderr);
-}
-
-/// Inits git in `workspace`, so it reads as a project repository.
-#[track_caller]
-fn git_init(workspace: &Path) {
-    fakes::git::git(workspace, &["init", "--quiet"]);
-}
-
-/// Declares the repository extension package `repo` registering the data
-/// provider `provider` serving `models`, and lists it under
-/// `repository_extensions`.
-#[track_caller]
-fn declare_repo_provider(workspace: &Path, name: &str, provider: &str, models: &Value) {
-    let dir = workspace.join("repo");
-    fs::create_dir_all(dir.join("providers")).unwrap();
-    fs::write(
-        dir.join("extension.json"),
-        json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
-               "providers": {provider: ["http://127.0.0.1:9/v1"]}})
-        .to_string(),
-    )
-    .unwrap();
-    fs::write(
-        dir.join("providers").join(format!("{provider}.json")),
-        json!({"name": provider, "models": models}).to_string(),
-    )
-    .unwrap();
-    write(
-        &workspace.join(".fiber/config.json"),
-        &json!({"repository_extensions": [{"path": "repo"}]}),
-    );
 }
 
 /// Runs `fiber` with `args` in `dir`: [`Setup::fiber`] anywhere but the

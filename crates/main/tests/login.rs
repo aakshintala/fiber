@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use support::repo_provider::{declare_repo_provider, git_init};
 use support::write_record;
 
 use fakes::{ProviderServer, Response, Watchdog};
@@ -1653,49 +1654,17 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
     );
 }
 
-/// Inits git in `workspace`, so it reads as a project repository.
-#[track_caller]
-fn git_init(workspace: &Path) {
-    fakes::git::git(workspace, &["init", "--quiet"]);
-}
-
-/// Declares the repository extension package `repo` registering the data
-/// provider `name` serving one model, and lists it under
-/// `repository_extensions`.
-#[track_caller]
-fn declare_repo_provider(workspace: &Path, name: &str) {
-    let dir = workspace.join("repo");
-    fs::create_dir_all(dir.join("providers")).unwrap();
-    fs::write(
-        dir.join("extension.json"),
-        json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
-               "providers": {"acme": ["http://127.0.0.1:9/v1"]}})
-        .to_string(),
-    )
-    .unwrap();
-    fs::write(
-        dir.join("providers").join("acme.json"),
-        json!({"name": "acme", "models": [
-            {"id": "m", "protocol": "openai-responses",
-             "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-        ]})
-        .to_string(),
-    )
-    .unwrap();
-    let file = workspace.join(".fiber/config.json");
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(
-        file,
-        json!({"repository_extensions": [{"path": "repo"}]}).to_string(),
-    )
-    .unwrap();
-}
-
 #[test]
 fn login_stores_a_key_for_an_approved_repository_provider() {
     let setup = Setup::new_with_fl_root();
     git_init(&setup.workspace());
-    declare_repo_provider(&setup.workspace(), "fiber.test/acme");
+    declare_repo_provider(
+        &setup.workspace(),
+        "fiber.test/acme",
+        "acme",
+        &json!([{"id": "m", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]),
+    );
     let approved = setup.run_with_input(&["approve", "--yes"], "");
     assert_eq!(approved.code, Some(0), "{}", approved.stderr);
     let login = setup.run_with_input(&["login", "acme"], &format!("{KEY}\n"));
@@ -1712,7 +1681,13 @@ fn login_stores_a_key_for_an_approved_repository_provider() {
 fn login_outside_the_project_finds_no_repository_provider() {
     let setup = Setup::new_with_fl_root();
     git_init(&setup.workspace());
-    declare_repo_provider(&setup.workspace(), "fiber.test/acme");
+    declare_repo_provider(
+        &setup.workspace(),
+        "fiber.test/acme",
+        "acme",
+        &json!([{"id": "m", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]),
+    );
     let approved = setup.run_with_input(&["approve", "--yes"], "");
     assert_eq!(approved.code, Some(0), "{}", approved.stderr);
     let outside = fakes::TempDir::new("fl-outside");

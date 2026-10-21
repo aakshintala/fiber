@@ -8,7 +8,9 @@
     reason = "test code; a failure is the test's"
 )]
 
-use crate::test_support::write_record;
+use crate::test_support::{
+    approve_repo, declare_repo, never_repo, repo_data, repo_manifest, write_record,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -1405,92 +1407,7 @@ fn providers_and_config_reads_the_same_providers_run_lists() {
     );
 }
 
-impl Setup {
-    /// Inits git in the workspace and declares these repository extension
-    /// packages, so the workspace reads as a project repository shipping
-    /// them.
-    fn declare_repo(&self, pkgs: &[RepoPkg<'_>]) {
-        fakes::git::git(&self.workspace(), &["init", "--quiet"]);
-        let mut paths = Vec::new();
-        for (dir, manifest, files) in pkgs {
-            paths.push(json!({"path": dir}));
-            fs::create_dir_all(self.workspace().join(dir)).unwrap();
-            fs::write(
-                self.workspace().join(dir).join("extension.json"),
-                manifest.to_string(),
-            )
-            .unwrap();
-            for (file, text) in files.iter() {
-                let path = self.workspace().join(dir).join(file);
-                fs::create_dir_all(path.parent().unwrap()).unwrap();
-                fs::write(&path, text).unwrap();
-            }
-        }
-        let config_dir = self.workspace().join(".fiber");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(
-            config_dir.join("config.json"),
-            json!({"repository_extensions": paths}).to_string(),
-        )
-        .unwrap();
-    }
-
-    /// Approves the declared extension `name` for the workspace's project.
-    fn approve_repo(&self, name: &str) {
-        let clock = fakes::clock::FakeClock::new();
-        let (_, project) = crate::project_of(&self.home(), &self.workspace()).unwrap();
-        let items = extensions::declared_items(&self.workspace(), &*clock).unwrap();
-        let item = items.into_iter().find(|found| found.name == name).unwrap();
-        let mut index = extensions::Index::load(&self.home());
-        let digest = extensions::hash(&mut index, &item).unwrap();
-        extensions::Store::new(&self.home(), &project, clock)
-            .approve(&item, &digest)
-            .unwrap();
-    }
-
-    /// Records never for the declared extension `name`: a skip that holds
-    /// until its content changes.
-    fn never_repo(&self, name: &str) {
-        let clock = fakes::clock::FakeClock::new();
-        let (_, project) = crate::project_of(&self.home(), &self.workspace()).unwrap();
-        let items = extensions::declared_items(&self.workspace(), &*clock).unwrap();
-        let item = items.into_iter().find(|found| found.name == name).unwrap();
-        let mut index = extensions::Index::load(&self.home());
-        let digest = extensions::hash(&mut index, &item).unwrap();
-        extensions::Store::new(&self.home(), &project, clock)
-            .never(&item, &digest)
-            .unwrap();
-    }
-}
-
-/// One repository package the tests declare: its dir, its manifest and
-/// its files, each `(path, text)`.
-type RepoPkg<'a> = (&'a str, Value, &'a [(&'a str, &'a str)]);
-
-/// The manifest of the repository extension `name` registering `providers`:
-/// each provider name to its models' distinct base URLs.
-fn repo_manifest(name: &str, providers: &Value) -> Value {
-    let mut manifest = json!({
-        "name": name,
-        "version": "v1.0.0",
-        "fiber": "0.0.0",
-        "api": extensions::API,
-    });
-    manifest["providers"] = providers.clone();
-    manifest
-}
-
-/// The data file of the provider `name` serving these model ids.
-fn repo_data(name: &str, ids: &[&str]) -> String {
-    let models: Vec<Value> = ids
-        .iter()
-        .map(|id| {
-            json!({"id": id, "protocol": "openai-responses",
-                   "base_url": "http://127.0.0.1:1/v1", "context_window": 1000})
-        })
-        .collect();
-    json!({"name": name, "models": models}).to_string()
-}
+impl Setup {}
 
 /// The `providers/<name>.lua` script registering `name` with a credential
 /// and this `models()` body.
@@ -1510,9 +1427,12 @@ fn repository_provider_models_list_inside_the_project_but_not_outside() {
             "fiber.test/acme",
             &json!({"acme": ["http://127.0.0.1:1/v1"]}),
         );
-        let data = repo_data("acme", &["repo-model"]);
-        setup.declare_repo(&[("repo", manifest, &[("providers/acme.json", data.as_str())])]);
-        setup.approve_repo("fiber.test/acme");
+        let data = repo_data("acme", "http://127.0.0.1:1/v1", &["repo-model"]);
+        declare_repo(
+            &setup.workspace(),
+            &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
+        );
+        approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
         let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
         assert!(result.is_ok(), "{result:?} {err}");
         assert!(out.contains("acme/repo-model"), "{out:?}");
@@ -1546,8 +1466,11 @@ fn repository_lua_provider_models_run_without_a_cached_list() {
             "{ { id = \"live-model\", protocol = \"openai-responses\", \
              base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 } }",
         );
-        setup.declare_repo(&[("repo", manifest, &[("providers/acme.lua", script.as_str())])]);
-        setup.approve_repo("fiber.test/acme");
+        declare_repo(
+            &setup.workspace(),
+            &[("repo", manifest, &[("providers/acme.lua", script.as_str())])],
+        );
+        approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
         // No cached list: the one-shot run serves the Lua `models()`.
         assert!(
             !setup.home().join("cache/models/acme.json").exists(),
@@ -1581,7 +1504,7 @@ fn unapproved_and_never_repository_providers_never_load() {
                 "fiber.test/ghost",
                 &json!({"ghost": ["http://127.0.0.1:1/v1"]}),
             );
-            let ghost_data = repo_data("ghost", &["ghost-model"]);
+            let ghost_data = repo_data("ghost", "http://127.0.0.1:1/v1", &["ghost-model"]);
             let boom = repo_manifest(
                 "fiber.test/boom",
                 &json!({"boom": ["http://127.0.0.1:1/v1"]}),
@@ -1589,15 +1512,18 @@ fn unapproved_and_never_repository_providers_never_load() {
             // A `models()` that fails loudly: if it ever ran, its text would
             // print as a notice.
             let script = repo_lua("boom", "error(\"repoboom\")");
-            setup.declare_repo(&[
-                (
-                    "ghost",
-                    ghost,
-                    &[("providers/ghost.json", ghost_data.as_str())],
-                ),
-                ("boom", boom, &[("providers/boom.lua", script.as_str())]),
-            ]);
-            setup.never_repo("fiber.test/ghost");
+            declare_repo(
+                &setup.workspace(),
+                &[
+                    (
+                        "ghost",
+                        ghost,
+                        &[("providers/ghost.json", ghost_data.as_str())],
+                    ),
+                    ("boom", boom, &[("providers/boom.lua", script.as_str())]),
+                ],
+            );
+            never_repo(&setup.home(), &setup.workspace(), "fiber.test/ghost");
             let (result, out, err) =
                 setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
             assert!(result.is_ok(), "{result:?} {err}");
@@ -1623,9 +1549,12 @@ fn a_shadowed_personal_provider_prints_one_notice() {
                      "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
             );
             let manifest = repo_manifest("acme", &json!({"acme": ["http://127.0.0.1:1/v1"]}));
-            let data = repo_data("acme", &["repo-model"]);
-            setup.declare_repo(&[("repo", manifest, &[("providers/acme.json", data.as_str())])]);
-            setup.approve_repo("acme");
+            let data = repo_data("acme", "http://127.0.0.1:1/v1", &["repo-model"]);
+            declare_repo(
+                &setup.workspace(),
+                &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
+            );
+            approve_repo(&setup.home(), &setup.workspace(), "acme");
             let (result, out, err) =
                 setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
             assert!(result.is_ok(), "{result:?} {err}");

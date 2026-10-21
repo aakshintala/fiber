@@ -8,7 +8,9 @@
     reason = "test code; a failure is the test's"
 )]
 
-use crate::test_support::write_record;
+use crate::test_support::{
+    approve_repo, declare_repo, never_repo, repo_data, repo_manifest, write_record,
+};
 use std::fs;
 use std::io::{self, BufRead, Cursor, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -1550,65 +1552,6 @@ fn dropping_the_sig_guard_restores_sigint_handling() {
 }
 
 impl Setup {
-    /// Inits git in the workspace and declares these repository extension
-    /// packages, so the workspace reads as a project repository shipping
-    /// them.
-    fn declare_repo(&self, pkgs: &[RepoPkg<'_>]) {
-        let workspace = self.root.path().join("workspace");
-        fakes::git::git(&workspace, &["init", "--quiet"]);
-        let mut paths = Vec::new();
-        for (dir, manifest, files) in pkgs {
-            paths.push(json!({"path": dir}));
-            fs::create_dir_all(workspace.join(dir)).unwrap();
-            fs::write(
-                workspace.join(dir).join("extension.json"),
-                manifest.to_string(),
-            )
-            .unwrap();
-            for (file, text) in files.iter() {
-                let path = workspace.join(dir).join(file);
-                fs::create_dir_all(path.parent().unwrap()).unwrap();
-                fs::write(&path, text).unwrap();
-            }
-        }
-        let config_dir = workspace.join(".fiber");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(
-            config_dir.join("config.json"),
-            json!({"repository_extensions": paths}).to_string(),
-        )
-        .unwrap();
-    }
-
-    /// Approves the declared extension `name` for the workspace's project.
-    fn approve_repo(&self, name: &str) {
-        let clock = fakes::clock::FakeClock::new();
-        let workspace = self.root.path().join("workspace");
-        let (_, project) = crate::project_of(&self.home(), &workspace).unwrap();
-        let items = extensions::declared_items(&workspace, &*clock).unwrap();
-        let item = items.into_iter().find(|found| found.name == name).unwrap();
-        let mut index = extensions::Index::load(&self.home());
-        let digest = extensions::hash(&mut index, &item).unwrap();
-        extensions::Store::new(&self.home(), &project, clock)
-            .approve(&item, &digest)
-            .unwrap();
-    }
-
-    /// Records never for the declared extension `name`: a skip that holds
-    /// until its content changes.
-    fn never_repo(&self, name: &str) {
-        let clock = fakes::clock::FakeClock::new();
-        let workspace = self.root.path().join("workspace");
-        let (_, project) = crate::project_of(&self.home(), &workspace).unwrap();
-        let items = extensions::declared_items(&workspace, &*clock).unwrap();
-        let item = items.into_iter().find(|found| found.name == name).unwrap();
-        let mut index = extensions::Index::load(&self.home());
-        let digest = extensions::hash(&mut index, &item).unwrap();
-        extensions::Store::new(&self.home(), &project, clock)
-            .never(&item, &digest)
-            .unwrap();
-    }
-
     /// The installed providers merged with `workspace`'s approved
     /// repository set, as `fiber login` reads them there.
     fn workspace_providers(&self, workspace: &Path) -> Providers {
@@ -1621,37 +1564,20 @@ impl Setup {
     }
 }
 
-/// One repository package the tests declare: its dir, its manifest and
-/// its files, each `(path, text)`.
-type RepoPkg<'a> = (&'a str, Value, &'a [(&'a str, &'a str)]);
-
-/// The manifest of the repository extension `name` registering `provider`.
-fn repo_manifest(name: &str, provider: &str) -> Value {
-    let mut manifest = json!({
-        "name": name,
-        "version": "v1.0.0",
-        "fiber": "0.0.0",
-        "api": extensions::API,
-    });
-    manifest["providers"] = json!({provider: ["http://x/v1"]});
-    manifest
-}
-
-/// The data file of the key-login provider `name`.
-fn repo_data(name: &str) -> String {
-    json!({"name": name, "models": [
-        {"id": "m", "protocol": "openai-responses", "base_url": "http://x/v1", "context_window": 1000},
-    ]})
-    .to_string()
-}
-
 #[test]
 fn login_targets_finds_a_repository_provider_inside_the_project_but_not_outside() {
     let setup = Setup::new();
-    let manifest = repo_manifest("fiber.test/acme", "acme");
-    let data = repo_data("acme");
-    setup.declare_repo(&[("repo", manifest, &[("providers/acme.json", data.as_str())])]);
-    setup.approve_repo("fiber.test/acme");
+    let manifest = repo_manifest("fiber.test/acme", &json!({"acme": ["http://x/v1"]}));
+    let data = repo_data("acme", "http://x/v1", &["m"]);
+    declare_repo(
+        &setup.root.path().join("workspace"),
+        &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
+    );
+    approve_repo(
+        &setup.home(),
+        &setup.root.path().join("workspace"),
+        "fiber.test/acme",
+    );
     let workspace = setup.root.path().join("workspace");
     let inside = targets(&setup.workspace_providers(&workspace));
     assert!(
@@ -1677,10 +1603,17 @@ fn login_targets_finds_a_repository_provider_inside_the_project_but_not_outside(
 #[test]
 fn login_store_stores_a_key_for_a_repository_provider() {
     let setup = Setup::new();
-    let manifest = repo_manifest("fiber.test/acme", "acme");
-    let data = repo_data("acme");
-    setup.declare_repo(&[("repo", manifest, &[("providers/acme.json", data.as_str())])]);
-    setup.approve_repo("fiber.test/acme");
+    let manifest = repo_manifest("fiber.test/acme", &json!({"acme": ["http://x/v1"]}));
+    let data = repo_data("acme", "http://x/v1", &["m"]);
+    declare_repo(
+        &setup.root.path().join("workspace"),
+        &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
+    );
+    approve_repo(
+        &setup.home(),
+        &setup.root.path().join("workspace"),
+        "fiber.test/acme",
+    );
     let workspace = setup.root.path().join("workspace");
     let providers = setup.workspace_providers(&workspace);
     let stored = store(&setup.home(), &providers, "acme", None, |_| {
@@ -1695,23 +1628,30 @@ fn login_store_stores_a_key_for_a_repository_provider() {
 #[test]
 fn unapproved_and_never_repository_names_never_log_in() {
     let setup = Setup::new();
-    let ghost = repo_manifest("fiber.test/ghost", "ghost");
-    let ghost_data = repo_data("ghost");
-    let sketchy = repo_manifest("fiber.test/sketchy", "sketchy");
-    let sketchy_data = repo_data("sketchy");
-    setup.declare_repo(&[
-        (
-            "ghost",
-            ghost,
-            &[("providers/ghost.json", ghost_data.as_str())],
-        ),
-        (
-            "sketchy",
-            sketchy,
-            &[("providers/sketchy.json", sketchy_data.as_str())],
-        ),
-    ]);
-    setup.never_repo("fiber.test/ghost");
+    let ghost = repo_manifest("fiber.test/ghost", &json!({"ghost": ["http://x/v1"]}));
+    let ghost_data = repo_data("ghost", "http://x/v1", &["m"]);
+    let sketchy = repo_manifest("fiber.test/sketchy", &json!({"sketchy": ["http://x/v1"]}));
+    let sketchy_data = repo_data("sketchy", "http://x/v1", &["m"]);
+    declare_repo(
+        &setup.root.path().join("workspace"),
+        &[
+            (
+                "ghost",
+                ghost,
+                &[("providers/ghost.json", ghost_data.as_str())],
+            ),
+            (
+                "sketchy",
+                sketchy,
+                &[("providers/sketchy.json", sketchy_data.as_str())],
+            ),
+        ],
+    );
+    never_repo(
+        &setup.home(),
+        &setup.root.path().join("workspace"),
+        "fiber.test/ghost",
+    );
     let workspace = setup.root.path().join("workspace");
     let providers = setup.workspace_providers(&workspace);
     for name in ["ghost", "sketchy"] {

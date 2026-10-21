@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
-use crate::test_support::write_record;
+use crate::test_support::{approve_repo, declare_repo, repo_data, repo_manifest, write_record};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -853,79 +853,21 @@ impl Setup {
             String::from_utf8(err).unwrap(),
         )
     }
-
-    /// Inits git in the workspace and declares these repository extension
-    /// packages, so the workspace reads as a project repository shipping
-    /// them.
-    fn declare_repo(&self, pkgs: &[RepoPkg<'_>]) {
-        fakes::git::git(&self.workspace(), &["init", "--quiet"]);
-        let mut paths = Vec::new();
-        for (dir, manifest, files) in pkgs {
-            paths.push(json!({"path": dir}));
-            fs::create_dir_all(self.workspace().join(dir)).unwrap();
-            fs::write(
-                self.workspace().join(dir).join("extension.json"),
-                manifest.to_string(),
-            )
-            .unwrap();
-            for (file, text) in files.iter() {
-                let path = self.workspace().join(dir).join(file);
-                fs::create_dir_all(path.parent().unwrap()).unwrap();
-                fs::write(&path, text).unwrap();
-            }
-        }
-        let config_dir = self.workspace().join(".fiber");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(
-            config_dir.join("config.json"),
-            json!({"repository_extensions": paths}).to_string(),
-        )
-        .unwrap();
-    }
-
-    /// Approves the declared extension `name` for the workspace's project.
-    fn approve_repo(&self, name: &str) {
-        let clock = fakes::clock::FakeClock::new();
-        let (_, project) = crate::project_of(&self.home(), &self.workspace()).unwrap();
-        let items = extensions::declared_items(&self.workspace(), &*clock).unwrap();
-        let item = items.into_iter().find(|found| found.name == name).unwrap();
-        let mut index = extensions::Index::load(&self.home());
-        let digest = extensions::hash(&mut index, &item).unwrap();
-        extensions::Store::new(&self.home(), &project, clock)
-            .approve(&item, &digest)
-            .unwrap();
-    }
-}
-
-/// One repository package the tests declare: its dir, its manifest and
-/// its files, each `(path, text)`.
-type RepoPkg<'a> = (&'a str, serde_json::Value, &'a [(&'a str, &'a str)]);
-
-/// The manifest of the repository extension `name` registering `provider`.
-fn repo_manifest(name: &str, provider: &str) -> serde_json::Value {
-    let mut manifest = json!({
-        "name": name,
-        "version": "v1.0.0",
-        "fiber": "0.0.0",
-        "api": extensions::API,
-    });
-    manifest["providers"] = json!({provider: ["http://127.0.0.1:1/v1"]});
-    manifest
-}
-
-/// The data file of the provider `name` serving these model ids.
-fn repo_data(name: &str, ids: &[&str]) -> String {
-    let models: Vec<serde_json::Value> = ids.iter().map(|id| model(id)).collect();
-    json!({"name": name, "models": models}).to_string()
 }
 
 #[test]
 fn set_model_checks_against_repository_models() {
     let setup = Setup::new();
-    let manifest = repo_manifest("fiber.test/acme", "acme");
-    let data = repo_data("acme", &["repo-model"]);
-    setup.declare_repo(&[("repo", manifest, &[("providers/acme.json", data.as_str())])]);
-    setup.approve_repo("fiber.test/acme");
+    let manifest = repo_manifest(
+        "fiber.test/acme",
+        &json!({"acme": ["http://127.0.0.1:1/v1"]}),
+    );
+    let data = repo_data("acme", "http://127.0.0.1:1/v1", &["repo-model"]);
+    declare_repo(
+        &setup.workspace(),
+        &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
+    );
+    approve_repo(&setup.home(), &setup.workspace(), "fiber.test/acme");
     // A repository-only model is accepted, as an installed one is.
     setup
         .set(Layer::Global, "model", "acme/repo-model")
@@ -945,10 +887,13 @@ fn set_model_checks_against_repository_models() {
 fn set_model_rejects_a_model_only_the_shadowed_install_serves() {
     let setup = Setup::new();
     install(&setup.home(), "acme", "acme", &models(&["personal-model"]));
-    let manifest = repo_manifest("acme", "acme");
-    let data = repo_data("acme", &["repo-model"]);
-    setup.declare_repo(&[("repo", manifest, &[("providers/acme.json", data.as_str())])]);
-    setup.approve_repo("acme");
+    let manifest = repo_manifest("acme", &json!({"acme": ["http://127.0.0.1:1/v1"]}));
+    let data = repo_data("acme", "http://127.0.0.1:1/v1", &["repo-model"]);
+    declare_repo(
+        &setup.workspace(),
+        &[("repo", manifest, &[("providers/acme.json", data.as_str())])],
+    );
+    approve_repo(&setup.home(), &setup.workspace(), "acme");
     // The repository copy wins: its model sets, the shadowed install's
     // model no longer names anything installed.
     setup

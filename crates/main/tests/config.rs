@@ -18,6 +18,7 @@ use std::thread;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
+use support::repo_provider::declare_repo_provider;
 use support::{
     Deadline, KillGroup, Output, Setup, group_alive, hello, is_status, run_to_exit, spawn_watched,
 };
@@ -290,44 +291,18 @@ fn a_repository_role_without_a_credential_raises_no_notice() {
     );
 }
 
-/// Declares the repository extension package `repo` registering the data
-/// provider `acme` serving `big`, and lists it under
-/// `repository_extensions`.
-#[track_caller]
-fn declare_repo_provider(workspace: &std::path::Path) {
-    let dir = workspace.join("repo");
-    fs::create_dir_all(dir.join("providers")).unwrap();
-    fs::write(
-        dir.join("extension.json"),
-        json!({"name": "fiber.test/acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
-               "providers": {"acme": ["http://127.0.0.1:9/v1"]}})
-        .to_string(),
-    )
-    .unwrap();
-    fs::write(
-        dir.join("providers").join("acme.json"),
-        json!({"name": "acme", "models": [
-            {"id": "big", "protocol": "openai-responses",
-             "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-        ]})
-        .to_string(),
-    )
-    .unwrap();
-    let file = workspace.join(".fiber/config.json");
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(
-        file,
-        json!({"repository_extensions": [{"path": "repo"}]}).to_string(),
-    )
-    .unwrap();
-}
-
 #[test]
 fn set_model_checks_against_an_approved_repository_provider() {
     let setup = Setup::new_with_fc_root();
     // Inits git in the workspace, so it reads as a project repository.
     fakes::git::git(&setup.workspace(), &["init", "--quiet"]);
-    declare_repo_provider(&setup.workspace());
+    declare_repo_provider(
+        &setup.workspace(),
+        "fiber.test/acme",
+        "acme",
+        &json!([{"id": "big", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]),
+    );
     let approved = setup.run_in_workspace(&["approve", "--yes"]);
     assert_eq!(
         approved.code,
