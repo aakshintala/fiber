@@ -15,7 +15,10 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock as _;
-use contract::events::{DelegateFinished, ExtensionLog, JobCompleted, JobLine, Outcome};
+use contract::events::{
+    DelegateFinished, DelegateStarted, Event, ExtensionLog, JobCompleted, JobLine, JobStarted,
+    Outcome,
+};
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::shapes::{ContentPart, Origin, Sender as From, Tokens, Usage};
@@ -548,6 +551,196 @@ fn a_normal_end_does_not_wait_again_for_an_end_drained_after_its_running_snapsho
             assert_eq!(lines.last().unwrap().payload["status"], "cancelled");
         }
     }
+}
+
+#[test]
+fn a_normal_end_releases_running_extension_jobs_before_its_first_drain() {
+    let (jobs, stops) = Listed::new(&["j_1", "j_2"]);
+    let hooks = Arc::new(CountingHooks::default());
+    let mut world = World::new(jobs.clone()).hooked(Arc::clone(&hooks));
+    // `j_0` ended before the end: owned but not running, so never released.
+    for id in ["j_0", "j_1", "j_2"] {
+        world
+            .looped
+            .write(
+                &Event::JobStarted(JobStarted {
+                    job_id: JobId(id.into()),
+                    tool: None,
+                    extension: Some("test/scan".into()),
+                    description: "scan".into(),
+                    output_path: "/child/events.jsonl".into(),
+                }),
+                None,
+                None,
+            )
+            .unwrap();
+    }
+    // The running jobs' outputs are other sessions' logs: the end path
+    // skips its `output_file` pass instead of opening `/child`.
+    for id in ["j_1", "j_2"] {
+        world
+            .looped
+            .write(
+                &Event::DelegateStarted(DelegateStarted {
+                    job_id: JobId(id.into()),
+                    delegate_session_id: SessionId("s_child".into()),
+                    harness: "fiber".into(),
+                    model: "fake/model".into(),
+                    workspace: "/w".into(),
+                    worktree: None,
+                    forked_from: None,
+                }),
+                None,
+                None,
+            )
+            .unwrap();
+    }
+    let (released_tx, released_rx) = mpsc::channel();
+    let (proceed_tx, proceed_rx) = mpsc::channel();
+    let proceed_rx = Mutex::new(proceed_rx);
+    // The release parks the settled thread: while parked, no drain delivery
+    // can have run and no stop can have been sent, so the release's place
+    // at the top of the branch is structural, not raced.
+    world.looped = world.looped.released(Arc::new(move |ids: &[JobId]| {
+        let _sent = released_tx.send(ids.to_vec());
+        let _go = proceed_rx.lock().unwrap().recv();
+    }));
+    // The drain waits on the running snapshot: the release has not fired.
+    let (reached, snapshot) = mpsc::channel();
+    let (unblock, unblocked) = mpsc::channel();
+    *jobs.snapshot_pause.lock().unwrap() = Some((reached, unblocked));
+    let (done, finished) = mpsc::channel();
+    let inbox = world.inbox.clone();
+    let held = world.held;
+    thread::spawn(move || {
+        let _sent = done.send(world.looped.settled(Ok(())));
+    });
+    let wait = Deadline::after(DEADLINE);
+    wait.recv_or_fail(&snapshot, "the running snapshot was read");
+    // Queued while the snapshot is withheld: the running read already took
+    // its list, so both ids are still released. The steer is processed by
+    // the first drain, the `j_1` end is dropped by it.
+    let (steer, steered) = answered();
+    inbox
+        .send(Delivery::Steer(message("hello"), steer))
+        .unwrap();
+    jobs.end_delegate("j_1", &inbox, "QUEUED SENTINEL");
+    assert!(
+        released_rx.try_recv().is_err(),
+        "the release waits on the drain"
+    );
+    unblock.send(()).unwrap();
+    // The release fired first, with exactly the still-running owned ids:
+    // installed, and no ended id passed.
+    assert_eq!(
+        wait.recv(&released_rx).expect("the release fired"),
+        vec![JobId("j_1".into()), JobId("j_2".into())]
+    );
+    // While the release parks the settled thread, nothing after it ran.
+    assert!(stops.try_recv().is_err(), "no stop preceded the release");
+    assert!(
+        steered.try_recv().is_err(),
+        "no drain delivery ran before the release"
+    );
+    proceed_tx.send(()).unwrap();
+    // The first drain then processes the steer and drops the `j_1` end.
+    let refusal = wait.recv(&steered).expect("the steer was refused");
+    assert_eq!(refusal.unwrap_err().code, ErrorCode::Closing);
+    // `j_1` already ended: only `j_2` is stopped, once.
+    assert_eq!(stopped(&stops, &wait), "j_2");
+    jobs.end("j_1", &inbox);
+    jobs.end("j_2", &inbox);
+    ran(&finished);
+    assert!(stops.try_recv().is_err(), "no ended job is stopped");
+    // Both real ends are written cancelled; the queued `j_1` end never was.
+    let lines = held.durable();
+    let ends: Vec<_> = lines
+        .iter()
+        .filter(|line| line.kind.as_str() == "job_completed")
+        .collect();
+    assert_eq!(ends.len(), 2);
+    for (end, id) in ends.iter().zip(["j_1", "j_2"]) {
+        assert_eq!(end.payload["job_id"], id);
+        assert_eq!(end.payload["status"], "cancelled");
+        assert!(end.turn_id.is_none() && end.action_id.is_none());
+    }
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.kind.as_str() == "delegate_finished"
+                && line.payload["text"] == "QUEUED SENTINEL"),
+        "the dropped end was never written"
+    );
+    // The dropped end ran no delivery hook; both real ends still ran theirs.
+    assert!(
+        !hooks
+            .contents()
+            .iter()
+            .any(|content| content.contains("QUEUED SENTINEL")),
+        "a dropped end runs no delivery hook"
+    );
+    assert_eq!(
+        hooks.calls(),
+        2,
+        "both real ends still run their delivery hooks"
+    );
+}
+
+#[test]
+fn a_shutdown_writes_a_bound_end_raw_with_no_release() {
+    let (jobs, stops) = Listed::new(&["j_1"]);
+    let mut world = World::new(jobs.clone());
+    world
+        .looped
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId("j_1".into()),
+                tool: None,
+                extension: Some("test/scan".into()),
+                description: "scan".into(),
+                output_path: "/child/events.jsonl".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let (released_tx, released_rx) = mpsc::channel();
+    world.looped = world.looped.released(Arc::new(move |ids: &[JobId]| {
+        let _sent = released_tx.send(ids.to_vec());
+    }));
+    world.cancel.shutdown(143);
+    let (done, finished) = mpsc::channel();
+    let inbox = world.inbox.clone();
+    let held = world.held;
+    thread::spawn(move || {
+        let _sent = done.send(world.looped.settled(Ok(())));
+    });
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(stopped(&stops, &wait), "j_1");
+    jobs.end_delegate("j_1", &inbox, "BOUND SENTINEL");
+    ran(&finished);
+    assert!(
+        released_rx.try_recv().is_err(),
+        "a shutdown releases nothing"
+    );
+    let lines = held.durable();
+    assert_eq!(
+        held.kinds(),
+        [
+            "session_started",
+            "job_started",
+            "delegate_finished",
+            "job_completed"
+        ]
+    );
+    assert_eq!(lines[2].payload["text"], "BOUND SENTINEL");
+    assert_eq!(lines[3].payload["job_id"], "j_1");
+    assert_eq!(lines[3].payload["status"], "cancelled");
+    assert!(
+        lines[2..]
+            .iter()
+            .all(|line| line.turn_id.is_none() && line.action_id.is_none())
+    );
 }
 
 #[test]
@@ -1619,6 +1812,9 @@ struct CountingHooks {
     redact: bool,
     waits: AtomicUsize,
     barrier: Mutex<Option<RunBarrier>>,
+    /// Every `after_tool` call's content, in order: a dropped end runs no
+    /// delivery hook, so its content never appears here.
+    contents: Mutex<Vec<String>>,
 }
 
 struct RunBarrier {
@@ -1630,6 +1826,10 @@ struct RunBarrier {
 impl CountingHooks {
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    fn contents(&self) -> Vec<String> {
+        self.contents.lock().unwrap().clone()
     }
 }
 
@@ -1656,8 +1856,12 @@ impl contract::hook::Hooks for CountingHooks {
         }
     }
 
-    fn after_tool(&self, _: &contract::hook::AfterToolCall<'_>) -> contract::hook::AfterToolAnswer {
+    fn after_tool(
+        &self,
+        call: &contract::hook::AfterToolCall<'_>,
+    ) -> contract::hook::AfterToolAnswer {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.contents.lock().unwrap().push(call.content.to_owned());
         contract::hook::AfterToolAnswer {
             outcome: if self.redact {
                 contract::hook::AfterToolOutcome::Changed {
