@@ -2242,3 +2242,57 @@ fn commit_declares_mcp_resources_only_when_a_slot_offers_them() {
         setup.stop(started.servers);
     }
 }
+
+#[test]
+fn classify_starts_a_lazy_slot_and_commit_swaps_it_for_a_live_one() {
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    let spec = setup.spec("fx");
+    let images = FakeImages::ok();
+    // The first start writes the cache; stopping it leaves the cache
+    // behind, so the second start declares from the cache without
+    // spawning: the slot never serves.
+    let first = setup.start_with_images(vec![spec.clone()], Arc::clone(&images));
+    let pid = setup.pid();
+    setup.stop(first.servers);
+    assert!(fakes::pids_exit(&[pid], WITHIN));
+    let started = setup.start_with_images(vec![spec.clone()], Arc::clone(&images));
+    assert_eq!(setup.pid(), pid, "the lazy start spawns nothing");
+    let slot = started
+        .servers
+        .slot("fx")
+        .expect("the lazy slot is adopted");
+    assert!(!slot.is_running());
+    assert!(!slot.is_live());
+    let rows = classify_sync(vec![spec], &started.servers);
+    assert!(matches!(rows.as_slice(), [SyncRow::Start { .. }]));
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = fakes::Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a fresh start stages");
+    let synced = commit_sync(
+        staged,
+        &servers,
+        &setup.cache(),
+        &setup.artifacts(),
+        &every(&images),
+    );
+    assert_eq!(synced.started, ["fx".to_owned()]);
+    assert!(
+        matches!(synced.records.as_slice(), [ServerRecord::Ready(_)]),
+        "a fresh start reads ready, not failed"
+    );
+    let echo = synced
+        .tools
+        .iter()
+        .find(|(_, _, info)| info.name == "mcp__fx__echo")
+        .expect("the new server is declared");
+    assert!(setup.run(&echo.1).error.is_none());
+    assert!(
+        servers.slot("fx").is_some_and(|slot| slot.is_live()),
+        "the commit swapped the lazy slot for a live one"
+    );
+    setup.stop(servers);
+}

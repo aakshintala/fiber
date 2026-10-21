@@ -93,6 +93,19 @@ pub struct ReloadPrepared {
     pub notices: Vec<Notice>,
     /// Names of the running MCP servers.
     pub servers: Vec<String>,
+    /// The reload's server sync, in `reloaded` order: kept as they were.
+    pub kept_servers: Vec<String>,
+    /// The reload's server sync: restarted beside the old servers.
+    pub restarted_servers: Vec<String>,
+    /// The reload's server sync: started fresh, with no old server.
+    pub started_servers: Vec<String>,
+    /// The reload's server sync: stopped and undeclared.
+    pub stopped_servers: Vec<String>,
+    /// The `mcp_server_failed`/`mcp_server_ready` lines in sync order,
+    /// written before `reloaded`.
+    pub server_records: Vec<contract::tool::ServerRecord>,
+    /// Each non-required server failure, for `reloaded`'s `failed` entry.
+    pub server_failures: Vec<contract::events::ReloadFailure>,
     /// Hooks over the session's one extension state registry.
     pub hooks: Option<Arc<dyn Hooks>>,
     /// The reviewer for the session's current model.

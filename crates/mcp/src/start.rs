@@ -545,9 +545,12 @@ pub enum SyncRow {
 /// Classifies the person's new specs against the live slots, required
 /// operations first (program order on the prepare thread is the edge),
 /// each partition in new-spec order, removals last in slot-list order.
-/// A key mismatch, a `startup_timeout`/`call_timeout`/`required`
-/// difference, or a slot that is not running takes the replace path;
-/// any other difference rebuilds at declare time with no restart.
+/// A key mismatch or a `startup_timeout`/`call_timeout`/`required`
+/// difference takes the replace path; a running slot with a matching
+/// key and timeouts keeps; a running slot that died or expired replaces;
+/// a slot that never serves (`NotStarted`, `Down`, `Dead`) and a name
+/// with no slot start fresh. Any other difference rebuilds at declare
+/// time with no restart.
 pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncRow> {
     let slots = servers
         .slots
@@ -570,18 +573,25 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
             Some(slot) => {
                 let old = slot.spec();
                 // A lazy slot never answers a reload: force a real start.
-                // A dead or expired slot never keeps: the re-list would
-                // only fall back, so the row replaces. `NotStarted` and
-                // the dead states read false through `is_live` below.
+                // A changed key or timeouts replace even a slot that never
+                // served: serving in place would run the old spec.
                 if old.key() != spec.key()
                     || old.startup_timeout != spec.startup_timeout
                     || old.call_timeout != spec.call_timeout
                     || old.required != spec.required
-                    || !slot.is_live()
                 {
                     SyncRow::Replace { spec }
-                } else {
+                } else if slot.is_live() {
                     SyncRow::Keep { spec }
+                } else if slot.is_running() {
+                    // Running but gone or expired: it died while idle, so
+                    // the re-list would only fall back; replace beside it.
+                    SyncRow::Replace { spec }
+                } else {
+                    // `NotStarted`, `Down` or `Dead`: nothing serves, so
+                    // the single-spec start runs fresh and the commit
+                    // swaps the leftover slot out.
+                    SyncRow::Start { spec }
                 }
             }
         };
@@ -937,6 +947,10 @@ pub fn commit_sync(
                 ready,
             } => {
                 let name = spec.name.clone();
+                // A fresh start swaps a leftover slot out: a lazy
+                // `NotStarted` or failed slot with the same name never
+                // serves again once the commit installs the new one.
+                servers.remove(&name);
                 servers
                     .slots
                     .lock()

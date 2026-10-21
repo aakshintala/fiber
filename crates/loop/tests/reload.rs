@@ -240,6 +240,12 @@ fn prepared() -> ReloadPrepared {
         }],
         notices: Vec::new(),
         servers: vec!["kept".into()],
+        kept_servers: Vec::new(),
+        restarted_servers: Vec::new(),
+        started_servers: Vec::new(),
+        stopped_servers: Vec::new(),
+        server_records: Vec::new(),
+        server_failures: Vec::new(),
         hooks: None,
         reviewer: Err(contract::shapes::Failure {
             code: ErrorCode::NoModel,

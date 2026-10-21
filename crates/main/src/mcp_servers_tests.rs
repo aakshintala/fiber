@@ -1296,3 +1296,51 @@ fn the_reader_reads_a_stored_secret_and_reports_a_missing_one() {
         mcp::SecretError::Unreadable(_)
     ));
 }
+
+fn reconnect_of(
+    sources: config::Sources,
+    servers: std::sync::Arc<mcp::Servers>,
+) -> r#loop::ReconnectServer {
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let declare: doors::Declare = std::sync::Arc::new(move |_name: &str, _info| {});
+    super::reconnect_server(
+        sources,
+        servers,
+        declare,
+        std::path::PathBuf::from("artifacts"),
+        std::sync::Arc::new(DummyImages),
+        clock,
+    )
+}
+
+#[test]
+fn the_shared_declared_check_rejects_unknown_like_reconnect() {
+    let setup = Setup::new();
+    let sources = sources_of(&setup.rig);
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let declared = super::declared_servers(&sources, &clock).expect("the load reads");
+    assert!(declared.is_empty());
+    let helper = super::approved_row(&declared, "missing").err().unwrap();
+    let reconnect = reconnect_of(sources, empty_servers(&setup.rig, &clock));
+    let through_reconnect = reconnect("missing").err().unwrap();
+    assert_eq!(helper.code, through_reconnect.code);
+    assert_eq!(helper.message, through_reconnect.message);
+    assert_eq!(helper.code, contract::ErrorCode::InvalidArguments);
+}
+
+#[test]
+fn the_shared_declared_check_rejects_unapproved_like_reconnect() {
+    let setup = Setup::new();
+    setup.repository(&json!({"mcp":{"servers":{"repo":{"command":"./srv/run.sh"}}}}));
+    let sources = sources_of(&setup.rig);
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let declared = super::declared_servers(&sources, &clock).expect("the load reads");
+    assert_eq!(declared.len(), 1);
+    assert!(!declared[0].approved);
+    let helper = super::approved_row(&declared, "repo").err().unwrap();
+    let reconnect = reconnect_of(sources, empty_servers(&setup.rig, &clock));
+    let through_reconnect = reconnect("repo").err().unwrap();
+    assert_eq!(helper.code, through_reconnect.code);
+    assert_eq!(helper.message, through_reconnect.message);
+    assert_eq!(helper.code, contract::ErrorCode::McpServerUnapproved);
+}

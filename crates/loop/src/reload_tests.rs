@@ -194,6 +194,12 @@ fn prepared() -> ReloadPrepared {
         extensions: Vec::new(),
         notices: Vec::new(),
         servers: Vec::new(),
+        kept_servers: Vec::new(),
+        restarted_servers: Vec::new(),
+        started_servers: Vec::new(),
+        stopped_servers: Vec::new(),
+        server_records: Vec::new(),
+        server_failures: Vec::new(),
         hooks: None,
         reviewer: Err(Failure {
             code: ErrorCode::NoModel,

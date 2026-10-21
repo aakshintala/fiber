@@ -741,6 +741,52 @@ fn login_target_failure(error: cli::CliError) -> Failure {
     }
 }
 
+/// Loads every declared MCP server, sorted by name then layer: the
+/// rows `fiber mcp list` prints. Shared by the reconnect entry and the
+/// reload preparation, so both read the same declarations.
+pub(crate) fn declared_servers(
+    sources: &config::Sources,
+    clock: &Arc<dyn contract::clock::Clock>,
+) -> Result<Vec<cli::DeclaredServer>, Rejection> {
+    cli::declared_servers(&sources.home, &sources.workspace, clock, &sources.overrides).map_err(
+        |error| {
+            let failure = Failure::from(error);
+            Rejection {
+                code: failure.code,
+                message: failure.message,
+            }
+        },
+    )
+}
+
+/// Finds `server` in the declared rows, rejecting unknown and
+/// unapproved names exactly as the reconnect entry does: the reload
+/// preparation shares the check for the servers it adopts.
+pub(crate) fn approved_row<'a>(
+    declared: &'a [cli::DeclaredServer],
+    server: &str,
+) -> Result<&'a cli::DeclaredServer, Rejection> {
+    let Some(row) = declared.iter().find(|declared| declared.name == server) else {
+        let failure = login_target_failure(cli::CliError::McpServerUnknown {
+            server: server.to_owned(),
+        });
+        return Err(Rejection {
+            code: failure.code,
+            message: failure.message,
+        });
+    };
+    if !row.approved {
+        let failure = Failure::from(cli::CliError::McpUnapproved {
+            server: server.to_owned(),
+        });
+        return Err(Rejection {
+            code: failure.code,
+            message: failure.message,
+        });
+    }
+    Ok(row)
+}
+
 /// Restarts one failed server for the `mcp_reconnect` command: declared
 /// and approved first, through the same checks the CLI's `mcp login`
 /// shares, then served in place when the session started it, or adopted
@@ -774,37 +820,8 @@ fn reconnect_server(
             code: error.code(),
             message: error.to_string(),
         })?;
-        let declared = cli::declared_servers(
-            &sources.home,
-            &sources.workspace,
-            &clock,
-            &sources.overrides,
-        )
-        .map_err(|error| {
-            let failure = Failure::from(error);
-            Rejection {
-                code: failure.code,
-                message: failure.message,
-            }
-        })?;
-        let Some(row) = declared.iter().find(|declared| declared.name == server) else {
-            let failure = login_target_failure(cli::CliError::McpServerUnknown {
-                server: server.to_owned(),
-            });
-            return Err(Rejection {
-                code: failure.code,
-                message: failure.message,
-            });
-        };
-        if !row.approved {
-            let failure = Failure::from(cli::CliError::McpUnapproved {
-                server: server.to_owned(),
-            });
-            return Err(Rejection {
-                code: failure.code,
-                message: failure.message,
-            });
-        }
+        let declared = declared_servers(&sources, &clock)?;
+        approved_row(&declared, server)?;
         let (used, removed, records) = if servers.has_slot(server) {
             let Some(restarted) = mcp::restart(&servers, server, &artifacts, &images) else {
                 return Err(Rejection {

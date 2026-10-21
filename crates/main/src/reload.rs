@@ -1,5 +1,6 @@
 //! Preparation and publication of configuration reloads (`docs/configuration.md`).
 use contract::diag::DebugLog as _;
+use contract::events::ToolSource;
 use contract::inbox::Rejection;
 use contract::shapes::Failure;
 use std::sync::Arc;
@@ -322,9 +323,64 @@ impl State {
         let mut notices = config.notices().to_vec();
         notices.extend(extensions.notices().iter().cloned());
         notices.extend(listed.notices);
-        let mut tools = self.tools.clone();
+        // The MCP sync: classify the new person specs against the live
+        // slots, stage (re-list keeps, shadow-start replacements and
+        // starts), and commit only after every required shadow start
+        // succeeded. A required shadow failure rejects the reload with
+        // the start's code; the old slots keep serving and the old caches
+        // stay byte-identical. No log or declaration write happens here.
+        let specs = crate::mcp_servers::specs(&config).map_err(failure)?;
+        notices.extend(specs.notices);
+        // Repository servers stay with the offer flow that owns them:
+        // never synced, and never removed while still declared.
+        let protected: Vec<String> = specs
+            .repository
+            .iter()
+            .map(|repo| repo.spec.name.clone())
+            .collect();
+        let mut rows = mcp::classify_sync(specs.specs, &self.servers);
+        rows.retain(
+            |row| !matches!(row, mcp::SyncRow::Remove { name } if protected.contains(name)),
+        );
+        let cache = config::mcp_cache_dir(&self.sources.home);
+        let staged = mcp::stage_sync(
+            rows,
+            &self.servers,
+            &self.sources.workspace,
+            &self.artifacts,
+            &self.images,
+            &cache,
+            &now.loader.clock,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .map_err(|error| Rejection {
+            code: error.code,
+            message: error.message,
+        })?;
+        let synced = mcp::commit_sync(staged, &self.servers, &cache, &self.artifacts, &self.images);
+        let mut tools: Tools = self
+            .tools
+            .iter()
+            .filter(|(owner, tool)| {
+                // The stale `mcp_resources` never carries: the sync
+                // re-adds it below when a post-sync slot offers
+                // resources, and dropping it here undeclares the stale
+                // one when none does.
+                (owner == "builtin" && tool.definition().name != mcp::RESOURCES_TOOL)
+                    || protected.contains(owner)
+            })
+            .cloned()
+            .collect();
         let mut infos = self.kept_infos.clone();
-        infos.retain(|info| info.name != "web_search");
+        infos.retain(|info| {
+            info.name != "web_search"
+                && info.name != mcp::RESOURCES_TOOL
+                && match &info.source {
+                    ToolSource::Builtin => true,
+                    ToolSource::Mcp { server, .. } => protected.contains(server),
+                    ToolSource::Extension { .. } => false,
+                }
+        });
         if let Some((tool, info)) = crate::builtin::web_search(
             model.model.web_search.as_deref(),
             extensions.search_backend().as_ref(),
@@ -334,6 +390,15 @@ impl State {
             tools.push(("builtin".into(), tool));
             infos.push(info);
         }
+        // The sync's tools and infos join after built-ins, so MCP
+        // registrations keep their startup precedence.
+        tools.extend(
+            synced
+                .tools
+                .iter()
+                .map(|(owner, tool, _)| (owner.clone(), Arc::clone(tool))),
+        );
+        infos.extend(synced.tools.iter().map(|(_, _, info)| info.clone()));
         // MCP registrations follow built-ins, so they keep their startup precedence.
         tools.sort_by_key(|(owner, _)| owner != "builtin");
         crate::mcp_servers::add_extension_tools(&mut tools, &mut infos, extensions.tools())
@@ -414,6 +479,12 @@ impl State {
             extensions: loaded,
             notices,
             servers: self.server_names.clone(),
+            kept_servers: synced.kept,
+            restarted_servers: synced.restarted,
+            started_servers: synced.started,
+            stopped_servers: synced.stopped,
+            server_records: synced.records,
+            server_failures: synced.failed,
             hooks: Some(hooks),
             reviewer,
             reviewer_observe,
