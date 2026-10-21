@@ -79,7 +79,7 @@ pub(crate) fn install(
         for (key, mapped) in &deps {
             if name.len() > key.len()
                 && name.starts_with(key.as_str())
-                && name.as_bytes()[key.len()] == b':'
+                && name.as_bytes().get(key.len()) == Some(&b':')
                 && best.is_none_or(|(found, _)| key.len() > found.len())
             {
                 best = Some((key, mapped));

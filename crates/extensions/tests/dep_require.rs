@@ -296,7 +296,7 @@ fn a_colon_holding_depends_key_loads_through_the_longest_match() {
         .join("extensions")
         .join(config::dir_name("weird:key"));
     std::fs::create_dir_all(&dep).unwrap();
-    std::fs::write(&dep.join("trim.lua"), TRIM).unwrap();
+    std::fs::write(dep.join("trim.lua"), TRIM).unwrap();
     let session = load(&setup, FakeClock::new());
     // The longest prefix `weird:key` wins over the shorter head `weird`,
     // which no key holds, so the module serves.
@@ -329,7 +329,7 @@ fn overlapping_depends_keys_pin_the_longest_win() {
         .join(config::dir_name("dep"));
     std::fs::create_dir_all(&short).unwrap();
     std::fs::write(
-        &short.join("trim.lua"),
+        short.join("trim.lua"),
         "return { trim = function(s) return \"wrong\" end }",
     )
     .unwrap();
@@ -338,7 +338,7 @@ fn overlapping_depends_keys_pin_the_longest_win() {
         .join("extensions")
         .join(config::dir_name("dep:a"));
     std::fs::create_dir_all(&long).unwrap();
-    std::fs::write(&long.join("trim.lua"), TRIM).unwrap();
+    std::fs::write(long.join("trim.lua"), TRIM).unwrap();
     let session = load(&setup, FakeClock::new());
     let AfterToolOutcome::Changed { content, .. } = answer(ask(&session)).outcome else {
         panic!("the hook runs");
