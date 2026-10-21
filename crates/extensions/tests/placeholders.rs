@@ -110,6 +110,36 @@ fn a_model_with_no_value_is_left_out_with_a_notice() {
 }
 
 #[test]
+fn a_provider_that_reads_no_stored_credential_is_not_sent_to_fiber_login_for_its_setting() {
+    let setup = Setup::new();
+    let mut data = provider_with(
+        "acme",
+        json!([model("m", "https://{workspace}/v1")]),
+        json!({"workspace": {"env": "ACME_HOST"}}),
+    );
+    data["credential_label"] = json!({"names": "acme profile", "default": "the environment"});
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let cfg = config(&setup, &[]);
+    let (mut providers, _) = Providers::load(&setup.home()).unwrap();
+    let env = env_of(&[]);
+    let notices = providers
+        .fill_placeholders(&cfg, &|name| env.get(name).cloned())
+        .unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ModelUnconfigured);
+    // `fiber login acme` would store a key `credential()` never reads
+    // (`docs/model-routing.md`, "A per-account host").
+    assert_eq!(
+        notices[0].message,
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         which has no value, and `ACME_HOST` is not set in the hub's environment \
+         (your login shell). Set `workspace` in `config/acme.json` in Fiber home, \
+         or export it in your shell profile and run `fiber hub refresh`."
+    );
+}
+
+#[test]
 fn the_named_environment_variable_fills_the_url() {
     let setup = Setup::new();
     let data = provider_with(

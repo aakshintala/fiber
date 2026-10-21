@@ -86,6 +86,18 @@ impl Setup {
         );
     }
 
+    /// A provider `cloud` whose `credential()` reads nothing stored: its
+    /// label names a profile outside Fiber (`docs/model-routing.md`, "What a
+    /// provider extension declares").
+    fn profiled(&self) {
+        let data = json!({
+            "name": "cloud",
+            "models": [model("m", "openai-responses", 1_000, None)],
+            "credential_label": {"names": "cloud profile", "default": "the environment"},
+        });
+        self.place("cloud", &[data], manifest("cloud"));
+    }
+
     fn write_config(&self, value: &Value) {
         fs::write(self.home().join("config.json"), value.to_string()).unwrap();
     }
@@ -388,6 +400,38 @@ fn a_selected_label_with_nothing_under_it_gives_the_as_line() {
             .any(|line| line.contains("* work") && line.contains("nothing stored or configured")),
         "{:?}",
         checked.lines
+    );
+}
+
+#[test]
+fn a_provider_that_reads_no_stored_credential_shows_its_label_s_source_and_never_blocks() {
+    let setup = Setup::new();
+    setup.profiled();
+    // Keys stored under its labels anyway are never what it reads.
+    setup.store("cloud", "work", "not-a-key");
+    setup.store("cloud", "other", "not-a-key");
+    let block = |lines: Vec<String>| -> Vec<String> {
+        let at = lines.iter().position(|line| line == "cloud:").unwrap();
+        lines.into_iter().skip(at).take(3).collect()
+    };
+    setup
+        .write_config(&json!({"model": "cloud/m", "providers": {"cloud": {"credential": "work"}}}));
+    assert_eq!(
+        block(setup.ready(&[], &env_of(&[]))),
+        [
+            "cloud:",
+            "  * work  cloud profile work, read by credential() (not checked)",
+            "permissions: auto",
+        ]
+    );
+    setup.write_config(&json!({"model": "cloud/m"}));
+    assert_eq!(
+        block(setup.ready(&[], &env_of(&[]))),
+        [
+            "cloud:",
+            "  * default  the environment, read by credential() (not checked)",
+            "permissions: auto",
+        ]
     );
 }
 

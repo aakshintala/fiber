@@ -215,3 +215,51 @@ fn a_userinfo_url_is_refused_without_naming_credentials() {
     assert!(!said.contains(":pw@"), "{said}");
     assert!(!said.contains("example.invalid"), "{said}");
 }
+
+#[test]
+fn bedrock_s_aws_profile_is_its_source_and_never_a_missing_key() {
+    let setup = Setup::new();
+    let to = setup.root.path().join("pkg-bedrock");
+    support::package::copy_package(
+        "bedrock",
+        &to,
+        "https://bedrock-runtime.{region}.amazonaws.com",
+        "http://127.0.0.1:1",
+    );
+    let installed = run_to_exit(
+        setup.deadline,
+        "extension install",
+        setup.fiber(&["extension", "install", to.to_str().unwrap()]),
+    );
+    assert_eq!(
+        installed.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_text(&installed)
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "providers": {"bedrock": {"credential": "work"}},
+        }),
+    );
+    let mut doctor = setup.fiber(&["doctor"]);
+    doctor.env("AWS_REGION", "us-east-1");
+    let output = run_to_exit(setup.deadline, "doctor with an AWS profile", doctor);
+
+    // Bedrock's `credential()` reads the AWS profile, which doctor cannot
+    // check without running it, so nothing blocks (#3020).
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_text(&output)
+    );
+    let text = stdout_text(&output);
+    assert!(
+        text.contains("bedrock:\n  * work  AWS profile work, read by credential() (not checked)\n"),
+        "{text}"
+    );
+    assert!(!text.contains("fiber login bedrock"), "{text}");
+}
