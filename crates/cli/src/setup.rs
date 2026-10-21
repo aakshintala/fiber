@@ -260,7 +260,7 @@ fn run_terminal(
         SessionExtensions::load(home, config, Arc::clone(clock), Arc::clone(locks), None)
     };
     let (providers, _config, notices) =
-        model_lists(home, workspace, ModelLists::Cached, &load, run).map_err(
+        model_lists(home, workspace, ModelLists::Cached, &load, run, &**clock).map_err(
             |error| match error {
                 ModelListsError::Load(error) => error,
                 ModelListsError::Config(error) => CliError::Config(error),
