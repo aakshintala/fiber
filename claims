@@ -21,6 +21,3 @@ crates/main/src/rewind.rs	368-p5	plan	2026-10-20T18:18:34Z	Amoghs-MacBook-Pro:/U
 crates/loop/src/rewind_tests.rs	368-p5	plan	2026-10-20T18:18:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/sessions.rs	3a4914d2-b13d-4ee4-a38a-6b30e3bca34e	plan	2026-10-20T21:23:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 docs/user/getting-help.md	docs/1254-doctor-user-page	grant	2026-10-21T00:37:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tools/src/shell/read_only.rs	3019	plan	2026-10-21T19:09:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tools/src/shell/classify_tests.rs	3019	plan	2026-10-21T19:09:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-docs/tools.md	3019	plan	2026-10-21T19:09:48Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
