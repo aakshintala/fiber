@@ -426,10 +426,11 @@ fn branch_exists(setup: &Setup, id: &str) -> bool {
         .success()
 }
 
-/// A session `id` whose workspace is `workspace`: its log and an unheld
-/// lock file, like `session` but working anywhere.
-fn wt_session(setup: &Setup, id: &str, workspace: &Path) -> PathBuf {
-    let dir = project(setup).join("sessions").join(id);
+/// A session `id` whose workspace is `workspace` in the project at
+/// `project_dir`: its log and an unheld lock file, like `session` but
+/// working anywhere.
+fn wt_session(id: &str, workspace: &Path, project_dir: &Path) -> PathBuf {
+    let dir = project_dir.join("sessions").join(id);
     fs::create_dir_all(dir.join("artifacts")).unwrap();
     let first = json!({"kind": "session_started", "seq": 0, "payload": {"workspace": workspace}});
     let last = json!({"kind": "x", "ts": 0});
@@ -551,7 +552,7 @@ fn a_running_session_keeps_its_worktree_under_force() {
     let setup = setup();
     repo(&setup);
     let wt = kept(&setup, "s_00000000000000e1");
-    let user = wt_session(&setup, "s_00000000000000a1", &wt);
+    let user = wt_session("s_00000000000000a1", &wt, &project(&setup));
     let held = match log::try_hold(&user) {
         Ok(log::Hold::Held(held)) => held,
         Ok(log::Hold::Busy) | Err(_) => panic!("the user's lock is held"),
@@ -827,17 +828,7 @@ fn prune_under_a_git_redirect_judges_the_workspace_repository() {
         .parent()
         .unwrap()
         .to_path_buf();
-    let decoy_session = decoy_project.join("sessions").join("s_00000000000000e5");
-    fs::create_dir_all(decoy_session.join("artifacts")).unwrap();
-    let first = json!({"kind": "session_started", "seq": 0, "payload": {"workspace": decoy_canon}});
-    let last = json!({"kind": "x", "ts": 0});
-    fs::write(
-        decoy_session.join("events.jsonl"),
-        format!("{first}\n{last}\n"),
-    )
-    .unwrap();
-    fs::write(decoy_session.join("artifacts/a_1.txt"), b"0123456789").unwrap();
-    fs::write(decoy_session.join("session.lock"), b"").unwrap();
+    let decoy_session = wt_session("s_00000000000000e5", &decoy_canon, &decoy_project);
     declare_hook(&decoy_canon, "decoy\n");
     git_in_dir(setup.deadline, &decoy_canon, &["add", "."]);
     git_in_dir(

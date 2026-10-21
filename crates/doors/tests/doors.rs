@@ -183,6 +183,9 @@ fn project_ignores_a_hostile_git_environment() {
             let common = fs::canonicalize(repo.join(".git")).unwrap();
             assert_eq!(project(&repo), common);
             assert_eq!(project(&repo.join("docs")), common);
+            let resolved = resolve_project(&repo);
+            assert_eq!(resolved.path, common);
+            assert!(resolved.in_repository);
         });
         return;
     }
@@ -193,31 +196,25 @@ fn project_ignores_a_hostile_git_environment() {
             let temp = Temp::new();
             let repo = temp.0.join("repo");
             fs::create_dir_all(repo.join("docs")).unwrap();
-            assert!(
-                Command::new("git")
-                    .arg("init")
-                    .arg("-q")
-                    .arg(&repo)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            fakes::git::git(&repo, &["init", "--quiet"]);
             let other = temp.0.join("other");
             fs::create_dir_all(&other).unwrap();
-            assert!(
-                Command::new("git")
-                    .arg("init")
-                    .arg("-q")
-                    .arg(&other)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            fakes::git::git(&other, &["init", "--quiet"]);
+            let other_git = other.join(".git").to_str().unwrap().to_owned();
+            let other_work = other.to_str().unwrap().to_owned();
+            let other_index = other
+                .join(".git")
+                .join("index")
+                .to_str()
+                .unwrap()
+                .to_owned();
             let out = fakes::rerun_within(
                 "project_ignores_a_hostile_git_environment",
                 &[
-                    ("GIT_COMMON_DIR", "/nonexistent"),
-                    ("GIT_DIR", other.join(".git").to_str().unwrap()),
+                    ("GIT_DIR", other_git.as_str()),
+                    ("GIT_WORK_TREE", other_work.as_str()),
+                    ("GIT_COMMON_DIR", other_git.as_str()),
+                    ("GIT_INDEX_FILE", other_index.as_str()),
                     ("FIBER_DOORS_PROJECT_ENV_CHILD", "1"),
                     ("FIBER_DOORS_PROJECT_ENV_REPO", repo.to_str().unwrap()),
                 ],
@@ -230,74 +227,6 @@ fn project_ignores_a_hostile_git_environment() {
             );
         },
     );
-}
-
-#[test]
-fn project_ignores_worktree_and_index_redirects() {
-    if std::env::var("FIBER_DOORS_PROJECT_ENV_CHILD").is_ok() {
-        fakes::within(
-            "the child's worktree and index checks",
-            CHILD_BUDGET,
-            || {
-                let repo = PathBuf::from(std::env::var("FIBER_DOORS_PROJECT_ENV_REPO").unwrap());
-                let resolved = resolve_project(&repo);
-                let common = fs::canonicalize(repo.join(".git")).unwrap();
-                assert_eq!(resolved.path, common);
-                assert!(resolved.in_repository);
-            },
-        );
-        return;
-    }
-    fakes::within(
-        "project_ignores_worktree_and_index_redirects",
-        RERUN_OUTER,
-        || {
-            let temp = Temp::new();
-            let repo = temp.0.join("repo");
-            fs::create_dir_all(repo.join("docs")).unwrap();
-            fakes::git::git(&repo, &["init", "--quiet"]);
-            let decoy = temp.0.join("decoy");
-            fs::create_dir_all(&decoy).unwrap();
-            fakes::git::git(&decoy, &["init", "--quiet"]);
-            let decoy_git = decoy.join(".git").to_str().unwrap().to_owned();
-            let decoy_work = decoy.to_str().unwrap().to_owned();
-            let decoy_index = decoy
-                .join(".git")
-                .join("index")
-                .to_str()
-                .unwrap()
-                .to_owned();
-            let out = fakes::rerun_within(
-                "project_ignores_worktree_and_index_redirects",
-                &[
-                    ("GIT_DIR", decoy_git.as_str()),
-                    ("GIT_WORK_TREE", decoy_work.as_str()),
-                    ("GIT_COMMON_DIR", decoy_git.as_str()),
-                    ("GIT_INDEX_FILE", decoy_index.as_str()),
-                    ("FIBER_DOORS_PROJECT_ENV_CHILD", "1"),
-                    ("FIBER_DOORS_PROJECT_ENV_REPO", repo.to_str().unwrap()),
-                ],
-                RERUN_WITHIN,
-            );
-            assert!(
-                out.status.success(),
-                "project must see past every redirect:\n{}",
-                String::from_utf8_lossy(&out.stdout)
-            );
-        },
-    );
-}
-
-/// The real `git` on the parent's `PATH`: the stub below execs it after
-/// logging the invocation discovery made.
-fn real_git_on_path() -> PathBuf {
-    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
-        let candidate = dir.join("git");
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    panic!("git is not on PATH");
 }
 
 #[test]
@@ -340,13 +269,13 @@ for name in GIT_OPTIONAL_LOCKS GIT_TERMINAL_PROMPT GIT_DIR GIT_WORK_TREE GIT_COM
  if [ -n "$present" ]; then eval "printf '%s=%s\n' \"$name\" \"\$$name\""; fi
 done
 } >> "$FIBER_DOORS_SCRUB_LOG"
-exec "$FIBER_DOORS_SCRUB_REAL_GIT" "$@"
+# The stub directory is first on PATH, so dropping it reaches the real git.
+PATH=${PATH#*:} exec git "$@"
 "#,
             )
             .unwrap();
             let stub = bin.join("git");
             fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-            let real = real_git_on_path();
             let log = temp.0.join("git.log");
             let path = format!(
                 "{}:{}",
@@ -355,7 +284,6 @@ exec "$FIBER_DOORS_SCRUB_REAL_GIT" "$@"
             );
             let repo_str = repo.to_str().unwrap().to_owned();
             let log_str = log.to_str().unwrap().to_owned();
-            let real_str = real.to_str().unwrap().to_owned();
             let decoy_git_str = decoy.join(".git").to_str().unwrap().to_owned();
             let decoy_str = decoy.to_str().unwrap().to_owned();
             let out = fakes::rerun_prepared(
@@ -364,7 +292,6 @@ exec "$FIBER_DOORS_SCRUB_REAL_GIT" "$@"
                     ("FIBER_DOORS_SCRUB_CHILD", "1"),
                     ("FIBER_DOORS_SCRUB_REPO", repo_str.as_str()),
                     ("FIBER_DOORS_SCRUB_LOG", log_str.as_str()),
-                    ("FIBER_DOORS_SCRUB_REAL_GIT", real_str.as_str()),
                     ("PATH", path.as_str()),
                     ("GIT_DIR", decoy_git_str.as_str()),
                     ("GIT_WORK_TREE", decoy_str.as_str()),
