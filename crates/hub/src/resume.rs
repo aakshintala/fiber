@@ -276,6 +276,15 @@ fn attempt(
     if recorded.delegate {
         return Step::Done(Err(delegate_refused()));
     }
+    // A workspace that is missing with no recorded repository to make it
+    // from cannot be recovered: refuse before starting a process.
+    if recorded.repository.is_none() && missing(&recorded.workspace) {
+        return Step::Done(Err(io_failed(
+            hub,
+            session,
+            &format!("{} no longer exists", recorded.workspace.display()),
+        )));
+    }
     let started = match hub.starter.resume(session, recorded.launch(), credential) {
         Ok(started) => started,
         Err(error) => return Step::Done(Err(io_failed(hub, session, &format!("{error}.")))),
@@ -372,8 +381,9 @@ impl Recorded {
 }
 
 /// Whether `path` is missing: only `NotFound` counts, so any other
-/// lookup error keeps the workspace.
-fn missing(path: &Path) -> bool {
+/// lookup error keeps the workspace. The hub's resume guard and the real
+/// starter's resume check share it.
+pub(crate) fn missing(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
         .is_err_and(|source| source.kind() == std::io::ErrorKind::NotFound)
 }

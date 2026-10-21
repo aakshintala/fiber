@@ -528,7 +528,17 @@ fn a_relay_that_saw_the_exited_window_sends_no_stream_closed() {
     let starter = FakeStarter::bind_hold_and_append_started(&fixture.home);
     let (rig, client_peer, mut session_peer, reader, _park) =
         rig(&fixture.home, starter.clone(), SID, false);
-    write_log(&fixture.home, SID, "/w", None, &[fiber_exited(SID)]);
+    // The recorded workspace exists: the resume guard for an
+    // unrecoverable missing workspace does not fire here.
+    let workspace = fixture.home.join("w");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_log(
+        &fixture.home,
+        SID,
+        &workspace.to_string_lossy(),
+        None,
+        &[fiber_exited(SID)],
+    );
     lock(&rig.relays)
         .subscribed
         .push((SID.to_owned(), subscribe("c_sub", "full")));

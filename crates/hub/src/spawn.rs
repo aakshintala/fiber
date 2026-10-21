@@ -69,6 +69,15 @@ impl Starter for SpawnStarter {
         workspace: &Path,
         credential: Option<&str>,
     ) -> std::io::Result<Box<dyn Started>> {
+        // A resume whose launch target is gone cannot bind: refuse before
+        // spawning, naming the path, so the hub's wrap names it too. Only
+        // a missing target refuses, as the hub's launch choice does.
+        if crate::resume::missing(workspace) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("{} no longer exists", workspace.display()),
+            ));
+        }
         let environment = self.environments.get();
         let args = SessionArgv {
             id: id.clone(),
