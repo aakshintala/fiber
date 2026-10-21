@@ -266,6 +266,10 @@ struct ScriptProvider {
     /// One sender per held call, in arrival order: the test answers each
     /// hold through these, in whatever order it chooses.
     hold_releases: Arc<Mutex<VecDeque<mpsc::Sender<Answer>>>>,
+    /// One-shot pause for the next held call: the call sends `parked`
+    /// once it reaches the pause, then blocks on `gate`. Consumed once;
+    /// later calls run as today.
+    held_pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl ScriptProvider {
@@ -284,6 +288,13 @@ impl ScriptProvider {
     /// later calls run as today.
     fn pause_hold(&self, cancelled: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
         *lock(&self.hold_pause) = Some((cancelled, release));
+    }
+
+    /// Parks the next held call between its release queue and its entry
+    /// signal: the call sends `parked` once it reaches the pause, then
+    /// blocks on `gate`. Consumed once; later calls run as today.
+    fn pause_held(&self, parked: mpsc::Sender<()>, gate: mpsc::Receiver<()>) {
+        *lock(&self.held_pause) = Some((parked, gate));
     }
 }
 
@@ -311,7 +322,8 @@ impl Provider for ScriptProvider {
             let entered = lock(&self.hold_entered)
                 .clone()
                 .expect("a held call needs the test's entry signal");
-            (entered, Arc::clone(&self.hold_releases))
+            let pause = Mutex::new(lock(&self.held_pause).take());
+            (entered, Arc::clone(&self.hold_releases), pause)
         });
         Box::new(ScriptCall {
             clock: Arc::clone(&self.clock),
@@ -325,9 +337,14 @@ impl Provider for ScriptProvider {
     }
 }
 
-/// Who wakes a held scripted call: its entry signal, and the queue of
-/// per-call answer senders the test drains in arrival order.
-type HoldRelease = (mpsc::Sender<()>, Arc<Mutex<VecDeque<mpsc::Sender<Answer>>>>);
+/// Who wakes a held scripted call: its entry signal, the queue of
+/// per-call answer senders the test drains in arrival order, and the
+/// test's one-shot pause between the queue and the signal.
+type HoldRelease = (
+    mpsc::Sender<()>,
+    Arc<Mutex<VecDeque<mpsc::Sender<Answer>>>>,
+    Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+);
 
 struct ScriptCall {
     clock: Arc<FakeClock>,
@@ -341,8 +358,8 @@ struct ScriptCall {
     /// Holds the run ahead of its release store; taken out and dropped
     /// before the block, so the cancel never meets this lock.
     pause: Mutex<Option<mpsc::Receiver<()>>>,
-    /// Set for held calls: signals entry, then parks for the test's
-    /// answer through the queued release.
+    /// Set for held calls: queues the release, signals entry, then parks
+    /// for the test's answer through the queued release.
     hold: Option<HoldRelease>,
 }
 
@@ -407,19 +424,30 @@ impl ModelCall for ScriptCall {
 impl ScriptCall {
     /// Parks a held call until the test sends its answer: queues the release,
     /// then signals entry, then runs the test's answer as the reply.
+    /// A wired pause parks the call between the queue and the signal: the
+    /// test owns both ends, so the block carries no deadline, and a dropped
+    /// gate releases it too. A test parked there observes the queue exactly
+    /// as the old signal-then-queue order left it: empty.
     /// A cancel still ends the hold cancelled, as with `Answer::Hold`.
-    /// The block carries no deadline: the channel is the test's own — the
+    /// The answer block carries no deadline: the channel is the test's own — the
     /// test pops the sender and sends the answer, and dropping it releases
     /// the hold too. The test's own deadline on the entry signal and the
     /// turn's end names a hang.
     #[allow(clippy::result_large_err, reason = "test helper mirroring the seam")]
     fn run_released(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let (entered, releases) = self
+        let (entered, releases, pause) = self
             .hold
             .as_ref()
             .expect("a held call is armed by the test");
         let (tx, rx) = mpsc::channel();
         lock(releases).push_back(tx);
+        // A wired pause parks the call after it queues its release and
+        // before it signals entry: taken out before the block, so the
+        // test's drop of the gate releases it too.
+        if let Some((parked, gate)) = lock(pause).take() {
+            let _sent = parked.send(());
+            let _released = gate.recv();
+        }
         let _sent = entered.send(());
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(CallError::Cancelled {
@@ -1351,6 +1379,7 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
         entered: Mutex::new(None),
         calls: AtomicUsize::new(0),
         hold_pause: Mutex::new(None),
+        held_pause: Mutex::new(None),
         requests: Mutex::new(Vec::new()),
         hold_entered: Mutex::new(None),
         hold_releases: Arc::new(Mutex::new(VecDeque::new())),
@@ -1427,6 +1456,7 @@ fn build(setup: &Setup, home: fakes::TempDir, script: Vec<Answer>) -> World {
             entered: Mutex::new(setup.reviewer_wake.clone()),
             calls: AtomicUsize::new(0),
             hold_pause: Mutex::new(None),
+            held_pause: Mutex::new(None),
             requests: Mutex::new(Vec::new()),
             hold_entered: Mutex::new(setup.reviewer_hold_entered.clone()),
             hold_releases: Arc::new(Mutex::new(VecDeque::new())),
@@ -1755,6 +1785,7 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
         entered: Mutex::new(None),
         calls: AtomicUsize::new(0),
         hold_pause: Mutex::new(None),
+        held_pause: Mutex::new(None),
         requests: Mutex::new(Vec::new()),
         hold_entered: Mutex::new(None),
         hold_releases: Arc::new(Mutex::new(VecDeque::new())),
@@ -1834,6 +1865,7 @@ fn exit_and_resume(world: &mut World, request: &str, script: Vec<Answer>) {
             entered: Mutex::new(None),
             calls: AtomicUsize::new(0),
             hold_pause: Mutex::new(None),
+            held_pause: Mutex::new(None),
             requests: Mutex::new(Vec::new()),
             hold_entered: Mutex::new(None),
             hold_releases: Arc::new(Mutex::new(VecDeque::new())),
@@ -5675,7 +5707,10 @@ fn a_failed_diagnostics_file_changes_no_output() {
 }
 
 // An observed entry means the release is already queued: the hold queues
-// its release before it signals entry, so the pop below needs no wait.
+// its release before it signals entry. The pause parks the held call
+// between the queue and the signal, so the pop below runs while the old
+// signal-then-queue order would still show an empty queue: it fails there
+// and passes here, with no wall-clock wait.
 // A reviewer hold answers one tool call, then the turn completes.
 #[test]
 fn an_entered_hold_already_queues_its_release() {
@@ -5696,14 +5731,19 @@ fn an_entered_hold_already_queues_its_release() {
             text_answer("Spare.", 0),
         ],
     );
+    let judging = Arc::clone(world.reviewer.as_ref().expect("a reviewer"));
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (gate_tx, gate_rx) = mpsc::channel();
+    judging.pause_held(parked_tx, gate_rx);
     prompt(&world, "hi");
     let flight = spawn_turn(&mut world);
     let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
-    deadline.recv_or_fail(&entered_rx, "the held call enters");
-    let judging = world.reviewer.as_ref().expect("a reviewer");
+    deadline.recv_or_fail(&parked_rx, "the held call reaches its release pause");
     let release = lock(&judging.hold_releases)
         .pop_front()
         .expect("an entered hold already queues its release");
+    let _sent = gate_tx.send(());
+    deadline.recv_or_fail(&entered_rx, "the held call enters");
     release
         .send(review_answers(&[review_text("allow", 0)]).remove(0))
         .expect("the hold waits");
