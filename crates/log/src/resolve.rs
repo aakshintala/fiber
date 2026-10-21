@@ -106,18 +106,29 @@ struct Opening {
     delegate: bool,
 }
 
+/// The identity a first line records: its worktree repository when one is
+/// recorded, else its workspace. Neither field recorded means no identity.
+pub(crate) fn recorded_identity<'a>(
+    workspace: Option<&'a str>,
+    repository: Option<&'a str>,
+) -> Option<&'a str> {
+    repository.or(workspace)
+}
+
 fn opening(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> Option<Opening> {
     let mut lines = crate::lines(dir).ok()?;
     let first = lines.next()?;
     let line = first.ok()?;
     match Event::from_envelope(&line) {
         Ok(Some(Event::SessionStarted(started))) => {
-            let recorded = started
-                .worktree
-                .as_ref()
-                .and_then(|worktree| worktree.repository.as_deref())
-                .unwrap_or(&started.workspace);
-            if in_project(recorded) {
+            let recorded = recorded_identity(
+                Some(&started.workspace),
+                started
+                    .worktree
+                    .as_ref()
+                    .and_then(|worktree| worktree.repository.as_deref()),
+            );
+            if recorded.is_some_and(in_project) {
                 Some(Opening {
                     ts: line.ts,
                     delegate: started.parent.is_some(),
