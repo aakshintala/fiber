@@ -1231,6 +1231,8 @@ fn nightly_notes_at_the_stable_tag_prints_head_itself() {
     assert!(run.stdout.contains("first"), "{}", run.stdout);
 }
 
+// debt: git setup mirrors nightly_notes_prints_the_range_since_the_stable_tag; fold the two into one helper when Pack::tool takes a working directory.
+// The mirror is deliberate: the ticket orders an additive test and the bug rule needs the red proof standing alone.
 /// `nightly-notes` reads the repository at `GITHUB_WORKSPACE`, so the
 /// publish job can run it from outside the checkout.
 #[test]
@@ -1248,6 +1250,7 @@ fn nightly_notes_outside_the_checkout_reads_the_workspace() {
     let head = fakes::git::git(&repo, &["rev-parse", "HEAD"]);
     let outside = fakes::TempDir::new("rlp-outside");
     let path = format!("{}:/usr/bin:/bin", fixture_bin().display());
+    // debt: hand-rolled Command mirrors Pack::tool field for field; switch to Pack::tool when it takes a working directory and extra env.
     let mut command = Command::new(script());
     command
         .process_group(0)
