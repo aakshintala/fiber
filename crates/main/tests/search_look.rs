@@ -1032,15 +1032,27 @@ fn the_changed_files_rows_match_the_doc() {
 /// (`crates/tui/src/view/panel.rs`, `session_rows`). The `cost` label
 /// draws only with the row: `cost on subscription` draws without it, so
 /// its `cost` prefix does not count.
-/// A layout shift drops inputs sent at coordinates read before it: the
-/// frame hit-tests against its current targets, so a click at stale
-/// coordinates lands elsewhere and nothing the test waits for happens.
-/// The resize forces the losing interleaving every run (no real-clock
-/// hold): it stands in for a session row landing late, which moves the
-/// cards the same way. Red on main: the shifted grid no longer names
-/// the Jobs card at the pre-shift coordinates the click uses.
+/// The panel is frozen for coordinate-taking: the Session card has
+/// settled and its speed row has landed. A usage fold adds the speed
+/// row (`panel.rs`, `session_rows`), moving the Delegates and Jobs cards
+/// a row down, as a late cost row moved them before `session_settled`;
+/// coordinates read before it lands name the wrong cells and the click
+/// or hover misses. The held turn's reply has completed once it shows,
+/// so its usage is recorded and the speed row always lands: waiting for
+/// it cannot hang. Afterwards no fold in this turn can add or remove a
+/// session row, and a queued duplicate only repeats the rows the grid
+/// already shows.
+fn panel_settled(grid: &Grid) -> bool {
+    session_settled(grid) && grid.contents.contains("speed, last reply")
+}
+
+/// Coordinates re-read after a layout shift land: the resize moves the
+/// panel's cells every run (no real-clock hold), standing in for a
+/// session row landing late. The test reads the Jobs card's coordinates
+/// again from the shifted grid before clicking, so the click names the
+/// card and the card expands.
 #[test]
-fn stale_panel_coords_miss_after_a_shift() {
+fn reread_panel_coords_land_after_a_shift() {
     let (setup, _release, _guard, _command) = running_setup();
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
@@ -1061,15 +1073,16 @@ fn stale_panel_coords_miss_after_a_shift() {
         // the new size still show the old layout until the reflow lands.
         grid.size() != size && panel_item_at(grid, "Jobs").is_some_and(|at| at != (x, y))
     });
-    // The dropped input: sent at the pre-shift coordinates.
-    click(&mut run, x, y);
-    // The drop, named without a deadline: the grid the click ran
-    // against already proves its coordinates name another cell.
-    assert_eq!(
-        panel_item_at(&grid, "Jobs"),
-        Some((x, y)),
-        "the click at ({x}, {y}) missed the Jobs card after the shift"
+    let (moved_x, moved_y) = panel_item_at(&grid, "Jobs").unwrap();
+    assert_ne!(
+        (moved_x, moved_y),
+        (x, y),
+        "the resize must move the card for this test to prove anything"
     );
+    click(&mut run, moved_x, moved_y);
+    run.wait_screen("the expanded Jobs card after the shift", |grid| {
+        panel_item_at(grid, "head -n 1").is_some()
+    });
 }
 
 fn session_settled(grid: &Grid) -> bool {
@@ -1103,7 +1116,7 @@ fn the_item_views_top_row_closes_them() {
         grid.contents.contains(REPLY)
             && panel_item_at(grid, "review the diff").is_some()
             && panel_item_at(grid, "Jobs").is_some()
-            && session_settled(grid)
+            && panel_settled(grid)
     });
     let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
     click(&mut run, x, y);
@@ -1119,7 +1132,7 @@ fn the_item_views_top_row_closes_them() {
         ("Jobs", "head -n 1", format!("› ▸ {command}")),
     ] {
         let grid = run.wait_screen("the running panel card's first item", |grid| {
-            session_settled(grid) && panel_card_item_at(grid, card, description).is_some()
+            panel_settled(grid) && panel_card_item_at(grid, card, description).is_some()
         });
         let (x, y) = panel_card_item_at(&grid, card, description).unwrap();
         // The hover frame acknowledges this cell as a live click target.
