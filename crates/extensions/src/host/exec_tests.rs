@@ -1682,7 +1682,7 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
     let mut req = sh(&script, cwd, CAP);
     req.input = Some(vec![b'y'; 1 << 18]);
     let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     // At the callback's deadline the run stops, although nothing
     // dropped its cancel; the group signal frees the parked writer.
@@ -1703,5 +1703,5 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
         !group::alive(pgid),
         "the run returned only once the group was empty"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
