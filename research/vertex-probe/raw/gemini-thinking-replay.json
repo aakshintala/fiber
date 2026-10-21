@@ -1,0 +1,179 @@
+{
+  "cost": 0.000183,
+  "events": [
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "No. "
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:58:34.769103Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000002",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "393 = 3 \u00d7 131."
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:58:34.769103Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000002",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "",
+                  "thoughtSignature": "AY89a1/azquZ9h20lR4a6xWqsQ56n2YaU6vrs4WM/XxHv73ZVJoeVPYvBDjhIluKvicH4rxwN33aldG1jOWgh/uc4HFaDXAjrHboOedTKsR135840iRVPjsvuOBtaK1eGZkcwN6E7IeuhqkLDVWSwnb65U36I9wfbqXxHbT4S//dLfmniO+4uS8dtPt45P8ma/lv6IE+IaiIN6bY+1In3cmO7BcP3cP0PsNeq9pzxb6jiNDHt50aCxgjRM71UZ/eKKpZxjwy+k2uaFdzGIAsPMGi7hxacRk910r5kxRB+cqUq91IouepXTiow81xtzgI+39XjsDB6IwMHUFe623XsAG0HqvJ/yvHHZ+FaVs41bF8mbKEngc0VB1RP7yo/fVrhRGFfyG2u8hiZcWpW7fs4mT0ELzVXqYYxOdmHUUgm8J8wf+rJuLfi30w92mgFKORTGUTRxVsIml77n7YGlFvtmNYusAhr82XxWVExajnpVMC"
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-10-20T16:58:34.769103Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000002",
+        "usageMetadata": {
+          "candidatesTokenCount": 15,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 15
+            }
+          ],
+          "promptTokenCount": 44,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 44
+            }
+          ],
+          "thoughtsTokenCount": 100,
+          "totalTokenCount": 159,
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    }
+  ],
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-disposition": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Is 391 a prime number? Think it through, then answer yes or no."
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "text": "**Testing Divisibility**\n\nI'm checking if 391 is prime by testing divisibility by small primes. It's not divisible by 2 or 3. Next up is 5.\n\n",
+            "thought": true
+          },
+          {
+            "text": "No. "
+          },
+          {
+            "text": "391 = 17 \u00d7 23."
+          },
+          {
+            "text": "",
+            "thoughtSignature": "AY89a1/f5/iXi2xZ0nvoWJ3HBUzVSptkpgcKwTBJvXs9tT+/YJ+UY4WEbV2MbgY/kvsbaOlCjUfoL/+Zllj6qS8Wqy42IamP04Z0xcIityUU+J+PaCggB8wi65ypg2s9oRXDb/IbAJSerd0T4U708YiTY+IN+xO4f0uNC0OxFckIo1tYdyGymLCZHk3TeKUiFpvq4mRh5syskueM3LYsP3/s6/Jdj72wkC3A8/BFzd4wrVRX6I20x5SKEOJCGFAQWgEbSNCk/rzr3ck8DdqgMPJVudtA3CjkCMi7r2pHsmZBhMRdTnDfluosRmgnvSOn3Ap3/DxdmjLa8ce8siG+Cy6r85N1CBXwoUlu2vTEvtwfN9DhGAelxigb52BuR2RCaUIHi0qDXp1uO4gxOv2mu4yzJ5idunK7a6x42eD7FZA9okP9HmUjttsd+olbYPq4Cqb7sIQsGOazD0cvn5nfmuoF86Zae3/wEbD+1KnBvwQYDXIjCG6/dGzxfmacEuzhHOVwbRKZ6cWoFG8uaGnzg8VPaZ+xSj0+gvCTJ160tFRteA6HqWcFUpOORhtN6NxZ0d7HdKa5hiS2oa6xE5+hkxKgs9QW97Q8OjbVFP5msT7QGGi9kJdF3krNtk9pY3FfKXjCLBC8em+FmTa4lFzcfpkYH5WvtM1l9kbjACQZVFNRsl1o1Ss03mV4ulwBw2AFxJabZDLSj9U8nLZWls2/Ao02ZhsxS05Z5o8K4ffes+vQZJ/vm0N630zK8FjHgSDnAsnFwBTI/jWecMQRqrxf7nMq1cH1OgwN/VbMEwCY4DI9R/zb2rCxhOXUTLoDi++IvJYOfIjNuvPaq/ekkW3Yg90Dl9XoEwx9KJjJzU+ZwSekbX5W6wlEg6a5BpwWfoMyHyI3csxLSv5+Pqdbcwmxul2hD7XkqjIrq9u2vIAHxG/6jm3QRoyXWE0006GbWBqMkNml11DSaL+6sMavnnD6MAAQUQnackYqtg7A0u6thpd8uqqkSkk02SqHwtNs0DSo5cxVpMUYkUu/2bLbktyGDlcR41Y+6OmTwRdSwNWHDTN1r7P+bzTnFNpscNoMRsmBxWf3wuubtnjC0SiM/ZLLWIDkm8lk/rfNggWvbQHBJN/73TiMPbqNySfvEJoGjFogG7fHhvN+8gZiI6nQ5BpbTVjxYE7fnR+o/FHBBT98rEJGv0efnoo68CAKPJYtjzBSQCv2Mvu6TMjoDVPVGuz7P8WJPVLOFhEmnFZCbndxoInbDro0qTJQZCHpZ62oyd2RDBZuGenSX+nur5vhd0dXY3dkaO7gE8V0bqxRZQ+RlxVYeNMpTvEAEKvh3xt4n5YL8QtGFe6HRYqyfmFpWLNBQfXa9MQZ4zFHPhyx7mdARF6zp+vmPqR036qF8/g="
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "text": "And 393?"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 1024,
+      "thinkingConfig": {
+        "includeThoughts": true,
+        "thinkingLevel": "MEDIUM"
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "usage": {
+    "candidatesTokenCount": 15,
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 15
+      }
+    ],
+    "promptTokenCount": 44,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 44
+      }
+    ],
+    "thoughtsTokenCount": 100,
+    "totalTokenCount": 159,
+    "trafficType": "ON_DEMAND"
+  }
+}

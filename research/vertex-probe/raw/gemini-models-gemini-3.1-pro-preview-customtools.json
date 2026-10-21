@@ -1,0 +1,207 @@
+{
+  "cost": 0.00105,
+  "events": [
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "**Finding Paris Weather**\n\nI'm focusing on gathering today's weather for Paris, specifically requesting it in Celsius. My next step is to execute the weather retrieval process.\n\n",
+                  "thought": true
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:58:42.787904Z",
+        "modelVersion": "gemini-3.1-pro-preview-customtools",
+        "responseId": "00000000000000000000006",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": "**Retrieving Paris Forecast**\n\nI am proceeding to obtain Paris's weather forecast in Celsius for today. The next logical action is to activate the weather retrieval function with the specified parameters.\n\n",
+                  "thought": true
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:58:42.787904Z",
+        "modelVersion": "gemini-3.1-pro-preview-customtools",
+        "responseId": "00000000000000000000006",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "functionCall": {
+                    "args": {
+                      "city": "Paris",
+                      "days": 1,
+                      "unit": "c"
+                    },
+                    "name": "get_weather"
+                  },
+                  "thoughtSignature": "CiMBjz1rX9bSOaJSP5DWuUZUNZ6HvIt5Ip4USNRwoTCy7FGlTgpWAY89a1+8mktJFD/MjEoULu32bpe1EwomqDNaXsayZ//HEJ0V06ngkigBzxguz1wCmmn/WWnE3ip+LYzjiz7rTwbLupN+ulOlpbAZUd9n+9Wt2ypnM4YKkwEBjz1rX2ZjDiEoUmQZoJ6p440Me8wdF5NcdnTwCgZQZzLA0uBXNixwwjIT0F6sZTt/nktDc8vBlU/lxU4Vtfzu2tq6uT0VXSaFebUUcoSNnpFWU1XZoTIR0yeKLmJAykYElKD+X2ZyhUXKth0gayw64RxEJlMKzVm1pHwNDCQnfpwdeQKK4ZFMPLyQr41nqcTDvN0KUwGPPWtfSOzmYTaMDdn03MbF+JzhXcqmlezeiiBtlL2CRhI9TNVbxabaExw0b2Bmtq03s1vaIWpVvHCjeGAXagUfABPk2o39MzrMJr2tMHABP+91CiMBjz1rX7yDm2Pl5mcqUagq1T6NoYe8XFz5UjKJhLFdem2FhA=="
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-10-20T16:58:42.787904Z",
+        "modelVersion": "gemini-3.1-pro-preview-customtools",
+        "responseId": "00000000000000000000006",
+        "usageMetadata": {
+          "candidatesTokenCount": 13,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 13
+            }
+          ],
+          "promptTokenCount": 27,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 27
+            }
+          ],
+          "thoughtsTokenCount": 70,
+          "totalTokenCount": 110,
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    }
+  ],
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-disposition": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.1-pro-preview-customtools:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "What is the weather in Paris in celsius for today? Use the tool."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 1024,
+      "thinkingConfig": {
+        "includeThoughts": true,
+        "thinkingLevel": "LOW"
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "Weather for a city.",
+            "name": "get_weather",
+            "parametersJsonSchema": {
+              "$defs": {
+                "unit": {
+                  "enum": [
+                    "c",
+                    "f"
+                  ],
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "days": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                }
+              },
+              "required": [
+                "city",
+                "unit",
+                "days"
+              ],
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "usage": {
+    "candidatesTokenCount": 13,
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 13
+      }
+    ],
+    "promptTokenCount": 27,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 27
+      }
+    ],
+    "thoughtsTokenCount": 70,
+    "totalTokenCount": 110,
+    "trafficType": "ON_DEMAND"
+  }
+}

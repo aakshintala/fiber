@@ -1,0 +1,149 @@
+{
+  "cost": 2.4e-05,
+  "events": [
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "functionCall": {
+                    "args": {},
+                    "id": "call_6274632",
+                    "name": "get_image"
+                  },
+                  "thoughtSignature": "AY89a19jsGjmpT93HQX447eegxEqvGxr6ORembNcZ5OcUTqr0lxMc0++FqbqsjdsmU7XzvEzoV95LPX21h0hkCS1X7SiCGd0xqFh0F4awRHBv8D4LdDm8O3ly4Q="
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:57:41.389040Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000001",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": ""
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-10-20T16:57:41.389040Z",
+        "modelVersion": "gemini-3.1-flash-lite",
+        "responseId": "00000000000000000000001",
+        "usageMetadata": {
+          "candidatesTokenCount": 10,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 10
+            }
+          ],
+          "promptTokenCount": 36,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 36
+            }
+          ],
+          "totalTokenCount": 46,
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    }
+  ],
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-disposition": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Look at the image the tool returns, then name its colour in one word."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 256,
+      "thinkingConfig": {
+        "includeThoughts": true
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    },
+    "toolConfig": {
+      "functionCallingConfig": {
+        "mode": "ANY"
+      }
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "Weather for a city.",
+            "name": "get_image",
+            "parametersJsonSchema": {
+              "properties": {},
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "usage": {
+    "candidatesTokenCount": 10,
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 10
+      }
+    ],
+    "promptTokenCount": 36,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 36
+      }
+    ],
+    "totalTokenCount": 46,
+    "trafficType": "ON_DEMAND"
+  }
+}

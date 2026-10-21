@@ -412,9 +412,10 @@ pub(crate) fn target(url: &str) -> String {
 /// Whether an error body says the provider does not know the model: the
 /// code `model_not_found` (muse, OpenAI), OpenRouter's "is not a valid model
 /// ID", a `not_found_error` whose message names the model (Anthropic, muse
-/// on messages; the same type with "Not found" is a wrong path), or Gemini's
+/// on messages; the same type with "Not found" is a wrong path), Gemini's
 /// `NOT_FOUND` for a `models/` name (`research/provider-errors`, "Unknown
-/// model" and "Wrong path").
+/// model" and "Wrong path"), or Vertex's `NOT_FOUND` for a `Publisher
+/// model` (`research/vertex-probe`).
 fn unknown_model(body: &str) -> bool {
     let value: Option<Value> = serde_json::from_str(body).ok();
     let field = |pointer: &str| {
@@ -428,7 +429,8 @@ fn unknown_model(body: &str) -> bool {
         || message.contains("is not a valid model ID")
         || (field("/error/type") == "not_found_error"
             && message.to_ascii_lowercase().contains("model"))
-        || (field("/error/status") == "NOT_FOUND" && message.starts_with("models/"))
+        || (field("/error/status") == "NOT_FOUND"
+            && (message.starts_with("models/") || message.starts_with("Publisher model")))
 }
 
 /// The code for a failure inside a 200 stream: from the provider's own code,

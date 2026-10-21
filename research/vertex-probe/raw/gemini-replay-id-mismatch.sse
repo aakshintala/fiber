@@ -1,0 +1,6 @@
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": "Sunny,"}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-3.1-flash-lite","createTime": "2026-10-20T16:56:42.930719Z","responseId": "00000000000000000000005"}
+
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": " 21°C."}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-3.1-flash-lite","createTime": "2026-10-20T16:56:42.930719Z","responseId": "00000000000000000000005"}
+
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": "","thoughtSignature": "AY89a19NGVJk5nxd9Ldh+sagWVbe1OHQofbKyiw6TFnhA06xPtSJI4Vtnt0llf7xIeGS/reNw/HAUaqTWXPjvkif4Rhqp+fXcn48KsNGfXhx3cGlUo/LJFNNfEg="}]},"finishReason": "STOP"}],"usageMetadata": {"promptTokenCount": 86,"candidatesTokenCount": 8,"totalTokenCount": 94,"trafficType": "ON_DEMAND","promptTokensDetails": [{"modality": "TEXT","tokenCount": 86}],"candidatesTokensDetails": [{"modality": "TEXT","tokenCount": 8}]},"modelVersion": "gemini-3.1-flash-lite","createTime": "2026-10-20T16:56:42.930719Z","responseId": "00000000000000000000005"}
+

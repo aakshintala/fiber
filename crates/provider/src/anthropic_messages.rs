@@ -3,7 +3,10 @@
 //! Bedrock, Google Vertex and Azure Foundry. A request is a `POST` to
 //! `<base_url>/messages`; the reply is a server-sent event stream that ends
 //! with `message_stop`, which always follows the `message_delta` carrying
-//! the stop reason (`research/anthropic-messages-probe`).
+//! the stop reason (`research/anthropic-messages-probe`). A model that
+//! declares `compat.vertex_raw_predict` is Claude on Google Vertex instead:
+//! a `POST` to `<base_url>/models/<id>:streamRawPredict` whose reply is the
+//! same event stream (`docs/model-routing.md`, "Google Vertex wire facts").
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -17,10 +20,14 @@ use serde_json::{Map, Value, json};
 pub use crate::anthropic_messages_decode::decode;
 use crate::anthropic_messages_decode::decode_tracked;
 pub use crate::call::Call;
-use crate::{Endpoint, strict};
+use crate::{Endpoint, Error, strict};
 
 /// The wire version every request declares (`research/anthropic-messages-probe`).
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// The wire version a Vertex request declares in its body, where Vertex
+/// reads it (`docs/model-routing.md`, "Google Vertex wire facts").
+const VERTEX_VERSION: &str = "vertex-2023-10-16";
 
 /// One model reached over `anthropic-messages`.
 #[derive(Debug, Clone)]
@@ -70,14 +77,21 @@ impl Messages {
             &request.cache_key,
         );
         let body = body(endpoint, request);
-        Call::new(
-            endpoint,
-            request,
-            format!("{}/messages", endpoint.base_url.trim_end_matches('/')),
-            headers,
-            body,
-            |stream, _, sink| decode_tracked(stream, sink),
-        )
+        let base_url = endpoint.base_url.trim_end_matches('/');
+        // Vertex names the model in the path, not the body.
+        let url = if endpoint.compat.vertex_raw_predict {
+            format!("{base_url}/models/{}:streamRawPredict", endpoint.model)
+        } else {
+            format!("{base_url}/messages")
+        };
+        let call = Call::new(endpoint, request, url, headers, body, |stream, _, sink| {
+            decode_tracked(stream, sink)
+        });
+        if endpoint.compat.vertex_raw_predict {
+            call.on_error(unlisted)
+        } else {
+            call
+        }
     }
     /// Builds the observed call for `request`: as the plain request, writing
     /// one `provider_request` line when the call was sent. At `info` the
@@ -210,7 +224,12 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // "Rewind").
     let tools = wired_tools(request);
     let mut body = Map::new();
-    body.insert("model".into(), json!(endpoint.model));
+    // Vertex reads the model from the path and the version from the body.
+    if endpoint.compat.vertex_raw_predict {
+        body.insert("anthropic_version".into(), json!(VERTEX_VERSION));
+    } else {
+        body.insert("model".into(), json!(endpoint.model));
+    }
     if let Some(system) = system(request) {
         body.insert("system".into(), system);
     }
@@ -289,6 +308,20 @@ fn budget_tokens(level: &contract::ThinkingLevel, max_tokens: Option<u64>) -> Op
         Some(m) if m <= 1024 => None,
         Some(m) => Some(1024.max(budget.min(m - 1024))),
     }
+}
+
+/// A failure whose body is a one-element list holding an object, as
+/// Vertex's `streamRawPredict` sends one, with that object as its body, so
+/// the error codes read it as any provider's (`docs/model-routing.md`,
+/// "Google Vertex wire facts"). Any other failure is kept as it came.
+fn unlisted(mut error: Error) -> Error {
+    if let Error::Status { body, .. } = &mut error
+        && let Ok(Value::Array(items)) = serde_json::from_str::<Value>(body)
+        && let [inner @ Value::Object(_)] = items.as_slice()
+    {
+        *body = inner.to_string();
+    }
+    error
 }
 
 /// Whether any `enum` in `schema` has an object or array value.
