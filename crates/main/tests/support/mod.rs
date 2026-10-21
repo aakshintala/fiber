@@ -259,8 +259,13 @@ pub(crate) struct Setup {
 impl Setup {
     /// Starts the test's deadline before any setup work.
     pub(crate) fn new() -> Self {
+        Self::new_under(&std::env::temp_dir())
+    }
+
+    /// As [`Setup::new`], rooted under `parent` for a short socket path.
+    pub(crate) fn new_under(parent: &Path) -> Self {
         let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fh");
+        let root = fakes::TempDir::under(parent, "fh");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { root, deadline }
