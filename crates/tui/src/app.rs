@@ -245,6 +245,9 @@ pub(crate) struct App {
     history: history::History,
     /// "Copied" shows, from a click on `copy` to the next key or click.
     copied: bool,
+    /// A `/copy` waiting for the opening pass to end (`docs/tui.md`,
+    /// "Selection and copy").
+    copy_owed: bool,
     /// A whole-turn copy waiting on dropped pages (`docs/tui.md`,
     /// "History and paging").
     pending_turn: Option<crate::turn_text::PendingTurn>,
@@ -337,6 +340,7 @@ impl App {
             completion: completion::Completion::default(),
             history: history::History::default(),
             copied: false,
+            copy_owed: false,
             pending_turn: None,
             focus: None,
             stops: Vec::new(),
@@ -369,6 +373,8 @@ impl App {
     /// file is one session's stream.
     pub(crate) fn attach(&mut self, session: SessionId) {
         self.end_overlay();
+        // A `/copy` waiting on a pass was for the screen before this one.
+        self.copy_owed = false;
         self.switch_session(&session);
         // Another session's stale rows end with the attachment; the open
         // session's own notice stands until `stream_reopened` ends it.
@@ -405,6 +411,10 @@ impl App {
         if let Some(effect) = self.report_key(&key) {
             return effect;
         }
+        // A `/copy` waiting on a pass copies only what was on screen
+        // when it was asked: the next key drops it, and the Enter that
+        // runs `/copy` sets it again below.
+        self.copy_owed = false;
         if matches!(
             key,
             Key::PageUp
@@ -1047,6 +1057,9 @@ impl App {
     /// says why.
     pub(crate) fn disconnected(&mut self) {
         self.passes.clear();
+        // The pass ends here without folding: a `/copy` waiting on it
+        // has nothing new to copy.
+        self.copy_owed = false;
         self.abandoned_history.clear();
         self.end_overlay();
         if self.outbox.is_up() {

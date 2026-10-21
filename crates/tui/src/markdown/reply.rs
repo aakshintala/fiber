@@ -45,6 +45,11 @@ impl Reply {
         self.id
     }
 
+    /// The text as the model wrote it, Markdown included.
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
     /// Appends a delta, leaving the shared slot for the replies still
     /// holding the old text.
     pub(crate) fn push(&mut self, text: &str) {

@@ -54,6 +54,7 @@ pub use isolation::{
 pub use session::{Declare, McpLogin, Replacement, ServersRefresh, Session};
 pub use sessions::SessionSockets;
 pub use signals::{SHUTDOWN_BOUND, Signals, signal_code};
+pub use socket::{SOCKET_PATH_MAX, check_socket_path};
 pub use steer::{Steered, steer};
 pub use watch::{Watched, watch, watch_after};
 

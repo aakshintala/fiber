@@ -1416,6 +1416,20 @@ The copy goes through OSC 52 and, on a local session, the system clipboard
 command as well. tmux's default `set-clipboard external` drops OSC 52
 silently, and over SSH only OSC 52 reaches the person's clipboard.
 
+`/copy` copies the newest reply in the conversation on screen the same way,
+and "Copied" shows: the text parts of the model's latest message that has
+text, as the model wrote them, Markdown included, joined by a blank line.
+With no reply yet, a notice says "No reply to copy yet." When the window
+holds no reply newer than a page it has dropped ("History and paging"), the
+newest reply may be on that page, so nothing is copied and a notice says "The
+last reply is paged out; jump to the end, then /copy again." While an opening
+pass folds a session's history ("History and paging"), the conversation on
+screen stays as it was, so `/copy` waits and copies in the frame after the
+pass ends. The next key, edit or click, a view opening or closing, leaving the
+session, a session attaching and a lost connection each drop the wait, so it
+never copies from a screen the person has moved on from. A job's view, and a delegate's view with no transcript, hold no
+reply: there `/copy` says "No reply to copy in this view."
+
 Shift-drag stays the terminal's native selection. A selection's highlight
 counts as open, so Esc clears it before it can interrupt the turn.
 
@@ -1764,6 +1778,7 @@ later release still applies.
 | `/usage`, `/cost` | Opens the usage view. |
 | `/quota` | Opens the quota view and fetches every label's quota. |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
+| `/copy` | Copies the newest reply ("Selection and copy"). |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |

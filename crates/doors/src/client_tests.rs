@@ -748,3 +748,12 @@ fn mcp_reconnect_delivers_the_server_to_the_inbox() {
         .unwrap();
     opened.close();
 }
+
+#[test]
+fn until_carries_the_shared_must_succeed_bound() {
+    assert_eq!(
+        support::UNTIL,
+        fakes::MUST_SUCCEED_WITHIN,
+        "until's whole-wait bound matches the shared must-succeed bound"
+    );
+}
