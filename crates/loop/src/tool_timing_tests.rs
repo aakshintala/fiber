@@ -1548,6 +1548,15 @@ fn turn(world: &mut World) -> Result<Option<TurnOutcome>, Error> {
     join_turn(world, flight)
 }
 
+#[test]
+fn waits_carry_the_shared_must_succeed_bound() {
+    assert_eq!(
+        WAIT,
+        fakes::MUST_SUCCEED_WITHIN,
+        "every wait that must succeed, the turn join included, uses the shared bound",
+    );
+}
+
 /// The next `permission_requested` on a watcher registered before the turn,
 /// with its request and action ids. One deadline bounds the whole wait:
 /// every skipped line takes what remains of it, never a fresh wait.
