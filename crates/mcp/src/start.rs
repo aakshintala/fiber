@@ -245,7 +245,7 @@ fn limits(spec: &ServerSpec) -> net::Limits {
 
 /// Starts one spec on its transport and runs the handshake: the only
 /// production caller of [`Server::start_observed`]. Session start
-/// ([`open_observed`]) and every lazy first start and restart
+/// ([`open_staged`]) and every lazy first start and restart
 /// ([`Slot::serve`]) both go through here, so the guard runs immediately
 /// before each spawn. One connection guard starts per attempt through
 /// `timing`: owned here and threaded to the tool-list boundary, which
@@ -612,34 +612,39 @@ pub(crate) fn start_observed_tracked(
         let name = spec.name.clone();
         let outstanding = outstanding.clone();
         thread::spawn(move || {
-            let opened = open_observed(
+            let required = spec.required;
+            let key = spec.key();
+            let staged = open_staged(
                 spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
             );
+            if let Shadowed::Up(ref opened) = staged {
+                cache::write(&cache, &name, &key, &opened.listed);
+            }
             if let Some(outstanding) = outstanding.as_ref() {
                 outstanding
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .remove(&name);
             }
-            done.send((index, opened)).unwrap_or(());
+            done.send((index, required, staged)).unwrap_or(());
         });
     }
     drop(done);
-    let mut opened: Vec<(usize, Opened)> = results.into_iter().collect();
-    opened.sort_by_key(|(index, _)| *index);
+    let mut staged: Vec<(usize, bool, Shadowed)> = results.into_iter().collect();
+    staged.sort_by_key(|(index, _, _)| *index);
     let mut tools: Vec<(String, Arc<dyn Tool>, ToolInfo)> = Vec::new();
     let mut failed = Vec::new();
     let mut required_failed = None;
     let mut slots = Vec::new();
     let mut sources = Vec::new();
-    for (_, opened) in opened {
-        match opened {
-            Opened::Up(slot, declared, listed) => {
-                slots.push(Arc::clone(&slot));
-                sources.extend(listed);
-                tools.extend(declared);
+    for (_, required, staged) in staged {
+        match staged {
+            Shadowed::Up(opened) => {
+                slots.push(Arc::clone(&opened.slot));
+                sources.extend(opened.sources);
+                tools.extend(opened.declared);
             }
-            Opened::Down { failure, required } => {
+            Shadowed::Down { failure } => {
                 if required {
                     if required_failed.is_none() {
                         required_failed = Some(failure);
@@ -722,14 +727,6 @@ pub(crate) fn resources_info(definition: &ToolDefinition) -> ToolInfo {
 
 pub(crate) type Declaration = (String, Arc<dyn Tool>, ToolInfo);
 
-pub(crate) enum Opened {
-    Up(Arc<Slot>, Vec<Declaration>, Vec<PromptSource>),
-    Down {
-        failure: McpServerFailed,
-        required: bool,
-    },
-}
-
 /// Session start without timing: direct-start tests only.
 #[cfg(test)]
 pub(crate) fn open(
@@ -740,10 +737,16 @@ pub(crate) fn open(
     cache: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
-) -> Opened {
-    open_observed(
+) -> Shadowed {
+    let name = spec.name.clone();
+    let key = spec.key();
+    let staged = open_staged(
         spec, workspace, artifacts, images, cache, clock, version, None,
-    )
+    );
+    if let Shadowed::Up(ref opened) = staged {
+        cache::write(cache, &name, &key, &opened.listed);
+    }
+    staged
 }
 
 /// What a shadow start holds: the running slot, its declarations, the
@@ -765,9 +768,14 @@ pub(crate) enum Shadowed {
     Down { failure: McpServerFailed },
 }
 
+/// Starts one spec and stages the outcome without writing the cache:
+/// the caller writes it only after its required starts succeed, so a
+/// required failure leaves the old caches byte-identical. The guard is
+/// consumed at the tool-list boundary, before prompt discovery. `None`
+/// timing stays untimed, as before.
 #[allow(
     clippy::too_many_arguments,
-    reason = "the observed companion adds only the Timing"
+    reason = "one shadow's startup inputs, as at session start"
 )]
 pub(crate) fn open_staged(
     spec: ServerSpec,
@@ -815,37 +823,6 @@ pub(crate) fn open_staged(
         listed: live,
         sources,
     })
-}
-
-/// As [`open`], timing the attempt's connection through `timing`: the
-/// guard is consumed at the tool-list boundary, before prompt discovery.
-/// `None` stays untimed, as before.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the observed companion adds only the Timing"
-)]
-pub(crate) fn open_observed(
-    spec: ServerSpec,
-    workspace: &Path,
-    artifacts: &Path,
-    images: &Arc<dyn Images>,
-    cache: &Path,
-    clock: &Arc<dyn Clock>,
-    version: &str,
-    timing: Option<contract::diag::Timing>,
-) -> Opened {
-    let name = spec.name.clone();
-    let key = spec.key();
-    let required = spec.required;
-    match open_staged(
-        spec, workspace, artifacts, images, cache, clock, version, timing,
-    ) {
-        Shadowed::Up(opened) => {
-            cache::write(cache, &name, &key, &opened.listed);
-            Opened::Up(opened.slot, opened.declared, opened.sources)
-        }
-        Shadowed::Down { failure } => Opened::Down { failure, required },
-    }
 }
 
 /// One prompt row source per listed prompt of `server`.

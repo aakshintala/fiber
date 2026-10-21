@@ -1238,6 +1238,7 @@ fn a_session_start_whose_guard_refuses_reports_start_failed() {
         spec.stdio_mut().args = __declared.1;
     }
     spec.stdio_mut().run = Some(run_program(&setup, &gate));
+    let required = spec.required;
     let images: std::sync::Arc<dyn contract::images::Images> = FakeImages::ok();
     let opened = super::open(
         spec,
@@ -1248,7 +1249,7 @@ fn a_session_start_whose_guard_refuses_reports_start_failed() {
         &setup.clock(),
         "0.0.0",
     );
-    let super::Opened::Down { failure, required } = opened else {
+    let super::Shadowed::Down { failure } = opened else {
         panic!("a refused guard fails the start");
     };
     assert!(!required);
