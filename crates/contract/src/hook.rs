@@ -236,6 +236,10 @@ pub struct CheckAnswer {
 pub struct BeforeMessage<'a> {
     /// The message's content parts.
     pub content: &'a [ContentPart],
+    /// The sending session, for a session message; absent otherwise.
+    pub from_session_id: Option<&'a SessionId>,
+    /// The sender's parent session, for a session message; absent otherwise.
+    pub parent_session_id: Option<&'a SessionId>,
 }
 
 /// A `before_message` replacement: the content and who changed it.

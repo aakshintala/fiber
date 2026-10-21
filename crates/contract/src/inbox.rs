@@ -90,6 +90,8 @@ pub struct SessionMessage {
     /// The latest `session_named` name in the sender's log; `None` when it
     /// has none, cleared it, or its log could not be read.
     pub name: Option<String>,
+    /// The sender's parent session, when the sender has one.
+    pub parent_session_id: Option<crate::SessionId>,
 }
 
 /// What the loop's inbox carries (`docs/invocation.md`, "Driver commands").
@@ -109,9 +111,10 @@ pub enum Delivery {
     /// names, when that message is still unapplied.
     SteerDrop(crate::CommandId, Ack),
     /// A session message from another session (`docs/tools.md`, "Messaging
-    /// other sessions"). Answered by the door once it is in the inbox;
-    /// the loop never answers it.
-    Message(SessionMessage),
+    /// other sessions"). The ack answers once the loop takes it: accepted
+    /// after the `before_message` hook passed and the message is queued,
+    /// or rejected `message_refused`, `hook_failed` or `closing`.
+    Message(SessionMessage, Ack),
     /// Switches model or thinking at the next turn boundary.
     Model(crate::commands::ModelArgs, Ack),
     /// Switches the credential label at the next turn boundary.
