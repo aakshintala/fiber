@@ -57,6 +57,11 @@ const PROVIDER_FILES: &[(&str, &str, &str)] = &[
         "openrouter",
         include_str!("../../../providers/openrouter/providers/openrouter.json"),
     ),
+    (
+        "vertex",
+        "vertex",
+        include_str!("../../../providers/vertex/providers/vertex.json"),
+    ),
 ];
 
 fn declared_providers() -> Vec<(String, String)> {

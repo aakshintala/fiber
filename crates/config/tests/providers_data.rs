@@ -59,6 +59,10 @@ fn a_shipped_reviewer_model_is_in_its_providers_list_and_is_not_a_contributor_mo
             "openrouter",
             include_str!("../../../providers/openrouter/providers/openrouter.json"),
         ),
+        (
+            "vertex",
+            include_str!("../../../providers/vertex/providers/vertex.json"),
+        ),
     ];
     let mut checked = 0;
     for (stem, text) in PROVIDER_FILES {

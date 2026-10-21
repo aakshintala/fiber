@@ -686,7 +686,6 @@ const OPENCODE_ZEN: Package = Package {
     ],
 };
 
-/// The seven first-party provider files generated from models.dev.
 /// The compat layer of a Bedrock Claude model that takes a token budget:
 /// the Invoke flag beside the budget flag, since a table layer replaces the
 /// whole `compat` object rather than deep-merging it.
@@ -1152,7 +1151,51 @@ const BEDROCK: Package = Package {
     ],
 };
 
-pub(crate) const PACKAGES: [Package; 8] = [
+/// Gemini on Google Vertex: models.dev's `google-vertex` Gemini 3 and later
+/// models, at the `global` location, each of which answered a tool call
+/// there (research/vertex-probe/raw/gemini-models.json). `gemini-4-argon`
+/// answered once and then refused every request
+/// (research/vertex-probe/raw/gemini-argon-refused.json), and Claude
+/// answered for no model on the probe's project, so neither is kept. The
+/// base URL's `{project}` is the package's `project` setting, read from
+/// `GOOGLE_CLOUD_PROJECT` when unset. Each thinking row is the `gemini`
+/// table's row for the same model.
+const VERTEX: Package = Package {
+    path: "providers/vertex/providers/vertex.json",
+    source: "google-vertex",
+    provider: r#"{"name":"vertex","placeholders":{"project":{"env":"GOOGLE_CLOUD_PROJECT"}},"reviewer_model":"gemini-3.8-flash"}"#,
+    protocol: ProtocolRule::Fixed("google-generative-ai"),
+    base_url: "https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google",
+    drop_deprecated: true,
+    skip: &[],
+    only: &[
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
+    ],
+    protocol_overrides: &[],
+    every_model: r#"{}"#,
+    by_protocol: &[],
+    by_model: &[],
+    thinking: &[
+        ("gemini-3-flash-preview", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemini-3.1-flash-lite", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemini-3.1-pro-preview", LOW_MEDIUM_HIGH, None),
+        ("gemini-3.1-pro-preview-customtools", LOW_MEDIUM_HIGH, None),
+        ("gemini-3.5-flash", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemini-3.5-flash-lite", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemini-3.7-flash", LOW_MEDIUM_HIGH, None),
+        ("gemini-3.8-flash", LOW_MEDIUM_HIGH, None),
+    ],
+};
+
+/// The nine first-party provider files generated from models.dev.
+pub(crate) const PACKAGES: [Package; 9] = [
     ANTHROPIC,
     GEMINI,
     OPENAI,
@@ -1161,4 +1204,5 @@ pub(crate) const PACKAGES: [Package; 8] = [
     OPENCODE_GO,
     OPENCODE_ZEN,
     BEDROCK,
+    VERTEX,
 ];

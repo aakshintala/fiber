@@ -1,0 +1,4 @@
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": "Blue."}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-2.5-flash-lite","createTime": "2026-10-20T16:57:46.942377Z","responseId": "00000000000000000000005"}
+
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": ""}]},"finishReason": "STOP"}],"usageMetadata": {"promptTokenCount": 272,"candidatesTokenCount": 2,"totalTokenCount": 274,"trafficType": "ON_DEMAND","promptTokensDetails": [{"modality": "TEXT","tokenCount": 14},{"modality": "IMAGE","tokenCount": 258}],"candidatesTokensDetails": [{"modality": "TEXT","tokenCount": 2}]},"modelVersion": "gemini-2.5-flash-lite","createTime": "2026-10-20T16:57:46.942377Z","responseId": "00000000000000000000005"}
+

@@ -270,6 +270,15 @@ credential label is the AWS profile name: `providers."bedrock".credential`
 set to `my-profile` reads that profile, and `/credential` switches it
 (`docs/model-routing.md`, "Protocols and providers").
 
+The first-party `vertex` extension has one setting, `project`: the Google
+Cloud project its models' base URL names, read from `GOOGLE_CLOUD_PROJECT`
+when it is unset (`docs/model-routing.md`, "A per-account host"). Its
+credential is not a key source. Its `credential()` asks the Google Cloud CLI
+for a token, and the credential label is a gcloud configuration's name:
+`providers."vertex".credential` set to `work` takes the token of the
+configuration `work`, and `/credential` switches it
+(`docs/model-routing.md`, "Protocols and providers").
+
 ## Secrets
 
 A secret is a file in `credentials/` in Fiber home, mode 0600. A provider's
@@ -614,6 +623,7 @@ declares") lists:
   | `thinking_budget` | boolean | `anthropic-messages` | the thinking level goes in `thinking: {type: "enabled", budget_tokens}` (`docs/model-routing.md`, "Thinking"); absent, it goes in `thinking: {type: "adaptive"}` and `output_config: {effort}` |
   | `bearer` | boolean | `anthropic-messages` | the key goes in `authorization: Bearer`; absent, it goes in `x-api-key` |
   | `bedrock_invoke` | boolean | `anthropic-messages` | the model is Claude on AWS Bedrock's Invoke API: the request goes to `<base_url>/model/<id>/invoke-with-response-stream` with `anthropic_version` in the body and no `model` or `stream`, the key goes in `authorization: Bearer`, and the reply is read in AWS event-stream framing (`docs/model-routing.md`, "Bedrock Invoke wire facts") |
+  | `vertex_raw_predict` | boolean | `anthropic-messages` | the model is Claude on Google Vertex: the request goes to `<base_url>/models/<id>:streamRawPredict` with `anthropic_version` in the body and no `model`, and an error body that is a list of one object is read as that object (`docs/model-routing.md`, "Google Vertex wire facts") |
 
   `openai-completions` always sends `stream_options.include_usage: true`,
   because OpenAI sends no usage without it (`docs/model-routing.md`,

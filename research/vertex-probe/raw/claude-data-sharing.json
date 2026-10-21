@@ -1,0 +1,59 @@
+{
+  "body": [
+    {
+      "error": {
+        "code": 403,
+        "message": "Access to this model requires data sharing to be enabled for publisher 'anthropic'. Please set `PublisherModelConfig.data_sharing_enabled_provider` to 'anthropic' via the setPublisherModelConfig API to use this model.",
+        "status": "PERMISSION_DENIED"
+      }
+    }
+  ],
+  "cost": 0.0,
+  "headers": {
+    "accept-ranges": null,
+    "alt-svc": null,
+    "connection": null,
+    "content-type": "application/json; charset=UTF-8",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/anthropic/models/claude-fable-5:streamRawPredict",
+  "request": {
+    "anthropic_version": "vertex-2023-10-16",
+    "max_tokens": 4,
+    "messages": [
+      {
+        "content": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "hi",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "stream": true,
+    "system": [
+      {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "text": "You are terse.",
+        "type": "text"
+      }
+    ],
+    "tool_choice": {
+      "type": "auto"
+    }
+  },
+  "status": 403,
+  "usage": {}
+}

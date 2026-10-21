@@ -105,10 +105,11 @@ pub enum Steered {
 /// [`Steered::Withheld`] with nothing written, true writes the `steer`
 /// line. No byte of it is written unless `commit` returned true on that
 /// connection, and `steer` holds no lock of the caller's across the write.
-/// `on_queued` runs at most once, when the probe's `command_accepted`
-/// arrives before the steer's answer: the session's reader answers the
-/// probe once it handed the steer to its inbox, so the probe proves the
-/// message is queued.
+/// `on_queued` runs at most once, when the session's reader queued the
+/// message: the probe's `command_accepted` proves it when it arrives
+/// first, and the steer's own at-once `command_accepted` proves it
+/// otherwise, since the reader queues, emits `steering_queue` and only
+/// then answers.
 pub fn steer(
     home: &Path,
     id: &SessionId,
@@ -178,6 +179,12 @@ pub fn steer(
             return Steered::Rejected(rejected(&line));
         }
         if is_answer(&line, "command_accepted", command) {
+            // The at-once answer is itself the queue proof: the reader
+            // queues, emits and only then answers, so the probe may
+            // never beat it.
+            if !queued {
+                on_queued();
+            }
             return Steered::Accepted;
         }
         if !queued && is_answer(&line, "command_accepted", &probe) {
