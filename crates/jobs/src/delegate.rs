@@ -731,7 +731,7 @@ pub(crate) mod test_rig {
 
     use contract::inbox::Delivery;
     use fakes::clock::FakeClock;
-    use fakes::{Recorder, TempDir, Watchdog, within};
+    use fakes::{Deadline, Recorder, TempDir, Watchdog, within};
 
     use super::run::{Launch, Launched, Watch};
     use crate::registry::Registry;
@@ -811,19 +811,23 @@ pub(crate) mod test_rig {
     #[track_caller]
     pub(crate) fn child_group(rig: &Rig) -> Watchdog {
         let pid = rig._dir.path().join("child.pid");
-        let pid: u32 = within("the child writes its pid", DEADLINE, move || {
-            loop {
-                let Ok(text) = std::fs::read_to_string(&pid) else {
-                    std::thread::yield_now();
-                    continue;
-                };
-                let Ok(pid) = text.trim().parse() else {
-                    std::thread::yield_now();
-                    continue;
-                };
-                return pid;
-            }
-        });
+        let pid: u32 = within(
+            "the child writes its pid",
+            Deadline::after(DEADLINE),
+            move || {
+                loop {
+                    let Ok(text) = std::fs::read_to_string(&pid) else {
+                        std::thread::yield_now();
+                        continue;
+                    };
+                    let Ok(pid) = text.trim().parse() else {
+                        std::thread::yield_now();
+                        continue;
+                    };
+                    return pid;
+                }
+            },
+        );
         Watchdog::group(pid)
     }
 }

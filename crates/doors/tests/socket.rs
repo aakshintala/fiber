@@ -2566,7 +2566,7 @@ fn answer_within(client: &Client, id: &str) -> Option<Value> {
 fn answers_within(client: &Client, ids: &[&str]) -> Vec<Option<Value>> {
     let mut answers: Vec<Option<Value>> = vec![None; ids.len()];
     while answers.iter().any(Option::is_none) {
-        let Some(line) = client.recv(DEADLINE) else {
+        let Some(line) = client.recv(fakes::Deadline::after(DEADLINE)) else {
             break;
         };
         if let Some(slot) = ids
@@ -6108,6 +6108,7 @@ mod import_sameness {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use fakes::Deadline;
     use serde_json::{Map, Value, json};
 
     use super::support::{Opened, kind, response, send, subscribe};
@@ -6322,7 +6323,7 @@ mod import_sameness {
         let output = fakes::rerun_prepared(
             &format!("{}::{test}", child_name()),
             &[(CHILD, case)],
-            CHILD_WITHIN,
+            Deadline::after(CHILD_WITHIN),
             |command| {
                 command.env("HOME", person);
             },

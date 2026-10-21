@@ -60,7 +60,12 @@ impl Files {
             .current_dir(self.dir.path());
         isolated(&mut command);
         let child = command.spawn().unwrap();
-        let output = finished("xtask bench-report", child, &[], CHILD_WITHIN);
+        let output = finished(
+            "xtask bench-report",
+            child,
+            &[],
+            Deadline::after(CHILD_WITHIN),
+        );
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         std::fs::read_to_string(self.dir.path().join("comment.md")).unwrap()
     }
@@ -219,7 +224,7 @@ fn the_spawned_child_holds_no_test_stdio() {
     lookup.args(["-o", "pgid=", "-p", &group.to_string()]);
     isolated(&mut lookup);
     let lookup = lookup.spawn().unwrap();
-    let output = finished("ps pgid", lookup, &[], CHILD_WITHIN);
+    let output = finished("ps pgid", lookup, &[], Deadline::after(CHILD_WITHIN));
     assert!(output.status.success(), "{output:?}");
     let pgid: u32 = String::from_utf8_lossy(&output.stdout)
         .trim()
@@ -234,9 +239,14 @@ fn the_spawned_child_holds_no_test_stdio() {
     // it returns, so the test itself states that no process is left
     // behind to hold any handle nextest waits on.
     drop(stdin);
-    finished("probe shell", guard.disarm(), &[], CHILD_WITHIN);
+    finished(
+        "probe shell",
+        guard.disarm(),
+        &[],
+        Deadline::after(CHILD_WITHIN),
+    );
     assert!(
-        group_empties(group, CHILD_WITHIN),
+        group_empties(group, fakes::Deadline::after(CHILD_WITHIN)),
         "the probe group {group} is still alive after finished"
     );
 }

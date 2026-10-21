@@ -197,7 +197,7 @@ impl Setup {
         // The group is empty. Skip the drop, which would kill it again,
         // and tell the watchdog to exit without signalling.
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         TextRun::from(output)
     }
 
@@ -2911,7 +2911,7 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
     assert_eq!(exited["exit_code"], 0);
     assert_eq!(exited["text"], "Hello.");
     assert!(
-        server.await_requests(3, setup.deadline.left()),
+        server.await_requests(3, setup.deadline),
         "waited for the refresh, the token and the model request"
     );
     let mut paths: Vec<String> = server
@@ -2995,7 +2995,7 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "waited for the model request"
     );
     let requests = server.requests();
@@ -3040,7 +3040,7 @@ fn a_declared_thinking_default_is_sent_when_no_level_is_given() {
     let run = setup.run_with_stdin(&["ask", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "waited for the model request"
     );
     let requests = server.requests();
@@ -3205,9 +3205,15 @@ fn login_with_an_unknown_key_prints_its_notice_first() {
     );
 }
 
-/// Installs an inline extension `name` with `init_lua`, and makes `name/m1`
-/// the configured model.
-fn inline_extension(setup: &Setup, name: &str, init_lua: &str, base_url: &str) {
+/// Installs an inline extension `name` with `init_lua`, and `data` as its
+/// provider data file when given, and makes `name/m1` the configured model.
+fn inline_extension(
+    setup: &Setup,
+    name: &str,
+    init_lua: &str,
+    base_url: &str,
+    data: Option<&Value>,
+) {
     let source = setup.root.path().join(format!("src-{name}"));
     // The manifest declares the URL the script's `models()` serves.
     let manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
@@ -3219,6 +3225,9 @@ fn inline_extension(setup: &Setup, name: &str, init_lua: &str, base_url: &str) {
         init_lua,
     )
     .unwrap();
+    if let Some(data) = data {
+        write(&source.join("providers").join(format!("{name}.json")), data);
+    }
     extensions::plan(
         &setup.home(),
         &extensions::Request::Path(source),
@@ -3251,6 +3260,7 @@ fn the_initial_model_loads_only_its_own_provider_file() {
                 marker = marker.display().to_string()
             ),
             &base_url,
+            None,
         );
         config::write_model_cache(&setup.home(), name, &json!([{
             "id":"lm", "protocol":"openai-responses", "base_url":base_url, "context_window":100000
@@ -3275,6 +3285,36 @@ fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provid
             "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{base_url}\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
         ),
         &base_url,
+        None,
+    );
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_pre_session(&run, 1, "credential_failed");
+    let error = &run.last()["payload"]["error"];
+    // The data declares no `login`, so `fiber login acme` would store a key
+    // `credential()` never reads.
+    assert_eq!(error["message"], "acme's credential() failed.");
+    assert_eq!(error["provider"]["name"], "acme");
+    let said = error["provider"]["message"].as_str().unwrap();
+    assert!(said.ends_with("refresh failed: body-xyz"), "{said}");
+    assert!(error["provider"].get("status").is_none());
+    assert!(!run.stderr.contains("body-xyz"), "{}", run.stderr);
+}
+
+#[test]
+fn a_credential_error_at_startup_advises_fiber_login_when_the_provider_s_data_declares_login() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    let base_url = format!("{}/v1", server.url());
+    let data = json!({"name": "acme", "login": "browser", "models": [{"id": "m1",
+        "protocol": "openai-responses", "base_url": base_url, "context_window": 100000}]});
+    inline_extension(
+        &setup,
+        "acme",
+        "fiber.provider(\"acme\", {\n credential = {\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n },\n})\n",
+        &base_url,
+        Some(&data),
     );
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);
@@ -3285,11 +3325,8 @@ fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provid
         error["message"],
         "acme's credential() failed. Run `fiber login acme`."
     );
-    assert_eq!(error["provider"]["name"], "acme");
     let said = error["provider"]["message"].as_str().unwrap();
     assert!(said.ends_with("refresh failed: body-xyz"), "{said}");
-    assert!(error["provider"].get("status").is_none());
-    assert!(!run.stderr.contains("body-xyz"), "{}", run.stderr);
 }
 
 #[test]
@@ -3304,6 +3341,7 @@ fn a_sign_error_keeps_the_token_out_of_every_line() {
             "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{base_url}\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
         ),
         &base_url,
+        None,
     );
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);

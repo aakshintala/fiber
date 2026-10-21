@@ -610,7 +610,7 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
     // The close goes only once `host.http` is held, so the command is
     // parked when the session closes.
     assert!(
-        held.await_requests(1, setup.deadline.left()),
+        held.await_requests(1, setup.deadline),
         "waited until the deadline for host.http to reach the held server"
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
@@ -684,7 +684,7 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
         "{message}"
     );
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the extension-driven turn requested its provider response"
     );
     // Close only after the turn completes: a close sent while the turn
@@ -1157,7 +1157,7 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
     });
     assert!(!ran.is_empty());
     assert!(
-        held.await_requests(1, setup.deadline.left()),
+        held.await_requests(1, setup.deadline),
         "waited until the deadline for the held command's host.http request"
     );
     // The held `run` is admitted but blocked on `host.http`: release it,

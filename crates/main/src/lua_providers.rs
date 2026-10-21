@@ -11,6 +11,7 @@ use contract::events::Notice;
 use contract::shapes::Failure;
 use contract::signing::Signer;
 use extensions::{CredentialPair, LuaProvider, Providers, SessionExtensions};
+use provider::LoginAdvice;
 use provider::redact::Secrets;
 
 use crate::failed;
@@ -143,13 +144,29 @@ pub(crate) fn session_credential(
                 .map_err(|e| failed(e.code(), e))? =>
         {
             lua.credential_token(&pair).map(|_| ()).map_err(|e| {
-                provider::Error::Sign(e).failure(&provider.name, &Secrets::default())
+                provider::Error::Sign(e).failure(
+                    &provider.name,
+                    login_advice(true, provider),
+                    &Secrets::default(),
+                )
             })?;
             None
         }
         _ => Some(key()?),
     };
     Ok((key, signer(lua, pair)?))
+}
+
+/// Whether `provider`'s credential sentences advise `fiber login`, given
+/// whether its Lua registers `credential`: not when it does and its data
+/// declares no `login`, since `fiber login` then stores a key nothing reads
+/// (`docs/errors.md`, "The shape").
+pub(crate) fn login_advice(credential: bool, provider: &ProviderData) -> LoginAdvice {
+    if credential && provider.login.is_none() {
+        LoginAdvice::Omitted
+    } else {
+        LoginAdvice::Advised
+    }
 }
 
 /// Signs `lua`'s requests; `Some` when it registered `credential` or `sign`.

@@ -21,6 +21,14 @@ Every failure is `error { code, message }`: on `tool_call_completed`,
   fix: "OpenRouter rejected the API key (HTTP 401). Run `fiber login
   openrouter`." The terminal shows the message as it is. A headless caller reads
   the same advice.
+- A sentence about a provider's credential advises `fiber login <provider>`
+  only where `fiber login` can fix it: for a provider that reads the key
+  `fiber login` stores, and for one whose data declares `login`
+  (`docs/model-routing.md`, "What a provider extension declares"). A provider
+  with `credential()` and no `login`, such as Bedrock or Vertex, reads no
+  stored key, so its sentence carries no such advice. `provider.message`
+  below keeps the provider's own words, which for a failed `credential()`
+  name its remedy.
 
 A failed model call adds two optional fields:
 
@@ -32,7 +40,7 @@ A failed model call adds two optional fields:
   `sign()` failed, `message` is the first line of the extension's error and
   `status` is absent. Before it is stored, every credential value and every
   header value the credential, `credential()` or `sign()` supplied is replaced
-  with `[redacted]`. Fiber's `message` then names the provider and the function, such as "acme's credential() failed. Run `fiber login acme`.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
+  with `[redacted]`. Fiber's `message` then names the provider and the function, such as "codex's credential() failed. Run `fiber login codex`." or, for a provider `fiber login` cannot fix, "bedrock's credential() failed.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
 
 ## Where a code comes from
 

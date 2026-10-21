@@ -273,7 +273,7 @@ impl Running {
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(self.guard);
-        self.watchdog.stand_down(self.deadline.cleanup());
+        self.watchdog.stand_down(self.deadline.cleanup_phase());
         (status, lines, stderr)
     }
 }

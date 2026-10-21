@@ -377,26 +377,26 @@ fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
     assert_eq!(requests[4].body, b"abc");
 }
 
-/// `await_requests` on a helper, so a mutant that waits out its 30 s `within`
-/// fails this wait instead of hanging the test.
+/// `await_requests` on a helper, so a mutant that waits out its `within`
+/// fails this wait instead of hanging the test. One deadline for the whole
+/// wait: the inner `await_requests` and the outer receive share it.
 #[track_caller]
 fn await_requests_within(server: &Arc<ProviderServer>, count: usize) -> bool {
+    let deadline = Deadline::after(DEADLINE);
     let (tx, rx) = mpsc::channel();
     let server = Arc::clone(server);
     thread::spawn(
-        move || match tx.send(server.await_requests(count, Duration::from_secs(30))) {
+        move || match tx.send(server.await_requests(count, deadline)) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         },
     );
-    Deadline::after(DEADLINE)
-        .recv(&rx)
-        .expect("waited for await_requests")
+    deadline.recv(&rx).expect("waited for await_requests")
 }
 
 #[test]
 fn await_requests_is_false_before_any_request() {
     let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
-    assert!(!server.await_requests(1, Duration::ZERO));
+    assert!(!server.await_requests(1, Deadline::after(Duration::ZERO)));
 }
 
 #[test]

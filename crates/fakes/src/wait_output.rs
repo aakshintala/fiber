@@ -10,7 +10,12 @@ use std::process::{Child, Output};
 /// group is killed and the test fails naming `what` it waited for.
 #[track_caller]
 pub fn wait_output(child: Child, what: &str) -> Output {
-    crate::finished(what, child, &[], crate::MUST_SUCCEED_WITHIN)
+    crate::finished(
+        what,
+        child,
+        &[],
+        crate::Deadline::after(crate::MUST_SUCCEED_WITHIN),
+    )
 }
 
 #[cfg(test)]

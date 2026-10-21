@@ -833,7 +833,7 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
         ));
     });
     assert!(
-        clock.await_parked(deadline, DEADLINE),
+        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
         "the wait did not park at its deadline"
     );
     assert!(
@@ -873,7 +873,7 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
             &CancelToken::new(),
         ));
     });
-    assert!(clock.await_parked(deadline, DEADLINE));
+    assert!(clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)));
     (opened.end.0)(completed(&id, Outcome::Completed));
     let output = Deadline::after(DEADLINE)
         .recv(&rx)
@@ -974,7 +974,7 @@ fn cancelling_a_wait_leaves_the_job_running() {
             &in_call,
         ));
     });
-    assert!(clock.await_parked(deadline, DEADLINE));
+    assert!(clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)));
     cancel.cancel();
     let output = Deadline::after(DEADLINE)
         .recv(&rx)
@@ -1023,7 +1023,7 @@ fn two_waits_deliver_the_completion_once() {
         handles.push(rx);
     }
     assert!(
-        clock.await_parked_count(deadline, 2, DEADLINE),
+        clock.await_parked_count(deadline, 2, fakes::Deadline::after(DEADLINE)),
         "both waits did not park"
     );
     (opened.end.0)(completed(&id, Outcome::Failed));
@@ -1311,7 +1311,7 @@ fn write_parks_at(arguments: Value, wait: Duration) {
         let _sent = tx.send(run(&tool, arguments, &CancelToken::new()));
     });
     assert!(
-        clock.await_parked(deadline, DEADLINE),
+        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
         "the write did not park {wait:?} out: {:?}",
         clock.parked()
     );
@@ -1324,7 +1324,7 @@ fn write_parks_at(arguments: Value, wait: Duration) {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(deadline), DEADLINE),
+        clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(DEADLINE)),
         "the write waits again a millisecond short: {:?}",
         clock.parked()
     );

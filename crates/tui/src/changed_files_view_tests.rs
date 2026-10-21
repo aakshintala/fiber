@@ -256,7 +256,7 @@ fn diff_command_under_sh_reads_only_a_literal_untracked_star_path() {
     let output = Deadline::after(Duration::from_secs(10))
         .recv(&finished)
         .expect("waited for the shell diff command");
-    watchdog.stand_down(Duration::from_secs(5));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     let stdout = String::from_utf8(output.stdout)
         .unwrap_or_else(|error| panic!("diff output was not UTF-8: {error}"));
     assert!(stdout.contains("literal-star-only"), "{stdout}");

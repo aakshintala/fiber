@@ -93,7 +93,7 @@ fn working_overlay(command: &str) -> Vec<String> {
     run.ready();
     run.write(b"say hi\r");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the first request to reach the server"
     );
     run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));

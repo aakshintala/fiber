@@ -135,7 +135,7 @@ fn the_hub_answer_fills_a_value_the_client_lacks() {
         hold(&stream);
     });
     let clock = FakeClock::new();
-    let answered = fakes::within("the hub answer", DEADLINE, move || {
+    let answered = fakes::within("the hub answer", Deadline::after(DEADLINE), move || {
         hub_env(&home, &[ABSENT_NAME.to_owned()], &*clock)
     });
     assert_eq!(
@@ -158,7 +158,7 @@ fn the_hub_answer_fills_a_value_the_client_lacks() {
 fn an_absent_hub_answers_nothing() {
     let (_dir, home) = home();
     let clock = FakeClock::new();
-    let answered = fakes::within("the absent hub", DEADLINE, move || {
+    let answered = fakes::within("the absent hub", Deadline::after(DEADLINE), move || {
         hub_env(&home, &[ABSENT_NAME.to_owned()], &*clock)
     });
     assert_eq!(answered, None);
@@ -172,7 +172,7 @@ fn a_refusing_hub_answers_nothing() {
         hold(&stream);
     });
     let clock = FakeClock::new();
-    let answered = fakes::within("the refusal", DEADLINE, move || {
+    let answered = fakes::within("the refusal", Deadline::after(DEADLINE), move || {
         hub_env(&home, &[ABSENT_NAME.to_owned()], &*clock)
     });
     assert_eq!(answered, None);
@@ -237,9 +237,11 @@ fn a_close_after_the_answer_still_answers() {
         // so the exchange's answer wins over the restore.
     });
     let clock = FakeClock::new();
-    let answered = fakes::within("the close after the answer", DEADLINE, move || {
-        hub_env(&home, &[ABSENT_NAME.to_owned()], &*clock)
-    });
+    let answered = fakes::within(
+        "the close after the answer",
+        Deadline::after(DEADLINE),
+        move || hub_env(&home, &[ABSENT_NAME.to_owned()], &*clock),
+    );
     assert_eq!(
         answered,
         Some(BTreeMap::from([(
@@ -265,9 +267,11 @@ fn a_close_before_any_answer_answers_nothing() {
         // Answer nothing: dropping the stream closes it.
     });
     let clock = FakeClock::new();
-    let answered = fakes::within("the close before any answer", DEADLINE, move || {
-        hub_env(&home, &[ABSENT_NAME.to_owned()], &*clock)
-    });
+    let answered = fakes::within(
+        "the close before any answer",
+        Deadline::after(DEADLINE),
+        move || hub_env(&home, &[ABSENT_NAME.to_owned()], &*clock),
+    );
     assert_eq!(answered, None);
 }
 

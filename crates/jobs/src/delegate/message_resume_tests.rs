@@ -456,7 +456,7 @@ fn stop_and_reap(rig: &ResumeRig, id: &JobId, watchdog: Watchdog) -> contract::i
     );
     let notice = reported(rig);
     assert_eq!(notice.completed.job_id, *id);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
     notice
 }
 
@@ -935,7 +935,7 @@ fn closing_resumes_once_the_run_ends_before_the_bound() {
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi there", CancelToken::new());
     let at = rig.clock.now() + BOUND;
     assert!(
-        rig.clock.await_parked(at, DEADLINE),
+        rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
         "the call parks its closing wait"
     );
     end_resume_run(finish, &id, "Done.");
@@ -961,8 +961,10 @@ fn gone_resumes_once_the_run_ends_during_the_backoff() {
     let watchdog = Watchdog::matching("fiber-message-gone");
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi", CancelToken::new());
     assert!(
-        rig.clock
-            .await_parked(rig.clock.now() + Duration::from_millis(50), DEADLINE),
+        rig.clock.await_parked(
+            rig.clock.now() + Duration::from_millis(50),
+            fakes::Deadline::after(DEADLINE)
+        ),
         "the call parks its backoff"
     );
     end_resume_run(finish, &id, "Done.");
@@ -990,7 +992,8 @@ fn closing_after_a_committed_gone_resumes_once_the_run_ends() {
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi", CancelToken::new());
     let backoff = rig.clock.now() + Duration::from_millis(50);
     assert!(
-        rig.clock.await_parked(backoff, DEADLINE),
+        rig.clock
+            .await_parked(backoff, fakes::Deadline::after(DEADLINE)),
         "the call parks its backoff"
     );
     rig.clock.advance_when_parked(
@@ -1003,7 +1006,7 @@ fn closing_after_a_committed_gone_resumes_once_the_run_ends() {
     // follows on the session clock.
     let at = rig.clock.now() + BOUND;
     assert!(
-        rig.clock.await_parked(at, DEADLINE),
+        rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
         "the call parks its closing wait"
     );
     end_resume_run(finish, &id, "Done.");

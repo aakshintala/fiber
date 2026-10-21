@@ -126,17 +126,21 @@ fn credentials_is_empty_for_a_signer_without_credentials_even_with_a_cached_toke
         .unwrap()
         .unwrap();
     let url = "http://127.0.0.1:1/v1/responses".to_owned();
-    let headers = fakes::within("signer.sign", fakes::MUST_SUCCEED_WITHIN, {
-        let signer = Arc::clone(&with_credential);
-        move || {
-            signer.sign(&SignRequest {
-                method: "POST",
-                url: &url,
-                headers: &[],
-                body: b"{}",
-            })
-        }
-    })
+    let headers = fakes::within(
+        "signer.sign",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let signer = Arc::clone(&with_credential);
+            move || {
+                signer.sign(&SignRequest {
+                    method: "POST",
+                    url: &url,
+                    headers: &[],
+                    body: b"{}",
+                })
+            }
+        },
+    )
     .unwrap();
     assert_eq!(
         headers,
@@ -243,10 +247,14 @@ fn list_models_returns_the_parsed_list_in_order_and_writes_no_cache() {
     let root = fakes::TempDir::new("fiber-list-models");
     let run = format!("{{ {}, {} }}", model_entry("b"), model_entry("a"));
     let (home, provider) = models_provider(&root, &run);
-    let (models, returned) = fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(&provider);
-        move || provider.list_models(&ModelsArg::default())
-    })
+    let (models, returned) = fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
     .unwrap();
     assert_eq!(
         models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
@@ -264,10 +272,14 @@ fn list_models_returns_the_parsed_list_in_order_and_writes_no_cache() {
 fn list_models_with_a_non_list_return_is_bad_return() {
     let root = fakes::TempDir::new("fiber-list-models-bad");
     let (_home, provider) = models_provider(&root, "\"x\"");
-    let err = fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(&provider);
-        move || provider.list_models(&ModelsArg::default())
-    })
+    let err = fakes::within(
+        "provider.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.list_models(&ModelsArg::default())
+        },
+    )
     .unwrap_err();
     let crate::Error::BadReturn { callback, .. } = &err else {
         panic!("{err:?}");
@@ -314,7 +326,7 @@ fn credential_idle_distinguishes_idle_fetching_and_completed() {
         drop(sent.send(other.token(&other_pair)));
     });
     assert!(
-        tokens.await_requests(1, WAIT),
+        tokens.await_requests(1, Deadline::after(WAIT)),
         "fetch reaches the held server"
     );
     assert!(!provider.await_idle(&pair, Duration::ZERO));
@@ -356,7 +368,7 @@ fn credential_value_returns_the_cached_token_expiry_and_headers() {
     let provider = http_token_provider(&root, &format!("{}/token", tokens.url()));
     let result = fakes::within(
         "provider.credential_value",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             let first = provider.credential_value(&token_pair()).unwrap();
             let second = provider.credential_value(&token_pair()).unwrap();
@@ -404,7 +416,7 @@ fn a_second_token_waits_for_the_fetch_in_flight() {
         let _sent = first_tx.send(first_provider.token(&first_pair));
     });
     assert!(
-        tokens.await_requests(1, WAIT),
+        tokens.await_requests(1, Deadline::after(WAIT)),
         "the first fetch reaches the server"
     );
     let (second_tx, second_rx) = mpsc::channel();
@@ -455,7 +467,7 @@ fn a_waiter_woken_by_a_failure_fetches_for_itself() {
         let _sent = first_tx.send(first_provider.token(&first_pair));
     });
     assert!(
-        tokens.await_requests(1, WAIT),
+        tokens.await_requests(1, Deadline::after(WAIT)),
         "the first fetch reaches the server"
     );
     let (second_tx, second_rx) = mpsc::channel();
@@ -518,7 +530,7 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
         let _sent = first_tx.send(first_provider.token(&first_pair));
     });
     assert!(
-        tokens.await_requests(1, WAIT),
+        tokens.await_requests(1, Deadline::after(WAIT)),
         "the first fetch reaches the server"
     );
     // Caller 2 waits on it.
@@ -544,14 +556,14 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
         let _sent = third_tx.send(third_provider.token(&third_pair));
     });
     assert!(
-        tokens.await_requests(2, WAIT),
+        tokens.await_requests(2, Deadline::after(WAIT)),
         "the third caller fetches without waiting on the held waiter"
     );
     // Caller 2 fetches for itself while caller 3's fetch is still held: no
     // release went out since, so the third request is still unanswered.
     release_tx.send(()).unwrap();
     assert!(
-        tokens.await_requests(3, WAIT),
+        tokens.await_requests(3, Deadline::after(WAIT)),
         "the woken waiter fetches without waiting on the third caller"
     );
     tokens.release();
@@ -607,12 +619,16 @@ fn has_credential_needs_a_registered_credential_or_a_stored_key() {
     let data = credentialless_data();
     // No `credential` function and no key source: nothing to refresh with.
     assert!(
-        !fakes::within("has_credential", fakes::MUST_SUCCEED_WITHIN, {
-            let provider = Arc::clone(&bare);
-            let config = config.clone();
-            let data = data.clone();
-            move || provider.has_credential(&config, &data, &fakes::children::grouped_output)
-        }),
+        !fakes::within(
+            "has_credential",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            {
+                let provider = Arc::clone(&bare);
+                let config = config.clone();
+                let data = data.clone();
+                move || provider.has_credential(&config, &data, &fakes::children::grouped_output)
+            }
+        ),
         "a provider with no credential and no stored key has none"
     );
     // A registered `credential` is one whatever the session stores.
@@ -627,11 +643,17 @@ fn has_credential_needs_a_registered_credential_or_a_stored_key() {
     let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
     let credentialed = LuaProvider::new(extension, "p");
     assert!(
-        fakes::within("has_credential", fakes::MUST_SUCCEED_WITHIN, {
-            let config = config.clone();
-            let data = data.clone();
-            move || credentialed.has_credential(&config, &data, &fakes::children::grouped_output)
-        }),
+        fakes::within(
+            "has_credential",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            {
+                let config = config.clone();
+                let data = data.clone();
+                move || {
+                    credentialed.has_credential(&config, &data, &fakes::children::grouped_output)
+                }
+            }
+        ),
         "a provider registering credential has one"
     );
 }

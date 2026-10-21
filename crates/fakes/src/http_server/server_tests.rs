@@ -284,7 +284,7 @@ fn a_woken_condvar_wait_counts_no_sleep() {
         let deadline = Deadline::after(OP);
         let ack = next_acknowledgment(&deadline, &acks, "the condvar wait");
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the wait parks before the clock moves"
         );
         clock.advance(Duration::from_secs(1));
@@ -340,7 +340,7 @@ fn a_shutdown_ended_condvar_wait_counts_no_sleep() {
         let deadline = Deadline::after(OP);
         let ack = next_acknowledgment(&deadline, &acks, "the condvar wait");
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the wait parks before shutdown lands"
         );
         assert!(server.shutdown(), "shutdown ends the parked wait");

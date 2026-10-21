@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use fakes::TempDir;
+use fakes::{Deadline, TempDir};
 
 use super::*;
 
@@ -992,7 +992,11 @@ const FETCH_WITHIN: Duration = Duration::from_secs(4);
 /// `fetch` on a thread, received under `FETCH_WITHIN`.
 fn fetched(url: &str) -> Result<Vec<u8>, String> {
     let url = url.to_owned();
-    fakes::within("models-dev fetch", FETCH_WITHIN, move || fetch(&url))
+    fakes::within(
+        "models-dev fetch",
+        Deadline::after(FETCH_WITHIN),
+        move || fetch(&url),
+    )
 }
 
 /// A `file://` URL for `dir` joining `name`, which no test writes.

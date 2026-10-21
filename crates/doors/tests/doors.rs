@@ -178,20 +178,24 @@ fn a_failure_before_any_session_prints_one_line_with_no_session_and_one_sentence
 #[test]
 fn project_ignores_a_hostile_git_environment() {
     if std::env::var("FIBER_DOORS_PROJECT_ENV_CHILD").is_ok() {
-        fakes::within("the child's project checks", CHILD_BUDGET, || {
-            let repo = PathBuf::from(std::env::var("FIBER_DOORS_PROJECT_ENV_REPO").unwrap());
-            let common = fs::canonicalize(repo.join(".git")).unwrap();
-            assert_eq!(project(&repo), common);
-            assert_eq!(project(&repo.join("docs")), common);
-            let resolved = resolve_project(&repo);
-            assert_eq!(resolved.path, common);
-            assert!(resolved.in_repository);
-        });
+        fakes::within(
+            "the child's project checks",
+            Deadline::after(CHILD_BUDGET),
+            || {
+                let repo = PathBuf::from(std::env::var("FIBER_DOORS_PROJECT_ENV_REPO").unwrap());
+                let common = fs::canonicalize(repo.join(".git")).unwrap();
+                assert_eq!(project(&repo), common);
+                assert_eq!(project(&repo.join("docs")), common);
+                let resolved = resolve_project(&repo);
+                assert_eq!(resolved.path, common);
+                assert!(resolved.in_repository);
+            },
+        );
         return;
     }
     fakes::within(
         "project_ignores_a_hostile_git_environment",
-        RERUN_OUTER,
+        Deadline::after(RERUN_OUTER),
         || {
             let temp = Temp::new();
             let repo = temp.0.join("repo");
@@ -218,7 +222,7 @@ fn project_ignores_a_hostile_git_environment() {
                     ("FIBER_DOORS_PROJECT_ENV_CHILD", "1"),
                     ("FIBER_DOORS_PROJECT_ENV_REPO", repo.to_str().unwrap()),
                 ],
-                RERUN_WITHIN,
+                Deadline::after(RERUN_WITHIN),
             );
             assert!(
                 out.status.success(),
@@ -232,18 +236,22 @@ fn project_ignores_a_hostile_git_environment() {
 #[test]
 fn discovery_runs_git_with_the_scrubbed_environment() {
     if std::env::var("FIBER_DOORS_SCRUB_CHILD").is_ok() {
-        fakes::within("the child's scrub checks", CHILD_BUDGET, || {
-            let repo = PathBuf::from(std::env::var("FIBER_DOORS_SCRUB_REPO").unwrap());
-            let resolved = resolve_project(&repo);
-            let common = fs::canonicalize(repo.join(".git")).unwrap();
-            assert_eq!(resolved.path, common);
-            assert!(resolved.in_repository);
-        });
+        fakes::within(
+            "the child's scrub checks",
+            Deadline::after(CHILD_BUDGET),
+            || {
+                let repo = PathBuf::from(std::env::var("FIBER_DOORS_SCRUB_REPO").unwrap());
+                let resolved = resolve_project(&repo);
+                let common = fs::canonicalize(repo.join(".git")).unwrap();
+                assert_eq!(resolved.path, common);
+                assert!(resolved.in_repository);
+            },
+        );
         return;
     }
     fakes::within(
         "discovery_runs_git_with_the_scrubbed_environment",
-        RERUN_OUTER,
+        Deadline::after(RERUN_OUTER),
         || {
             let temp = Temp::new();
             let repo = temp.0.join("repo");
@@ -298,7 +306,7 @@ PATH=${PATH#*:} exec git "$@"
                     ("GIT_OPTIONAL_LOCKS", "9"),
                     ("GIT_TERMINAL_PROMPT", "ask"),
                 ],
-                RERUN_WITHIN,
+                Deadline::after(RERUN_WITHIN),
                 |_| {},
             );
             assert!(

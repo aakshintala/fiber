@@ -6,10 +6,9 @@
 //! so a refresh test scripts `/token` replies and a device-code test scripts
 //! `/device/token` replies.
 
-use std::time::Duration;
-
 use serde_json::json;
 
+use crate::deadline::Deadline;
 use crate::provider_server::{ProviderServer, Response};
 
 /// One scripted reply of the token endpoint.
@@ -151,10 +150,10 @@ impl OauthServer {
         self.inner.requests().len()
     }
 
-    /// Waits, at most `within` of real time, until at least `count` requests
-    /// are recorded. True once they are; false at the deadline.
-    pub fn await_requests(&self, count: usize, within: Duration) -> bool {
-        self.inner.await_requests(count, within)
+    /// Waits, at most what remains of `deadline`, until at least `count`
+    /// requests are recorded. True once they are; false at the deadline.
+    pub fn await_requests(&self, count: usize, deadline: Deadline) -> bool {
+        self.inner.await_requests(count, deadline)
     }
 
     /// Holds every reply until [`OauthServer::release`]. A request is still

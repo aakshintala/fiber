@@ -24,6 +24,7 @@ use contract::events::OfferedKind;
 use contract::mcp_remote::McpRemote;
 use contract::shapes::Failure;
 use extensions::{Decision, Index, Store};
+use fakes::Deadline;
 use serde_json::{Value, json};
 
 use super::{
@@ -49,11 +50,16 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(50);
 #[track_caller]
 fn child_exit(test: &str, setup: &Setup) -> (Option<i32>, String) {
     let full = format!("{}::{test}", module_path!().split_once("::").unwrap().1);
-    let output = fakes::rerun_prepared(&full, &[(CHILD, "1")], CHILD_DEADLINE, |command| {
-        command
-            .env("FIBER_HOME", setup.home())
-            .current_dir(setup.workspace());
-    });
+    let output = fakes::rerun_prepared(
+        &full,
+        &[(CHILD, "1")],
+        Deadline::after(CHILD_DEADLINE),
+        |command| {
+            command
+                .env("FIBER_HOME", setup.home())
+                .current_dir(setup.workspace());
+        },
+    );
     (
         output.status.code(),
         String::from_utf8(output.stderr).unwrap(),

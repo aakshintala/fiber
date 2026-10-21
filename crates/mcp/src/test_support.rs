@@ -287,7 +287,7 @@ impl Setup {
         let args = args.to_owned();
         let workspace = workspace.to_path_buf();
         let clock = Arc::clone(clock);
-        fakes::within("the server start", WITHIN, move || {
+        fakes::within("the server start", Deadline::after(WITHIN), move || {
             crate::server::Server::start(
                 &command,
                 &args,
@@ -315,7 +315,7 @@ impl Setup {
     #[track_caller]
     pub(crate) fn run(&self, tool: &Arc<dyn Tool>) -> contract::tool::Output {
         let tool = Arc::clone(tool);
-        fakes::within("the call", WITHIN, move || {
+        fakes::within("the call", Deadline::after(WITHIN), move || {
             tool.run(
                 &Default::default(),
                 &fakes::CancelToken::new(),
@@ -339,7 +339,7 @@ impl Setup {
         let prompt = prompt.to_owned();
         let arguments = arguments.to_owned();
         let cancel = cancel.clone();
-        fakes::within("the prompt get", WITHIN, move || {
+        fakes::within("the prompt get", Deadline::after(WITHIN), move || {
             prompts.get(&server, &prompt, &arguments, &cancel)
         })
     }
@@ -348,13 +348,13 @@ impl Setup {
     #[track_caller]
     pub(crate) fn serve(&self, slot: &Arc<Slot>) -> Served {
         let slot = Arc::clone(slot);
-        fakes::within("the serve", WITHIN, move || slot.serve())
+        fakes::within("the serve", Deadline::after(WITHIN), move || slot.serve())
     }
 
     /// Stops `servers`, with a deadline naming the wait.
     #[track_caller]
     pub(crate) fn stop(&self, servers: Servers) {
-        fakes::within("the stop", WITHIN, move || {
+        fakes::within("the stop", Deadline::after(WITHIN), move || {
             servers.stop();
         });
     }
@@ -542,7 +542,7 @@ impl contract::mcp_tokens::HeldTokenFile for FakeHeld {
 /// wait and the failure names what was waited for.
 #[track_caller]
 pub(crate) fn await_until(what: &str, mut probe: impl FnMut() -> bool + Send + 'static) {
-    fakes::within(what, WITHIN, move || {
+    fakes::within(what, Deadline::after(WITHIN), move || {
         loop {
             if probe() {
                 return;

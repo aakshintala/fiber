@@ -87,15 +87,16 @@ impl Ready {
         &self.path
     }
 
-    /// The next line's process ids. Panics at `within`, naming the wait, or
+    /// The next line's process ids. Panics at `deadline`, naming the wait, or
     /// when the FIFO closes before a line.
     #[allow(
         clippy::panic,
         reason = "a ready line that never arrives means the test cannot proceed"
     )]
     #[track_caller]
-    pub fn wait(&self, within: Duration) -> Vec<u32> {
-        match Deadline::after(within).recv(&self.lines) {
+    pub fn wait(&self, deadline: Deadline) -> Vec<u32> {
+        let within = deadline.left();
+        match deadline.recv(&self.lines) {
             Ok(Line::Text(line)) => pids(&line, &self.path),
             Ok(Line::End) => panic!(
                 "ready fifo {} closed before a line arrived",
@@ -269,10 +270,10 @@ pub fn grouped_output(command: &mut Command, _timeout: Duration) -> io::Result<O
         Ok(_) | Err(_) => {}
     }
     assert!(
-        group_empties(pid, MUST_SUCCEED_WITHIN),
+        group_empties(pid, Deadline::after(MUST_SUCCEED_WITHIN)),
         "`{program}` left its process group {pid} behind"
     );
-    watchdog.stand_down(MUST_SUCCEED_WITHIN);
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
     Ok(output)
 }
 

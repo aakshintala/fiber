@@ -91,7 +91,7 @@ fn finish(running: Running) {
         "fiber left a process in its group"
     );
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 }
 
 /// The session id of a started `fiber ask`: its first stdout line.
@@ -120,13 +120,13 @@ fn a_hub_subscriber_gets_every_line_before_an_unreadable_one_then_stream_closed(
     let running_b = start(&setup, &["ask", "hi"]);
     let id_b = session_of(&running_b, "B's session_started");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the held response was requested"
     );
     let running_a = start(&setup, &["ask", "hi"]);
     let id_a = session_of(&running_a, "A's session_started");
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both held responses were requested"
     );
 

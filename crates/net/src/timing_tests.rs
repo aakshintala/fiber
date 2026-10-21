@@ -112,12 +112,16 @@ fn observed_agent(keep: Arc<dyn Keep>, capture: &Arc<Capture>) -> ureq::Agent {
 /// GETs `url` on its own thread under [`EACH_WITHIN`], reading the body
 /// to a string on success.
 fn get(agent: ureq::Agent, url: String) -> Result<String, ureq::Error> {
-    fakes::within("the observed GET to answer", EACH_WITHIN, move || {
-        let mut body = agent.get(url).call()?.into_body().into_reader();
-        let mut text = String::new();
-        body.read_to_string(&mut text).map_err(ureq::Error::Io)?;
-        Ok(text)
-    })
+    fakes::within(
+        "the observed GET to answer",
+        Deadline::after(EACH_WITHIN),
+        move || {
+            let mut body = agent.get(url).call()?.into_body().into_reader();
+            let mut text = String::new();
+            body.read_to_string(&mut text).map_err(ureq::Error::Io)?;
+            Ok(text)
+        },
+    )
 }
 
 /// A keep that holds a handle to the socket it was handed.
@@ -271,7 +275,7 @@ fn open_timed_over_two_refused_addresses_fails_once_with_the_last_refusal() {
     let timing = capture.timing();
     let error = fakes::within(
         "an observed open past two refusals to fail",
-        EACH_WITHIN,
+        Deadline::after(EACH_WITHIN),
         move || {
             open_timed(&[refused, refused], &(), LIMITS, wait(), Some(&timing))
                 .map(|_| ())
@@ -294,14 +298,20 @@ fn open_timed_over_two_refused_addresses_fails_once_with_the_last_refusal() {
 fn open_timed_with_no_addresses_times_nothing() {
     let capture = Capture::new();
     let timing = capture.timing();
-    let timed = fakes::within("an observed empty open to fail", EACH_WITHIN, move || {
-        open_timed(&[], &(), LIMITS, wait(), Some(&timing))
-            .map(|_| ())
-            .unwrap_err()
-    });
-    let plain = fakes::within("a plain empty open to fail", EACH_WITHIN, move || {
-        open(&[], &(), LIMITS, wait()).map(|_| ()).unwrap_err()
-    });
+    let timed = fakes::within(
+        "an observed empty open to fail",
+        Deadline::after(EACH_WITHIN),
+        move || {
+            open_timed(&[], &(), LIMITS, wait(), Some(&timing))
+                .map(|_| ())
+                .unwrap_err()
+        },
+    );
+    let plain = fakes::within(
+        "a plain empty open to fail",
+        Deadline::after(EACH_WITHIN),
+        move || open(&[], &(), LIMITS, wait()).map(|_| ()).unwrap_err(),
+    );
     assert_eq!(
         format!("{timed:?}"),
         format!("{plain:?}"),
@@ -331,11 +341,15 @@ fn open_timed_that_starts_stopped_times_nothing() {
     let addr = listener.local_addr().unwrap();
     let capture = Capture::new();
     let timing = capture.timing();
-    let error = fakes::within("a stopped observed open to fail", EACH_WITHIN, move || {
-        open_timed(&[addr], &AlreadyStopped, LIMITS, wait(), Some(&timing))
-            .map(|_| ())
-            .unwrap_err()
-    });
+    let error = fakes::within(
+        "a stopped observed open to fail",
+        Deadline::after(EACH_WITHIN),
+        move || {
+            open_timed(&[addr], &AlreadyStopped, LIMITS, wait(), Some(&timing))
+                .map(|_| ())
+                .unwrap_err()
+        },
+    );
     assert!(is_stopped(&error), "a stopped open fails stopped: {error}");
     assert_eq!(
         capture.calls(),
@@ -376,7 +390,7 @@ fn open_timed_stops_before_its_remaining_addresses_and_emits_once() {
     let timing = capture.timing();
     let error = fakes::within(
         "an observed open stopped mid-walk to fail",
-        EACH_WITHIN,
+        Deadline::after(EACH_WITHIN),
         move || {
             open_timed(
                 &[refused, addr],
@@ -800,22 +814,26 @@ fn an_observed_proxy_call_times_its_one_socket() {
     let worker = keep.clone();
     let timing = capture.timing();
     let through = proxy_through(&proxy);
-    let text = fakes::within("the observed proxy GET to answer", EACH_WITHIN, move || {
-        let agent = crate::agent_observed(
-            crate::config().proxy(Some(through)).build(),
-            worker,
-            DefaultResolver::default(),
-            LIMITS,
-            timing,
-        );
-        let mut body = agent.get(url).call().unwrap().into_body().into_reader();
-        let mut text = String::new();
-        body.read_to_string(&mut text).unwrap();
-        text
-    });
+    let text = fakes::within(
+        "the observed proxy GET to answer",
+        Deadline::after(EACH_WITHIN),
+        move || {
+            let agent = crate::agent_observed(
+                crate::config().proxy(Some(through)).build(),
+                worker,
+                DefaultResolver::default(),
+                LIMITS,
+                timing,
+            );
+            let mut body = agent.get(url).call().unwrap().into_body().into_reader();
+            let mut text = String::new();
+            body.read_to_string(&mut text).unwrap();
+            text
+        },
+    );
     assert_eq!(text, "{}", "the proxy call reached the origin");
     assert!(
-        proxy.await_connects(1, EACH_WITHIN),
+        proxy.await_connects(1, Deadline::after(EACH_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
@@ -839,23 +857,27 @@ fn a_proxy_refusing_connect_still_times_the_one_socket() {
     let refused = SocketAddr::from(fakes::refused::ADDR);
     let url = format!("http://{refused}/");
     let through = proxy_through(&proxy);
-    let timed = fakes::within("the refused proxy call to fail", EACH_WITHIN, move || {
-        let capture = Capture::new();
-        let error = crate::agent_observed(
-            crate::config().proxy(Some(through)).build(),
-            Arc::new(()),
-            DefaultResolver::default(),
-            LIMITS,
-            capture.timing(),
-        )
-        .get(url)
-        .call()
-        .unwrap_err();
-        (format!("{error:?}"), capture.calls(), capture.ends())
-    });
+    let timed = fakes::within(
+        "the refused proxy call to fail",
+        Deadline::after(EACH_WITHIN),
+        move || {
+            let capture = Capture::new();
+            let error = crate::agent_observed(
+                crate::config().proxy(Some(through)).build(),
+                Arc::new(()),
+                DefaultResolver::default(),
+                LIMITS,
+                capture.timing(),
+            )
+            .get(url)
+            .call()
+            .unwrap_err();
+            (format!("{error:?}"), capture.calls(), capture.ends())
+        },
+    );
     let plain = fakes::within(
         "the plain refused proxy call to fail",
-        EACH_WITHIN,
+        Deadline::after(EACH_WITHIN),
         move || {
             crate::agent(
                 crate::config().proxy(Some(proxy_through(&proxy))).build(),
@@ -891,19 +913,23 @@ fn a_no_proxy_bypass_times_the_direct_socket() {
     let url = format!("{}/v1", server.url());
     let capture = Capture::new();
     let timing = capture.timing();
-    let text = fakes::within("the bypassed GET to answer", EACH_WITHIN, move || {
-        let agent = crate::agent_observed(
-            crate::config().proxy(Some(bypass)).build(),
-            Arc::new(()),
-            DefaultResolver::default(),
-            LIMITS,
-            timing,
-        );
-        let mut body = agent.get(url).call().unwrap().into_body().into_reader();
-        let mut text = String::new();
-        body.read_to_string(&mut text).unwrap();
-        text
-    });
+    let text = fakes::within(
+        "the bypassed GET to answer",
+        Deadline::after(EACH_WITHIN),
+        move || {
+            let agent = crate::agent_observed(
+                crate::config().proxy(Some(bypass)).build(),
+                Arc::new(()),
+                DefaultResolver::default(),
+                LIMITS,
+                timing,
+            );
+            let mut body = agent.get(url).call().unwrap().into_body().into_reader();
+            let mut text = String::new();
+            body.read_to_string(&mut text).unwrap();
+            text
+        },
+    );
     assert_eq!(text, "{}", "the bypass reached the origin directly");
     assert!(
         proxy.connects().is_empty(),
@@ -1179,7 +1205,7 @@ fn a_none_answer_is_final_for_the_group() {
     let refused = SocketAddr::from(fakes::refused::ADDR);
     let timed = fakes::within(
         "a none-timed open past two refusals to fail",
-        EACH_WITHIN,
+        Deadline::after(EACH_WITHIN),
         move || {
             open_timed(&[refused, refused], &(), LIMITS, wait(), Some(&none))
                 .map(|_| ())
@@ -1188,7 +1214,7 @@ fn a_none_answer_is_final_for_the_group() {
     );
     let plain = fakes::within(
         "a plain open past two refusals to fail",
-        EACH_WITHIN,
+        Deadline::after(EACH_WITHIN),
         move || {
             open(&[refused, refused], &(), LIMITS, wait())
                 .map(|_| ())
@@ -1207,7 +1233,7 @@ fn a_none_answer_is_final_for_the_group() {
     );
     let missing = fakes::within(
         "an untimed open past two refusals to fail",
-        EACH_WITHIN,
+        Deadline::after(EACH_WITHIN),
         move || {
             open_timed(&[refused, refused], &(), LIMITS, wait(), None)
                 .map(|_| ())

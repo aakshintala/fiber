@@ -1087,7 +1087,7 @@ fn brand_string_reads_sysctl_on_macos() {
             "sysctl",
             child,
             &[],
-            Duration::from_secs(30),
+            fakes::Deadline::after(Duration::from_secs(30)),
         ))
     });
     assert!(!live.is_empty() && live != "unknown", "{live:?}");

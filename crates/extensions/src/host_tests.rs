@@ -278,7 +278,7 @@ fn through_proxy_env(test: &str, server_path: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
@@ -377,7 +377,7 @@ fn a_silent_server_past_the_backstop_is_timeout() {
         .expect("waited {GET_WITHIN:?} for the silent-server get")
         .unwrap_err();
     assert!(
-        server.await_requests(1, ACCEPT_WITHIN),
+        server.await_requests(1, Deadline::after(ACCEPT_WITHIN)),
         "the silent server never received the request"
     );
     assert_eq!(code, contract::ErrorCode::Timeout, "{message}");

@@ -96,9 +96,11 @@ fn provider(extension: &Arc<LuaExtension>, name: &str) -> Arc<LuaProvider> {
 fn token(provider: &Arc<LuaProvider>, credential: &str, label: &str) -> String {
     let provider = Arc::clone(provider);
     let owned = pair(credential, label);
-    fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
-        provider.token(&owned)
-    })
+    fakes::within(
+        "provider.token",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || provider.token(&owned),
+    )
     .unwrap()
     .expose()
     .to_owned()
@@ -153,20 +155,26 @@ fn a_signer_sends_its_own_pairs_token() {
     let echo = provider(&extension, "echo");
     let signed = |pair: CredentialPair| {
         let echo = Arc::clone(&echo);
-        let signer = fakes::within("echo.signer", fakes::MUST_SUCCEED_WITHIN, move || {
-            echo.signer(pair)
-        })
+        let signer = fakes::within(
+            "echo.signer",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || echo.signer(pair),
+        )
         .unwrap()
         .unwrap();
         let signing = Arc::clone(&signer);
-        let headers = fakes::within("signing.sign", fakes::MUST_SUCCEED_WITHIN, move || {
-            signing.sign(&SignRequest {
-                method: "POST",
-                url: "http://127.0.0.1:1/v1/responses",
-                headers: &[],
-                body: b"{}",
-            })
-        })
+        let headers = fakes::within(
+            "signing.sign",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                signing.sign(&SignRequest {
+                    method: "POST",
+                    url: "http://127.0.0.1:1/v1/responses",
+                    headers: &[],
+                    body: b"{}",
+                })
+            },
+        )
         .unwrap();
         (headers, signer.credentials())
     };
@@ -243,9 +251,11 @@ fn a_pair_the_credential_file_refuses_fails_and_creates_nothing() {
     ] {
         let provider = Arc::clone(&oauth);
         let owned = pair(credential, label);
-        let err = fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
-            provider.token(&owned)
-        })
+        let err = fakes::within(
+            "provider.token",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || provider.token(&owned),
+        )
         .unwrap_err();
         assert_eq!(
             err.code(),
@@ -288,23 +298,29 @@ fn a_background_refresh_of_one_pair_leaves_another_pair_alone() {
     server.hold();
     let soon = Arc::clone(&timed);
     assert_eq!(
-        fakes::within("soon.token", fakes::MUST_SUCCEED_WITHIN, move || soon
-            .token(&pair("timed", "soon")))
+        fakes::within(
+            "soon.token",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || soon.token(&pair("timed", "soon"))
+        )
         .unwrap()
         .expose(),
         "s1",
         "the request still gets the token it has while the refresh runs"
     );
     assert!(
-        server.await_requests(2, WAIT),
+        server.await_requests(2, Deadline::after(WAIT)),
         "waited for the refresh request"
     );
     // While the refresh is held, the other pair answers from its own entry:
     // no new `credential()` call, and the held pair's token is untouched.
     let late = Arc::clone(&timed);
     assert_eq!(
-        fakes::within("late.token", fakes::MUST_SUCCEED_WITHIN, move || late
-            .token(&pair("timed", "late")))
+        fakes::within(
+            "late.token",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || late.token(&pair("timed", "late"))
+        )
         .unwrap()
         .expose(),
         "late/1"
@@ -340,10 +356,14 @@ fn a_background_refresh_of_one_pair_leaves_another_pair_alone() {
 fn refresh_outside_credential_is_refused() {
     let (setup, _clock, extension) = fixture();
     let oauth = provider(&extension, "oauth");
-    let err = fakes::within("oauth.models", fakes::MUST_SUCCEED_WITHIN, {
-        let oauth = Arc::clone(&oauth);
-        move || oauth.models(&ModelsArg::default())
-    })
+    let err = fakes::within(
+        "oauth.models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let oauth = Arc::clone(&oauth);
+            move || oauth.models(&ModelsArg::default())
+        },
+    )
     .unwrap_err();
     let text = err.to_string();
     assert!(text.contains("host.oauth.refresh"), "{text}");

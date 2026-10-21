@@ -20,6 +20,7 @@ use contract::ErrorCode;
 
 use super::*;
 use crate::{Error, Inspected, Inspection, Removed, ignored, inspect, remove};
+use fakes::Deadline;
 use fakes::git::{branch_exists, git, repo};
 
 /// One budget for the whole wait: setup, the code under test and the
@@ -97,7 +98,7 @@ fn exists(path: &Path) -> bool {
 fn create_makes_the_branch_at_head_and_checks_it_out() {
     fakes::within(
         "create_makes_the_branch_at_head_and_checks_it_out",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-create");
             let path = home.path().join("wt");
@@ -122,7 +123,7 @@ fn create_makes_the_branch_at_head_and_checks_it_out() {
 fn the_created_path_is_canonical_through_a_symlinked_parent() {
     fakes::within(
         "the_created_path_is_canonical_through_a_symlinked_parent",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-create-symlink");
             let real = home.path().join("real");
@@ -141,7 +142,7 @@ fn the_created_path_is_canonical_through_a_symlinked_parent() {
 fn create_from_a_subdirectory_makes_a_worktree_of_the_whole_repository() {
     fakes::within(
         "create_from_a_subdirectory_makes_a_worktree_of_the_whole_repository",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-create-sub");
             let sub = home.path().join("sub");
@@ -156,36 +157,44 @@ fn create_from_a_subdirectory_makes_a_worktree_of_the_whole_repository() {
 
 #[test]
 fn a_plain_directory_is_not_a_repository() {
-    fakes::within("a_plain_directory_is_not_a_repository", BUDGET, || {
-        let home = fakes::TempDir::new("worktree-create-plain");
-        let launch = home.path().join("plain");
-        fs::create_dir(&launch).unwrap();
-        let path = launch.join("wt");
-        let err = create(&launch, &path, "fiber/x", &direct).unwrap_err();
-        assert!(matches!(err, Error::NotARepository { .. }), "{err:?}");
-        assert_eq!(err.code(), ErrorCode::Usage);
-        assert!(err.to_string().contains(launch.to_str().unwrap()), "{err}");
-        assert!(!exists(&path), "nothing was created");
-    });
+    fakes::within(
+        "a_plain_directory_is_not_a_repository",
+        Deadline::after(BUDGET),
+        || {
+            let home = fakes::TempDir::new("worktree-create-plain");
+            let launch = home.path().join("plain");
+            fs::create_dir(&launch).unwrap();
+            let path = launch.join("wt");
+            let err = create(&launch, &path, "fiber/x", &direct).unwrap_err();
+            assert!(matches!(err, Error::NotARepository { .. }), "{err:?}");
+            assert_eq!(err.code(), ErrorCode::Usage);
+            assert!(err.to_string().contains(launch.to_str().unwrap()), "{err}");
+            assert!(!exists(&path), "nothing was created");
+        },
+    );
 }
 
 #[test]
 fn the_inside_of_dot_git_is_not_a_repository() {
-    fakes::within("the_inside_of_dot_git_is_not_a_repository", BUDGET, || {
-        let home = repo("worktree-create-gitdir");
-        let launch = home.path().join(".git");
-        // `rev-parse --is-inside-work-tree` succeeds here, printing
-        // `false`: only the output tells it apart.
-        let err = create(&launch, &launch.join("wt"), "fiber/x", &direct).unwrap_err();
-        assert!(matches!(err, Error::NotARepository { .. }), "{err:?}");
-    });
+    fakes::within(
+        "the_inside_of_dot_git_is_not_a_repository",
+        Deadline::after(BUDGET),
+        || {
+            let home = repo("worktree-create-gitdir");
+            let launch = home.path().join(".git");
+            // `rev-parse --is-inside-work-tree` succeeds here, printing
+            // `false`: only the output tells it apart.
+            let err = create(&launch, &launch.join("wt"), "fiber/x", &direct).unwrap_err();
+            assert!(matches!(err, Error::NotARepository { .. }), "{err:?}");
+        },
+    );
 }
 
 #[test]
 fn an_unborn_head_is_a_git_error_and_creates_nothing() {
     fakes::within(
         "an_unborn_head_is_a_git_error_and_creates_nothing",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = fakes::TempDir::new("worktree-create-unborn");
             git(home.path(), &["init", "--quiet"]);
@@ -203,7 +212,7 @@ fn an_unborn_head_is_a_git_error_and_creates_nothing() {
 fn an_existing_branch_is_refused_and_left_where_it_was() {
     fakes::within(
         "an_existing_branch_is_refused_and_left_where_it_was",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-create-branch");
             git(home.path(), &["branch", "fiber/x"]);
@@ -220,23 +229,27 @@ fn an_existing_branch_is_refused_and_left_where_it_was() {
 
 #[test]
 fn an_existing_empty_directory_is_refused() {
-    fakes::within("an_existing_empty_directory_is_refused", BUDGET, || {
-        let home = repo("worktree-create-empty");
-        let path = home.path().join("wt");
-        fs::create_dir(&path).unwrap();
-        let err = create(home.path(), &path, "fiber/x", &direct).unwrap_err();
-        // Git itself accepts an empty directory: only the check refuses it.
-        assert!(matches!(err, Error::Exists { .. }), "{err:?}");
-        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
-        assert!(!branch_exists(home.path(), "fiber/x"));
-    });
+    fakes::within(
+        "an_existing_empty_directory_is_refused",
+        Deadline::after(BUDGET),
+        || {
+            let home = repo("worktree-create-empty");
+            let path = home.path().join("wt");
+            fs::create_dir(&path).unwrap();
+            let err = create(home.path(), &path, "fiber/x", &direct).unwrap_err();
+            // Git itself accepts an empty directory: only the check refuses it.
+            assert!(matches!(err, Error::Exists { .. }), "{err:?}");
+            assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+            assert!(!branch_exists(home.path(), "fiber/x"));
+        },
+    );
 }
 
 #[test]
 fn an_existing_non_empty_path_is_refused_and_left_alone() {
     fakes::within(
         "an_existing_non_empty_path_is_refused_and_left_alone",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-create-full");
             let path = home.path().join("wt");
@@ -255,43 +268,51 @@ fn an_existing_non_empty_path_is_refused_and_left_alone() {
 
 #[test]
 fn a_dangling_symlink_at_the_path_is_refused() {
-    fakes::within("a_dangling_symlink_at_the_path_is_refused", BUDGET, || {
-        let home = repo("worktree-create-dangling");
-        let path = home.path().join("wt");
-        std::os::unix::fs::symlink(home.path().join("no-such-target"), &path).unwrap();
-        let err = create(home.path(), &path, "fiber/x", &direct).unwrap_err();
-        // `Path::exists` follows the link and says missing: only
-        // `symlink_metadata` refuses it.
-        assert!(matches!(err, Error::Exists { .. }), "{err:?}");
-        assert_eq!(
-            fs::read_link(&path).unwrap(),
-            home.path().join("no-such-target")
-        );
-        assert!(!branch_exists(home.path(), "fiber/x"));
-    });
+    fakes::within(
+        "a_dangling_symlink_at_the_path_is_refused",
+        Deadline::after(BUDGET),
+        || {
+            let home = repo("worktree-create-dangling");
+            let path = home.path().join("wt");
+            std::os::unix::fs::symlink(home.path().join("no-such-target"), &path).unwrap();
+            let err = create(home.path(), &path, "fiber/x", &direct).unwrap_err();
+            // `Path::exists` follows the link and says missing: only
+            // `symlink_metadata` refuses it.
+            assert!(matches!(err, Error::Exists { .. }), "{err:?}");
+            assert_eq!(
+                fs::read_link(&path).unwrap(),
+                home.path().join("no-such-target")
+            );
+            assert!(!branch_exists(home.path(), "fiber/x"));
+        },
+    );
 }
 
 #[test]
 fn an_unreadable_parent_is_an_io_error() {
-    fakes::within("an_unreadable_parent_is_an_io_error", BUDGET, || {
-        let home = repo("worktree-create-noperm");
-        let parent = home.path().join("dark");
-        fs::create_dir(&parent).unwrap();
-        fs::set_permissions(&parent, fs::Permissions::from_mode(0o000)).unwrap();
-        let err = create(home.path(), &parent.join("wt"), "fiber/x", &direct).unwrap_err();
-        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
-        // A lookup error other than `NotFound` is an I/O error, never
-        // "absent".
-        assert!(matches!(err, Error::Io { .. }), "{err:?}");
-        assert!(!branch_exists(home.path(), "fiber/x"));
-    });
+    fakes::within(
+        "an_unreadable_parent_is_an_io_error",
+        Deadline::after(BUDGET),
+        || {
+            let home = repo("worktree-create-noperm");
+            let parent = home.path().join("dark");
+            fs::create_dir(&parent).unwrap();
+            fs::set_permissions(&parent, fs::Permissions::from_mode(0o000)).unwrap();
+            let err = create(home.path(), &parent.join("wt"), "fiber/x", &direct).unwrap_err();
+            fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+            // A lookup error other than `NotFound` is an I/O error, never
+            // "absent".
+            assert!(matches!(err, Error::Io { .. }), "{err:?}");
+            assert!(!branch_exists(home.path(), "fiber/x"));
+        },
+    );
 }
 
 #[test]
 fn a_failing_post_checkout_hook_leaves_nothing_behind() {
     fakes::within(
         "a_failing_post_checkout_hook_leaves_nothing_behind",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-create-hook");
             git(home.path(), &["branch", "keep"]);
@@ -322,63 +343,75 @@ fn a_failing_post_checkout_hook_leaves_nothing_behind() {
 
 #[test]
 fn a_missing_git_is_git_missing() {
-    fakes::within("a_missing_git_is_git_missing", BUDGET, || {
-        let home = repo("worktree-create-nogit");
-        let err = create_with(
-            "fiber-no-such-git",
-            home.path(),
-            &home.path().join("wt"),
-            "fiber/x",
-            &direct,
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::GitMissing), "{err:?}");
-        assert_eq!(err.code(), ErrorCode::Usage);
-    });
+    fakes::within(
+        "a_missing_git_is_git_missing",
+        Deadline::after(BUDGET),
+        || {
+            let home = repo("worktree-create-nogit");
+            let err = create_with(
+                "fiber-no-such-git",
+                home.path(),
+                &home.path().join("wt"),
+                "fiber/x",
+                &direct,
+            )
+            .unwrap_err();
+            assert!(matches!(err, Error::GitMissing), "{err:?}");
+            assert_eq!(err.code(), ErrorCode::Usage);
+        },
+    );
 }
 
 #[test]
 fn a_git_that_cannot_execute_is_an_io_error() {
-    fakes::within("a_git_that_cannot_execute_is_an_io_error", BUDGET, || {
-        let home = repo("worktree-create-noexec");
-        let err = create_with(
-            home.path().to_str().unwrap(),
-            home.path(),
-            &home.path().join("wt"),
-            "fiber/x",
-            &direct,
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::Io { .. }), "{err:?}");
-        assert_eq!(err.code(), ErrorCode::IoFailed);
-    });
+    fakes::within(
+        "a_git_that_cannot_execute_is_an_io_error",
+        Deadline::after(BUDGET),
+        || {
+            let home = repo("worktree-create-noexec");
+            let err = create_with(
+                home.path().to_str().unwrap(),
+                home.path(),
+                &home.path().join("wt"),
+                "fiber/x",
+                &direct,
+            )
+            .unwrap_err();
+            assert!(matches!(err, Error::Io { .. }), "{err:?}");
+            assert_eq!(err.code(), ErrorCode::IoFailed);
+        },
+    );
 }
 
 #[test]
 fn an_interrupted_add_creates_nothing() {
-    fakes::within("an_interrupted_add_creates_nothing", BUDGET, || {
-        let home = repo("worktree-create-interrupted");
-        let path = home.path().join("wt");
-        let runner =
-            |_: &mut Command| -> io::Result<Output> { Err(io::ErrorKind::Interrupted.into()) };
-        let err = create(home.path(), &path, "fiber/x", &runner).unwrap_err();
-        match err {
-            Error::Io { source, .. } => assert_eq!(source.kind(), io::ErrorKind::Interrupted),
-            Error::GitMissing
-            | Error::NotARepository { .. }
-            | Error::Exists { .. }
-            | Error::Git { .. } => panic!("expected an I/O error, found {err:?}"),
-        }
-        assert!(!exists(&path), "no path");
-        assert!(!branch_exists(home.path(), "fiber/x"), "no branch");
-    });
+    fakes::within(
+        "an_interrupted_add_creates_nothing",
+        Deadline::after(BUDGET),
+        || {
+            let home = repo("worktree-create-interrupted");
+            let path = home.path().join("wt");
+            let runner =
+                |_: &mut Command| -> io::Result<Output> { Err(io::ErrorKind::Interrupted.into()) };
+            let err = create(home.path(), &path, "fiber/x", &runner).unwrap_err();
+            match err {
+                Error::Io { source, .. } => assert_eq!(source.kind(), io::ErrorKind::Interrupted),
+                Error::GitMissing
+                | Error::NotARepository { .. }
+                | Error::Exists { .. }
+                | Error::Git { .. } => panic!("expected an I/O error, found {err:?}"),
+            }
+            assert!(!exists(&path), "no path");
+            assert!(!branch_exists(home.path(), "fiber/x"), "no branch");
+        },
+    );
 }
 
 #[test]
 fn an_add_cancelled_after_it_ran_is_rolled_back() {
     fakes::within(
         "an_add_cancelled_after_it_ran_is_rolled_back",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-create-cancelled");
             let path = home.path().join("wt");
@@ -399,30 +432,38 @@ fn an_add_cancelled_after_it_ran_is_rolled_back() {
 #[test]
 fn no_command_but_add_runs_a_hook() {
     if std::env::var("FIBER_WORKTREE_HOOKS_CHILD").is_ok() {
-        fakes::within("no_command_but_add_runs_a_hook child", CHILD_BUDGET, || {
-            hooks_child();
-        });
+        fakes::within(
+            "no_command_but_add_runs_a_hook child",
+            Deadline::after(CHILD_BUDGET),
+            || {
+                hooks_child();
+            },
+        );
         return;
     }
-    fakes::within("no_command_but_add_runs_a_hook", RERUN_OUTER, || {
-        let home = fakes::TempDir::new("worktree-hooks");
-        let log = home.path().join("hooks.log");
-        fs::write(&log, "").unwrap();
-        let name = module_path!().split_once("::").unwrap().1;
-        let out = fakes::rerun_within(
-            &format!("{name}::no_command_but_add_runs_a_hook"),
-            &[
-                ("FIBER_WORKTREE_HOOKS_CHILD", home.path().to_str().unwrap()),
-                ("FIBER_TEST_HOOK_LOG", log.to_str().unwrap()),
-            ],
-            RERUN_WITHIN,
-        );
-        assert!(
-            out.status.success(),
-            "the hook child failed:\n{}",
-            String::from_utf8_lossy(&out.stdout)
-        );
-    });
+    fakes::within(
+        "no_command_but_add_runs_a_hook",
+        Deadline::after(RERUN_OUTER),
+        || {
+            let home = fakes::TempDir::new("worktree-hooks");
+            let log = home.path().join("hooks.log");
+            fs::write(&log, "").unwrap();
+            let name = module_path!().split_once("::").unwrap().1;
+            let out = fakes::rerun_within(
+                &format!("{name}::no_command_but_add_runs_a_hook"),
+                &[
+                    ("FIBER_WORKTREE_HOOKS_CHILD", home.path().to_str().unwrap()),
+                    ("FIBER_TEST_HOOK_LOG", log.to_str().unwrap()),
+                ],
+                Deadline::after(RERUN_WITHIN),
+            );
+            assert!(
+                out.status.success(),
+                "the hook child failed:\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+        },
+    );
 }
 
 /// The hook test's body, in the re-run child with `FIBER_TEST_HOOK_LOG`
@@ -483,7 +524,7 @@ fn git_environment_cannot_redirect_creation() {
     if let Ok(launch) = std::env::var("FIBER_WORKTREE_CREATE_ENV_CHILD") {
         fakes::within(
             "git_environment_cannot_redirect_creation child",
-            CHILD_BUDGET,
+            Deadline::after(CHILD_BUDGET),
             || {
                 let launch = PathBuf::from(launch);
                 let path = launch.join("wt");
@@ -506,7 +547,7 @@ fn git_environment_cannot_redirect_creation() {
     }
     fakes::within(
         "git_environment_cannot_redirect_creation",
-        RERUN_OUTER,
+        Deadline::after(RERUN_OUTER),
         || {
             let home = repo("worktree-create-env");
             let other = repo("worktree-create-env-other");
@@ -532,7 +573,7 @@ fn git_environment_cannot_redirect_creation() {
                         other.path().to_str().unwrap(),
                     ),
                 ],
-                RERUN_WITHIN,
+                Deadline::after(RERUN_WITHIN),
             );
             assert!(
                 out.status.success(),
@@ -547,7 +588,7 @@ fn git_environment_cannot_redirect_creation() {
 fn commits_beyond_counts_zero_then_one_then_two() {
     fakes::within(
         "commits_beyond_counts_zero_then_one_then_two",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-create-count");
             let path = home.path().join("wt");
@@ -569,7 +610,7 @@ fn commits_beyond_counts_zero_then_one_then_two() {
 fn a_commit_merged_elsewhere_still_counts_beyond_the_base() {
     fakes::within(
         "a_commit_merged_elsewhere_still_counts_beyond_the_base",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-create-merged");
             let path = home.path().join("wt");
@@ -587,7 +628,7 @@ fn a_commit_merged_elsewhere_still_counts_beyond_the_base() {
 
 #[test]
 fn a_bad_base_is_a_git_error() {
-    fakes::within("a_bad_base_is_a_git_error", BUDGET, || {
+    fakes::within("a_bad_base_is_a_git_error", Deadline::after(BUDGET), || {
         let home = repo("worktree-create-badbase");
         let path = home.path().join("wt");
         create(home.path(), &path, "fiber/x", &direct).unwrap();
@@ -604,30 +645,34 @@ fn a_bad_base_is_a_git_error() {
 
 #[test]
 fn recreate_makes_the_branch_at_the_new_head() {
-    fakes::within("recreate_makes_the_branch_at_the_new_head", BUDGET, || {
-        let home = repo("worktree-recreate");
-        fs::write(home.path().join("second.txt"), "y").unwrap();
-        git(home.path(), &["add", "."]);
-        git(home.path(), &["commit", "--quiet", "-m", "second"]);
-        let head = git(home.path(), &["rev-parse", "HEAD"]);
-        let common = home.path().join(".git");
-        let path = home.path().join("wt");
-        let created = recreate(&common, &path, "fiber/y", &direct).unwrap();
-        assert_eq!(created.base, head);
-        assert_eq!(created.branch, "fiber/y");
-        assert_eq!(created.path, fs::canonicalize(&path).unwrap());
-        assert!(path.join("second.txt").is_file());
-        assert_eq!(git(home.path(), &["rev-parse", "fiber/y"]), head);
-        let inspected = worktree_of(inspect(&path).unwrap());
-        assert_eq!(inspected.branch, "fiber/y");
-    });
+    fakes::within(
+        "recreate_makes_the_branch_at_the_new_head",
+        Deadline::after(BUDGET),
+        || {
+            let home = repo("worktree-recreate");
+            fs::write(home.path().join("second.txt"), "y").unwrap();
+            git(home.path(), &["add", "."]);
+            git(home.path(), &["commit", "--quiet", "-m", "second"]);
+            let head = git(home.path(), &["rev-parse", "HEAD"]);
+            let common = home.path().join(".git");
+            let path = home.path().join("wt");
+            let created = recreate(&common, &path, "fiber/y", &direct).unwrap();
+            assert_eq!(created.base, head);
+            assert_eq!(created.branch, "fiber/y");
+            assert_eq!(created.path, fs::canonicalize(&path).unwrap());
+            assert!(path.join("second.txt").is_file());
+            assert_eq!(git(home.path(), &["rev-parse", "fiber/y"]), head);
+            let inspected = worktree_of(inspect(&path).unwrap());
+            assert_eq!(inspected.branch, "fiber/y");
+        },
+    );
 }
 
 #[test]
 fn recreate_refuses_a_plain_a_root_and_a_missing_repository() {
     fakes::within(
         "recreate_refuses_a_plain_a_root_and_a_missing_repository",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-recreate-notrepo");
             // A plain directory: the common-dir read fails.
@@ -671,7 +716,7 @@ fn recreate_refuses_a_plain_a_root_and_a_missing_repository() {
 fn recreate_with_an_existing_branch_keeps_it_where_it_was() {
     fakes::within(
         "recreate_with_an_existing_branch_keeps_it_where_it_was",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-recreate-branch");
             git(home.path(), &["branch", "fiber/y"]);
@@ -697,7 +742,7 @@ fn recreate_with_an_existing_branch_keeps_it_where_it_was() {
 fn recreate_with_an_existing_path_leaves_it_alone() {
     fakes::within(
         "recreate_with_an_existing_path_leaves_it_alone",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-recreate-path");
             let path = home.path().join("wt");
@@ -718,7 +763,7 @@ fn recreate_with_an_existing_path_leaves_it_alone() {
 fn recreate_accepts_a_symlink_to_the_common_dir() {
     fakes::within(
         "recreate_accepts_a_symlink_to_the_common_dir",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-recreate-symlink");
             let other = fakes::TempDir::new("worktree-recreate-symlink-other");
@@ -734,36 +779,40 @@ fn recreate_accepts_a_symlink_to_the_common_dir() {
 
 #[test]
 fn recreate_from_a_bare_repository() {
-    fakes::within("recreate_from_a_bare_repository", BUDGET, || {
-        let home = repo("worktree-recreate-bare-src");
-        fs::write(home.path().join("second.txt"), "y").unwrap();
-        git(home.path(), &["add", "."]);
-        git(home.path(), &["commit", "--quiet", "-m", "second"]);
-        let holder = fakes::TempDir::new("worktree-recreate-bare");
-        let bare = holder.path().join("bare.git");
-        git(
-            holder.path(),
-            &[
-                "clone",
-                "--quiet",
-                "--bare",
-                home.path().to_str().unwrap(),
-                bare.to_str().unwrap(),
-            ],
-        );
-        let head = git(&bare, &["rev-parse", "HEAD"]);
-        let path = holder.path().join("wt");
-        let created = recreate(&bare, &path, "fiber/y", &direct).unwrap();
-        assert_eq!(created.base, head);
-        assert!(path.join("second.txt").is_file());
-    });
+    fakes::within(
+        "recreate_from_a_bare_repository",
+        Deadline::after(BUDGET),
+        || {
+            let home = repo("worktree-recreate-bare-src");
+            fs::write(home.path().join("second.txt"), "y").unwrap();
+            git(home.path(), &["add", "."]);
+            git(home.path(), &["commit", "--quiet", "-m", "second"]);
+            let holder = fakes::TempDir::new("worktree-recreate-bare");
+            let bare = holder.path().join("bare.git");
+            git(
+                holder.path(),
+                &[
+                    "clone",
+                    "--quiet",
+                    "--bare",
+                    home.path().to_str().unwrap(),
+                    bare.to_str().unwrap(),
+                ],
+            );
+            let head = git(&bare, &["rev-parse", "HEAD"]);
+            let path = holder.path().join("wt");
+            let created = recreate(&bare, &path, "fiber/y", &direct).unwrap();
+            assert_eq!(created.base, head);
+            assert!(path.join("second.txt").is_file());
+        },
+    );
 }
 
 #[test]
 fn recreate_with_a_failing_hook_leaves_nothing_behind() {
     fakes::within(
         "recreate_with_a_failing_hook_leaves_nothing_behind",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-recreate-hook");
             let hooks = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/failing-hook");
@@ -790,7 +839,7 @@ fn recreate_with_a_failing_hook_leaves_nothing_behind() {
 fn a_canonicalize_failure_after_a_successful_add_rolls_back() {
     fakes::within(
         "a_canonicalize_failure_after_a_successful_add_rolls_back",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = repo("worktree-create-self-delete");
             let hooks = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/self-deleting-hook");

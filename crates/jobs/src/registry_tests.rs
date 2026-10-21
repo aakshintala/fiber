@@ -784,7 +784,7 @@ fn write_returns_the_output_after_the_write_when_the_wait_passes() {
     let deadline = clock.now().checked_add(Duration::from_millis(250)).unwrap();
     let rx = writing(&registry, &id, "hi\n", 250, CancelToken::new());
     assert!(
-        clock.await_parked(deadline, DEADLINE),
+        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
         "the write did not park at its wait"
     );
     assert!(rx.try_recv().is_err(), "the write returned before its wait");
@@ -813,7 +813,7 @@ fn write_returns_at_once_with_the_final_state_when_the_job_ends_in_the_wait() {
     let (id, opened, _typed) = open_tty(&registry, b"got:hi\n");
     let deadline = clock.now().checked_add(Duration::from_millis(250)).unwrap();
     let rx = writing(&registry, &id, "hi\n", 250, CancelToken::new());
-    assert!(clock.await_parked(deadline, DEADLINE));
+    assert!(clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)));
     (opened.end.0)(ended_ok(&id));
     let answer = Deadline::after(DEADLINE)
         .recv(&rx)
@@ -842,7 +842,7 @@ fn a_cancel_returns_the_write_at_once_with_what_arrived() {
     let deadline = clock.now().checked_add(Duration::from_millis(250)).unwrap();
     let cancel = CancelToken::new();
     let rx = writing(&registry, &id, "x", 250, cancel.clone());
-    assert!(clock.await_parked(deadline, DEADLINE));
+    assert!(clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)));
     cancel.cancel();
     let answer = Deadline::after(DEADLINE)
         .recv(&rx)
@@ -1055,7 +1055,7 @@ fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
     // The writer processes the pre-deadline advance and parks again
     // before the test asserts it is still waiting.
     assert!(
-        clock.await_parked_since(&mark, None, DEADLINE),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "the write did not park again after the pre-deadline advance"
     );
     assert!(

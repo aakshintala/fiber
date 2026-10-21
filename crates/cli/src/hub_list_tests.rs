@@ -368,11 +368,16 @@ fn public_add_writes_the_entry_and_reports_usage_on_a_duplicate() {
         let name = module_path!().split_once("::").unwrap().1.to_owned()
             + "::public_add_writes_the_entry_and_reports_usage_on_a_duplicate";
         let run = || {
-            fakes::rerun_prepared(&name, &args, Duration::from_secs(10), |command| {
-                command
-                    .env("FIBER_HOME", dir.path())
-                    .current_dir(dir.path());
-            })
+            fakes::rerun_prepared(
+                &name,
+                &args,
+                Deadline::after(Duration::from_secs(10)),
+                |command| {
+                    command
+                        .env("FIBER_HOME", dir.path())
+                        .current_dir(dir.path());
+                },
+            )
         };
         let output = run();
         assert_eq!(output.status.code(), Some(0));
@@ -410,7 +415,7 @@ fn public_remove_deletes_state_and_reports_usage_when_absent() {
         fakes::rerun_prepared(
             &name,
             &[(PUBLIC_CHILD, "1")],
-            Duration::from_secs(10),
+            Deadline::after(Duration::from_secs(10)),
             |command| {
                 command
                     .env("FIBER_HOME", dir.path())
@@ -446,7 +451,7 @@ fn public_add_reads_plain_input_when_only_stderr_is_a_terminal() {
     let output = fakes::rerun_prepared(
         &name,
         &[(PUBLIC_CHILD, "1")],
-        Duration::from_secs(10),
+        Deadline::after(Duration::from_secs(10)),
         |command| {
             command
                 .env("FIBER_HOME", dir.path())
