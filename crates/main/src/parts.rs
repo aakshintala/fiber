@@ -271,7 +271,14 @@ pub(crate) fn parts_in(
     let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
         reads.credential(command, timeout, &*clock)
     };
-    let (naming, notices) = lua_providers::add_lua(&extensions, &mut providers, &config, &run)?;
+    let (naming, notices) = lua_providers::add_lua(
+        &extensions,
+        &mut providers,
+        &config,
+        &run,
+        &home,
+        clock.as_ref(),
+    )?;
     startup_notices.extend(notices);
     scripted::prepare(&mut providers, &config, recorded);
     let owners = (extensions.lua_providers().iter())

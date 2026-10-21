@@ -450,6 +450,7 @@ fn start_in(dir: &std::path::Path) -> Start {
         browser: Arc::new(crate::oauth::SystemBrowser::default()),
         session: None,
         secrets: Vec::new(),
+        deps: Default::default(),
     }
 }
 
@@ -1159,6 +1160,7 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
                         browser,
                         session: None,
                         secrets: Vec::new(),
+                        deps: Default::default(),
                     },
                     &hub,
                     &mut parked,

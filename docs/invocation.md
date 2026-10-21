@@ -139,7 +139,7 @@ credential a session uses"). A new session takes its label from
 
 | Command | What it does |
 |---|---|
-| `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). `upgrade` runs the same command. A repository's extensions are not updated: each changes only through a new offer. |
+| `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). Takes `--channel stable|nightly`, or `FIBER_CHANNEL` when the flag is absent: the flag beats the environment, and an empty setting means stable. `upgrade` runs the same command. A repository's extensions are not updated: each changes only through a new offer. |
 | `setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code \| codex>]... [--completions <shell> \| --no-completions] [--hub \| --no-hub]` | Asks the questions a new install needs, and applies each answer with the command that already does it (below). `install.sh` runs it last; a person runs it again at any time. |
 | `approve [--yes]` | Run in a repository: shows every extension, hook and MCP server the repository declares, as one offer would, and approves them for this person (`docs/extensions.md`, "Code a repository ships"). `--yes` approves without asking, for a script or a machine image. It prints each approval on stderr. |
 | `login [<name>] [--as <label>] [--device]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"), or a secret an installed extension declares (`docs/configuration.md`, "Secrets"). Without `--as`, a provider's label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. `--as` applies only to a provider. `--device` applies only to a provider that logs in by browser, and logs in with a device code instead of the browser. A name that is neither an installed provider, nor a provider the current workspace's approved repository set registers, nor a declared secret is a usage error that names the providers and the declared secrets. With no name, a terminal offers the providers, installed and approved repository ones alike, and the declared secrets; without a terminal, it is a usage error. |
@@ -382,7 +382,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `prompt` | `content` |
 | `steer` | `content` |
 | `steer_drop` | `command_id` (string), the `steer` command's id |
-| `message` | `from_session_id` (string), `text` (string) |
+| `message` | `from_session_id` (string), `parent_session_id` (string, optional), the sender's parent session when it has one, `text` (string) |
 | `cancel` | none |
 | `reply` | `request_id` (string) and the answer ("Replying") |
 | `job_stop` | `job_id` (string) |
@@ -858,9 +858,10 @@ of them runs"). It stops its jobs and exits with `suspended_on` naming the
 request, as it does when the idle delay passes ("Lifecycle"), and resuming
 raises the request again.
 
-A signal that arrives before `fiber_started` is written exits with the code
-and writes no durable event; an ephemeral `clients` line already sent to a
-client that attached stays sent. Once `fiber_started` is written,
+A signal that arrives before Fiber starts writing `fiber_started` exits with the code
+and writes no durable event; one that arrives while it is being written takes effect once it is written, as the started process's shutdown. An ephemeral `clients` line already sent to a
+client that attached stays sent. A signal that arrives before Fiber starts writing `fiber_started` also writes one diagnostic line (`docs/state.md`, "What each part holds").
+Once `fiber_started` is written,
 `fiber_exited` always is, unless the process dies or reaches its kill point.
 
 **The bound is 5 seconds** from the signal to exit, per process. The
@@ -1027,6 +1028,8 @@ websocket for everything it does.
 | `write_config` | `workspace` (absolute string), `path`, `text`, `version` (strings) | Writes the text only while the file still has that version; otherwise rejects `stale_request` without writing. Parses no text. |
 | `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
+| `stop` | none | On the local socket only: ends the hub as SIGTERM does. |
+| `placeholder_env` | `names` (array of strings) | Answers with the hub's captured values for the named placeholders, absent names omitted, so the list and the session agree (`docs/model-routing.md`, "Model discovery"). |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
 | `devices` | none | Answers with the paired devices. |
 | `revoke` | `device` (string) | Revokes the device's token, which may be the asking client's own, and closes its live connections. |

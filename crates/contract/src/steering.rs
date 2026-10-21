@@ -175,23 +175,35 @@ impl Queue {
         Ok(())
     }
 
-    /// Admits one session message: staged from the start, never tracked,
-    /// so a drop naming it stays stale. One section: push, snapshot, emit.
-    pub fn admit_message(
+    /// Admits one session message whose hook pass already ran: staged
+    /// from the start, but never tracked in `admitted`, so the id stays
+    /// stale to `is_admitted` and drops. A queued entry with the same id
+    /// from the same sender is a duplicate. One section: push, snapshot,
+    /// emit.
+    pub fn admit_session_hooked(
         &self,
         id: CommandId,
         content: Vec<ContentPart>,
         sender: Sender,
+        staged: Staged,
         emit: &dyn Emit,
-    ) {
+    ) -> Result<(), Duplicate> {
         let mut inner = self.acquire();
+        if inner
+            .entries
+            .iter()
+            .any(|entry| entry.id == id && entry.sender.origin == sender.origin)
+        {
+            return Err(Duplicate);
+        }
         inner.entries.push_back(Entry {
             id,
             content,
             sender,
-            staged: Some(Staged::default()),
+            staged: Some(staged),
         });
         emit.emit(&queue_event(&inner.entries));
+        Ok(())
     }
 
     /// Takes the still-queued non-session entry `id` names off, if any.

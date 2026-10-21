@@ -7,10 +7,10 @@ use clap::error::ContextValue;
 use crate::completion::Shell;
 
 use super::{
-    ApproveArgs, AskArgs, Commands, ConfigCommands, ExtensionCommands, HubCommands, ImportSource,
-    Invocation, LoginArgs, LogoutArgs, MENU, McpAddArgs, McpCommands, McpRemoveArgs, SessionArgs,
-    SessionsArgs, SessionsCommands, TokenCommands, TopLevel, command, parse_from, usage_sentence,
-    version_line,
+    ApproveArgs, AskArgs, ChannelArg, Commands, ConfigCommands, ExtensionCommands, HubCommands,
+    ImportSource, Invocation, LoginArgs, LogoutArgs, MENU, McpAddArgs, McpCommands, McpRemoveArgs,
+    SessionArgs, SessionsArgs, SessionsCommands, SetupArgs, TokenCommands, TopLevel, command,
+    parse_from, usage_sentence, version_line,
 };
 
 #[test]
@@ -1213,6 +1213,86 @@ fn parses_argv_into_its_invocation() {
                 TopLevel::default(),
             ),
         ),
+        (
+            &["fiber", "setup"],
+            Invocation::Run(
+                Some(Commands::Setup(SetupArgs {
+                    provider: Vec::new(),
+                    model: None,
+                    thinking: None,
+                    import: Vec::new(),
+                    completions: None,
+                    no_completions: false,
+                    hub: false,
+                    no_hub: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &[
+                "fiber",
+                "setup",
+                "--provider",
+                "openrouter",
+                "--provider",
+                "codex",
+                "--model",
+                "fake/m",
+                "--thinking",
+                "high",
+                "--import",
+                "claude-code",
+                "--completions",
+                "zsh",
+                "--hub",
+            ],
+            Invocation::Run(
+                Some(Commands::Setup(SetupArgs {
+                    provider: vec!["openrouter".to_owned(), "codex".to_owned()],
+                    model: Some("fake/m".to_owned()),
+                    thinking: Some("high".to_owned()),
+                    import: vec![ImportSource::ClaudeCode],
+                    completions: Some(Shell::Zsh),
+                    no_completions: false,
+                    hub: true,
+                    no_hub: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "setup", "--import", "codex", "--no-completions"],
+            Invocation::Run(
+                Some(Commands::Setup(SetupArgs {
+                    provider: Vec::new(),
+                    model: None,
+                    thinking: None,
+                    import: vec![ImportSource::Codex],
+                    completions: None,
+                    no_completions: true,
+                    hub: false,
+                    no_hub: false,
+                })),
+                TopLevel::default(),
+            ),
+        ),
+        (
+            &["fiber", "setup", "--no-hub"],
+            Invocation::Run(
+                Some(Commands::Setup(SetupArgs {
+                    provider: Vec::new(),
+                    model: None,
+                    thinking: None,
+                    import: Vec::new(),
+                    completions: None,
+                    no_completions: false,
+                    hub: false,
+                    no_hub: true,
+                })),
+                TopLevel::default(),
+            ),
+        ),
     ];
     for (argv, expected) in &cases {
         let parsed = parse_from(argv.iter().copied());
@@ -1307,6 +1387,108 @@ fn doctor_takes_no_arguments() {
 }
 
 #[test]
+fn update_takes_an_optional_channel_and_upgrade_runs_the_same_command() {
+    let Invocation::Run(
+        Some(Commands::Update {
+            channel,
+            test_base_url,
+        }),
+        _,
+    ) = parse_from(["fiber", "update"])
+    else {
+        panic!("bare update did not parse");
+    };
+    assert_eq!(channel, None);
+    assert_eq!(test_base_url.base_url, None);
+    for (args, expected) in [
+        (
+            vec!["fiber", "update", "--channel", "stable"],
+            Some(ChannelArg::Stable),
+        ),
+        (
+            vec!["fiber", "update", "--channel", "nightly"],
+            Some(ChannelArg::Nightly),
+        ),
+        (vec!["fiber", "upgrade"], None),
+        (
+            vec!["fiber", "upgrade", "--channel", "nightly"],
+            Some(ChannelArg::Nightly),
+        ),
+    ] {
+        let Invocation::Run(
+            Some(Commands::Update {
+                channel,
+                test_base_url,
+            }),
+            _,
+        ) = parse_from(args.clone())
+        else {
+            panic!("{args:?} did not parse");
+        };
+        assert_eq!(channel, expected, "{args:?}");
+        assert_eq!(test_base_url.base_url, None, "{args:?}");
+    }
+    let Invocation::Run(
+        Some(Commands::Update {
+            channel,
+            test_base_url,
+        }),
+        _,
+    ) = parse_from(["fiber", "update", "--base-url", "http://127.0.0.1:1"])
+    else {
+        panic!("update with --base-url did not parse");
+    };
+    assert_eq!(channel, None);
+    assert_eq!(
+        test_base_url.base_url.as_deref(),
+        Some("http://127.0.0.1:1")
+    );
+}
+
+#[test]
+fn update_and_release_install_share_one_hidden_base_url() {
+    let cmd = command();
+    for name in ["update", "release-install"] {
+        let sub = cmd
+            .get_subcommands()
+            .find(|sub| sub.get_name() == name)
+            .unwrap_or_else(|| panic!("{name} is a subcommand"));
+        let arg = sub
+            .get_arguments()
+            .find(|arg| arg.get_long() == Some("base-url"))
+            .unwrap_or_else(|| panic!("{name} takes --base-url"));
+        assert!(arg.is_hide_set(), "{name} hides --base-url");
+    }
+}
+
+#[test]
+fn update_rejects_a_positional_argument_and_an_unknown_channel() {
+    let error = sentence(&["fiber", "update", "extra"]);
+    assert!(error.starts_with("Unexpected argument 'extra'"), "{error}");
+    assert!(error.ends_with("Run `fiber --help` for usage."), "{error}");
+    let error = sentence(&["fiber", "update", "--channel", "bogus"]);
+    assert!(
+        error.starts_with("Invalid value 'bogus' for '--channel"),
+        "{error}"
+    );
+    assert!(
+        error.contains("[possible values: stable, nightly]"),
+        "{error}"
+    );
+    assert!(error.ends_with("Run `fiber --help` for usage."), "{error}");
+}
+
+#[test]
+fn the_menu_names_update_and_its_alias_and_channel() {
+    let line = MENU
+        .lines()
+        .find(|line| line.starts_with("  update"))
+        .unwrap();
+    assert!(line.contains("`upgrade`"), "{line}");
+    assert!(line.contains("`--channel"), "{line}");
+}
+
+#[test]
 fn approve_rejects_anything_else() {
     assert!(
         sentence(&["fiber", "approve", "extra"]).starts_with("Unexpected argument 'extra'"),
@@ -1349,6 +1531,58 @@ fn logout_as_conflicts_with_all() {
     assert!(said.contains("cannot be used with"), "{said}");
     assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
     assert_eq!(said.lines().count(), 1, "{said}");
+}
+
+#[test]
+fn setup_flags_conflict_in_pairs() {
+    for args in [
+        &["fiber", "setup", "--completions", "zsh", "--no-completions"][..],
+        &["fiber", "setup", "--hub", "--no-hub"],
+    ] {
+        let said = sentence(args);
+        assert!(said.contains("cannot be used with"), "{said}");
+        assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+        assert_eq!(said.lines().count(), 1, "{said}");
+    }
+}
+
+#[test]
+fn setup_help_names_every_flag() {
+    let help = super::render_help(&["setup"]).unwrap();
+    for flag in [
+        "--provider",
+        "--model",
+        "--thinking",
+        "--import",
+        "--completions",
+        "--no-completions",
+        "--hub",
+        "--no-hub",
+    ] {
+        assert!(help.contains(flag), "{flag}: {help}");
+    }
+    assert!(help.contains("Usage: fiber setup"), "{help}");
+}
+
+#[test]
+fn the_menu_names_setup_with_its_synopsis() {
+    let itself = menu()
+        .split("\n\n")
+        .find(|group| group.starts_with("Fiber itself:"))
+        .unwrap()
+        .to_owned();
+    let row = itself
+        .lines()
+        .find(|line| line.starts_with("  setup "))
+        .unwrap()
+        .to_owned();
+    // The synopsis is the text before the description's gap of two or
+    // more spaces, past the two-space indent.
+    assert_eq!(
+        row[2..].split("  ").next().unwrap_or(""),
+        "setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code | codex>]... [--completions <shell> | --no-completions] [--hub | --no-hub]",
+        "{row}"
+    );
 }
 
 #[test]
@@ -2095,6 +2329,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
     assert_eq!(
         visible(),
         [
+            "update",
             "ask",
             "resume",
             "continue",
@@ -2106,6 +2341,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "config",
             "import",
             "login",
+            "setup",
             "logout",
             "doctor",
             "feedback",
@@ -2166,6 +2402,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
     assert_eq!(
         visible(),
         [
+            "update",
             "ask",
             "resume",
             "continue",
@@ -2177,6 +2414,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "config",
             "import",
             "login",
+            "setup",
             "logout",
             "doctor",
             "feedback",
@@ -2727,24 +2965,36 @@ fn help_hub_install_prints_that_commands_help() {
 
 #[test]
 fn the_hidden_release_install_takes_a_version_and_a_base_url() {
-    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url }), _) =
-        parse_from(["fiber", "release-install", "0.3.0"])
+    let Invocation::Run(
+        Some(Commands::ReleaseInstall {
+            version,
+            test_base_url,
+        }),
+        _,
+    ) = parse_from(["fiber", "release-install", "0.3.0"])
     else {
         panic!("release-install with a version");
     };
     assert_eq!(version, "0.3.0");
-    assert_eq!(base_url, None);
-    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url }), _) = parse_from([
+    assert_eq!(test_base_url.base_url, None);
+    let Invocation::Run(
+        Some(Commands::ReleaseInstall {
+            version,
+            test_base_url,
+        }),
+        _,
+    ) = parse_from([
         "fiber",
         "release-install",
         "0.3.0",
         "--base-url",
         "file:///tmp/r",
-    ]) else {
+    ])
+    else {
         panic!("release-install with a base URL");
     };
     assert_eq!(version, "0.3.0");
-    assert_eq!(base_url.as_deref(), Some("file:///tmp/r"));
+    assert_eq!(test_base_url.base_url.as_deref(), Some("file:///tmp/r"));
     assert!(
         command()
             .try_get_matches_from(["fiber", "release-install"])
@@ -3383,7 +3633,7 @@ fn is_built_follows_the_parser() {
     assert!(is_built(&["hub", "token", "list"]));
     assert!(is_built(&["hub", "add"]));
     assert!(is_built(&[]));
-    assert!(!is_built(&["update"]));
+    assert!(is_built(&["update"]));
     assert!(is_built(&["doctor"]));
     assert!(!is_built(&["mcp", "serve"]));
     assert!(is_built(&["hub", "remove"]));
@@ -3798,5 +4048,5 @@ fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
         "these doc synopses are not in the menu: {missing:?}"
     );
     unbuilt.sort();
-    assert_eq!(unbuilt, ["mcp serve", "setup", "update"]);
+    assert_eq!(unbuilt, ["mcp serve"]);
 }

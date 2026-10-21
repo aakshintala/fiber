@@ -180,6 +180,42 @@ impl Origin {
             .collect())
     }
 
+    /// The SHA of the exact `refs/tags/<tag>` line `git ls-remote --tags
+    /// --refs <repo>` reports: a shorter tag never matches a longer one
+    /// (`v1` matches neither `v10` nor the peeled `v1^{}` line), and a
+    /// repository without the tag is [`Error::MissingTag`] naming the tag
+    /// and the repository.
+    ///
+    /// The listing ends the command's deadline; each later `git` call
+    /// starts its own.
+    pub(crate) fn tag_commit(
+        &self,
+        repo: &str,
+        tag: &str,
+        clock: &dyn Clock,
+    ) -> Result<String, Error> {
+        let wanted = format!("refs/tags/{tag}");
+        let url = (self.url)(repo);
+        let out = match self.run(&["ls-remote", "--tags", "--refs", &url], None, clock) {
+            Ok(out) => out,
+            Err(Error::Git { why, .. }) if repository_missing(&why) => {
+                return Err(Error::NoRepository {
+                    name: repo.into(),
+                    why,
+                });
+            }
+            Err(err) => return Err(err),
+        };
+        out.lines()
+            .filter_map(|line| line.split_once('\t'))
+            .find(|(_, r)| *r == wanted)
+            .map(|(sha, _)| sha.to_owned())
+            .ok_or_else(|| Error::MissingTag {
+                repo: repo.to_owned(),
+                tag: tag.to_owned(),
+            })
+    }
+
     /// Clones the repository at `tag` to
     /// `dest`, history included only when `history`, and returns the exact
     /// commit. `dest/.git` stays.

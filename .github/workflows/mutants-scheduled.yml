@@ -162,10 +162,16 @@ jobs:
             --shard "$SHARD/$TOTAL"
             --sharding round-robin
           )
+          # Guarded by `if` so errexit (-e, which Actions' `bash`
+          # shell sets) does not exit on a non-zero status before the
+          # status capture: a survivors-only shard (status 2) must reach
+          # the helper below instead of failing the step here.
           if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}"; then
-            :
+            status=0
           else
             status=$?
+          fi
+          if [ "$status" -ne 0 ]; then
             last_log=$(find mutants.out/log -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
               | sort -nr | head -n 1 | cut -d' ' -f2- || true)
             echo "cargo mutants failed with status $status; last mutant:"
@@ -174,7 +180,7 @@ jobs:
             else
               echo "No scenario log found in mutants.out/log."
             fi
-            exit "$status"
+            scripts/mutants-shard-finish "$status"
           fi
       - name: Upload mutants.out
         if: always()

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use config::{Manifest, ProviderData};
 
-use crate::resolve::version;
+use crate::resolve::{at_least, version};
 use crate::{API, Error};
 
 /// Where an installed extension came from.
@@ -178,7 +178,7 @@ pub(crate) fn check(
     fiber_version: &str,
 ) -> Result<(Manifest, Vec<ProviderData>), Error> {
     let manifest = config::read_manifest(source)?;
-    if version(&manifest.fiber)? > version(fiber_version)? {
+    if !at_least(&manifest.fiber, fiber_version)? {
         return Err(Error::NeedsNewerFiber {
             name: manifest.name,
             needs: manifest.fiber,

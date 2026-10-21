@@ -279,6 +279,10 @@ pub struct Loop {
     /// completed handoff resets it, as a resume and a model switch do:
     /// `None` means no earlier prefix may be reused.
     reviewer_sent: Option<usize>,
+    /// `permission_resolved` lines phase A of a concurrent batch buffered
+    /// instead of appending: phase C drains each call's lines in request
+    /// order at write-back. `None` outside phase A, when `decided` appends.
+    decision_buffer: Option<Vec<contract::events::PermissionResolved>>,
     /// Consecutive reviewer blocks; a reviewer allow or a person's answer
     /// to a review escalation resets it.
     consecutive: u64,
@@ -633,6 +637,7 @@ impl Loop {
             reviewer_notes: String::new(),
             reviewed,
             reviewer_sent: None,
+            decision_buffer: None,
             consecutive: 0,
             session_blocks,
             no_model_noticed: false,

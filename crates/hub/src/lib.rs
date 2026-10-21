@@ -74,7 +74,7 @@ pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
 pub use crate::machine::{DeviceLogin, FileSearch, Machine, ShowCode};
 pub use crate::recent::{Left, RecentError, RecentRow, append, append_exited};
-pub use crate::spawn::SpawnStarter;
+pub use crate::spawn::{HUB_SESSION_MARKER, SpawnStarter};
 
 /// What the hub reads from the configuration when it starts.
 #[derive(Debug, Clone, PartialEq, Eq)]

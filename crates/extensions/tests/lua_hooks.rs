@@ -275,7 +275,10 @@ fn ask_message(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeMessage
     let session = Arc::clone(session);
     std::thread::spawn(move || {
         let content = vec![ContentPart::Text { text: "x".into() }];
-        let answer = session.before_message(&BeforeMessage { content: &content });
+        let answer = session.before_message(&BeforeMessage {
+            content: &content,
+            sender: None,
+        });
         match tx.send(answer) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }

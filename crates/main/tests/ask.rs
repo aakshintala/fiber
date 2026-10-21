@@ -769,6 +769,8 @@ Sessions:
   models [<search>] [--json]                                                                                      List the models the installed providers serve
 
 Fiber itself:
+  setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code | codex>]... [--completions <shell> | --no-completions] [--hub | --no-hub]  Ask the questions a new install needs, applying each answer
+  update                                    Update the Fiber binary and every installed extension together; `upgrade` runs the same command, with `--channel stable|nightly`
   approve [--yes]                           Show what this repository ships and approve it
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
@@ -1129,12 +1131,13 @@ fn package(name: &str) -> PathBuf {
 /// The OpenCode Go tool exchange with `muse-spark-1.3-contributor`: the
 /// recorded tool call, then the probe's answer after the tool result.
 fn go_exchange() -> [Response; 2] {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let call = root.join("crates/provider/tests/recordings/opencode-go-tool-call.sse");
-    let answer = root.join("research/opencode-probe/raw/go_stream_tools_1.sse");
     [
-        Response::stream(fs::read(call).unwrap()),
-        Response::stream(fs::read(answer).unwrap()),
+        Response::stream(
+            include_bytes!("../../provider/tests/recordings/opencode-go-tool-call.sse").to_vec(),
+        ),
+        Response::stream(
+            include_bytes!("../../../research/opencode-probe/raw/go_stream_tools_1.sse").to_vec(),
+        ),
     ]
 }
 
@@ -1331,6 +1334,11 @@ fn old_extension_command_names_are_unknown() {
         &["remove", "x"][..],
         &["list"][..],
     ] {
+        if args.first() == Some(&"update") {
+            // `update` is a built command now, so it no longer belongs
+            // with the unknown old names; the rows below still do.
+            continue;
+        }
         let run = setup.run_with_stdin(args, None);
         assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
         assert!(run.raw.is_empty());

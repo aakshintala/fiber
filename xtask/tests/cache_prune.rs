@@ -284,6 +284,96 @@ fn build_generations_keep_only_the_newest_of_each_group() {
     assert_eq!(fixture.deleted(&log), ["21", "22"], "{out}");
 }
 
+/// Superseded generations share a ref and a key minus its last two dash
+/// segments (`-<env hash>-<lock hash>`). Within each such group every
+/// entry on the newest entry's lock hash stays, including distinct env
+/// hashes of the current lock, and the rest are deleted.
+#[test]
+fn build_generations_delete_the_superseded_lock() {
+    let fixture = Fixture::new();
+    let prs = fixture.prs_file("prs.txt", &["1"]);
+    let caches = fixture.state_file(
+        "caches.json",
+        &array(&[
+            cache(
+                41,
+                "v0-rust-ci-line-tables-Linux-x64-b771e0df-06b9f28a",
+                "refs/heads/main",
+                "2026-01-01T00:00:00Z",
+            ),
+            cache(
+                42,
+                "v0-rust-ci-line-tables-Linux-arm64-f011ef13-06b9f28a",
+                "refs/heads/main",
+                "2026-01-01T00:00:01Z",
+            ),
+            cache(
+                43,
+                "v0-rust-ci-line-tables-Darwin-arm64-b558bb6d-06b9f28a",
+                "refs/heads/main",
+                "2026-01-01T00:00:02Z",
+            ),
+            cache(
+                44,
+                "v0-rust-release-Linux-x64-077ade60-06b9f28a",
+                "refs/heads/main",
+                "2026-01-01T00:00:03Z",
+            ),
+            cache(
+                45,
+                "v0-rust-release-Linux-x64-7e9f1f9d-06b9f28a",
+                "refs/heads/main",
+                "2026-01-01T00:00:04Z",
+            ),
+            cache(
+                46,
+                "v0-rust-ci-line-tables-Linux-x64-7543b454-2681f625",
+                "refs/heads/main",
+                "2026-01-01T00:00:05Z",
+            ),
+            cache(
+                47,
+                "v0-rust-ci-line-tables-Linux-x64-a74c6f26-2681f625",
+                "refs/heads/main",
+                "2026-01-01T00:00:06Z",
+            ),
+            cache(
+                48,
+                "v0-rust-ci-line-tables-Linux-arm64-cccccccc-2681f625",
+                "refs/heads/main",
+                "2026-01-01T00:00:07Z",
+            ),
+            cache(
+                49,
+                "v0-rust-ci-line-tables-Darwin-arm64-dddddddd-2681f625",
+                "refs/heads/main",
+                "2026-01-01T00:00:08Z",
+            ),
+            cache(
+                50,
+                "v0-rust-release-Linux-x64-eeeeeeee-2681f625",
+                "refs/heads/main",
+                "2026-01-01T00:00:09Z",
+            ),
+        ]),
+    );
+    let log = fixture.state.path().join("delete.log");
+    let vars = [
+        ("FAKE_PRS", prs.display().to_string()),
+        ("FAKE_CACHES", caches.display().to_string()),
+        ("FAKE_USAGE", "12345".to_owned()),
+        ("FAKE_DELETE_LOG", log.display().to_string()),
+    ];
+    let var_refs: Vec<(&str, &str)> = vars.iter().map(|pair| (pair.0, pair.1.as_str())).collect();
+    let (code, out) = fixture.prune(&var_refs, false);
+    assert_eq!(code, Some(0), "{out}");
+    assert_eq!(
+        fixture.deleted(&log),
+        ["41", "42", "43", "44", "45"],
+        "{out}"
+    );
+}
+
 #[test]
 fn a_failing_pr_list_deletes_nothing() {
     let fixture = Fixture::new();

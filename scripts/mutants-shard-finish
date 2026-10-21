@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# The finished-shard mapping for the scheduled mutants workflow: a shard
+# that finishes with only missed mutants (cargo-mutants exit 2) is green,
+# with each missed mutant's file:line in the step summary. Any other
+# status exits as cargo-mutants did. Usage:
+# scripts/mutants-shard-finish <status>.
+set -euo pipefail
+
+status=$1
+case $status in
+  '' | *[!0-9]*) echo "scripts/mutants-shard-finish: status '$status' is not a non-negative integer" >&2; exit 2 ;;
+esac
+
+if [ "$status" -eq 2 ]; then
+  # Survivors alone still pass; the summary names each missed mutant's
+  # file and line. A missed.txt line reads
+  # `<path>:<line>:<col>: <description>`, so the file:line is the
+  # text before the line's third colon.
+  sed 's/^\([^:]*:[^:]*\):.*/\1/' mutants.out/missed.txt >>"$GITHUB_STEP_SUMMARY" || true
+  exit 0
+fi
+exit "$status"

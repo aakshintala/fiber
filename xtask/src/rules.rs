@@ -556,6 +556,7 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/log/src/lib.rs", "fn session_dir|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/lib.rs", "fn sessions_dir|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/name.rs", "fn session_name|root:home", "join:projects", "#1720"),
+    source_allowance!("crates/log/src/name.rs", "fn session_dirs|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/read.rs", "fn walk|root:home", "join:projects", "#1725"),
     source_allowance!("crates/log/src/scan.rs", "fn started_sessions|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/escalations/place.rs", "fn sessions|root:home", "join:projects", "#2481"),

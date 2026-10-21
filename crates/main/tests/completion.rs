@@ -85,6 +85,8 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     (
         "",
         &[
+            "update",
+            "upgrade",
             "ask",
             "resume",
             "continue",
@@ -92,6 +94,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
             "models",
             "extension",
             "mcp",
+            "setup",
             "approve",
             "config",
             "import",
@@ -106,6 +109,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
         ],
         &["--model", "-c", "--hub", "-h", "--help", "-v", "--version"],
     ),
+    ("update", &[], &["--channel", "-h", "--help"]),
     (
         "ask",
         &[],
@@ -122,6 +126,22 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     ("models", &[], &["--json", "-h", "--help"]),
     ("resume", &[], &["--credential", "--hub", "-h", "--help"]),
     ("continue", &[], &["-h", "--help"]),
+    (
+        "setup",
+        &[],
+        &[
+            "--provider",
+            "--model",
+            "--thinking",
+            "--import",
+            "--completions",
+            "--no-completions",
+            "--hub",
+            "--no-hub",
+            "-h",
+            "--help",
+        ],
+    ),
     ("approve", &[], &["--yes", "-h", "--help"]),
     ("login", &[], &["--as", "--device", "-h", "--help"]),
     ("logout", &[], &["--as", "--all", "-h", "--help"]),

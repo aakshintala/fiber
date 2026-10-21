@@ -3,7 +3,8 @@
 # backstop runs it after it saved the build cache. It deletes:
 #   - every build-cache entry (key v0-rust-...) that a newer generation of the
 #     same cache replaced: entries sharing a ref and a key up to its last
-#     dash, all but the newest;
+#     two dashes, all but those whose lock hash (last segment) equals the
+#     newest entry's;
 #   - every release-musl-<sha> entry whose commit is not among the 10 nearest
 #     first-parent commits (the commit included) of main's head or of the
 #     merge base of main's head and any open pull request's head: the commits
@@ -53,8 +54,9 @@ doomed() {
   jq -r --arg keep "$1" '
     ($keep | split("\n") | map(select(length > 0))) as $keep
     | ([.[] | select(.key | startswith("v0-rust-"))]
-        | group_by([.ref, (.key | sub("-[^-]*$"; ""))])
-        | map(sort_by(.created_at) | reverse | .[1:][])) as $old
+        | group_by([.ref, (.key | sub("-[^-]*-[^-]*$"; ""))])
+        | map(sort_by(.created_at) | reverse | (.[0].key | sub(".*-"; "")) as $lock
+            | map(select((.key | sub(".*-"; "")) != $lock)) | .[])) as $old
     | ([.[] | select(.key | startswith("release-musl-"))
         | select((.key | ltrimstr("release-musl-")) | IN($keep[]) | not)]) as $unreachable
     | ($old + $unreachable)[] | .id'

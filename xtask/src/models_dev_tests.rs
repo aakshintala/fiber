@@ -619,12 +619,8 @@ fn a_missing_tier_rate_falls_back_to_base_then_zero() {
 
 #[test]
 fn thinking_entries_name_snapshot_models_and_known_levels() {
-    let snapshot = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/models-dev.json"
-    ))
-    .unwrap();
-    let snapshot: Value = serde_json::from_str(&snapshot).unwrap();
+    let snapshot = include_str!("../tests/models-dev.json");
+    let snapshot: Value = serde_json::from_str(snapshot).unwrap();
     const VOCABULARY: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
     let mut listed = 0;
     for package in &PACKAGES {

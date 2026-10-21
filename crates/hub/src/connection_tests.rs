@@ -259,6 +259,96 @@ fn names_outside_the_hub_table_are_unknown_command() {
     }
 }
 
+#[test]
+fn stop_from_a_local_client_is_accepted_and_records_the_stop() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_stop", "stop", json!({})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_stop");
+    assert_eq!(result, Value::Null);
+    // The store landed: the idle wait ends the hub as a SIGTERM does,
+    // with no clock advance.
+    assert!(matches!(
+        hub.idle_wait(
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &AtomicI32::new(0)
+        ),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
+#[test]
+fn stop_with_arguments_is_invalid_arguments_and_stops_nothing() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_1", "stop", json!({"level": "full"})));
+    let (code, echoed, message) = rejected(&client.next("the rejection"));
+    assert_eq!(code, "invalid_arguments");
+    assert_eq!(echoed.as_deref(), Some("c_1"));
+    assert_eq!(message, "The arguments do not fit this command.");
+    // No stop flag: a fresh accept still counts.
+    let (served, _peer) = UnixStream::pair().unwrap();
+    assert!(matches!(
+        hub.poll_accept(&served, &AtomicBool::new(false)),
+        Accept::Counted(_)
+    ));
+}
+
+#[test]
+fn stop_from_a_device_is_unknown_command() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let dir = temp.dir.join("hub").join("devices");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("phone"),
+        format!(
+            "{{\"token_sha256\":\"{}\"}}",
+            crate::devices::sha256_hex(b"tok-planted")
+        ),
+    )
+    .unwrap();
+    let who = hub
+        .pairing
+        .authenticate(&hub, 1, "tok-planted")
+        .expect("the device authenticates");
+    // An authenticated connection hears no `hub_hello`, as on the port.
+    let (served, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let hub_for_thread = Arc::clone(&hub);
+    thread::Builder::new()
+        .name("hub-conn".to_owned())
+        .spawn(move || serve_authenticated(served, hub_for_thread, 1, who, None))
+        .unwrap();
+    let mut bytes = serde_json::to_vec(&command("c_1", "stop", json!({}))).unwrap();
+    bytes.push(b'\n');
+    peer.try_clone().unwrap().write_all(&bytes).unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let mut read = BufReader::new(peer);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut text = String::new();
+            let outcome = read.read_line(&mut text);
+            done_tx.send((outcome, text)).unwrap_or(());
+        });
+        let (outcome, text) = Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .unwrap_or_else(|_| panic!("never received the rejection"));
+        outcome.unwrap_or_else(|_| panic!("the hub never answers"));
+        let line: Value = serde_json::from_str(&text).unwrap();
+        let (code, echoed, message) = rejected(&line);
+        assert_eq!(code, "unknown_command");
+        assert_eq!(echoed.as_deref(), Some("c_1"));
+        assert_eq!(message, "`stop` is not a hub command.");
+    });
+}
+
 /// The import answer the driver answers with, scripted through the
 /// machine: names and reasons only, never secret values.
 fn import_report() -> Value {
@@ -445,6 +535,69 @@ fn status_counts_both_open_connections() {
     second.send(&command("c_1", "status", json!({})));
     let (_, result) = accepted(&second.next("the acknowledgement"));
     assert_eq!(result.get("clients"), Some(&json!(2)));
+}
+
+#[test]
+fn placeholder_env_answers_requested_values_and_omits_the_rest() {
+    let temp = Temp::new();
+    let hub = {
+        let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+        let hub = crate::testkit::hub(&temp.dir, Arc::new(FakeStarter::hang(&temp.dir)), timed);
+        Arc::new(
+            hub.with_environments(crate::Environments::ready(crate::Environment {
+                vars: vec![
+                    ("PRESENT".into(), "kept".into()),
+                    ("UNASKED".into(), "stays".into()),
+                ],
+                source: contract::events::VariablesSource::Inherited,
+            })),
+        )
+    };
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command(
+        "c_1",
+        "placeholder_env",
+        json!({"names": ["PRESENT", "ABSENT"]}),
+    ));
+    let (id, result) = accepted(&client.next("the placeholder_env answer"));
+    assert_eq!(id, "c_1");
+    assert_eq!(result, json!({"values": {"PRESENT": "kept"}}));
+    let reread: contract::events::CommandAccepted =
+        serde_json::from_value(json!({"command_id": "c_1", "result": result})).unwrap();
+    assert_eq!(
+        reread.result,
+        Some(contract::events::CommandResult::PlaceholderEnv {
+            values: [("PRESENT".to_owned(), "kept".to_owned())]
+                .into_iter()
+                .collect(),
+        })
+    );
+}
+
+#[test]
+fn placeholder_env_rejects_a_misshaped_request() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    for (id, args) in [
+        ("c_1", json!({})),
+        ("c_2", json!({"names": "PRESENT"})),
+        ("c_3", json!({"names": ["PRESENT"], "extra": true})),
+        ("c_4", json!({"names": null})),
+    ] {
+        client.send(&command(id, "placeholder_env", args));
+        let (code, answered, message) = rejected(&client.next("the rejection"));
+        assert_eq!(
+            (code.as_str(), answered.as_deref(), message.as_str()),
+            (
+                "invalid_arguments",
+                Some(id),
+                "The arguments do not fit this command.",
+            )
+        );
+    }
 }
 
 #[test]

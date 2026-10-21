@@ -28,6 +28,7 @@ impl Sessions for FakeSessions {
         &self,
         _to: &SessionId,
         _from: &SessionId,
+        _parent: Option<&SessionId>,
         _text: &str,
         _cancel: &dyn Cancel,
     ) -> Result<(), contract::sessions::MessageError> {

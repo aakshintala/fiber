@@ -35,7 +35,13 @@ pub fn login_provider(
         .provider_source_dir(name)
         .unwrap_or_else(|| config::extensions_dir(home).join(config::dir_name(extension_name)));
     let manifest = config::read_manifest(&dir)?;
+    // The dependency layout follows the resolved directory: a pinned
+    // copy serves its own .fiber-depends, a personal install serves home —
+    // the same rule start_vm uses.
+    let is_repository_copy = crate::hooks::is_repository_copy(&dir, home);
+    let deps = crate::dep_dirs(home, &dir, &manifest.depends, is_repository_copy);
     let mut extension = LuaExtension::new(extension_name, dir, home, clock)
+        .with_dependencies(deps)
         .with_browser(browser)
         .with_secrets(manifest.secrets.clone());
     if let Some(cap) = manifest

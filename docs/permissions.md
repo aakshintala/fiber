@@ -352,7 +352,16 @@ kept byte for byte.
 
 Two stages. The first asks for one word: `check`, meaning the call goes
 to the reasoning pass, or `allow`. Only a call answered `check` gets the
-reasoning pass. The first stage asks for the reviewer model's lowest
+reasoning pass. The first-stage requests for the reviewed calls of one reply
+go out concurrently, and all of them share the reply's prefix. Second-stage
+passes run one at a time, in request order, before any call is
+applied: a second stage goes out even when a grant installed while an
+earlier call applied moots its reply, so the write-back applies the
+grant instead. When `budget.usd` is set, the
+first-stage requests go out one at a time, as the budget is checked before
+each reviewer request (`docs/loop.md`, "Spending budget"). A call a remembered
+grant decides keeps its already-sent first-stage request's `usage_recorded`:
+a billed request is never hidden from the `usage` fold. The first stage asks for the reviewer model's lowest
 thinking level, or none when the model declares none
 (`docs/model-routing.md`, "Thinking"), and caps its reply at 4,096 tokens:
 a ceiling for a model that does not stop, not the answer's length. The
@@ -387,7 +396,9 @@ A human is interrupted when the agent keeps hitting the wall: **3 consecutive
 blocks, or 20 in a session**, both configurable. The block that reaches the count
 is not returned to the model: the call goes to a person instead, as a
 `permission_requested` whose `escalation` gives the cause and the reviewer's
-reason. The person's answer ends the run of consecutive blocks. Escalating every block would
+reason. The person's answer ends the run of consecutive blocks. For the
+3-consecutive-blocks count, blocks within one reply are counted in request
+order. Escalating every block would
 send a person every call under load, and a person answering a stream of
 questions stops reading them.
 
@@ -480,7 +491,10 @@ can remember.
 `permission_resolved` carries the decision, the reason, and **what decided it**:
 the credential deny, a human, a standing rule, a session grant or the
 reviewer. A reviewer decision also carries the reviewer's model and which
-stage decided. A reviewed call's decision that has no request carries the call's
+stage decided. The `permission_resolved` lines for one reply are written in
+request order, before any of that reply's `tool_call_started`, whichever
+verdict arrives first. A reply's hook notices come first in request order,
+then the reply's `permission_resolved` lines. A reviewed call's decision that has no request carries the call's
 declared effects and its paths, with `always_reviewed` when the tool declared it,
 and the rewritten `arguments` with `changed_by` when a `before_tool` hook rewrote
 them, because no `permission_requested` and no `tool_call_started` holds them.

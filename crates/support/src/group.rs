@@ -239,8 +239,10 @@ pub fn spawn(cmd: &mut Command) -> Result<(Child, Listing), Error> {
 }
 
 /// Makes the child its own session leader, and, for a terminal command,
-/// the secondary already on fd 0 its controlling terminal. Called before
-/// [`spawn`], so the child the spawn lists is already a group leader.
+/// the secondary already on fd 0 its controlling terminal and its group
+/// the terminal's foreground group, so the child's reads never stop with
+/// `SIGTTIN`. Called before [`spawn`], so the child the spawn lists is
+/// already a group leader.
 #[allow(
     unsafe_code,
     reason = "setsid between fork and exec, which CommandExt::pre_exec requires"
@@ -260,6 +262,14 @@ pub fn detach(cmd: &mut Command, controlling_tty: bool) {
                 // SAFETY: fd 0 is open, the secondary `Command` dup'd onto it.
                 let stdin = rustix::fd::BorrowedFd::borrow_raw(0);
                 rustix::process::ioctl_tiocsctty(stdin).map_err(raw_error)?;
+                // The controlling terminal alone leaves the group background,
+                // and a background read stops with `SIGTTIN` where the
+                // terminal never foregrounds its session leader: becoming the
+                // foreground group is what lets `/dev/tty` reads proceed.
+                // SAFETY: fd 0 is open as above; `getpgrp` and the terminal
+                // ioctl are system calls, and none of this allocates.
+                let group = rustix::process::getpgrp();
+                rustix::termios::tcsetpgrp(stdin, group).map_err(raw_error)?;
             }
             Ok(())
         });

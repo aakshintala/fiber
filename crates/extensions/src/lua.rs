@@ -12,6 +12,7 @@
 //! callback has started, it stops waiting a grace period past the deadline
 //! and abandons the VM. What every caller waits on, and when, is `lua/hub.rs`.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -301,6 +302,10 @@ pub struct LuaExtension {
     hub: Arc<Hub>,
     /// The names `host.secret` reads: the manifest's `secrets`.
     secrets: Vec<String>,
+    /// Where each manifest `depends` entry lives: the directories a
+    /// qualified `require` loads from, empty until the session attaches
+    /// them.
+    deps: BTreeMap<String, PathBuf>,
 }
 
 impl LuaExtension {
@@ -322,6 +327,7 @@ impl LuaExtension {
             browser: Arc::new(SystemBrowser::default()),
             hub: Hub::new(clock),
             secrets: Vec::new(),
+            deps: BTreeMap::new(),
         }
     }
 
@@ -356,6 +362,15 @@ impl LuaExtension {
     /// none.
     pub fn with_secrets(mut self, names: Vec<String>) -> Self {
         self.secrets = names;
+        self
+    }
+
+    /// Sets where each manifest `depends` entry lives, so a qualified
+    /// `require` loads from the dependency's directory. Session start,
+    /// login and the case runner attach it; without it only unqualified
+    /// requires resolve.
+    pub fn with_dependencies(mut self, deps: BTreeMap<String, PathBuf>) -> Self {
+        self.deps = deps;
         self
     }
 

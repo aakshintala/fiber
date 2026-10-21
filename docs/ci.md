@@ -229,16 +229,20 @@ On Linux x86_64 alone:
   baseline passes; at most
   16 shards run at once, and a concurrency group prevents scheduled runs from
   overlapping. The rotation covers the whole list over `days = max(1,
-  ceil(count / 12800))` days, so each day runs 16 shards of about 800 mutants:
+  ceil(count / 4800))` days, so each day runs 16 shards of about 300 mutants:
   the day is the days since 1970-01-01 modulo the rotation length, and its
   shards are `--shard k/T` with round-robin sharding for the 16 values of `k`
   starting at 16 times the day, where `T` is 16 times the rotation length. Each
   shard's artifact name and job summary carry its `k`, `T` and rotation day.
-  The 800-mutant target comes from run 38541652244, which listed about 23,900
-  workspace mutants and tested about 15 seconds a mutant (1,194 of shard 0's
-  1,492 mutants in 300 minutes), so 800 mutants keep a shard near 200 minutes.
+  The 300-mutant target comes from run 39399082087, which listed about 28,900
+  workspace mutants and tested 18 to over 30 seconds a mutant, so 602-mutant
+  shards ran over the 300-minute step limit while 300 mutants keep a shard
+  near 150 minutes.
   Both baseline and shard jobs install zsh and fish for the completion tests.
-  Each shard always uploads `mutants.out`, including survivors and logs. The
+  Each shard always uploads `mutants.out`, including survivors and logs. A
+  shard that finishes with only missed mutants is green: its job summary
+  lists each missed mutant's file and line, and survivors are filed after
+  each full rotation as per-crate "kill or exempt" tickets. The
   initial job limit is a generous 360 minutes because scheduled cold-run history
   is not available; each mutation step has a 300-minute limit. This report gates
   no pull request or merge.

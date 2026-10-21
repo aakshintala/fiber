@@ -38,6 +38,8 @@ mod handoff;
 mod lifecycle;
 mod settle;
 mod start;
+pub use start::dep_dirs;
+pub(crate) use start::is_repository_copy;
 #[cfg(test)]
 mod state_tests;
 
@@ -874,9 +876,9 @@ impl SessionExtensions {
     /// as what the wait answered. A watcher with no cursor drains from the
     /// watermark, so lines before registration never reach it. No-op when
     /// the session holds no watchers.
-    pub fn drain_watchers(&self, log: &log::Log, dir: &Path) -> Vec<WatcherError> {
+    pub fn drain_watchers(&self, log: &log::Log, dir: &Path) -> (Vec<WatcherError>, bool) {
         if self.watchers.is_empty() {
-            return Vec::new();
+            return (Vec::new(), false);
         }
         // A durable delivery the live offer already covered runs before the
         // drain replays past it: the cursor advanced when it queued, so the
@@ -922,7 +924,7 @@ impl SessionExtensions {
                     callback: "drain".to_owned(),
                     message: format!("the session-end drain could not read the log: {error}"),
                 });
-                return errors;
+                return (errors, false);
             }
         };
         for line in lines {
@@ -964,6 +966,7 @@ impl SessionExtensions {
             replay.push((seq, event));
         }
         let mut advanced = BTreeMap::new();
+        let mut stopped = false;
         'watchers: for watcher in &self.watchers {
             let key = (watcher.name.clone(), watcher.index);
             // A cursor names the last offered `seq`, so the next one is
@@ -986,7 +989,10 @@ impl SessionExtensions {
                     .drain_watcher(watcher.index, watcher_arg(event))
                 {
                     Ok(()) => {}
-                    Err(Error::Stopped { .. }) => break 'watchers,
+                    Err(Error::Stopped { .. }) => {
+                        stopped = true;
+                        break 'watchers;
+                    }
                     Err(error) => errors.push(WatcherError {
                         extension: watcher.name.clone(),
                         callback: format!("watcher:{}", watcher.index),
@@ -1001,7 +1007,7 @@ impl SessionExtensions {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .extend(advanced);
-        errors
+        (errors, stopped)
     }
 
     /// Hands the ephemeral emitter to every extension's `host.status`,

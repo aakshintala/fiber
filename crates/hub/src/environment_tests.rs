@@ -307,6 +307,19 @@ fn close_during_a_hung_first_capture_returns_with_the_fallback() {
 }
 
 #[test]
+fn value_reads_present_names_and_holds_absent_ones() {
+    let environment = Environment {
+        vars: vec![
+            (OsString::from("PRESENT"), OsString::from("kept")),
+            (OsString::from("PATH"), OsString::from("/usr/bin")),
+        ],
+        source: VariablesSource::Inherited,
+    };
+    assert_eq!(environment.value("PRESENT").as_deref(), Some("kept"));
+    assert_eq!(environment.value("ABSENT"), None);
+}
+
+#[test]
 fn ready_never_captures() {
     let temp = Temp::new();
     let _shell = fake_shell(&temp, "exec sleep 600");

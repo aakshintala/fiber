@@ -1383,6 +1383,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `device_login_result` | `path` (string), the stored credential relative to the hub's Fiber home (`docs/invocation.md`, "What the hub speaks") |
 | `directories` | `directories`, an array of strings, the names of the subdirectories the path holds, sorted, and `path` (string), the absolute path listed, `~/` expanded, over the hub (`docs/invocation.md`, "The hub") |
 | `status` | `running` (boolean, always true), `fiber_version` (string), `clients` (integer, the open connections, the asker included) and `variables` (object, as `session_started` carries it: the environment sessions the hub starts now get), over the hub (`docs/invocation.md`, "The hub") |
+| `placeholder_env` | `values` (object, the hub's captured value by requested placeholder name, absent names omitted, never logged), over the hub (`docs/invocation.md`, "What the hub speaks") |
 
 #### `command_rejected`
 
