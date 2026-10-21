@@ -28,7 +28,9 @@ Every failure is `error { code, message }`: on `tool_call_completed`,
   with `credential()` and no `login`, such as Bedrock or Vertex, reads no
   stored key, so its sentence carries no such advice. `provider.message`
   below keeps the provider's own words, which for a failed `credential()`
-  name its remedy.
+  name its remedy. `fiber doctor` and the `model_unconfigured` notice run no
+  extension code, so they read the same fact from the provider's data: its
+  `credential_label`, which such a provider declares.
 
 A failed model call adds two optional fields:
 
@@ -132,7 +134,9 @@ install it. None of these is retried.
 
 Three fixes, in the order the message names them. `fiber login
 <provider>` asks for the host after the credential is stored and saves it
-globally. Setting the named setting in `config/<extension>.json` in Fiber
+globally; the message leaves it out for a provider whose data declares
+`credential_label`, which reads no stored credential
+(`docs/model-routing.md`, "A per-account host"). Setting the named setting in `config/<extension>.json` in Fiber
 home fills it for every project at once. When the message names an
 environment variable, exporting it in the shell profile and running `fiber
 hub refresh` fills it: the hub reads its environment when it starts, so a

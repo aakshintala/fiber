@@ -610,6 +610,11 @@ declares") lists:
   function instead.
 - `login` is `browser` for a provider whose `fiber login` runs its
   `credential()` login instead of reading a key. Absent means a key.
+- `credential_label` is for a provider whose `credential()` reads nothing
+  Fiber stores: `names` is what a credential label names, `default` what
+  the `default` label reads (`docs/model-routing.md`, "What a provider
+  extension declares"). A file that declares it beside `login` or
+  `credential` is invalid.
 - `compat` is a flat object of the flags the protocol reads. Fiber never
   guesses a flag, and a flag that is absent is not set:
 
