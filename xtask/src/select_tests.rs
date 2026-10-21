@@ -889,6 +889,51 @@ fn a_crate_internal_providers_path_is_a_run_time_read() {
 }
 
 #[test]
+fn a_bare_providers_dir_with_the_manifest_token_stays_with_the_package_reader_check() {
+    // Exactly one disjunct of the exemption holds: the resolved path is the
+    // bare `providers` directory itself, so the `||` joining it to
+    // `resolved == "extensions"` must stay a disjunction for the read to
+    // stay exempt.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let p = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers\");\nlet bytes = std::fs::read(&p).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_providers_read_is_exempt_only_with_the_manifest_token() {
+    // Both sides of the `literal == "CARGO_MANIFEST_DIR"` equality: with
+    // the token the root `providers/` read stays with the package-reader
+    // check, without it the same read is reported.
+    let files = [
+        runtime_src(
+            "main",
+            "crates/main/tests/with_token.rs",
+            "tests/with_token.rs",
+            "let m = env!(\"CARGO_MANIFEST_DIR\");\nlet bytes = std::fs::read(\"../../providers/opencode/extension.json\").unwrap();\n",
+        ),
+        runtime_src(
+            "main",
+            "crates/main/tests/release.rs",
+            "tests/release.rs",
+            "let bytes = std::fs::read(\"../../providers/opencode/extension.json\").unwrap();\n",
+        ),
+    ];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/release.rs: reads ../../providers/opencode/extension.json at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
 fn a_join_onto_a_non_joined_base_binds_nothing() {
     // `tmp` never joins onto the manifest directory, so `q` binds nothing
     // and the read through `q` stays unreported.
