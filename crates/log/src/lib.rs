@@ -14,6 +14,7 @@ pub mod crash;
 mod delete;
 mod dependents;
 pub mod diag;
+mod escalations;
 mod export;
 #[cfg(test)]
 mod fixtures;
@@ -39,6 +40,7 @@ use contract::{ErrorCode, SessionId};
 pub use artifact::{Refusal, check_artifact_path, open_artifact};
 pub use delete::{delete_session, is_plain_dir};
 pub use dependents::{Children, dependents};
+pub use escalations::{AllowedEscalation, allowed_escalations};
 pub use export::export;
 pub use history::{Segment, history, history_to, last_line, last_seq};
 pub use name::session_name;

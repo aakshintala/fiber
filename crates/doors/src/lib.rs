@@ -23,6 +23,7 @@ pub use error::Error;
 pub mod hub;
 mod isolation;
 mod message;
+mod notes;
 mod pasted;
 mod prompt_history;
 mod reply;

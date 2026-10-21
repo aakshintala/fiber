@@ -43,6 +43,7 @@ mod local_time;
 mod logical;
 mod login_view;
 mod login_worker;
+mod logout_view;
 mod look;
 mod markdown;
 mod mcp_view;
@@ -103,9 +104,10 @@ pub use attention::Attention;
 pub use catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, ReadModels, Refresh};
 pub use configure::{
     BrowserLogin, Configure, ConfigureError, FileOutcome, FileSaved, KeyEdit, Layer, LoginKind,
-    LoginNeed, LoginShow, LoginTarget, NotesFile, NotesSaved, NotesWrite, ProviderInstall,
-    ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesScope, RulesSection, Saved, SettingRow,
-    Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    LoginNeed, LoginShow, LoginTarget, LogoutRow, NotesFile, NotesSaved, NotesWrite,
+    ProviderInstall, ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesScope, RulesSection,
+    Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists,
+    ToolSwitches, WriteScope,
 };
 
 pub use home::{Launch, LaunchLocation};
