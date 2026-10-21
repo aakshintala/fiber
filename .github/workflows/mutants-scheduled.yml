@@ -132,6 +132,7 @@ jobs:
           ROTATION_DAY: ${{ matrix.day }}
         run: |
           mutant_list="$RUNNER_TEMP/mutants-scheduled-day$ROTATION_DAY-$SHARD-of-$TOTAL.txt"
+          run_log="$RUNNER_TEMP/mutants-run-day$ROTATION_DAY-$SHARD-of-$TOTAL.log"
           cargo mutants --workspace --test-tool nextest --shard "$SHARD/$TOTAL" --sharding round-robin --list >"$mutant_list"
           echo "Rotation day $ROTATION_DAY, shard $SHARD of $TOTAL (--shard $SHARD/$TOTAL, round-robin)." >>"$GITHUB_STEP_SUMMARY"
           if [ ! -s "$mutant_list" ]; then
@@ -162,10 +163,9 @@ jobs:
             --shard "$SHARD/$TOTAL"
             --sharding round-robin
           )
-          if systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}"; then
-            :
-          else
-            status=$?
+          systemd-run --user --scope -p MemoryMax=12G -p OOMPolicy=kill -- cargo mutants "${mutant_args[@]}" 2>&1 | tee "$run_log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
             last_log=$(find mutants.out/log -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
               | sort -nr | head -n 1 | cut -d' ' -f2- || true)
             echo "cargo mutants failed with status $status; last mutant:"
@@ -174,7 +174,7 @@ jobs:
             else
               echo "No scenario log found in mutants.out/log."
             fi
-            exit "$status"
+            scripts/mutants-shard-finish "$status" "$run_log"
           fi
       - name: Upload mutants.out
         if: always()
