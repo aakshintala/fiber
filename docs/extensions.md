@@ -414,10 +414,13 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   Before the session runs, and after a reload until the new set's hub has
   its inbox, it raises `closing` with `host.delegate: the session is not
   running yet`. On every completion (`completed`, `failed`, `cancelled`)
-  the bound extension's `run` receives the job's `job_id`, its `status`
-  and the `delegate_finished` data: on `completed` the bounded final text
-  and the `artifact`, on `failed` or `cancelled` with no finish only
-  `job_id` and `status`. `run`'s timeout counts from the push of its
+  the bound extension's `run` receives one table: `job_id` and `status`
+  always, plus the `delegate_finished` fields when one was written —
+  `text` (the bounded final message; the full text stays in `artifacts/`,
+  never the raw transcript), `artifact`, `questions`, `usage` and
+  `worktree`, each under its `docs/events.md` key name and only when the
+  finish carries it, and no other key. With no finish only `job_id` and
+  `status`. `run`'s timeout counts from the push of its
   stream item. A `run` that times out or raises fails as a callback error
   does: it emits `hook_failed` with `extension` set. A `job_completed`
   arriving while a hook is parked waits behind it. A reload keeps the

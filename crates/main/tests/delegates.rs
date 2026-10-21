@@ -5275,7 +5275,8 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
 const SENTINEL: &str = "sentinel-scan-done-4d2a9c1e";
 
 /// A `go` command starting an extension delegate on `pb/m`: its `run`
-/// writes the final message to the workspace, then logs that it wrote.
+/// writes an unconditional invocation marker before touching the finish,
+/// then the final message to the workspace, then logs that it wrote.
 /// The same start backs a `go` tool, since a model turn can only call
 /// tools: the ask test's prompt reaches the delegate through it.
 const DELEGATE_INIT: &str = r#"
@@ -5283,6 +5284,7 @@ local function start()
   local id = host.delegate(
     { description = "scan", prompt = "scan the tree", model = "fiber:pb/m" },
     { timeout = 60000, run = function(finish)
+        host.fs.write("run-invoked.txt", "invoked")
         host.fs.write("run-out.txt", finish.text)
         host.log("wrote:" .. finish.text)
       end })
@@ -5374,6 +5376,11 @@ fn an_extension_delegate_run_writes_the_final_message_where_the_model_never_read
         line["kind"] == "extension_log" && line["payload"]["message"] == format!("wrote:{SENTINEL}")
     });
     assert_eq!(
+        fs::read_to_string(setup.workspace().join("run-invoked.txt")).unwrap(),
+        "invoked",
+        "the run entered before reading the finish"
+    );
+    assert_eq!(
         fs::read_to_string(setup.workspace().join("run-out.txt")).unwrap(),
         SENTINEL,
         "the run file holds the bounded final message"
@@ -5461,18 +5468,42 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         reloaded.last().unwrap()["payload"].get("failed").is_none(),
         "the reload dropped the extension cleanly: {reloaded:?}"
     );
-    // The stop ends the delegate `cancelled`, and its `run` never writes.
+    // The stop ends the delegate `cancelled`, and its `run` never ran:
+    // no invocation marker, so no finish read either.
     until_session(&client, "the cancelled end", |line| {
         line["kind"] == "job_completed" && line["payload"]["status"] == "cancelled"
     });
     assert!(
-        !setup.workspace().join("run-out.txt").is_file(),
+        !setup.workspace().join("run-invoked.txt").is_file(),
         "the stopped delegate ran no run"
+    );
+    assert!(
+        !setup.workspace().join("run-out.txt").is_file(),
+        "the stopped delegate wrote no finish"
     );
     assert_eq!(
         child.requests().len(),
         1,
         "the delegate ran exactly its held first request"
+    );
+    // The whole durable stream, in order, read before close: a
+    // never-prompted session's directory is deleted on close.
+    assert_eq!(
+        durable_kinds(&read_lines(
+            &support::session_dir(&setup, &id).join("events.jsonl")
+        )),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "job_started",
+            "delegate_started",
+            "reloaded",
+            "extensions_loaded",
+            "preamble_built",
+            "delegate_finished",
+            "job_completed",
+        ]
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let _tail = until_session_close(&client);
@@ -5508,9 +5539,49 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     let (status, lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
-    // The normal end releases the running delegate: its `cancelled` end is
-    // logged before the exit, and its `run` never writes.
+    // The whole stream, in order, with the independently triggered
+    // `session_status` lines set aside: they carry no position relative
+    // to the session's other lines (`docs/testing.md`, "Event streams").
     let kinds = owned_kinds(&lines);
+    let ordered: Vec<&str> = kinds
+        .iter()
+        .filter(|kind| *kind != "session_status")
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        ordered,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "job_started",
+            "delegate_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "delegate_finished",
+            "job_completed",
+            "fiber_exited",
+        ]
+    );
+    // The normal end releases the running delegate: the ordered stream
+    // already pins its `cancelled` end before the exit, and its `run`
+    // never ran: no invocation marker, so no finish read either.
     let end = kinds
         .iter()
         .position(|kind| kind == "job_completed")
@@ -5522,8 +5593,12 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
     assert!(end < exit, "the cancelled end precedes the exit: {kinds:?}");
     assert_eq!(one(&lines, "job_completed")["status"], "cancelled");
     assert!(
-        !setup.root.path().join("run-out.txt").is_file(),
+        !setup.workspace().join("run-invoked.txt").is_file(),
         "the released delegate ran no run"
+    );
+    assert!(
+        !setup.workspace().join("run-out.txt").is_file(),
+        "the released delegate wrote no finish"
     );
     // The sentinel reached no provider request: the wake input carries
     // the job id, and the tool result carries only the start receipt.

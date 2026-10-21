@@ -11,8 +11,10 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::clock::Clock;
-use contract::events::{DelegateFinished, Event, ExtensionUi, JobCompleted, Outcome, Ui};
-use contract::shapes::{Failure, Tokens, Usage};
+use contract::events::{
+    DelegateFinished, Event, ExtensionUi, FinishedWorktree, JobCompleted, Outcome, Ui,
+};
+use contract::shapes::{Choice, Failure, Question, Tokens, Usage, Worktree};
 use contract::{ErrorCode, JobId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -27,12 +29,23 @@ use super::run_arg;
 const WAIT: Duration = Duration::from_secs(5);
 
 #[allow(clippy::too_many_lines, reason = "test helpers read top to bottom")]
+/// A held finish with every optional field populated, so the `run`
+/// table test pins each one; hook bookkeeping rides along to prove the
+/// table leaves it out.
 fn finished(job_id: &JobId) -> DelegateFinished {
     DelegateFinished {
         job_id: job_id.clone(),
         text: "Done.".to_owned(),
         artifact: Some("artifact.txt".to_owned()),
-        questions: None,
+        questions: Some(vec![Question {
+            header: "Deploy?".to_owned(),
+            question: "Ship it?".to_owned(),
+            options: vec![Choice {
+                label: "yes".to_owned(),
+                description: None,
+            }],
+            multi_select: None,
+        }]),
         usage: Usage {
             tokens: Tokens {
                 input: 1,
@@ -43,8 +56,15 @@ fn finished(job_id: &JobId) -> DelegateFinished {
             cost: Some(0.0),
             subscription_cost: 0.0,
         },
-        changed_by: None,
-        worktree: None,
+        changed_by: Some(vec!["redactor".to_owned()]),
+        worktree: Some(FinishedWorktree {
+            worktree: Worktree {
+                path: "/w".to_owned(),
+                branch: "scan".to_owned(),
+                repository: None,
+            },
+            dirty: true,
+        }),
     }
 }
 
@@ -64,25 +84,56 @@ fn id(name: &str) -> JobId {
     JobId(name.to_owned())
 }
 
-/// `completed` with bounded text and an artifact reaches the `run` as one
-/// table carrying the finish fields; without a held finish it carries only
-/// `job_id` and `status`.
+/// A held finish reaches the `run` as one table carrying the finish's
+/// fields under their `docs/events.md` key names, and nothing else: hook
+/// bookkeeping such as `changed_by` stays out. A `failed` end with a
+/// held finish still carries the finish fields. Without a held finish the
+/// table carries only `job_id` and `status`.
 #[test]
 fn run_arg_carries_the_finish_when_held() {
     let job_id = id("j_1");
-    let with_finish = run_arg(
-        &completed(&job_id, Outcome::Completed),
-        Some(&finished(&job_id)),
+    let finish = finished(&job_id);
+    let with_finish = run_arg(&completed(&job_id, Outcome::Completed), Some(&finish));
+    let table = with_finish.as_object().expect("the run arg is a table");
+    let mut keys: Vec<&str> = table.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "artifact",
+            "job_id",
+            "questions",
+            "status",
+            "text",
+            "usage",
+            "worktree"
+        ],
+        "exactly the N7 keys, in {with_finish:?}"
+    );
+    assert_eq!(table["job_id"], "j_1");
+    assert_eq!(table["status"], "completed");
+    assert_eq!(table["text"], "Done.");
+    assert_eq!(table["artifact"], "artifact.txt");
+    assert_eq!(
+        table["questions"],
+        serde_json::to_value(&finish.questions).expect("questions serialize")
     );
     assert_eq!(
-        with_finish,
-        serde_json::json!({
-            "job_id": "j_1",
-            "status": "completed",
-            "text": "Done.",
-            "artifact": "artifact.txt",
-        })
+        table["usage"],
+        serde_json::to_value(&finish.usage).expect("usage serializes")
     );
+    assert_eq!(
+        table["worktree"],
+        serde_json::to_value(&finish.worktree).expect("worktree serializes")
+    );
+    assert_eq!(table["questions"][0]["header"], "Deploy?");
+    assert_eq!(table["usage"]["tokens"]["input"], 1);
+    assert_eq!(table["worktree"]["branch"], "scan");
+    // A failed end with a held finish still carries the finish fields.
+    let failed = run_arg(&completed(&job_id, Outcome::Failed), Some(&finish));
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["text"], "Done.");
+    assert_eq!(failed["usage"], table["usage"]);
     let without_finish = run_arg(&completed(&job_id, Outcome::Completed), None);
     assert_eq!(
         without_finish,
@@ -468,13 +519,17 @@ fn wait_until_idle(ext: &LuaExtension) {
     );
 }
 
-/// A completed run receives `job_id`, `status`, `text` and `artifact`, and
-/// its return is ignored: no notice follows.
+/// A completed run receives `job_id`, `status`, `text`, `artifact`,
+/// `questions`, `usage` and `worktree`, and its return is ignored: no
+/// notice follows.
 #[test]
 fn completed_run_receives_the_finish_fields() {
     let clock = FakeClock::new();
     let rig = running_extension(
-        "host.status(done.job_id .. \"/\" .. done.status .. \"/\" .. tostring(done.text) .. \"/\" .. tostring(done.artifact))",
+        "host.status(done.job_id .. \"/\" .. done.status .. \"/\" .. tostring(done.text) .. \"/\" .. tostring(done.artifact))\n\
+         host.status(\"usage:\" .. done.usage.tokens.input .. \"/\" .. done.usage.tokens.output .. \"/\" .. tostring(done.usage.cost))\n\
+         host.status(\"q:\" .. #done.questions .. \"/\" .. done.questions[1].header)\n\
+         host.status(\"wt:\" .. done.worktree.path .. \"/\" .. done.worktree.branch .. \"/\" .. tostring(done.worktree.dirty))",
         5_000,
         clock,
     );
@@ -493,6 +548,13 @@ fn completed_run_receives_the_finish_fields() {
         "the run saw job_id, status, text and artifact, in {:?}",
         rig.emit.statuses()
     );
+    for expected in ["usage:1/2/0.0", "q:1/Deploy?", "wt:/w/scan/true"] {
+        assert!(
+            rig.emit.statuses().iter().any(|status| status == expected),
+            "the run saw {expected}, in {:?}",
+            rig.emit.statuses()
+        );
+    }
     assert!(
         rig.emit.notices().iter().all(|event| !matches!(
             event,

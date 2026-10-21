@@ -11,9 +11,13 @@
 use contract::events::{DelegateFinished, JobCompleted, Outcome};
 use serde_json::{Value, json};
 
-/// The `run` table for `completed`: `job_id` and `status` always, with the
-/// held finish's bounded final text and `artifact` when one was held. A
-/// `failed` or `cancelled` end with no finish carries no finish fields.
+/// The `run` table for a completion with a held finish: `job_id` and
+/// `status` always, with the finish's `text`, `artifact`, `questions`,
+/// `usage` and `worktree` under their `docs/events.md` key names, each
+/// only when the finish carries it (`usage` totals are non-optional, so
+/// always). Nothing else: hook bookkeeping such as `changed_by` stays
+/// out. A `failed` or `cancelled` end with no held finish carries only
+/// `job_id` and `status`.
 pub(super) fn run_arg(completed: &JobCompleted, finished: Option<&DelegateFinished>) -> Value {
     let status = match completed.status {
         Outcome::Completed => "completed",
@@ -26,11 +30,24 @@ pub(super) fn run_arg(completed: &JobCompleted, finished: Option<&DelegateFinish
                 "job_id": finished.job_id.0,
                 "status": status,
                 "text": finished.text,
+                "usage": serde_json::to_value(&finished.usage).unwrap_or(Value::Null),
             });
-            if let Some(artifact) = &finished.artifact
-                && let Some(map) = arg.as_object_mut()
-            {
-                map.insert("artifact".to_owned(), Value::String(artifact.clone()));
+            if let Some(map) = arg.as_object_mut() {
+                if let Some(artifact) = &finished.artifact {
+                    map.insert("artifact".to_owned(), Value::String(artifact.clone()));
+                }
+                if let Some(questions) = &finished.questions {
+                    map.insert(
+                        "questions".to_owned(),
+                        serde_json::to_value(questions).unwrap_or(Value::Null),
+                    );
+                }
+                if let Some(worktree) = &finished.worktree {
+                    map.insert(
+                        "worktree".to_owned(),
+                        serde_json::to_value(worktree).unwrap_or(Value::Null),
+                    );
+                }
             }
             arg
         }

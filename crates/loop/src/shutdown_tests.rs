@@ -653,6 +653,21 @@ fn a_normal_end_releases_running_extension_jobs_before_its_first_drain() {
     ran(&finished);
     assert!(stops.try_recv().is_err(), "no ended job is stopped");
     // Both real ends are written cancelled; the queued `j_1` end never was.
+    // The whole stream, in order: the queued `j_1` end was dropped, so
+    // only the two real ends were written, both cancelled.
+    assert_eq!(
+        held.kinds(),
+        [
+            "session_started",
+            "job_started",
+            "job_started",
+            "job_started",
+            "delegate_started",
+            "delegate_started",
+            "job_completed",
+            "job_completed",
+        ]
+    );
     let lines = held.durable();
     let ends: Vec<_> = lines
         .iter()
