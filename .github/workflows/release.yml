@@ -298,6 +298,18 @@ jobs:
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-about
+      - name: Set the fiber crate version to the nightly version
+        env:
+          VERSION: ${{ needs.nightly-preflight.outputs.nightly-version }}
+        run: |
+          set -euo pipefail
+          # The checkout edit below is never committed: it sets the version
+          # the nightly binary reports before the locked build reads it.
+          [ -n "${VERSION:-}" ] || { printf 'release: %s\n' "no nightly version from nightly-preflight." >&2; exit 1; }
+          perl -pi -e 's/^version = ".*"/version = "$ENV{VERSION}"/' crates/main/Cargo.toml
+          perl -pi -e 's/^version = ".*"/version = "$ENV{VERSION}"/ if $last; $last = /^name = "main"$/' Cargo.lock
+          grep -q -F "version = \"$VERSION\"" crates/main/Cargo.toml || { printf 'release: %s\n' "crates/main/Cargo.toml holds no $VERSION; refusing to build 0.0.0." >&2; exit 1; }
+          grep -q -F "version = \"$VERSION\"" Cargo.lock || { printf 'release: %s\n' "Cargo.lock holds no $VERSION; refusing to build 0.0.0." >&2; exit 1; }
       - name: Build the release binary
         run: cargo build --locked --release --target "${{ matrix.target }}" --bin fiber
       - name: Generate THIRD-PARTY-NOTICES
