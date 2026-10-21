@@ -144,6 +144,8 @@ pub enum Command {
     Rewind(RewindArgs),
     /// Runs a shell command the person typed.
     Shell(Shell),
+    /// Proposes reviewer-note lines for one topic, without conversation.
+    ProposeNotes(crate::notes::ProposeNotesArgs),
     /// Runs an extension's command by name.
     Command(RunCommand),
     /// Accepts no more prompts, finishes what is running, and exits; with `now`, shuts down.
@@ -517,6 +519,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "handoff",
     "name",
     "login",
+    "logout",
     "approvals",
     "reload",
     "import",

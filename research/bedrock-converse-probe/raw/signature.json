@@ -1,0 +1,266 @@
+{
+  "case": "signature",
+  "model": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "region": "ap-south-1",
+  "url_path": "/model/global.anthropic.claude-haiku-4-5-20251001-v1%3A0/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "What is 17 * 23? Answer with the number."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 2048
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ],
+    "additionalModelRequestFields": {
+      "thinking": {
+        "type": "enabled",
+        "budget_tokens": 1024
+      }
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "17"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": " * 23 = ?"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "\n\nLet me calculate this:"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "\n17 * 23 = "
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "17 * 20 + "
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "17 * 3\n= "
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "340 + 51\n= "
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "391"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "signature": "ErYCCoQBCBMQARgCKkBO86syXoPgvybhT9ui9X97JDCqCypKQw04d6y/6AvgoM+MEuECGiYlCzJznhLoL95pWMx3Kdu/fnhv0HAnCYdYMhljbGF1ZGUtaGFpa3UtNC01LTIwMjUxMDAxOABCCHRoaW5raW5nWgwwMDAwMDAwMDAwMDCoAYnb29YGEgwurcXuNQ0H14p/e8UaDLDhmInn8Vr95+zAWSIwcwNqZQdCCV7w9dPllHl+2K1iSMDRORAkeHNE840ju/tQuBIK/z+pPJEBQLWs9ddCKl/t0FbfgJi8MlR6DqnlplhzvnXyq3UyIi1Wz5sTllSHlaAeXzYVD9BXhCEmXpxW3PDMuDyhIku+iGwk+49Xtkj8FIJMXrqSYpUIAGJO9sa7sk19L6ccLKBF/Tfa2svDQRgB"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "text": "391"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "end_turn"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 951
+        },
+        "usage": {
+          "inputTokens": 56,
+          "outputTokens": 60,
+          "serverToolUsage": {},
+          "totalTokens": 116
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 56,
+    "outputTokens": 60,
+    "serverToolUsage": {},
+    "totalTokens": 116
+  },
+  "cost_usd": 0.000356
+}

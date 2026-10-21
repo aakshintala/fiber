@@ -1,0 +1,32 @@
+{
+  "case": "bad-model",
+  "model": "mistral.nonexistent-v9:0",
+  "region": "ap-south-1",
+  "url_path": "/model/mistral.nonexistent-v9%3A0/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "hi"
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 64
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ]
+  },
+  "status": 400,
+  "headers": {
+    "content-type": "application/json",
+    "x-amzn-errortype": "ValidationException:http://internal.amazon.com/coral/com.amazon.bedrock/"
+  },
+  "body": "{\"message\":\"The provided model identifier is invalid.\"}"
+}

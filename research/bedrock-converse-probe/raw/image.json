@@ -1,0 +1,121 @@
+{
+  "case": "image",
+  "model": "mistral.ministral-3-8b-instruct",
+  "region": "ap-south-1",
+  "url_path": "/model/mistral.ministral-3-8b-instruct/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "image": {
+              "format": "png",
+              "source": {
+                "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGM4ISeHFTEMLQkAkL9BAbKfPiIAAAAASUVORK5CYII="
+              }
+            }
+          },
+          {
+            "text": "What colour is this image? One word."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 16
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ]
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": ""
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": "Red."
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "end_turn"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 139
+        },
+        "usage": {
+          "inputTokens": 20,
+          "outputTokens": 3,
+          "serverToolUsage": {},
+          "totalTokens": 23
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 20,
+    "outputTokens": 3,
+    "serverToolUsage": {},
+    "totalTokens": 23
+  },
+  "cost_usd": 3e-06
+}

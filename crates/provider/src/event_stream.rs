@@ -258,6 +258,8 @@ pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     crc.value()
 }
 
+// The framing harness (`frame`, `Trickle`) is shared with the
+// `bedrock-converse` decoder's tests.
 #[cfg(test)]
 #[path = "event_stream_tests.rs"]
-mod tests;
+pub(crate) mod tests;

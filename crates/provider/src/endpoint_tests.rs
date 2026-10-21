@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::{Compat, Endpoint};
+use super::{Compat, Endpoint, ReasoningField};
 
 fn endpoint(max_output_tokens: Option<u64>) -> Endpoint {
     Endpoint {
@@ -64,6 +64,42 @@ fn compat_flags_are_read_from_data_with_thinking_budget_unset_when_absent() {
     ] {
         assert_eq!(
             Compat::from_data(data.as_object().unwrap()).vertex_raw_predict,
+            want,
+            "{data}"
+        );
+    }
+}
+
+#[test]
+fn the_converse_flags_are_read_from_data_and_unset_when_absent_or_unknown() {
+    let empty = Compat::from_data(&serde_json::Map::new());
+    assert!(!empty.cache_point);
+    assert_eq!(empty.reasoning_field, None);
+    for (data, want) in [
+        (json!({"cache_point": true}), true),
+        (json!({"cache_point": false}), false),
+        (json!({"cache_point": "yes"}), false),
+    ] {
+        assert_eq!(
+            Compat::from_data(data.as_object().unwrap()).cache_point,
+            want,
+            "{data}"
+        );
+    }
+    for (data, want) in [
+        (
+            json!({"reasoning_field": "reasoning_effort"}),
+            Some(ReasoningField::ReasoningEffort),
+        ),
+        (
+            json!({"reasoning_field": "reasoningConfig"}),
+            Some(ReasoningField::ReasoningConfig),
+        ),
+        (json!({"reasoning_field": "reasoning_config"}), None),
+        (json!({"reasoning_field": true}), None),
+    ] {
+        assert_eq!(
+            Compat::from_data(data.as_object().unwrap()).reasoning_field,
             want,
             "{data}"
         );

@@ -165,8 +165,6 @@ codes! {
     PathChanged,
     /// A reply was still paused after 5 continuations in a row.
     PausedTooLong,
-    /// The model's protocol is one this Fiber does not speak yet.
-    ProtocolUnsupported,
     /// A provider server error or overload.
     ProviderUnavailable,
     /// A quota, billing or subscription limit.

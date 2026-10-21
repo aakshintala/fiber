@@ -120,6 +120,13 @@ Fiber places at most these three markers, and model data adds none
 request with more than 4 markers across `tools`, `system` and `messages`
 (`research/anthropic-messages-probe`).
 
+On `bedrock-converse`, a model whose data declares `compat.cache_point` takes
+the same three markers as `cachePoint` blocks, each the block after the one it
+marks. A marker whose block is not text is left out: Nova refused a
+`cachePoint` after a tool call or a tool result, and took one after a text
+that follows a result. A model without the flag is sent no marker
+(`docs/model-routing.md`, "Bedrock Converse wire facts").
+
 Providers that route by key are given the root session's id:
 
 | Provider | Field |
@@ -162,7 +169,10 @@ cheaper on 1 hour. The replay is
 [research/prompt-cache/ttl.py](../research/prompt-cache/ttl.py).
 
 OpenAI offers one lifetime, 30 minutes, on GPT-5.6 and later, so the setting
-applies only where a protocol offers a choice.
+applies only where a protocol offers a choice. On `bedrock-converse` a
+`cachePoint` carries no `ttl`, so the cache keeps Bedrock's 5-minute default:
+Nova refused `ttl: "1h"` as "only supported for Anthropic models"
+(`research/bedrock-converse-probe`).
 
 ### Warming while idle
 
@@ -183,7 +193,9 @@ different budget, and a change of thinking parameters invalidates Anthropic's
 cached messages ([research/prompt-cache/README.md](../research/prompt-cache/README.md)).
 The refresh would miss and pay for a full rebuild. A level sent as
 adaptive thinking or an effort parameter does not depend on the cap, and
-warms.
+warms. On `bedrock-converse`, a `reasoningConfig` level of `high` sends no
+`maxTokens` at all (`docs/model-routing.md`, "Thinking"), so no cap can be
+sent, and it does not warm.
 
 A refresh checks `budget.usd` first: when the spend has reached it, warming
 stops and no turn fails. It runs no `before_model_call` hook: the hooks

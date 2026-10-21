@@ -1,0 +1,151 @@
+{
+  "case": "reasoning-oss-low",
+  "model": "openai.gpt-oss-20b-1:0",
+  "region": "ap-south-1",
+  "url_path": "/model/openai.gpt-oss-20b-1%3A0/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "What is 17 * 23? Answer with the number."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 2048
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ],
+    "additionalModelRequestFields": {
+      "reasoning_effort": "low"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": ""
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "reasoningContent": {
+            "text": "Just compute 17*23 = 391."
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 2,
+        "delta": {
+          "text": "391"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 2
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "end_turn"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 177
+        },
+        "usage": {
+          "inputTokens": 88,
+          "outputTokens": 21,
+          "serverToolUsage": {},
+          "totalTokens": 109
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 88,
+    "outputTokens": 21,
+    "serverToolUsage": {},
+    "totalTokens": 109
+  },
+  "cost_usd": 1.2e-05
+}
