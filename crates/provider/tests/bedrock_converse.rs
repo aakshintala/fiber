@@ -941,6 +941,63 @@ fn an_observed_call_names_its_generation_from_the_request_id_too() {
     );
 }
 
+/// A debug writer that keeps each line a call writes.
+#[derive(Default)]
+struct Kept(std::sync::Mutex<Vec<contract::diag::ProviderRequest>>);
+
+impl contract::diag::DebugLog for Kept {
+    fn debugging(&self) -> bool {
+        true
+    }
+
+    fn provider_request(&self, line: &contract::diag::ProviderRequest) {
+        self.0.lock().unwrap().push(line.clone());
+    }
+}
+
+#[test]
+fn with_cache_diagnostics_the_line_carries_each_segments_hash_and_the_reported_read() {
+    let server = ProviderServer::start([stream(CACHE_READ)]).unwrap();
+    let kept = std::sync::Arc::new(Kept::default());
+    let observation = provider::RequestObservation::new(
+        kept.clone(),
+        fakes::clock::FakeClock::new(),
+        std::num::NonZeroU32::MIN,
+    )
+    .with_cache_diagnostics(true);
+    let mut request = harness::request();
+    request.tools = vec![ToolDefinition {
+        name: "read".to_owned(),
+        description: "reads a file".to_owned(),
+        input_schema: json!({"type": "object"}),
+        deferred: false,
+        hosted: None,
+    }];
+    let (reply, _) = run(Converse::new(endpoint(&server)).call_observed(&request, observation));
+    assert!(reply.is_ok(), "{reply:?}");
+    let lines = kept.0.lock().unwrap();
+    assert_eq!(lines.len(), 1, "one call writes one line");
+    let hashes = lines[0].prefix_hashes.as_ref().expect("hashes are set");
+    let hex64 =
+        |digest: &String| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit());
+    assert!(
+        hashes.system.as_ref().is_some_and(hex64),
+        "the system blocks hash"
+    );
+    assert!(hashes.tools.as_ref().is_some_and(hex64), "the tools hash");
+    assert!(!hashes.messages.is_empty(), "the conversation hashes");
+    assert!(
+        hashes.messages.iter().all(hex64),
+        "each message boundary hashes"
+    );
+    assert_eq!(lines[0].cache_read, Some(2121), "the recorded read");
+    // The hashed text never lands in the line.
+    let line = serde_json::to_string(&lines[0]).unwrap();
+    for text in ["You are terse.", "reads a file"] {
+        assert!(!line.contains(text), "no {text:?} in the line");
+    }
+}
+
 #[test]
 fn another_protocol_never_takes_the_request_id_as_its_generation() {
     // A Chat Completions stream that names no generation, behind a gateway

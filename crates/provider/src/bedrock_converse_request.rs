@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use contract::diag::PrefixHashes;
 use contract::provider::{Input, ModelRequest, ToolDefinition};
 use contract::{ActionId, ThinkingLevel};
 use serde_json::{Map, Value, json};
@@ -48,6 +49,46 @@ pub(crate) fn sends_output_limit(endpoint: &Endpoint, request: &ModelRequest) ->
         && request.thinking == Some(ThinkingLevel::High))
 }
 
+/// The tools as sent: the rewound build verbatim, else the tools Fiber
+/// builds. Shared by the body and the digests, so both hash the same
+/// bytes.
+fn wired_tools(request: &ModelRequest) -> Vec<Value> {
+    request
+        .sent_tools
+        .clone()
+        .unwrap_or_else(|| wire_tools(&request.tools))
+        .into_iter()
+        .map(Value::Object)
+        .collect()
+}
+
+/// The `system` blocks as sent, with a cache point after the text on a
+/// model that takes one: absent when the request sends none. Shared by the
+/// body and the digests, so both hash the same bytes.
+fn system(endpoint: &Endpoint, request: &ModelRequest) -> Option<Value> {
+    if request.system_prompt.is_empty() {
+        return None;
+    }
+    let mut system = vec![json!({"text": request.system_prompt})];
+    if endpoint.compat.cache_point {
+        system.push(cache_point());
+    }
+    Some(Value::Array(system))
+}
+
+/// The redacted prefix digests of the encoded segments: the `system`
+/// blocks, the `toolConfig` tools and each cumulative `messages` prefix as
+/// sent (`docs/prompt-cache.md`, "Cache diagnostics"). Either of the first
+/// two is absent when the request sends none.
+pub(crate) fn hashes(endpoint: &Endpoint, request: &ModelRequest) -> PrefixHashes {
+    let tools = wired_tools(request);
+    PrefixHashes {
+        system: system(endpoint, request).map(|system| crate::cache_diagnostics::segment(&system)),
+        tools: (!tools.is_empty()).then(|| crate::cache_diagnostics::segment(&Value::Array(tools))),
+        messages: crate::cache_diagnostics::cumulative(&messages(endpoint, request)),
+    }
+}
+
 /// The request body. Its objects serialise with their keys sorted, because
 /// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
 /// "Bytes").
@@ -55,20 +96,10 @@ pub(crate) fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // A rewound session's first request sends its parent's logged build
     // verbatim, so it matches the parent's bytes (`docs/events.md`,
     // "Rewind").
-    let tools: Vec<Value> = request
-        .sent_tools
-        .clone()
-        .unwrap_or_else(|| wire_tools(&request.tools))
-        .into_iter()
-        .map(Value::Object)
-        .collect();
+    let tools = wired_tools(request);
     let mut body = Map::new();
-    if !request.system_prompt.is_empty() {
-        let mut system = vec![json!({"text": request.system_prompt})];
-        if endpoint.compat.cache_point {
-            system.push(cache_point());
-        }
-        body.insert("system".into(), Value::Array(system));
+    if let Some(system) = system(endpoint, request) {
+        body.insert("system".into(), system);
     }
     body.insert("messages".into(), Value::Array(messages(endpoint, request)));
     if !tools.is_empty() {

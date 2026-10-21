@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::Endpoint;
 pub use crate::bedrock_converse_decode::decode;
 use crate::bedrock_converse_decode::decode_tracked;
-use crate::bedrock_converse_request::{body, sends_output_limit, wire_tools};
+use crate::bedrock_converse_request::{body, hashes, sends_output_limit, wire_tools};
 pub use crate::call::Call;
 
 /// The media type a Converse reply streams in.
@@ -71,9 +71,14 @@ impl Converse {
         request: &ModelRequest,
         observation: crate::RequestObservation,
     ) -> Box<dyn ModelCall> {
-        let call = self.request(request);
+        let mut call = self.request(request);
         if !observation.debugging() {
             return Box::new(call);
+        }
+        // The digests cost a second encoding, so they run only with the
+        // setting on; the hot path with it off is unchanged.
+        if observation.cache_diagnostics() {
+            call = call.with_hashes(hashes(&self.endpoint, request));
         }
         Box::new(call.observed(observation.with_model(self.endpoint.model.clone())))
     }

@@ -254,7 +254,13 @@ fn build(
         Protocol::BedrockConverse => {
             let converse = Converse::new(endpoint);
             let observe = diag.and_then(|diag| {
-                observed(diag, &here.clock, converse.clone(), Converse::call_observed)
+                observed(
+                    diag,
+                    &here.clock,
+                    converse.clone(),
+                    Converse::call_observed,
+                    here.cache_diagnostics,
+                )
             });
             (Arc::new(converse), observe)
         }
