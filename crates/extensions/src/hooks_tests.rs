@@ -2493,7 +2493,7 @@ fn a_parked_watcher_drops_the_ephemeral_offer_and_queues_the_durable_one() {
     let statuses = status_channel(&session);
     session.deliver(&noticed("park"), None);
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the watcher to park on host.http"
     );
     // While it is parked the ephemeral offer is dropped and the durable one
@@ -2796,7 +2796,7 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
     // bounds the waits for the parked delivery to appear and the loop to
     // notice the move.
     assert!(
-        clock.await_parked(before + Duration::from_millis(300), WAIT),
+        clock.await_parked(before + Duration::from_millis(300), Deadline::after(WAIT)),
         "waited for the sleeping watcher to park at its deadline"
     );
     clock.advance_when_parked(
@@ -2945,7 +2945,7 @@ fn a_watcher_queued_at_a_signal_never_starts() {
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     session.deliver(&noticed("park"), None);
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the first watcher to park on host.http"
     );
     // The one worker is parked on the first delivery, so the second stays
@@ -3129,7 +3129,7 @@ fn drain_watchers_waits_for_a_queued_durable_delivery() {
     // keeps it from returning before the queued delivery runs.
     session.deliver(&stepped(), Some(contract::Seq(0)));
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the live delivery to park on host.http"
     );
     let lua = session

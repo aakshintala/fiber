@@ -2187,7 +2187,7 @@ fn a_hook_queued_behind_a_parked_watcher_does_not_start() {
     }
     ext.hub.notify();
     assert!(
-        server.await_requests(1, WAIT_UNTIL),
+        server.await_requests(1, Deadline::after(WAIT_UNTIL)),
         "waited for the watcher to reach the server"
     );
     assert!(
@@ -2279,7 +2279,7 @@ fn a_watcher_queued_behind_a_parked_hook_does_not_start() {
     }
     ext.hub.notify();
     assert!(
-        server.await_requests(1, WAIT_UNTIL),
+        server.await_requests(1, Deadline::after(WAIT_UNTIL)),
         "waited for the hook to reach the server"
     );
     assert!(
