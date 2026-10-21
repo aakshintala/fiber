@@ -2,8 +2,9 @@
 
 use crate::configure::{
     ConfigureError, FileOutcome, FileSaved, HostGap, HostSaved, Layer, LoginKind, LoginTarget,
-    LogoutRow, NotesFile, NotesSaved, ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesSection, Saved,
-    SettingRow, Shown, SkillsDisabled, Stored, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    LogoutRow, NotesFile, NotesSaved, ReviewerModels, ReviewerNotes, Revoked, RuleRow,
+    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, ToolGroup, ToolLists,
+    ToolSwitches, WriteScope,
 };
 use contract::{ErrorCode, HubLine};
 use serde_json::Value;

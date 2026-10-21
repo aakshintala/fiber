@@ -13,9 +13,9 @@ use contract::clock::Clock;
 use crate::ThemeSetting;
 use crate::configure::{
     BrowserLogin, Configure, ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginShow,
-    LoginTarget, LogoutRow, NotesFile, NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked,
-    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
-    ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    LoginTarget, LogoutRow, NotesFile, NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes,
+    Revoked, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored,
+    SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 /// One notes save the view asked for: the workspace and each sent layer.
