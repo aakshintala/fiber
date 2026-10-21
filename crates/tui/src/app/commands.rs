@@ -146,6 +146,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_diff,
     },
     CommandEntry {
+        name: "copy",
+        description: "Copies the newest reply.",
+        hint: None,
+        run: run_copy,
+    },
+    CommandEntry {
         name: "panel",
         description: "Shows or hides the panel.",
         hint: None,
@@ -402,6 +408,10 @@ fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {
 fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.open_session_view(super::SessionView::ChangedFiles))
+}
+
+fn run_copy(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.copy_last_reply())
 }
 
 fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -913,6 +923,10 @@ mod aliases;
 #[cfg(test)]
 #[path = "diff_command_tests.rs"]
 mod diff_command;
+
+#[cfg(test)]
+#[path = "copy_command_tests.rs"]
+mod copy_command;
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

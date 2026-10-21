@@ -1,6 +1,7 @@
-//! The conversation's click targets, and a code block's `copy` cells,
-//! which copy its code and show "Copied" until the next key or click
-//! (`docs/tui.md`, "Look", "Selection and copy").
+//! The conversation's click targets, a code block's `copy` cells, which
+//! copy its code and show "Copied" until the next key or click, and
+//! `/copy`, which copies the newest reply the same way (`docs/tui.md`,
+//! "Look", "Selection and copy").
 
 use std::ops::Range;
 
@@ -37,7 +38,86 @@ pub(crate) fn copy_target(turns: &[Turn], target: Target, width: u16) -> Option<
         })
 }
 
+/// What `/copy` finds walking the pages from the newest.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LastReply {
+    /// The newest message's text parts, joined by a blank line.
+    Text(String),
+    /// A dropped page came before any reply: the newest may be on it.
+    PagedOut,
+    /// No page holds a reply.
+    NoReply,
+}
+
+/// The newest reply in `pages`, each page's turns from the newest page
+/// back, `None` for a dropped one: every text part of the latest message
+/// that has text, as the model wrote it.
+pub(crate) fn last_reply<'a>(pages: impl Iterator<Item = Option<&'a [Turn]>>) -> LastReply {
+    for turns in pages {
+        let Some(turns) = turns else {
+            return LastReply::PagedOut;
+        };
+        for turn in turns.iter().rev() {
+            let Some(newest) = turn.entries.iter().rev().find_map(reply_action) else {
+                continue;
+            };
+            let parts: Vec<&str> = turn
+                .entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    Entry::Reply { action, reply } if action == newest => Some(reply.text()),
+                    Entry::Reply { .. }
+                    | Entry::Steer(_)
+                    | Entry::Group(_)
+                    | Entry::Aside(_)
+                    | Entry::Band(_)
+                    | Entry::Answers(_) => None,
+                })
+                .collect();
+            return LastReply::Text(parts.join("\n\n"));
+        }
+    }
+    LastReply::NoReply
+}
+
+/// The message a reply entry belongs to.
+fn reply_action(entry: &Entry) -> Option<&str> {
+    match entry {
+        Entry::Reply { action, .. } => Some(action),
+        Entry::Steer(_)
+        | Entry::Group(_)
+        | Entry::Aside(_)
+        | Entry::Band(_)
+        | Entry::Answers(_) => None,
+    }
+}
+
 impl App {
+    /// `/copy`: the newest reply in the conversation on screen goes out
+    /// through the copy path and "Copied" shows; otherwise a notice says
+    /// why nothing was copied.
+    pub(super) fn copy_last_reply(&mut self) -> Effect {
+        self.draft.clear();
+        match last_reply(self.screen.pages().newest_first()) {
+            LastReply::Text(text) => {
+                self.copied = true;
+                Effect::Copy(text)
+            }
+            LastReply::PagedOut => {
+                self.notices.push(
+                    "copy",
+                    "The last reply is paged out; jump to the end, then /copy again.".to_owned(),
+                );
+                Effect::None
+            }
+            LastReply::NoReply => {
+                self.notices
+                    .push("copy", "No reply to copy yet.".to_owned());
+                Effect::None
+            }
+        }
+    }
+
     /// For each line of [`Self::lines`] that opens something, its index and
     /// what it opens.
     #[cfg(test)]

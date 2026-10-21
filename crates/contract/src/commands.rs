@@ -513,6 +513,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "cost",
     "quota",
     "diff",
+    "copy",
     "tools",
     "mcp",
     "panel",
