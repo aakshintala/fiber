@@ -96,7 +96,7 @@ impl Ready {
     #[track_caller]
     pub fn wait(&self, deadline: Deadline) -> Vec<u32> {
         let within = deadline.left();
-        match Deadline::after(within).recv(&self.lines) {
+        match deadline.recv(&self.lines) {
             Ok(Line::Text(line)) => pids(&line, &self.path),
             Ok(Line::End) => panic!(
                 "ready fifo {} closed before a line arrived",

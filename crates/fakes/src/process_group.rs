@@ -138,7 +138,6 @@ fn signal_named(name: &str) -> io::Result<Option<Signal>> {
 /// wait then returns `false`.
 #[must_use]
 pub fn group_empties(group: u32, deadline: Deadline) -> bool {
-    let within = deadline.left();
     let (emptied, empty) = mpsc::channel();
     let (stop, stopped) = mpsc::channel::<()>();
     thread::spawn(move || {
@@ -151,7 +150,7 @@ pub fn group_empties(group: u32, deadline: Deadline) -> bool {
             Ok(()) | Err(_) => {}
         }
     });
-    let result = Deadline::after(within).recv(&empty).is_ok();
+    let result = deadline.recv(&empty).is_ok();
     drop(stop);
     result
 }
@@ -428,7 +427,6 @@ fn wait_exits(pids: &[u32], stop: &mpsc::Receiver<()>, mut probe: impl FnMut(u32
 /// less.
 #[must_use]
 pub fn pids_exit(pids: &[u32], deadline: Deadline) -> bool {
-    let within = deadline.left();
     let pids = pids.to_vec();
     let (done, finished) = mpsc::channel::<bool>();
     let (stop, stopped) = mpsc::channel::<()>();
@@ -438,7 +436,7 @@ pub fn pids_exit(pids: &[u32], deadline: Deadline) -> bool {
             Ok(()) | Err(_) => {}
         }
     });
-    let result = Deadline::after(within).recv(&finished).unwrap_or_default();
+    let result = deadline.recv(&finished).unwrap_or_default();
     drop(stop);
     result
 }

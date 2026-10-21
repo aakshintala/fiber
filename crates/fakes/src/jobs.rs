@@ -226,8 +226,7 @@ impl FakeJobs {
 
     /// The next completion, or `None` when none arrives within `deadline`.
     pub fn ended(&self, deadline: Deadline) -> Option<JobCompleted> {
-        let within = deadline.left();
-        Deadline::after(within).recv(&lock(&self.completed_rx)).ok()
+        deadline.recv(&lock(&self.completed_rx)).ok()
     }
 
     /// How many times `stop_delegates` ran: the loop calls it once per

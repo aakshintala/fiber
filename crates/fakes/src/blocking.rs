@@ -61,14 +61,12 @@ impl BlockingProvider {
     /// this, so the cancel lands mid-stream.
     #[track_caller]
     pub fn wait_started(&self, deadline: Deadline) {
-        let within = deadline.left();
-        let timeout = within;
         let started = self
             .inner
             .started_rx
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let got = Deadline::after(timeout).recv(&started);
+        let got = deadline.recv(&started);
         assert!(got.is_ok(), "timed out waiting for the model call to start");
     }
 }
