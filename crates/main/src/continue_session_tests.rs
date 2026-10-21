@@ -305,6 +305,25 @@ fn array_worktree_is_corrupt_with_no_new_log() {
 }
 
 #[test]
+fn null_worktree_is_corrupt_with_no_new_log() {
+    // The payload rules forbid `null`: an optional key is absent, never
+    // `null`, so a `null` worktree is foreign data and malformed.
+    let (_home, old_dir, workspace) = fixture("main-continues-worktree-null", None);
+    let first = started(&workspace, Some(Value::Null));
+    std::fs::write(old_dir.join("events.jsonl"), first).unwrap();
+    let error = resolve(&new(), &old(), &old_dir, &workspace).unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::LogCorrupt);
+    assert!(
+        !old_dir
+            .parent()
+            .unwrap()
+            .join("s_bbbbbbbbbbbbbbbb")
+            .exists(),
+        "no new session log was created"
+    );
+}
+
+#[test]
 fn malformed_worktree_object_is_corrupt() {
     // The path matches, so only the object's shape refuses: without the
     // shape check this resolves.

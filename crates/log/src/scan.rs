@@ -149,14 +149,17 @@ impl SessionStarted {
     }
 
     /// The recorded worktree: the strict policy the hub and the session
-    /// continuation walk by. Absent (missing or null) is `Ok(None)`; a
-    /// record with string `path` and `branch` and a present absolute-path
-    /// `repository` is `Ok(Some)`; any other present value is malformed.
+    /// continuation walk by. Absent (the key is missing) is `Ok(None)`;
+    /// a record with string `path` and `branch` and a present
+    /// absolute-path `repository` is `Ok(Some)`; `null` is `Err`
+    /// (the payload rules forbid `null`: an optional key is absent, never
+    /// `null`), as is any other present value.
     /// Public because the hub and the session process both validate
     /// through it.
     pub fn worktree_record(&self) -> Result<Option<Worktree>, MalformedWorktree> {
         match &self.worktree_raw {
-            None | Some(Value::Null) => Ok(None),
+            None => Ok(None),
+            Some(Value::Null) => Err(MalformedWorktree),
             Some(raw) => match serde_json::from_value::<Worktree>(raw.clone()) {
                 Ok(record)
                     if record

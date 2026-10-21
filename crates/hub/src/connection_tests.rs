@@ -755,6 +755,28 @@ fn start_with_continues_and_a_non_object_worktree_is_log_corrupt() {
 }
 
 #[test]
+fn start_with_continues_and_a_null_worktree_is_log_corrupt() {
+    // The payload rules forbid `null`: an optional key is absent, never
+    // `null`, so a `null` worktree is foreign data and malformed.
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let dir = temp.dir.join("projects/-w/sessions").join(OLD);
+    fs::create_dir_all(&dir).unwrap();
+    let first = json!({"kind": "session_started", "payload": {
+        "workspace": workspace,
+        "worktree": Value::Null,
+    }})
+    .to_string()
+        + "\n";
+    fs::write(dir.join("events.jsonl"), first).unwrap();
+    refused_start(
+        &temp,
+        json!({"workspace": workspace, "continues": OLD}),
+        "log_corrupt",
+    );
+}
+
+#[test]
 fn start_with_continues_and_a_worktree_without_repository_is_log_corrupt() {
     let temp = Temp::new();
     let worktree = temp.dir.join("wt");

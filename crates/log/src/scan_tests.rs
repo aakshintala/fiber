@@ -181,15 +181,21 @@ fn worktree_path_is_none_unless_an_object_with_a_string_path() {
 }
 
 #[test]
-fn worktree_record_is_none_when_absent_or_null() {
-    for payload in [
-        json!({"workspace": "/w"}),
-        json!({"workspace": "/w", "worktree": Value::Null}),
-    ] {
-        let first = json!({"kind": "session_started", "payload": payload}).to_string();
-        let view = SessionStarted::parse(first.as_bytes()).expect("a session_started");
-        assert_eq!(view.worktree_record().unwrap(), None, "{payload}");
-    }
+fn worktree_record_is_none_when_absent() {
+    let payload = json!({"workspace": "/w"});
+    let first = json!({"kind": "session_started", "payload": payload}).to_string();
+    let view = SessionStarted::parse(first.as_bytes()).expect("a session_started");
+    assert_eq!(view.worktree_record().unwrap(), None, "{payload}");
+}
+
+#[test]
+fn worktree_record_null_is_malformed() {
+    // The payload rules forbid `null`: an optional key is absent, never
+    // `null`, so a `null` worktree is foreign data and malformed.
+    let payload = json!({"workspace": "/w", "worktree": Value::Null});
+    let first = json!({"kind": "session_started", "payload": payload}).to_string();
+    let view = SessionStarted::parse(first.as_bytes()).expect("a session_started");
+    assert!(view.worktree_record().is_err(), "{payload}");
 }
 
 #[test]
