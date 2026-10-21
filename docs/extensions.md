@@ -1478,7 +1478,10 @@ way, naming the drain instead of a watcher. `host.fs` and
 watchers, as ever.
 
 When a signal stops Fiber, no extension code runs, as no hook does. The
-5-second shutdown bound has no room for it.
+5-second shutdown bound has no room for it. A signal that stops the
+drain makes Fiber exit with the signal's code; `fiber_exited` keeps the
+line it already wrote. A signal after the drain finished changes
+nothing.
 
 ## Notes for authors
 

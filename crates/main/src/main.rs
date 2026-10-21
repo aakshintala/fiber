@@ -39,6 +39,7 @@ mod switch;
 mod theme_setting;
 
 #[cfg(test)]
+#[path = "exit_state_tests.rs"]
 mod exit_state_tests;
 #[cfg(test)]
 #[path = "live_tests.rs"]
@@ -262,7 +263,7 @@ fn run() -> i32 {
                 } else {
                     Layer::Global
                 };
-                ::cli::config_set(layer, &key, &value)
+                ::cli::config_set(layer, &key, &value, clock.as_ref())
             }
         },
         cli::Invocation::Run(Some(cli::Commands::Login(args)), _) => ::cli::run_login(
@@ -726,10 +727,16 @@ fn write_state_at_exit(
     Ok(())
 }
 
-/// The process exit after the session-end drain: the shutdown code when
-/// a signal stopped the drain (Ruling 19), else the `fiber_exited` code.
-fn drain_exit_code(exited: i32, cancel: &Arc<r#loop::TurnCancel>) -> i32 {
-    cancel.shutdown_code().unwrap_or(exited)
+/// The process exit after the session-end drain: the shutdown code only
+/// when the drain was stopped and a shutdown is recorded (Ruling 19,
+/// T4(d)), else the `fiber_exited` code. A stop with no shutdown recorded
+/// (an abandonment, an idle hub) keeps `exited`; a shutdown recorded with
+/// no stop keeps `exited` (the #2980 case).
+fn drain_exit_code(exited: i32, stopped: bool, code: Option<i32>) -> i32 {
+    match (stopped, code) {
+        (true, Some(code)) => code,
+        _ => exited,
+    }
 }
 
 /// Runs one turn of the session `session` writes to `log`, once its log,
@@ -818,7 +825,8 @@ fn run_turn(
             // printed under `fiber_exited` — never as a notice, since the
             // log is already closed to new lines (`docs/extensions.md`,
             // "When a session ends").
-            for failure in current.get().drain_watchers(log, dir) {
+            let (failures, stopped) = current.get().drain_watchers(log, dir);
+            for failure in failures {
                 writeln!(
                     io::stderr(),
                     "fiber: {} {} failed at session end: {}",
@@ -834,7 +842,7 @@ fn run_turn(
             // A signal during the drain wins over the pre-signal line
             // (Ruling 19): `fiber_exited` already holds the pre-signal
             // code, but the process exits with the signal code.
-            drain_exit_code(exited.code, &cancel)
+            drain_exit_code(exited.code, stopped, cancel.shutdown_code())
         }
         Err(_) => 1,
     }

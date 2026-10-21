@@ -140,6 +140,7 @@ fn a_model_name_reaches_its_picker_entry() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     // Neither the provider nor either id contains "opus": only the
@@ -218,6 +219,7 @@ fn levels_and_default_come_from_the_model() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let [entry] = catalogue.models.as_slice() else {
@@ -246,6 +248,7 @@ fn configured_is_the_per_model_level_then_the_top_level() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert_eq!(
@@ -263,6 +266,7 @@ fn configured_is_the_per_model_level_then_the_top_level() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert_eq!(
@@ -289,6 +293,7 @@ fn a_fiber_role_marks_its_model_with_or_without_a_level() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let marked: Vec<(&str, Vec<&str>)> = catalogue
@@ -329,6 +334,7 @@ fn load_notices_reach_the_catalogue() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert!(catalogue.models.is_empty());
@@ -351,6 +357,7 @@ fn no_provider_is_an_empty_catalogue() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert!(catalogue.models.is_empty());
@@ -376,6 +383,7 @@ fn installed_first_party_declaration_is_not_installable() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let expected: Vec<String> = extensions::not_installed_providers(&setup.home())
@@ -406,6 +414,7 @@ fn price_maps_cache_write_and_falls_back_to_input() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let [entry] = catalogue.models.as_slice() else {
@@ -440,6 +449,7 @@ fn price_maps_cache_write_over_input() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let [entry] = catalogue.models.as_slice() else {
@@ -479,6 +489,7 @@ fn price_is_none_without_a_cost_and_tiers_sort_ascending() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let prices: Vec<(&str, Option<tui::Price>)> = catalogue
@@ -535,6 +546,7 @@ fn a_zero_cost_is_a_free_price_not_none() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert_eq!(
@@ -561,6 +573,7 @@ fn fresh_cache_lists_its_age() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert_eq!(
@@ -588,6 +601,7 @@ fn cache_at_refresh_after_is_fresh_one_second_over_is_stale() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert!(
@@ -603,6 +617,7 @@ fn cache_at_refresh_after_is_fresh_one_second_over_is_stale() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert!(
@@ -624,6 +639,7 @@ fn missing_cache_has_no_time_and_is_stale() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert_eq!(
@@ -662,6 +678,7 @@ fn future_cache_reads_as_updated_now() {
         now(),
         &unloaded(&called),
         &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     // A file dated after `now` reads as updated `now`: age zero.

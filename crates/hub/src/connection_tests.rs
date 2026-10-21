@@ -538,6 +538,69 @@ fn status_counts_both_open_connections() {
 }
 
 #[test]
+fn placeholder_env_answers_requested_values_and_omits_the_rest() {
+    let temp = Temp::new();
+    let hub = {
+        let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+        let hub = crate::testkit::hub(&temp.dir, Arc::new(FakeStarter::hang(&temp.dir)), timed);
+        Arc::new(
+            hub.with_environments(crate::Environments::ready(crate::Environment {
+                vars: vec![
+                    ("PRESENT".into(), "kept".into()),
+                    ("UNASKED".into(), "stays".into()),
+                ],
+                source: contract::events::VariablesSource::Inherited,
+            })),
+        )
+    };
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command(
+        "c_1",
+        "placeholder_env",
+        json!({"names": ["PRESENT", "ABSENT"]}),
+    ));
+    let (id, result) = accepted(&client.next("the placeholder_env answer"));
+    assert_eq!(id, "c_1");
+    assert_eq!(result, json!({"values": {"PRESENT": "kept"}}));
+    let reread: contract::events::CommandAccepted =
+        serde_json::from_value(json!({"command_id": "c_1", "result": result})).unwrap();
+    assert_eq!(
+        reread.result,
+        Some(contract::events::CommandResult::PlaceholderEnv {
+            values: [("PRESENT".to_owned(), "kept".to_owned())]
+                .into_iter()
+                .collect(),
+        })
+    );
+}
+
+#[test]
+fn placeholder_env_rejects_a_misshaped_request() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    for (id, args) in [
+        ("c_1", json!({})),
+        ("c_2", json!({"names": "PRESENT"})),
+        ("c_3", json!({"names": ["PRESENT"], "extra": true})),
+        ("c_4", json!({"names": null})),
+    ] {
+        client.send(&command(id, "placeholder_env", args));
+        let (code, answered, message) = rejected(&client.next("the rejection"));
+        assert_eq!(
+            (code.as_str(), answered.as_deref(), message.as_str()),
+            (
+                "invalid_arguments",
+                Some(id),
+                "The arguments do not fit this command.",
+            )
+        );
+    }
+}
+
+#[test]
 fn client_lines_end_at_the_cap_before_any_parse() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
