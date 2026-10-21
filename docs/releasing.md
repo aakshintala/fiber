@@ -24,7 +24,15 @@ From 1.0, a breaking change bumps the major number.
 released version and its own commit. A build with no git history, such as a
 source tarball or a mutation-testing copy, prints `fiber <version>`.
 
-A release is cut when there is something worth installing, never on a
+Stable releases are versioned by PR: 0.0.N until the public launch, which is
+0.1.0.
+
+A nightly pre-release is built from main once a day, only when main changed
+since the last nightly, for example `0.0.N-nightly.YYYYMMDD`. A nightly is a
+pre-release of the next stable version: with `Cargo.toml` at `0.0.0`, the
+first nightly is `0.0.1-nightly.YYYYMMDD`, and SemVer sorts it below `0.0.1`.
+
+A stable release is cut when there is something worth installing, never on a
 schedule.
 
 ## Cutting a release
@@ -46,9 +54,27 @@ No step creates a tag before every earlier step has passed, so a failed
 release leaves no tag behind. A failed run is re-run from the Actions tab on
 the same commit. Nobody creates a version tag by hand.
 
-After a release, a pull request lowers every ceiling in
+After a stable release, a pull request lowers every ceiling in
 `docs/performance.md` that the release measured at less than half its value,
 to the measured value times two.
+
+### Nightly pre-releases
+
+The nightly job runs on a daily schedule: its preflight computes the next nightly
+version from the `fiber` crate's `Cargo.toml` and skips every later job when
+main is unchanged since the newest nightly tag. A nightly is published as a
+GitHub pre-release, so `releases/latest` and the stable channel never see
+it. The draft is created with `--prerelease` and published last, with the
+same rule as a stable release: publishing is what creates the tag, so a
+failed run leaves no tag and no Release. A nightly ships the same three
+target archives plus the docs, extensions and installer assets, through the
+same gate and the same signing. A nightly writes no `CHANGELOG.md` section
+and requires none; its notes are the `git log` range since the previous
+stable tag. Nightly jobs reuse the stable steps verbatim so their
+measurements are reported ungated exactly as `docs/ci.md`, "Releases",
+describes, while ceiling-lowering follow-up pull requests stay on stable
+releases, which key off `CHANGELOG.md` sections and version bumps that
+nightlies never write.
 
 ### The changelog
 
@@ -181,11 +207,29 @@ The binary unpacks the archives itself and refuses any entry that is not a
 file, a directory or a relative symlink inside its directory.
 
 The script is `install.sh` in the repository's `scripts/` directory. It reads only
-`FIBER_INSTALL_DIR` and `FIBER_VERSION`; the binary reads `FIBER_HOME`.
+`FIBER_INSTALL_DIR`, `FIBER_VERSION` and `FIBER_CHANNEL`; the binary reads `FIBER_HOME`.
 
 `FIBER_VERSION=0.3.0` installs that version instead of the newest, with that
 version's docs and first-party extensions. Rolling back is installing an older
 version this way.
+
+`fiber update` and `install.sh` follow a channel setting, stable by default.
+`install.sh` takes `--channel stable|nightly`, or `FIBER_CHANNEL` when the
+flag is absent; an empty `FIBER_CHANNEL` means stable, and the flag beats the
+environment either way. An explicit `FIBER_VERSION` wins over the channel and
+the channel is ignored. A nightly-form `FIBER_VERSION` stays refused by the
+version check above: pinning a single nightly is out of scope. The stable
+channel installs from `latest/download` exactly as above, which excludes
+pre-releases by GitHub's own rule, so stable ignores nightlies with no
+further code. The nightly channel installs the newest nightly: GitHub's
+`releases/latest` skips pre-releases, so the nightly channel reads the
+release list instead, `https://api.github.com/repos/aakshintala/fiber/releases?per_page=100`,
+and picks the newest entry whose tag matches `v<N>-nightly.YYYYMMDD` with
+`"prerelease": true` and `"draft": false`, installing from that tag's
+`download/<tag>/` URLs. The list is a GitHub API call and so is held to the
+API's limit of 60 requests an hour for each address. A failed list fetch
+fails the install naming the URL, and no matching nightly fails naming the
+channel.
 
 Running `install.sh` again reinstalls the first-party extensions, including
 one a person removed. `fiber update` never does: it updates only what is
@@ -236,6 +280,15 @@ which the next client starts a new one. Clients reconnect with backoff, and
 no session stops (`docs/invocation.md`, "The hub").
 
 Nothing checks for a new version on its own. An idle Fiber does no work.
+
+`fiber update` follows a channel setting, stable by default. The stable
+channel finds the newest version through `releases/latest` as above; the
+nightly channel reads the release list instead and updates from its
+nightlies, because GitHub's `releases/latest` skips pre-releases. `fiber
+update` does not exist yet, so its channel is built by #408, which lands
+after this ticket and updates from its nightlies. This ticket writes the
+channel into this section for #408 to build. It does not add competing
+release code.
 
 ### How `fiber update` replaces the binary
 

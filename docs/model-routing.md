@@ -27,8 +27,10 @@ A sixth, `scripted`, speaks to no vendor: it reads a script file
 ("The scripted provider").
 
 AWS event-stream framing is a per-model flag, not a protocol. `anthropic-messages`
-reads it for Claude on Bedrock, which Bedrock serves through its Invoke API, and
-`bedrock-converse` reads it too.
+reads it for Claude on Bedrock, which Bedrock serves through its Invoke API: a
+model whose data declares `compat.bedrock_invoke` ("Bedrock Invoke wire
+facts"). `bedrock-converse` will read it too. It is not built yet: a session
+whose model speaks it fails with `protocol_unsupported` (`docs/errors.md`).
 
 ChatGPT/codex speaks `openai-responses` with two compatibility flags its
 extension declares on each model, `store: false` and
@@ -105,10 +107,39 @@ A first-party provider is one Fiber can probe and re-record. There are eleven:
 The protocols are the ones each provider serves and Fiber speaks for it. A
 package's shipped models may use only some of them, and a model on another
 one is added once it is probed. The OpenAI provider sends `store: false` on every request. Google Vertex's
-flags and URLs are data, like any provider's. Google Vertex ships its Gemini 3
+flags and URLs are data, like any provider's. AWS Bedrock ships its Claude
+models only, each under a geography's inference profile, such as
+`global.anthropic.claude-haiku-4-5-20251001-v1:0`. Google Vertex ships its Gemini 3
 and later models only, at the `global` location: no Claude model answered on
 the project it was probed with ("Google Vertex wire facts"), so its Claude
 models are added once one is probed.
+
+AWS Bedrock's `credential()` returns a Bedrock API key, sent as
+`authorization: Bearer`, or AWS credentials, with which its `sign()` signs each
+request with SigV4 in place of that header. The session's credential label
+is the AWS profile name. Under any label but `default` it runs `aws configure
+export-credentials --profile <label> --format process`, so a profile, SSO or an
+assumed role works without an AWS SDK. A person picks the profile as any
+label is picked ("Which credential a session uses"), such as in the global
+file:
+
+```json
+{ "providers": { "bedrock": { "credential": "my-profile" } } }
+```
+
+and switches it mid-session with `/credential <profile>`, which gets that
+profile's own credentials. Under `default` it takes the first of:
+a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`; AWS keys in
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with `AWS_SESSION_TOKEN`
+when set; and the AWS CLI's own default chain, which reads `AWS_PROFILE`.
+Credentials with an `Expiration` are refreshed before it, as any token is
+("Keys, tokens and OAuth"). With none of these, the call fails with
+`credential_failed`, and the message says to set `AWS_BEARER_TOKEN_BEDROCK`
+or name a profile. `fiber login bedrock` is not supported: it stores a key,
+and a provider with `credential()` reads none ("Which credential a session
+uses"), so a Bedrock API key comes from the environment only. The AWS region is the package's `region` setting,
+the per-account host its base URL names, read from `AWS_REGION` when unset
+("A per-account host").
 
 Google Vertex's `credential()` returns an OAuth access token from the Google
 Cloud CLI, sent as `authorization: Bearer`. The session's credential label
@@ -339,6 +370,52 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
 - Go sends `store: false` on its `openai-responses` and
   `openai-completions` requests, as the OpenAI provider does on every
   request; its `anthropic-messages` requests carry no `store` key.
+
+### Bedrock Invoke wire facts
+
+Measured on October 20, 2026 against `bedrock-runtime.ap-south-1.amazonaws.com`
+with `global.anthropic.claude-haiku-4-5-20251001-v1:0`, and one request to
+`global.anthropic.claude-haiku-5-5` (`research/bedrock-invoke-probe`).
+
+- A model with `compat.bedrock_invoke` posts to
+  `<base_url>/model/<id>/invoke-with-response-stream`, with the id
+  percent-encoded (`:` as `%3A`) and `accept: application/vnd.amazon.eventstream`.
+  The body is the `anthropic-messages` body with no `model` and no `stream`,
+  and `anthropic_version: bedrock-2023-05-31` where Anthropic takes the
+  `anthropic-version` header. A model's beta flags go in the body's
+  `anthropic_beta` list, through its `extra_body`; Fiber sends no
+  `anthropic-beta` header.
+- The reply is AWS event-stream framing. Each message is a prelude (its total
+  length and its headers' length, big-endian 32-bit, then the prelude's
+  CRC-32), string headers, a payload and the CRC-32 of the rest of the
+  message. Each `:event-type` `chunk` message's JSON payload holds `bytes`,
+  one Anthropic stream event in base64, beside a `p` field of padding. The
+  events are Anthropic's own, `message_start` to `message_stop`, and
+  `message_stop` also carries `amazon-bedrock-invocationMetrics`. No stream
+  probed sent `ping`. A message whose checksum fails, or whose lengths are out
+  of range, fails the call with `stream_incomplete`, since nothing after it
+  can be trusted.
+- `message_start` splits cache writes by lifetime in `cache_creation`, as
+  Anthropic's does. Prompt caching wrote and read with a 5-minute marker, a
+  1-hour `ttl` was accepted, and Fiber's own sessions recorded 1-hour writes
+  and later reads, a resumed turn's included.
+- `thinking: {type: "enabled", budget_tokens}` streamed a signed thinking
+  block on Haiku 4.5, and a signed thinking block sent back in the next
+  request was accepted. Adaptive thinking with `output_config.effort` was
+  accepted on Haiku 5.5.
+- A thinking block's signature carries the AWS account id in clear inside its
+  base64, so a recording's signatures are scrubbed before it is checked in.
+- A failure before the stream is a JSON body, `{"message": ...}`, or
+  `{"Message": ...}` for a malformed API key, and names its exception only in
+  the `X-Amzn-ErrorType` header, as
+  `ValidationException:http://internal.amazon.com/coral/com.amazon.bedrock/`
+  (`docs/errors.md`, "Recognising an AWS exception"). An unknown model id, and
+  a geography's profile used from a region outside it, answered 400
+  `ValidationException` "The provided model identifier is invalid.".
+- A failure during the stream is a message whose `:message-type` is
+  `exception`, naming itself in camel case in `:exception-type`, such as
+  `throttlingException`, with its text in the payload's `message`. The probe
+  reached none.
 
 ### The scripted provider
 
@@ -624,8 +701,10 @@ and OAuth"), and `cost()` only after a call has ended ("Cost").
 ### Signing a request
 
 A provider may declare a Lua `sign()` function for a scheme that signs each
-request, such as AWS SigV4. It receives the method, the URL, the headers and
-the SHA-256 of the body, and returns headers to add. It cannot change the body. If `sign()` fails or
+request, such as AWS SigV4. It receives the method, the URL, the headers, the
+SHA-256 of the body and the time, in whole Unix seconds from the extension's
+clock, since SigV4 signs over the time and Lua has no clock of its own. It
+returns headers to add. It cannot change the body. If `sign()` fails or
 returns headers Fiber cannot use, the call fails with `credential_failed`, and
 is not retried.
 SigV4's chain of HMACs uses the `host.hmac_sha256` host call
