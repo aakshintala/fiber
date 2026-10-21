@@ -1,0 +1,181 @@
+{
+  "cost": 0.000141,
+  "events": [
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "functionCall": {
+                    "args": {
+                      "city": "Paris",
+                      "days": 1,
+                      "unit": "c"
+                    },
+                    "id": "call_904610",
+                    "name": "get_weather"
+                  },
+                  "thoughtSignature": "AY89a18qHw09806NonbC300E2rDEPI6U2yOGi4bZFPeroH8m1B+TQsf65E4eHeOqW8t5pdp1tP88ap7GFGl8daa8iitfAtoDPbdvp5amD3e3hS/IUGqV"
+                }
+              ],
+              "role": "model"
+            }
+          }
+        ],
+        "createTime": "2026-10-20T16:58:50.309088Z",
+        "modelVersion": "gemini-3.7-flash",
+        "responseId": "00000000000000000000009",
+        "usageMetadata": {
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    },
+    {
+      "data": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {
+                  "text": ""
+                }
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-10-20T16:58:50.309088Z",
+        "modelVersion": "gemini-3.7-flash",
+        "responseId": "00000000000000000000009",
+        "usageMetadata": {
+          "candidatesTokenCount": 26,
+          "candidatesTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 26
+            }
+          ],
+          "promptTokenCount": 58,
+          "promptTokensDetails": [
+            {
+              "modality": "TEXT",
+              "tokenCount": 58
+            }
+          ],
+          "totalTokenCount": 84,
+          "trafficType": "ON_DEMAND"
+        }
+      },
+      "event": null
+    }
+  ],
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-disposition": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.7-flash:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "What is the weather in Paris in celsius for today? Use the tool."
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 1024,
+      "thinkingConfig": {
+        "includeThoughts": true,
+        "thinkingLevel": "LOW"
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "Weather for a city.",
+            "name": "get_weather",
+            "parametersJsonSchema": {
+              "$defs": {
+                "unit": {
+                  "enum": [
+                    "c",
+                    "f"
+                  ],
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "days": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                }
+              },
+              "required": [
+                "city",
+                "unit",
+                "days"
+              ],
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "usage": {
+    "candidatesTokenCount": 26,
+    "candidatesTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 26
+      }
+    ],
+    "promptTokenCount": 58,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 58
+      }
+    ],
+    "totalTokenCount": 84,
+    "trafficType": "ON_DEMAND"
+  }
+}

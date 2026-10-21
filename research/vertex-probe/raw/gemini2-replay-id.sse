@@ -1,0 +1,6 @@
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": "The weather in Paris today"}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-2.5-flash-lite","createTime": "2026-10-20T16:56:58.221616Z","responseId": "00000000000000000000002"}
+
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": " will be sunny with a high of 21 C."}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-2.5-flash-lite","createTime": "2026-10-20T16:56:58.221616Z","responseId": "00000000000000000000002"}
+
+data: {"candidates": [{"content": {"role": "model","parts": [{"text": ""}]},"finishReason": "STOP"}],"usageMetadata": {"promptTokenCount": 47,"candidatesTokenCount": 17,"totalTokenCount": 64,"trafficType": "ON_DEMAND","promptTokensDetails": [{"modality": "TEXT","tokenCount": 47}],"candidatesTokensDetails": [{"modality": "TEXT","tokenCount": 17}]},"modelVersion": "gemini-2.5-flash-lite","createTime": "2026-10-20T16:56:58.221616Z","responseId": "00000000000000000000002"}
+

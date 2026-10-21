@@ -56,6 +56,7 @@ impl Gemini {
         // header keeps the key out of the URL.
         let headers = crate::call::base_headers(
             endpoint,
+            "text/event-stream",
             &[],
             endpoint
                 .key
@@ -135,6 +136,7 @@ fn retry_info(error: Error) -> Error {
             retry_after: None,
             should_retry,
             url,
+            error_type,
         } => {
             let retry_after = serde_json::from_str::<Value>(&body).ok().and_then(|v| {
                 v.pointer("/error/details")?
@@ -153,6 +155,7 @@ fn retry_info(error: Error) -> Error {
                 retry_after,
                 should_retry,
                 url,
+                error_type,
             }
         }
         other @ (Error::Status { .. }

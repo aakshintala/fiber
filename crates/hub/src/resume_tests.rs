@@ -16,7 +16,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -67,29 +67,35 @@ impl Temp {
         workspace
     }
 
-    /// Writes `first` as the first line of `SID`'s log in a project.
-    fn log(&self, first: &str) {
+    /// `id`'s log in a project: `projects/-p/sessions/<id>/events.jsonl`,
+    /// created with it.
+    fn events(&self, id: &str) -> PathBuf {
         let dir = self
             .dir
             .join("projects")
             .join("-p")
             .join("sessions")
-            .join(SID);
+            .join(id);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("events.jsonl"), format!("{first}\n{{}}\n")).unwrap();
+        dir.join("events.jsonl")
+    }
+
+    /// Writes `lines` as the whole of `id`'s log.
+    fn write_lines(&self, id: &str, lines: &[String]) {
+        let mut text = lines.join("\n");
+        text.push('\n');
+        fs::write(self.events(id), text).unwrap();
+    }
+
+    /// Writes `first` as the first line of `SID`'s log in a project.
+    fn log(&self, first: &str) {
+        self.write_lines(SID, &[first.to_owned(), "{}".to_owned()]);
     }
 
     /// Writes `bytes` as the whole of `SID`'s log, with no newline added:
     /// for a first line still being written or torn mid-character.
     fn log_bytes(&self, bytes: &[u8]) {
-        let dir = self
-            .dir
-            .join("projects")
-            .join("-p")
-            .join("sessions")
-            .join(SID);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("events.jsonl"), bytes).unwrap();
+        fs::write(self.events(SID), bytes).unwrap();
     }
 
     /// `SID`'s log recording [`Temp::workspace`].
@@ -125,13 +131,7 @@ impl Temp {
 
     /// Appends `kind` as the last line of `SID`'s log.
     fn append(&self, kind: &str) {
-        let log = self
-            .dir
-            .join("projects")
-            .join("-p")
-            .join("sessions")
-            .join(SID)
-            .join("events.jsonl");
+        let log = self.events(SID);
         let mut text = fs::read_to_string(&log).unwrap();
         text.push_str(&json!({"kind": kind, "session_id": SID, "payload": {}}).to_string());
         text.push('\n');
@@ -2426,4 +2426,309 @@ fn a_refused_labelled_subscribe_asks_once() {
     assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
     assert_eq!(rejected["payload"]["command_id"], "c_1");
     assert_eq!(starter.asked(), [Some("nope".to_owned())]);
+}
+
+/// Writes `SID`'s log as a finished delegate's: `session_started` naming
+/// the parent, then `fiber_started` and `fiber_exited`, each with its
+/// `seq`, so a replay carries `last_seq` and a verbatim fold.
+fn finished_delegate_log(temp: &Temp) {
+    let workspace = temp.workspace();
+    let started = json!({"kind": "session_started", "seq": 0, "session_id": SID,
+        "ts": 1, "schema_version": 1,
+        "payload": {"workspace": workspace, "parent": parent()}});
+    let middle = json!({"kind": "fiber_started", "seq": 1, "session_id": SID,
+        "ts": 2, "schema_version": 1, "payload": {}});
+    let exited = json!({"kind": "fiber_exited", "seq": 2, "session_id": SID,
+        "ts": 3, "schema_version": 1, "payload": {}});
+    temp.write_lines(
+        SID,
+        &[started.to_string(), middle.to_string(), exited.to_string()],
+    );
+}
+
+/// Writes the parent's log with `session_started` then one job line per
+/// `kinds`, each naming `j_1` with the next `seq`.
+fn parent_log(temp: &Temp, kinds: &[&str]) {
+    let workspace = temp.workspace();
+    let started = json!({"kind": "session_started", "seq": 0,
+        "session_id": "s_1111111111111111", "ts": 1, "schema_version": 1,
+        "payload": {"workspace": workspace}})
+    .to_string();
+    let mut lines = vec![started];
+    for (n, kind) in kinds.iter().enumerate() {
+        let line = json!({"kind": kind, "seq": n + 1, "session_id": "s_1111111111111111",
+            "ts": 2, "schema_version": 1, "payload": {"job_id": "j_1"}});
+        lines.push(line.to_string());
+    }
+    temp.write_lines("s_1111111111111111", &lines);
+}
+
+#[test]
+fn an_exited_delegate_with_a_completed_job_replays() {
+    let temp = Temp::new();
+    finished_delegate_log(&temp);
+    parent_log(&temp, &["job_started", "job_completed"]);
+    assert!(super::exited_delegate(&temp.dir, &sid()));
+}
+
+#[test]
+fn an_exited_delegate_with_an_open_job_started_does_not_replay() {
+    let temp = Temp::new();
+    finished_delegate_log(&temp);
+    for jobs in [
+        vec!["job_started"],
+        vec!["job_started", "job_completed", "job_started"],
+        // A delivery naming the job never closes its run: the latest
+        // lifecycle line is still the start.
+        vec!["job_started", "job_line"],
+    ] {
+        parent_log(&temp, &jobs);
+        assert!(!super::exited_delegate(&temp.dir, &sid()), "{jobs:?}");
+    }
+}
+
+#[test]
+fn an_exited_delegate_without_a_parent_log_replays() {
+    // No parent log can hold an open `job_started`, so the window is shut.
+    let temp = Temp::new();
+    finished_delegate_log(&temp);
+    assert!(super::exited_delegate(&temp.dir, &sid()));
+}
+
+#[test]
+fn what_is_not_a_finished_delegate_does_not_replay() {
+    for shape in [
+        // Running: the tail is not `fiber_exited`.
+        (false, true),
+        // Not a delegate: no parent names a job.
+        (true, false),
+    ] {
+        let temp = Temp::new();
+        if shape.1 {
+            temp.delegate_log(parent());
+        } else {
+            temp.recorded();
+        }
+        if shape.0 {
+            temp.append("fiber_exited");
+        }
+        assert!(!super::exited_delegate(&temp.dir, &sid()), "{shape:?}");
+    }
+    // A malformed parent names no job to check the window for.
+    for parent in [json!("s0"), Value::Null] {
+        let temp = Temp::new();
+        temp.delegate_log(parent);
+        temp.append("fiber_exited");
+        assert!(!super::exited_delegate(&temp.dir, &sid()));
+    }
+}
+
+#[test]
+fn a_full_subscribe_to_an_exited_delegate_replays_its_log() {
+    let temp = Temp::new();
+    finished_delegate_log(&temp);
+    parent_log(&temp, &["job_started", "job_completed"]);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "full");
+    let accepted = client.next("the replayed acknowledgement");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    assert_eq!(accepted["payload"]["command_id"], "c_1");
+    assert_eq!(accepted["payload"]["result"]["last_seq"], 2, "{accepted}");
+    let kinds: Vec<String> = (0..3)
+        .map(|n| {
+            let line = client.next("the next folded line");
+            assert_eq!(line["session_id"], SID, "{line}");
+            assert_eq!(line["seq"], n, "{line}");
+            line["kind"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(kinds, ["session_started", "fiber_started", "fiber_exited"]);
+    // Every other command is refused exactly as today: the replay kept no
+    // live tail, and the entry already drained.
+    client.send("c_2", "steer");
+    let refused = client.next("the refusal");
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["command_id"], "c_2");
+    assert_eq!(refused["payload"]["code"], "session_not_found");
+    assert_eq!(refused["payload"]["message"], DELEGATE_REFUSED);
+    assert!(starter.resumed().is_empty(), "no process starts");
+}
+
+#[test]
+fn a_summary_subscribe_to_an_exited_delegate_is_refused_without_a_replay() {
+    // A summary (non-`full`) subscribe never enters the replay branch:
+    // only a `full` subscribe replays the exited run's log, so the `&&`
+    // joining the command and the level in `route` keeps this a delegate
+    // refusal with no accepted fold.
+    let temp = Temp::new();
+    finished_delegate_log(&temp);
+    parent_log(&temp, &["job_started", "job_completed"]);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "summary");
+    let refused = client.next("the refusal");
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["command_id"], "c_1");
+    assert_eq!(refused["payload"]["code"], "session_not_found");
+    assert_eq!(refused["payload"]["message"], DELEGATE_REFUSED);
+    assert!(starter.resumed().is_empty(), "no process starts");
+}
+
+#[test]
+fn a_full_subscribe_bypasses_a_live_relay_for_an_exited_delegate() {
+    let temp = Temp::new();
+    temp.delegate_log(parent());
+    let running = FakeStarter::bind_and_hold(&temp.dir);
+    let started = crate::Starter::start(&running, &sid(), &temp.workspace(), None, &[], false);
+    assert!(started.is_ok(), "the delegate binds");
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    let (relays_tx, relays_rx) = mpsc::channel();
+    *crate::connection::lock(&hub.before_forward) = Some(Box::new(move |_, relays| {
+        relays_tx.send(Arc::clone(relays)).unwrap_or(());
+    }));
+    client.subscribe("c_0", "summary");
+    assert_eq!(client.acknowledged("the live subscribe"), "c_0");
+    let relays = Deadline::after(DEADLINE)
+        .recv(&relays_rx)
+        .expect("the forward ran");
+    // The run ends after the live relay publishes.
+    finished_delegate_log(&temp);
+    crate::connection::lock(&relays).before_command_write = Some(Box::new(|| {
+        panic!("the replay writes nothing to the session");
+    }));
+    crate::connection::lock(&relays).at_gate = Some(Box::new(|| {
+        panic!("the replay opens nothing");
+    }));
+    *crate::connection::lock(&hub.before_open) = Some(Box::new(|| {
+        panic!("the replay resumes nothing");
+    }));
+    client.subscribe("c_1", "full");
+    let accepted = client.next("the replayed acknowledgement");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    assert_eq!(accepted["payload"]["command_id"], "c_1");
+    assert_eq!(accepted["payload"]["result"]["last_seq"], 2, "{accepted}");
+    let kinds: Vec<String> = (0..3)
+        .map(|_| {
+            let line = client.next("the next folded line");
+            line["kind"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(kinds, ["session_started", "fiber_started", "fiber_exited"]);
+    assert_eq!(
+        received(&running),
+        [("c_0".to_owned(), "subscribe".to_owned())],
+        "the dying session receives nothing more"
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    // The tripwires above only guard the replay: the steer that follows
+    // is meant to reach the live relay.
+    crate::connection::lock(&relays).before_command_write.take();
+    crate::connection::lock(&relays).at_gate.take();
+    crate::connection::lock(&hub.before_open).take();
+    // A steer still writes to the live relay as today.
+    client.send("c_2", "steer");
+    assert_eq!(client.acknowledged("the steer"), "c_2");
+    assert!(
+        received(&running).contains(&("c_2".to_owned(), "steer".to_owned())),
+        "the steer reached the live relay"
+    );
+}
+
+#[test]
+fn a_full_subscribe_waits_out_an_open_delegate_job() {
+    let temp = Temp::new();
+    finished_delegate_log(&temp);
+    parent_log(&temp, &["job_started"]);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe("c_1", "full");
+    let refused = client.next("the refusal");
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["command_id"], "c_1");
+    assert_eq!(refused["payload"]["code"], "session_not_found");
+    assert_eq!(refused["payload"]["message"], DELEGATE_REFUSED);
+    assert!(starter.resumed().is_empty(), "no process starts");
+    // The job completing replays the same log: the window shut.
+    parent_log(&temp, &["job_started", "job_completed"]);
+    client.subscribe("c_2", "full");
+    assert_eq!(client.acknowledged("the replayed subscribe"), "c_2");
+}
+
+#[test]
+fn a_malformed_full_subscribe_to_an_exited_delegate_is_refused() {
+    let temp = Temp::new();
+    finished_delegate_log(&temp);
+    parent_log(&temp, &["job_started", "job_completed"]);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.subscribe_raw("c_1", json!({"level": "full", "credential": 7}));
+    let refused = client.next("the refusal");
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["command_id"], "c_1");
+    assert_eq!(refused["payload"]["code"], "invalid_arguments");
+    assert!(starter.resumed().is_empty(), "no process starts");
+}
+
+#[test]
+fn a_rerouted_full_subscribe_to_an_exited_delegate_replays_and_releases_the_queue() {
+    // The `Reroute` arm routes with `from` and `exited` set: the replay
+    // answers in command order, releasing the parked waiter.
+    let temp = Temp::new();
+    finished_delegate_log(&temp);
+    parent_log(&temp, &["job_started", "job_completed"]);
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let relays = Arc::new(Mutex::new(crate::relay::Relays::default()));
+    let epoch = crate::connection::lock(&relays).mint();
+    let (writer, peer) = UnixStream::pair().unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let stripped = json!({"id": "c_1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let order = crate::connection::lock(&relays).order.clone();
+    crate::retire::enqueue_new(
+        &order,
+        SID,
+        &contract::CommandId("c_1".to_owned()),
+        &stripped,
+    );
+    order.mark_rerouted("c_1", SID, epoch);
+    crate::relay::route(
+        &contract::CommandId("c_1".to_owned()),
+        SID,
+        stripped,
+        &hub,
+        &writer,
+        &relays,
+        Some(epoch),
+        true,
+    );
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let mut read = BufReader::new(peer);
+    let mut text = String::new();
+    read.read_line(&mut text).unwrap();
+    let accepted: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    assert_eq!(accepted["payload"]["command_id"], "c_1");
+    assert_eq!(accepted["payload"]["result"]["last_seq"], 2, "{accepted}");
+    // The replay's acknowledgement released the queue: nothing is still
+    // parked behind the re-routed command.
+    let (done_tx, done) = mpsc::channel();
+    let waiting = order.clone();
+    thread::spawn(move || {
+        waiting.wait_rerouted(SID, epoch, "c_2");
+        done_tx.send(()).unwrap_or(());
+    });
+    Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("the replayed acknowledgement released the queue");
+    assert!(starter.resumed().is_empty(), "no process starts");
 }

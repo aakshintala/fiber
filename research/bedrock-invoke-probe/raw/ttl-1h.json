@@ -1,0 +1,122 @@
+{
+  "case": "ttl-1h",
+  "model": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "region": "ap-south-1",
+  "url_path": "/model/global.anthropic.claude-haiku-4-5-20251001-v1%3A0/invoke-with-response-stream",
+  "request": {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 16,
+    "system": [
+      {
+        "type": "text",
+        "text": "You are terse.",
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Say ok.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "type": "message_start",
+      "message": {
+        "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "id": "msg_bdrk_avcq2iql4fdxrzcllgyqvm3n2l3wwrhkbtutiduff7jc2dbscswa",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 15,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 1,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "type": "content_block_start",
+      "index": 0,
+      "content_block": {
+        "type": "text",
+        "text": ""
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "text_delta",
+        "text": "ok"
+      }
+    },
+    {
+      "type": "content_block_stop",
+      "index": 0
+    },
+    {
+      "type": "message_delta",
+      "delta": {
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "container": null
+      },
+      "usage": {
+        "input_tokens": 15,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 4
+      }
+    },
+    {
+      "type": "message_stop",
+      "amazon-bedrock-invocationMetrics": {
+        "inputTokenCount": 15,
+        "outputTokenCount": 4,
+        "invocationLatency": 802,
+        "firstByteLatency": 785
+      }
+    }
+  ],
+  "usage": {
+    "input_tokens": 15,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 4,
+    "service_tier": "standard"
+  },
+  "cost_usd": 3.5e-05
+}

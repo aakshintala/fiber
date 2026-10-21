@@ -97,15 +97,15 @@ fn plain() -> Vec<&'static str> {
 }
 
 /// `tool_turn` with `steering_applied` at the start of its last step: the
-/// drain lists the queued steer, the step applies it, and the queue lists
-/// empty once it is applied.
+/// drain lists the queued steer, the step clears the queue, then applies
+/// the claimed snapshot.
 fn applied(middle: &[&str]) -> Vec<String> {
     let mut kinds = tool_turn(middle);
     let step = kinds
         .iter()
         .rposition(|kind| kind == "step_started")
         .unwrap();
-    for (at, kind) in ["steering_queue", "steering_applied", "steering_queue"]
+    for (at, kind) in ["steering_queue", "steering_queue", "steering_applied"]
         .into_iter()
         .enumerate()
     {
@@ -325,8 +325,8 @@ fn closed_and_steered() -> Vec<&'static str> {
         "assistant_message_completed",
         "steering_queue",
         "step_started",
-        "steering_applied",
         "steering_queue",
+        "steering_applied",
         "assistant_message_started",
         "assistant_message_delta",
         "assistant_message_delta",
@@ -355,8 +355,8 @@ fn applied_then_dropped() -> Vec<String> {
         "tool_call_completed",
         "step_started",
         "steering_queue",
-        "steering_applied",
         "steering_queue",
+        "steering_applied",
         "assistant_message_started",
         "assistant_message_delta",
         "tool_call_arguments_delta",

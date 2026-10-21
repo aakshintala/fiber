@@ -118,7 +118,7 @@ fn advance_to(
 fn signed(request: &Request) -> &str {
     assert_eq!(
         request.header("x-fixture-saw"),
-        Some("body_sha256,headers,method,url")
+        Some("body_sha256,headers,method,time,url")
     );
     let signature = request.header("x-fixture-signature").unwrap_or("");
     assert_eq!(signature.len(), 64, "{signature:?}");

@@ -2804,7 +2804,7 @@ fn only_model_request(server: &ProviderServer) -> Request {
     assert_fingerprint(request, "authorization", "Bearer tok-1");
     assert_eq!(
         request.header("x-fixture-saw"),
-        Some("body_sha256,headers,method,url")
+        Some("body_sha256,headers,method,time,url")
     );
     let signature = request.header("x-fixture-signature").unwrap_or("");
     assert!(is_hex64(signature), "{signature:?}");

@@ -1,0 +1,356 @@
+{
+  "claude_global": {
+    "claude-fable-5": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude-fable-5-1": {
+      "body": {
+        "input_tokens": 10
+      },
+      "status": 200
+    },
+    "claude-haiku-4-5@20251001": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude-haiku-5-5": {
+      "body": {
+        "input_tokens": 10
+      },
+      "status": 200
+    },
+    "claude-haiku-5-5@default": {
+      "body": {
+        "input_tokens": 10
+      },
+      "status": 200
+    },
+    "claude-opus-4-5@20251101": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude-opus-4-6": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude-opus-4-7": {
+      "body": {
+        "input_tokens": 13
+      },
+      "status": 200
+    },
+    "claude-opus-4-8": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude-opus-5": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude-opus-5-5": {
+      "body": {
+        "input_tokens": 10
+      },
+      "status": 200
+    },
+    "claude-sonnet-4-5@20250929": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude-sonnet-4-6": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude-sonnet-5": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude-sonnet-5-5": {
+      "body": {
+        "input_tokens": 10
+      },
+      "status": 200
+    }
+  },
+  "gemini_global": {
+    "gemini-2.5-flash": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-2.5-flash-lite": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-2.5-pro": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-3-flash-preview": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-3.1-flash-lite": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-3.1-flash-lite-image": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-3.1-pro-preview": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-3.1-pro-preview-customtools": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-3.5-flash": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-3.5-flash-lite": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-3.6-flash": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-3.7-flash": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-3.8-flash": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini-4-argon": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    }
+  },
+  "locations": {
+    "claude asia-south1": {
+      "error": {
+        "code": 404,
+        "message": "Publisher model `projects/example-project/locations/asia-south1/publishers/anthropic/models/count-tokens` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+        "status": "NOT_FOUND"
+      },
+      "status": 404
+    },
+    "claude europe-west1": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude global on global-aiplatform host": {
+      "status": 404
+    },
+    "claude us-east5": {
+      "body": {
+        "input_tokens": 8
+      },
+      "status": 200
+    },
+    "claude us-east5 on the global host": {
+      "error": {
+        "code": 501,
+        "message": "Operation is not implemented, or supported, or enabled.",
+        "status": "UNIMPLEMENTED"
+      },
+      "status": 501
+    },
+    "gemini 2.5 us-central1": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    },
+    "gemini asia-south1": {
+      "error": {
+        "code": 404,
+        "message": "Publisher model `projects/example-project/locations/asia-south1/publishers/google/models/gemini-3.1-flash-lite` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+        "status": "NOT_FOUND"
+      },
+      "status": 404
+    },
+    "gemini global on global-aiplatform host": {
+      "status": 404
+    },
+    "gemini us-central1": {
+      "error": {
+        "code": 404,
+        "message": "Publisher model `projects/example-project/locations/us-central1/publishers/google/models/gemini-3.1-flash-lite` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+        "status": "NOT_FOUND"
+      },
+      "status": 404
+    },
+    "gemini us-central1 on the global host": {
+      "body": {
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1
+          }
+        ],
+        "totalBillableCharacters": 2,
+        "totalTokens": 1
+      },
+      "status": 200
+    }
+  }
+}

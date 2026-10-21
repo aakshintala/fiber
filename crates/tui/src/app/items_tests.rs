@@ -809,9 +809,14 @@ fn a_resumed_job_opens_from_its_row_again() {
     let lowered = commands(app.items_due(clock.now()));
     ack_all(&mut app, &lowered);
     complete(&mut app, "j_1");
-    // Completed: the row opens nothing.
-    assert_eq!(app.open_serial(serial), Effect::None);
-    // The same job id runs again: the row is clickable and opens.
+    // Completed: the row replays the finished run.
+    let finished = open_serial_of(&mut app, serial);
+    assert_eq!(subscribes(&finished).len(), 1);
+    ack_all(&mut app, &finished);
+    assert!(app.item_open());
+    app.close_item();
+    // The same job id runs again: the row is clickable and opens, and
+    // the replay's held `full` lowers and raises again.
     start_delegate(&mut app, "j_1", DELEGATE_A);
     let resumed = match app.open_serial(serial) {
         Effect::Send(lines) => commands(lines),
@@ -827,8 +832,16 @@ fn a_resumed_job_opens_from_its_row_again() {
         | Effect::OpenFile(_)
         | Effect::ReadImage(_) => panic!("resuming opens"),
     };
-    assert_eq!(subscribes(&resumed).len(), 1);
-    assert_eq!(resumed[0]["args"]["level"], "full");
+    let resumed_subscribes = subscribes(&resumed);
+    let levels: Vec<&str> = resumed_subscribes
+        .iter()
+        .map(|line| {
+            line["args"]["level"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a level"))
+        })
+        .collect();
+    assert_eq!(levels, ["summary", "full"]);
     let view = app.item_view().unwrap_or_else(|| panic!("a view"));
     assert!(view.running);
 }
@@ -867,15 +880,139 @@ fn an_open_view_runs_and_steers_again_after_its_job_restarts() {
 }
 
 #[test]
-fn opening_a_completed_delegate_swaps_but_sends_nothing() {
+fn opening_a_completed_delegate_swaps_and_subscribes() {
     let mut app = home();
     opened(&mut app);
     start_delegate(&mut app, "j_1", DELEGATE_A);
     complete(&mut app, "j_1");
-    assert!(open(&mut app, "j_1").is_empty());
+    // The finished view swaps in and subscribes at `full`: the hub
+    // replays the delegate's transcript into it.
+    let out = open(&mut app, "j_1");
+    let full = subscribes(&out);
+    assert_eq!(full.len(), 1);
+    assert_eq!(full[0]["args"]["level"], "full");
+    assert_eq!(full[0]["session_id"], DELEGATE_A);
     let view = app.item_view().unwrap_or_else(|| panic!("a view"));
     assert!(view.has_transcript);
     assert!(!view.running);
+    ack_all(&mut app, &out);
+    // The replayed fold lands on the swapped screen, not the parent's.
+    app.on_line(other_line(
+        DELEGATE_A,
+        "turn_started",
+        json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "deep"}]}]}),
+    ));
+    assert!(shown(&app).iter().any(|row| row.contains("deep")));
+}
+
+#[test]
+fn a_finished_item_shows_the_outcome_where_the_stop_target_would_be() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    complete(&mut app, "j_1");
+    let out = open(&mut app, "j_1");
+    assert_eq!(subscribes(&out).len(), 1);
+    let view = app.item_view().unwrap_or_else(|| panic!("a view"));
+    assert!(!view.running);
+    assert_eq!(view.word, "completed");
+    assert_eq!(view.glyph, "▣");
+}
+
+#[test]
+fn enter_in_a_finished_item_keeps_the_draft_with_the_finished_notice() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    complete(&mut app, "j_1");
+    let out = open(&mut app, "j_1");
+    assert_eq!(subscribes(&out).len(), 1);
+    // Steering goes nowhere: Enter keeps the draft with the notice.
+    app.draft.set("hello?");
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
+    assert_eq!(app.draft(), "hello?");
+}
+
+#[test]
+fn a_resume_while_open_rewants_full_without_a_second_subscribe() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    complete(&mut app, "j_1");
+    let out = open(&mut app, "j_1");
+    assert_eq!(subscribes(&out).len(), 1);
+    // The resume lands while the replay subscribe is in flight: the
+    // re-want holds its wish instead of sending beside it.
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    assert!(commands(app.items_due(clock.now())).is_empty());
+    assert!(
+        app.items
+            .wants
+            .contains_key(&SessionId(DELEGATE_A.to_owned())),
+        "the resume re-wants the open delegate"
+    );
+    // The in-flight answer settles the wish without another send: the
+    // held level already answers the new run.
+    ack_all(&mut app, &out);
+    assert!(commands(app.items_due(clock.now())).is_empty());
+}
+
+#[test]
+fn closing_a_finished_view_before_its_ack_sends_nothing_further() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    complete(&mut app, "j_1");
+    let out = open(&mut app, "j_1");
+    let id = subscribes(&out)
+        .into_iter()
+        .next()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("an id"));
+    // Closing with the replay subscribe in flight sends nothing: a
+    // finished view leaves no `summary` wish behind.
+    assert_eq!(app.close_item(), None);
+    assert!(!app.item_open());
+    assert!(commands(app.items_due(clock.now())).is_empty());
+    // The late answer settles without touching the closed view.
+    app.on_line(session_accepted(DELEGATE_A, &id));
+    assert!(!app.item_open());
+    assert!(commands(app.items_due(clock.now())).is_empty());
+}
+
+#[test]
+fn opening_a_finished_delegate_with_the_link_down_holds_its_wish() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    tick(&mut app, &clock);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    complete(&mut app, "j_1");
+    app.disconnected();
+    // The open swaps in and holds its wish; nothing goes out.
+    assert!(open(&mut app, "j_1").is_empty());
+    assert!(app.item_open());
+    assert!(
+        app.items
+            .wants
+            .contains_key(&SessionId(DELEGATE_A.to_owned())),
+        "the down link holds the wish"
+    );
+    // The reconciler drops the wish on a down link, as today.
+    assert!(commands(app.items_due(clock.now())).is_empty());
+    assert!(
+        !app.items
+            .wants
+            .contains_key(&SessionId(DELEGATE_A.to_owned())),
+        "the down link drops the wish"
+    );
 }
 
 #[test]
@@ -1103,7 +1240,7 @@ fn a_press_and_release_on_different_serials_opens_nothing() {
 }
 
 #[test]
-fn a_click_on_a_completed_job_serial_opens_nothing() {
+fn a_click_on_a_completed_job_serial_opens_and_subscribes() {
     use crate::app::panel::Spot as PanelSpot;
     let mut app = home();
     opened(&mut app);
@@ -1112,11 +1249,86 @@ fn a_click_on_a_completed_job_serial_opens_nothing() {
     let serial = app
         .serial_of_job(&JobId("j_1".to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
-    assert_eq!(
-        app.on_click(crate::mouse::TargetId::Panel(PanelSpot::Delegate(serial))),
+    let out = match app.on_click(crate::mouse::TargetId::Panel(PanelSpot::Delegate(serial))) {
+        Effect::Send(lines) => commands(lines),
         Effect::None
-    );
-    assert!(!app.item_open());
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_) => panic!("opening sends"),
+    };
+    let full = subscribes(&out);
+    assert_eq!(full.len(), 1);
+    assert_eq!(full[0]["args"]["level"], "full");
+    assert!(app.item_open());
+}
+
+#[test]
+fn enter_on_a_finished_delegate_row_opens_and_subscribes() {
+    use crate::app::panel::Spot as PanelSpot;
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    complete(&mut app, "j_1");
+    let serial = app
+        .serial_of_job(&JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"));
+    // Enter on the focused Delegates-card row is the click's twin: it
+    // opens through the same `open_serial` seam.
+    app.focus = Some(crate::mouse::TargetId::Panel(PanelSpot::Delegate(serial)));
+    let out = match app.on_key(Key::Enter, clock.now()) {
+        Effect::Send(lines) => commands(lines),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_) => panic!("opening sends"),
+    };
+    let full = subscribes(&out);
+    assert_eq!(full.len(), 1);
+    assert_eq!(full[0]["args"]["level"], "full");
+    assert!(app.item_open());
+    ack_all(&mut app, &out);
+    // The replayed fold lands on the swapped screen, not the parent's.
+    app.on_line(other_line(
+        DELEGATE_A,
+        "turn_started",
+        json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "deep"}]}]}),
+    ));
+    assert!(shown(&app).iter().any(|row| row.contains("deep")));
+}
+
+/// Opens `serial`'s view, returning the parsed lines going out.
+fn open_serial_of(app: &mut App, serial: u64) -> Vec<Value> {
+    match app.open_serial(serial) {
+        Effect::Send(lines) => commands(lines),
+        Effect::None => Vec::new(),
+        Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_) => panic!("opening sends or nothing"),
+    }
 }
 
 #[test]
