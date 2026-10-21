@@ -804,3 +804,87 @@ fn prune_keeps_a_held_pinned_copy() {
         "removed"
     );
 }
+
+#[test]
+fn prune_under_a_git_redirect_judges_the_workspace_repository() {
+    let setup = setup();
+    repo(&setup);
+    let old = session(&setup, ROOT, None, 0);
+    // A decoy repository elsewhere, with one old exited session in its own
+    // project and one approved copy.
+    let decoy = setup.root.path().join("decoy");
+    fs::create_dir_all(&decoy).unwrap();
+    git_in_dir(setup.deadline, &decoy, &["init", "--quiet"]);
+    fs::write(decoy.join("file.txt"), "x").unwrap();
+    git_in_dir(setup.deadline, &decoy, &["add", "."]);
+    git_in_dir(
+        setup.deadline,
+        &decoy,
+        &["commit", "--quiet", "-m", "first"],
+    );
+    let decoy_canon = fs::canonicalize(&decoy).unwrap();
+    let decoy_project = log::sessions_dir(&setup.home(), &doors::project(&decoy_canon))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let decoy_session = decoy_project.join("sessions").join("s_00000000000000e5");
+    fs::create_dir_all(decoy_session.join("artifacts")).unwrap();
+    let first = json!({"kind": "session_started", "seq": 0, "payload": {"workspace": decoy_canon}});
+    let last = json!({"kind": "x", "ts": 0});
+    fs::write(
+        decoy_session.join("events.jsonl"),
+        format!("{first}\n{last}\n"),
+    )
+    .unwrap();
+    fs::write(decoy_session.join("artifacts/a_1.txt"), b"0123456789").unwrap();
+    fs::write(decoy_session.join("session.lock"), b"").unwrap();
+    declare_hook(&decoy_canon, "decoy\n");
+    git_in_dir(setup.deadline, &decoy_canon, &["add", "."]);
+    git_in_dir(
+        setup.deadline,
+        &decoy_canon,
+        &["commit", "--quiet", "-m", "hook"],
+    );
+    let approved = approve_in(&setup, &decoy_canon);
+    assert!(
+        approved.status.success(),
+        "fiber approve: {}",
+        text(&approved.stderr)
+    );
+    let decoy_copy = copies(&setup)
+        .into_iter()
+        .find(|name| {
+            fs::read_to_string(
+                setup
+                    .home()
+                    .join("pinned")
+                    .join(name)
+                    .join("scripts/fmt.sh"),
+            )
+            .unwrap()
+                == "decoy\n"
+        })
+        .expect("one decoy copy");
+    // Prune with the git environment redirected at the decoy repository.
+    let mut command = setup.fiber(&["sessions", "prune", "--older-than", "30d", "--yes"]);
+    command.current_dir(setup.workspace());
+    command.env("GIT_DIR", decoy_canon.join(".git"));
+    command.env("GIT_WORK_TREE", &decoy_canon);
+    let output = run_to_exit(setup.deadline, "fiber sessions prune", command);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = text(&output.stdout);
+    assert!(!old.exists(), "the workspace session is gone");
+    assert!(
+        decoy_session.join("events.jsonl").is_file(),
+        "the decoy session stays"
+    );
+    assert!(
+        setup.home().join("pinned").join(&decoy_copy).is_dir(),
+        "the decoy copy stays"
+    );
+    assert_eq!(
+        pinned_lines(&out),
+        ["pinned  skipped: GIT_DIR is set, so git may read another repository"],
+        "{out}"
+    );
+}

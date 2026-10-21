@@ -506,3 +506,128 @@ fn an_old_root_whose_only_child_has_no_workspace_is_skipped_then_listed() {
         ["s_00000000000000a1", "s_00000000000000b2"]
     );
 }
+
+/// A re-run child's own bound: it fires before the parent's wait, so the
+/// two no longer contradict.
+const REDIRECT_CHILD_BUDGET: Duration = Duration::from_secs(20);
+
+/// A parent's wait for a re-run child: inside half of nextest's per-test
+/// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
+const REDIRECT_RERUN_WITHIN: Duration = Duration::from_secs(30);
+
+/// The outer wait around a test that re-runs a child: at least twice the
+/// parent's wait (`docs/testing.md`, "Waits and timeouts").
+const REDIRECT_RERUN_OUTER: Duration = Duration::from_secs(60);
+
+/// Re-run bounds keep their margins: the child's budget is below the
+/// parent's wait, the wait stays inside half of nextest's per-test timeout,
+/// and the outer wrapper is at least twice the wait.
+const _: () = assert!(
+    REDIRECT_CHILD_BUDGET.as_secs() < REDIRECT_RERUN_WITHIN.as_secs()
+        && REDIRECT_RERUN_WITHIN.as_secs() <= 30
+        && REDIRECT_RERUN_OUTER.as_secs() >= 2 * REDIRECT_RERUN_WITHIN.as_secs()
+);
+
+#[test]
+fn a_git_redirect_keeps_selection_scoped_to_the_workspace_project() {
+    if std::env::var("FIBER_CLI_PRUNE_SESSIONS_REDIRECT_CHILD").is_ok() {
+        fakes::within("the child's redirect checks", REDIRECT_CHILD_BUDGET, || {
+            let home =
+                PathBuf::from(std::env::var("FIBER_CLI_PRUNE_SESSIONS_REDIRECT_HOME").unwrap());
+            let workspace = PathBuf::from(
+                std::env::var("FIBER_CLI_PRUNE_SESSIONS_REDIRECT_WORKSPACE").unwrap(),
+            );
+            let selected = select(
+                &home,
+                &log::started_sessions(&home),
+                &workspace,
+                Some(older_than()),
+                false,
+                wall(),
+            );
+            let mut deletes = selected
+                .deletes
+                .iter()
+                .map(|d| d.id.0.clone())
+                .collect::<Vec<_>>();
+            deletes.sort();
+            assert_eq!(deletes, ["s_00000000000000a1"]);
+        });
+        return;
+    }
+    fakes::within(
+        "a_git_redirect_keeps_selection_scoped_to_the_workspace_project",
+        REDIRECT_RERUN_OUTER,
+        || {
+            let root = fakes::TempDir::new("cli-prune-sessions-redirect");
+            let repo = root.path().join("repo");
+            fs::create_dir_all(&repo).unwrap();
+            assert!(
+                Command::new("git")
+                    .args(["init", "-q"])
+                    .arg(&repo)
+                    .stdin(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let decoy = root.path().join("decoy");
+            fs::create_dir_all(&decoy).unwrap();
+            assert!(
+                Command::new("git")
+                    .args(["init", "-q"])
+                    .arg(&decoy)
+                    .stdin(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let workspace = fs::canonicalize(&repo).unwrap();
+            let decoy_canon = fs::canonicalize(&decoy).unwrap();
+            let home = root.path().join("home");
+            fs::create_dir_all(&home).unwrap();
+            let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+            session_in(
+                &sessions.join("s_00000000000000a1"),
+                workspace.to_str().unwrap(),
+                None,
+                old_ts(),
+            );
+            let decoy_sessions = log::sessions_dir(&home, &doors::project(&decoy_canon));
+            session_in(
+                &decoy_sessions.join("s_00000000000000b2"),
+                decoy_canon.to_str().unwrap(),
+                None,
+                old_ts(),
+            );
+            let home_str = home.to_str().unwrap().to_owned();
+            let workspace_str = workspace.to_str().unwrap().to_owned();
+            let decoy_git = decoy_canon.join(".git").to_str().unwrap().to_owned();
+            let decoy_str = decoy_canon.to_str().unwrap().to_owned();
+            let name = module_path!().split_once("::").unwrap().1.to_owned()
+                + "::a_git_redirect_keeps_selection_scoped_to_the_workspace_project";
+            let out = fakes::rerun_prepared(
+                &name,
+                &[
+                    ("FIBER_CLI_PRUNE_SESSIONS_REDIRECT_CHILD", "1"),
+                    ("FIBER_CLI_PRUNE_SESSIONS_REDIRECT_HOME", home_str.as_str()),
+                    (
+                        "FIBER_CLI_PRUNE_SESSIONS_REDIRECT_WORKSPACE",
+                        workspace_str.as_str(),
+                    ),
+                    ("GIT_DIR", decoy_git.as_str()),
+                    ("GIT_WORK_TREE", decoy_str.as_str()),
+                ],
+                REDIRECT_RERUN_WITHIN,
+                |_| {},
+            );
+            assert!(
+                out.status.success(),
+                "selection must stay scoped to the workspace project:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        },
+    );
+}

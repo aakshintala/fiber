@@ -232,6 +232,78 @@ fn project_ignores_a_hostile_git_environment() {
     );
 }
 
+#[test]
+fn project_ignores_worktree_and_index_redirects() {
+    if std::env::var("FIBER_DOORS_PROJECT_ENV_CHILD").is_ok() {
+        fakes::within(
+            "the child's worktree and index checks",
+            CHILD_BUDGET,
+            || {
+                let repo = PathBuf::from(std::env::var("FIBER_DOORS_PROJECT_ENV_REPO").unwrap());
+                let resolved = resolve_project(&repo);
+                let common = fs::canonicalize(repo.join(".git")).unwrap();
+                assert_eq!(resolved.path, common);
+                assert!(resolved.in_repository);
+            },
+        );
+        return;
+    }
+    fakes::within(
+        "project_ignores_worktree_and_index_redirects",
+        RERUN_OUTER,
+        || {
+            let temp = Temp::new();
+            let repo = temp.0.join("repo");
+            fs::create_dir_all(repo.join("docs")).unwrap();
+            assert!(
+                Command::new("git")
+                    .arg("init")
+                    .arg("-q")
+                    .arg(&repo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let decoy = temp.0.join("decoy");
+            fs::create_dir_all(&decoy).unwrap();
+            assert!(
+                Command::new("git")
+                    .arg("init")
+                    .arg("-q")
+                    .arg(&decoy)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let decoy_git = decoy.join(".git").to_str().unwrap().to_owned();
+            let decoy_work = decoy.to_str().unwrap().to_owned();
+            let decoy_index = decoy
+                .join(".git")
+                .join("index")
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let out = fakes::rerun_within(
+                "project_ignores_worktree_and_index_redirects",
+                &[
+                    ("GIT_DIR", decoy_git.as_str()),
+                    ("GIT_WORK_TREE", decoy_work.as_str()),
+                    ("GIT_COMMON_DIR", decoy_git.as_str()),
+                    ("GIT_INDEX_FILE", decoy_index.as_str()),
+                    ("FIBER_DOORS_PROJECT_ENV_CHILD", "1"),
+                    ("FIBER_DOORS_PROJECT_ENV_REPO", repo.to_str().unwrap()),
+                ],
+                RERUN_WITHIN,
+            );
+            assert!(
+                out.status.success(),
+                "project must see past every redirect:\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+        },
+    );
+}
+
 /// The real `git` on the parent's `PATH`: the stub below execs it after
 /// logging the invocation discovery made.
 fn real_git_on_path() -> PathBuf {
@@ -348,11 +420,11 @@ exec "$FIBER_DOORS_SCRUB_REAL_GIT" "$@"
                 "discovery runs git with fsmonitor off:\n{logged}"
             );
             assert!(
-                lines.iter().any(|line| *line == "GIT_OPTIONAL_LOCKS=0"),
+                lines.contains(&"GIT_OPTIONAL_LOCKS=0"),
                 "discovery pins the lock guard:\n{logged}"
             );
             assert!(
-                lines.iter().any(|line| *line == "GIT_TERMINAL_PROMPT=0"),
+                lines.contains(&"GIT_TERMINAL_PROMPT=0"),
                 "discovery pins the prompt guard:\n{logged}"
             );
             for name in [
