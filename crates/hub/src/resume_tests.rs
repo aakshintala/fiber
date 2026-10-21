@@ -2584,7 +2584,8 @@ fn a_full_subscribe_bypasses_a_live_relay_for_an_exited_delegate() {
     let temp = Temp::new();
     temp.delegate_log(parent());
     let running = FakeStarter::bind_and_hold(&temp.dir);
-    let started = crate::Starter::start(&running, &sid(), &temp.workspace(), None, &[], false);
+    let started =
+        crate::Starter::start(&running, &sid(), &temp.workspace(), None, &[], false, None);
     assert!(started.is_ok(), "the delegate binds");
     let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());
