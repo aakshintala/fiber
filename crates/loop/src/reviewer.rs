@@ -2,19 +2,21 @@
 //! a call no earlier step decided is judged by a separate reviewer model.
 
 use std::sync::Arc;
+use std::thread;
 
-use contract::diag::DebugLog;
+use contract::diag::{DebugLog, Observe};
 use contract::events::{
     AskStep, CacheLifetime, DecidedBy, Decision, Escalation, Event, Notice, PermissionResolved,
     ReviewedCall, ReviewerRef, ReviewerUse, RuleOffer, ToolCallCompleted, ToolCallRequested,
 };
-use contract::provider::{CallError, Cost, Input, ModelRequest, Provider, Reply};
+use contract::provider::{CallError, Cost, Input, ModelCall, ModelRequest, Provider, Reply};
 use contract::shapes::Failure;
 use contract::tool::Effects;
 use contract::{ActionId, ErrorCode, RequestId, TurnId};
 
 use crate::before_tool::Prepared;
 use crate::calls::{Asked, Decided};
+use crate::cancel::TurnCancel;
 use crate::{Error, Loop, Model};
 
 mod request;
@@ -179,22 +181,29 @@ fn clean(word: &str) -> String {
 mod tests;
 
 /// One call under review: everything step 7 needs after the stages read it.
-struct UnderReview<'a> {
-    call: &'a ToolCallRequested,
-    id: &'a ActionId,
-    turn: &'a TurnId,
-    prepared: &'a Prepared,
+/// Shared by the serial ask and the batch build, so both judge the same call.
+pub(crate) struct UnderReview<'a> {
+    pub(crate) call: &'a ToolCallRequested,
+    pub(crate) id: &'a ActionId,
+    pub(crate) turn: &'a TurnId,
+    pub(crate) prepared: &'a Prepared,
 }
 
 /// What sends a reviewer request: the reviewer's provider and model, cloned
 /// off the loop so a request borrows nothing while it runs.
-struct ReviewEndpoint {
-    provider: Arc<dyn Provider>,
-    reference: String,
-    cost: Option<Cost>,
-    subscription: bool,
-    cache_lifetime: CacheLifetime,
-    thinking: Option<contract::ThinkingLevel>,
+pub(crate) struct ReviewEndpoint {
+    /// The reviewer's provider: the only handle a stage-1 worker holds.
+    pub(crate) provider: Arc<dyn Provider>,
+    /// The reviewer's model reference, carried on the usage line.
+    pub(crate) reference: String,
+    /// The reviewer's model prices, carried on the usage line.
+    pub(crate) cost: Option<Cost>,
+    /// Whether a subscription serves the reviewer.
+    pub(crate) subscription: bool,
+    /// The prompt-cache lifetime its requests ask for.
+    pub(crate) cache_lifetime: CacheLifetime,
+    /// The thinking level every reviewer request asks for.
+    pub(crate) thinking: Option<contract::ThinkingLevel>,
 }
 
 /// What one full stage (with its one re-ask) said.
@@ -486,65 +495,63 @@ impl Loop {
         }
     }
 
-    /// The reviewer's request: the transcript cut after the call, then its
-    /// effects, then the stage item. Both stages match up to the stage item.
-    /// A rewritten call is judged as the call that will run: its effects
-    /// item names the rewritten call's declared effects and the arguments
-    /// it runs with. The history never changes after a line renders.
-    fn review_conversation(
+    /// The reviewer's conversation: the transcript cut after the call, then
+    /// its effects, then the stage item. Moves the shared cursor past the
+    /// cut; the batch builds through `cut_for` and `stage_conversation`
+    /// instead, chaining a local cursor so the shared one moves once.
+    /// Visible for the batch-build unit test's serial oracle.
+    pub(crate) fn review_conversation(
         &mut self,
         under: &UnderReview<'_>,
         stage: &str,
         note: Option<&str>,
     ) -> (Vec<Input>, Option<usize>) {
-        let cut = self
-            .reviewed
-            .iter()
-            .position(|item| matches!(&item.shown, shown::Shown::Call(call) if call == under.id))
-            .map_or(self.reviewed.len(), |at| at + 1);
+        let cut = cut_for(&self.reviewed, under.id);
         let previous = self.reviewer_sent;
         self.reviewer_sent = Some(cut);
-        let mut conversation: Vec<Input> = self
-            .reviewed
-            .iter()
-            .take(cut)
-            .map(|item| item.input.clone())
-            .collect();
-        let declared = serde_json::to_string(&under.prepared.effects.declared).unwrap_or_default();
-        let workspace = self.workspace_label.clone();
-        // The call stays where it ran: the item after it names it, so the
-        // reviewer never counts on it coming last.
-        let name = &under.call.name;
-        let effects = match &under.prepared.rewritten {
-            Some(changed_by) => {
-                let names = changed_by.join(", ");
-                let arguments =
-                    serde_json::to_string(&under.prepared.arguments).unwrap_or_default();
-                format!(
-                    "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}"
-                )
-            }
-            None => format!(
-                "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nWorkspace root: {workspace}"
-            ),
-        };
-        conversation.push(Input::User {
-            text: effects,
-            images: Vec::new(),
-        });
-        conversation.push(Input::User {
-            text: stage.to_owned(),
-            images: Vec::new(),
-        });
-        if let Some(note) = note {
-            conversation.push(Input::User {
-                text: note.to_owned(),
-                images: Vec::new(),
-            });
-        }
-        (conversation, previous)
+        let item = under_item(under.prepared, &under.call.name, &self.workspace_label);
+        (
+            stage_conversation(&self.reviewed, cut, item, stage, note),
+            previous,
+        )
     }
 
+    /// Builds one first-stage request without moving the shared cursor:
+    /// `sent` is the cursor the build chains from, and `cut` is the value
+    /// the shared cursor holds after it. The batch builds every call's in
+    /// request order over the fixed `reviewed` vec, so the bytes match the
+    /// serial path's; only the provider round trips overlap.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the call under review, the endpoint and prompts, the note, and the chained cursor are one build"
+    )]
+    pub(crate) fn build_stage1(
+        &self,
+        under: &UnderReview<'_>,
+        endpoint: &ReviewEndpoint,
+        shared: &str,
+        stage: &str,
+        note: Option<&str>,
+        sent: Option<usize>,
+    ) -> BuiltStage1 {
+        let cut = cut_for(&self.reviewed, under.id);
+        let item = under_item(under.prepared, &under.call.name, &self.workspace_label);
+        let conversation = stage_conversation(&self.reviewed, cut, item, stage, note);
+        let request = self.review_request(
+            endpoint,
+            shared,
+            conversation,
+            sent,
+            Some(request::FIRST_STAGE_OUTPUT_TOKENS),
+        );
+        BuiltStage1 {
+            request,
+            reviewer_use: ReviewerUse::Stage1 {
+                action_id: under.id.clone(),
+            },
+            cut,
+        }
+    }
     /// Sends one reviewer request and records its usage, marked with what
     /// the reviewer was doing, so the spend ties to the call under review.
     /// A call that ended without a reply writes what it saw, and a reviewer
@@ -563,7 +570,32 @@ impl Loop {
         previous_end: Option<usize>,
         max_output_tokens: Option<u64>,
     ) -> Result<Result<Reply, CallError>, Error> {
-        let request = ModelRequest {
+        let request = self.review_request(
+            endpoint,
+            shared,
+            conversation,
+            previous_end,
+            max_output_tokens,
+        );
+        let call = start_review_call(&endpoint.provider, self.reviewer_observe.as_ref(), &request);
+        let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
+        self.record_review_usage(&reply, endpoint, reviewer, turn)?;
+        Ok(reply)
+    }
+
+    /// One reviewer request's bytes: the shared instructions with the
+    /// person's notes, the stage's conversation, and the cursor the cache
+    /// chain extends from. One builder serves the serial send and every
+    /// batch request, so the two match byte for byte.
+    fn review_request(
+        &self,
+        endpoint: &ReviewEndpoint,
+        shared: &str,
+        conversation: Vec<Input>,
+        previous_end: Option<usize>,
+        max_output_tokens: Option<u64>,
+    ) -> ModelRequest {
+        ModelRequest {
             system_prompt: system_prompt(shared, &self.reviewer_notes),
             tools: Vec::new(),
             thinking: endpoint.thinking,
@@ -575,17 +607,21 @@ impl Loop {
             sent_tools: None,
             max_output_tokens,
             session_dir: self.log.dir().to_path_buf(),
-        };
-        // The reviewer's own factory builds the call at the first attempt,
-        // never the session's: every review stage and the handoff
-        // selection share this one send.
-        let observed = self.reviewer_observe.clone();
-        let call = match observed {
-            Some(observe) => observe(&request, std::num::NonZeroU32::MIN),
-            None => endpoint.provider.call(&request),
-        };
-        let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
-        let (usage, inline) = match &reply {
+        }
+    }
+
+    /// Records one reviewer reply's usage, marked with what the reviewer
+    /// was doing, so the spend ties to the call under review. The serial
+    /// send and the batch write-back share it, so a fanned-out request
+    /// records the same line the serial path would.
+    fn record_review_usage(
+        &mut self,
+        reply: &Result<Reply, CallError>,
+        endpoint: &ReviewEndpoint,
+        reviewer: ReviewerUse,
+        turn: &TurnId,
+    ) -> Result<(), Error> {
+        let (usage, inline) = match reply {
             Ok(reply) => (reply.usage(), reply.cost),
             Err(error) => (error.usage().clone(), None),
         };
@@ -598,8 +634,7 @@ impl Loop {
         );
         recorded.line.reviewer = Some(reviewer);
         let lookup = endpoint.provider.cost_lookup();
-        self.write_usage(recorded, lookup, Some(turn), None)?;
-        Ok(reply)
+        self.write_usage(recorded, lookup, Some(turn), None)
     }
 
     /// A cancelled review completes `cancelled`, not denied: its resolved
@@ -725,6 +760,156 @@ impl Loop {
             )?;
         }
         Ok(())
+    }
+}
+
+/// A first-stage request built for one call: the request itself, what the
+/// reviewer was doing for its usage line, and where `reviewed` cut for it.
+/// `cut` is both the stage-2 rebuild point and the cursor value after it.
+pub(crate) struct BuiltStage1 {
+    /// The request as the serial path would send it.
+    pub(crate) request: ModelRequest,
+    /// What the reviewer was doing, for the usage line.
+    pub(crate) reviewer_use: ReviewerUse,
+    /// Where `reviewed` cut for the call.
+    pub(crate) cut: usize,
+}
+
+/// What a first-stage worker carries across the thread boundary: cloned
+/// `Arc`s and, per spawn, an owned request. No `&mut Loop`, no log handle
+/// and no rules guard cross, so the deciding thread stays the only writer.
+#[derive(Clone)]
+pub(crate) struct Stage1Worker {
+    /// The reviewer's provider: the only handle a worker holds.
+    pub(crate) provider: Arc<dyn Provider>,
+    /// The observer of the reviewer's calls, when one is installed.
+    pub(crate) observe: Option<Observe>,
+    /// The turn's cancel, so a cancelled turn wakes every worker.
+    pub(crate) cancel: Arc<TurnCancel>,
+}
+
+/// Sends prebuilt first-stage requests, one thread each inside a
+/// `thread::scope`, and returns every reply in request order. A worker only
+/// runs its call to its end; the caller records usage and applies verdicts
+/// in order after the join.
+pub(crate) fn fanout_stage1(
+    worker: &Stage1Worker,
+    requests: Vec<ModelRequest>,
+) -> Vec<Result<Reply, CallError>> {
+    thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(requests.len());
+        for request in requests {
+            let worker = worker.clone();
+            handles.push(scope.spawn(
+                #[allow(
+                    clippy::result_large_err,
+                    reason = "the error is the reviewer call's, returned unchanged"
+                )]
+                move || run_stage1(&worker, request),
+            ));
+        }
+        let mut replies = Vec::with_capacity(handles.len());
+        for handle in handles {
+            // A panicking provider is a bug: unwinding carries its panic out
+            // of the scope, as a serial send would unwind the deciding thread.
+            replies.push(match handle.join() {
+                Ok(reply) => reply,
+                Err(payload) => std::panic::resume_unwind(payload),
+            });
+        }
+        replies
+    })
+}
+
+/// Runs one prebuilt first-stage request to its end: the reviewer's own
+/// factory builds the call, and a cancel wakes it. The caller records usage
+/// and applies the verdict.
+#[allow(
+    clippy::result_large_err,
+    reason = "the error is the reviewer call's, returned unchanged"
+)]
+fn run_stage1(worker: &Stage1Worker, request: ModelRequest) -> Result<Reply, CallError> {
+    let call = start_review_call(&worker.provider, worker.observe.as_ref(), &request);
+    crate::cancel::run_cancellable(&worker.cancel, call, &mut |_| {})
+}
+
+/// Where `reviewed` cuts for the call `id`: after its call item, or the end
+/// when the call is not shown.
+fn cut_for(reviewed: &[Reviewed], id: &ActionId) -> usize {
+    reviewed
+        .iter()
+        .position(|item| matches!(&item.shown, Shown::Call(call) if call == id))
+        .map_or(reviewed.len(), |at| at + 1)
+}
+
+/// The "Call under review" item for a call: its declared effects, or its
+/// rewrite, with the workspace root. Both stages share it, so they match up
+/// to the stage item. A rewritten call is judged as the call that will run:
+/// its effects item names the rewritten call's declared effects and the
+/// arguments it runs with.
+fn under_item(prepared: &Prepared, name: &str, workspace: &str) -> Input {
+    // The call stays where it ran: the item after it names it, so the
+    // reviewer never counts on it coming last.
+    let declared = serde_json::to_string(&prepared.effects.declared).unwrap_or_default();
+    let effects = match &prepared.rewritten {
+        Some(changed_by) => {
+            let names = changed_by.join(", ");
+            let arguments = serde_json::to_string(&prepared.arguments).unwrap_or_default();
+            format!(
+                "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}"
+            )
+        }
+        None => format!(
+            "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nWorkspace root: {workspace}"
+        ),
+    };
+    Input::User {
+        text: effects,
+        images: Vec::new(),
+    }
+}
+
+/// One stage's conversation over `reviewed` cut at `cut`: the transcript to
+/// the cut, then the call's effects item, then the stage item and the re-ask
+/// note. Both stages match up to the stage item. The history never changes
+/// after a line renders.
+fn stage_conversation(
+    reviewed: &[Reviewed],
+    cut: usize,
+    item: Input,
+    stage: &str,
+    note: Option<&str>,
+) -> Vec<Input> {
+    let mut conversation: Vec<Input> = reviewed
+        .iter()
+        .take(cut)
+        .map(|item| item.input.clone())
+        .collect();
+    conversation.push(item);
+    conversation.push(Input::User {
+        text: stage.to_owned(),
+        images: Vec::new(),
+    });
+    if let Some(note) = note {
+        conversation.push(Input::User {
+            text: note.to_owned(),
+            images: Vec::new(),
+        });
+    }
+    conversation
+}
+
+/// Starts one reviewer request: the reviewer's own factory builds the call
+/// at the first attempt, never the session's. Every review stage and the
+/// handoff selection share this one start; the caller records usage.
+fn start_review_call(
+    provider: &Arc<dyn Provider>,
+    observe: Option<&Observe>,
+    request: &ModelRequest,
+) -> Box<dyn ModelCall> {
+    match observe {
+        Some(observe) => observe(request, std::num::NonZeroU32::MIN),
+        None => provider.call(request),
     }
 }
 
