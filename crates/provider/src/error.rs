@@ -223,19 +223,33 @@ fn sign_sentence(provider: &str, error: &contract::signing::Error, secrets: &Sec
             "{provider}'s credential() failed: logging in needs a person, and nobody is attached. \
              Run `fiber login {provider}`."
         ),
-        Sign::Credential { code, .. } if *code == ErrorCode::AuthenticationFailed => format!(
-            "{provider}'s credential() failed: the token endpoint rejected the refresh. Run \
-             `fiber login {provider}`."
-        ),
+        Sign::Credential { code, login, .. } if *code == ErrorCode::AuthenticationFailed => {
+            format!(
+                "{provider}'s credential() failed: the token endpoint rejected the refresh.{}",
+                login_advice(provider, *login)
+            )
+        }
         Sign::Credential { code, .. } if *code == ErrorCode::ConnectionFailed => {
             format!("{provider}'s credential() failed: the token endpoint could not be reached.")
         }
-        Sign::Credential { .. } => {
-            format!("{provider}'s credential() failed. Run `fiber login {provider}`.")
-        }
+        Sign::Credential { login, .. } => format!(
+            "{provider}'s credential() failed.{}",
+            login_advice(provider, *login)
+        ),
         // Today's wording, redacted: the interpolated header name can carry
         // a known secret.
         Sign::NotHeaders(_) => secrets.redact(&format!("{provider} could not be signed: {error}")),
+    }
+}
+
+/// The advice to run `fiber login`, for a provider whose data declares
+/// `login`; nothing for any other, whose `fiber login` stores a key its
+/// `credential()` never reads (`docs/errors.md`, "The shape").
+fn login_advice(provider: &str, login: bool) -> String {
+    if login {
+        format!(" Run `fiber login {provider}`.")
+    } else {
+        String::new()
     }
 }
 

@@ -135,7 +135,7 @@ fn callback_login_expires_as_authentication_failed_and_frees_its_port() {
     let deadline = clock.now().checked_add(Duration::from_secs(3)).unwrap();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        tx.send(provider.credential_token(&pair("acme", "default")))
+        tx.send(provider.credential_token(&pair("acme", "default"), None))
             .unwrap_or(());
     });
     advance_login_deadline(&clock, deadline, &ready);
@@ -347,7 +347,7 @@ fn unset_session_refuses_before_any_interactive_side_effect() {
         fakes::within(
             "provider.credential_token",
             fakes::MUST_SUCCEED_WITHIN,
-            move || provider.credential_token(&pair("acme", "other"))
+            move || provider.credential_token(&pair("acme", "other"), None)
         ),
         Err(signing::Error::Unattended { .. })
     ));

@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use config::{Config, ProviderData, Secret};
+use config::{Config, Login, ProviderData, Secret};
 use contract::events::Notice;
 use contract::shapes::Failure;
 use contract::signing::Signer;
@@ -142,23 +142,27 @@ pub(crate) fn session_credential(
                 .registers("credential")
                 .map_err(|e| failed(e.code(), e))? =>
         {
-            lua.credential_token(&pair).map(|_| ()).map_err(|e| {
-                provider::Error::Sign(e).failure(&provider.name, &Secrets::default())
-            })?;
+            lua.credential_token(&pair, provider.login)
+                .map(|_| ())
+                .map_err(|e| {
+                    provider::Error::Sign(e).failure(&provider.name, &Secrets::default())
+                })?;
             None
         }
         _ => Some(key()?),
     };
-    Ok((key, signer(lua, pair)?))
+    Ok((key, signer(lua, pair, provider.login)?))
 }
 
 /// Signs `lua`'s requests; `Some` when it registered `credential` or `sign`.
+/// `login` is the provider data's (`docs/errors.md`, "The shape").
 pub(crate) fn signer(
     lua: Option<&Arc<LuaProvider>>,
     pair: CredentialPair,
+    login: Option<Login>,
 ) -> Result<Option<Arc<dyn Signer>>, Failure> {
     match lua {
-        Some(lua) => lua.signer(pair).map_err(|e| failed(e.code(), e)),
+        Some(lua) => lua.signer(pair, login).map_err(|e| failed(e.code(), e)),
         None => Ok(None),
     }
 }

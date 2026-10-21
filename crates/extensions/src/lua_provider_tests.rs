@@ -119,10 +119,13 @@ fn credentials_is_empty_for_a_signer_without_credentials_even_with_a_cached_toke
     let provider = LuaProvider::new(extension, "p");
 
     let with_credential = provider
-        .signer(CredentialPair {
-            credential: "p".to_owned(),
-            label: "default".to_owned(),
-        })
+        .signer(
+            CredentialPair {
+                credential: "p".to_owned(),
+                label: "default".to_owned(),
+            },
+            None,
+        )
         .unwrap()
         .unwrap();
     let url = "http://127.0.0.1:1/v1/responses".to_owned();
@@ -153,6 +156,7 @@ fn credentials_is_empty_for_a_signer_without_credentials_even_with_a_cached_toke
         },
         credential: false,
         sign: false,
+        login: false,
     };
     assert!(
         without_credential.credentials().is_empty(),

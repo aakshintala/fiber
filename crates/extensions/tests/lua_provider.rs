@@ -17,7 +17,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use common::{Setup, pair, script_provider, write};
-use config::{Secret, store_secret};
+use config::{Login, Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::signing::{SignRequest, Signer};
@@ -889,7 +889,7 @@ fn the_token_rides_before_what_sign_returns_and_sign_sees_it() {
     );
     let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
-        move || provider.signer(pair(provider.name(), "default"))
+        move || provider.signer(pair(provider.name(), "default"), None)
     })
     .unwrap()
     .unwrap();
@@ -912,7 +912,7 @@ fn without_sign_only_the_token_is_sent() {
     let provider = script_provider(&setup, FakeClock::new(), Some(TOKEN), None);
     let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
-        move || provider.signer(pair(provider.name(), "default"))
+        move || provider.signer(pair(provider.name(), "default"), None)
     })
     .unwrap()
     .unwrap();
@@ -933,7 +933,7 @@ fn without_credential_only_what_sign_returns_is_sent() {
     );
     let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
-        move || provider.signer(pair(provider.name(), "default"))
+        move || provider.signer(pair(provider.name(), "default"), None)
     })
     .unwrap()
     .unwrap();
@@ -958,7 +958,7 @@ fn without_credential_or_sign_there_is_no_signer() {
     assert!(
         fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
             let provider = Arc::clone(&provider);
-            move || provider.signer(pair(provider.name(), "default"))
+            move || provider.signer(pair(provider.name(), "default"), None)
         })
         .unwrap()
         .is_none()
@@ -1002,7 +1002,7 @@ fn sign_wins_over_the_token_header_whatever_its_case() {
     );
     let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
-        move || provider.signer(pair(provider.name(), "default"))
+        move || provider.signer(pair(provider.name(), "default"), None)
     })
     .unwrap()
     .unwrap();
@@ -1023,7 +1023,7 @@ fn signer_credentials_returns_the_cached_token_even_when_sign_replaces_authoriza
     );
     let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
-        move || provider.signer(pair(provider.name(), "default"))
+        move || provider.signer(pair(provider.name(), "default"), None)
     })
     .unwrap()
     .unwrap();
@@ -1057,7 +1057,7 @@ fn signer_credentials_is_empty_without_credential() {
     );
     let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
-        move || provider.signer(pair(provider.name(), "default"))
+        move || provider.signer(pair(provider.name(), "default"), None)
     })
     .unwrap()
     .unwrap();
@@ -1074,7 +1074,7 @@ fn a_credential_error_at_send_time_is_credential_failed() {
     let provider = script_provider(&setup, FakeClock::new(), Some("{}"), Some("{}"));
     let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
-        move || provider.signer(pair(provider.name(), "default"))
+        move || provider.signer(pair(provider.name(), "default"), None)
     })
     .unwrap()
     .unwrap();
@@ -1128,7 +1128,7 @@ fn refresh_provider(setup: &Setup, url: &str) -> Arc<LuaProvider> {
 fn sign_error(provider: &Arc<LuaProvider>) -> contract::signing::Error {
     let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(provider);
-        move || provider.signer(pair(provider.name(), "default"))
+        move || provider.signer(pair(provider.name(), "default"), None)
     })
     .unwrap()
     .unwrap();
@@ -1264,7 +1264,7 @@ fn a_credential_error_is_its_own_first_line_with_its_code() {
     );
     let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
-        move || provider.signer(pair(provider.name(), "default"))
+        move || provider.signer(pair(provider.name(), "default"), None)
     })
     .unwrap()
     .unwrap();
@@ -1284,6 +1284,74 @@ fn a_credential_error_is_its_own_first_line_with_its_code() {
     assert_eq!(*code, ErrorCode::CredentialFailed);
     assert!(message.ends_with("refresh failed: body-xyz"), "{message}");
     assert!(!message.starts_with('`'), "{message}");
+}
+
+/// The `login` a failed credential carries out of `provider`, whose data's
+/// `login` is `login`: through its signer, and through `credential_token`
+/// when `token` is set.
+#[track_caller]
+fn carried_login(provider: &Arc<LuaProvider>, login: Option<Login>, token: bool) -> Vec<bool> {
+    let provider = Arc::clone(provider);
+    fakes::within(
+        "a failed credential",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            let pair = pair(provider.name(), "default");
+            let signer = provider.signer(pair.clone(), login).unwrap().unwrap();
+            let signed = signer.sign(&SignRequest {
+                method: "POST",
+                url: "http://127.0.0.1:1/v1/responses",
+                headers: &[],
+                body: b"{}",
+            });
+            let mut errors = vec![signed.unwrap_err()];
+            if token {
+                errors.push(provider.credential_token(&pair, login).unwrap_err());
+            }
+            errors
+                .into_iter()
+                .map(|error| match error {
+                    contract::signing::Error::Credential { login, .. } => login,
+                    contract::signing::Error::Failed(_)
+                    | contract::signing::Error::NotHeaders(_)
+                    | contract::signing::Error::Unattended { .. }
+                    | contract::signing::Error::LoginTimedOut { .. } => {
+                        panic!("expected a credential error: {error:?}")
+                    }
+                })
+                .collect()
+        },
+    )
+}
+
+#[test]
+fn a_failed_credential_carries_whether_the_provider_s_data_declares_login() {
+    let failing = Setup::new();
+    let failing = script_provider(
+        &failing,
+        FakeClock::new(),
+        Some("error(\"refresh failed\")"),
+        None,
+    );
+    // A header Fiber builds itself fails the sign after `credential()`
+    // succeeded.
+    let clashing = Setup::new();
+    let clashing = script_provider(
+        &clashing,
+        FakeClock::new(),
+        Some("{ token = \"t\", expires_at = 4102444800, headers = { authorization = \"x\" } }"),
+        None,
+    );
+    assert_eq!(carried_login(&failing, None, true), [false, false]);
+    assert_eq!(
+        carried_login(&failing, Some(Login::Browser), true),
+        [true, true]
+    );
+    assert_eq!(carried_login(&clashing, None, false), [false]);
+    assert_eq!(
+        carried_login(&clashing, Some(Login::Browser), false),
+        [true]
+    );
 }
 
 #[test]

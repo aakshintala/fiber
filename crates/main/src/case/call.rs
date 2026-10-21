@@ -112,7 +112,13 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
                 let worker = match std::thread::Builder::new()
                     .name("fiber-case-call".to_owned())
                     .spawn(move || {
-                        let result = invoke(&owned_provider, &mut owned_pair, &owned_home, ready);
+                        let result = invoke(
+                            &owned_provider,
+                            &mut owned_pair,
+                            data.login,
+                            &owned_home,
+                            ready,
+                        );
                         drop(sent.send((result, owned_pair)));
                     }) {
                     Ok(worker) => worker,
@@ -182,6 +188,7 @@ const CALL_WAIT: Duration = super::run::UNTIL_WAIT;
 fn invoke(
     provider: &Arc<extensions::LuaProvider>,
     pair: &mut extensions::CredentialPair,
+    login: Option<config::Login>,
     home: &Path,
     ready: Ready,
 ) -> Result<Value, Value> {
@@ -235,7 +242,9 @@ fn invoke(
             url,
             headers,
         } => {
-            let signer = provider.signer(pair.clone()).map_err(extension_error)?;
+            let signer = provider
+                .signer(pair.clone(), login)
+                .map_err(extension_error)?;
             let Some(signer) = signer else {
                 return Ok(json!({}));
             };

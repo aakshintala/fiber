@@ -901,7 +901,7 @@ fn provider_purposes_record_once_per_attempt() {
     let token = fakes::within("credential_token", fakes::MUST_SUCCEED_WITHIN, {
         let credentials = Arc::clone(&credentials);
         let pair = pair.clone();
-        move || credentials.credential_token(&pair)
+        move || credentials.credential_token(&pair, None)
     });
     assert!(token.is_ok(), "the stored credential refresh succeeds");
     let cost = fakes::within("models.cost", fakes::MUST_SUCCEED_WITHIN, {
@@ -1733,7 +1733,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
                 };
                 fakes::within("credential_token", fakes::MUST_SUCCEED_WITHIN, {
                     let started = Arc::clone(&started);
-                    move || started.credential_token(&pair)
+                    move || started.credential_token(&pair, None)
                 })
                 .expect("fresh credential() succeeds");
             }

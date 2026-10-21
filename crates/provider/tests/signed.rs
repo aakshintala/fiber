@@ -43,6 +43,7 @@ impl Signer for Refuses {
         Err(contract::signing::Error::Credential {
             code: self.code.clone(),
             message: "the token refresh was rejected".into(),
+            login: false,
         })
     }
 }
@@ -134,6 +135,7 @@ fn a_credential_error_displays_its_message_alone() {
     let error = contract::signing::Error::Credential {
         code: ErrorCode::AuthenticationFailed,
         message: "the token refresh was rejected".into(),
+        login: true,
     };
     assert_eq!(error.to_string(), "the token refresh was rejected");
 }
@@ -194,6 +196,7 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
             SignError::Credential {
                 code: ErrorCode::CredentialFailed,
                 message: "init.lua:3: boom".into(),
+                login: true,
             },
             ErrorCode::CredentialFailed,
             "acme's credential() failed. Run `fiber login acme`.",
@@ -204,6 +207,7 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
             SignError::Credential {
                 code: ErrorCode::QuotaExceeded,
                 message: "init.lua:3: boom".into(),
+                login: true,
             },
             ErrorCode::QuotaExceeded,
             "acme's credential() failed. Run `fiber login acme`.",
@@ -214,6 +218,7 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
             SignError::Credential {
                 code: ErrorCode::AuthenticationFailed,
                 message: "init.lua:3: boom".into(),
+                login: true,
             },
             ErrorCode::AuthenticationFailed,
             "acme's credential() failed: the token endpoint rejected the refresh. Run `fiber login \
@@ -244,6 +249,7 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
             SignError::Credential {
                 code: ErrorCode::ConnectionFailed,
                 message: "init.lua:3: boom".into(),
+                login: true,
             },
             ErrorCode::ConnectionFailed,
             "acme's credential() failed: the token endpoint could not be reached.",
@@ -281,6 +287,53 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
     }
 }
 
+#[test]
+fn a_failed_credential_advises_fiber_login_only_for_a_provider_whose_data_declares_login() {
+    let remedy = "acme credential: set ACME_TOKEN or name a profile";
+    let cases: &[(&str, ErrorCode, bool, &str)] = &[
+        (
+            "failed, logs in",
+            ErrorCode::CredentialFailed,
+            true,
+            "acme's credential() failed. Run `fiber login acme`.",
+        ),
+        (
+            "failed, no login",
+            ErrorCode::CredentialFailed,
+            false,
+            "acme's credential() failed.",
+        ),
+        (
+            "rejected refresh, logs in",
+            ErrorCode::AuthenticationFailed,
+            true,
+            "acme's credential() failed: the token endpoint rejected the refresh. Run `fiber login \
+             acme`.",
+        ),
+        (
+            "rejected refresh, no login",
+            ErrorCode::AuthenticationFailed,
+            false,
+            "acme's credential() failed: the token endpoint rejected the refresh.",
+        ),
+    ];
+    for (name, code, login, message) in cases {
+        let server = ProviderServer::start([Response::status(500, "{}")]).unwrap();
+        let error = contract::signing::Error::Credential {
+            code: code.clone(),
+            message: remedy.into(),
+            login: *login,
+        };
+        let endpoint = endpoint("acme", &server, Arc::new(Failing(error)));
+        let (failure, _) = failed(Box::new(Responses::new(endpoint).request(&request())));
+        assert_eq!(failure.code, *code, "{name}");
+        assert_eq!(failure.message.as_str(), *message, "{name}");
+        // The provider's own first line still names its remedy.
+        let said = failure.provider.unwrap();
+        assert_eq!(said.message.as_str(), remedy, "{name}");
+    }
+}
+
 /// Adds the account-id header a codex `credential()` returns.
 struct AccountId;
 
@@ -314,6 +367,7 @@ impl Signer for Leaking {
         Err(contract::signing::Error::Credential {
             code: ErrorCode::CredentialFailed,
             message: "saw acct_secret".into(),
+            login: true,
         })
     }
 
