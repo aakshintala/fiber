@@ -497,6 +497,21 @@ impl crate::reload::State {
     }
 }
 
+/// The `mcp_servers` answer's reader with the startup's settled failures
+/// carried alongside, so a query served before the startup commit wrote
+/// their lines can read the settled rows. (The fold does not consult the
+/// seed yet.)
+fn servers_refresh_seeded(
+    _seed: HashMap<String, contract::events::McpServerFailed>,
+    sources: config::Sources,
+    servers: Arc<mcp::Servers>,
+    log: std::sync::Weak<log::Log>,
+    clock: Arc<dyn contract::clock::Clock>,
+    waiting: Arc<std::sync::Mutex<HashMap<String, Option<String>>>>,
+) -> doors::ServersRefresh {
+    servers_refresh(sources, servers, log, clock, waiting)
+}
+
 /// Reads the `mcp_servers` answer from the tools answer's rows: one row
 /// per configured server, in configuration order, folding the session's
 /// own log so a mid-session death reads failed exactly as the startup

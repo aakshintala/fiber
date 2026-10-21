@@ -270,6 +270,63 @@ fn a_ready_after_a_failure_clears_the_failure() {
 }
 
 #[test]
+fn a_settled_failure_reads_needs_login_before_its_line_is_written() {
+    // The startup settles every server before the door's commit writes
+    // their failure lines, and the door serves queries from before that
+    // commit: a query in the gap reads the settled row, never the
+    // `connecting` of a start still in flight. The seed carries the
+    // settled failure the commit is about to write (`docs/mcp.md`,
+    // "Servers, their state and the per-server commands").
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"remote": {"url": "https://example.com/mcp"}}}}));
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let sessions = setup.rig.root.path().join("sessions");
+    let log = std::sync::Arc::new(
+        log::Log::create(
+            &sessions,
+            contract::SessionId("s_seed".into()),
+            clock.clone(),
+        )
+        .expect("the log opens"),
+    );
+    // No failure line yet: the startup commit has not run.
+    let servers = empty_servers(&setup.rig, &clock);
+    let waiting = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut seed = std::collections::HashMap::new();
+    seed.insert(
+        "remote".to_owned(),
+        contract::events::McpServerFailed {
+            server: "remote".into(),
+            reason: contract::events::ServerFailure::NotLoggedIn,
+            will_restart: false,
+            error: contract::shapes::Failure {
+                code: contract::ErrorCode::McpServerUnavailable,
+                message: "The MCP server `remote` failed to start: it needs a login.".into(),
+                retry_after_ms: None,
+                provider: None,
+            },
+        },
+    );
+    let refresh = super::servers_refresh_seeded(
+        seed,
+        sources_of(&setup.rig),
+        servers.clone(),
+        std::sync::Arc::downgrade(&log),
+        clock,
+        waiting,
+    );
+    let rows = refresh(Vec::new()).expect("the refresh reads");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "remote");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::NeedsLogin,
+        "{rows:?}"
+    );
+    servers.stop();
+}
+
+#[test]
 fn a_persons_server_becomes_a_spec_with_defaults() {
     let setup = Setup::new();
     setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
