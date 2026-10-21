@@ -1,0 +1,111 @@
+{
+  "body": {
+    "error": {
+      "code": 400,
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.BadRequest",
+          "fieldViolations": [
+            {
+              "description": "Invalid JSON payload received. Unknown name \"$defs\" at 'tools[0].function_declarations[0].parameters': Cannot find field.",
+              "field": "tools[0].function_declarations[0].parameters"
+            },
+            {
+              "description": "Invalid JSON payload received. Unknown name \"$ref\" at 'tools[0].function_declarations[0].parameters.properties[1].value': Cannot find field.",
+              "field": "tools[0].function_declarations[0].parameters.properties[1].value"
+            }
+          ]
+        }
+      ],
+      "message": "Invalid JSON payload received. Unknown name \"$defs\" at 'tools[0].function_declarations[0].parameters': Cannot find field.\nInvalid JSON payload received. Unknown name \"$ref\" at 'tools[0].function_declarations[0].parameters.properties[1].value': Cannot find field.",
+      "status": "INVALID_ARGUMENT"
+    }
+  },
+  "cost": 0.0,
+  "headers": {
+    "alt-svc": null,
+    "connection": null,
+    "content-length": null,
+    "content-type": "text/event-stream",
+    "date": null,
+    "server": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/google/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse",
+  "request": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Weather in Paris in celsius, today only?"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "generationConfig": {
+      "maxOutputTokens": 256,
+      "thinkingConfig": {
+        "includeThoughts": true
+      }
+    },
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "You are terse."
+        }
+      ]
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "Weather for a city.",
+            "name": "get_weather",
+            "parameters": {
+              "$defs": {
+                "unit": {
+                  "enum": [
+                    "c",
+                    "f"
+                  ],
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "days": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                }
+              },
+              "required": [
+                "city",
+                "unit",
+                "days"
+              ],
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "status": 400,
+  "usage": {}
+}

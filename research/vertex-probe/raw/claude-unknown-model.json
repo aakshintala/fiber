@@ -1,0 +1,59 @@
+{
+  "body": [
+    {
+      "error": {
+        "code": 404,
+        "message": "Publisher model `projects/example-project/locations/global/publishers/anthropic/models/claude-no-such-model@20990101` was not found or your project does not have access to it. Ensure you are using a valid model name and that the model is available in the specified region. For more information, see: https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations.",
+        "status": "NOT_FOUND"
+      }
+    }
+  ],
+  "cost": 0.0,
+  "headers": {
+    "accept-ranges": null,
+    "alt-svc": null,
+    "connection": null,
+    "content-type": "application/json; charset=UTF-8",
+    "date": null,
+    "server": null,
+    "transfer-encoding": null,
+    "vary": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null
+  },
+  "path": "/v1/projects/example-project/locations/global/publishers/anthropic/models/claude-no-such-model@20990101:streamRawPredict",
+  "request": {
+    "anthropic_version": "vertex-2023-10-16",
+    "max_tokens": 4,
+    "messages": [
+      {
+        "content": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "hi",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "stream": true,
+    "system": [
+      {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "text": "You are terse.",
+        "type": "text"
+      }
+    ],
+    "tool_choice": {
+      "type": "auto"
+    }
+  },
+  "status": 404,
+  "usage": {}
+}

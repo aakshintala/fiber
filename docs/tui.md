@@ -552,7 +552,11 @@ a click on it returns too. The views are:
   `error`. The input box's hint reads "steering goes to ◆ <description>",
   dim. A delegate that has not bound its socket yet answers
   `session_not_found`; while its parent lists it running, the terminal asks
-  again every 500 ms.
+  again every 500 ms. A delegate or job that has finished opens the same
+  view read-only: its status row shows the outcome (`completed`, `failed`
+  or `cancelled`) where the stop target would be, the transcript is the
+  replay of its log, and Enter keeps the finished notice instead of
+  steering.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box sends `job_input` to type into it as raw keys, as `jobs write`
   does for the model, so the person can finish an interactive step the model

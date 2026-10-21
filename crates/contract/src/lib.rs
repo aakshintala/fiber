@@ -42,6 +42,7 @@ pub mod sessions;
 pub mod shapes;
 pub mod signing;
 pub mod skills;
+pub mod steering;
 pub mod tool;
 
 pub use codes::ErrorCode;

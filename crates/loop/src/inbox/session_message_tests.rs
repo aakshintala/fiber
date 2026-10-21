@@ -22,7 +22,7 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{Decision, TurnOutcome};
-use contract::inbox::{Ack, Delivery, SessionMessage};
+use contract::inbox::{Ack, Delivery, Message, SessionMessage};
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::repository::{Decided, RepositoryCode, Unapproved};
 use contract::rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};
@@ -1173,5 +1173,30 @@ fn a_question_wait_refuses_a_message_sent_just_after_its_last_idle_check() {
     assert!(outcome.unwrap().is_none());
     assert!(refused.load(Ordering::SeqCst));
     assert!(looped.idle_left);
+    world.looped = Some(looped);
+}
+
+#[test]
+fn a_session_message_queued_as_a_steer_keeps_the_session_from_idle() {
+    let mut world = World::new(Vec::new(), Vec::new());
+    let mut looped = world.looped.take().unwrap();
+    // Only the first disjunct holds: one session steer in `queued`, no
+    // steering session, nothing deferred, nothing in the input.
+    looped.queued.push_back(crate::jobs::Queued::Steer(
+        Message {
+            content: vec![ContentPart::Text { text: TEXT.into() }],
+            sender: From {
+                origin: Origin::Session {
+                    from_session_id: contract::SessionId("s_other".into()),
+                },
+                command_id: Some(CommandId(COMMAND.into())),
+            },
+        },
+        crate::before_message::Hooked::default(),
+    ));
+    assert!(
+        looped.holds_message(),
+        "a queued session steer alone waits to join a turn"
+    );
     world.looped = Some(looped);
 }

@@ -93,7 +93,8 @@ fn trim_model(model: &Value) -> Value {
     Value::Object(kept)
 }
 
-/// The six source keys and, per model, only the fields `generate` reads.
+/// Each package's source key and, per model, only the fields `generate`
+/// reads.
 /// Err when a source key is missing or not an object.
 pub(crate) fn trim(catalog: &Value) -> Result<Value, String> {
     let mut trimmed = Map::new();
