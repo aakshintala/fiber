@@ -234,10 +234,10 @@ jobs:
       matrix:
         runner: [ubuntu-24.04]
     runs-on: ${{ matrix.runner }}
-    # Warm median 4 min; the slowest passing run of the last 25, a window that
-    # holds the cache-eviction runs, took 9 min; the bound is twice that
+    # Cold 16m27s with the 1.99.1 toolchain (run 39564649711 on this PR,
+    # which missed every cache); the bound is twice that, rounded up
     # (docs/ci.md, "Job time limits").
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps: &test-steps
@@ -360,9 +360,10 @@ jobs:
       matrix:
         runner: [ubuntu-24.04-arm, macos-26]
     runs-on: ${{ matrix.runner }}
-    # Warm medians: Linux 4 min, macOS 7 min. The slowest passing run of the last
-    # 25 took 12 min on macOS; the bound is twice that (docs/ci.md, "Job time limits").
-    timeout-minutes: ${{ matrix.runner == 'macos-26' && 25 || 20 }}
+    # Cold with the 1.99.1 toolchain (run 39564649711 on this PR, which
+    # missed every cache): Linux arm64 14m46s; macOS 30m38s. Each bound is
+    # twice its cold figure, rounded up (docs/ci.md, "Job time limits").
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 62 || 30 }}
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps: *test-steps
