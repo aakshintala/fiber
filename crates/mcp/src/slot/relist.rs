@@ -1,9 +1,5 @@
-//! The running-server re-list behind its own module boundary, so
-//! `slot.rs` stays under the size guideline: a fresh `tools/list`
-//! (`prompts/list` only for the cache write) against the running server,
-//! returning declare-ready lists and touching nothing. Identical shapes:
-//! [`Slot::relist`](super::Slot) delegates here, which the sync boundary
-//! calls.
+//! The running-server re-list: a fresh `tools/list` against the running
+//! server, returning declare-ready lists and touching nothing.
 
 use std::sync::Arc;
 
@@ -32,17 +28,10 @@ pub(crate) enum Relisted {
     },
 }
 
-/// A fresh `tools/list` (`prompts/list` only for the cache write)
-/// against the running server, under the slot lease, bounded by the
-/// spec's `startup_timeout`, the same bound as the handshake's listing
-/// it repeats. Returns declare-ready lists and touches nothing: the
-/// caller stages the outcome. Any transport failure (a timeout, a
-/// death mid-reload, an expiry, or a `tools/list` that errors) signals
-/// the replace path, carrying the death outcome the shared path
-/// already yields, built here without moving the slot: dead, expired,
-/// wedged (timeout), and gone servers all return the replace path
-/// with no state change. The prompt payload feeds the cache write
-/// only, never the session.
+/// Re-lists the running server under the slot lease, bounded by the spec's
+/// `startup_timeout`: installs nothing — the caller stages the outcome,
+/// and the prompt payload feeds the cache write only — and any transport
+/// failure signals the replace path instead.
 pub(super) fn relist(slot: &Slot) -> Relisted {
     // The lease, held across the RPCs as `serve` holds it across a
     // launch: the edge against a concurrent serve or stop.

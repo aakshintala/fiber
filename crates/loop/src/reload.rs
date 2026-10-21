@@ -261,16 +261,27 @@ impl Loop {
         (self.tools, self.replaced) = crate::calls::register(prepared.tools);
         self.hooks = prepared.hooks;
         // New servers' prompts join the `/` list; every startup row stays.
-        // Their sources join the fetch too: the new rows route to the
-        // carried fetch, so an appended row answers through the same
-        // path as a startup row, while every startup tag keeps its own.
+        // Their sources join the fetch too: the carried tags route to the
+        // carried fetch, so a new row answers through the same path as a
+        // startup row, while every other tag keeps its own. A replaced
+        // row keeps its metadata and is not appended again, but its tag
+        // still routes to the replacement source, so a kept `/name` row
+        // answers through the new slot.
         let mut sync = prepared.server_sync;
-        if let Some((mut rows, extra)) = sync.new_prompts.take()
+        if let Some((rows, extra)) = sync.new_prompts.take()
             && !rows.is_empty()
             && let Some(prompts) = self.server_prompts.as_mut()
         {
             let tags: HashSet<String> = rows.iter().map(|row| row.tag.clone()).collect();
-            prompts.rows.append(&mut rows);
+            for row in rows {
+                if !prompts
+                    .rows
+                    .iter()
+                    .any(|kept| kept.tag == row.tag && kept.name == row.name)
+                {
+                    prompts.rows.push(row);
+                }
+            }
             let old = Arc::clone(&prompts.fetch);
             prompts.fetch = Arc::new(move |server, prompt, text, cancel| {
                 if tags.contains(server) {

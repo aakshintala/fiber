@@ -125,20 +125,11 @@ fn install_failed(
     }
 }
 
-/// Commits the staged sync: stops and removes old slots, installs the new
-/// ones, writes caches, and declares. Only once every required shadow start
-/// has succeeded does the install run (stop/remove old slots, install the
-/// new ones, write caches, declare), so no two slots for one name ever serve
-/// at once and no stale spec survives.
-///
-/// The install itself stages nothing and cannot fail: a keep installs its
-/// staged re-list only while its slot is still live — the install answers
-/// whether it landed and the commit writes the cache only then — so a keep
-/// that died racing the commit keeps its slot and cache as the stage left
-/// them, its staged tools still declare, and the next call restarts it.
-/// Failing there instead would return an error after earlier rows already
-/// installed slots or wrote caches, changing what the plan's change-nothing
-/// rule keeps.
+/// Commits the staged sync: the install runs only after every required
+/// shadow start has succeeded, so no two slots for one name ever serve
+/// at once — and the install itself cannot fail, so a keep that died
+/// racing the commit still declares its staged tools while its cache
+/// stays as the stage left it.
 pub fn commit_sync(
     staged: super::stage::StagedSync,
     servers: &Servers,
@@ -156,13 +147,8 @@ pub fn commit_sync(
         },
         prompt_sources: Prompts::default(),
     };
-    // The install runs now that every required shadow start has
-    // succeeded: stop/remove old slots, install the new ones, write
-    // caches, declare.
     let mut all_sources: Vec<PromptSource> = Vec::new();
-    let mut rows = staged.rows;
-    while !rows.is_empty() {
-        let row = rows.remove(0);
+    for row in staged.rows {
         match row {
             StagedRow::Keep { spec, listed, used } => {
                 let name = spec.name.clone();

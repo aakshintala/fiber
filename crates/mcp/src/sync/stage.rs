@@ -1,7 +1,5 @@
 //! The reload's staging: re-list keeps, shadow-start replacements and
-//! starts, without touching the live slots or the cache files. Required
-//! rows already come first from [`classify`](super::classify_sync), so a
-//! required failure returns before any non-required row runs.
+//! starts, without touching the live slots or the cache files.
 
 use std::sync::Arc;
 
@@ -143,14 +141,10 @@ fn stage_shadow(
     }
 }
 
-/// Stages the classified rows without touching the live slots or the cache
-/// files: kept servers re-list in place with staged installs, replacements
-/// and starts shadow-start first. Required rows already come first from
-/// [`classify`](super::classify_sync), so a required failure returns before
-/// any non-required row runs. On a required shadow-start failure the shadows
-/// are stopped, the staged outcomes dropped, and the start's failure
-/// propagates: the old slots keep serving and the old caches stay
-/// byte-identical.
+/// Stages the classified rows: required rows come first, so a required
+/// failure returns before any non-required row runs — and the staged
+/// outcomes are dropped, so the old slots keep serving and the old
+/// caches stay byte-identical.
 ///
 pub fn stage_sync(
     rows: Vec<SyncRow>,

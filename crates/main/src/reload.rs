@@ -402,12 +402,15 @@ impl State {
                 ready,
             )
         };
-        // New prompt sources join the `/` list when their server had no
-        // row yet (started, newly added, or approved in-session); every
-        // row the session already lists stays, and kept servers refresh
-        // the cache file only. The baseline is the session's current
-        // rows — startup plus every earlier reload's additions — so a
-        // second reload keeps the first reload's rows for kept servers.
+        // Every shadow source joins the carried rows: a started
+        // server's rows are new, and a replaced server's rows ride
+        // along so `loop` routes those tags to the replacement source
+        // — a kept `/name` row keeps its metadata but answers through
+        // the new slot. Every row the session already lists stays, and
+        // kept servers refresh the cache file only. The baseline is the
+        // session's current rows — startup plus every earlier reload's
+        // additions — so a second reload keeps the first reload's rows
+        // for kept servers.
         let baseline = self
             .prompt_rows
             .lock()
@@ -415,17 +418,20 @@ impl State {
             .clone();
         let mut new_prompts = Vec::new();
         if let Some(synced) = &synced {
-            for prompt in synced.prompt_sources.commands() {
-                if !baseline.iter().any(|row| row.tag == prompt.tag) {
-                    new_prompts.push(prompt);
-                }
-            }
+            new_prompts.extend(synced.prompt_sources.commands());
         }
         // The carried sources answer the new rows through the same path
-        // as a startup row: `loop` routes the new tags to the fetch the
-        // sync bundles with the rows below.
+        // as a startup row: `loop` routes the carried tags to the fetch
+        // the sync bundles with the rows below.
         let mut prompt_rows = baseline;
-        prompt_rows.extend(new_prompts.clone());
+        for prompt in &new_prompts {
+            if !prompt_rows
+                .iter()
+                .any(|row| row.tag == prompt.tag && row.name == prompt.name)
+            {
+                prompt_rows.push(prompt.clone());
+            }
+        }
         let listed = r#loop::commands(
             &inputs,
             &self.sources.workspace,
@@ -531,14 +537,23 @@ impl State {
         let carried_prompts = new_prompts.clone();
         let installed = Box::new(move || {
             // The session's current rows grow by this reload's additions,
-            // so the next preparation rebuilds from them: prepare already
-            // filtered the carried rows against this same baseline.
+            // so the next preparation rebuilds from them: rows the session
+            // already lists stay, and only new names are appended, while
+            // the fetch below still routes every carried tag — including
+            // replaced ones — to the replacement source.
             {
                 let mut rows = shared
                     .prompt_rows
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                rows.extend(carried_prompts);
+                for prompt in carried_prompts {
+                    if !rows
+                        .iter()
+                        .any(|row| row.tag == prompt.tag && row.name == prompt.name)
+                    {
+                        rows.push(prompt);
+                    }
+                }
             }
             extensions.emit_to(Arc::new(log::WeakEmit::new(&shared.log)));
             extensions.drive_to(shared.drive.clone());

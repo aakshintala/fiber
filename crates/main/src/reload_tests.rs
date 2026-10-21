@@ -665,15 +665,16 @@ fn manifest(name: &str) -> serde_json::Value {
     json!({"name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1})
 }
 
-/// Approves the declared extension `name` through the public store API.
-fn approve(fixture: &Fixture, name: &str) {
+/// Approves the declared `kind` item `name`, as an in-session `fiber approve`
+/// would: the next preparation reads the approval fresh.
+fn approve(fixture: &Fixture, kind: contract::events::OfferedKind, name: &str) {
     let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let items =
         extensions::declared_items(&fixture.rig.workspace, &*clock).expect("declared items");
     let found = items
         .into_iter()
-        .find(|item| item.kind == contract::events::OfferedKind::Extension && item.name == name)
-        .expect("the declared extension");
+        .find(|item| item.kind == kind && item.name == name)
+        .expect("the declared item");
     let mut index = extensions::Index::load(&fixture.rig.home);
     let digest = extensions::hash(&mut index, &found).expect("the content hash");
     let store = extensions::Store::new(
@@ -700,30 +701,6 @@ fn write_repo_config(fixture: &Fixture, servers: &serde_json::Value) {
     .unwrap();
 }
 
-/// Approves the repository's declared MCP server `name`, as an in-session
-/// `fiber approve` would: the next preparation reads the approval fresh.
-fn approve_repo_server(fixture: &Fixture, name: &str) {
-    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let found = extensions::declared_items(&fixture.rig.workspace, &*clock)
-        .expect("declared items")
-        .into_iter()
-        .find(|item| item.kind == contract::events::OfferedKind::McpServer && item.name == name)
-        .expect("the declared repository server");
-    let mut index = extensions::Index::load(&fixture.rig.home);
-    let digest = extensions::hash(&mut index, &found).expect("the content hash");
-    let store = extensions::Store::new(
-        &fixture.rig.home,
-        &fixture.state.sources.project,
-        std::sync::Arc::clone(&clock),
-    )
-    .fetching(extensions::Fetch::new(
-        extensions::Origin::github(),
-        env!("CARGO_PKG_VERSION"),
-        clock,
-    ));
-    store.approve(&found, &digest).expect("the approval");
-}
-
 #[test]
 fn reload_lists_an_approved_repository_package() {
     let fixture = Fixture::new();
@@ -736,7 +713,11 @@ fn reload_lists_an_approved_repository_package() {
             false,
         )],
     );
-    approve(&fixture, "fiber.test/lint");
+    approve(
+        &fixture,
+        contract::events::OfferedKind::Extension,
+        "fiber.test/lint",
+    );
     let prepared = fixture.prepare();
     let listed = prepared
         .extensions
@@ -750,7 +731,7 @@ fn reload_lists_an_approved_repository_package() {
 fn reload_lists_a_repository_package_disabled_in_configuration() {
     let fixture = Fixture::new();
     declare_pkgs(&fixture.rig, &[("pkg", manifest("x"), "-- entry\n", false)]);
-    approve(&fixture, "x");
+    approve(&fixture, contract::events::OfferedKind::Extension, "x");
     // The `enabled` gate is personal: an approved repository copy loads
     // even when configuration disables the name.
     fixture
@@ -779,7 +760,11 @@ fn reload_rejects_a_missing_required_package_and_keeps_current() {
             true,
         )],
     );
-    approve(&fixture, "fiber.test/need");
+    approve(
+        &fixture,
+        contract::events::OfferedKind::Extension,
+        "fiber.test/need",
+    );
     let old = fixture.state.current.get();
     let state = fixture.state.clone();
     let rejected = fakes::within("required reload", fakes::MUST_SUCCEED_WITHIN, move || {
@@ -815,7 +800,11 @@ fn the_late_preparer_drops_written_notices_and_keeps_new_ones() {
             false,
         )],
     );
-    approve(&fixture, "fiber.test/old");
+    approve(
+        &fixture,
+        contract::events::OfferedKind::Extension,
+        "fiber.test/old",
+    );
     // The first preparation stands in for the startup: its notices are
     // what the session already wrote.
     let written = fixture.prepare().notices;
@@ -837,7 +826,11 @@ fn the_late_preparer_drops_written_notices_and_keeps_new_ones() {
             ),
         ],
     );
-    approve(&fixture, "fiber.test/new");
+    approve(
+        &fixture,
+        contract::events::OfferedKind::Extension,
+        "fiber.test/new",
+    );
     let state =
         Arc::try_unwrap(fixture.state).unwrap_or_else(|_| panic!("only the test holds the state"));
     let (_reload, late) = state.preparers(written);
@@ -970,8 +963,16 @@ fn a_rejected_required_package_quotes_its_own_notice() {
             ),
         ],
     );
-    approve(&fixture, "fiber.test/other");
-    approve(&fixture, "fiber.test/need");
+    approve(
+        &fixture,
+        contract::events::OfferedKind::Extension,
+        "fiber.test/other",
+    );
+    approve(
+        &fixture,
+        contract::events::OfferedKind::Extension,
+        "fiber.test/need",
+    );
     let state = fixture.state.clone();
     let rejected = fakes::within("required detail", fakes::MUST_SUCCEED_WITHIN, move || {
         state
@@ -1010,7 +1011,11 @@ fn a_late_install_does_not_repeat_the_startup_notices() {
             false,
         )],
     );
-    approve(&fixture, "fiber.test/old");
+    approve(
+        &fixture,
+        contract::events::OfferedKind::Extension,
+        "fiber.test/old",
+    );
     // The startup installs the old package: its notice is the one the
     // session already wrote.
     let prepared = fixture.prepare();
@@ -1035,7 +1040,11 @@ fn a_late_install_does_not_repeat_the_startup_notices() {
             ),
         ],
     );
-    approve(&fixture, "fiber.test/new");
+    approve(
+        &fixture,
+        contract::events::OfferedKind::Extension,
+        "fiber.test/new",
+    );
     let state =
         Arc::try_unwrap(fixture.state).unwrap_or_else(|_| panic!("only the test holds the state"));
     let (_reload, late) = state.preparers(written);
@@ -1066,7 +1075,11 @@ fn startup_written_is_the_session_notices_then_the_startup_notices() {
             false,
         )],
     );
-    approve(&fixture, "fiber.test/old");
+    approve(
+        &fixture,
+        contract::events::OfferedKind::Extension,
+        "fiber.test/old",
+    );
     let prepared = fixture.prepare();
     (prepared.installed)();
     let current = fixture.state.current.get();
@@ -1091,7 +1104,11 @@ fn unwritten_keeps_only_the_startup_notices_the_session_did_not_write() {
             false,
         )],
     );
-    approve(&fixture, "fiber.test/old");
+    approve(
+        &fixture,
+        contract::events::OfferedKind::Extension,
+        "fiber.test/old",
+    );
     let prepared = fixture.prepare();
     (prepared.installed)();
     let current = fixture.state.current.get();
@@ -1382,6 +1399,112 @@ fn reload_with_only_a_timeout_change_replaces_with_the_new_spec() {
 }
 
 #[test]
+fn reload_routes_a_replaced_servers_kept_prompt_through_the_replacement() {
+    // A same-name replacement serving a kept prompt name answers the
+    // preserved `/name` row through the replacement source: the row
+    // keeps its metadata, but the fetch routes to the new slot, while
+    // the old slot serves nothing again after the commit stops it.
+    let mut fixture = Fixture::new();
+    let fx = FakeServer::new(&fixture.rig, "fx", &json!([{"name": "echo"}]));
+    fx.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    std::fs::write(
+        fx.dir.join("prompts.json"),
+        json!([{"name": "greet", "description": "Greets."}]).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        fx.dir.join("prompt-greet.json"),
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Hello, Old."}}]}"#,
+    )
+    .unwrap();
+    fixture.rewrite(json!({"fx": fx.entry(json!({}))}));
+    let config = fixture.rig.config(Vec::<String>::new());
+    let specs = crate::mcp_servers::specs(&config).expect("the specs read");
+    let workspace = fixture.state.sources.workspace.clone();
+    let artifacts = fixture.state.artifacts.clone();
+    let cache = config::mcp_cache_dir(&fixture.state.sources.home);
+    let clock = fixture.state.template.clock.clone();
+    let started = fakes::within("servers start", fakes::MUST_SUCCEED_WITHIN, move || {
+        mcp::start_observed(
+            specs.specs,
+            &workspace,
+            &artifacts,
+            Arc::new(DummyImages),
+            &cache,
+            &clock,
+            "test",
+            None,
+        )
+    });
+    assert!(started.failed.is_empty(), "{:?}", started.failed);
+    fixture.state = Arc::new(assemble(&fixture.state, started));
+    fixture.servers = vec![fx];
+    assert!(
+        fixture
+            .state
+            .prompt_rows
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|row| row.tag == "fx" && row.name == "greet"),
+        "the startup lists the prompt"
+    );
+    // A second fake directory is the replacement executable, serving
+    // the same prompt name with new text.
+    let next = FakeServer::new(&fixture.rig, "fx-next", &json!([{"name": "echo"}]));
+    next.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    std::fs::write(
+        next.dir.join("prompts.json"),
+        json!([{"name": "greet", "description": "Greets."}]).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        next.dir.join("prompt-greet.json"),
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Hello, New."}}]}"#,
+    )
+    .unwrap();
+    let old_pid = fixture.servers[0].pid();
+    fixture.rewrite(json!({"fx": next.entry(json!({}))}));
+    let prepared = fixture.prepare();
+    assert_eq!(prepared.server_sync.servers.restarted, ["fx"]);
+    assert_ne!(next.pid(), old_pid, "the new executable answers");
+    assert!(
+        !fakes::pid_alive(old_pid),
+        "the old slot serves nothing again after the commit stops it"
+    );
+    let carried = prepared
+        .server_sync
+        .new_prompts
+        .as_ref()
+        .expect("the replacement carries its prompts with their fetch");
+    assert!(
+        carried
+            .0
+            .iter()
+            .any(|row| row.tag == "fx" && row.name == "greet"),
+        "the kept prompt name rides the carried rows: {:?}",
+        carried.0
+    );
+    struct NoCancel;
+    impl contract::tool::Cancel for NoCancel {
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+
+        fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+    }
+    let fetched = (carried.1)("fx", "greet", "", &NoCancel);
+    assert!(fetched.error.is_none(), "{:?}", fetched.error);
+    assert!(
+        fetched.content.iter().any(|part| matches!(
+            part,
+            contract::shapes::ContentPart::Text { text } if text.contains("New")
+        )),
+        "the preserved row answers through the replacement source"
+    );
+}
+
+#[test]
 fn reload_with_an_unchanged_spec_keeps_without_reconnecting() {
     let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
     let pid = fixture.servers[0].pid();
@@ -1554,7 +1677,7 @@ fn reload_restarts_a_changed_approved_repository_server() {
     let db = FakeServer::new(&fixture.rig, "db", &json!([{"name": "echo"}]));
     db.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     write_repo_config(&fixture, &json!({"db": db.entry(json!({}))}));
-    approve_repo_server(&fixture, "db");
+    approve(&fixture, contract::events::OfferedKind::McpServer, "db");
     let first = fixture.prepare();
     assert_eq!(first.server_sync.servers.started, ["db"]);
     assert!(
@@ -1568,7 +1691,7 @@ fn reload_restarts_a_changed_approved_repository_server() {
     let next = FakeServer::new(&fixture.rig, "db-next", &json!([{"name": "plus"}]));
     next.answer("plus", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     write_repo_config(&fixture, &json!({"db": next.entry(json!({}))}));
-    approve_repo_server(&fixture, "db");
+    approve(&fixture, contract::events::OfferedKind::McpServer, "db");
     let prepared = fixture.prepare();
     assert_eq!(prepared.server_sync.servers.kept, ["fx"]);
     assert_eq!(prepared.server_sync.servers.restarted, ["db"]);
@@ -1594,7 +1717,7 @@ fn reload_relists_an_unchanged_approved_repository_server_without_reconnecting()
     let db = FakeServer::new(&fixture.rig, "db", &json!([{"name": "echo"}]));
     db.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     write_repo_config(&fixture, &json!({"db": db.entry(json!({}))}));
-    approve_repo_server(&fixture, "db");
+    approve(&fixture, contract::events::OfferedKind::McpServer, "db");
     let first = fixture.prepare();
     assert_eq!(first.server_sync.servers.started, ["db"]);
     let pid = db.pid();
@@ -1630,7 +1753,7 @@ fn reload_starts_an_approved_in_session_repository_server_with_its_prompts() {
     assert!(skipped.server_sync.servers.started.is_empty());
     assert!(!fixture.state.servers.has_slot("db"));
     // Approved in-session, it starts with its prompts joining the `/` list.
-    approve_repo_server(&fixture, "db");
+    approve(&fixture, contract::events::OfferedKind::McpServer, "db");
     let prepared = fixture.prepare();
     assert_eq!(prepared.server_sync.servers.started, ["db"]);
     assert!(
