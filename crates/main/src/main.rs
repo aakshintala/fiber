@@ -815,7 +815,7 @@ fn drain_exit_code(exited: i32, stopped: bool, code: Option<i32>) -> i32 {
 /// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
 /// what ran. `run` writes the session's first lines through
 /// [`Signals::commit`](doors::Signals::commit): `Ok(Some(code))` means
-/// nothing was written for this process, and `run_turn` returns `code`
+/// nothing was written to the session log for this process, and `run_turn` returns `code`
 /// with no `quiesce`, no `fiber_exited` and no stderr line. One cancel
 /// signal, `cancel`, serves the door and the loop, so
 /// a `cancel` ends the turn the prompt starts; a shutdown's code on it is
@@ -867,7 +867,7 @@ fn run_turn(
             }
         }),
     };
-    // Nothing was written for this process: the commit found a recorded
+    // Nothing was written to the session log for this process: the commit found a recorded
     // signal, so the log stays as it was and the code is the exit code.
     if let Some(code) = committed {
         return code;

@@ -77,7 +77,7 @@ fn rerun_within_kills_a_child_that_outlives_the_callers_bound() {
         rerun_within(
             "rerun::tests::rerun_within_kills_a_child_that_outlives_the_callers_bound",
             &[(HANG, "1")],
-            bound,
+            Deadline::after(bound),
         )
     });
     let payload = outcome.expect_err("a child that never exits panics the caller");
@@ -85,7 +85,11 @@ fn rerun_within_kills_a_child_that_outlives_the_callers_bound() {
         .downcast_ref::<String>()
         .expect("the panic carries a formatted message");
     assert!(
-        message.contains("waited 300ms") && message.contains("reaped: true"),
+        message.starts_with("waited ")
+            && message.contains(
+                "for `rerun::tests::rerun_within_kills_a_child_that_outlives_the_callers_bound` to exit",
+            )
+            && message.contains("reaped: true"),
         "the panic names the caller's bound and the reaped child: {message}"
     );
 }
@@ -118,7 +122,7 @@ fn a_prepared_rerun_child_leads_its_own_group_in_the_prepared_directory() {
     let output = rerun_prepared(
         TEST,
         &[(CHILD, "1"), (DIR, dir.path().to_str().unwrap())],
-        Duration::from_secs(10),
+        Deadline::after(Duration::from_secs(10)),
         |command| {
             command.current_dir(dir.path());
             command.process_group(rustix::process::getpgrp().as_raw_pid());
@@ -185,7 +189,7 @@ fn a_prepared_rerun_child_that_leaves_its_group_occupied_fails_and_the_group_is_
     // A zombie reparented to init reads alive until init reaps it, so the
     // bound absorbs the reap; an unkilled sleeper (3600 s) still fails it.
     assert!(
-        crate::pids_exit(&[pid], crate::MUST_SUCCEED_WITHIN),
+        crate::pids_exit(&[pid], Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "the group was killed before the panic"
     );
 }
@@ -206,7 +210,7 @@ fn a_rerun_child_has_no_crash_exception_port() {
     let output = rerun_prepared(
         TEST,
         &[(CHILD, "1")],
-        Duration::from_secs(10),
+        Deadline::after(Duration::from_secs(10)),
         crate::crash_ports::probe::inherit_a_live_port,
     );
     assert!(

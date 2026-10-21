@@ -189,11 +189,11 @@ impl Setup {
             ),
         };
         assert!(
-            fakes::group_empties(group, self.deadline.left()),
+            fakes::group_empties(group, self.deadline),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         StdoutRun::from(output)
     }
 
@@ -296,11 +296,11 @@ impl Setup {
             ),
         };
         assert!(
-            fakes::group_empties(group, self.deadline.left()),
+            fakes::group_empties(group, self.deadline),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         StdoutRun {
             run: support::Run {
                 code: status.code(),
@@ -1578,7 +1578,7 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
     let completed = &lines[35];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
-    job_guard.stand_down(setup.deadline.cleanup());
+    job_guard.stand_down(setup.deadline.cleanup_phase());
     assert!(completed.get("action_id").is_none_or(Value::is_null));
     assert_eq!(server.requests().len(), 4);
 }
@@ -1759,7 +1759,7 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     let completed = &lines[ended_at];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
-    job_guard.stand_down(setup.deadline.cleanup());
+    job_guard.stand_down(setup.deadline.cleanup_phase());
     // The deltas left out above: all of this job's, inside its life, and
     // together exactly what it printed, so a missing or duplicated one fails.
     let all: Vec<&str> = run

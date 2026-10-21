@@ -51,5 +51,5 @@ fn on_thread_reaps_the_handed_off_child_and_reports_its_status() {
         .expect("the reap ends before its deadline")
         .expect("the hub child's wait");
     assert_eq!(status.code(), Some(3));
-    watchdog.stand_down(REAP_DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(REAP_DEADLINE));
 }

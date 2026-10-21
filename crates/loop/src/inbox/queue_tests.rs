@@ -62,6 +62,37 @@ fn extension_drain_keeps_other_deliveries_in_order() {
 }
 
 #[test]
+fn message_drain_keeps_other_deliveries_in_order() {
+    let (tx, rx) = mpsc::channel();
+    let mut queue = Queue::new(rx);
+    let first = || crate::inbox::session_message::for_test("s_from", None, None, "c_1", "first");
+    let second = || crate::inbox::session_message::for_test("s_from", None, None, "c_2", "second");
+    tx.send(Delivery::Cancelled).unwrap();
+    tx.send(Delivery::Message(first(), Ack(Box::new(|_| {}))))
+        .unwrap();
+    tx.send(Delivery::Close(Ack(Box::new(|_| {})))).unwrap();
+    tx.send(Delivery::Message(second(), Ack(Box::new(|_| {}))))
+        .unwrap();
+    let texts: Vec<String> = queue
+        .take_messages()
+        .into_iter()
+        .map(|delivery| {
+            let Delivery::Message(message, _) = delivery else {
+                panic!("expected a session message");
+            };
+            message.text
+        })
+        .collect();
+    assert_eq!(texts, ["first", "second"]);
+    // Repeating the selective drain never returns a held non-message.
+    assert!(queue.take_messages().is_empty());
+    let deliveries: Vec<_> = queue.try_iter().collect();
+    assert_eq!(deliveries.len(), 2);
+    assert!(matches!(deliveries[0], Delivery::Cancelled));
+    assert!(matches!(deliveries[1], Delivery::Close(_)));
+}
+
+#[test]
 fn try_recv_takes_held_before_receiver() {
     let (tx, rx) = mpsc::channel();
     let mut queue = Queue::new(rx);

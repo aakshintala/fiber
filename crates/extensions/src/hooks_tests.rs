@@ -1430,7 +1430,7 @@ end }})"#,
         .recv(&started)
         .expect("the waiter started");
     assert!(
-        clock.await_thread_parked(waiter_id, None, WAIT),
+        clock.await_thread_parked(waiter_id, None, fakes::Deadline::after(WAIT)),
         "the session barrier parks while its exec is held"
     );
     assert!(
@@ -1661,7 +1661,7 @@ fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
         let _sent = done_tx.send(lua.command("hold", ""));
     });
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the command to park on host.http"
     );
     contract::extension::ExtensionDoor::seal(&*session);
@@ -2493,7 +2493,7 @@ fn a_parked_watcher_drops_the_ephemeral_offer_and_queues_the_durable_one() {
     let statuses = status_channel(&session);
     session.deliver(&noticed("park"), None);
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the watcher to park on host.http"
     );
     // While it is parked the ephemeral offer is dropped and the durable one
@@ -2796,7 +2796,7 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
     // bounds the waits for the parked delivery to appear and the loop to
     // notice the move.
     let thread = clock
-        .mark_parked(before + Duration::from_millis(300), WAIT)
+        .mark_parked(before + Duration::from_millis(300), Deadline::after(WAIT))
         .expect("waited for the sleeping watcher to park at its deadline")
         .threads()
         .pop()
@@ -2805,10 +2805,10 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
     // advancing: its poll park would otherwise arrive beside the
     // watcher's deadline park and fail the unnamed wait.
     let poll = clock
-        .mark_parked(before + Duration::from_millis(10), WAIT)
+        .mark_parked(before + Duration::from_millis(10), Deadline::after(WAIT))
         .expect("waited for the exec runner to park");
     assert!(
-        clock.await_any_parked_since(&poll, WAIT),
+        clock.await_any_parked_since(&poll, Deadline::after(WAIT)),
         "waited for the exec runner to re-park"
     );
     clock.advance_when_parked(
@@ -2957,7 +2957,7 @@ fn a_watcher_queued_at_a_signal_never_starts() {
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     session.deliver(&noticed("park"), None);
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the first watcher to park on host.http"
     );
     // The one worker is parked on the first delivery, so the second stays
@@ -3144,7 +3144,7 @@ fn drain_watchers_waits_for_a_queued_durable_delivery() {
     // keeps it from returning before the queued delivery runs.
     session.deliver(&stepped(), Some(contract::Seq(0)));
     assert!(
-        server.await_requests(1, WAIT),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the live delivery to park on host.http"
     );
     let lua = session

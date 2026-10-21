@@ -75,7 +75,10 @@ fn handoff_sends_its_instructions() {
 fn the_slash_list_shows_the_name_row() {
     let mut app = connected();
     type_text(&mut app, "/nam");
-    assert_eq!(shown(&app), ["/name <text>  Names the session.  command"]);
+    assert_eq!(
+        shown(&app),
+        ["/name /rename <text>  Names the session.  command"]
+    );
 }
 
 #[test]

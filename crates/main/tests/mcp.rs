@@ -155,11 +155,11 @@ impl Setup {
             ),
         };
         assert!(
-            fakes::group_empties(group, self.deadline.left()),
+            fakes::group_empties(group, self.deadline),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Run::new(output)
     }
 }
@@ -376,7 +376,7 @@ fn the_server_runs_in_the_workspace_and_stops_with_the_session() {
     assert!(pid > 1);
     // The server's pid is gone after `fiber` exits.
     assert!(
-        fakes::pids_exit(&[pid], setup.deadline.left()),
+        fakes::pids_exit(&[pid], setup.deadline),
         "waited until the deadline for pid {pid} to exit after `fiber`"
     );
 }
@@ -404,7 +404,7 @@ fn a_servers_grandchild_is_gone_after_fiber_exits() {
         .parse()
         .unwrap();
     assert!(
-        fakes::pids_exit(&[grandchild], setup.deadline.left()),
+        fakes::pids_exit(&[grandchild], setup.deadline),
         "waited until the deadline for grandchild {grandchild} to exit after `fiber`"
     );
 }
@@ -898,7 +898,7 @@ fn a_required_server_that_fails_to_start_exits_before_the_session() {
         .unwrap();
     // The healthy server started, then stopped with the failed session.
     assert!(
-        fakes::pids_exit(&[pid], setup.deadline.left()),
+        fakes::pids_exit(&[pid], setup.deadline),
         "waited until the deadline for pid {pid} to exit after the required failure"
     );
 }

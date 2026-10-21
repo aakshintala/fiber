@@ -249,7 +249,7 @@ fn load_target_uses_the_workspaces_layered_config_and_propagates_load_errors() {
         let named = named.map(str::to_owned);
         fakes::within(
             "loading the workspace's hub target",
-            Duration::from_secs(5),
+            Deadline::after(Duration::from_secs(5)),
             move || load_target(&home, &workspace, named.as_deref()),
         )
     };

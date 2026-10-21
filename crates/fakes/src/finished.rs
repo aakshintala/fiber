@@ -2,7 +2,6 @@
 
 use std::io::Write as _;
 use std::process::{Child, Output};
-use std::time::Duration;
 
 use crate::deadline::Deadline;
 
@@ -23,7 +22,8 @@ use crate::deadline::Deadline;
 /// timeouts"). The child leads its own group (`process_group(0)` at spawn),
 /// so the kill never reaches the test's.
 #[track_caller]
-pub fn finished(what: &str, mut child: Child, stdin: &[u8], within: Duration) -> Output {
+pub fn finished(what: &str, mut child: Child, stdin: &[u8], deadline: Deadline) -> Output {
+    let within = deadline.left();
     let pid = child.id();
     let stdin = stdin.to_vec();
     let (done, waited) = std::sync::mpsc::channel();
@@ -55,7 +55,7 @@ pub fn finished(what: &str, mut child: Child, stdin: &[u8], within: Duration) ->
                     Ok(_) | Err(_) => {}
                 }
                 assert!(
-                    crate::group_empties(pid, within),
+                    crate::group_empties(pid, Deadline::after(within)),
                     "{what} left its process group {pid} alive"
                 );
                 output
@@ -64,7 +64,7 @@ pub fn finished(what: &str, mut child: Child, stdin: &[u8], within: Duration) ->
                 match crate::kill_group(pid, "KILL") {
                     Ok(_) | Err(_) => {}
                 }
-                let emptied = crate::group_empties(pid, within);
+                let emptied = crate::group_empties(pid, Deadline::after(within));
                 panic!("{what} has no output: {err} (group emptied: {emptied})");
             }
         },

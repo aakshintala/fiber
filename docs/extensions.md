@@ -1082,7 +1082,7 @@ keys below; values use the shapes of `docs/events.md` ("Content parts",
 | Hook point | What `run` is given | What it may return |
 |---|---|---|
 | `session_start` | `reason`, why the session started: start, resume, fork, rewind or handoff; `session_id`; `workspace`, the workspace root | `context`, a non-empty string to add |
-| `before_message` | `content`, the message's content parts as logged | `content`, a non-empty list of parts that replaces the message: text parts, and image or pdf parts the message holds; `context`, a non-empty string to add; or `refuse`, a non-empty string, alone |
+| `before_message` | `content`, the message's content parts as logged; `from_session_id`, the sending session, and `parent_session_id`, its parent, for a session message, each absent otherwise | `content`, a non-empty list of parts that replaces the message: text parts, and image or pdf parts the message holds; `context`, a non-empty string to add; or `refuse`, a non-empty string, alone |
 | `turn_start` | `input`, the turn's input as the turn_started event logs it | `context`, a non-empty string to add |
 | `before_tool` | `tool`; `arguments`; `effects`, a list of effect names; `paths`, absent when the call declares none; `reversible` | `arguments`, a table that replaces the arguments, or `refuse`, a non-empty string, alone |
 | `before_model_call` | `model`, the model reference; `usage`, the session's usage so far, its delegates included, with cost absent when unknown | `refuse`, a non-empty string, alone |

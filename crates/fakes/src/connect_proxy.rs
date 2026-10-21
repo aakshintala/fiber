@@ -7,11 +7,11 @@ use std::io;
 #[cfg(test)]
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
 
 use contract::clock::Clock;
 
 use crate::clock::SystemClock;
+use crate::deadline::Deadline;
 #[cfg(test)]
 use crate::http_server::WaitAck;
 use crate::http_server::{
@@ -85,10 +85,11 @@ impl ConnectProxy {
         self.core.test_acknowledgments()
     }
 
-    /// Waits, at most `within` of real time, until at least `count`
+    /// Waits, at most what remains of `deadline`, until at least `count`
     /// `CONNECT` targets are recorded. True once they are; false at the
     /// deadline.
-    pub fn await_connects(&self, count: usize, within: Duration) -> bool {
+    pub fn await_connects(&self, count: usize, deadline: Deadline) -> bool {
+        let within = deadline.left();
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived
@@ -97,10 +98,11 @@ impl ConnectProxy {
         guard.connects.len() >= count
     }
 
-    /// Waits, at most `within` of real time, until at least `count`
+    /// Waits, at most what remains of `deadline`, until at least `count`
     /// connections saw their client side close. True once they did; false
     /// at the deadline.
-    pub fn await_closed(&self, count: usize, within: Duration) -> bool {
+    pub fn await_closed(&self, count: usize, deadline: Deadline) -> bool {
+        let within = deadline.left();
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived

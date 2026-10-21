@@ -171,7 +171,7 @@ impl Loop {
             Delivery::Prompt(..)
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
-            | Delivery::Message(_)
+            | Delivery::Message(..)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
             | Delivery::Reload(..)

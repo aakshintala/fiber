@@ -89,7 +89,7 @@ fn lists_running_sessions_marks_itself_and_waits_out_a_silent_one() {
         serde_json::from_str(&deadline.recv_or_fail(&rx, "B session started")).unwrap();
     assert_eq!(first["kind"], "session_started");
     let b_id = first["session_id"].as_str().unwrap().to_owned();
-    assert!(server.await_requests(1, deadline.left()));
+    assert!(server.await_requests(1, deadline));
     let socket = Socket::connect(deadline, &setup.session_socket(&b_id));
     socket.send(
         &json!({"id":doors::mint("c_"),"command":"subscribe","args":{"level":"summary"}})
@@ -183,7 +183,7 @@ fn lists_running_sessions_marks_itself_and_waits_out_a_silent_one() {
         lines.push(serde_json::from_str(&line).unwrap());
     }
     assert!(a.wait().unwrap().success(), "A exits cleanly");
-    a_watchdog.stand_down(deadline.cleanup());
+    a_watchdog.stand_down(deadline.cleanup_phase());
     assert_eq!(support::kinds(&lines), support::read_kinds());
     let a_id = line(&lines, "session_started")["session_id"]
         .as_str()
@@ -244,6 +244,6 @@ fn lists_running_sessions_marks_itself_and_waits_out_a_silent_one() {
         .cleanup_phase()
         .recv_or_fail(&read_end, "B stdout closed");
     assert!(!support::group_alive(deadline, group));
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
     std::mem::forget(guard);
 }

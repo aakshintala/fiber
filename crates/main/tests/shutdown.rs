@@ -231,7 +231,7 @@ impl Fiber {
             "fiber left a process in its group"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(deadline.cleanup());
+        watchdog.stand_down(deadline.cleanup_phase());
         Ended {
             code: status.code(),
             raw: raw
@@ -306,6 +306,47 @@ fn assert_exited(setup: &Setup, ended: &Ended, code: i32, kinds: &[&str], before
     assert_eq!(fs::read(&logs[0]).unwrap(), expected);
 }
 
+/// The one early diagnostic line a pre-`fiber_started` signal leaves:
+/// exactly one pid-named file under `home`'s `logs/` with one line, keys
+/// in wire order, naming `signal` and the exit `code`.
+#[track_caller]
+fn assert_early_line(home: &Path, pid: u32, signal: &str, code: i32) {
+    let entries: Vec<PathBuf> = fs::read_dir(home.join("logs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(entries.len(), 1, "exactly one diagnostic file: {entries:?}");
+    assert_eq!(
+        entries[0].file_name().unwrap(),
+        format!("ask-{pid}.log").as_str()
+    );
+    let text = fs::read_to_string(&entries[0]).unwrap();
+    assert_eq!(text.lines().count(), 1, "exactly one line");
+    let line = text.lines().next().unwrap();
+    for (first, second) in [
+        ("ts", "level"),
+        ("level", "process"),
+        ("process", "code"),
+        ("code", "message"),
+    ] {
+        assert!(
+            line.find(format!("\"{first}\":").as_str()).unwrap()
+                < line.find(format!("\"{second}\":").as_str()).unwrap(),
+            "keys in order: {line}"
+        );
+    }
+    let value: Value = serde_json::from_str(line).unwrap();
+    assert!(value["ts"].as_u64().is_some_and(|ts| ts > 0));
+    assert_eq!(value["level"], "error");
+    assert_eq!(value["process"], "ask");
+    assert!(value.get("session_id").is_none());
+    assert_eq!(value["code"], "signal");
+    assert_eq!(
+        value["message"],
+        format!("{signal} arrived before the session started; the process exits {code}.")
+    );
+}
+
 /// `fiber ask` whose model request the fake server holds open, signalled
 /// with `signal` once the request arrived.
 #[track_caller]
@@ -316,7 +357,7 @@ fn held_ask(signal: &'static str, code: i32) {
     setup.provider(&server);
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived"
     );
     fiber.signal(signal);
@@ -350,6 +391,12 @@ fn held_ask(signal: &'static str, code: i32) {
     assert_eq!(completed.len(), 1);
     assert_eq!(completed[0]["payload"]["outcome"], "interrupted");
     assert_eq!(server.requests().len(), 1, "no further model request");
+    // A started shutdown writes no diagnostic line: the writer's file is
+    // created only by its first line.
+    assert!(
+        !setup.home().join("logs").exists(),
+        "a started shutdown left no logs/"
+    );
 }
 
 #[test]
@@ -403,7 +450,7 @@ fn a_shutdown_stops_a_background_job_before_fiber_exited() {
     // The prompt's turn, then the ending notice's: the session now waits
     // for the job.
     fiber.wait_for("turn_completed", 2);
-    let job_group = ready.wait(setup.deadline.left())[0];
+    let job_group = ready.wait(setup.deadline)[0];
     let job_watchdog = Watchdog::group(job_group);
     fiber.signal("TERM");
     let ended = fiber.end();
@@ -462,7 +509,7 @@ fn a_shutdown_stops_a_background_job_before_fiber_exited() {
         !support::group_alive(setup.deadline, job_group),
         "the job's group outlived fiber"
     );
-    job_watchdog.stand_down(setup.deadline.cleanup());
+    job_watchdog.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -484,6 +531,7 @@ fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
         .recv(&result)
         .expect("fiber read stdin in time");
     outcome.unwrap();
+    let pid = fiber.child.id();
     fiber.signal("TERM");
     let ended = fiber.end();
     drop(stdin);
@@ -491,6 +539,7 @@ fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
     assert!(setup.logs().is_empty(), "a session was left behind");
+    assert_early_line(&setup.home(), pid, "SIGTERM", 143);
     assert!(server.requests().is_empty());
 }
 
@@ -509,7 +558,7 @@ fn sigterm_mid_turn_of_a_resumed_session_exits_143() {
     server.hold();
     let fiber = setup.start(&["ask", "--resume", &id, "again"], Stdio::null());
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "the resumed request arrived"
     );
     fiber.signal("TERM");
@@ -593,7 +642,8 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     );
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     // The server runs, so the signals were armed before it started.
-    let _pid = ready.wait(setup.deadline.left())[0];
+    let _pid = ready.wait(setup.deadline)[0];
+    let pid = fiber.child.id();
     fiber.signal("TERM");
     // Before `end`, whose group check would otherwise catch a server
     // left alive first: this wait is the one that pins the stop's kill.
@@ -606,6 +656,7 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
     assert!(setup.logs().is_empty(), "a session was left behind");
+    assert_early_line(&setup.home(), pid, "SIGTERM", 143);
     assert!(
         setup.session_dirs().is_empty(),
         "a session directory was created"
@@ -664,7 +715,7 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
     // The server runs past its trap, so the signals were armed before
     // it started.
-    let _pid = ready.wait(setup.deadline.left())[0];
+    let _pid = ready.wait(setup.deadline)[0];
     // The server's `read` opened the FIFO, so the write end is open:
     // holding it parks the server until the signal or the test's end.
     let _writer = setup

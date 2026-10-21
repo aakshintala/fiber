@@ -14,7 +14,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -27,6 +27,7 @@ use super::*;
 use crate::connection::serve_connection;
 use crate::fake::{FakeStarter, Handshake, failure};
 use crate::start::START_DEADLINE;
+use crate::{Started, Starter};
 use fakes::Deadline;
 
 /// One named deadline per wait: a resume answers before it.
@@ -55,9 +56,13 @@ impl Temp {
     }
 
     fn hub(&self, starter: FakeStarter) -> Arc<Hub> {
+        self.hub_with(Arc::new(starter))
+    }
+
+    fn hub_with(&self, starter: Arc<dyn Starter>) -> Arc<Hub> {
         let clock = Arc::clone(&self.clock);
         let timed: Arc<dyn Clock> = clock;
-        Arc::new(crate::testkit::hub(&self.dir, Arc::new(starter), timed))
+        Arc::new(crate::testkit::hub(&self.dir, starter, timed))
     }
 
     /// The workspace a session's log records: its name holds [`SECRET`].
@@ -491,7 +496,8 @@ fn a_label_bearing_subscribe_past_an_exited_process_starts_the_session_on_it() {
     client.subscribe_with("c_1", "full", Some("work"));
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
@@ -684,7 +690,8 @@ fn a_held_resume_of_an_exited_session_retries_until_the_lock_is_released() {
     for k in 1..=2 {
         let until = temp.clock.origin() + HELD_POLL * k;
         assert!(
-            temp.clock.await_parked(until, DEADLINE),
+            temp.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the hub waits a poll after held failure {k}"
         );
         assert_eq!(starter.resumed().len(), usize::try_from(k).unwrap());
@@ -710,7 +717,8 @@ fn a_resume_held_past_the_shutdown_bound_is_session_held() {
     for k in 1..=polls() {
         let until = temp.clock.origin() + HELD_POLL * k;
         assert!(
-            temp.clock.await_parked(until, DEADLINE),
+            temp.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the hub waits poll {k} inside the bound"
         );
         assert!(finished.try_recv().is_err(), "no answer before the bound");
@@ -1190,7 +1198,8 @@ fn a_command_answered_closing_after_fiber_exited_reaches_the_resumed_session() {
     // The exiting process still accepts on its socket: the hub waits.
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     assert!(starter.resumed().is_empty());
@@ -1239,7 +1248,8 @@ fn two_commands_answered_closing_reach_one_resumed_session() {
     release_tx.send(()).unwrap_or(());
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
@@ -1279,7 +1289,8 @@ fn a_command_read_while_a_reroute_opens_follows_it_on_one_connection() {
     // lookup finds nothing and opens a second relay.
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     let (parked_tx, parked_rx) = mpsc::channel();
@@ -1436,7 +1447,8 @@ fn commands_held_behind_a_failed_reroute_are_each_refused_in_order() {
     client.send("c_1", "reply");
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     let (routed_tx, routed_rx) = mpsc::channel();
@@ -1449,7 +1461,8 @@ fn commands_held_behind_a_failed_reroute_are_each_refused_in_order() {
     for k in 1..=polls() {
         let until = temp.clock.origin() + HELD_POLL * k;
         assert!(
-            temp.clock.await_parked(until, DEADLINE),
+            temp.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the hub waits poll {k} inside the bound"
         );
         temp.clock
@@ -1462,7 +1475,8 @@ fn commands_held_behind_a_failed_reroute_are_each_refused_in_order() {
     for k in 1..=polls() {
         let until = temp.clock.origin() + SHUTDOWN_BOUND + HELD_POLL * k;
         assert!(
-            temp.clock.await_parked(until, DEADLINE),
+            temp.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the hub waits poll {k} inside the second bound"
         );
         temp.clock
@@ -1539,7 +1553,8 @@ fn an_exiting_process_that_never_ends_is_session_held_past_the_bound() {
     for k in 1..=polls() {
         let until = temp.clock.origin() + HELD_POLL * k;
         assert!(
-            temp.clock.await_parked(until, DEADLINE),
+            temp.clock
+                .await_parked(until, fakes::Deadline::after(DEADLINE)),
             "the hub waits poll {k} inside the bound"
         );
         temp.clock
@@ -1754,7 +1769,8 @@ fn a_subscribe_answered_closing_after_fiber_exited_is_sent_once() {
     client.subscribe("c_1", "full");
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     assert!(dying.stop(&sid(), DEADLINE), "the exiting process ended");
@@ -2036,7 +2052,8 @@ fn the_last_queued_command_holds_the_relay_until_its_queue_is_empty() {
     client.send("c_1", "reply");
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     let (routed_tx, routed_rx) = mpsc::channel();
@@ -2103,7 +2120,8 @@ fn a_client_that_leaves_drops_the_queue_and_passes_nothing_on() {
     client.send("c_1", "reply");
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     let (routed_tx, routed_rx) = mpsc::channel();
@@ -2183,7 +2201,8 @@ fn an_acknowledgement_is_forwarded_before_the_next_queued_command_passes_on() {
     release_tx.send(()).unwrap_or(());
     let until = temp.clock.origin() + HELD_POLL;
     assert!(
-        temp.clock.await_parked(until, DEADLINE),
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the hub waits out the exiting process"
     );
     let (routed_tx, routed_rx) = mpsc::channel();
@@ -2307,21 +2326,152 @@ fn a_present_workspace_resumes_in_the_workspace_whatever_repository_is_recorded(
 }
 
 #[test]
-fn a_removed_workspace_without_a_repository_resumes_in_the_workspace() {
+fn a_removed_workspace_without_a_repository_is_refused_before_any_start() {
     let temp = Temp::new();
     let workspace = temp.dir.join(format!("w-{SECRET}"));
     let (workspace, _) = temp.worktree_log(false, json!({"path": workspace, "branch": "fiber/s"}));
-    // The workspace is gone, but with no recorded repository there is
-    // nowhere else to start: the starter gets the workspace and reports
-    // the missing path itself.
-    let starter = FakeStarter::exit_with(
-        &temp.dir,
-        crate::fake::failure(contract::ErrorCode::IoFailed, "The workspace is gone."),
-    );
+    // The workspace is gone, and with no recorded repository there is
+    // nowhere to make it from: the hub refuses before starting a process.
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());
     let refused = refused(resumed(&hub));
     assert_eq!(refused.code, contract::ErrorCode::IoFailed);
-    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Session {SID} could not resume: {} no longer exists",
+            workspace.display()
+        )
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+/// A starter whose resume always fails missing, naming its target: the
+/// race and the confirmed case behind the hub's wrap.
+struct MissingStarter {
+    tried: Mutex<Vec<(SessionId, PathBuf)>>,
+}
+
+impl MissingStarter {
+    fn new() -> Self {
+        Self {
+            tried: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn tried(&self) -> Vec<(SessionId, PathBuf)> {
+        self.tried.lock().unwrap().clone()
+    }
+}
+
+impl Starter for MissingStarter {
+    fn start(
+        &self,
+        _id: &SessionId,
+        _workspace: &Path,
+        _model: Option<&str>,
+        _overrides: &[&str],
+        _worktree: bool,
+        _continues: Option<&SessionId>,
+    ) -> std::io::Result<Box<dyn Started>> {
+        panic!("no start in the missing-target tests")
+    }
+
+    fn resume(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        _credential: Option<&str>,
+    ) -> std::io::Result<Box<dyn Started>> {
+        self.tried
+            .lock()
+            .unwrap()
+            .push((id.clone(), workspace.to_path_buf()));
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} no longer exists", workspace.display()),
+        ))
+    }
+
+    fn rewind(
+        &self,
+        _id: &SessionId,
+        _workspace: &Path,
+        _from: &SessionId,
+    ) -> std::io::Result<Box<dyn Started>> {
+        panic!("no rewind in the missing-target tests")
+    }
+}
+
+#[test]
+fn a_starter_failure_on_an_already_missing_target_keeps_the_ruled_shape() {
+    let temp = Temp::new();
+    let workspace = temp.dir.join(format!("w-{SECRET}"));
+    let repository = temp.dir.join(format!("r-{SECRET}")).join(".git");
+    temp.worktree_log(
+        false,
+        json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
+    );
+    // The workspace and its repository are both gone, so the launch
+    // target was already missing when the starter failed: the confirmed
+    // case, refused with the ruled shape and no wrapper period.
+    let starter = Arc::new(MissingStarter::new());
+    let hub = temp.hub_with(starter.clone());
+    let refused = refused(resumed(&hub));
+    assert_eq!(refused.code, contract::ErrorCode::IoFailed);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Session {SID} could not resume: {} no longer exists",
+            repository.display()
+        )
+    );
+    assert_eq!(starter.tried(), [(sid(), repository)]);
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+#[test]
+fn a_starter_failure_on_a_present_target_keeps_the_wrapper_period() {
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    // The workspace was present at the check, so the starter failure is
+    // the race: the refusal keeps the wrapper's period and renders like
+    // any other refusal.
+    let starter = Arc::new(MissingStarter::new());
+    let hub = temp.hub_with(starter.clone());
+    let refused = refused(resumed(&hub));
+    assert_eq!(refused.code, contract::ErrorCode::IoFailed);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Session {SID} could not resume: {} no longer exists.",
+            workspace.display()
+        )
+    );
+    assert_eq!(starter.tried(), [(sid(), workspace)]);
+    assert!(!temp.hub_log().contains(SECRET), "no path in the log");
+}
+
+#[test]
+fn a_removed_plain_workspace_is_refused_before_any_start() {
+    let temp = Temp::new();
+    let workspace = temp.recorded();
+    fs::remove_dir_all(&workspace).unwrap();
+    // A plain directory records no worktree, so the missing workspace
+    // cannot be made again: the hub refuses before starting a process.
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let refused = refused(resumed(&hub));
+    assert_eq!(refused.code, contract::ErrorCode::IoFailed);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Session {SID} could not resume: {} no longer exists",
+            workspace.display()
+        )
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
     assert!(!temp.hub_log().contains(SECRET), "no path in the log");
 }
 
@@ -2334,10 +2484,22 @@ fn a_repository_that_is_not_a_string_is_ignored_and_the_log_is_not_corrupt() {
             false,
             json!({"path": workspace, "branch": "fiber/s", "repository": repository}),
         );
+        // A repository that is not a string is no repository: the missing
+        // workspace cannot be made again, so the resume is refused before
+        // any start, and the log is still not corrupt.
         let starter = FakeStarter::bind_and_hold(&temp.dir);
         let hub = temp.hub(starter.clone());
-        assert!(resumed(&hub).is_ok(), "{repository}");
-        assert_eq!(starter.resumed(), [(sid(), workspace)], "{repository}");
+        let refused = refused(resumed(&hub));
+        assert_eq!(refused.code, contract::ErrorCode::IoFailed, "{repository}");
+        assert_eq!(
+            refused.message,
+            format!(
+                "Session {SID} could not resume: {} no longer exists",
+                workspace.display()
+            ),
+            "{repository}"
+        );
+        assert!(starter.resumed().is_empty(), "{repository}");
         assert!(!temp.hub_log().contains(SECRET), "no path in the log");
     }
     // A `worktree` that is not an object holds no repository either.
@@ -2345,8 +2507,16 @@ fn a_repository_that_is_not_a_string_is_ignored_and_the_log_is_not_corrupt() {
     let (workspace, _) = temp.worktree_log(false, json!("x"));
     let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());
-    assert!(resumed(&hub).is_ok());
-    assert_eq!(starter.resumed(), [(sid(), workspace)]);
+    let refused = refused(resumed(&hub));
+    assert_eq!(refused.code, contract::ErrorCode::IoFailed);
+    assert_eq!(
+        refused.message,
+        format!(
+            "Session {SID} could not resume: {} no longer exists",
+            workspace.display()
+        )
+    );
+    assert!(starter.resumed().is_empty(), "no process starts");
     assert!(!temp.hub_log().contains(SECRET), "no path in the log");
 }
 

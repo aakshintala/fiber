@@ -183,7 +183,7 @@ fn settle(clock: &FakeClock, due: Instant) {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, None, DEADLINE),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "the lookup worker parks with nothing queued once it has pushed"
     );
 }
@@ -446,7 +446,11 @@ fn a_session_that_ends_before_30_seconds_writes_no_second_record() {
     let start = session.clock.now();
     let (_, first_lines) = first_turn(&mut session);
     assert_eq!(kinds(&first_lines), FAILED_FIRST_KINDS);
-    assert!(session.clock.await_parked(start + AFTER, DEADLINE));
+    assert!(
+        session
+            .clock
+            .await_parked(start + AFTER, fakes::Deadline::after(DEADLINE))
+    );
     run_to_end(&mut session);
     // The lookup goes once the loop and the stopped worker have let go.
     Deadline::after(DEADLINE)
@@ -748,7 +752,9 @@ fn a_warming_refresh_s_cost_settles_in_no_turn_and_no_action() {
 
     let refresh = start + Duration::from_secs(270);
     assert!(
-        session.clock.await_parked(refresh, DEADLINE),
+        session
+            .clock
+            .await_parked(refresh, fakes::Deadline::after(DEADLINE)),
         "a refresh is due"
     );
     advance_and_wake(&session, loop_thread, refresh, refresh);
@@ -756,16 +762,20 @@ fn a_warming_refresh_s_cost_settles_in_no_turn_and_no_action() {
     let exit = start + Duration::from_secs(300) + MINUTE;
     let mark = session
         .clock
-        .mark_parked(due, DEADLINE)
+        .mark_parked(due, fakes::Deadline::after(DEADLINE))
         .expect("the lookup worker parks at the due");
     advance_and_wake(&session, loop_thread, exit, due);
     assert!(
-        session.clock.await_parked_since(&mark, None, DEADLINE),
+        session
+            .clock
+            .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "the lookup worker settled"
     );
     assert_eq!(seen.calls(), ["gen_warm"]);
     assert!(
-        session.clock.await_parked(exit, DEADLINE),
+        session
+            .clock
+            .await_parked(exit, fakes::Deadline::after(DEADLINE)),
         "idle counts from the cap"
     );
     advance_and_wake(&session, loop_thread, exit, exit);

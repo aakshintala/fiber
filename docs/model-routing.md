@@ -139,7 +139,8 @@ a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`; AWS keys in
 when set; and the AWS CLI's own default chain, which reads `AWS_PROFILE`.
 Credentials with an `Expiration` are refreshed before it, as any token is
 ("Keys, tokens and OAuth"). With none of these, the call fails with
-`credential_failed`, and the message says to set `AWS_BEARER_TOKEN_BEDROCK`
+`credential_failed`, and the extension's own message, in `provider.message`
+(`docs/errors.md`, "The shape"), says to set `AWS_BEARER_TOKEN_BEDROCK`
 or name a profile. `fiber login bedrock` is not supported: it stores a key,
 and a provider with `credential()` reads none ("Which credential a session
 uses"), so a Bedrock API key comes from the environment only. The AWS region is the package's `region` setting,
@@ -169,8 +170,9 @@ login`, so a session never switches to the account Application Default
 Credentials hold. Each command's `--format` prints the token and its expiry
 and no other field. The token is refreshed before its expiry, as any token is
 ("Keys, tokens and OAuth"). With no account selected and no Application
-Default Credentials, the call fails with `credential_failed`, and the message
-says to run `gcloud auth login` or `gcloud auth application-default login`,
+Default Credentials, the call fails with `credential_failed`, and the
+extension's own message, in `provider.message`, says to run `gcloud auth
+login` or `gcloud auth application-default login`,
 or name a configuration. The failure keeps gcloud's own reason, with an
 address shown as `[account]` and any run of 20 or more token-like characters
 as `[redacted]`.

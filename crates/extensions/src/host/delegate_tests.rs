@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use contract::shapes::Failure;
 use contract::{ErrorCode, JobId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use mlua::{Lua, Value as LuaValue};
 use serde_json::{Map, Value};
@@ -182,9 +183,11 @@ fn command_init(body: &str) -> String {
 #[track_caller]
 fn go(ext: &Arc<LuaExtension>) -> Result<String, crate::Error> {
     let held = Arc::clone(ext);
-    fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || {
-        held.command("go", "")
-    })
+    fakes::within(
+        "held.command",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || held.command("go", ""),
+    )
 }
 
 /// The `pcall` verdict for a call with this spec and opts: `ok` with the
@@ -430,7 +433,7 @@ fn a_timer_cannot_change_what_the_held_start_sends() {
     assert_eq!(extension, "ext");
     let due = clock.origin() + Duration::from_millis(100);
     let timer = clock
-        .mark_parked(due, WAIT)
+        .mark_parked(due, fakes::Deadline::after(WAIT))
         .expect("the timer waits for its due time")
         .threads();
     assert_eq!(timer.len(), 1, "only the timer parks at its due time");
@@ -468,9 +471,11 @@ fn entry_script_and_a_missing_service_raise_closing() {
     let init = format!("host.delegate({GOOD_SPEC}, {GOOD_OPTS})\n");
     let (_dir, ext, _clock) = rigged(&init, Some(&fake), true);
     let held = Arc::clone(&ext);
-    match fakes::within("held.commands", fakes::MUST_SUCCEED_WITHIN, move || {
-        held.commands()
-    }) {
+    match fakes::within(
+        "held.commands",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || held.commands(),
+    ) {
         Err(crate::Error::Lua { message, .. }) => {
             assert_eq!(message, "host.delegate: not available while init.lua runs");
         }
@@ -560,7 +565,7 @@ fn a_second_timer_fires_while_one_start_is_held() {
     assert_eq!(first.get("description"), Some(&Value::from("first")));
     let due = clock.origin() + Duration::from_millis(100);
     let timer = clock
-        .mark_parked(due, WAIT)
+        .mark_parked(due, fakes::Deadline::after(WAIT))
         .expect("the timer waits for its due time")
         .threads();
     assert_eq!(timer.len(), 1, "only the timer parks at its due time");

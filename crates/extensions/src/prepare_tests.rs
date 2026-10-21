@@ -149,7 +149,7 @@ fn download_tunnels_through_the_proxy_environment() {
     let port = server.url().rsplit(':').next().unwrap().to_owned();
     let target = format!("127.0.0.1:{port}");
     assert!(
-        proxy.await_connects(1, CONNECT_WITHIN),
+        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
@@ -184,15 +184,19 @@ fn a_held_download_fails_within_the_limit() {
     let server = fakes::ProviderServer::start([]).unwrap();
     server.hold_from(1, Duration::from_secs(30));
     let url = format!("{}/tool", server.url());
-    let err = fakes::within("a held download", DOWNLOAD_WITHIN, move || {
-        download_with(
-            "probe",
-            &url,
-            None,
-            net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
-        )
-        .unwrap_err()
-    });
+    let err = fakes::within(
+        "a held download",
+        Deadline::after(DOWNLOAD_WITHIN),
+        move || {
+            download_with(
+                "probe",
+                &url,
+                None,
+                net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
+            )
+            .unwrap_err()
+        },
+    );
     assert!(
         matches!(err, crate::Error::Download { .. }),
         "a held download fails as its download failed: {err}"
@@ -205,21 +209,25 @@ fn a_held_download_fails_within_the_limit() {
 fn a_stalled_download_body_fails_and_closes() {
     let server = fakes::ProviderServer::start([fakes::Response::stall(200, "abc", 1000)]).unwrap();
     let url = format!("{}/tool", server.url());
-    let err = fakes::within("a stalled download", DOWNLOAD_WITHIN, move || {
-        download_with(
-            "probe",
-            &url,
-            None,
-            net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
-        )
-        .unwrap_err()
-    });
+    let err = fakes::within(
+        "a stalled download",
+        Deadline::after(DOWNLOAD_WITHIN),
+        move || {
+            download_with(
+                "probe",
+                &url,
+                None,
+                net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
+            )
+            .unwrap_err()
+        },
+    );
     assert!(
         matches!(err, crate::Error::Download { .. }),
         "a stalled download fails as its download failed: {err}"
     );
     assert!(
-        server.await_closed(1, WITHIN),
+        server.await_closed(1, Deadline::after(WITHIN)),
         "the server saw the stalled download close"
     );
 }
@@ -259,12 +267,12 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
             ));
         })
         .unwrap();
-    let pid = ready.wait(WITHIN)[0];
+    let pid = ready.wait(fakes::Deadline::after(WITHIN))[0];
     // The spinner shares this test's group: match its argv by pid alone,
     // so a panic anywhere below still kills it.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     assert!(
-        clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
+        clock.await_parked(clock.now() + GROUP_POLL, fakes::Deadline::after(WITHIN)),
         "waited {WITHIN:?} for the step to park while running"
     );
     // At the install-step deadline the run stops.
@@ -303,7 +311,7 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the stopped step is gone"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 /// A step whose program cannot start fails as its install step failed,

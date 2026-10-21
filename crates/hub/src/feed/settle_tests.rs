@@ -61,7 +61,7 @@ fn listing(feed: &Arc<Feed>) -> mpsc::Receiver<Vec<String>> {
 /// Waits until the listing thread parks beside the scanner.
 fn await_listing_parked(clock: &FakeClock, until: Instant) {
     assert!(
-        clock.await_parked_count(until, 2, DEADLINE),
+        clock.await_parked_count(until, 2, fakes::Deadline::after(DEADLINE)),
         "the listing parks beside the scanner"
     );
 }
@@ -153,7 +153,7 @@ fn a_silent_session_holds_the_listing_for_one_rescan_at_most() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_count(until, 2, DEADLINE),
+        clock.await_parked_count(until, 2, fakes::Deadline::after(DEADLINE)),
         "both still parked before the bound"
     );
     assert!(rx.try_recv().is_err(), "not answered before the bound");
@@ -176,7 +176,7 @@ fn stopping_the_feed_releases_a_listing_before_any_scan() {
     let (feed, clock) = new_feed(&temp.dir);
     let rx = listing(&feed);
     assert!(
-        clock.await_parked_unbounded(DEADLINE),
+        clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
         "the listing waits for the first scan"
     );
     assert!(rx.try_recv().is_err(), "no scan yet, so not answered");
@@ -256,7 +256,7 @@ fn a_listing_made_before_the_first_scan_is_answered_by_it() {
     let (feed, clock) = new_feed(&temp.dir);
     let rx = listing(&feed);
     assert!(
-        clock.await_parked_unbounded(DEADLINE),
+        clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
         "the listing waits for the first scan"
     );
     assert!(rx.try_recv().is_err(), "no scan yet, so not answered");
@@ -274,7 +274,7 @@ fn a_deadline_passing_before_the_first_scan_does_not_release_the_listing() {
     let (feed, clock) = new_feed(&temp.dir);
     let rx = listing(&feed);
     assert!(
-        clock.await_parked_unbounded(DEADLINE),
+        clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
         "the listing waits for the first scan"
     );
     let mark = clock.advance_when_parked(
@@ -284,7 +284,7 @@ fn a_deadline_passing_before_the_first_scan_does_not_release_the_listing() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, None, DEADLINE),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "still waiting for the first scan past the bound"
     );
     assert!(rx.try_recv().is_err(), "a deadline is not a scan");
@@ -316,7 +316,7 @@ fn a_session_found_after_the_first_scan_is_not_awaited() {
         &Deadline::after(DEADLINE),
     );
     assert!(session.await_subscribed(1, DEADLINE));
-    assert!(clock.await_parked(next_scan(&clock), DEADLINE));
+    assert!(clock.await_parked(next_scan(&clock), fakes::Deadline::after(DEADLINE)));
     let rx = listing(&feed);
     assert_eq!(
         Deadline::after(DEADLINE).recv(&rx).unwrap(),

@@ -333,14 +333,14 @@ fn bounded_returns_a_timeout_on_a_miss_and_kills_the_child() {
     let stdin = child.stdin.take().unwrap();
     let missed = crate::within(
         "bounded to give up on the hung shell",
-        DEADLINE,
+        Deadline::after(DEADLINE),
         move || bounded(child, "the hung shell", Duration::from_millis(100)),
     );
     let err = missed.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     assert!(err.to_string().contains("the hung shell"), "{err}");
     assert!(
-        pids_exit(&[pid], DEADLINE),
+        pids_exit(&[pid], Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the hung shell to be killed and reaped"
     );
     drop(stdin);
@@ -368,24 +368,24 @@ fn bounded_kills_a_child_that_closed_stdout_then_hangs() {
     // The line is written past the close, so stdout is at end-of-file
     // while the `sleep` lives.
     assert_eq!(
-        ready.wait(DEADLINE),
+        ready.wait(Deadline::after(DEADLINE)),
         vec![group],
         "the ready line is the closed-stdout shell's pid"
     );
     let pid = child.id();
     let missed = crate::within(
         "bounded to give up on the closed-stdout shell",
-        DEADLINE,
+        Deadline::after(DEADLINE),
         move || bounded(child, "the closed-stdout shell", Duration::from_millis(100)),
     );
     let err = missed.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     assert!(err.to_string().contains("the closed-stdout shell"), "{err}");
     assert!(
-        pids_exit(&[pid], DEADLINE),
+        pids_exit(&[pid], Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the closed-stdout shell to be killed and reaped"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -395,10 +395,11 @@ fn bounded_returns_the_status_and_stdout_of_a_child_that_exits() {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    let (status, stdout) = crate::within("bounded to return", DEADLINE, move || {
-        bounded(child, "the listing shell", DEADLINE)
-    })
-    .unwrap();
+    let (status, stdout) =
+        crate::within("bounded to return", Deadline::after(DEADLINE), move || {
+            bounded(child, "the listing shell", DEADLINE)
+        })
+        .unwrap();
     assert_eq!(status.code(), Some(3));
     assert_eq!(stdout, b"listed\n");
 }
@@ -548,13 +549,13 @@ fn group_empties_reports_an_empty_group_and_a_live_one() {
     let child = marked("group_empties");
     let group = child.id();
     assert!(
-        !group_empties(group, Duration::from_millis(200)),
+        !group_empties(group, Deadline::after(Duration::from_millis(200))),
         "a live group must not read as empty"
     );
     kill_group(group, "KILL").unwrap();
     reaped(child, "the killed group leader");
     assert!(
-        group_empties(group, DEADLINE),
+        group_empties(group, Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the killed group to empty"
     );
 }
@@ -572,7 +573,11 @@ fn group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties
     let group = child.id();
     let stdin = child.stdin.take().unwrap();
     let (answered, answer) = mpsc::channel();
-    thread::spawn(move || answered.send(group_empties(group, DEADLINE)).unwrap());
+    thread::spawn(move || {
+        answered
+            .send(group_empties(group, Deadline::after(DEADLINE)))
+            .unwrap()
+    });
     // The group lives until its stdin closes, so the wait must still be
     // running after several probe intervals: a wait that gave up after one
     // live probe would have answered `false` by now.
@@ -657,7 +662,11 @@ fn pids_exit_waits_for_both_pids() {
     let stdin_a = a.stdin.take().unwrap();
     let stdin_b = b.stdin.take().unwrap();
     let (answered, answer) = mpsc::channel();
-    thread::spawn(move || answered.send(pids_exit(&[pa, pb], DEADLINE)).unwrap());
+    thread::spawn(move || {
+        answered
+            .send(pids_exit(&[pa, pb], Deadline::after(DEADLINE)))
+            .unwrap()
+    });
     drop(stdin_a);
     reaped(a, "the first child to exit once its stdin closed");
     assert!(
@@ -720,7 +729,7 @@ fn pids_exit_is_false_while_a_pid_lives() {
     let pid = child.id();
     let stdin = child.stdin.take().unwrap();
     assert!(
-        !pids_exit(&[pid], Duration::from_millis(200)),
+        !pids_exit(&[pid], Deadline::after(Duration::from_millis(200))),
         "a live pid must not read as exited"
     );
     drop(stdin);
@@ -736,7 +745,7 @@ fn matching_exits_is_true_when_nothing_matches() {
         .to_string_lossy()
         .into_owned();
     assert!(
-        matching_exits(&marker, DEADLINE),
+        matching_exits(&marker, Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for nothing to match"
     );
 }
@@ -748,7 +757,7 @@ fn matching_exits_is_false_while_a_match_lives() {
     let child = marked(&marker);
     let group = child.id();
     assert!(
-        !matching_exits(&marker, Duration::from_millis(200)),
+        !matching_exits(&marker, Deadline::after(Duration::from_millis(200))),
         "a live match must not read as exited"
     );
     kill_group(group, "KILL").unwrap();
@@ -765,7 +774,7 @@ fn matching_exits_waits_for_a_live_match() {
     let (answered, answer) = mpsc::channel();
     thread::spawn(move || {
         answered
-            .send(matching_exits(&marker_text, DEADLINE))
+            .send(matching_exits(&marker_text, Deadline::after(DEADLINE)))
             .unwrap()
     });
     assert!(
@@ -847,10 +856,10 @@ fn a_stalled_lookup_times_out_and_reaps_the_lookup() {
     };
     assert_eq!(text, PS_TIMEOUT, "a stalled lookup must read as timed out");
     assert!(
-        pids_exit(&[pid], DEADLINE),
+        pids_exit(&[pid], Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the timed-out lookup to be reaped"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -917,7 +926,7 @@ fn a_lookup_that_cannot_be_bounded_reads_gone_not_timed_out() {
     let (reaped_pid, status) = reaped.expect("the killed lookup is waited on");
     assert_eq!(reaped_pid, pid);
     assert_eq!(status.terminating_signal(), Some(9));
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -964,7 +973,7 @@ fn try_matching_exits_is_ok_when_nothing_matches() {
         .join("nothing-matches-this-marker")
         .to_string_lossy()
         .into_owned();
-    assert!(try_matching_exits(&marker, DEADLINE).is_ok());
+    assert!(try_matching_exits(&marker, Deadline::after(DEADLINE)).is_ok());
 }
 
 #[test]

@@ -95,7 +95,7 @@ fn hold(stream: &UnixStream) {
 fn probed(home: &Path, within: Duration) -> Result<Status, Failure> {
     let home = home.to_path_buf();
     let clock = FakeClock::new();
-    fakes::within("the probe", DEADLINE, move || {
+    fakes::within("the probe", Deadline::after(DEADLINE), move || {
         probe(&home, &*clock, within, false)
     })
 }
@@ -461,7 +461,7 @@ fn ask_restores_blocking_after_a_reply() {
     assert!(is_blocking(&stream), "the stream arrives blocking");
     let clock = FakeClock::new();
     let within = ANSWER;
-    fakes::within("the ask", DEADLINE, move || {
+    fakes::within("the ask", Deadline::after(DEADLINE), move || {
         let reply = super::ask(
             &stream,
             clock.now() + within,
@@ -483,7 +483,7 @@ fn ask_restores_blocking_after_a_close_before_the_answer() {
     assert!(is_blocking(&stream), "the stream arrives blocking");
     let clock = FakeClock::new();
     let within = ANSWER;
-    fakes::within("the ask", DEADLINE, move || {
+    fakes::within("the ask", Deadline::after(DEADLINE), move || {
         let Err(error) = super::ask(
             &stream,
             clock.now() + within,
@@ -508,7 +508,7 @@ fn ask_restores_blocking_after_the_deadline() {
     assert!(is_blocking(&stream), "the stream arrives blocking");
     let clock = FakeClock::new();
     let within = Duration::ZERO;
-    fakes::within("the ask", DEADLINE, move || {
+    fakes::within("the ask", Deadline::after(DEADLINE), move || {
         let Err(error) = super::ask(
             &stream,
             clock.now() + within,
@@ -661,7 +661,7 @@ fn installed_is_whether_the_unit_file_exists() {
 fn the_installed_flag_reaches_the_status() {
     let (_dir, home) = home();
     let clock = FakeClock::new();
-    let status = fakes::within("the probe", DEADLINE, move || {
+    let status = fakes::within("the probe", Deadline::after(DEADLINE), move || {
         probe(&home, &*clock, ANSWER, true)
     })
     .unwrap();
@@ -718,7 +718,7 @@ fn the_json_is_one_line_in_field_order() {
 fn devices_is_empty_when_absent_and_an_error_when_not_a_dir() {
     let (_dir, home) = home();
     let probed = home.clone();
-    let empty = fakes::within("the probe", DEADLINE, move || {
+    let empty = fakes::within("the probe", Deadline::after(DEADLINE), move || {
         super::devices(&probed).unwrap()
     });
     assert!(empty.is_empty());
@@ -747,7 +747,7 @@ fn child_exit(test: &str, case: &str, vars: &[(&str, &Path)]) -> i32 {
     let output = fakes::rerun_prepared(
         &format!("{test}::hub_status_exits_without_the_manager"),
         &[(CHILD, "1"), (CASE, case)],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command.env_remove("XDG_CONFIG_HOME");
             for (key, value) in vars {
@@ -952,7 +952,7 @@ fn diagnosed(home: &Path, answer: &str, within: Duration) -> Diagnostic {
         hold(&stream);
     });
     let clock: Arc<FakeClock> = FakeClock::new();
-    fakes::within("the diagnose", DEADLINE, move || {
+    fakes::within("the diagnose", Deadline::after(DEADLINE), move || {
         diagnose(&home, &*clock, within)
     })
 }

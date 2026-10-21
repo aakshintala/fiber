@@ -13,7 +13,7 @@ use std::fs;
 use contract::SessionId;
 use serde_json::json;
 
-use super::session_name;
+use super::{session_name, session_parent};
 
 const SENDER: &str = "s_sender00000001";
 
@@ -136,6 +136,84 @@ fn a_line_of_another_kind_with_a_string_name_is_no_name() {
     let home = fakes::TempDir::new("log-name-other");
     plant(home.path(), "-a", SENDER, &[other(), other()]);
     assert_eq!(session_name(home.path(), &id(SENDER)), None);
+}
+
+fn started(parent: Option<serde_json::Value>) -> String {
+    let mut payload = json!({"workspace": "/w"});
+    if let Some(parent) = parent {
+        payload["parent"] = parent;
+    }
+    json!({"kind": "session_started", "payload": payload}).to_string()
+}
+
+fn delegated(parent: &str) -> serde_json::Value {
+    json!({"session_id": parent, "delegate_id": "j_1"})
+}
+
+#[test]
+fn a_delegate_reports_its_parent() {
+    let home = fakes::TempDir::new("log-parent-delegate");
+    plant(
+        home.path(),
+        "-a",
+        SENDER,
+        &[started(Some(delegated("s_parent00000001"))), other()],
+    );
+    assert_eq!(
+        session_parent(home.path(), &id(SENDER)),
+        Some(id("s_parent00000001"))
+    );
+}
+
+#[test]
+fn a_top_level_session_has_no_parent() {
+    let home = fakes::TempDir::new("log-parent-top");
+    plant(home.path(), "-a", SENDER, &[started(None), other()]);
+    assert_eq!(session_parent(home.path(), &id(SENDER)), None);
+}
+
+#[test]
+fn a_first_line_without_a_parent_reads_as_no_parent() {
+    let home = fakes::TempDir::new("log-parent-absent");
+    plant(home.path(), "-a", SENDER, &[named(json!("a"))]);
+    assert_eq!(session_parent(home.path(), &id(SENDER)), None);
+}
+
+#[test]
+fn a_missing_log_has_no_parent() {
+    let home = fakes::TempDir::new("log-parent-missing");
+    assert_eq!(session_parent(home.path(), &id(SENDER)), None);
+}
+
+#[test]
+fn a_torn_first_line_reads_as_no_parent() {
+    let home = fakes::TempDir::new("log-parent-torn-first");
+    let dir = home.path().join("projects/-a/sessions").join(SENDER);
+    fs::create_dir_all(&dir).unwrap();
+    // No closing newline: a torn write reads as nothing, so the parent
+    // it names is not read.
+    fs::write(
+        dir.join("events.jsonl"),
+        started(Some(delegated("s_parent00000001"))),
+    )
+    .unwrap();
+    assert_eq!(session_parent(home.path(), &id(SENDER)), None);
+}
+
+#[test]
+fn an_unreadable_first_line_has_no_parent() {
+    let home = fakes::TempDir::new("log-parent-unreadable");
+    plant(home.path(), "-a", SENDER, &["not json".to_owned()]);
+    assert_eq!(session_parent(home.path(), &id(SENDER)), None);
+}
+
+#[test]
+fn a_non_normal_id_reaches_no_parent() {
+    let home = fakes::TempDir::new("log-parent-traversal");
+    plant(home.path(), "-a", "a/b", &[started(Some(delegated("s_p")))]);
+    for odd in ["..", "a/b", "/abs", ""] {
+        assert_eq!(session_parent(home.path(), &id(odd)), None, "{odd}");
+    }
 }
 
 #[test]

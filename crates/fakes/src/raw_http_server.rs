@@ -17,9 +17,9 @@
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
 
 use crate::clock::SystemClock;
+use crate::deadline::Deadline;
 use crate::http_server::server::DropProbe;
 use crate::http_server::{
     Connection, HttpServer, Limits, ReplyEnd,
@@ -103,13 +103,14 @@ impl RawHttpServer {
         lock(&self.state).requests.clone()
     }
 
-    /// Waits, at most `within` of real time, until at least `count`
+    /// Waits, at most what remains of `deadline`, until at least `count`
     /// replies are fully flushed. True once they are; false at the
     /// deadline. Zero admits at once. Dropping the server ends no wait
     /// early.
     // exempted: waiting while completed <= count instead of < count only waits longer once satisfied; the trailing >= verdict returns the same value, so no test can observe the difference without a timing assert (docs/testing.md "Waits and timeouts"); same wait/verdict shape as the established ProviderServer awaits.
     #[cfg_attr(false, mutants::skip)]
-    pub fn await_replies(&self, count: usize, within: Duration) -> bool {
+    pub fn await_replies(&self, count: usize, deadline: Deadline) -> bool {
+        let within = deadline.left();
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived
@@ -118,12 +119,13 @@ impl RawHttpServer {
         guard.completed >= count
     }
 
-    /// Waits, at most `within` of real time, until no recorded reply is
-    /// still unfinished. True once every send attempt ended; false at the
-    /// deadline. Idle admits at once.
+    /// Waits, at most what remains of `deadline`, until no recorded reply
+    /// is still unfinished. True once every send attempt ended; false at
+    /// the deadline. Idle admits at once.
     // exempted: waiting while pending >= 0 instead of > 0 only waits longer once satisfied; the trailing == verdict returns the same value, so no test can observe the difference without a timing assert (docs/testing.md "Waits and timeouts"); same wait/verdict shape as await_replies above. Both verdict directions stay pinned by the held zero check and the interrupt idle wait.
     #[cfg_attr(false, mutants::skip)]
-    pub fn await_idle(&self, within: Duration) -> bool {
+    pub fn await_idle(&self, deadline: Deadline) -> bool {
+        let within = deadline.left();
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived

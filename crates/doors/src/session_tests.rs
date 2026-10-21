@@ -233,7 +233,7 @@ fn extensions() -> Event {
 
 fn recv(client: &Client) -> serde_json::Value {
     client
-        .recv(DEADLINE)
+        .recv(fakes::Deadline::after(DEADLINE))
         .expect("a line arrived before the deadline")
 }
 
@@ -285,7 +285,7 @@ fn many_connections_leave_nothing_held() {
             }
             drop(client);
             let socket = socket.clone();
-            fakes::within("forty connections", DEADLINE, move || {
+            fakes::within("forty connections", Deadline::after(DEADLINE), move || {
                 for i in 0..40 {
                     let client = Client::connect(&socket).unwrap();
                     client
@@ -735,7 +735,7 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
         if let Ok(()) = done_tx.send(()) {}
     });
     assert!(
-        clock.await_parked(until, DEADLINE),
+        clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
         "close waits for a writer that is blocked in write"
     );
     assert!(
@@ -749,7 +749,7 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(until), DEADLINE),
+        clock.await_parked_since(&mark, Some(until), fakes::Deadline::after(DEADLINE)),
         "close waits again one millisecond short of the grace"
     );
     assert!(
@@ -1441,7 +1441,7 @@ fn a_shell_registered_after_close_is_cancelled() {
     });
     let close_thread = close.thread().id();
     assert!(
-        clock.await_parked(until, DEADLINE),
+        clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
         "close is past the shell snapshot and waiting out the grace"
     );
     client
@@ -2340,18 +2340,22 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     // The ack precedes the connection's own `clients` line, so the test
     // reads that line before quiesce: one still unwritten would be taken
     // for a line that followed quiesce.
-    let lines = fakes::within("the joining client's clients line", DEADLINE, move || {
-        let wait = Deadline::after(DEADLINE);
-        loop {
-            let line = wait
-                .recv(&lines)
-                .expect("the joining client's clients line arrives");
-            if line.kind == "clients" {
-                break;
+    let lines = fakes::within(
+        "the joining client's clients line",
+        Deadline::after(DEADLINE),
+        move || {
+            let wait = Deadline::after(DEADLINE);
+            loop {
+                let line = wait
+                    .recv(&lines)
+                    .expect("the joining client's clients line arrives");
+                if line.kind == "clients" {
+                    break;
+                }
             }
-        }
-        lines
-    });
+            lines
+        },
+    );
     opened.session.quiesce();
     drop(connected);
     wait_idle(&gate);
@@ -2360,7 +2364,7 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     late.send(&subscribe_line("c_late", "full")).unwrap();
     let _ack = recv(&late);
     opened.log.append(&notice(), None, None).unwrap();
-    let _lines = fakes::within("the notice", DEADLINE, move || {
+    let _lines = fakes::within("the notice", Deadline::after(DEADLINE), move || {
         let wait = Deadline::after(DEADLINE);
         loop {
             let line = wait.recv(&lines).expect("the notice arrives");
@@ -2455,7 +2459,7 @@ fn send_text(client: &Client, id: &str, command: &str, text: &str) {
 fn answer_of(client: &Client, id: &str) -> Value {
     let owned = id.to_owned();
     client
-        .recv_until(DEADLINE, |line| {
+        .recv_until(fakes::Deadline::after(DEADLINE), |line| {
             matches!(
                 line["kind"].as_str(),
                 Some("command_accepted" | "command_rejected")
@@ -2862,10 +2866,14 @@ fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
             let ack = recv(&client);
             assert_eq!(ack["kind"], "command_accepted");
             let first = client
-                .recv_until(DEADLINE, |line| line["kind"] == "extension_ui")
+                .recv_until(fakes::Deadline::after(DEADLINE), |line| {
+                    line["kind"] == "extension_ui"
+                })
                 .expect("the first extension_ui arrives");
             let second = client
-                .recv_until(DEADLINE, |line| line["kind"] == "extension_ui")
+                .recv_until(fakes::Deadline::after(DEADLINE), |line| {
+                    line["kind"] == "extension_ui"
+                })
                 .expect("the second extension_ui arrives");
             assert_eq!(
                 [
@@ -2973,7 +2981,9 @@ fn a_full_subscribe_is_counted_before_its_acknowledgement() {
             assert_eq!(ack["kind"], "command_accepted");
             assert_eq!(ack["payload"]["command_id"], "c_full");
             let clients = client
-                .recv_until(DEADLINE, |line| line["kind"] == "clients")
+                .recv_until(fakes::Deadline::after(DEADLINE), |line| {
+                    line["kind"] == "clients"
+                })
                 .expect("the clients line follows the seed");
             assert_eq!(clients["payload"]["count"], 1);
             Ok(())
@@ -3806,19 +3816,37 @@ fn message_and_close_race_in_both_lock_orders() {
                 second.send(r#"{"id":"c_close","command":"close"}"#).unwrap();
                 release_tx.send(()).unwrap();
                 // The message was admitted under the lock the close waited
-                // for: accepted, ahead of the close.
-                let accepted = support::response(&first, "c_m1");
-                assert_eq!(support::kind(&accepted), "command_accepted");
-                Deadline::after(DEADLINE)
-                    .recv(&closed)
-                    .expect("the close took the lock next");
-                let Delivery::Message(message) = Deadline::after(DEADLINE)
+                // for: it reaches the inbox ahead of the close, still
+                // unanswered, and the take's ack answers it.
+                let Delivery::Message(message, ack) = Deadline::after(DEADLINE)
                     .recv(&inbox)
                     .expect("the message is delivered")
                 else {
                     panic!("the message is delivered as a message");
                 };
                 assert_eq!(message.command_id.0, "c_m1");
+                // The take proves admission finished: read up to a second
+                // subscribe's acknowledgement and prove the message itself
+                // is still unanswered. The reader answers lines in order,
+                // so the acknowledgement arrives after anything admission
+                // sent; the take's ack is still uncalled, so the round
+                // trip orders the check instead of a wall-clock wait.
+                first.send(&subscribe_line("c_probe", "full")).unwrap();
+                for line in support::until(&first, |line| {
+                    support::command_id(line) == Some("c_probe")
+                }) {
+                    assert_ne!(
+                        support::command_id(&line),
+                        Some("c_m1"),
+                        "the door answers nothing at admission"
+                    );
+                }
+                ack.0(Ok(None));
+                let accepted = support::response(&first, "c_m1");
+                assert_eq!(support::kind(&accepted), "command_accepted");
+                Deadline::after(DEADLINE)
+                    .recv(&closed)
+                    .expect("the close took the lock next");
                 let Delivery::Close(ack) = Deadline::after(DEADLINE)
                     .recv(&inbox)
                     .expect("the close is delivered")
@@ -4010,7 +4038,9 @@ fn a_first_subscribe_with_a_label_waits_for_the_switch_before_its_acceptance() {
             // the ordered read below would fail on it too.
             wait_switch_waiting();
             assert!(
-                client.recv(Duration::ZERO).is_none(),
+                client
+                    .recv(fakes::Deadline::after(Duration::ZERO))
+                    .is_none(),
                 "no line precedes the loop's answer"
             );
             (ack.0)(Ok(None));
@@ -4373,7 +4403,9 @@ fn a_level_change_with_a_label_waits_for_the_switch() {
             // thread that never ran. No clock is read.
             wait_switch_waiting();
             assert!(
-                client.recv(Duration::ZERO).is_none(),
+                client
+                    .recv(fakes::Deadline::after(Duration::ZERO))
+                    .is_none(),
                 "no line precedes the loop's answer"
             );
             (ack.0)(Ok(None));

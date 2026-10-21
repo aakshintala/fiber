@@ -244,7 +244,7 @@ impl Running {
                 panic!("the stderr reader ended without its text")
             }
         };
-        self.watchdog.stand_down(self.deadline.cleanup());
+        self.watchdog.stand_down(self.deadline.cleanup_phase());
         (status, stderr)
     }
 }
@@ -1432,7 +1432,7 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let command: u32 = ready.wait(setup.deadline.left())[0];
+    let command: u32 = ready.wait(setup.deadline)[0];
     let watchdog = Watchdog::group(command);
     let session = running.group;
     assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
@@ -1450,7 +1450,7 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
         !group_alive(setup.deadline, command),
         "the command was killed"
     );
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     // The complete ordered kinds of the session log: the turn, then the
     // exit, with no `model_changed`, since the switch died in its read.
     assert_eq!(
@@ -1504,7 +1504,7 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let command: u32 = ready.wait(setup.deadline.left())[0];
+    let command: u32 = ready.wait(setup.deadline)[0];
     let watchdog = Watchdog::group(command);
     // The open blocks until the switch's read opens the FIFO: the
     // rendezvous proves the read is in flight, and the line the test
@@ -1531,7 +1531,7 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
         !group_alive(setup.deadline, command),
         "the command was killed"
     );
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     // The complete ordered kinds of the session log: the turn, then the
     // exit, with no `model_changed`, since the switch died in its read.
     assert_eq!(
@@ -1585,7 +1585,7 @@ fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let command: u32 = ready.wait(setup.deadline.left())[0];
+    let command: u32 = ready.wait(setup.deadline)[0];
     let watchdog = Watchdog::group(command);
     // The write's open rendezvouses with the switch's read, and the line
     // releases it: waiting for `model_changed` next proves the read
@@ -1612,7 +1612,7 @@ fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
         !group_alive(setup.deadline, command),
         "the command was killed"
     );
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     // The complete ordered kinds of the session log: the turn, the
     // applied switch, then the exit.
     assert_eq!(

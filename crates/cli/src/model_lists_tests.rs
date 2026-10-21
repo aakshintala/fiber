@@ -16,6 +16,7 @@ use std::time::Duration;
 use config::Config;
 use contract::clock::Clock;
 use extensions::{Providers, SessionExtensions};
+use fakes::Deadline;
 use fakes::NoLock;
 use serde_json::{Value, json};
 
@@ -212,20 +213,24 @@ fn bounded(
     let home = setup.home();
     let workspace = setup.workspace();
     let clock = Arc::clone(clock);
-    fakes::within("the model list read", DEADLINE, move || {
-        let load = installed(home.as_path(), &clock);
-        match model_lists(
-            &home,
-            &workspace,
-            read,
-            &load,
-            &fakes::children::grouped_output,
-            &*fakes::clock::FakeClock::new(),
-        ) {
-            Ok(loaded) => Ok(listed(loaded)),
-            Err(error) => Err(error.to_string()),
-        }
-    })
+    fakes::within(
+        "the model list read",
+        Deadline::after(DEADLINE),
+        move || {
+            let load = installed(home.as_path(), &clock);
+            match model_lists(
+                &home,
+                &workspace,
+                read,
+                &load,
+                &fakes::children::grouped_output,
+                &*fakes::clock::FakeClock::new(),
+            ) {
+                Ok(loaded) => Ok(listed(loaded)),
+                Err(error) => Err(error.to_string()),
+            }
+        },
+    )
 }
 
 #[test]

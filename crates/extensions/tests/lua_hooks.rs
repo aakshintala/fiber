@@ -125,7 +125,7 @@ fn timed_out<T>(
     let answer = ask();
     wait.recv(went).expect("waited for the hook to start");
     let parked = clock
-        .mark_parked(asked + timeout, WAIT)
+        .mark_parked(asked + timeout, fakes::Deadline::after(WAIT))
         .expect("the caller parks at the hook's deadline");
     let parked = parked.threads();
     assert_eq!(
@@ -275,7 +275,10 @@ fn ask_message(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeMessage
     let session = Arc::clone(session);
     std::thread::spawn(move || {
         let content = vec![ContentPart::Text { text: "x".into() }];
-        let answer = session.before_message(&BeforeMessage { content: &content });
+        let answer = session.before_message(&BeforeMessage {
+            content: &content,
+            sender: None,
+        });
         match tx.send(answer) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
@@ -717,12 +720,16 @@ fn a_run_ending_after_the_extension_is_dropped_is_not_logged() {
     );
     assert_eq!(Arc::strong_count(&ext), 1, "the test holds the last handle");
     drop(ext);
-    fakes::within("File::create", fakes::MUST_SUCCEED_WITHIN, move || {
-        use std::io::Write as _;
-        std::fs::File::create(&release)
-            .and_then(|mut released| released.write_all(b"x\n"))
-            .is_ok()
-    });
+    fakes::within(
+        "File::create",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            use std::io::Write as _;
+            std::fs::File::create(&release)
+                .and_then(|mut released| released.write_all(b"x\n"))
+                .is_ok()
+        },
+    );
     match Deadline::after(WAIT).recv(&inbox) {
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
         Ok(delivery) => panic!("a run ending after the drop was logged: {delivery:?}"),
@@ -748,12 +755,16 @@ const SENTINEL: Duration = Duration::from_secs(60);
 fn timer_fifo(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     let made = path.clone();
-    let made = fakes::within("mkfifo", fakes::MUST_SUCCEED_WITHIN, move || {
-        std::process::Command::new("mkfifo")
-            .arg(&made)
-            .status()
-            .is_ok_and(|status| status.success())
-    });
+    let made = fakes::within(
+        "mkfifo",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            std::process::Command::new("mkfifo")
+                .arg(&made)
+                .status()
+                .is_ok_and(|status| status.success())
+        },
+    );
     if !made {
         panic!("mkfifo {} failed", path.display());
     }
@@ -1007,7 +1018,7 @@ fn every_fires_again_ms_after_each_firing_ends() {
     // the rescheduling and make this test flaky.
     let rescheduled = clock.now() + Duration::from_millis(50);
     assert!(
-        clock.await_parked(rescheduled, WAIT),
+        clock.await_parked(rescheduled, fakes::Deadline::after(WAIT)),
         "waited {WAIT:?} for the first firing to end and park at its every"
     );
     // The first firing ended at the frozen now, so its `every` is due 50 ms
@@ -1020,7 +1031,7 @@ fn every_fires_again_ms_after_each_firing_ends() {
     );
     no_line(&second, "the second firing 1 ms early");
     assert!(
-        clock.await_parked(rescheduled, WAIT),
+        clock.await_parked(rescheduled, fakes::Deadline::after(WAIT)),
         "waited {WAIT:?} for the thread to park again at the every's due"
     );
     clock.advance_when_parked(
@@ -1204,7 +1215,7 @@ fn a_queued_command_starts_before_a_due_timer() {
     let slow_caller = Arc::clone(&ext);
     std::thread::spawn(move || slow_tx.send(slow_caller.command("slow", "")));
     assert!(
-        clock.await_parked(slow_started, WAIT),
+        clock.await_parked(slow_started, fakes::Deadline::after(WAIT)),
         "waited {WAIT:?} for `slow` to start and hold the thread"
     );
     // `quick` is queued while `slow` holds the thread and the timer is due.
@@ -1215,7 +1226,7 @@ fn a_queued_command_starts_before_a_due_timer() {
     let quick_caller = Arc::clone(&ext);
     std::thread::spawn(move || quick_tx.send(quick_caller.command("quick", "")));
     assert!(
-        clock.await_parked(quick_queued, WAIT),
+        clock.await_parked(quick_queued, fakes::Deadline::after(WAIT)),
         "waited {WAIT:?} for `quick` to wait in the queue"
     );
     // Releasing `slow` frees the thread with `quick` queued and the timer
@@ -1287,7 +1298,7 @@ fn a_timer_callback_past_its_timeout_ends_and_every_keeps_firing() {
     // parks at the firing's 200 ms deadline, the signal before the advance.
     let deadline = clock.now() + Duration::from_millis(200);
     let parked = clock
-        .mark_parked(deadline, WAIT)
+        .mark_parked(deadline, fakes::Deadline::after(WAIT))
         .expect("the firing parks at its deadline");
     let parked = parked.threads();
     assert_eq!(parked.len(), 1, "only the firing parks at its deadline");
@@ -1302,7 +1313,7 @@ fn a_timer_callback_past_its_timeout_ends_and_every_keeps_firing() {
     // that end: the park there proves the end before the next advance.
     let rescheduled = clock.now() + Duration::from_millis(50);
     assert!(
-        clock.await_parked(rescheduled, WAIT),
+        clock.await_parked(rescheduled, fakes::Deadline::after(WAIT)),
         "waited {WAIT:?} for the timed-out firing to park at its every"
     );
     clock.advance_when_parked(
@@ -1402,7 +1413,7 @@ fn a_timer_fires_while_a_hook_waits_on_host_exec() {
     );
     let due = clock.now() + Duration::from_millis(50);
     let parked = clock
-        .mark_parked(due, WAIT)
+        .mark_parked(due, fakes::Deadline::after(WAIT))
         .expect("the extension thread parks at the timer due");
     let parked = parked.threads();
     assert_eq!(
@@ -1475,7 +1486,7 @@ fn in_child(name: &str) {
     let Ok(output) = Deadline::after(WAIT).recv(&rx) else {
         fakes::within(
             "kill -KILL on the child",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 drop(fakes::kill_pid(pid, "KILL"));
             },
@@ -1537,12 +1548,12 @@ fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
     assert!(
         !fakes::within(
             "kill -0 on the group",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || fakes::kill_group(pid, "0").unwrap_or(true)
         ),
         "the exec group is gone after the kill"
     );
-    watchdog.stand_down(WAIT);
+    watchdog.stand_down(fakes::Deadline::after(WAIT));
 }
 
 // The lifecycle points under their timeouts, on the fake clock

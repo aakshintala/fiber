@@ -185,7 +185,8 @@ impl Session {
         assert!(status.success(), "{stderr}");
         assert!(!group_alive(self.setup.deadline, group));
         std::mem::forget(self.guard);
-        self.watchdog.stand_down(self.setup.deadline.cleanup());
+        self.watchdog
+            .stand_down(self.setup.deadline.cleanup_phase());
         assert_one_clients(&self.stream);
         assert_eq!(
             kinds_without_clients(&self.stream),
@@ -333,7 +334,7 @@ fn reload_is_busy_during_a_request_and_changes_nothing() {
     server.hold();
     let mut session = Session::start(setup);
     session.send_prompt();
-    assert!(server.await_requests(1, session.setup.deadline.left()));
+    assert!(server.await_requests(1, session.setup.deadline));
     session.client.send(r#"{"id":"reload","command":"reload"}"#);
     session.client.send(r#"{"id":"barrier","command":"tools"}"#);
     session
@@ -605,7 +606,7 @@ fn close_now_cancels_a_reload_blocked_in_extension_initialization() {
     std::mem::forget(session.guard);
     session
         .watchdog
-        .stand_down(session.setup.deadline.cleanup());
+        .stand_down(session.setup.deadline.cleanup_phase());
     session
         .expected
         .extend(["command_accepted", "command_rejected", "fiber_exited"]);

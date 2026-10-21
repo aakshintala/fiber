@@ -115,7 +115,7 @@ fn record(
         }
     };
     let mut stream = opened.map_err(|e| {
-        let failure = e.failure("record", &secrets);
+        let failure = e.failure("record", provider::LoginAdvice::Advised, &secrets);
         serde_json::to_string(&failure).unwrap_or_else(|_| e.to_string())
     })?;
     let mut file = File::create(out).map_err(|e| format!("{out}: {e}"))?;

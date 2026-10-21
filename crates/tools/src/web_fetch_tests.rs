@@ -1018,8 +1018,10 @@ fn held(rig: &Rig, server: &ProviderServer, url: &str, deadline: Duration) -> Ca
     server.hold();
     let call = rig.start(url);
     assert!(
-        rig.clock
-            .await_parked(rig.clock.origin() + deadline, SIGNAL),
+        rig.clock.await_parked(
+            rig.clock.origin() + deadline,
+            fakes::Deadline::after(SIGNAL)
+        ),
         "the watcher waits for the deadline"
     );
     call
@@ -1030,7 +1032,10 @@ fn a_request_that_takes_over_sixty_seconds_times_out() {
     let server = serve([ok("text/plain", "late")]);
     let rig = Rig::new();
     let call = held(&rig, &server, &server.url(), Duration::from_secs(60));
-    assert!(server.await_requests(1, SIGNAL), "the request is in flight");
+    assert!(
+        server.await_requests(1, Deadline::after(SIGNAL)),
+        "the request is in flight"
+    );
     rig.clock.advance_when_parked(
         Some(rig.clock.origin() + Duration::from_secs(60)),
         None,
@@ -1051,7 +1056,7 @@ fn a_request_one_second_short_of_sixty_is_still_waiting() {
     let server = serve([ok("text/plain", "late")]);
     let rig = Rig::new();
     let call = held(&rig, &server, &server.url(), Duration::from_secs(60));
-    assert!(server.await_requests(1, SIGNAL));
+    assert!(server.await_requests(1, Deadline::after(SIGNAL)));
     let mark = rig.clock.advance_when_parked(
         Some(rig.clock.origin() + Duration::from_secs(60)),
         None,
@@ -1062,7 +1067,7 @@ fn a_request_one_second_short_of_sixty_is_still_waiting() {
         rig.clock.await_parked_since(
             &mark,
             Some(rig.clock.origin() + Duration::from_secs(60)),
-            SIGNAL
+            fakes::Deadline::after(SIGNAL)
         ),
         "the watcher waits again a second before its deadline"
     );
@@ -1087,13 +1092,13 @@ fn a_deadline_that_passes_while_the_body_is_read_times_out() {
     let server = serve([stall()]);
     let rig = Rig::new();
     let call = rig.start(&server.url());
-    assert!(
-        rig.clock
-            .await_parked(rig.clock.origin() + Duration::from_secs(60), SIGNAL)
-    );
+    assert!(rig.clock.await_parked(
+        rig.clock.origin() + Duration::from_secs(60),
+        fakes::Deadline::after(SIGNAL)
+    ));
     // Past headers: the partial body is what the read is blocked on.
     assert!(
-        server.await_partial(1, SIGNAL),
+        server.await_partial(1, Deadline::after(SIGNAL)),
         "the partial response was sent"
     );
     rig.clock.advance_when_parked(
@@ -1110,7 +1115,7 @@ fn a_deadline_that_passes_while_the_body_is_read_times_out() {
         fakes::text_of(&output)
     );
     assert!(
-        server.await_closed(1, SIGNAL),
+        server.await_closed(1, Deadline::after(SIGNAL)),
         "the fetch closed the socket"
     );
 }
@@ -1120,12 +1125,12 @@ fn a_cancel_while_the_body_is_read_stops_the_call() {
     let server = serve([stall()]);
     let rig = Rig::new();
     let call = rig.start(&server.url());
+    assert!(rig.clock.await_parked(
+        rig.clock.origin() + Duration::from_secs(60),
+        fakes::Deadline::after(SIGNAL)
+    ));
     assert!(
-        rig.clock
-            .await_parked(rig.clock.origin() + Duration::from_secs(60), SIGNAL)
-    );
-    assert!(
-        server.await_partial(1, SIGNAL),
+        server.await_partial(1, Deadline::after(SIGNAL)),
         "the partial response was sent"
     );
     call.cancel.cancel();
@@ -1133,7 +1138,7 @@ fn a_cancel_while_the_body_is_read_stops_the_call() {
     assert_eq!(code(&output), None);
     assert_eq!(fakes::text_of(&output), "Cancelled and stopped.\n");
     assert!(
-        server.await_closed(1, SIGNAL),
+        server.await_closed(1, Deadline::after(SIGNAL)),
         "the fetch closed the socket"
     );
 }
@@ -1143,7 +1148,7 @@ fn a_cancel_during_a_held_response_returns_promptly_and_says_it_stopped() {
     let server = serve([ok("text/plain", "late")]);
     let rig = Rig::new();
     let call = held(&rig, &server, &server.url(), Duration::from_secs(60));
-    assert!(server.await_requests(1, SIGNAL));
+    assert!(server.await_requests(1, Deadline::after(SIGNAL)));
     call.cancel.cancel();
     let output = call.wait();
     assert_eq!(code(&output), None);
@@ -1179,7 +1184,10 @@ fn the_whole_fetch_times_out_after_five_minutes_whatever_each_hop_has_left() {
         // Each hop is held short of its own 60-second deadline.
         for n in 1..=hops {
             if n > 1 {
-                assert!(server.await_requests(n, SIGNAL), "hop {n} is in flight");
+                assert!(
+                    server.await_requests(n, Deadline::after(SIGNAL)),
+                    "hop {n} is in flight"
+                );
             }
             rig.clock.advance_when_parked(
                 Some(origin + Duration::from_secs(now + 60)),
@@ -1194,7 +1202,7 @@ fn the_whole_fetch_times_out_after_five_minutes_whatever_each_hop_has_left() {
         // `now + 60`; the fetch's 300 s is the earlier one.
         assert_eq!(now, 5 * hop);
         assert!(
-            server.await_requests(6, SIGNAL),
+            server.await_requests(6, Deadline::after(SIGNAL)),
             "the sixth hop is in flight"
         );
         rig.clock.advance_when_parked(
@@ -1228,7 +1236,7 @@ fn a_hop_whose_own_deadline_is_earlier_than_the_fetchs_is_a_request_timeout() {
     );
     server.release_one();
     assert!(
-        server.await_requests(2, SIGNAL),
+        server.await_requests(2, Deadline::after(SIGNAL)),
         "the second hop is in flight"
     );
     rig.clock.advance_when_parked(
@@ -1266,7 +1274,7 @@ fn a_fetch_through_a_proxy_tunnels_through_it() {
     let output = rig.fetch(&server.url());
     assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
     assert!(fakes::text_of(&output).ends_with("via proxy"));
-    assert!(proxy.await_connects(1, SIGNAL));
+    assert!(proxy.await_connects(1, Deadline::after(SIGNAL)));
     assert_eq!(
         proxy.connects(),
         [format!("127.0.0.1:{}", port_of(&server))]
@@ -1699,7 +1707,7 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
         .recv(&second_write_rx)
         .expect("the artifact writer reaches piece two");
     assert!(
-        server.await_partial(1, WITHIN),
+        server.await_partial(1, Deadline::after(WITHIN)),
         "the server sends piece three before the timeout"
     );
     Deadline::after(WITHIN)
@@ -1709,7 +1717,7 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
     rig.clock.advance(Duration::from_secs(61));
     hold_release.send(()).expect("the held watcher is released");
     assert!(
-        server.await_closed(1, WITHIN),
+        server.await_closed(1, Deadline::after(WITHIN)),
         "the fetch closed the socket after the stop landed"
     );
     release
@@ -1822,7 +1830,10 @@ fn an_html_body_cut_short_is_connection_failed_and_leaves_no_file() {
     let url = format!("{}/page", server.url());
     let rig = Rig::new();
     let output = rig.fetch(&url);
-    assert!(server.await_replies(1, SIGNAL), "the server answered");
+    assert!(
+        server.await_replies(1, Deadline::after(SIGNAL)),
+        "the server answered"
+    );
     assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
     assert_eq!(
         fakes::text_of(&output),

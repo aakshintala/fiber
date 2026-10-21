@@ -56,7 +56,7 @@ fn the_first_call_blocks_until_its_cancel() {
         // If `wait_started` fails, the guard still cancels, so the test
         // fails with its message instead of hanging on the call's bound.
         let _guard = CancelOnDrop { call: &*call };
-        provider.wait_started(WAIT);
+        provider.wait_started(crate::Deadline::after(WAIT));
         call.cancel();
         let (ended, drops) = run.join().unwrap();
         assert!(matches!(ended, Err(CallError::Cancelled { .. })));
@@ -114,5 +114,5 @@ fn later_calls_answer_at_once() {
 fn wait_started_fails_when_no_call_starts() {
     // Nothing ever calls this provider, so the deadline always expires:
     // the wait is the assertion.
-    BlockingProvider::default().wait_started(Duration::from_millis(100));
+    BlockingProvider::default().wait_started(crate::Deadline::after(Duration::from_millis(100)));
 }

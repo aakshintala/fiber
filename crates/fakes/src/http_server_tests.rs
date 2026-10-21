@@ -139,7 +139,7 @@ fn expected_accept_expires_without_a_client() {
         let deadline = Deadline::after(OP);
         let ack = next_acknowledgment(&deadline, &acks, "the accept's clock wait");
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the accept parks on the clock before it moves"
         );
         clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
@@ -174,7 +174,7 @@ fn expected_accept_expires_without_a_client() {
         let deadline = Deadline::after(OP);
         let ack = next_acknowledgment(&deadline, &acks, "the accept's clock wait");
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the accept parks on the clock before it moves"
         );
         clock.advance(Duration::from_secs(10) + Duration::from_nanos(1));
@@ -249,7 +249,7 @@ fn accept_time_is_charged_to_the_request_budget() {
         let deadline = Deadline::after(OP);
         let ack = next_acknowledgment(&deadline, &acks, "the accept's clock wait");
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the accept parks on the clock before it moves"
         );
         // Three seconds pass with no client: the budget is running already.
@@ -315,7 +315,7 @@ fn fake_time_wakes_a_silent_connection() {
             }
         };
         assert!(
-            clock.await_thread_parked(read.thread, read.until, OP),
+            clock.await_thread_parked(read.thread, read.until, Deadline::after(OP)),
             "the read parks on the clock before it moves"
         );
         clock.advance(Duration::from_secs(10));
@@ -427,7 +427,7 @@ fn advance_between_check_and_park_is_not_lost() {
         let deadline = Deadline::after(OP);
         let first = next_acknowledgment(&deadline, &acks, "the accept's clock wait");
         assert!(
-            clock.await_thread_parked(first.thread, first.until, OP),
+            clock.await_thread_parked(first.thread, first.until, Deadline::after(OP)),
             "the accept parks on the clock before it moves"
         );
         // Arm the check-to-park pause, then wake the waiter once: it
@@ -584,7 +584,7 @@ fn start_reply_drain(
         }
     };
     assert!(
-        clock.await_thread_parked(ack.thread, ack.until, OP),
+        clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
         "the drain waits on its injected-clock bound"
     );
     (clock, server, client, recorded_rx, drained_rx, ack)
@@ -608,7 +608,7 @@ fn reply_drain_bound_expires_at_the_exact_edge() {
         .expect("the bound is at least one nanosecond");
     let mark = clock.advance_marked(before);
     assert!(
-        clock.await_parked_since(&mark, ack.until, OP),
+        clock.await_parked_since(&mark, ack.until, Deadline::after(OP)),
         "one tick below the bound the drain is still waiting"
     );
     assert!(
@@ -644,7 +644,7 @@ fn reply_drain_progress_does_not_restart_its_bound() {
     client.write_all(b"x").expect("the pipelined byte writes");
     let mark = clock.advance_marked(Duration::from_millis(1));
     assert!(
-        clock.await_parked_since(&mark, ack.until, OP),
+        clock.await_parked_since(&mark, ack.until, Deadline::after(OP)),
         "after consuming the byte, the drain waits again on the same bound"
     );
     let rest = SHORT
@@ -663,7 +663,7 @@ fn shutdown_ends_a_reply_drain_with_an_open_peer() {
     let (clock, server, _client, requests, drained, ack) =
         start_reply_drain(Duration::from_secs(30));
     assert!(
-        clock.await_thread_parked(ack.thread, ack.until, OP),
+        clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
         "the reply drain is waiting before shutdown"
     );
     assert!(
@@ -1237,7 +1237,7 @@ fn blocked_write_expires_on_the_injected_clock() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the write parks on the clock before it moves"
         );
         clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
@@ -1403,7 +1403,7 @@ fn a_wait_without_a_wake_parks_instead_of_spinning() {
         let ack = next_acknowledgment(&deadline, &acks, "the accept's clock wait");
         assert_eq!(ack.phase, "to accept the connection");
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the accept parks on the clock before it moves"
         );
         let entered = server.test_wait_entries();
@@ -1448,7 +1448,7 @@ fn a_silent_connection_is_not_closed() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the stall parks on the clock before it moves"
         );
         assert!(
@@ -1517,7 +1517,7 @@ fn a_reset_connection_ends_a_fill_at_once() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the fill parks on the clock before it moves"
         );
         drop(client);
@@ -1559,7 +1559,7 @@ fn a_silent_fill_waits_for_its_bytes() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the fill parks on the clock before it moves"
         );
         assert!(
@@ -1625,7 +1625,7 @@ fn a_reset_stall_reports_the_close() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the stall parks on the clock before it moves"
         );
         drop(client);
@@ -1828,7 +1828,7 @@ fn a_would_block_flush_waits_out_its_bound() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the flush parks on the clock before it moves"
         );
         clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
@@ -2667,7 +2667,7 @@ fn a_handshake_the_peer_never_reads_fails_within_its_bound() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the handshake parks on the clock before it moves"
         );
         clock.advance(Duration::from_secs(10));
@@ -2718,7 +2718,7 @@ fn a_stalled_tunnel_direction_fails_within_its_bound() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the copy parks on the clock before it moves"
         );
         clock.advance(Duration::from_secs(10));
@@ -2793,7 +2793,7 @@ fn a_stalled_origin_read_fails_within_its_bound() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the origin copy parks on the clock before it moves"
         );
         clock.advance(Duration::from_secs(10));
@@ -2853,7 +2853,7 @@ fn a_stalled_origin_write_fails_within_its_bound() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the origin write parks on the clock before it moves"
         );
         clock.advance(Duration::from_secs(10));
@@ -2907,7 +2907,7 @@ fn shutdown_during_a_stalled_origin_read_stops_it() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the origin copy parks on the clock before it moves"
         );
         assert!(server.shutdown(), "shutdown ends the stalled origin read");
@@ -2955,7 +2955,7 @@ fn shutdown_during_a_stalled_origin_write_stops_it() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the origin write parks on the clock before it moves"
         );
         assert!(server.shutdown(), "shutdown ends the stalled origin write");
@@ -2997,7 +2997,7 @@ fn a_silent_origin_parks_on_the_injected_clock() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the origin copy parks on the clock before it moves"
         );
         assert!(server.shutdown(), "shutdown ends the silent tunnel");
@@ -3040,7 +3040,7 @@ fn shutdown_during_the_tunnel_handshake_stops_it() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the handshake parks on the clock before it moves"
         );
         assert!(server.shutdown(), "shutdown stops the handshake");
@@ -3170,7 +3170,7 @@ fn a_finished_tunnel_removes_only_its_own_registry_entry() {
             }
         };
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the copy parks on the clock before it moves"
         );
         // A live neighbour above the tunnel's id, claimed while the

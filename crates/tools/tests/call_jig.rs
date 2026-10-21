@@ -51,7 +51,7 @@ fn call(tool: &str, arguments: &str) -> Output {
         .recv(&finished)
         .expect("the call jig finished")
         .unwrap();
-    watchdog.stand_down(Duration::from_secs(5));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     output
 }
 

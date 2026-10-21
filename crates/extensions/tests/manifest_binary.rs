@@ -151,7 +151,7 @@ fn installed(body: &'static [u8]) -> (Setup, fakes::ProviderServer, std::path::P
         INIT,
     );
     assert!(
-        server.await_requests(1, Duration::from_secs(10)),
+        server.await_requests(1, Deadline::after(WAIT)),
         "waited for the binary to be downloaded"
     );
     (setup, server, dir)
