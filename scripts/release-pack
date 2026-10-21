@@ -299,11 +299,11 @@ nightly_needed() {
 nightly_notes() {
   [ -n "${2:-}" ] || fail "nightly-notes needs a head commit." 2
   if [ -z "${1:-}" ]; then
-    git log --format='- %h %s' -n 50 "$2"
-  elif [ -n "$(git log --format='%H' "$1..$2" 2> /dev/null | head -n 1)" ]; then
-    git log --format='- %h %s' -n 50 "$1..$2"
+    git -C "${GITHUB_WORKSPACE:-.}" log --format='- %h %s' -n 50 "$2"
+  elif [ -n "$(git -C "${GITHUB_WORKSPACE:-.}" log --format='%H' "$1..$2" 2> /dev/null | head -n 1)" ]; then
+    git -C "${GITHUB_WORKSPACE:-.}" log --format='- %h %s' -n 50 "$1..$2"
   else
-    git log --format='- %h %s' -n 1 "$2"
+    git -C "${GITHUB_WORKSPACE:-.}" log --format='- %h %s' -n 1 "$2"
   fi
 }
 
