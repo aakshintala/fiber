@@ -367,11 +367,7 @@ fn a_gif_over_2000_px_is_fitted_as_a_png() {
 
 #[test]
 fn a_cmyk_jpeg_is_accepted_and_stored_within_the_caps() {
-    let input = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/cmyk.jpg"
-    ))
-    .unwrap();
+    let input = include_bytes!("../tests/fixtures/cmyk.jpg").to_vec();
     let stored = process(&input).unwrap();
     assert_eq!(stored.bytes, input);
     assert_eq!(stored.extension, "jpg");
@@ -379,11 +375,7 @@ fn a_cmyk_jpeg_is_accepted_and_stored_within_the_caps() {
 
 #[test]
 fn a_cmyk_jpeg_over_the_size_cap_is_decoded_and_fitted() {
-    let input = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/cmyk.jpg"
-    ))
-    .unwrap();
+    let input = include_bytes!("../tests/fixtures/cmyk.jpg").to_vec();
     let forced = padded(input, 900_000);
     let stored = process(&forced).unwrap();
     assert_ne!(stored.bytes, forced);

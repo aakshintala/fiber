@@ -3006,8 +3006,9 @@ fn drain_watchers_replays_each_watchers_range_in_order() {
     log.append(&texted("a"), None, None).unwrap();
     log.append(&texted("b"), None, None).unwrap();
     log.append(&stepped(), None, None).unwrap();
-    let errors = session.drain_watchers(&log, &dir);
+    let (errors, stopped) = session.drain_watchers(&log, &dir);
     assert!(errors.is_empty(), "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
     assert_eq!(fs::read_to_string(&first).unwrap(), "a\nb\n");
     assert_eq!(fs::read_to_string(&second).unwrap(), "second");
     assert_eq!(
@@ -3045,8 +3046,9 @@ fn a_late_watcher_drains_only_its_post_watermark_range() {
     // so the cursor stays unset and the drain starts at the watermark.
     session.set_watermark(log.count());
     log.append(&texted("after"), None, None).unwrap();
-    let errors = session.drain_watchers(&log, &dir);
+    let (errors, stopped) = session.drain_watchers(&log, &dir);
     assert!(errors.is_empty(), "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
     assert_eq!(fs::read_to_string(&seen).unwrap(), "after\n");
 }
 
@@ -3087,10 +3089,11 @@ fn a_signal_during_the_drain_stops_it_at_once() {
     crate::lua::hub::stop_every_callback();
     // Far under the 2000 ms fixture timeout: waiting the timeout out would
     // miss this bound, so only `Stopped` wakes it in time.
-    let errors = Deadline::after(Duration::from_secs(1))
+    let (errors, stopped) = Deadline::after(Duration::from_secs(1))
         .recv(&done_rx)
         .expect("waited for the drain to answer the stop");
     assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(stopped, "a signal that ends the drain reports it stopped");
     assert!(
         errors[0].extension.contains("fiber.test/draining"),
         "{errors:?}"
@@ -3150,10 +3153,11 @@ fn drain_watchers_waits_for_a_queued_durable_delivery() {
         .recv(&wait_rx)
         .expect("waited for the drain to wait for the queued delivery");
     server.release();
-    let errors = Deadline::after(WAIT)
+    let (errors, stopped) = Deadline::after(WAIT)
         .recv(&done_rx)
         .expect("waited for the drain after the release");
     assert!(errors.is_empty(), "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
     // The queued delivery ran under the wait, before the drain returned:
     // its seq was already covered, so the drain replayed nothing and the
     // cursor it advanced at queue time still stands.
@@ -3194,8 +3198,9 @@ fn drain_watchers_replays_only_past_the_live_covered_seq() {
     // the drain's pre-replay wait holds it until that delivery ran, so the
     // live run wrote "a" before the drain replays.
     session.deliver(&texted("a"), Some(contract::Seq(0)));
-    let errors = session.drain_watchers(&log, &dir);
+    let (errors, stopped) = session.drain_watchers(&log, &dir);
     assert!(errors.is_empty(), "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
     // The drain replays only "b": "a" was already covered live.
     assert_eq!(fs::read_to_string(&seen).unwrap(), "a\nb\n");
 }
@@ -3218,8 +3223,9 @@ fn drain_watchers_collects_a_log_it_cannot_open() {
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     let (_logs, log, _dir) = empty_log();
     session.set_watermark(log.count());
-    let errors = session.drain_watchers(&log, &home.root.path().join("missing"));
+    let (errors, stopped) = session.drain_watchers(&log, &home.root.path().join("missing"));
     assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(!stopped, "a drain that never replays was not stopped");
     assert_eq!(errors[0].extension, "log", "{errors:?}");
     assert_eq!(errors[0].callback, "drain", "{errors:?}");
     assert!(
@@ -3256,8 +3262,9 @@ fn drain_watchers_collects_an_unreadable_line_and_replays_its_prefix() {
     let mut bytes = fs::read(&events).unwrap();
     bytes.extend_from_slice(b"not json\n");
     fs::write(&events, bytes).unwrap();
-    let errors = session.drain_watchers(&log, &dir);
+    let (errors, stopped) = session.drain_watchers(&log, &dir);
     assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
     assert_eq!(errors[0].extension, "log", "{errors:?}");
     assert!(
         errors[0].message.contains("unreadable log line"),
@@ -3301,8 +3308,9 @@ fn drain_watchers_collects_a_line_it_cannot_read_as_an_event() {
     bytes.extend_from_slice(&serde_json::to_vec(&bad).unwrap());
     bytes.push(b'\n');
     fs::write(&events, bytes).unwrap();
-    let errors = session.drain_watchers(&log, &dir);
+    let (errors, stopped) = session.drain_watchers(&log, &dir);
     assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
     assert_eq!(errors[0].extension, "log", "{errors:?}");
     assert_eq!(errors[0].callback, "drain", "{errors:?}");
     assert!(

@@ -1857,6 +1857,28 @@ fn a_skills_result_leaves_out_absent_keys() {
 }
 
 #[test]
+fn a_placeholder_env_result_round_trips_present_names_only() {
+    let result = CommandResult::PlaceholderEnv {
+        values: [(
+            "DATABRICKS_HOST".to_owned(),
+            "adb-1.example.test".to_owned(),
+        )]
+        .into_iter()
+        .collect(),
+    };
+    let wire = json!({"values": {"DATABRICKS_HOST": "adb-1.example.test"}});
+    assert_eq!(serde_json::to_value(&result).unwrap(), wire);
+    assert_eq!(result_of(json!({"command_id":"c","result":wire})), result);
+    // Absent names are omitted, never `null`.
+    assert_eq!(
+        result_of(json!({"command_id":"c","result":{"values":{}}})),
+        CommandResult::PlaceholderEnv {
+            values: BTreeMap::new()
+        }
+    );
+}
+
+#[test]
 fn an_empty_skills_result_reads_as_skills() {
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {"skills": []}})),

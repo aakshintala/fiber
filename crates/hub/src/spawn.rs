@@ -106,11 +106,23 @@ impl Starter for SpawnStarter {
     }
 }
 
+/// Marks a hub-spawned session's process: set beside the startup snapshot
+/// in [`apply`], so the session knows its process already holds its fixed
+/// environment (`docs/invocation.md`, "A session's environment"). The
+/// value is the names-only `"1"`, never a secret. `add_lua`
+/// (`crates/main/src/lua_providers.rs`) keys off its presence: present →
+/// the process environment is the snapshot, and no hub query runs;
+/// absent → an in-process `fiber ask`, which queries the hub so the
+/// session agrees with `fiber models` (issue #2909).
+pub const HUB_SESSION_MARKER: &str = "FIBER_HUB_SESSION";
+
 /// The hub's current environment onto the session command: exactly its
-/// variables (`docs/invocation.md`, "A session's environment").
+/// variables (`docs/invocation.md`, "A session's environment"), with the
+/// session marker riding beside the snapshot it marks.
 fn apply(command: &mut Command, environment: &Environment) {
     command.env_clear();
     command.envs(environment.vars.iter().map(|(name, value)| (name, value)));
+    command.env(HUB_SESSION_MARKER, "1");
 }
 
 /// Whether the session command carries `--login-shell`: only when the
