@@ -301,3 +301,7 @@ pub fn config_set(layer: Layer, key: &str, value: &str, clock: &dyn contract::cl
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_extension_tests.rs"]
+mod config_extension_tests;
