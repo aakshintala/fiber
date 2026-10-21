@@ -60,7 +60,9 @@ to the measured value times two.
 
 ### Nightly pre-releases
 
-The nightly job runs on a daily schedule: its preflight computes the next nightly
+The nightly job runs on a daily schedule, and on a manual dispatch of
+`release.yml` from `main` (`gh workflow run release.yml`) under the same check:
+its preflight computes the next nightly
 version from the `fiber` crate's `Cargo.toml` and skips every later job when
 main is unchanged since the newest nightly tag. A nightly is published as a
 GitHub pre-release, so `releases/latest` and the stable channel never see
