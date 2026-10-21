@@ -578,10 +578,12 @@ impl App {
             .slash_rows
             .iter()
             .any(|row| row.name == name);
-        // Home and an opening session hold no answer: the session there
-        // runs what it knows and sends the rest as written.
+        // Without a current answer (home, an opening session, skills
+        // changed since) the list may lack a name the session runs, so
+        // the session decides. A delegate's view steers the delegate,
+        // which this session's list does not describe.
         let answered = matches!(self.completion.answer, super::completion::Answer::Answered);
-        if listed || !answered || name.is_empty() || name.contains('/') {
+        if listed || !answered || self.item_open() || name.is_empty() || name.contains('/') {
             return None;
         }
         self.notices.push(

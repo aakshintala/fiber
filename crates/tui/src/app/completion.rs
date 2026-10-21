@@ -28,6 +28,10 @@ pub(super) enum Answer {
     Asked(String),
     /// Answered: the list holds every `/name` the session runs.
     Answered,
+    /// Answered, then a `skills_changed`: the session's skills moved on
+    /// at a turn start, while its `commands` answer stays as it was
+    /// until it reloads, so the list may lack a name the session runs.
+    Stale,
 }
 
 /// The `/` and `@` panels' state.
@@ -82,10 +86,25 @@ impl Completion {
         line
     }
 
+    /// Whether `id` is the latest `commands` sent, still unanswered.
+    pub(super) fn awaits(&self, id: &str) -> bool {
+        matches!(&self.answer, Answer::Asked(asked) if asked == id)
+    }
+
+    /// A `skills_changed`: an answered list may now lack a skill the
+    /// session runs. A question still out stands: a reload writes its
+    /// `skills_changed` after `reloaded`, and the answer to the
+    /// `commands` sent on `reloaded` is built from the reloaded skills.
+    pub(super) fn skills_changed(&mut self) {
+        if matches!(self.answer, Answer::Answered) {
+            self.answer = Answer::Stale;
+        }
+    }
+
     /// A session's `command_accepted`: the answer to the latest `commands`
     /// sent replaces the session's rows of the `/` list.
     pub(super) fn commands_answered(&mut self, accepted: &CommandAccepted) {
-        if !matches!(&self.answer, Answer::Asked(id) if *id == accepted.command_id.0) {
+        if !self.awaits(&accepted.command_id.0) {
             return;
         }
         if let Some(CommandResult::Commands { commands }) = &accepted.result {

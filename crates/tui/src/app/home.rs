@@ -704,6 +704,18 @@ impl App {
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &envelope.payload));
                     }
+                    // The `commands` an opening sends is answered while
+                    // its replay is still gated: the answer is no history,
+                    // and it fills the `/` list now.
+                    if accepted
+                        && self.gated(&envelope.session_id)
+                        && self.completion.awaits(id)
+                        && let Some(answer) =
+                            super::read!(envelope, contract::events::CommandAccepted)
+                    {
+                        self.commands_answered(&answer);
+                        return Some(Vec::new());
+                    }
                 }
                 if envelope.kind == "notice" && self.gated(&envelope.session_id) {
                     // An opening session's notice reaches the notices

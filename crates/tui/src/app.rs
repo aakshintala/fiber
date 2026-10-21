@@ -1704,11 +1704,15 @@ impl App {
                     self.refused(&id.0, &rejected.code, rejected.message);
                 }
             }
-            "reloaded" => {
+            // An offer's approval loads extensions with no `reloaded`,
+            // so `extensions_loaded` asks too: their commands join the
+            // list (`docs/events.md`, "`extensions_loaded`").
+            "reloaded" | "extensions_loaded" => {
                 if self.outbox.is_up() {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
             }
+            "skills_changed" => self.completion.skills_changed(),
             "usage_recorded" => self.config_views_usage(envelope),
             "session_named" => {
                 if let Some(named) = read!(envelope, SessionNamed) {

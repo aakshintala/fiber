@@ -1783,21 +1783,28 @@ never as a row of its own.
 The rest of the list is the session's answer to the `commands` driver command
 (`docs/invocation.md`, "What each command does"): its skills, prompt templates
 and extension commands, each with the tag the answer gives. The terminal sends
-`commands` when it attaches to a session and again after each `reloaded`, and
+`commands` when it attaches to a session and again after each `reloaded` and
+each `extensions_loaded`, which an offer's approval writes with no `reloaded`
+(`docs/events.md`, "`extensions_loaded`"), and
 fills the list from the answer to the latest one it sent; until that answer
 arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
 
 Enter on a draft whose first word is `/` and a name runs that name's command.
-Once the list holds the session's answer, a name the list does not hold is
-refused: nothing is sent, the draft stays for the person to correct, and an
+Once the list holds the session's latest answer, a name the list does not hold
+is refused: nothing is sent, the draft stays for the person to correct, and an
 `unknown_command` notice says "Unknown command /<name>. Type / to see the
-list." A first word with a second `/` in it, such as a path, names no command,
-and the draft goes out as written. On home, and before the answer arrives, the
-terminal does not know the session's list, so the draft goes out as written,
-and the session runs the skill or prompt template its first word names
-(`docs/invocation.md`, "Getting a prompt in").
+list." A first word that is `/` alone, or has a second `/` in it, such as a
+path, names no command, and the draft goes out as written. The draft also goes
+out as written wherever the list may lack a name the session runs: on home,
+while a session opens and its answer has not arrived, and after a
+`skills_changed`, since a skill added or switched on at a turn start runs at
+once while the session's `commands` answer stays as it was until it reloads
+(`docs/system-prompt.md`, "Added and removed skills"). The session then runs
+the skill or prompt template the first word names (`docs/invocation.md`,
+"Getting a prompt in"). In a delegate's view the draft steers the delegate,
+whose commands this list does not hold, so nothing there is refused.
 
 ### Clearing
 
