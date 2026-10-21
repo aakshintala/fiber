@@ -371,7 +371,11 @@ fn cancel_stops_and_reaps(prelude: &str) {
             .run(&arguments, &call_cancel, &Recorder::default());
         drop(done_tx.send(output));
     });
-    let pid = ready.wait(LIMIT).first().copied().unwrap();
+    let pid = ready
+        .wait(fakes::Deadline::after(LIMIT))
+        .first()
+        .copied()
+        .unwrap();
     assert!(
         done_rx.try_recv().is_err(),
         "the call ended before the cancel"
@@ -650,7 +654,11 @@ fn process_cancel_after_the_child_started_stops_and_reaps_it() {
         let child = ImageChild::new(fiber, root.join("artifacts"));
         drop(done_tx.send(child.process(b"small", &call_cancel)));
     });
-    let pid = ready.wait(PROCESS_LIMIT).first().copied().unwrap();
+    let pid = ready
+        .wait(fakes::Deadline::after(PROCESS_LIMIT))
+        .first()
+        .copied()
+        .unwrap();
     assert!(
         done_rx.try_recv().is_err(),
         "the call ended before the cancel"
@@ -689,7 +697,11 @@ fn process_cancel_stops_a_stalled_child_while_the_write_is_blocked() {
         let child = ImageChild::new(fiber_path, root.join("artifacts"));
         drop(done_tx.send(child.process(&bytes, &call_cancel)));
     });
-    let pid = ready.wait(PROCESS_LIMIT).first().copied().unwrap();
+    let pid = ready
+        .wait(fakes::Deadline::after(PROCESS_LIMIT))
+        .first()
+        .copied()
+        .unwrap();
     cancel.cancel();
     let result = Deadline::after(PROCESS_LIMIT)
         .recv(&done_rx)

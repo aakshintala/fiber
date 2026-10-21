@@ -221,7 +221,7 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
         seam.reviewer_saves(),
         [("codex".to_owned(), "m1".to_owned())]
     );
-    watchdog.stand_down(WAIT);
+    watchdog.stand_down(fakes::Deadline::after(WAIT));
 }
 
 #[test]

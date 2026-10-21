@@ -241,7 +241,7 @@ impl Setup {
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         let lines = String::from_utf8(output.stdout).unwrap();
         let parsed = lines
             .lines()
@@ -370,7 +370,7 @@ impl Running {
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => String::new(),
         };
-        self.watchdog.stand_down(self.deadline.cleanup());
+        self.watchdog.stand_down(self.deadline.cleanup_phase());
         (status, out, stderr)
     }
 }
@@ -2165,7 +2165,7 @@ fn job_session(
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"start the job"}]}}"#,
     );
     after_prompt();
-    let job_group = ready.wait(setup.deadline.left())[0];
+    let job_group = ready.wait(setup.deadline)[0];
     // The session must stop the job: dropping the watchdog here would kill
     // the group first, so it is forgotten and only fires if the test
     // process dies.

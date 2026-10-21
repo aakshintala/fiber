@@ -243,7 +243,7 @@ pub(crate) fn expired<T>(
     }
     let reaped = deadline.cleanup_phase().recv(reap).is_ok();
     assert!(
-        fakes::group_empties(group, deadline.cleanup()),
+        fakes::group_empties(group, deadline.cleanup_phase()),
         "waited until the deadline for {what}, and its group outlived the kill"
     );
     panic!("waited until the deadline for {what} (reaped after the kill: {reaped})")
@@ -550,7 +550,7 @@ impl HubProc {
             !group_alive(deadline, group),
             "the hub left a process in its group behind"
         );
-        watchdog.stand_down(deadline.cleanup());
+        watchdog.stand_down(deadline.cleanup_phase());
         status
     }
 
@@ -577,7 +577,7 @@ impl HubProc {
                 panic!("the hub's wait thread ended before the hub exited")
             }
         };
-        watchdog.stand_down(deadline.cleanup());
+        watchdog.stand_down(deadline.cleanup_phase());
         status
     }
 }
@@ -854,7 +854,7 @@ impl SessionGuard {
     #[track_caller]
     pub(crate) fn stand_down_watchdog(&mut self) {
         if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(self.deadline.cleanup());
+            watchdog.stand_down(self.deadline.cleanup_phase());
         }
     }
 
@@ -864,7 +864,7 @@ impl SessionGuard {
     /// path to exit, then stands the guard down.
     #[track_caller]
     pub(crate) fn wait_gone(mut self) {
-        match fakes::try_matching_exits(&self.workspace, self.deadline.left()) {
+        match fakes::try_matching_exits(&self.workspace, self.deadline) {
             Ok(()) => {}
             Err(err) => panic!(
                 "waited until the deadline for every process holding the workspace path to exit: {err}"
@@ -956,7 +956,7 @@ pub(crate) fn run_to_exit(
         !group_alive(deadline, group),
         "{what} left a process in its group behind"
     );
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
     output
 }
 

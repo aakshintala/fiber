@@ -608,7 +608,7 @@ fn a_held_tool_list_measures_the_advance_and_prompts_add_nothing() {
     assert!(
         setup
             .fake
-            .await_parked_since(&mark, Some(until), test_deadline.left()),
+            .await_parked_since(&mark, Some(until), test_deadline),
         "the handshake re-parks past the advance"
     );
     fake.release_one();
@@ -619,7 +619,7 @@ fn a_held_tool_list_measures_the_advance_and_prompts_add_nothing() {
     assert!(
         setup
             .fake
-            .await_parked_since(&mark, Some(until), test_deadline.left()),
+            .await_parked_since(&mark, Some(until), test_deadline),
         "the handshake waits on the held list"
     );
     fake.release_one();
@@ -632,7 +632,7 @@ fn a_held_tool_list_measures_the_advance_and_prompts_add_nothing() {
     assert!(
         setup
             .fake
-            .await_parked_since(&mark, Some(until), test_deadline.left()),
+            .await_parked_since(&mark, Some(until), test_deadline),
         "the handshake waits on the held prompts"
     );
     assert_one_completion(&capture, Duration::from_millis(5));
@@ -686,7 +686,7 @@ fn a_failed_prompt_list_after_a_held_tool_list_writes_no_second_line() {
     assert!(
         setup
             .fake
-            .await_parked_since(&mark, Some(until), test_deadline.left()),
+            .await_parked_since(&mark, Some(until), test_deadline),
         "the handshake re-parks past the advance"
     );
     fake.release_one();
@@ -697,7 +697,7 @@ fn a_failed_prompt_list_after_a_held_tool_list_writes_no_second_line() {
     assert!(
         setup
             .fake
-            .await_parked_since(&mark, Some(until), test_deadline.left()),
+            .await_parked_since(&mark, Some(until), test_deadline),
         "the handshake waits on the held list"
     );
     fake.release();
@@ -862,7 +862,7 @@ fn a_missed_startup_deadline_still_completes_once() {
             panic!("the deadline fails the launch");
         };
         assert!(matches!(error, crate::server::StartError::Deadline));
-        watchdog.stand_down(WITHIN);
+        watchdog.stand_down(fakes::Deadline::after(WITHIN));
     });
     assert_one_completion(&capture, spec.startup_timeout);
 }
@@ -900,7 +900,9 @@ fn a_shutdown_during_launch_still_completes_once() {
             .unwrap_or(());
         });
         assert!(
-            setup.fake.await_parked(until, WITHIN),
+            setup
+                .fake
+                .await_parked(until, fakes::Deadline::after(WITHIN)),
             "the launch waits on the startup deadline"
         );
         crate::registry::stop_every_start();
@@ -911,7 +913,7 @@ fn a_shutdown_during_launch_still_completes_once() {
             panic!("the stop fails the launch");
         };
         assert!(matches!(error, crate::server::StartError::StartFailed(_)));
-        watchdog.stand_down(WITHIN);
+        watchdog.stand_down(fakes::Deadline::after(WITHIN));
     });
     assert_one_completion(&capture, Duration::ZERO);
 }

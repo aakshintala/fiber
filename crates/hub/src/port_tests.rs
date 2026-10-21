@@ -729,7 +729,7 @@ fn a_stalled_sink_bounds_the_stop_but_still_shuts_down() {
         Item::Close(1001, "The hub is stopping.".to_owned())
     );
     assert!(
-        clock.await_parked(start + STOP_CLOSE_WAIT, WITHIN),
+        clock.await_parked(start + STOP_CLOSE_WAIT, fakes::Deadline::after(WITHIN)),
         "the stop waits out its bound"
     );
     let mark = clock.advance_when_parked(
@@ -739,7 +739,11 @@ fn a_stalled_sink_bounds_the_stop_but_still_shuts_down() {
         &Deadline::after(WITHIN),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(start + STOP_CLOSE_WAIT), WITHIN),
+        clock.await_parked_since(
+            &mark,
+            Some(start + STOP_CLOSE_WAIT),
+            fakes::Deadline::after(WITHIN)
+        ),
         "the stop reparks at its bound after the advance"
     );
     assert!(

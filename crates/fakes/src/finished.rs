@@ -55,7 +55,7 @@ pub fn finished(what: &str, mut child: Child, stdin: &[u8], deadline: Deadline) 
                     Ok(_) | Err(_) => {}
                 }
                 assert!(
-                    crate::group_empties(pid, within),
+                    crate::group_empties(pid, Deadline::after(within)),
                     "{what} left its process group {pid} alive"
                 );
                 output
@@ -64,7 +64,7 @@ pub fn finished(what: &str, mut child: Child, stdin: &[u8], deadline: Deadline) 
                 match crate::kill_group(pid, "KILL") {
                     Ok(_) | Err(_) => {}
                 }
-                let emptied = crate::group_empties(pid, within);
+                let emptied = crate::group_empties(pid, Deadline::after(within));
                 panic!("{what} has no output: {err} (group emptied: {emptied})");
             }
         },

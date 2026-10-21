@@ -267,12 +267,12 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
             ));
         })
         .unwrap();
-    let pid = ready.wait(WITHIN)[0];
+    let pid = ready.wait(fakes::Deadline::after(WITHIN))[0];
     // The spinner shares this test's group: match its argv by pid alone,
     // so a panic anywhere below still kills it.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     assert!(
-        clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
+        clock.await_parked(clock.now() + GROUP_POLL, fakes::Deadline::after(WITHIN)),
         "waited {WITHIN:?} for the step to park while running"
     );
     // At the install-step deadline the run stops.
@@ -311,7 +311,7 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the stopped step is gone"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 /// A step whose program cannot start fails as its install step failed,

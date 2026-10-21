@@ -456,7 +456,7 @@ fn get(port: u16, request: &str) -> String {
 #[track_caller]
 fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
     let mark = clock
-        .mark_parked(at, WAIT)
+        .mark_parked(at, fakes::Deadline::after(WAIT))
         .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
     let threads = mark.threads();
     assert_eq!(
@@ -480,11 +480,12 @@ fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
 fn await_callbacks_parked(env: &Env, deadline: Instant, callers: usize, threads: usize) {
     assert!(
         env.clock
-            .await_parked_count(deadline + GRACE, callers, WAIT),
+            .await_parked_count(deadline + GRACE, callers, fakes::Deadline::after(WAIT)),
         "the callers never began waiting past their deadline"
     );
     assert!(
-        env.clock.await_parked_count(deadline, threads, WAIT),
+        env.clock
+            .await_parked_count(deadline, threads, fakes::Deadline::after(WAIT)),
         "the callbacks never parked"
     );
 }
@@ -930,7 +931,8 @@ fn poll_slow_down_adds_five_seconds() {
     ]);
     let rx = start(&ext, "poll", &server.url());
     assert!(
-        env.clock.await_parked(wake(&env, 10), WAIT),
+        env.clock
+            .await_parked(wake(&env, 10), fakes::Deadline::after(WAIT)),
         "the slowed poll never parked for its 10-second wake within {WAIT:?}"
     );
     let poller = thread_parked_at(&env.clock, wake(&env, 10));
@@ -942,7 +944,8 @@ fn poll_slow_down_adds_five_seconds() {
     );
     // Still waiting on the instant 10 s out.
     assert!(
-        env.clock.await_parked(wake(&env, 10), WAIT),
+        env.clock
+            .await_parked(wake(&env, 10), fakes::Deadline::after(WAIT)),
         "the slowed poll left its 10-second wake early within {WAIT:?}"
     );
     assert_eq!(server.request_count(), 1);
@@ -987,7 +990,8 @@ fn poll_that_times_out_while_sleeping_is_a_timeout() {
     let server = device_server(vec![OauthReply::pending(), OauthReply::pending()]);
     let rx = start(&ext, "poll", &server.url());
     assert!(
-        env.clock.await_parked(wake(&env, 5), WAIT),
+        env.clock
+            .await_parked(wake(&env, 5), fakes::Deadline::after(WAIT)),
         "the poll never parked for its 5-second sleep within {WAIT:?}"
     );
     // Late wake past the 5 s poll park to the 60 s deadline; the park is
@@ -1184,7 +1188,8 @@ fn a_function_the_hook_stops_leaves_the_file_and_frees_the_lock() {
     let rx = start_token(&provider);
     finish(&went, &Deadline::after(WAIT));
     assert!(
-        env.clock.await_parked(asked + TIMEOUT + GRACE, WAIT),
+        env.clock
+            .await_parked(asked + TIMEOUT + GRACE, fakes::Deadline::after(WAIT)),
         "the token call never waited past its deadline while the spin held the lock within {WAIT:?}"
     );
     env.clock.advance_when_parked(
@@ -1305,13 +1310,15 @@ fn a_refresh_that_times_out_in_its_function_leaves_the_file_and_frees_the_lock()
         "the refresh never reached the endpoint"
     );
     assert!(
-        env.clock.await_parked(deadline, WAIT),
+        env.clock
+            .await_parked(deadline, fakes::Deadline::after(WAIT)),
         "the refresh never parked on its timeout while on the wire within {WAIT:?}"
     );
     // The token call waits past its deadline once the refresh function has
     // started, so the deadline park below is the scheduler's, not a queue.
     assert!(
-        env.clock.await_parked(deadline + GRACE, WAIT),
+        env.clock
+            .await_parked(deadline + GRACE, fakes::Deadline::after(WAIT)),
         "the token call never waited past its deadline while the refresh held the lock within {WAIT:?}"
     );
     let scheduler = thread_parked_at(&env.clock, deadline);

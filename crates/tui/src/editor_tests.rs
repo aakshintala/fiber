@@ -127,7 +127,7 @@ impl Fake {
     #[track_caller]
     fn wait_ready(&self) -> Vec<u32> {
         match &self.ready {
-            Some(ready) => ready.wait(DEADLINE),
+            Some(ready) => ready.wait(fakes::Deadline::after(DEADLINE)),
             None => panic!("the script names no $READY line to wait for"),
         }
     }
@@ -146,7 +146,7 @@ impl Fake {
 impl Drop for Fake {
     fn drop(&mut self) {
         if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(DEADLINE);
+            watchdog.stand_down(fakes::Deadline::after(DEADLINE));
         }
     }
 }
@@ -291,7 +291,7 @@ fn a_shutdown_signal_ends_a_blocked_editor_wait() {
     }
     assert!(fake.left().is_empty());
     assert!(
-        fakes::pids_exit(&live, DEADLINE),
+        fakes::pids_exit(&live, fakes::Deadline::after(DEADLINE)),
         "the editor outlived the shutdown: {live:?}"
     );
 }
@@ -347,7 +347,7 @@ fn a_term_ignoring_editor_is_forced_down_with_sigkill() {
     );
     assert!(fake.left().is_empty());
     assert!(
-        fakes::pids_exit(&live, DEADLINE),
+        fakes::pids_exit(&live, fakes::Deadline::after(DEADLINE)),
         "the editor outlived the shutdown: {live:?}"
     );
 }

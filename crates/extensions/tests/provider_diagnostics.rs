@@ -711,7 +711,11 @@ fn a_suspended_dispatch_spans_the_whole_call() {
     // (`docs/extensions.md`, "How an extension runs"), a stable park the
     // transient deadline wait ends in before the HTTP receipt returns.
     assert!(
-        clock.await_thread_parked(id, Some(mark + Duration::from_secs(31)), WAIT),
+        clock.await_thread_parked(
+            id,
+            Some(mark + Duration::from_secs(31)),
+            fakes::Deadline::after(WAIT)
+        ),
         "the hook caller parked past its check on the suspended callback"
     );
     clock.advance_when_parked(
@@ -785,7 +789,11 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
     // The caller waits on the suspended callback past its own check: the
     // hook's deadline plus the scheduler's grace for a suspended call.
     assert!(
-        clock.await_thread_parked(id, Some(mark + Duration::from_millis(2000)), WAIT),
+        clock.await_thread_parked(
+            id,
+            Some(mark + Duration::from_millis(2000)),
+            fakes::Deadline::after(WAIT)
+        ),
         "the hook caller parked past its check on the suspended callback"
     );
     // Past the hook's deadline but inside its grace: the caller takes the

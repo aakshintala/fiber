@@ -185,7 +185,8 @@ impl Session {
         assert!(status.success(), "{stderr}");
         assert!(!group_alive(self.setup.deadline, group));
         std::mem::forget(self.guard);
-        self.watchdog.stand_down(self.setup.deadline.cleanup());
+        self.watchdog
+            .stand_down(self.setup.deadline.cleanup_phase());
         assert_one_clients(&self.stream);
         assert_eq!(
             kinds_without_clients(&self.stream),
@@ -605,7 +606,7 @@ fn close_now_cancels_a_reload_blocked_in_extension_initialization() {
     std::mem::forget(session.guard);
     session
         .watchdog
-        .stand_down(session.setup.deadline.cleanup());
+        .stand_down(session.setup.deadline.cleanup_phase());
     session
         .expected
         .extend(["command_accepted", "command_rejected", "fiber_exited"]);

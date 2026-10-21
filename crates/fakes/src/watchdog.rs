@@ -6,7 +6,6 @@ use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use crate::deadline::Deadline;
 
@@ -89,13 +88,14 @@ impl Watchdog {
     }
 
     /// The processes are done. Tell the watchdog to exit without signalling, and
-    /// wait for it at most `within`.
+    /// wait for it at most what remains of `deadline`.
     #[allow(
         clippy::panic,
         reason = "a watchdog that does not exit leaves a process behind"
     )]
     #[track_caller]
-    pub fn stand_down(mut self, within: Duration) {
+    pub fn stand_down(mut self, deadline: Deadline) {
+        let within = deadline.left();
         if let Some(mut stdin) = self.stdin.take() {
             match writeln!(stdin) {
                 Ok(()) | Err(_) => {}

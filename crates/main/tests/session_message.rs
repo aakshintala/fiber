@@ -324,7 +324,7 @@ fn a_fiber_ask_session_messages_a_hub_started_session_and_a_fiber_ask_target_is_
     // Nothing is left behind: B's group, the hub with T, and the guard.
     support::kill_group(deadline, b_group.0, "TERM").unwrap();
     b.wait().unwrap();
-    b_watchdog.stand_down(deadline.cleanup());
+    b_watchdog.stand_down(deadline.cleanup_phase());
     let t_closer = Socket::connect(deadline, &setup.session_socket(&t_id));
     support::close_session(&t_closer);
     let hub = hub.lock().unwrap().take().expect("the hub started");

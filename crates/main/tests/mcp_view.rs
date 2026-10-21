@@ -181,7 +181,8 @@ impl Driver {
         assert!(status.success(), "{stderr}");
         assert!(!group_alive(self.setup.deadline, group));
         std::mem::forget(self.guard);
-        self.watchdog.stand_down(self.setup.deadline.cleanup());
+        self.watchdog
+            .stand_down(self.setup.deadline.cleanup_phase());
         stderr
     }
 }

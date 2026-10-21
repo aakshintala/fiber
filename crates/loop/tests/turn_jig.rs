@@ -52,7 +52,7 @@ fn turn(args: &[&str]) -> Output {
         .recv(&finished)
         .expect("the turn jig finished")
         .unwrap();
-    watchdog.stand_down(Duration::from_secs(5));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     output
 }
 

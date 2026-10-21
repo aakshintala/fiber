@@ -629,7 +629,7 @@ fn a_spinning_tool_holds_the_extensions_hook_until_its_timeout() {
     );
     let park = asked + Duration::from_millis(100) + crate::lua::GRACE;
     let parked = clock
-        .mark_parked(park, WAIT)
+        .mark_parked(park, fakes::Deadline::after(WAIT))
         .expect("the tool caller parks at the grace");
     let parked = parked.threads();
     assert_eq!(parked.len(), 1, "only the tool caller parks at the grace");

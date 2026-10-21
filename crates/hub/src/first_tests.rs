@@ -115,7 +115,11 @@ fn an_unarmed_wait_never_reaches_a_deadline() {
     let (_, held) = held(&setup);
     let first = First::new(Arc::clone(&setup.hub.tick));
     later(&setup.hub, &setup.relays, held, Arc::clone(&first)).unwrap();
-    assert!(setup.clock.await_parked_unbounded(DEADLINE));
+    assert!(
+        setup
+            .clock
+            .await_parked_unbounded(fakes::Deadline::after(DEADLINE))
+    );
     let mark = setup.clock.advance_when_parked(
         None,
         None,
@@ -123,13 +127,19 @@ fn an_unarmed_wait_never_reaches_a_deadline() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        setup.clock.await_parked_since(&mark, None, DEADLINE),
+        setup
+            .clock
+            .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "it re-checked and still has no deadline"
     );
     assert_eq!(prompts(&setup.starter), 0);
     let due = setup.clock.now() + FIRST_PROMPT_WAIT;
     first.arm(due);
-    assert!(setup.clock.await_parked(due, DEADLINE));
+    assert!(
+        setup
+            .clock
+            .await_parked(due, fakes::Deadline::after(DEADLINE))
+    );
     setup.clock.advance_when_parked(
         Some(due),
         None,
@@ -164,7 +174,9 @@ fn arm_while_the_waiter_checks_does_not_deadlock() {
         done_tx.send(()).unwrap_or(());
     });
     assert!(
-        setup.clock.await_parked(due, DEADLINE),
+        setup
+            .clock
+            .await_parked(due, fakes::Deadline::after(DEADLINE)),
         "the waiter read the deadline"
     );
     Deadline::after(DEADLINE).recv(&done).expect("arm returned");
@@ -189,7 +201,11 @@ fn the_bound_removes_its_awaiting_entry() {
         later(&setup.hub, &setup.relays, held, Arc::clone(&first)).unwrap();
         let due = setup.clock.now() + FIRST_PROMPT_WAIT;
         first.arm(due);
-        assert!(setup.clock.await_parked(due, DEADLINE));
+        assert!(
+            setup
+                .clock
+                .await_parked(due, fakes::Deadline::after(DEADLINE))
+        );
         setup.clock.advance_when_parked(
             Some(due),
             None,

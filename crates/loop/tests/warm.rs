@@ -52,7 +52,10 @@ fn arm(session: &mut Session, idle: Duration, cap: Option<u32>) {
 }
 
 fn parked(clock: &FakeClock, until: Instant, what: &str) {
-    assert!(clock.await_parked(until, DEADLINE), "{what}");
+    assert!(
+        clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
+        "{what}"
+    );
 }
 
 /// Moves the clock to `to` once the loop parks at `park`, and wakes the

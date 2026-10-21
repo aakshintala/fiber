@@ -91,7 +91,7 @@ impl Setup {
                 &format!("`fiber extension {}` to exit", args.join(" ")),
             ),
         };
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
     }
 }
@@ -138,7 +138,7 @@ fn script_output(deadline: Deadline, script: &Path) -> String {
             &format!("`{}` to exit", script.display()),
         ),
     };
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
     assert!(output.status.success(), "{output:?}");
     String::from_utf8(output.stdout).unwrap()
 }

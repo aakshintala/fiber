@@ -215,7 +215,7 @@ fn a_started_fork_counts_toward_the_cap() {
     assert_eq!(error.code, contract::ErrorCode::ToolError);
     assert_eq!(error.message, crate::JobsError::DelegatesFull.to_string());
     rig.registry.stop_delegates();
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
     drop(finishes);
 }
 

@@ -1119,11 +1119,11 @@ impl Gated {
             );
         }
         assert!(
-            fakes::group_empties(group, GROUP_WAIT),
+            fakes::group_empties(group, fakes::Deadline::after(GROUP_WAIT)),
             "the gated group {group} emptied within {GROUP_WAIT:?}"
         );
         if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(GROUP_WAIT);
+            watchdog.stand_down(fakes::Deadline::after(GROUP_WAIT));
         }
     }
 }

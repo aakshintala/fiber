@@ -182,7 +182,7 @@ fn run_watched(command: &mut Command, deadline: Deadline, what: &str) -> Output 
         Ok(output) => output.unwrap(),
         Err(_) => support::expired(deadline, group, &finished, what),
     };
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
     Output::from(output)
 }
 

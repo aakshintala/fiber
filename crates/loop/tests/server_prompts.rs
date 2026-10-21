@@ -533,7 +533,7 @@ fn a_rejected_prompt_does_not_move_the_idle_deadline() {
         )
     );
     assert!(
-        clock.await_parked(deadline, support::DEADLINE),
+        clock.await_parked(deadline, fakes::Deadline::after(support::DEADLINE)),
         "a rejected prompt does not move the deadline"
     );
     assert!(

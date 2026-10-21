@@ -213,7 +213,7 @@ fn a_session_runs_with_the_login_shell_capture() {
     });
     // Until the session process is gone it still holds its connections
     // and answers a command `closing`, so the prompt waits for it.
-    fakes::try_matching_exits(&workspace, setup.deadline.left()).unwrap_or_else(|err| {
+    fakes::try_matching_exits(&workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the session process to exit: {err}")
     });
     client.send(&format!(

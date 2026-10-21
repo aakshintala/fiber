@@ -709,7 +709,7 @@ fn a_rewind_through_the_hub_resumes_an_exited_session() {
     let old = hubbed.start("c3_start", "c3_sub", "one");
     let client = hubbed.client();
     hubbed.close("c3_close", &old);
-    fakes::try_matching_exits(&hubbed.workspace, setup.deadline.left()).unwrap_or_else(|err| {
+    fakes::try_matching_exits(&hubbed.workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the old session process to exit: {err}")
     });
     assert!(
@@ -845,7 +845,7 @@ fn an_unprompted_rewound_session_is_kept_and_resumes() {
     assert!(dir.is_dir(), "the rewound session is kept");
     // The prompt must reach a gone session, not one still shutting down:
     // its socket accepts until the process releases it.
-    fakes::try_matching_exits(&hubbed.workspace, setup.deadline.left()).unwrap_or_else(|err| {
+    fakes::try_matching_exits(&hubbed.workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the closed session process to exit: {err}")
     });
 
@@ -987,7 +987,7 @@ fn a_rewind_keeps_the_person_name_and_its_pin() {
     let old = hubbed.start("n1_start", "n1_sub", "one");
     let client = hubbed.client();
     hubbed.close("n1_close_old", &old);
-    fakes::try_matching_exits(&hubbed.workspace, setup.deadline.left()).unwrap_or_else(|err| {
+    fakes::try_matching_exits(&hubbed.workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the old session process to exit: {err}")
     });
 
@@ -1114,7 +1114,7 @@ fn a_rewind_to_an_ancestor_point_keeps_the_rewound_sessions_person_name() {
     });
     hubbed.prompt("a1_p3", &middle, "three");
     hubbed.close("a1_close_middle", &middle);
-    fakes::try_matching_exits(&hubbed.workspace, setup.deadline.left()).unwrap_or_else(|err| {
+    fakes::try_matching_exits(&hubbed.workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the middle session process to exit: {err}")
     });
 
@@ -1422,7 +1422,7 @@ fn a_rewind_keeps_the_worktree_for_the_next_session() {
     });
 
     // The old process is gone, and the worktree is still there.
-    fakes::try_matching_exits(&repo, setup.deadline.left()).unwrap_or_else(|err| {
+    fakes::try_matching_exits(&repo, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the old session process to exit: {err}")
     });
     support::bounded(setup.deadline, "the old session to be reaped", move || {

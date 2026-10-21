@@ -403,7 +403,7 @@ fn idle_passes(session: &Session, tap: &Tap, finished: &Finished, at: Instant) {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(at), DEADLINE),
+        clock.await_parked_since(&mark, Some(at), fakes::Deadline::after(DEADLINE)),
         "1 ms before it, the step waits again"
     );
     no_resolution(tap);
@@ -428,7 +428,9 @@ fn advance_step(session: &Session, by: Duration) -> Mark {
 /// spinning: a park caught by a zero advance is followed by another park.
 fn settles(session: &Session) -> bool {
     let mark = advance_step(session, Duration::ZERO);
-    session.clock.await_parked_since(&mark, None, DEADLINE)
+    session
+        .clock
+        .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE))
 }
 
 #[test]
@@ -473,12 +475,12 @@ fn a_rejected_reply_does_not_move_the_idle_deadline() {
         &Deadline::after(DEADLINE),
     );
     let mark = clock
-        .mark_parked(at, DEADLINE)
+        .mark_parked(at, fakes::Deadline::after(DEADLINE))
         .expect("the step waits again");
     let answered = answer_value(&session, &request, json!({"confirmed": true}));
     assert_eq!(answered.unwrap_err().code, ErrorCode::InvalidArguments);
     assert!(
-        clock.await_parked_since(&mark, Some(at), DEADLINE),
+        clock.await_parked_since(&mark, Some(at), fakes::Deadline::after(DEADLINE)),
         "after the rejected reply the step waits until the same deadline"
     );
     idle_passes(&session, &tap, &finished, at);
@@ -515,7 +517,7 @@ fn waits_past_the_idle_delay(later: &'static str) {
     let request = request_id(&tap.wait_for("interaction_requested"));
     let mark = advance_step(&session, IDLE * 2);
     assert!(
-        clock.await_parked_since(&mark, None, DEADLINE),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "past the idle delay the step still waits with no deadline"
     );
     // A stale reply is answered from the step's wait, after the advance.
@@ -579,7 +581,7 @@ fn the_idle_delay_counts_from_when_the_earlier_call_completes() {
     let request = request_id(&tap.wait_for("interaction_requested"));
     let mark = advance_step(&session, IDLE);
     assert!(
-        clock.await_parked_since(&mark, None, DEADLINE),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "the advance leaves the step waiting with no deadline"
     );
     gate.open();
@@ -624,7 +626,7 @@ fn a_running_job_keeps_a_pending_form_from_going_idle() {
     let request = request_id(&tap.wait_for("interaction_requested"));
     let mark = advance_step(&session, IDLE * 2);
     assert!(
-        clock.await_parked_since(&mark, None, DEADLINE),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "past the idle delay the step still waits with no deadline"
     );
     still_running(&finished);
@@ -636,7 +638,9 @@ fn a_running_job_keeps_a_pending_form_from_going_idle() {
     // The step re-parks at the deadline only after it sees the wake, so
     // wait for that park before advancing to it.
     assert!(
-        session.clock.await_parked(at, DEADLINE),
+        session
+            .clock
+            .await_parked(at, fakes::Deadline::after(DEADLINE)),
         "the step waits until the idle deadline after the job ends"
     );
     idle_passes(&session, &tap, &finished, at);
@@ -831,7 +835,7 @@ fn without_an_idle_delay_a_form_waits_a_day_for_its_answer() {
     let request = request_id(&tap.wait_for("interaction_requested"));
     let mark = advance_step(&session, Duration::from_secs(24 * 60 * 60));
     assert!(
-        clock.await_parked_since(&mark, None, DEADLINE),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "a day later the step still waits with no deadline"
     );
     still_running(&finished);
@@ -874,7 +878,7 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
     assert!(requested.payload.get("resumes").is_none());
     let mark = advance_step(&session, IDLE * 2);
     assert!(
-        clock.await_parked_since(&mark, None, DEADLINE),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "past the idle delay the step still waits with no deadline"
     );
     let stale = answer_value(&session, "r_nope", main_branch());
@@ -923,7 +927,9 @@ fn shut_down_on_form(former: &Arc<Former>) -> ShutDown {
     let finished = start(&mut session);
     let requested = tap.wait_for("interaction_requested");
     assert!(
-        session.clock.await_parked(at, DEADLINE),
+        session
+            .clock
+            .await_parked(at, fakes::Deadline::after(DEADLINE)),
         "the step waits on the pending form"
     );
     session.cancel.shutdown(143);
@@ -1151,7 +1157,9 @@ fn the_idle_delay_in_the_finishing_turn_suspends_on_the_same_request() {
     // The raised-again step settles at the deadline after it asks, so wait
     // for that park before advancing to it.
     assert!(
-        session.clock.await_parked(at, DEADLINE),
+        session
+            .clock
+            .await_parked(at, fakes::Deadline::after(DEADLINE)),
         "the finishing step waits until the idle deadline"
     );
     idle_passes(&session, &tap, &finished, at);
@@ -1181,7 +1189,9 @@ fn a_shutdown_in_the_finishing_turn_suspends_on_the_same_request() {
     // so only the step waiting on the pending form proves the call
     // asked and the loop pended it. The shutdown alone ends the step.
     assert!(
-        session.clock.await_parked(at, DEADLINE),
+        session
+            .clock
+            .await_parked(at, fakes::Deadline::after(DEADLINE)),
         "the finishing step waits on the pending form"
     );
     session.cancel.shutdown(143);
@@ -1546,7 +1556,9 @@ fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action
         }))
         .unwrap();
     assert!(
-        session.clock.await_parked(at, DEADLINE),
+        session
+            .clock
+            .await_parked(at, fakes::Deadline::after(DEADLINE)),
         "the step waits on the pending form"
     );
     session.cancel.shutdown(143);

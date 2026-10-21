@@ -180,7 +180,7 @@ impl Setup {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(self.deadline, group, &finished, "install.sh to exit"),
         };
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         assert_eq!(
             fs::read_dir(self.path("tmp")).unwrap().count(),
             0,

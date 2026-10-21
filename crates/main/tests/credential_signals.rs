@@ -212,11 +212,11 @@ fn install(home: &Path, script: &str) {
 /// are gone before the cleanup deadline, and fails.
 #[track_caller]
 fn await_refresh_exit(deadline: Deadline, pattern: &str) {
-    if fakes::matching_exits(pattern, deadline.left()) {
+    if fakes::matching_exits(pattern, deadline) {
         return;
     }
     support::kill_matching(deadline, pattern).unwrap();
-    fakes::try_matching_exits(pattern, deadline.cleanup()).unwrap_or_else(|err| {
+    fakes::try_matching_exits(pattern, deadline.cleanup_phase()).unwrap_or_else(|err| {
         panic!("the refresh child outlived SIGKILL past the cleanup deadline: {err}")
     });
 }
@@ -295,11 +295,11 @@ fn observe_group_members(deadline: Deadline, pgid: u32) -> Result<Vec<GroupMembe
             match support::kill_group(deadline, ps_group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            watchdog.stand_down(deadline.cleanup());
+            watchdog.stand_down(deadline.cleanup_phase());
             return Err(format!("ps did not exit within {wait:?}"));
         }
     };
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
     if !output.status.success() {
         return Err(format!(
             "ps exited {}: {}",
@@ -391,7 +391,7 @@ fn sigint_to_fiber_models_during_a_credential_fork_loop_leaves_no_group_member_f
         let (fiber_pid, child, watchdog) = setup.start(&["models"]);
         // The first line proves the command ran: the signal below lands
         // while the command forks on every run.
-        let pgid = ready.wait(setup.deadline.left())[0];
+        let pgid = ready.wait(setup.deadline)[0];
         let group = Watchdog::group(pgid);
         support::kill_pid(setup.deadline, fiber_pid, "INT").unwrap();
         let output = setup.finish("`fiber models` to exit", fiber_pid, child);
@@ -410,9 +410,9 @@ fn sigint_to_fiber_models_during_a_credential_fork_loop_leaves_no_group_member_f
         match support::kill_group(setup.deadline, pgid, "KILL") {
             Ok(_) | Err(_) => {}
         }
-        group.stand_down(setup.deadline.cleanup());
-        watchdog.stand_down(setup.deadline.cleanup());
-        matching.stand_down(setup.deadline.cleanup());
+        group.stand_down(setup.deadline.cleanup_phase());
+        watchdog.stand_down(setup.deadline.cleanup_phase());
+        matching.stand_down(setup.deadline.cleanup_phase());
         assert!(
             members.is_empty(),
             "attempt {attempt}: group {pgid} still holds {members:?} at Fiber exit"
@@ -435,7 +435,7 @@ fn sigint_to_fiber_models_while_a_credential_command_runs_exits_130_and_kills_it
     let (fiber_pid, child, watchdog) = setup.start(&["models"]);
     // The ready line proves the descendant started before the signal: the
     // sleep forks before the echo, and the shell waits for it.
-    let pgid = ready.wait(setup.deadline.left())[0];
+    let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, fiber_pid, "INT").unwrap();
     let output = setup.finish("`fiber models` to exit", fiber_pid, child);
@@ -445,10 +445,10 @@ fn sigint_to_fiber_models_while_a_credential_command_runs_exits_130_and_kills_it
         "stderr: {}",
         stderr(&output)
     );
-    assert!(fakes::group_empties(pgid, setup.deadline.left()));
-    group.stand_down(setup.deadline.cleanup());
-    watchdog.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    assert!(fakes::group_empties(pgid, setup.deadline));
+    group.stand_down(setup.deadline.cleanup_phase());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -462,7 +462,7 @@ fn sighup_to_fiber_models_while_a_credential_command_runs_exits_129_and_kills_it
         &format!("sleep 600 & echo $$ > '{}'; wait", fifo.display()),
     );
     let (fiber_pid, child, watchdog) = setup.start(&["models"]);
-    let pgid = ready.wait(setup.deadline.left())[0];
+    let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, fiber_pid, "HUP").unwrap();
     let output = setup.finish("`fiber models` to exit", fiber_pid, child);
@@ -472,10 +472,10 @@ fn sighup_to_fiber_models_while_a_credential_command_runs_exits_129_and_kills_it
         "stderr: {}",
         stderr(&output)
     );
-    assert!(fakes::group_empties(pgid, setup.deadline.left()));
-    group.stand_down(setup.deadline.cleanup());
-    watchdog.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    assert!(fakes::group_empties(pgid, setup.deadline));
+    group.stand_down(setup.deadline.cleanup_phase());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -489,7 +489,7 @@ fn sigterm_to_refresh_model_lists_while_a_credential_command_runs_exits_143_and_
         &format!("sleep 600 & echo $$ > '{}'; wait", fifo.display()),
     );
     let (fiber_pid, child, watchdog) = setup.start(&["refresh-model-lists", "acme"]);
-    let pgid = ready.wait(setup.deadline.left())[0];
+    let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, fiber_pid, "TERM").unwrap();
     let output = setup.finish("`fiber refresh-model-lists` to exit", fiber_pid, child);
@@ -499,10 +499,10 @@ fn sigterm_to_refresh_model_lists_while_a_credential_command_runs_exits_143_and_
         "stderr: {}",
         stderr(&output)
     );
-    assert!(fakes::group_empties(pgid, setup.deadline.left()));
-    group.stand_down(setup.deadline.cleanup());
-    watchdog.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    assert!(fakes::group_empties(pgid, setup.deadline));
+    group.stand_down(setup.deadline.cleanup_phase());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -526,8 +526,8 @@ fn fiber_models_with_nothing_in_flight_exits_within_two_seconds() {
     };
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     await_refresh_exit(setup.deadline, &setup.refresh_pattern());
-    watchdog.stand_down(setup.deadline.cleanup());
-    refresh_guard.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    refresh_guard.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -549,28 +549,28 @@ fn fiber_models_returning_normally_kills_what_its_credential_command_left() {
     );
     let (fiber_pid, child, watchdog) = setup.start(&["models"]);
     // The first line proves the credential command ran.
-    let first = ready.wait(setup.deadline.left())[0];
+    let first = ready.wait(setup.deadline)[0];
     let first_group = Watchdog::group(first);
     let output = setup.finish("`fiber models` to exit", fiber_pid, child);
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     // The list is stale, so `fiber models` starts its detached refresh
     // child, which runs the command again: the second line.
-    let second = ready.wait(setup.deadline.left())[0];
+    let second = ready.wait(setup.deadline)[0];
     let second_group = Watchdog::group(second);
     await_refresh_exit(setup.deadline, &setup.refresh_pattern());
     assert!(
-        fakes::group_empties(first, setup.deadline.left()),
+        fakes::group_empties(first, setup.deadline),
         "the normal return killed what the command left"
     );
     assert!(
-        fakes::group_empties(second, setup.deadline.left()),
+        fakes::group_empties(second, setup.deadline),
         "the refresh child is gone with its group"
     );
-    first_group.stand_down(setup.deadline.cleanup());
-    second_group.stand_down(setup.deadline.cleanup());
-    watchdog.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
-    refresh_guard.stand_down(setup.deadline.cleanup());
+    first_group.stand_down(setup.deadline.cleanup_phase());
+    second_group.stand_down(setup.deadline.cleanup_phase());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
+    refresh_guard.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -588,17 +588,17 @@ fn refresh_model_lists_returning_normally_kills_what_its_credential_command_left
         ),
     );
     let (fiber_pid, child, watchdog) = setup.start(&["refresh-model-lists", "acme"]);
-    let pgid = ready.wait(setup.deadline.left())[0];
+    let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     let output = setup.finish("`fiber refresh-model-lists` to exit", fiber_pid, child);
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     assert!(
-        fakes::group_empties(pgid, setup.deadline.left()),
+        fakes::group_empties(pgid, setup.deadline),
         "the normal return killed what the command left"
     );
-    group.stand_down(setup.deadline.cleanup());
-    watchdog.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    group.stand_down(setup.deadline.cleanup_phase());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -618,14 +618,14 @@ fn sigterm_to_the_terminal_while_a_picker_read_runs_exits_143_and_kills_its_grou
     run.write(b"\x0c");
     run.wait_screen("the open picker", picker_open);
     run.wait_screen("the picker's asked catalogue read", picker_read_asked);
-    let pgid = ready.wait(setup.deadline.left())[0];
+    let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, run.id(), "TERM").unwrap();
     let exited = run.wait();
     assert_eq!(exited.status.code(), Some(143));
-    assert!(fakes::group_empties(pgid, setup.deadline.left()));
-    group.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    assert!(fakes::group_empties(pgid, setup.deadline));
+    group.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -645,14 +645,14 @@ fn sighup_to_the_terminal_while_a_picker_read_runs_exits_129_and_kills_its_group
     run.write(b"\x0c");
     run.wait_screen("the open picker", picker_open);
     run.wait_screen("the picker's asked catalogue read", picker_read_asked);
-    let pgid = ready.wait(setup.deadline.left())[0];
+    let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, run.id(), "HUP").unwrap();
     let exited = run.wait();
     assert_eq!(exited.status.code(), Some(129));
-    assert!(fakes::group_empties(pgid, setup.deadline.left()));
-    group.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    assert!(fakes::group_empties(pgid, setup.deadline));
+    group.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }
 
 /// Deterministic repro for #2738: a queued catalogue read restarts
@@ -681,7 +681,7 @@ fn queued_picker_read_restarts_without_its_asked_mark_2738() {
     // process's shared reads.
     run.write(b"\x0c");
     run.wait_screen("the open picker", picker_open);
-    let first = ready.wait(setup.deadline.left())[0];
+    let first = ready.wait(setup.deadline)[0];
     // Ctrl+R queues a wider read behind the hanging one; the typed query
     // proves the loop handled the refresh first, since it handles its
     // inputs in order.
@@ -694,7 +694,7 @@ fn queued_picker_read_restarts_without_its_asked_mark_2738() {
     // the queued read: the second ready line proves the queued read runs
     // its credential command.
     support::kill_group(setup.deadline, first, "KILL").unwrap();
-    let second = ready.wait(setup.deadline.left())[0];
+    let second = ready.wait(setup.deadline)[0];
     let second_group = Watchdog::group(second);
     // The restarted read hangs in its credential command with no mark:
     // this wait reaches its deadline while the bug stands.
@@ -702,7 +702,7 @@ fn queued_picker_read_restarts_without_its_asked_mark_2738() {
     support::kill_pid(setup.deadline, run.id(), "HUP").unwrap();
     let exited = run.wait();
     assert_eq!(exited.status.code(), Some(129));
-    assert!(fakes::group_empties(second, setup.deadline.left()));
-    second_group.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    assert!(fakes::group_empties(second, setup.deadline));
+    second_group.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }

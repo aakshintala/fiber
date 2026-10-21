@@ -147,7 +147,10 @@ fn a_run_that_spins_past_its_timeout_is_a_timeout() {
         .recv(&went)
         .expect("waited for the callback to pass its clock check");
     assert!(
-        clock.await_parked(asked + Duration::from_millis(50) + GRACE, WAIT),
+        clock.await_parked(
+            asked + Duration::from_millis(50) + GRACE,
+            fakes::Deadline::after(WAIT)
+        ),
         "waited for the caller to park at the grace"
     );
     clock.advance_when_parked(

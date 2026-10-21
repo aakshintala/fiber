@@ -83,7 +83,7 @@ fn trickled_header_bytes_fail_within_the_request_bound() {
             }
         };
         assert!(
-            clock.await_thread_parked(headers.thread, headers.until, WAIT),
+            clock.await_thread_parked(headers.thread, headers.until, Deadline::after(WAIT)),
             "the headers wait parks on the clock before it moves"
         );
         // A header line, one byte at a time, across more than the bound

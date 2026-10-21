@@ -532,7 +532,11 @@ fn a_silent_handshake_records_nothing_on_the_injected_clock() {
         }
     };
     assert!(
-        clock.await_thread_parked(waiting.thread, waiting.until, CONNECT_WITHIN),
+        clock.await_thread_parked(
+            waiting.thread,
+            waiting.until,
+            Deadline::after(CONNECT_WITHIN)
+        ),
         "the handshake parks on the clock before it moves"
     );
     // Half the bound passes with no client bytes: the same reader
@@ -556,7 +560,7 @@ fn a_silent_handshake_records_nothing_on_the_injected_clock() {
         "only the announced sequence advances the clock"
     );
     assert!(
-        clock.await_thread_parked(still.thread, still.until, CONNECT_WITHIN),
+        clock.await_thread_parked(still.thread, still.until, Deadline::after(CONNECT_WITHIN)),
         "half the bound later the handshake is still parked on the silent peer"
     );
     assert!(

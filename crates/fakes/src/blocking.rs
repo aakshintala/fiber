@@ -57,10 +57,12 @@ impl Default for BlockingProvider {
 
 impl BlockingProvider {
     /// Blocks until the first call starts to block, failing the test at
-    /// `timeout` naming the missing call. The test fires its cancel after
+    /// `deadline` naming the missing call. The test fires its cancel after
     /// this, so the cancel lands mid-stream.
     #[track_caller]
-    pub fn wait_started(&self, timeout: Duration) {
+    pub fn wait_started(&self, deadline: Deadline) {
+        let within = deadline.left();
+        let timeout = within;
         let started = self
             .inner
             .started_rx

@@ -133,7 +133,7 @@ impl Setup {
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Run::from(output)
     }
 
@@ -657,7 +657,7 @@ fn until_exited(client: &support::Socket, setup: &Setup) -> Vec<Value> {
         line["kind"] == "fiber_exited"
     });
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    fakes::try_matching_exits(&workspace, setup.deadline.left()).unwrap_or_else(|err| {
+    fakes::try_matching_exits(&workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the session process to exit: {err}")
     });
     lines

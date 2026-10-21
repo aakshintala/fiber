@@ -704,7 +704,7 @@ fn outcome_names_only_status_content_and_reason_or_error() {
 #[track_caller]
 fn wait_parked(clock: &FakeClock, caller: std::thread::ThreadId, until: Instant) {
     assert!(
-        clock.await_thread_parked(caller, Some(until), WAIT),
+        clock.await_thread_parked(caller, Some(until), fakes::Deadline::after(WAIT)),
         "the caller never parked on the extension's clock within {WAIT:?}"
     );
 }
@@ -796,7 +796,7 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
     );
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
-        clock.await_parked(due, WAIT),
+        clock.await_parked(due, fakes::Deadline::after(WAIT)),
         "the timer waits for its due time"
     );
     clock.advance_when_parked(

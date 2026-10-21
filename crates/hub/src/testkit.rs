@@ -75,7 +75,7 @@ pub(crate) fn new_feed(dir: &Path) -> (Arc<Feed>, Arc<FakeClock>) {
 /// Waits until the scanner parks for the scan after now.
 pub(crate) fn await_scanner(clock: &FakeClock) {
     assert!(
-        clock.await_parked(clock.now() + RUN_SCAN, DEADLINE),
+        clock.await_parked(clock.now() + RUN_SCAN, fakes::Deadline::after(DEADLINE)),
         "the scanner parks until the next scan"
     );
 }

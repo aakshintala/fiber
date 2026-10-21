@@ -88,7 +88,7 @@ fn ask(setup: &Setup, prompt: &str) -> StdoutRun {
         !support::group_alive(setup.deadline, group),
         "`fiber` left a process in its group behind"
     );
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     let run = StdoutRun::from(output);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     run

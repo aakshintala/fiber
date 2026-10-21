@@ -331,7 +331,7 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
     // The loop parks at the deadline; the clock advances only on that
     // signal, first to 1 ms short of it.
     assert!(
-        clock.await_thread_parked(loop_thread, Some(deadline), WITHIN),
+        clock.await_thread_parked(loop_thread, Some(deadline), fakes::Deadline::after(WITHIN)),
         "the loop waits on the call's deadline",
     );
     let mark = clock.advance_when_parked(
@@ -341,7 +341,7 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
         &Deadline::after(WITHIN),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(deadline), WITHIN),
+        clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(WITHIN)),
         "the loop parks at the deadline again",
     );
     assert!(

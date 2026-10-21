@@ -1632,7 +1632,7 @@ fn at_899s_the_wait_continues_and_at_900s_it_fails() {
             &fakes::Deadline::after(WITHIN),
         );
         assert!(
-            clock.await_parked_since(&mark, Some(deadline), WITHIN),
+            clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(WITHIN)),
             "the login ended before 900 s"
         );
         clock.advance_when_parked(
@@ -1672,7 +1672,7 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
             fakes::Deadline::after(WITHIN).recv_or_fail(&received_url, "the authorization URL");
         let deadline = clock.origin() + CALLBACK_WAIT;
         assert!(
-            clock.await_parked(deadline, WITHIN),
+            clock.await_parked(deadline, fakes::Deadline::after(WITHIN)),
             "the login never waited on the clock"
         );
         // A slow drip: one byte at a time, never completing a head. Each
@@ -2056,7 +2056,7 @@ fn drive_wait(
         // this signal does the test interact, and only after it may the
         // fallback below advance the clock.
         assert!(
-            clock.await_parked(deadline, WITHIN),
+            clock.await_parked(deadline, fakes::Deadline::after(WITHIN)),
             "the callback wait never waited on the clock"
         );
         let echo = interact(addr);
@@ -2418,7 +2418,7 @@ fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
             );
             writer.write_all(b"G").unwrap();
             assert!(
-                clock.await_parked_since(&mark, Some(deadline), WITHIN),
+                clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(WITHIN)),
                 "the drain never waited on the clock"
             );
         }
@@ -2429,7 +2429,7 @@ fn a_refused_head_dripped_past_the_deadline_ends_at_the_deadline() {
             &fakes::Deadline::after(WITHIN),
         );
         assert!(
-            clock.await_parked_since(&mark, Some(deadline), WITHIN),
+            clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(WITHIN)),
             "the drain never waited on the clock"
         );
         clock.advance_when_parked(

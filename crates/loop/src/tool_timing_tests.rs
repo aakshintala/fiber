@@ -2329,7 +2329,9 @@ fn a_cancel_while_waiting_ends_cancelled_with_one_record() {
     // The cancel lands only once the wait parks on the clock: any earlier
     // and the unarmed signal swallows it.
     assert!(
-        world.clock.await_parked_unbounded(WAIT),
+        world
+            .clock
+            .await_parked_unbounded(fakes::Deadline::after(WAIT)),
         "the approval wait parks on the clock"
     );
     world.cancel.cancel();
@@ -2763,7 +2765,9 @@ fn a_resumed_cancel_ends_its_segment_cancelled() {
         "the approval is raised again",
     );
     assert!(
-        world.clock.await_parked(world.origin + IDLE, WAIT),
+        world
+            .clock
+            .await_parked(world.origin + IDLE, fakes::Deadline::after(WAIT)),
         "the resumed wait parks on the clock"
     );
     world.cancel.cancel();
@@ -4578,7 +4582,9 @@ fn a_cancel_before_the_run_check_times_no_run() {
         "the approval is raised",
     );
     assert!(
-        world.clock.await_parked_unbounded(WAIT),
+        world
+            .clock
+            .await_parked_unbounded(fakes::Deadline::after(WAIT)),
         "the approval wait parks on the clock"
     );
     assert!(world.cancel.cancel());

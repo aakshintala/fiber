@@ -155,7 +155,7 @@ fn tick(rx: &Receiver<Input>, wait: &Deadline) -> Input {
 /// Waits for the thread to park at `until`, within [`DEADLINE`].
 fn parked(clock: &FakeClock, until: Instant) {
     assert!(
-        clock.await_parked(until, DEADLINE),
+        clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park on the clock"
     );
 }
@@ -178,7 +178,7 @@ fn an_armed_ticker_sends_one_tick_at_its_deadline() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(at), DEADLINE),
+        clock.await_parked_since(&mark, Some(at), fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park again"
     );
     // Nothing sent yet: an empty channel, not a dead thread.
@@ -226,11 +226,11 @@ fn rearming_moves_the_deadline() {
     let _finished = run(&ticker, clock.clone(), tx);
     ticker.arm(Some(first));
     let mark = clock
-        .mark_parked(first, DEADLINE)
+        .mark_parked(first, fakes::Deadline::after(DEADLINE))
         .expect("ticker did not park at the first deadline");
     ticker.arm(Some(moved));
     assert!(
-        clock.await_parked_since(&mark, Some(moved), DEADLINE),
+        clock.await_parked_since(&mark, Some(moved), fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park at the moved deadline"
     );
     // Past the first deadline the thread still parks at the moved one,

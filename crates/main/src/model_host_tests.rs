@@ -1266,7 +1266,7 @@ fn cancelled_retry_wait_fails_without_clock_move() {
         }
     });
     assert!(
-        clock.await_parked(target, WAIT),
+        clock.await_parked(target, fakes::Deadline::after(WAIT)),
         "the retry wait to park at its target"
     );
     cancel.cancel();
@@ -1303,7 +1303,7 @@ fn clock_jump_past_deadline_during_retry_wait_fails() {
         ));
     });
     assert!(
-        clock.await_parked(target, WAIT),
+        clock.await_parked(target, fakes::Deadline::after(WAIT)),
         "the retry wait to park at its target"
     );
     // Late wake past the 30 s retry park to 100 s, past the 60 s deadline; the park is proven just above (ruling 6261259790).

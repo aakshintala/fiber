@@ -281,11 +281,11 @@ impl Setup {
             ),
         };
         assert!(
-            fakes::group_empties(group, self.deadline.left()),
+            fakes::group_empties(group, self.deadline),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Run::new(output)
     }
 
@@ -683,7 +683,7 @@ fn attach(setup: &Setup, id: &str) -> fakes::Client {
         .send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#)
         .unwrap();
     client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "clients" && line["payload"]["count"] == 1
         })
         .expect("the session counts the client within the deadline");

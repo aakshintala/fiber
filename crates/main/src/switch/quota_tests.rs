@@ -1240,7 +1240,7 @@ fn fetch_true_waits_for_a_held_loader_then_answers() {
         .checked_add(LOADER_BUDGET)
         .expect("the loader budget fits the clock");
     assert!(
-        loader_clock.await_parked(end, MUST_SUCCEED_WITHIN),
+        loader_clock.await_parked(end, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the fetch path parked on the loader wait"
     );
     release.send(()).unwrap();
@@ -1290,7 +1290,7 @@ fn fetch_true_answers_unreachable_when_the_loader_budget_expires() {
         .checked_add(LOADER_BUDGET)
         .expect("the loader budget fits the clock");
     assert!(
-        loader_clock.await_parked(end, MUST_SUCCEED_WITHIN),
+        loader_clock.await_parked(end, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the fetch path parked on the loader wait"
     );
     loader_clock.advance_when_parked(

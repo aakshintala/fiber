@@ -206,9 +206,9 @@ fn a_ps_that_closes_its_output_and_hangs_is_killed_at_the_bound() {
     );
     let bound = clock.now() + PS_BOUND;
     let rx = list(&ps, 99, &clock);
-    let pid = ready.wait(DEADLINE)[0];
+    let pid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     assert!(
-        clock.await_parked(bound, DEADLINE),
+        clock.await_parked(bound, fakes::Deadline::after(DEADLINE)),
         "the listing did not park at its bound"
     );
     assert!(
@@ -233,7 +233,7 @@ fn a_ps_that_does_not_finish_is_killed_at_the_bound() {
     let bound = clock.now() + PS_BOUND;
     let rx = list(&ps, 99, &clock);
     assert!(
-        clock.await_parked(bound, DEADLINE),
+        clock.await_parked(bound, fakes::Deadline::after(DEADLINE)),
         "the listing did not park at its bound"
     );
     assert!(

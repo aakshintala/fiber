@@ -148,11 +148,11 @@ impl Proc {
                 return Err(format!("process {} survived SIGKILL", self.group));
             }
         }
-        if !fakes::group_empties(self.group, STOP) {
+        if !fakes::group_empties(self.group, fakes::Deadline::after(STOP)) {
             signal(self.group, "KILL")?;
             // It returns once the group is seen empty or the bound passes,
             // never while a member may still be dying unreported.
-            let after = if fakes::group_empties(self.group, STOP) {
+            let after = if fakes::group_empties(self.group, fakes::Deadline::after(STOP)) {
                 "SIGKILL emptied it"
             } else {
                 "it outlived SIGKILL"
@@ -163,7 +163,7 @@ impl Proc {
             ));
         }
         if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(STOP);
+            watchdog.stand_down(fakes::Deadline::after(STOP));
         }
         Ok(())
     }

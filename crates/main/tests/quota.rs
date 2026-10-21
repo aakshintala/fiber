@@ -176,6 +176,6 @@ fn a_scripted_session_answers_every_codex_label_without_a_model_switch() {
     let stderr = setup.deadline.recv(&errors).expect("the stderr drain");
     assert!(status.success(), "{stderr}");
     assert!(!group_alive(setup.deadline, group));
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     std::mem::forget(guard);
 }

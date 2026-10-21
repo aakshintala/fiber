@@ -123,7 +123,7 @@ fn wait_until_parks_and_advance_wakes_it() {
     });
     barrier.wait();
     assert!(
-        clock.await_parked(until, Duration::from_secs(2)),
+        clock.await_parked(until, Deadline::after(Duration::from_secs(2))),
         "waited for the thread to park at its deadline"
     );
     assert_eq!(
@@ -166,7 +166,7 @@ fn await_parked_returns_once_a_thread_parks_at_the_deadline() {
     });
     barrier.wait();
     assert!(
-        clock.await_parked(until, Duration::from_secs(2)),
+        clock.await_parked(until, Deadline::after(Duration::from_secs(2))),
         "waited for a thread to park at the deadline"
     );
     assert_eq!(clock.parked(), vec![Some(until)]);
@@ -196,16 +196,16 @@ fn await_parked_returns_at_once_when_a_thread_is_already_parked() {
         if let Ok(()) = exit_tx.send(()) {}
     });
     assert!(
-        clock.await_parked(until, Duration::from_secs(5)),
+        clock.await_parked(until, Deadline::after(Duration::from_secs(5))),
         "waited for a thread to park at the deadline"
     );
     let clock_t = Arc::clone(&clock);
     let (tx, rx) = mpsc::channel();
-    thread::spawn(
-        move || match tx.send(clock_t.await_parked(until, Duration::from_secs(30))) {
+    thread::spawn(move || {
+        match tx.send(clock_t.await_parked(until, Deadline::after(Duration::from_secs(30)))) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
-        },
-    );
+        }
+    });
     assert!(
         Deadline::after(Duration::from_secs(5))
             .recv(&rx)
@@ -225,7 +225,11 @@ fn await_count(clock: &Arc<FakeClock>, until: std::time::Instant, count: usize) 
     let (tx, rx) = mpsc::channel();
     let clock = Arc::clone(clock);
     thread::spawn(move || {
-        match tx.send(clock.await_parked_count(until, count, Duration::from_secs(30))) {
+        match tx.send(clock.await_parked_count(
+            until,
+            count,
+            Deadline::after(Duration::from_secs(30)),
+        )) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
@@ -272,7 +276,11 @@ fn park_n(
 #[test]
 fn await_parked_count_is_false_before_any_thread_parks() {
     let clock = FakeClock::new();
-    assert!(!clock.await_parked_count(clock.origin() + Duration::from_secs(5), 1, Duration::ZERO));
+    assert!(!clock.await_parked_count(
+        clock.origin() + Duration::from_secs(5),
+        1,
+        Deadline::after(Duration::ZERO)
+    ));
 }
 
 #[test]
@@ -300,7 +308,7 @@ fn await_parked_is_false_when_nobody_parks() {
     let clock = FakeClock::new();
     assert!(!clock.await_parked(
         clock.origin() + Duration::from_secs(5),
-        Duration::from_millis(30)
+        Deadline::after(Duration::from_millis(30))
     ));
 }
 
@@ -357,7 +365,11 @@ fn await_since(
     let clock = Arc::clone(clock);
     let mark = mark.clone();
     thread::spawn(move || {
-        match tx.send(clock.await_parked_since(&mark, until, Duration::from_secs(5))) {
+        match tx.send(clock.await_parked_since(
+            &mark,
+            until,
+            Deadline::after(Duration::from_secs(5)),
+        )) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
@@ -371,11 +383,11 @@ fn await_since(
 fn await_unbounded(clock: &Arc<FakeClock>) -> bool {
     let (tx, rx) = mpsc::channel();
     let clock = Arc::clone(clock);
-    thread::spawn(
-        move || match tx.send(clock.await_parked_unbounded(Duration::from_secs(5))) {
+    thread::spawn(move || {
+        match tx.send(clock.await_parked_unbounded(Deadline::after(Duration::from_secs(5)))) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
-        },
-    );
+        }
+    });
     Deadline::after(Duration::from_secs(5))
         .recv(&rx)
         .expect("waited for await_parked_unbounded")
@@ -421,12 +433,12 @@ fn a_park_present_at_the_advance_does_not_match() {
         .recv(&parked)
         .expect("waited for the thread to park");
     assert!(
-        clock.await_parked(until, Duration::from_secs(5)),
+        clock.await_parked(until, Deadline::after(Duration::from_secs(5))),
         "waited for the thread to park at the deadline"
     );
     let mark = clock.advance_marked(Duration::from_millis(1));
     assert!(
-        !clock.await_parked_since(&mark, Some(until), Duration::ZERO),
+        !clock.await_parked_since(&mark, Some(until), Deadline::after(Duration::ZERO)),
         "the park present at the advance is not a later park"
     );
     release.send(()).unwrap();
@@ -485,7 +497,8 @@ fn a_later_park_at_any_deadline_by_a_thread_in_the_mark_matches() {
     let clock_wait = Arc::clone(&clock);
     let mark_wait = mark.clone();
     thread::spawn(move || {
-        let result = clock_wait.await_any_parked_since(&mark_wait, Duration::from_secs(5));
+        let result =
+            clock_wait.await_any_parked_since(&mark_wait, Deadline::after(Duration::from_secs(5)));
         if let Ok(()) = awaited_tx.send(result) {}
     });
     release_tx.send(()).unwrap();
@@ -518,7 +531,11 @@ fn a_park_by_a_thread_absent_from_the_mark_does_not_match() {
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     assert!(
-        !clock.await_parked_since(&mark, Some(until), Duration::from_millis(30)),
+        !clock.await_parked_since(
+            &mark,
+            Some(until),
+            Deadline::after(Duration::from_millis(30))
+        ),
         "a park by a thread absent from the mark is not a later park"
     );
     release_a.send(()).unwrap();
@@ -582,11 +599,11 @@ fn only_the_park_with_the_awaited_until_matches() {
         "second"
     );
     assert!(
-        !clock.await_parked_since(&mark, Some(until), Duration::ZERO),
+        !clock.await_parked_since(&mark, Some(until), Deadline::after(Duration::ZERO)),
         "the re-park is at another deadline"
     );
     assert!(
-        !clock.await_parked_since(&mark, None, Duration::ZERO),
+        !clock.await_parked_since(&mark, None, Deadline::after(Duration::ZERO)),
         "the re-park has a deadline"
     );
     release_tx.send(()).unwrap();
@@ -635,7 +652,7 @@ fn advance_marked_moves_the_clock_and_wakes_subscribers() {
 fn await_parked_unbounded_matches_only_a_park_without_a_deadline() {
     let clock = FakeClock::new();
     assert!(
-        !clock.await_parked_unbounded(Duration::from_millis(30)),
+        !clock.await_parked_unbounded(Deadline::after(Duration::from_millis(30))),
         "nobody is parked"
     );
     let until = clock.origin() + Duration::from_secs(30);
@@ -644,7 +661,7 @@ fn await_parked_unbounded_matches_only_a_park_without_a_deadline() {
         .recv(&parked)
         .expect("waited for the thread to park");
     assert!(
-        !clock.await_parked_unbounded(Duration::ZERO),
+        !clock.await_parked_unbounded(Deadline::after(Duration::ZERO)),
         "the only park has a deadline"
     );
     release.send(()).unwrap();
@@ -676,7 +693,7 @@ fn mark_parked_marks_only_the_threads_parked_at_until() {
         .recv(&parked_second)
         .expect("waited for the second thread to park");
     let mark = clock
-        .mark_parked(until, Duration::from_secs(5))
+        .mark_parked(until, Deadline::after(Duration::from_secs(5)))
         .expect("waited for a thread to park at the deadline");
     assert_eq!(
         mark.0.iter().map(|(_, id)| *id).collect::<Vec<_>>(),
@@ -699,7 +716,7 @@ fn mark_parked_is_none_when_nobody_parks() {
         clock
             .mark_parked(
                 clock.origin() + Duration::from_secs(5),
-                Duration::from_millis(30)
+                Deadline::after(Duration::from_millis(30))
             )
             .is_none()
     );
@@ -714,7 +731,7 @@ fn mark_threads_returns_the_parked_threads() {
         .recv(&parked)
         .expect("waited for the thread to park");
     let mark = clock
-        .mark_parked(until, Duration::from_secs(5))
+        .mark_parked(until, Deadline::after(Duration::from_secs(5)))
         .expect("waited for a thread to park at the deadline");
     assert_eq!(mark.threads(), vec![id]);
     release.send(()).unwrap();
@@ -755,7 +772,7 @@ fn a_later_park_after_mark_parked_matches() {
         .recv(&first_rx)
         .expect("waited for the first park");
     let mark = clock
-        .mark_parked(until, Duration::from_secs(5))
+        .mark_parked(until, Deadline::after(Duration::from_secs(5)))
         .expect("waited for the thread to park at the deadline");
     release_tx.send(()).unwrap();
     Deadline::after(Duration::from_secs(5))
@@ -862,7 +879,7 @@ fn a_re_park_before_the_advance_does_not_match() {
         .expect("waited for the thread to park again");
     let mark = clock.advance_marked(Duration::from_millis(1));
     assert!(
-        !clock.await_parked_since(&mark, Some(until), Duration::ZERO),
+        !clock.await_parked_since(&mark, Some(until), Deadline::after(Duration::ZERO)),
         "the park present at the advance is not a later park"
     );
     release.send(()).unwrap();
@@ -880,7 +897,8 @@ fn await_any(clock: &Arc<FakeClock>, mark: &super::Mark) -> bool {
     let clock = Arc::clone(clock);
     let mark = mark.clone();
     thread::spawn(move || {
-        match tx.send(clock.await_any_parked_since(&mark, Duration::from_secs(5))) {
+        match tx.send(clock.await_any_parked_since(&mark, Deadline::after(Duration::from_secs(5))))
+        {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
@@ -896,7 +914,7 @@ fn await_any_parked_since_is_false_when_no_thread_parks_again() {
     let clock = FakeClock::new();
     let mark = clock.advance_marked(Duration::from_millis(1));
     assert!(
-        !clock.await_any_parked_since(&mark, Duration::from_millis(30)),
+        !clock.await_any_parked_since(&mark, Deadline::after(Duration::from_millis(30))),
         "no thread parked again after the mark"
     );
 }
@@ -923,7 +941,8 @@ fn await_any_parked_since_matches_a_next_park_after_a_leave() {
     let clock_wait = Arc::clone(&clock);
     let mark_wait = mark.clone();
     thread::spawn(move || {
-        let result = clock_wait.await_any_parked_since(&mark_wait, Duration::from_secs(5));
+        let result =
+            clock_wait.await_any_parked_since(&mark_wait, Deadline::after(Duration::from_secs(5)));
         if let Ok(()) = awaited_tx.send(result) {}
     });
     Deadline::after(Duration::from_secs(5))
@@ -966,7 +985,7 @@ fn await_any_parked_since_needs_an_id_past_the_mark() {
         .expect("waited for the thread to park");
     let mark = clock.advance_marked(Duration::from_millis(1));
     assert!(
-        !clock.await_any_parked_since(&mark, Duration::from_millis(30)),
+        !clock.await_any_parked_since(&mark, Deadline::after(Duration::from_millis(30))),
         "the park present at the advance is not a later park"
     );
     release.send(()).unwrap();
@@ -1003,7 +1022,7 @@ fn await_any_parked_since_ignores_a_thread_absent_from_the_mark() {
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     assert!(
-        !clock.await_any_parked_since(&mark, Duration::from_millis(30)),
+        !clock.await_any_parked_since(&mark, Deadline::after(Duration::from_millis(30))),
         "a park by a thread absent from the mark is not a later park"
     );
     release_a.send(()).unwrap();
@@ -1024,7 +1043,7 @@ fn a_thread_parking_after_the_advance_is_absent_from_the_mark() {
         .recv(&parked_a)
         .expect("waited for thread A to park");
     assert!(
-        clock.await_parked_unbounded(Duration::from_secs(5)),
+        clock.await_parked_unbounded(Deadline::after(Duration::from_secs(5))),
         "thread A is parked unbounded"
     );
     let mark = clock.advance_marked(Duration::from_millis(1));
@@ -1033,12 +1052,12 @@ fn a_thread_parking_after_the_advance_is_absent_from_the_mark() {
         .recv(&parked_b)
         .expect("waited for thread B to park");
     assert!(
-        clock.await_thread_parked(b_id, None, Duration::from_secs(5)),
+        clock.await_thread_parked(b_id, None, Deadline::after(Duration::from_secs(5))),
         "thread B is parked unbounded: {:?}, thread {b_id:?}",
         clock.parked(),
     );
     assert!(
-        !clock.await_parked_since(&mark, None, Duration::ZERO),
+        !clock.await_parked_since(&mark, None, Deadline::after(Duration::ZERO)),
         "thread B parked after the advance, so it is absent from the mark"
     );
     release_a.send(()).unwrap();
@@ -1060,7 +1079,7 @@ fn await_thread_parked_is_false_for_a_thread_that_never_parked() {
         .expect("waited for the thread to park");
     let idle = thread::current().id();
     assert!(
-        !clock.await_thread_parked(idle, None, Duration::ZERO),
+        !clock.await_thread_parked(idle, None, Deadline::after(Duration::ZERO)),
         "a thread that never parked is not parked: {:?}, thread {idle:?}",
         clock.parked(),
     );
@@ -1080,7 +1099,7 @@ fn await_thread_parked_is_false_for_the_wrong_until() {
         .recv(&parked)
         .expect("waited for the thread to park");
     assert!(
-        !clock.await_thread_parked(id, Some(wrong), Duration::ZERO),
+        !clock.await_thread_parked(id, Some(wrong), Deadline::after(Duration::ZERO)),
         "the thread parked at another deadline: {:?}, thread {id:?}",
         clock.parked(),
     );
@@ -1099,7 +1118,7 @@ fn await_thread_parked_is_true_for_the_matching_until() {
         .recv(&parked)
         .expect("waited for the thread to park");
     assert!(
-        clock.await_thread_parked(id, Some(until), Duration::from_secs(5)),
+        clock.await_thread_parked(id, Some(until), Deadline::after(Duration::from_secs(5))),
         "the thread parked at its deadline: {:?}, thread {id:?}",
         clock.parked(),
     );
@@ -1122,7 +1141,7 @@ fn await_thread_parked_is_false_after_the_thread_leaves_its_park() {
         .recv(&exit)
         .expect("the parked thread exits");
     assert!(
-        !clock.await_thread_parked(id, Some(until), Duration::ZERO),
+        !clock.await_thread_parked(id, Some(until), Deadline::after(Duration::ZERO)),
         "the thread left its park: {:?}, thread {id:?}",
         clock.parked(),
     );
@@ -1161,18 +1180,18 @@ fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
     // would let the step advance before B parks; only the thread wait holds
     // the advance until B is parked.
     assert!(
-        clock.await_parked_unbounded(Duration::ZERO),
+        clock.await_parked_unbounded(Deadline::after(Duration::ZERO)),
         "thread A is parked unbounded: {:?}",
         clock.parked(),
     );
     assert!(
-        !clock.await_thread_parked(b_id, None, Duration::ZERO),
+        !clock.await_thread_parked(b_id, None, Deadline::after(Duration::ZERO)),
         "thread B has not parked yet: {:?}, thread {b_id:?}",
         clock.parked(),
     );
     start_tx.send(()).unwrap();
     assert!(
-        clock.await_thread_parked(b_id, None, Duration::from_secs(5)),
+        clock.await_thread_parked(b_id, None, Deadline::after(Duration::from_secs(5))),
         "thread B parked unbounded: {:?}, thread {b_id:?}",
         clock.parked(),
     );
@@ -1184,7 +1203,7 @@ fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
     wait.recv(&report_rx)
         .expect("waited for thread B to park again");
     assert!(
-        clock.await_parked_since(&mark, None, Duration::from_secs(5)),
+        clock.await_parked_since(&mark, None, Deadline::after(Duration::from_secs(5))),
         "thread B is in the mark, so its next park matches: {:?}, thread {b_id:?}",
         clock.parked(),
     );
@@ -1212,7 +1231,7 @@ fn mark_parked_returns_the_park_that_arrives_after_it_starts() {
     let (result_tx, result_rx) = mpsc::channel();
     let clock_wait = Arc::clone(&clock);
     thread::spawn(move || {
-        let mark = clock_wait.mark_parked(until, Duration::from_secs(5));
+        let mark = clock_wait.mark_parked(until, Deadline::after(Duration::from_secs(5)));
         match result_tx.send(mark) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
@@ -1235,7 +1254,11 @@ fn mark_parked_returns_the_park_that_arrives_after_it_starts() {
     });
     let parker_id = parker.thread().id();
     assert!(
-        clock.await_thread_parked(parker_id, Some(until), Duration::from_secs(5)),
+        clock.await_thread_parked(
+            parker_id,
+            Some(until),
+            Deadline::after(Duration::from_secs(5))
+        ),
         "the parker parked at its deadline: {:?}, thread {parker_id:?}",
         clock.parked(),
     );
@@ -2736,7 +2759,7 @@ fn advance_when_parked_wakes_a_subscriber_after_releasing_the_clock_lock() {
     });
     barrier.wait();
     assert!(
-        clock.await_parked(until, Duration::from_secs(2)),
+        clock.await_parked(until, Deadline::after(Duration::from_secs(2))),
         "waited for the thread to park at its deadline"
     );
     assert_eq!(

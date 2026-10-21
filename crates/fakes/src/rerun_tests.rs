@@ -189,7 +189,7 @@ fn a_prepared_rerun_child_that_leaves_its_group_occupied_fails_and_the_group_is_
     // A zombie reparented to init reads alive until init reaps it, so the
     // bound absorbs the reap; an unkilled sleeper (3600 s) still fails it.
     assert!(
-        crate::pids_exit(&[pid], crate::MUST_SUCCEED_WITHIN),
+        crate::pids_exit(&[pid], Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "the group was killed before the panic"
     );
 }

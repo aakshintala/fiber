@@ -496,7 +496,7 @@ fn a_server_that_misses_its_deadline_is_left_out() {
             ErrorCode::McpServerUnavailable
         );
         started.servers.stop();
-        watchdog.stand_down(WITHIN);
+        watchdog.stand_down(fakes::Deadline::after(WITHIN));
     });
 }
 
@@ -742,7 +742,7 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
          Raise `startup_timeout_ms` under `mcp.servers.slow` if it needs longer.",
     );
     setup.stop(started.servers);
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -1273,7 +1273,10 @@ fn adopt_then_stop_stops_the_adopted_server() {
     idle.servers.adopt(started.servers);
     assert_eq!(idle.servers.slots.lock().unwrap().len(), 1);
     setup.stop(idle.servers);
-    assert!(fakes::pids_exit(&[pid], WITHIN), "pid {pid} to be reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "pid {pid} to be reaped"
+    );
     assert!(!fakes::pid_alive(pid), "pid {pid} to be reaped");
 }
 

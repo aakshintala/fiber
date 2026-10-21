@@ -628,7 +628,7 @@ fn reap_group_leader(
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()));
     if let Ok(status) = Deadline::after(deadline).recv(&finished) {
-        watchdog.stand_down(REAP_DEADLINE);
+        watchdog.stand_down(fakes::Deadline::after(REAP_DEADLINE));
         return status.unwrap();
     }
     fakes::kill_group(group, "KILL").unwrap();

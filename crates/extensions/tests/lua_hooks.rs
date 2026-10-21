@@ -125,7 +125,7 @@ fn timed_out<T>(
     let answer = ask();
     wait.recv(went).expect("waited for the hook to start");
     let parked = clock
-        .mark_parked(asked + timeout, WAIT)
+        .mark_parked(asked + timeout, fakes::Deadline::after(WAIT))
         .expect("the caller parks at the hook's deadline");
     let parked = parked.threads();
     assert_eq!(
@@ -1015,7 +1015,7 @@ fn every_fires_again_ms_after_each_firing_ends() {
     // the rescheduling and make this test flaky.
     let rescheduled = clock.now() + Duration::from_millis(50);
     assert!(
-        clock.await_parked(rescheduled, WAIT),
+        clock.await_parked(rescheduled, fakes::Deadline::after(WAIT)),
         "waited {WAIT:?} for the first firing to end and park at its every"
     );
     // The first firing ended at the frozen now, so its `every` is due 50 ms
@@ -1028,7 +1028,7 @@ fn every_fires_again_ms_after_each_firing_ends() {
     );
     no_line(&second, "the second firing 1 ms early");
     assert!(
-        clock.await_parked(rescheduled, WAIT),
+        clock.await_parked(rescheduled, fakes::Deadline::after(WAIT)),
         "waited {WAIT:?} for the thread to park again at the every's due"
     );
     clock.advance_when_parked(
@@ -1212,7 +1212,7 @@ fn a_queued_command_starts_before_a_due_timer() {
     let slow_caller = Arc::clone(&ext);
     std::thread::spawn(move || slow_tx.send(slow_caller.command("slow", "")));
     assert!(
-        clock.await_parked(slow_started, WAIT),
+        clock.await_parked(slow_started, fakes::Deadline::after(WAIT)),
         "waited {WAIT:?} for `slow` to start and hold the thread"
     );
     // `quick` is queued while `slow` holds the thread and the timer is due.
@@ -1223,7 +1223,7 @@ fn a_queued_command_starts_before_a_due_timer() {
     let quick_caller = Arc::clone(&ext);
     std::thread::spawn(move || quick_tx.send(quick_caller.command("quick", "")));
     assert!(
-        clock.await_parked(quick_queued, WAIT),
+        clock.await_parked(quick_queued, fakes::Deadline::after(WAIT)),
         "waited {WAIT:?} for `quick` to wait in the queue"
     );
     // Releasing `slow` frees the thread with `quick` queued and the timer
@@ -1295,7 +1295,7 @@ fn a_timer_callback_past_its_timeout_ends_and_every_keeps_firing() {
     // parks at the firing's 200 ms deadline, the signal before the advance.
     let deadline = clock.now() + Duration::from_millis(200);
     let parked = clock
-        .mark_parked(deadline, WAIT)
+        .mark_parked(deadline, fakes::Deadline::after(WAIT))
         .expect("the firing parks at its deadline");
     let parked = parked.threads();
     assert_eq!(parked.len(), 1, "only the firing parks at its deadline");
@@ -1310,7 +1310,7 @@ fn a_timer_callback_past_its_timeout_ends_and_every_keeps_firing() {
     // that end: the park there proves the end before the next advance.
     let rescheduled = clock.now() + Duration::from_millis(50);
     assert!(
-        clock.await_parked(rescheduled, WAIT),
+        clock.await_parked(rescheduled, fakes::Deadline::after(WAIT)),
         "waited {WAIT:?} for the timed-out firing to park at its every"
     );
     clock.advance_when_parked(
@@ -1410,7 +1410,7 @@ fn a_timer_fires_while_a_hook_waits_on_host_exec() {
     );
     let due = clock.now() + Duration::from_millis(50);
     let parked = clock
-        .mark_parked(due, WAIT)
+        .mark_parked(due, fakes::Deadline::after(WAIT))
         .expect("the extension thread parks at the timer due");
     let parked = parked.threads();
     assert_eq!(
@@ -1550,7 +1550,7 @@ fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
         ),
         "the exec group is gone after the kill"
     );
-    watchdog.stand_down(WAIT);
+    watchdog.stand_down(fakes::Deadline::after(WAIT));
 }
 
 // The lifecycle points under their timeouts, on the fake clock

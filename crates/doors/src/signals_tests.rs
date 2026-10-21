@@ -285,7 +285,7 @@ fn the_bound_kills_and_exits_at_4_9_seconds_with_no_writer() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(until), DEADLINE),
+        clock.await_parked_since(&mark, Some(until), fakes::Deadline::after(DEADLINE)),
         "short of the bound it waits again"
     );
     assert!(calls.try_recv().is_err(), "nothing killed before the bound");
@@ -319,7 +319,7 @@ fn the_bound_kills_at_4_9_seconds_then_writes_its_line_then_exits() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(kill_at), DEADLINE),
+        clock.await_parked_since(&mark, Some(kill_at), fakes::Deadline::after(DEADLINE)),
         "short of the kill point it waits again"
     );
     assert!(
@@ -385,7 +385,7 @@ fn a_stalled_bound_line_still_exits_at_5_seconds() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(exit_by), DEADLINE),
+        clock.await_parked_since(&mark, Some(exit_by), fakes::Deadline::after(DEADLINE)),
         "short of 5 s it waits again"
     );
     assert!(did.try_recv().is_err(), "no exit before 5 s");

@@ -342,11 +342,11 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     let deadline = clock.origin() + Duration::from_millis(200);
     let grace = clock.origin() + Duration::from_millis(1200);
     assert!(
-        clock.await_thread_parked(caller_id, Some(grace), WAIT),
+        clock.await_thread_parked(caller_id, Some(grace), fakes::Deadline::after(WAIT)),
         "the caller parks at the slow command deadline plus the grace"
     );
     let parked = clock
-        .mark_parked(deadline, WAIT)
+        .mark_parked(deadline, fakes::Deadline::after(WAIT))
         .expect("the scheduler parks at the slow command deadline");
     let parked = parked.threads();
     assert_eq!(

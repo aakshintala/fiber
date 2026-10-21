@@ -503,7 +503,7 @@ fn check_phase(prefix: &[u8], phase: &'static str, progress: &[u8]) {
         });
         let ack = wait_phase(&acks, phase);
         assert!(
-            clock.await_thread_parked(ack.thread, ack.until, OP),
+            clock.await_thread_parked(ack.thread, ack.until, Deadline::after(OP)),
             "the {phase} parks on the clock before it moves"
         );
         // The park above, marked before the progress byte lands: the
@@ -512,12 +512,12 @@ fn check_phase(prefix: &[u8], phase: &'static str, progress: &[u8]) {
         // than through wall timing.
         let until = ack.until.expect("the phase waits on the request budget");
         let mark = clock
-            .mark_parked(until, OP)
+            .mark_parked(until, Deadline::after(OP))
             .expect("the phase parks on the clock under its budget");
         client.write_all(progress).expect("one byte writes");
         clock.advance(Duration::from_secs(10) - Duration::from_nanos(1));
         assert!(
-            clock.await_parked_since(&mark, ack.until, OP),
+            clock.await_parked_since(&mark, ack.until, Deadline::after(OP)),
             "one tick before the bound the {phase} parks again instead of ending"
         );
         assert!(
@@ -571,11 +571,14 @@ fn a_phase_change_during_the_same_clock_wait_is_announced() {
         // same waiter reaches the header phase without a clock advance.
         let line = wait_phase(&acks, "to read the request line");
         assert!(
-            clock.await_thread_parked(line.thread, line.until, OP),
+            clock.await_thread_parked(line.thread, line.until, Deadline::after(OP)),
             "the request-line read parks before the bytes arrive"
         );
         let mark = clock
-            .mark_parked(line.until.expect("the read has a bound"), OP)
+            .mark_parked(
+                line.until.expect("the read has a bound"),
+                Deadline::after(OP),
+            )
             .expect("the request-line read is parked");
         client
             .write_all(b"G / H\r\n")
@@ -588,7 +591,7 @@ fn a_phase_change_during_the_same_clock_wait_is_announced() {
         assert_eq!(headers.thread, line.thread, "the same reader advances");
         assert_eq!(headers.seq, line.seq + 1, "the phase change is sequenced");
         assert!(
-            clock.await_parked_since(&mark, headers.until, OP),
+            clock.await_parked_since(&mark, headers.until, Deadline::after(OP)),
             "the same reader parks again for the headers"
         );
 

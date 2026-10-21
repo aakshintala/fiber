@@ -35,7 +35,7 @@ const WAIT: Duration = Duration::from_secs(5);
 #[track_caller]
 fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
     let mark = clock
-        .mark_parked(at, WAIT)
+        .mark_parked(at, fakes::Deadline::after(WAIT))
         .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
     let threads = mark.threads();
     assert_eq!(
@@ -864,7 +864,7 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     assert!(
         clock.await_parked(
             asked + Duration::from_millis(30000) + Duration::from_secs(1),
-            WAIT
+            fakes::Deadline::after(WAIT)
         ),
         "waited for get to park at its grace"
     );

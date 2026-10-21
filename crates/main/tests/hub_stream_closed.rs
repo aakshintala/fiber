@@ -91,7 +91,7 @@ fn finish(running: Running) {
         "fiber left a process in its group"
     );
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 }
 
 /// The session id of a started `fiber ask`: its first stdout line.

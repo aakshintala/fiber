@@ -446,7 +446,7 @@ fn the_timer_covers_settlement_and_reports_the_whole_wait() {
         .unwrap_or(());
     });
     assert!(
-        clock.await_parked_count(until, 2, DEADLINE),
+        clock.await_parked_count(until, 2, fakes::Deadline::after(DEADLINE)),
         "the listing parks beside the scanner"
     );
     // The guard is alive but uncompleted: settlement holds the answer,

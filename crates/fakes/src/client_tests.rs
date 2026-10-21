@@ -57,11 +57,9 @@ fn recv_returns_a_buffered_line_without_waiting_for_the_socket_to_close() {
     let mut server = accept_within(&listener);
     server.write_all(b"{\"ok\":true}\n").unwrap();
     let (tx, rx) = mpsc::channel();
-    thread::spawn(
-        move || {
-            if let Ok(()) = tx.send(client.recv(Duration::from_secs(60))) {}
-        },
-    );
+    thread::spawn(move || {
+        if let Ok(()) = tx.send(client.recv(Deadline::after(Duration::from_secs(60)))) {}
+    });
     let line = Deadline::after(MUST)
         .recv(&rx)
         .expect("recv returns when the line is buffered")
@@ -77,7 +75,7 @@ fn a_line_keeps_no_trailing_cr_or_lf() {
     let client = Client::connect(&path).unwrap();
     let mut server = accept_within(&listener);
     server.write_all(b"hello\r\n").unwrap();
-    let line = client.recv(MUST).expect("a line arrives");
+    let line = client.recv(Deadline::after(MUST)).expect("a line arrives");
     assert_eq!(line, Value::String("hello".into()));
 }
 
@@ -90,7 +88,9 @@ fn drop_closes_the_socket() {
     let mut server = accept_within(&listener);
     server.write_all(b"{\"ok\":true}\n").unwrap();
     server.set_read_timeout(Some(MUST)).unwrap();
-    client.recv(MUST).expect("the line arrives");
+    client
+        .recv(Deadline::after(MUST))
+        .expect("the line arrives");
     drop(client);
     let mut buf = [0u8; 8];
     let n = server.read(&mut buf).expect("drop closes the socket");
@@ -108,12 +108,14 @@ fn recv_until_skips_non_matching_lines_and_returns_the_match() {
         .write_all(b"{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n{\"n\":4}\n")
         .unwrap();
     let got = client
-        .recv_until(MUST, |line| {
+        .recv_until(Deadline::after(MUST), |line| {
             line.get("n").and_then(Value::as_u64) == Some(3)
         })
         .expect("the matching line arrives");
     assert_eq!(got["n"], 3);
-    let next = client.recv(MUST).expect("the line after the match");
+    let next = client
+        .recv(Deadline::after(MUST))
+        .expect("the line after the match");
     assert_eq!(
         next["n"], 4,
         "lines before the match are dropped, later ones kept"
@@ -128,9 +130,11 @@ fn recv_until_without_a_match_consumes_nothing() {
     let client = Client::connect(&path).unwrap();
     let mut server = accept_within(&listener);
     server.write_all(b"{\"n\":1}\n{\"n\":2}\n").unwrap();
-    let got = client.recv_until(Duration::from_millis(100), |_| false);
+    let got = client.recv_until(Deadline::after(Duration::from_millis(100)), |_| false);
     assert!(got.is_none(), "no match returns none");
-    let first = client.recv(MUST).expect("the first queued line");
+    let first = client
+        .recv(Deadline::after(MUST))
+        .expect("the first queued line");
     assert_eq!(first["n"], 1, "a miss consumes nothing");
 }
 
@@ -145,7 +149,7 @@ fn recv_until_returns_none_at_once_when_the_socket_closes() {
     let got = within(
         "a closed socket",
         Deadline::after(Duration::from_secs(10)),
-        move || client.recv_until(Duration::from_secs(60), |_| false),
+        move || client.recv_until(Deadline::after(Duration::from_secs(60)), |_| false),
     );
     assert!(got.is_none(), "a close with no match returns none");
 }
@@ -399,7 +403,7 @@ fn a_client_dropped_during_an_unwind_keeps_the_first_panic() {
     client.notify_when_blocked(blocked);
     // Starts the reader without waiting: with no lines queued the zero
     // bound expires at once, leaving the reader blocked in `read`.
-    assert!(client.recv(Duration::ZERO).is_none());
+    assert!(client.recv(Deadline::after(Duration::ZERO)).is_none());
     Deadline::after(MUST)
         .recv(&is_blocked)
         .expect("the reader to block in read");

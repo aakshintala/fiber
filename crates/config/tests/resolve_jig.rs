@@ -58,7 +58,7 @@ fn resolve(setup: &Setup, args: &[&str]) -> Output {
         .recv(&finished)
         .expect("the resolve jig finished: the resolve example")
         .unwrap();
-    watchdog.stand_down(Duration::from_secs(5));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     output
 }
 

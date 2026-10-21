@@ -197,7 +197,7 @@ impl Setup {
         // The group is empty. Skip the drop, which would kill it again,
         // and tell the watchdog to exit without signalling.
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         TextRun::from(output)
     }
 

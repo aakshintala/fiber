@@ -1986,9 +1986,10 @@ fn a_cancel_mid_call_times_one_scope() {
             // The hold parks far out: the test cancels only once the park
             // shows the call waiting on the clock.
             assert!(
-                world
-                    .clock
-                    .await_parked(world.origin + Duration::from_secs(3600), WAIT),
+                world.clock.await_parked(
+                    world.origin + Duration::from_secs(3600),
+                    fakes::Deadline::after(WAIT)
+                ),
                 "the held call parks before the cancel lands"
             );
             world.cancel.cancel();
@@ -2111,7 +2112,9 @@ fn a_retry_measures_runs_without_the_backoff() {
             // test advances only once the wait shows on the clock.
             let backoff_until = world.origin + Duration::from_millis(7) + Duration::from_secs(2);
             assert!(
-                world.clock.await_parked(backoff_until, WAIT),
+                world
+                    .clock
+                    .await_parked(backoff_until, fakes::Deadline::after(WAIT)),
                 "the retry parks its backoff before the advance"
             );
             world.clock.advance_when_parked(
@@ -2161,7 +2164,9 @@ fn a_cancel_during_the_backoff_runs_nothing_more() {
             });
             let backoff_until = world.origin + Duration::from_millis(7) + Duration::from_secs(2);
             assert!(
-                world.clock.await_parked(backoff_until, WAIT),
+                world
+                    .clock
+                    .await_parked(backoff_until, fakes::Deadline::after(WAIT)),
                 "the retry parks its backoff before the cancel"
             );
             world.cancel.cancel();
@@ -2788,9 +2793,10 @@ fn a_cancel_mid_note_times_handoff_and_the_entered_note() {
                 done_tx.send(outcome).unwrap();
             });
             assert!(
-                world
-                    .clock
-                    .await_parked(world.origin + Duration::from_secs(3600), WAIT),
+                world.clock.await_parked(
+                    world.origin + Duration::from_secs(3600),
+                    fakes::Deadline::after(WAIT)
+                ),
                 "the note parks before the cancel lands"
             );
             world.cancel.cancel();

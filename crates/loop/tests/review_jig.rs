@@ -352,7 +352,7 @@ fn wait_under(child: Child, bound: Duration) -> Output {
             );
         }
     };
-    watchdog.stand_down(Duration::from_secs(5));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     output
 }
 
@@ -1866,7 +1866,8 @@ impl HeldExchange {
                 );
             }
         };
-        self.watchdog.stand_down(Duration::from_secs(5));
+        self.watchdog
+            .stand_down(fakes::Deadline::after(Duration::from_secs(5)));
         output
     }
 }
@@ -1920,7 +1921,7 @@ fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> 
     }
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    ready.wait(START_BOUND);
+    ready.wait(fakes::Deadline::after(START_BOUND));
     HeldExchange {
         _home: home,
         hold,

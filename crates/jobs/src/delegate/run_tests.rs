@@ -620,7 +620,7 @@ fn wait_folded(rig: &Rig, n: usize) {
 /// backoff 50, 100, 200, 400, 800 ms, then 1 s.
 fn wake_retry(rig: &Rig, at: std::time::Instant, gap: Duration, calls: usize) {
     assert!(
-        rig.clock.await_parked(at, DEADLINE),
+        rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
         "the runner parks until {at:?}"
     );
     rig.clock
@@ -717,7 +717,7 @@ fn the_watch_flow_completes_with_the_delegate_text() {
         notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some("Done.".into())
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -783,7 +783,7 @@ fn a_pre_session_error_fails_with_that_error() {
         notice.delegate.as_ref().map(|finish| finish.usage.clone()),
         Some(Usage::default())
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -840,7 +840,7 @@ fn a_full_envelope_error_keeps_its_usage_and_final_message() {
         notice.delegate.as_ref().map(|finish| finish.usage.clone()),
         Some(usage())
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Runs a child that prints `line` on stdout and exits `code` with
@@ -858,7 +858,7 @@ fn stdout_report(line: &str, code: i32, marker: &str) -> contract::inbox::JobNot
         1024,
     );
     let notice = reported(&rig);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
     notice
 }
 
@@ -1036,7 +1036,7 @@ fn the_last_stdout_verdict_wins() {
             .map(|error| error.message.clone()),
         Some("Second.".to_owned())
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1067,7 +1067,7 @@ fn a_child_that_exits_before_any_connect_uses_stdout() {
         notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some("Quick.".into())
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1127,7 +1127,7 @@ fn a_delayed_drain_still_feeds_the_fold() {
         notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some("Late.".into())
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1230,10 +1230,10 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
     );
     kill_pid(member, "KILL").unwrap();
     assert!(
-        pids_exit(&[member], DEADLINE),
+        pids_exit(&[member], fakes::Deadline::after(DEADLINE)),
         "the escaped member is reaped"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1253,7 +1253,7 @@ fn exit_zero_with_no_line_anywhere_is_indeterminate() {
             .map(|error| error.code.clone()),
         Some(ErrorCode::Indeterminate)
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1297,12 +1297,13 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         // next park, once it has taken the refusal, is the retry.
         let running = rig
             .clock
-            .mark_parked(at + super::POLL, DEADLINE)
+            .mark_parked(at + super::POLL, fakes::Deadline::after(DEADLINE))
             .expect("the runner parks while the watch runs");
         gate.send(()).expect("the held watch takes its release");
         at += Duration::from_millis(gap);
         assert!(
-            rig.clock.await_parked_since(&running, Some(at), DEADLINE),
+            rig.clock
+                .await_parked_since(&running, Some(at), fakes::Deadline::after(DEADLINE)),
             "the runner parks until {at:?}"
         );
         rig.clock.advance_when_parked(
@@ -1338,7 +1339,7 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         8,
         "after `fiber_exited` the watch rests"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1411,7 +1412,7 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
     for (gap, calls) in [(50, 2), (100, 3), (200, 4)] {
         at += Duration::from_millis(gap);
         assert!(
-            rig.clock.await_parked(at, DEADLINE),
+            rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
             "the runner parks until {at:?}"
         );
         rig.clock.advance_when_parked(
@@ -1443,7 +1444,7 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
         4,
         "after `fiber_exited` the watch rests"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1526,7 +1527,7 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
         .recv(&done)
         .expect("the runner returns after `fiber_exited`");
     assert_eq!(rig.script.calls().len(), 1);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1599,7 +1600,7 @@ fn timeout_stops_a_term_trap_without_sigkill() {
     assert!(
         !crate::delegate::group::sent_signals().contains(&(pgid, rustix::process::Signal::KILL))
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1623,7 +1624,7 @@ fn timeout_does_not_replace_a_childs_own_early_exit() {
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("early runner returns");
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 fn timeout_report(rig: &Rig, park: &Parker) -> contract::inbox::JobNotice {
@@ -1686,7 +1687,7 @@ fn a_stop_on_a_term_trap_cancels_without_sigkill() {
                 && *signal == rustix::process::Signal::KILL),
         "no SIGKILL went to the reaped group"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1729,7 +1730,7 @@ fn a_stop_on_a_term_ignorer_kills_past_the_bound() {
                 && *signal == rustix::process::Signal::KILL),
         "SIGKILL went out once the bound passed"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1771,7 +1772,7 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
     // The fourth call is refused, so the backoff is 400 ms.
     at += Duration::from_millis(400);
     assert!(
-        rig.clock.await_parked(at, DEADLINE),
+        rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
         "the runner parks until {at:?}"
     );
     if Deadline::after(Duration::from_millis(20))
@@ -1795,7 +1796,7 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
             .map(|error| error.code.clone()),
         Some(ErrorCode::OutputCap)
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1822,7 +1823,7 @@ fn a_disconnected_cap_trips_on_a_backoff_wake() {
             .map(|error| error.code.clone()),
         Some(ErrorCode::OutputCap)
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1857,7 +1858,7 @@ fn a_stop_before_the_cap_keeps_cancelled() {
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Cancelled);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1895,7 +1896,7 @@ fn a_child_that_exits_in_the_stop_timer_sends_no_kill() {
                 && *signal == rustix::process::Signal::KILL),
         "the timer found the group retired"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -1932,18 +1933,18 @@ fn a_member_outliving_a_stop_is_killed_and_the_job_still_cancels() {
     // is gone.
     assert_eq!(notice.completed.status, Outcome::Cancelled);
     assert!(
-        pids_exit(&[survivor], DEADLINE),
+        pids_exit(&[survivor], fakes::Deadline::after(DEADLINE)),
         "the surviving member got SIGKILL"
     );
     assert!(
-        group_empties(pgid, DEADLINE),
+        group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the group retires once it is empty"
     );
     // Retired, not just empty, once the runner has run: without the
     // retire loop the pgid would stay listed after its members are gone.
     wait_retired(&rig.clock, pgid);
     assert!(!listed(pgid));
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -2003,7 +2004,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
     }
     let after_bound = clock.origin() + BOUND + Duration::from_secs(1);
     assert!(
-        clock.await_parked_since(&mark, Some(after_bound), DEADLINE),
+        clock.await_parked_since(&mark, Some(after_bound), fakes::Deadline::after(DEADLINE)),
         "retire checks the timer and parks again past the bound"
     );
     assert!(kills(pgid) >= 1, "SIGKILL went out past the bound");
@@ -2027,7 +2028,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         .recv(&done_rx)
         .expect("retire returned once the group was empty");
     assert!(!listed(pgid));
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -2083,7 +2084,7 @@ fn a_blocked_watch_still_lets_a_stop_through() {
     for k in 1..=5 {
         let at = t0 + Duration::from_secs(k);
         assert!(
-            rig.clock.await_parked(at, DEADLINE),
+            rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
             "the runner parks until {at:?}"
         );
         rig.clock
@@ -2116,7 +2117,7 @@ fn a_blocked_watch_still_lets_a_stop_through() {
         "one watcher runs while it is blocked, never one per wake"
     );
     drop(release);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -2146,7 +2147,7 @@ fn a_blocked_watch_does_not_block_the_cap() {
         Some(ErrorCode::OutputCap)
     );
     drop(release);
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -2361,7 +2362,7 @@ fn the_watch_boundary_skips_an_earlier_run_exit() {
         "every watch call passes the boundary (none when the reap wins): {:?}",
         rig.script.afters()
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -2392,7 +2393,7 @@ fn no_boundary_takes_the_first_replayed_exit_as_today() {
         "every watch call passes no boundary (none when the reap wins): {:?}",
         rig.script.afters()
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -2482,7 +2483,7 @@ fn the_fold_starts_from_the_run_boundary() {
         !afters.is_empty() && afters.iter().all(|after| *after == Some(5)),
         "every watch call passes the boundary: {afters:?}"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]

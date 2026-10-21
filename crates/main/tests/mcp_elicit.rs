@@ -57,7 +57,7 @@ fn prompt(deadline: Deadline, client: &Client) {
 /// follows cannot overtake it.
 fn subscribed(deadline: Deadline, client: &Client) {
     client
-        .recv_until(deadline.left(), |line| {
+        .recv_until(deadline, |line| {
             line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_sub"
         })
         .expect("the subscribe is accepted");
@@ -65,9 +65,7 @@ fn subscribed(deadline: Deadline, client: &Client) {
 
 fn requested(deadline: Deadline, client: &Client) -> Value {
     client
-        .recv_until(deadline.left(), |line| {
-            line["kind"] == "interaction_requested"
-        })
+        .recv_until(deadline, |line| line["kind"] == "interaction_requested")
         .expect("the question arrives")
 }
 
@@ -78,15 +76,13 @@ fn reply(deadline: Deadline, client: &Client, id: &str, args: &Value) {
 
 fn resolved(deadline: Deadline, client: &Client) -> Value {
     client
-        .recv_until(deadline.left(), |line| {
-            line["kind"] == "interaction_resolved"
-        })
+        .recv_until(deadline, |line| line["kind"] == "interaction_resolved")
         .expect("the resolution arrives")
 }
 
 fn rejected(deadline: Deadline, client: &Client, id: &str) -> Value {
     client
-        .recv_until(deadline.left(), |line| {
+        .recv_until(deadline, |line| {
             line["kind"] == "command_rejected" && line["payload"]["command_id"] == id
         })
         .expect("the reply is rejected")
@@ -303,14 +299,15 @@ fn an_elicitation_raises_one_interaction_per_field_and_the_server_gets_the_answe
     running.wait_for("extensions_loaded");
     subscribe(setup.deadline, &client);
     client
-        .recv_until(std::time::Duration::from_secs(10), |line| {
-            line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_sub"
-        })
+        .recv_until(
+            fakes::Deadline::after(std::time::Duration::from_secs(10)),
+            |line| line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_sub",
+        )
         .expect("the subscribe is accepted");
     prompt(setup.deadline, &client);
     // The call's id rides on the envelope, not the payload.
     let call = client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "tool_call_requested" && line["payload"]["name"] == "mcp__fx__ask"
         })
         .expect("the call is requested");
@@ -388,9 +385,7 @@ fn an_elicitation_raises_one_interaction_per_field_and_the_server_gets_the_answe
     assert_eq!(counted["payload"]["request_id"], third_id);
     assert_eq!(counted["payload"]["text"], "3");
     let completed = client
-        .recv_until(setup.deadline.left(), |line| {
-            line["kind"] == "tool_call_completed"
-        })
+        .recv_until(setup.deadline, |line| line["kind"] == "tool_call_completed")
         .expect("the call completes");
     assert_eq!(completed["payload"]["status"], "completed");
     assert_eq!(completed["payload"]["content"][0]["text"], "finished");
@@ -509,7 +504,7 @@ fn an_elicitation_with_two_calls_in_flight_names_both() {
     let mut actions = Vec::new();
     for tool in ["mcp__fx__hold", "mcp__fx__ask"] {
         let call = client
-            .recv_until(setup.deadline.left(), |line| {
+            .recv_until(setup.deadline, |line| {
                 line["kind"] == "tool_call_requested" && line["payload"]["name"] == tool
             })
             .expect("both calls are requested");
@@ -546,9 +541,7 @@ fn an_elicitation_with_two_calls_in_flight_names_both() {
     write_fifo(setup.deadline, dir.join("release-hold"));
     for _ in 0..2 {
         let completed = client
-            .recv_until(setup.deadline.left(), |line| {
-                line["kind"] == "tool_call_completed"
-            })
+            .recv_until(setup.deadline, |line| line["kind"] == "tool_call_completed")
             .expect("both calls complete");
         assert_eq!(completed["payload"]["status"], "completed");
     }

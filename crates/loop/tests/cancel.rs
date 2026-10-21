@@ -31,7 +31,7 @@ fn cancel_mid_stream_writes_no_completion_and_ends_interrupted() {
     let cancel = Arc::clone(&session.cancel);
     std::thread::scope(|scope| {
         let turn = scope.spawn(|| session.turn());
-        blocking.wait_started(DEADLINE);
+        blocking.wait_started(fakes::Deadline::after(DEADLINE));
         assert!(cancel.cancel());
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
     });
@@ -420,7 +420,7 @@ fn a_cancelled_review_completes_cancelled() {
     let cancel = Arc::clone(&session.cancel);
     std::thread::scope(|scope| {
         let turn = scope.spawn(|| session.turn());
-        review_blocking.wait_started(DEADLINE);
+        review_blocking.wait_started(fakes::Deadline::after(DEADLINE));
         assert!(cancel.cancel());
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
     });
@@ -1022,7 +1022,7 @@ fn a_shutdown_mid_stream_ends_the_turn_interrupted_and_starts_no_other() {
     let cancel = Arc::clone(&session.cancel);
     std::thread::scope(|scope| {
         let turn = scope.spawn(|| session.turn());
-        blocking.wait_started(DEADLINE);
+        blocking.wait_started(fakes::Deadline::after(DEADLINE));
         cancel.shutdown(143);
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
     });

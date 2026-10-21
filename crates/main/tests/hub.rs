@@ -352,7 +352,7 @@ fn a_session_left_running_is_killed_by_its_guard() {
     // The watchdog stands down first, so only the drop can kill.
     guard.stand_down_watchdog();
     drop(guard);
-    fakes::try_matching_exits(&workspace, setup.deadline.left()).unwrap_or_else(|err| {
+    fakes::try_matching_exits(&workspace, setup.deadline).unwrap_or_else(|err| {
         panic!("waited until the deadline for the session to die after its guard dropped: {err}")
     });
     drop(client);
@@ -387,7 +387,7 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     client.send(&format!(
         "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\"}}}}"
     ));
-    ready.wait(setup.deadline.left());
+    ready.wait(setup.deadline);
     let sessions = log::sessions_dir(&setup.home(), &fs::canonicalize(&workspace).unwrap());
     let locks = fs::read_dir(&sessions)
         .map(|dirs| {
@@ -401,7 +401,7 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     drop(guard);
     let rejected = recv(&client, "the start rejection");
     assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
-    fakes::try_matching_exits(&workspace, setup.deadline.left()).unwrap_or_else(|err| panic!("waited until the deadline for the stuck session and its server to die after the guard dropped: {err}"));
+    fakes::try_matching_exits(&workspace, setup.deadline).unwrap_or_else(|err| panic!("waited until the deadline for the stuck session and its server to die after the guard dropped: {err}"));
     drop(client);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.kill_and_wait();

@@ -337,7 +337,7 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
         "the finished delegate's calls, elapsed and done, dim",
         |grid| delegate_progress(grid, "done", true),
     );
-    guard.stand_down(setup.deadline.cleanup());
+    guard.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 
@@ -468,7 +468,7 @@ fn panel_cards_match_the_doc() {
         guard,
     } = release;
     std::io::Write::write_all(&mut &release, b"\n").unwrap();
-    guard.stand_down(setup.deadline.cleanup());
+    guard.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 
@@ -528,7 +528,7 @@ fn narrow_status_rows_match_the_doc() {
         guard,
     } = release;
     std::io::Write::write_all(&mut &release, b"\n").unwrap();
-    guard.stand_down(setup.deadline.cleanup());
+    guard.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 
@@ -567,6 +567,6 @@ fn panel_tint_quantises_to_233() {
         guard,
     } = release;
     std::io::Write::write_all(&mut &release, b"\n").unwrap();
-    guard.stand_down(setup.deadline.cleanup());
+    guard.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }

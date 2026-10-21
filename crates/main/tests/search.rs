@@ -83,11 +83,11 @@ impl Setup {
             ),
         };
         assert!(
-            fakes::group_empties(group, self.deadline.left()),
+            fakes::group_empties(group, self.deadline),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
     }
 }

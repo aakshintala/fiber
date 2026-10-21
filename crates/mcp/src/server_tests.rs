@@ -247,7 +247,9 @@ fn a_hang_tool_times_out_only_after_the_clock_advances() {
         &Deadline::after(WITHIN),
     );
     assert!(
-        setup.fake.await_parked_since(&mark, Some(deadline), WITHIN),
+        setup
+            .fake
+            .await_parked_since(&mark, Some(deadline), fakes::Deadline::after(WITHIN)),
         "the call waits again a second before its deadline within {WITHIN:?}"
     );
     assert!(
@@ -293,7 +295,9 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
         });
     }
     assert!(
-        setup.fake.await_parked(deadline, WITHIN),
+        setup
+            .fake
+            .await_parked(deadline, fakes::Deadline::after(WITHIN)),
         "the caller waits on the call deadline within {WITHIN:?}",
     );
     cancel.cancel();
@@ -443,7 +447,7 @@ fn a_server_that_misses_its_startup_deadline_is_left_out() {
             .unwrap_or_else(|_| panic!("the missed-deadline start ends within {WITHIN:?}")),
         StartError::Deadline,
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -734,7 +738,7 @@ fn a_stopped_server_takes_its_grandchild_with_it() {
         .recv(&stopped)
         .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));
     assert!(
-        fakes::pids_exit(&[grandchild], WITHIN),
+        fakes::pids_exit(&[grandchild], fakes::Deadline::after(WITHIN)),
         "the grandchild {grandchild} outlived the stop"
     );
 }
@@ -882,7 +886,10 @@ fn endless_pages_end_at_the_startup_deadline() {
             matches!(outcome, Err(StartError::Deadline)),
             "endless {method} pages end at the startup deadline",
         );
-        assert!(fakes::pids_exit(&[pid], WITHIN), "pid {pid} to be reaped");
+        assert!(
+            fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+            "pid {pid} to be reaped"
+        );
         assert!(!fakes::pid_alive(pid), "pid {pid} to be reaped");
     }
 }
@@ -948,7 +955,9 @@ fn kill_every_server_kills_one_that_ignores_sigterm() {
     let grace = setup.fake.now() + support::group::GRACE;
     let stopped = stopping(opened.server);
     assert!(
-        setup.fake.await_parked(grace, WITHIN),
+        setup
+            .fake
+            .await_parked(grace, fakes::Deadline::after(WITHIN)),
         "the stop waits out the grace on a server ignoring SIGTERM"
     );
     support::group::kill_every_group();
@@ -1238,7 +1247,7 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
         Duration::from_secs(600),
     );
     let pid = ready
-        .wait(WITHIN)
+        .wait(fakes::Deadline::after(WITHIN))
         .into_iter()
         .next()
         .expect("the ready line holds the server's pid");
@@ -1251,7 +1260,9 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
         .checked_add(support::group::GRACE)
         .expect("grace");
     assert!(
-        setup.fake.await_parked(grace, WITHIN),
+        setup
+            .fake
+            .await_parked(grace, fakes::Deadline::after(WITHIN)),
         "the stop waits out the grace within {WITHIN:?}"
     );
     assert!(
@@ -1274,7 +1285,7 @@ fn a_stopped_start_waits_out_the_grace_before_its_kill() {
         "the server was reaped after the grace"
     );
     assert!(support::group::live().is_empty());
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -1301,7 +1312,9 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
         Duration::from_secs(600),
     );
     assert!(
-        setup.fake.await_parked(start_deadline, WITHIN),
+        setup
+            .fake
+            .await_parked(start_deadline, fakes::Deadline::after(WITHIN)),
         "the start waits on its startup deadline within {WITHIN:?}"
     );
     assert_eq!(
@@ -1318,7 +1331,7 @@ fn a_stopped_start_whose_server_exits_on_sigterm_returns_without_the_clock_movin
     );
     assert_eq!(setup.fake.now(), before, "the clock never moved");
     assert!(support::group::live().is_empty());
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]

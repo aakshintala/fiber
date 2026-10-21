@@ -1489,9 +1489,11 @@ fn an_outer_return_cancels_its_inner_and_holds_its_completion_without_cancelling
     let (done, id) = start_turn(&mut session);
     deadline.recv_or_fail(&cancelled, "anchor cancellation");
     assert!(
-        session
-            .clock
-            .await_thread_parked(id, None, std::time::Duration::from_secs(2)),
+        session.clock.await_thread_parked(
+            id,
+            None,
+            fakes::Deadline::after(std::time::Duration::from_secs(2))
+        ),
         "loop waits for the cancelled inner result before completing its outer"
     );
     let durable = log::read(&session.dir).unwrap();
@@ -1589,7 +1591,7 @@ fn inner_deltas_are_paced_on_the_injected_clock_and_flushed_under_the_inner_acti
         session.clock.await_thread_parked(
             thread,
             Some(session.clock.now() + interval),
-            std::time::Duration::from_secs(2)
+            fakes::Deadline::after(std::time::Duration::from_secs(2))
         ),
         "inner delta waits on its clock interval"
     );

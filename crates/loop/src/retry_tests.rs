@@ -314,9 +314,10 @@ fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
     let mut partial = RetryRun::start(PARTIAL_ADVANCE);
     partial.wait_for_retry_scheduled(DEADLINE);
     assert!(
-        partial
-            .clock
-            .await_parked(partial.origin + RETRY_DELAY, DEADLINE),
+        partial.clock.await_parked(
+            partial.origin + RETRY_DELAY,
+            fakes::Deadline::after(DEADLINE)
+        ),
         "the retry stays parked at its fixed deadline"
     );
     assert_eq!(

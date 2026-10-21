@@ -219,7 +219,7 @@ exec 3<>block
         .unwrap();
     std::io::Write::write_all(&mut release, b"done\n").unwrap();
     let ended = jobs
-        .ended(Duration::from_secs(10))
+        .ended(fakes::Deadline::after(Duration::from_secs(10)))
         .expect("moved grep descendant ended");
     assert_eq!(ended.status, Outcome::Completed);
     assert_eq!(output.details, Some(json!({"command":"grep x a"})));
@@ -244,7 +244,7 @@ fn background_search_has_no_match_side_channel() {
     arguments.insert("run_in_background".into(), json!(true));
     let output = run_details_call(shell, arguments);
     let ended = jobs
-        .ended(Duration::from_secs(10))
+        .ended(fakes::Deadline::after(Duration::from_secs(10)))
         .expect("background grep ended");
     assert_eq!(ended.status, Outcome::Completed);
     assert_eq!(output.details, Some(json!({"command":"grep needle a.txt"})));
@@ -569,7 +569,7 @@ fn result_lines_name_what_was_observed() {
     let killed = fakes::Deadline::after(Duration::from_secs(10))
         .recv_or_fail(&waited, "the signalled shell to exit")
         .unwrap();
-    watchdog.stand_down(Duration::from_secs(10));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(10)));
     let (_, signal, line) = observed(killed);
     assert_eq!(signal.as_deref(), Some("SIGTERM"));
     assert_eq!(line, "Killed by SIGTERM.");
@@ -757,7 +757,7 @@ fn run_in_background_skips_the_bare_wait_and_returns_a_receipt() {
     assert_eq!(started.tool.as_deref(), Some("shell"));
     jobs.stop(&started.job_id);
     let ended = jobs
-        .ended(Duration::from_secs(10))
+        .ended(fakes::Deadline::after(Duration::from_secs(10)))
         .expect("the stopped sleep to end");
     assert_eq!(ended.status, Outcome::Cancelled);
     assert!(ended.output_tail.is_none());

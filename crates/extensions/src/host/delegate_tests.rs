@@ -433,7 +433,7 @@ fn a_timer_cannot_change_what_the_held_start_sends() {
     assert_eq!(extension, "ext");
     let due = clock.origin() + Duration::from_millis(100);
     let timer = clock
-        .mark_parked(due, WAIT)
+        .mark_parked(due, fakes::Deadline::after(WAIT))
         .expect("the timer waits for its due time")
         .threads();
     assert_eq!(timer.len(), 1, "only the timer parks at its due time");
@@ -565,7 +565,7 @@ fn a_second_timer_fires_while_one_start_is_held() {
     assert_eq!(first.get("description"), Some(&Value::from("first")));
     let due = clock.origin() + Duration::from_millis(100);
     let timer = clock
-        .mark_parked(due, WAIT)
+        .mark_parked(due, fakes::Deadline::after(WAIT))
         .expect("the timer waits for its due time")
         .threads();
     assert_eq!(timer.len(), 1, "only the timer parks at its due time");

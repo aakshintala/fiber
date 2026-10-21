@@ -660,7 +660,7 @@ fn concurrent_readers_share_one_fetch() {
         "the shared fetch never reached the server"
     );
     assert!(
-        clock.await_parked_count(deadline, 2, WAIT),
+        clock.await_parked_count(deadline, 2, fakes::Deadline::after(WAIT)),
         "both readers never parked on the shared fetch"
     );
     server.release();
@@ -702,7 +702,7 @@ fn a_fetch_times_out_at_exactly_eight_seconds() {
         "the second fetch never reached the server"
     );
     assert!(
-        clock.await_parked(until, WAIT),
+        clock.await_parked(until, fakes::Deadline::after(WAIT)),
         "the reader never parked at the fetch's deadline"
     );
     // One nanosecond short of the cap the reader is still parked: it woke,
@@ -714,7 +714,7 @@ fn a_fetch_times_out_at_exactly_eight_seconds() {
         &Deadline::after(WAIT),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(until), WAIT),
+        clock.await_parked_since(&mark, Some(until), fakes::Deadline::after(WAIT)),
         "the reader never re-parked at the same deadline"
     );
     assert!(rx.try_recv().is_err(), "the fetch ended before its 8 s cap");
@@ -858,7 +858,7 @@ fn a_reader_reports_its_own_flight_when_the_flight_is_replaced() {
         std::thread::spawn(move || tx.send(provider.quota(&pair, None)))
     };
     assert!(
-        clock.await_parked(t0 + Duration::from_secs(8), WAIT),
+        clock.await_parked(t0 + Duration::from_secs(8), fakes::Deadline::after(WAIT)),
         "the reader never parked on flight 7"
     );
     // Hold the cache while the clock passes flight 7's deadline, so the reader
@@ -1744,7 +1744,7 @@ fn a_wait_reports_its_own_flight_when_the_flight_is_replaced() {
         std::thread::spawn(move || tx.send(provider.wait_quota(&pair, wait)))
     };
     assert!(
-        clock.await_parked(t0 + Duration::from_secs(8), WAIT),
+        clock.await_parked(t0 + Duration::from_secs(8), fakes::Deadline::after(WAIT)),
         "the wait never parked on flight 7"
     );
     // Hold the cache while the clock passes flight 7's deadline, so the

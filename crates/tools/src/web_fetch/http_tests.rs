@@ -101,7 +101,7 @@ fn a_deadline_one_tick_ahead_runs_the_work() {
 /// check is `done`. Only the check after the join can then catch the stop.
 fn miss_the_watcher(fake: &FakeClock, hop: &Hop, deadline: std::time::Instant) {
     assert!(
-        fake.await_parked(deadline, Duration::from_secs(10)),
+        fake.await_parked(deadline, fakes::Deadline::after(Duration::from_secs(10))),
         "the watcher parks at the deadline"
     );
     hop.lock().done = true;
@@ -332,7 +332,10 @@ fn park_waits_for_a_wake_before_the_deadline() {
         parked.park(timed.as_ref(), until, 0);
         tx.send(()).unwrap_or(());
     });
-    assert!(fake.await_parked(until, SIGNAL), "park waits on the clock");
+    assert!(
+        fake.await_parked(until, fakes::Deadline::after(SIGNAL)),
+        "park waits on the clock"
+    );
     hop.wake();
     Deadline::after(SIGNAL)
         .recv(&rx)

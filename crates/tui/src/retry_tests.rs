@@ -48,7 +48,7 @@ fn result(rx: &Receiver<bool>, wait: &Deadline) -> bool {
 /// Waits for the thread to park at `until`, within [`DEADLINE`].
 fn parked(clock: &FakeClock, until: std::time::Instant) {
     assert!(
-        clock.await_parked(until, DEADLINE),
+        clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the wait to park on the clock"
     );
 }
@@ -83,7 +83,7 @@ fn an_advance_short_of_the_delay_keeps_waiting() {
     // Parked again at the same deadline: 499 ms is short of it, and the
     // thread has checked the clock since the advance.
     assert!(
-        clock.await_parked_since(&mark, Some(until), DEADLINE),
+        clock.await_parked_since(&mark, Some(until), fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the wait to park again"
     );
     assert!(rx.try_recv().is_err());

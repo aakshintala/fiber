@@ -791,7 +791,7 @@ impl Session {
         let err = setup.deadline.recv(&stderr).unwrap();
         assert!(!group_alive(setup.deadline, group));
         std::mem::forget(guard);
-        watchdog.stand_down(setup.deadline.cleanup());
+        watchdog.stand_down(setup.deadline.cleanup_phase());
         // The child's stdout is closed, so the reader ended: every line
         // is here, including the ephemeral notices the durable log and
         // a late-subscribed client never see.

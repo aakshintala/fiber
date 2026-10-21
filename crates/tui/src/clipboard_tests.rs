@@ -116,7 +116,7 @@ fn the_command_receives_the_text_on_its_standard_input() {
     let status = reap(handle).unwrap_or_else(|err| panic!("command: {err}"));
     assert!(status.success());
     assert_eq!(std::fs::read_to_string(&out).ok().as_deref(), Some(text));
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]

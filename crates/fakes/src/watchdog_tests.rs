@@ -70,7 +70,7 @@ fn stand_down_leaves_the_group_alive() {
     let watchdog_pid = watchdog.child.as_ref().expect("a running watchdog").id();
     // `stand_down` returns once the watchdog is reaped: from here nothing
     // else can signal the group.
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(Deadline::after(DEADLINE));
     assert!(
         !crate::kill_pid(watchdog_pid, "0").unwrap(),
         "stand_down returned before reaping the watchdog"
@@ -191,7 +191,7 @@ fn stand_down_leaves_matching_processes_alive() {
     let watchdog_pid = watchdog.child.as_ref().expect("a running watchdog").id();
     // `stand_down` returns once the watchdog is reaped: from here nothing
     // else can signal the group.
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(Deadline::after(DEADLINE));
     assert!(
         !crate::kill_pid(watchdog_pid, "0").unwrap(),
         "stand_down returned before reaping the watchdog"

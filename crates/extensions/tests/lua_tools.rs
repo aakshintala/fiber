@@ -37,7 +37,7 @@ const WAIT: Duration = Duration::from_secs(5);
 #[track_caller]
 fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
     let mark = clock
-        .mark_parked(at, WAIT)
+        .mark_parked(at, fakes::Deadline::after(WAIT))
         .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
     let threads = mark.threads();
     assert_eq!(
@@ -382,7 +382,10 @@ fiber.tool("slow", {
         .recv(&went)
         .expect("waited for the effects function to start");
     assert!(
-        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
+        clock.await_parked(
+            asked + Duration::from_millis(100) + GRACE,
+            fakes::Deadline::after(WAIT)
+        ),
         "waited for the effects call to park at its grace"
     );
     clock.advance_when_parked(
@@ -516,7 +519,10 @@ fiber.tool("spin", {
         .recv(&went)
         .expect("waited for spin to start");
     assert!(
-        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
+        clock.await_parked(
+            asked + Duration::from_millis(100) + GRACE,
+            fakes::Deadline::after(WAIT)
+        ),
         "waited for spin to park at its grace"
     );
     clock.advance_when_parked(
@@ -577,7 +583,10 @@ fiber.tool("wait", {{
     // The caller of a parked call waits to the deadline plus the grace,
     // so the callback is parked under its deadline.
     assert!(
-        clock.await_parked(deadline.checked_add(GRACE).unwrap(), WAIT),
+        clock.await_parked(
+            deadline.checked_add(GRACE).unwrap(),
+            fakes::Deadline::after(WAIT)
+        ),
         "waited for the caller to see the call parked"
     );
     let scheduler = thread_parked_at(&clock, deadline);
@@ -1128,7 +1137,10 @@ fiber.tool("count", {
     cancel.cancel();
     assert_eq!(ran(&queued, &Deadline::after(WAIT)), cancelled());
     assert!(
-        clock.await_parked(asked + Duration::from_millis(100) + GRACE, WAIT),
+        clock.await_parked(
+            asked + Duration::from_millis(100) + GRACE,
+            fakes::Deadline::after(WAIT)
+        ),
         "waited for spin to park at its grace"
     );
     clock.advance_when_parked(
@@ -1265,7 +1277,7 @@ fn a_call_parked_on_exec_returns_once_its_group_is_empty() {
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["exec"], &cancel);
-    let group = ready.wait(WAIT)[0];
+    let group = ready.wait(fakes::Deadline::after(WAIT))[0];
     let watchdog = fakes::Watchdog::group(group);
     cancel.cancel();
     assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
@@ -1273,7 +1285,7 @@ fn a_call_parked_on_exec_returns_once_its_group_is_empty() {
         !fakes::kill_group(group, "0").unwrap(),
         "the group is empty when the call returns"
     );
-    watchdog.stand_down(WAIT);
+    watchdog.stand_down(fakes::Deadline::after(WAIT));
     assert_eq!(
         text(&ran(
             &run(&tools["exec"], json!({})),
@@ -1313,12 +1325,12 @@ fiber.tool("exec", {{
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["exec"], &cancel);
-    let group = ready.wait(WAIT)[0];
+    let group = ready.wait(fakes::Deadline::after(WAIT))[0];
     let watchdog = fakes::Watchdog::group(group);
     let cancelled_at = clock.now();
     cancel.cancel();
     // The trap's line: SIGTERM arrived and the group runs on.
-    ready.wait(WAIT);
+    ready.wait(fakes::Deadline::after(WAIT));
     assert!(
         Deadline::after(Duration::from_millis(200))
             .recv(&first)
@@ -1344,7 +1356,7 @@ fiber.tool("exec", {{
     let before = len();
     pause(Duration::from_millis(100));
     assert_eq!(len(), before, "nothing writes after the call returned");
-    watchdog.stand_down(WAIT);
+    watchdog.stand_down(fakes::Deadline::after(WAIT));
 }
 
 #[test]
@@ -1386,7 +1398,7 @@ fiber.tool("other", {
     cancel.cancel();
     let abandon_at = asked + Duration::from_millis(50) + GRACE;
     assert!(
-        clock.await_parked(abandon_at, WAIT),
+        clock.await_parked(abandon_at, fakes::Deadline::after(WAIT)),
         "waited for the caller to park at the grace"
     );
     clock.advance_when_parked(
@@ -1459,7 +1471,7 @@ fiber.tool("find", {{
     );
     let abandon_at = asked + Duration::from_millis(50) + GRACE;
     assert!(
-        clock.await_parked(abandon_at, WAIT),
+        clock.await_parked(abandon_at, fakes::Deadline::after(WAIT)),
         "waited for the stuck call's caller to park at the grace"
     );
     let stuck_caller = thread_parked_at(&clock, abandon_at);
@@ -1515,7 +1527,7 @@ fiber.tool("find", {{
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["exec"], &cancel);
-    let group = ready.wait(WAIT)[0];
+    let group = ready.wait(fakes::Deadline::after(WAIT))[0];
     let watchdog = fakes::Watchdog::group(group);
     let asked = clock.now();
     let abandon_at = asked + Duration::from_millis(50) + GRACE;
@@ -1549,7 +1561,7 @@ fiber.tool("find", {{
     );
     let kill_at = cancelled_at + support::group::GRACE;
     assert!(
-        clock.await_parked(abandon_at, WAIT),
+        clock.await_parked(abandon_at, fakes::Deadline::after(WAIT)),
         "waited for the stuck call's caller to park at the grace"
     );
     clock.advance_when_parked(
@@ -1569,7 +1581,7 @@ fiber.tool("find", {{
     );
     // The stop reached the run without the Lua thread: SIGTERM arrived,
     // and the group runs on past it.
-    ready.wait(WAIT);
+    ready.wait(fakes::Deadline::after(WAIT));
     assert!(
         Deadline::after(Duration::from_millis(200))
             .recv(&first)
@@ -1593,7 +1605,7 @@ fiber.tool("find", {{
     let before = len();
     pause(Duration::from_millis(100));
     assert_eq!(len(), before, "nothing writes after the call returned");
-    watchdog.stand_down(WAIT);
+    watchdog.stand_down(fakes::Deadline::after(WAIT));
 }
 
 /// `host.tool` through the public API (`docs/extensions.md`, "Running a

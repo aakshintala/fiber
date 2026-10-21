@@ -70,7 +70,7 @@ impl Setup {
                 &format!("`fiber extension {}` to exit", args.join(" ")),
             ),
         };
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
     }
 }

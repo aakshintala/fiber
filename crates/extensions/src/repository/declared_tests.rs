@@ -578,7 +578,7 @@ fn a_stalled_ls_files_fails_at_the_git_deadline() {
         stdout.contains("1 passed"),
         "the child ran exactly the ls-files stall test: {stdout}"
     );
-    stall_guard.stand_down(fakes::MUST_SUCCEED_WITHIN);
+    stall_guard.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// The re-executed child: `git` resolves to the fixture through `PATH`, so
@@ -671,7 +671,7 @@ fn stalled_ls_files_child() {
             let mut parked = false;
             let mut early = None;
             for _ in 0..STUCK_ROUNDS {
-                if clock.await_parked(running_until, SIGHT) {
+                if clock.await_parked(running_until, fakes::Deadline::after(SIGHT)) {
                     parked = true;
                     break;
                 }
@@ -737,7 +737,7 @@ fn stalled_ls_files_child() {
                 leftovers.is_empty(),
                 "the stalled ls-files is gone: {leftovers:?}"
             );
-            stall_guard.stand_down(CHILD_BUDGET);
+            stall_guard.stand_down(fakes::Deadline::after(CHILD_BUDGET));
         },
     );
 }

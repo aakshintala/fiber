@@ -1018,8 +1018,10 @@ fn held(rig: &Rig, server: &ProviderServer, url: &str, deadline: Duration) -> Ca
     server.hold();
     let call = rig.start(url);
     assert!(
-        rig.clock
-            .await_parked(rig.clock.origin() + deadline, SIGNAL),
+        rig.clock.await_parked(
+            rig.clock.origin() + deadline,
+            fakes::Deadline::after(SIGNAL)
+        ),
         "the watcher waits for the deadline"
     );
     call
@@ -1065,7 +1067,7 @@ fn a_request_one_second_short_of_sixty_is_still_waiting() {
         rig.clock.await_parked_since(
             &mark,
             Some(rig.clock.origin() + Duration::from_secs(60)),
-            SIGNAL
+            fakes::Deadline::after(SIGNAL)
         ),
         "the watcher waits again a second before its deadline"
     );
@@ -1090,10 +1092,10 @@ fn a_deadline_that_passes_while_the_body_is_read_times_out() {
     let server = serve([stall()]);
     let rig = Rig::new();
     let call = rig.start(&server.url());
-    assert!(
-        rig.clock
-            .await_parked(rig.clock.origin() + Duration::from_secs(60), SIGNAL)
-    );
+    assert!(rig.clock.await_parked(
+        rig.clock.origin() + Duration::from_secs(60),
+        fakes::Deadline::after(SIGNAL)
+    ));
     // Past headers: the partial body is what the read is blocked on.
     assert!(
         server.await_partial(1, Deadline::after(SIGNAL)),
@@ -1123,10 +1125,10 @@ fn a_cancel_while_the_body_is_read_stops_the_call() {
     let server = serve([stall()]);
     let rig = Rig::new();
     let call = rig.start(&server.url());
-    assert!(
-        rig.clock
-            .await_parked(rig.clock.origin() + Duration::from_secs(60), SIGNAL)
-    );
+    assert!(rig.clock.await_parked(
+        rig.clock.origin() + Duration::from_secs(60),
+        fakes::Deadline::after(SIGNAL)
+    ));
     assert!(
         server.await_partial(1, Deadline::after(SIGNAL)),
         "the partial response was sent"

@@ -30,7 +30,7 @@ const GRACE: Duration = Duration::from_secs(1);
 #[track_caller]
 fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
     let mark = clock
-        .mark_parked(at, WAIT)
+        .mark_parked(at, fakes::Deadline::after(WAIT))
         .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
     let threads = mark.threads();
     assert_eq!(
@@ -149,7 +149,7 @@ fn discover(stuck: Stuck, wait_until: Duration) -> (Vec<(ErrorCode, Option<Strin
         "{stuck:?}: waited for the stuck call to reach the server"
     );
     assert!(
-        clock.await_parked(asked + wait_until + GRACE, WAIT),
+        clock.await_parked(asked + wait_until + GRACE, fakes::Deadline::after(WAIT)),
         "{stuck:?}: waited for the caller to park at its grace"
     );
     // The stuck `models()` suspends its callback on the wire, so the

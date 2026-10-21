@@ -246,7 +246,7 @@ fn the_spawned_child_holds_no_test_stdio() {
         Deadline::after(CHILD_WITHIN),
     );
     assert!(
-        group_empties(group, CHILD_WITHIN),
+        group_empties(group, fakes::Deadline::after(CHILD_WITHIN)),
         "the probe group {group} is still alive after finished"
     );
 }

@@ -840,7 +840,7 @@ fn until_passes(mut session: Session, answers: &mpsc::Receiver<Answered>, at: In
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(at), DEADLINE),
+        clock.await_parked_since(&mark, Some(at), fakes::Deadline::after(DEADLINE)),
         "the step waits again"
     );
     assert!(
@@ -1146,7 +1146,10 @@ fn another_calls_deltas_keep_flowing_while_one_is_pending() {
     gates[1].open();
     // The second change is held for the 100 ms interval, then written.
     let due = clock.now() + Duration::from_millis(100);
-    assert!(clock.await_parked(due, DEADLINE), "the held change waits");
+    assert!(
+        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        "the held change waits"
+    );
     clock.advance_when_parked(
         Some(due),
         session.turn_thread,

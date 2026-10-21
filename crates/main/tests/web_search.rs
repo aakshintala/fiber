@@ -107,7 +107,7 @@ fn run_fiber(setup: &Setup, args: &[&str]) -> Run {
         !support::group_alive(setup.deadline, group),
         "`fiber` left a process in its group behind"
     );
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     Run::from(output)
 }
 

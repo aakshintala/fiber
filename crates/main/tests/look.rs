@@ -545,7 +545,7 @@ fn the_hub_wait_outlives_the_sockets_absence() {
         "the hub is gone after its exit"
     );
     until_hub_exits(deadline, &socket, dir.path(), "the fake hub to exit");
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 }
 
 /// The journey's waits finish when the finished title arrives before the

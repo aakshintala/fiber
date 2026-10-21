@@ -550,7 +550,9 @@ fn users(request: &ModelRequest) -> Vec<String> {
 fn park_idle(world: &World) -> Mark {
     let origin = world.clock.now();
     assert!(
-        world.clock.await_parked(origin + IDLE, DEADLINE),
+        world
+            .clock
+            .await_parked(origin + IDLE, fakes::Deadline::after(DEADLINE)),
         "the loop parked in its idle wait: {:?}",
         world.clock.parked()
     );
@@ -583,7 +585,9 @@ fn a_message_sent_just_before_the_last_idle_check_is_run() {
     // The message turn runs; the loop parks again, then exits past a
     // second deadline with the hook spent.
     assert!(
-        world.clock.await_any_parked_since(&mark, DEADLINE),
+        world
+            .clock
+            .await_any_parked_since(&mark, fakes::Deadline::after(DEADLINE)),
         "the message turn ran and the loop parked again: {:?}",
         world.clock.parked()
     );
@@ -644,7 +648,9 @@ fn a_message_sent_just_after_the_last_idle_check_is_refused() {
     });
     let origin = world.clock.now();
     assert!(
-        world.clock.await_parked(origin + IDLE, DEADLINE),
+        world
+            .clock
+            .await_parked(origin + IDLE, fakes::Deadline::after(DEADLINE)),
         "the loop parked in its idle wait: {:?}",
         world.clock.parked()
     );
@@ -803,7 +809,9 @@ fn a_question_wait_with_a_session_message_queued_does_not_end_idle() {
     world.send(Delivery::Cancelled);
     // Past the delay the wait holds no deadline and writes nothing more.
     assert!(
-        world.clock.await_parked_since(&mark, None, DEADLINE),
+        world
+            .clock
+            .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "the wait stays parked with no deadline: {:?}",
         world.clock.parked()
     );
@@ -889,7 +897,9 @@ fn an_approval_wait_with_a_session_message_queued_does_not_end_idle() {
     let mark = world.clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
     assert!(
-        world.clock.await_parked_since(&mark, None, DEADLINE),
+        world
+            .clock
+            .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "the wait stays parked with no deadline: {:?}",
         world.clock.parked()
     );
@@ -959,7 +969,9 @@ fn an_offer_wait_with_a_session_message_in_the_input_does_not_end_idle() {
     let mark = world.clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
     assert!(
-        world.clock.await_parked_since(&mark, None, DEADLINE),
+        world
+            .clock
+            .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "the wait stays parked with no deadline: {:?}",
         world.clock.parked()
     );
@@ -1032,7 +1044,9 @@ fn an_offer_wait_holding_a_session_message_that_arrived_during_it_does_not_end_i
     let mark = world.clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
     assert!(
-        world.clock.await_parked_since(&mark, None, DEADLINE),
+        world
+            .clock
+            .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
         "the wait stays parked with no deadline: {:?}",
         world.clock.parked()
     );

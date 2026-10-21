@@ -152,7 +152,7 @@ impl Jig {
         self.watchdog
             .take()
             .unwrap()
-            .stand_down(Duration::from_secs(5));
+            .stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     }
     /// Reaps a jig that must fail, as [`wait`](Self::wait) reaps one that must succeed.
     fn wait_fails(&mut self) {
@@ -165,7 +165,7 @@ impl Jig {
         self.watchdog
             .take()
             .unwrap()
-            .stand_down(Duration::from_secs(5));
+            .stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     }
 }
 impl Drop for Jig {
@@ -175,7 +175,7 @@ impl Drop for Jig {
             let _reaped = Deadline::after(Duration::from_secs(5)).recv(&self.exited);
         }
         if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(Duration::from_secs(5));
+            watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
         }
     }
 }

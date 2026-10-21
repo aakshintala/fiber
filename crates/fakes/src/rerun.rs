@@ -162,14 +162,14 @@ fn rerun_bounded(
     match Deadline::after(within).recv(&finished) {
         Ok(Ok(output)) => {
             let cleanup = Deadline::after(reap);
-            if crate::group_empties(group, half(reap)) {
-                watchdog.stand_down(cleanup.left());
+            if crate::group_empties(group, Deadline::after(half(reap))) {
+                watchdog.stand_down(cleanup);
                 return output;
             }
             match crate::kill_group(group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            let emptied = crate::group_empties(group, cleanup.left());
+            let emptied = crate::group_empties(group, cleanup);
             // Dropping the watchdog closes its standard input, a second net
             // around the group.
             panic!(
@@ -181,7 +181,7 @@ fn rerun_bounded(
             match crate::kill_group(group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            match crate::group_empties(group, cleanup.left()) {
+            match crate::group_empties(group, cleanup) {
                 true | false => {}
             }
             panic!("`{test}` has no output: {err}");
@@ -192,7 +192,7 @@ fn rerun_bounded(
                 Ok(_) | Err(_) => {}
             }
             let reaped = cleanup.recv(&finished).is_ok();
-            let emptied = crate::group_empties(group, cleanup.left());
+            let emptied = crate::group_empties(group, cleanup);
             panic!(
                 "waited {within:?} for `{test}` to exit (reaped: {reaped}, group empty: {emptied})"
             );

@@ -128,7 +128,7 @@ fn send(deadline: Deadline, client: &Client, line: &str) {
 
 fn recv(deadline: Deadline, client: &Client) -> Value {
     client
-        .recv(deadline.left())
+        .recv(deadline)
         .expect("waited until the deadline for a line")
 }
 
@@ -156,7 +156,7 @@ fn until_client(
     let mut lines = Vec::new();
     loop {
         let line = client
-            .recv(deadline.left())
+            .recv(deadline)
             .unwrap_or_else(|| panic!("waited until the deadline for {what}; got {lines:?}"));
         let stop = done(&line);
         lines.push(line);

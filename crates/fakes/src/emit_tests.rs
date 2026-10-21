@@ -43,7 +43,7 @@ fn wait_for_text_sees_a_delta_emitted_after_the_wait_started() {
                 details: None,
             }));
         });
-        assert!(recorder.wait_for_text("hell", Duration::from_secs(10)));
+        assert!(recorder.wait_for_text("hell", crate::Deadline::after(Duration::from_secs(10))));
     });
     assert_eq!(recorder.text(), "hello");
 }
@@ -51,7 +51,7 @@ fn wait_for_text_sees_a_delta_emitted_after_the_wait_started() {
 #[test]
 fn wait_for_text_times_out_when_nothing_matches() {
     let recorder = Recorder::default();
-    assert!(!recorder.wait_for_text("missing", Duration::from_millis(50)));
+    assert!(!recorder.wait_for_text("missing", crate::Deadline::after(Duration::from_millis(50))));
 }
 
 #[test]
@@ -63,12 +63,15 @@ fn ignores_another_ephemeral_kind_and_keeps_recording_deltas() {
     // Recorded (it is ephemeral), but it carries no delta text.
     assert_eq!(recorder.events().len(), 1);
     assert_eq!(recorder.text(), String::new());
-    assert!(!recorder.wait_for_text("not a delta", Duration::from_millis(20)));
+    assert!(!recorder.wait_for_text(
+        "not a delta",
+        crate::Deadline::after(Duration::from_millis(20))
+    ));
     recorder.emit(&Event::ToolCallDelta(Progress {
         text: Some("yes".into()),
         details: Some(json!({"done": 1})),
     }));
-    assert!(recorder.wait_for_text("yes", Duration::from_secs(10)));
+    assert!(recorder.wait_for_text("yes", crate::Deadline::after(Duration::from_secs(10))));
 }
 
 #[test]

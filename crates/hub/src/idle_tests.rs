@@ -252,7 +252,7 @@ fn await_open_park(clock: &Arc<fakes::clock::FakeClock>, what: &str) {
 #[track_caller]
 fn await_idle_park(clock: &Arc<fakes::clock::FakeClock>, zero: Instant, what: &str) {
     assert!(
-        clock.await_parked(zero + IDLE, WITHIN),
+        clock.await_parked(zero + IDLE, fakes::Deadline::after(WITHIN)),
         "the hub parks until idle_exit after the count reached 0 {what}"
     );
 }
@@ -538,14 +538,14 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     // The old gate: the stale park still satisfies the instant wait even
     // with a client counted, so advancing on it races the arrival.
     assert!(
-        clock.await_parked(origin + IDLE, WITHIN),
+        clock.await_parked(origin + IDLE, fakes::Deadline::after(WITHIN)),
         "the stale start-up park still satisfies the instant gate with a client counted"
     );
     // The new gate: no unbounded park exists while the guard is held. A
     // zero-bound probe reads the predicate with no elapsed-time wait:
     // the stale finite park alone cannot satisfy it.
     assert!(
-        !clock.await_parked_unbounded(Duration::ZERO),
+        !clock.await_parked_unbounded(fakes::Deadline::after(Duration::ZERO)),
         "the stale park answers no unbounded wait while the guard is held"
     );
     // Release both wakes and the idle thread: it leaves the stale park,
@@ -559,7 +559,7 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     advance.join().expect("the advance thread joins");
     arrival.join().expect("the arrival thread joins");
     assert!(
-        clock.await_parked_unbounded(WITHIN),
+        clock.await_parked_unbounded(fakes::Deadline::after(WITHIN)),
         "the hub parks with no deadline once it saw the client"
     );
     // The departure starts the timer at the advanced time; the advance
@@ -774,7 +774,7 @@ fn an_installed_hub_never_exits_for_idleness_and_stops_on_sigterm() {
     );
     // An installed hub parks with no deadline even with no client.
     assert!(
-        clock.await_parked_unbounded(WITHIN),
+        clock.await_parked_unbounded(fakes::Deadline::after(WITHIN)),
         "the installed hub waits with no idle deadline"
     );
     clock.advance_when_parked(
@@ -825,7 +825,7 @@ fn an_installed_hub_waits_for_the_lock_then_binds() {
     );
     drop(other);
     assert!(
-        clock.await_parked_unbounded(WITHIN),
+        clock.await_parked_unbounded(fakes::Deadline::after(WITHIN)),
         "the installed hub serves once the lock is released"
     );
     drop(connect(&temp));
@@ -1052,7 +1052,7 @@ fn a_signal_during_a_hung_first_capture_stops_with_no_environment_built() {
     assert!(
         clock.await_parked(
             origin + crate::environment::capture::CAPTURE_DEADLINE,
-            WITHIN
+            fakes::Deadline::after(WITHIN)
         ),
         "the first capture waits on its deadline"
     );
@@ -1063,7 +1063,10 @@ fn a_signal_during_a_hung_first_capture_stops_with_no_environment_built() {
             .expect("the hub stops"),
         143
     );
-    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "the shell is reaped"
+    );
     assert!(
         !temp.log().contains("environment_built"),
         "a cancelled capture writes no line"

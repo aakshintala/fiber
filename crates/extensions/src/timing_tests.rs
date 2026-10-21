@@ -1087,11 +1087,11 @@ fn worker_emits_only_after_the_guard_releases() {
     // deadline plus the grace for a suspended call, while its callback
     // stays suspended. A transient hold no longer fails the read below.
     assert!(
-        fake.await_parked(mark + Duration::from_secs(60), WAIT),
+        fake.await_parked(mark + Duration::from_secs(60), fakes::Deadline::after(WAIT)),
         "the hook caller parked at its deadline"
     );
     assert!(
-        fake.await_parked(mark + Duration::from_secs(61), WAIT),
+        fake.await_parked(mark + Duration::from_secs(61), fakes::Deadline::after(WAIT)),
         "the caller parked past its check"
     );
     // Gate the models caller's next park past its check: the window where
@@ -1157,7 +1157,7 @@ fn worker_emits_only_after_the_guard_releases() {
         .expect("the zero advance returns after the release")
         .expect("the zero advance succeeded");
     assert!(
-        fake.await_parked(mark + Duration::from_secs(61), WAIT),
+        fake.await_parked(mark + Duration::from_secs(61), fakes::Deadline::after(WAIT)),
         "the caller parked past its check"
     );
     // With the scheduler frozen past the rendezvous and the worker gated
@@ -1226,7 +1226,7 @@ fn gated_park_holds_the_hub_guard() {
         "the worker suspended on HTTP"
     );
     assert!(
-        fake.await_parked(mark + Duration::from_secs(61), WAIT),
+        fake.await_parked(mark + Duration::from_secs(61), fakes::Deadline::after(WAIT)),
         "the caller parked past its check"
     );
     let (gated_arrived, gated_release) = clock.arm(Some(mark + Duration::from_secs(61)));
@@ -1373,7 +1373,10 @@ fn expired_before_admission_starts_nothing() {
         })
     };
     assert!(
-        clock.await_parked(mark + Duration::from_millis(1000), WAIT),
+        clock.await_parked(
+            mark + Duration::from_millis(1000),
+            fakes::Deadline::after(WAIT)
+        ),
         "the queued call parked at its deadline"
     );
     clock.advance_when_parked(
@@ -1486,7 +1489,10 @@ fn late_workers_emit_once_and_drop_late_replies() {
         "the hook suspended on HTTP"
     );
     assert!(
-        clock.await_parked(mark + Duration::from_millis(2000), WAIT),
+        clock.await_parked(
+            mark + Duration::from_millis(2000),
+            fakes::Deadline::after(WAIT)
+        ),
         "the hook caller parked past its check on the suspended callback"
     );
     // Past the hook's deadline but inside its grace: its caller takes the

@@ -392,7 +392,7 @@ fn settling_drops_a_command_request_without_taking_answering_or_logging_it() {
     assert_eq!(taken.load(Ordering::SeqCst), 0);
     assert_eq!(answered.load(Ordering::SeqCst), 0);
     assert_eq!(world.held.kinds(), ["session_started"]);
-    watchdog.stand_down(Duration::from_secs(3));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(3)));
 }
 
 impl Held {
@@ -990,7 +990,7 @@ fn a_shutdown_ends_an_idle_wait_at_its_next_wake() {
     let cancel = Arc::clone(&world.cancel);
     let (finished, inbox, held) = world.spawn_run();
     assert!(
-        clock.await_parked(until, DEADLINE),
+        clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
         "the loop waits on the idle deadline"
     );
     // The door's stopper wakes the wait with a delivery.

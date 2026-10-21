@@ -110,7 +110,7 @@ impl Setup {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(self.deadline, group, &finished, "`fiber` to exit"),
         };
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
     }
 }

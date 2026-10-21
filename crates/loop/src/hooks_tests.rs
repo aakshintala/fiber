@@ -452,7 +452,7 @@ fn run_in(
             streamed
         },
     );
-    watchdog.stand_down(TURN_DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(TURN_DEADLINE));
     let session = home.path().join("s_test");
     Ran {
         turn,

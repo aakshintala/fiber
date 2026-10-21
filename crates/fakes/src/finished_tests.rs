@@ -49,7 +49,7 @@ fn a_child_past_its_deadline_fails_naming_the_wait_and_leaves_no_group() {
     let message = panic_message(caught.unwrap_err());
     assert!(message.contains("sleepy"), "{message}");
     assert!(
-        crate::group_empties(pid, WITHIN),
+        crate::group_empties(pid, Deadline::after(WITHIN)),
         "the killed group {pid} is still alive"
     );
 }
@@ -67,7 +67,7 @@ fn a_backgrounded_descendant_leaves_no_group() {
     assert!(output.status.success());
     assert_eq!(output.stdout, b"ok\n");
     assert!(
-        crate::group_empties(pid, WITHIN),
+        crate::group_empties(pid, Deadline::after(WITHIN)),
         "the backgrounded group {pid} is still alive"
     );
 }
@@ -83,7 +83,7 @@ fn a_stdin_write_error_kills_and_reaps_the_group() {
     let message = panic_message(caught.unwrap_err());
     assert!(message.contains("closed stdin"), "{message}");
     assert!(
-        crate::group_empties(pid, WITHIN),
+        crate::group_empties(pid, Deadline::after(WITHIN)),
         "the killed group {pid} is still alive"
     );
 }

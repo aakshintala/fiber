@@ -1648,7 +1648,9 @@ pub(crate) fn await_step_park(session: &Session) {
         .turn_thread
         .expect("a turn is running on its own thread");
     assert!(
-        session.clock.await_thread_parked(id, None, DEADLINE),
+        session
+            .clock
+            .await_thread_parked(id, None, fakes::Deadline::after(DEADLINE)),
         "the step thread {id:?} parked with no deadline: {:?}",
         session.clock.parked(),
     );

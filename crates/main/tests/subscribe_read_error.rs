@@ -89,7 +89,7 @@ fn finish(running: Running) {
         "fiber left a process in its group"
     );
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 }
 
 /// Connects a raw socket to `path`, on a thread bounded by the deadline.

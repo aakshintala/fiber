@@ -41,7 +41,7 @@ fn commanded(deadline: Deadline, client: &Client, id: &str, name: &str) {
         )
         .unwrap();
     client
-        .recv_until(deadline.left(), |line| {
+        .recv_until(deadline, |line| {
             line["kind"] == "command_accepted" && line["payload"]["command_id"] == id
         })
         .expect("the command was admitted");
@@ -49,9 +49,7 @@ fn commanded(deadline: Deadline, client: &Client, id: &str, name: &str) {
 
 fn requested(deadline: Deadline, client: &Client) -> Value {
     client
-        .recv_until(deadline.left(), |line| {
-            line["kind"] == "interaction_requested"
-        })
+        .recv_until(deadline, |line| line["kind"] == "interaction_requested")
         .expect("the question arrives")
 }
 
@@ -84,7 +82,7 @@ fn a_command_raising_a_form_resolves_through_reply() {
     // `command_accepted` comes only after the client has read the
     // resolution carrying those answers.
     let resolved = client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "interaction_resolved"
         })
         .expect("the resolution arrives");
@@ -93,12 +91,12 @@ fn a_command_raising_a_form_resolves_through_reply() {
     assert_eq!(resolved["payload"]["answers"][0]["labels"], json!(["a"]));
     assert_eq!(resolved["payload"]["note"], "hi");
     client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_reply"
         })
         .expect("the reply was accepted");
     let ui = client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
         })
         .expect("the answer reaches host.status");
@@ -144,7 +142,7 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
     let mut rejected = None;
     while rejected.is_none() {
         let line = client
-            .recv(setup.deadline.left())
+            .recv(setup.deadline)
             .expect("the unfit reply is rejected");
         assert!(
             line["kind"] != "interaction_resolved",
@@ -162,13 +160,13 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
         ), &|| setup.deadline.left())
         .unwrap();
     let resolved = client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "interaction_resolved"
         })
         .expect("the fitting reply resolves");
     assert_eq!(resolved["payload"]["request_id"], request_id);
     client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_3"
         })
         .expect("the fitting reply was accepted");
@@ -179,7 +177,7 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
         ), &|| setup.deadline.left())
         .unwrap();
     let stale = client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_4"
         })
         .expect("the second reply is rejected");
@@ -219,7 +217,7 @@ fn run_ask(setup: &Setup, args: &[&str]) -> (ExitStatus, Vec<Value>, String) {
     // The group is empty. Skip the drop, which would kill it again,
     // and tell the watchdog to exit without signalling.
     std::mem::forget(guard);
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     let status = output.status;
     let stderr = String::from_utf8(output.stderr).unwrap();
     let out = String::from_utf8(output.stdout)
@@ -295,7 +293,7 @@ fn close_while_an_ask_is_pending_declines_it_by_fiber() {
         })
         .unwrap();
     let exited = client
-        .recv_until(setup.deadline.left(), |line| line["kind"] == "fiber_exited")
+        .recv_until(setup.deadline, |line| line["kind"] == "fiber_exited")
         .expect("the session exits");
     assert!(exited.get("suspended_on").is_none());
     drop(client);
@@ -355,7 +353,7 @@ fn a_resumed_interactive_session_answers_a_host_ask() {
         ), &|| setup.deadline.left())
         .unwrap();
     let resolved = client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "interaction_resolved"
         })
         .expect("the answer resolves");
@@ -366,12 +364,12 @@ fn a_resumed_interactive_session_answers_a_host_ask() {
         "the resumed ask was answered, not declined: {resolved}"
     );
     client
-        .recv_until(setup.deadline.left(), |line| {
+        .recv_until(setup.deadline, |line| {
             line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_reply"
         })
         .expect("the reply was accepted");
     let ui = client
-        .recv_until(setup.deadline.left(), |line| line["kind"] == "extension_ui")
+        .recv_until(setup.deadline, |line| line["kind"] == "extension_ui")
         .expect("the answer reaches the command");
     assert_eq!(ui["payload"]["status"], "true");
     client

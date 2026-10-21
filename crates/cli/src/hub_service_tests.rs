@@ -907,7 +907,7 @@ fn system_run_reports_the_exit_code_and_stderr() {
     .unwrap();
     assert!(ran.success);
     assert_eq!(ran.code, Some(0));
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]

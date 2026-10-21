@@ -37,7 +37,7 @@ fn a_written_line_is_its_pids() {
         .open(ready.path())
         .unwrap();
     writeln!(writer, "12 34").unwrap();
-    assert_eq!(ready.wait(DEADLINE), vec![12, 34]);
+    assert_eq!(ready.wait(Deadline::after(DEADLINE)), vec![12, 34]);
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn a_writer_that_closes_without_a_line_does_not_drop_the_next_line() {
         .unwrap();
     writeln!(writer, "7").unwrap();
     drop(writer);
-    assert_eq!(ready.wait(DEADLINE), vec![7]);
+    assert_eq!(ready.wait(Deadline::after(DEADLINE)), vec![7]);
 }
 
 #[test]
@@ -64,7 +64,9 @@ fn a_line_that_never_comes_fails_at_the_deadline() {
     let dir = TempDir::new("fiber-ready-deadline");
     let ready = Ready::new(dir.path());
     let within = Duration::from_millis(200);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready.wait(within)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ready.wait(Deadline::after(within))
+    }));
     assert!(result.is_err(), "waited {within:?} should fail the wait");
 }
 
@@ -81,9 +83,9 @@ fn ignores_sigterm_survives_sigterm() {
         .process_group(0)
         .spawn()
         .unwrap();
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(DEADLINE);
+    let _own = ready.wait(Deadline::after(DEADLINE));
     kill_group(pgid, "TERM").unwrap();
     let block = super::block_of(ready.path());
     let fifo = block.clone();
@@ -98,7 +100,7 @@ fn ignores_sigterm_survives_sigterm() {
         "waited {DEADLINE:?} for {} to be read after SIGTERM",
         block.display()
     );
-    assert_eq!(ready.wait(DEADLINE), vec![pgid]);
+    assert_eq!(ready.wait(Deadline::after(DEADLINE)), vec![pgid]);
     assert!(
         child.try_wait().unwrap().is_none(),
         "SIGTERM killed a command that ignores it"
@@ -120,9 +122,9 @@ fn leaves_descendants_keeps_the_child_after_sigterm() {
         .process_group(0)
         .spawn()
         .unwrap();
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
-    let descendant = ready.wait(DEADLINE)[0];
+    let descendant = ready.wait(Deadline::after(DEADLINE))[0];
     kill_group(pgid, "TERM").unwrap();
     wait_child(child);
     assert!(
@@ -146,9 +148,9 @@ fn escapes_group_leaves_and_is_not_in_the_group() {
         .process_group(0)
         .spawn()
         .unwrap();
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
-    let escapee = ready.wait(DEADLINE)[0];
+    let escapee = ready.wait(Deadline::after(DEADLINE))[0];
     assert_ne!(escapee, pgid);
     assert!(
         !in_group(escapee, pgid),
@@ -191,7 +193,7 @@ fn ready_at_reads_an_existing_fifo() {
         .spawn()
         .unwrap();
     let pid = child.id();
-    assert_eq!(ready.wait(DEADLINE), vec![pid]);
+    assert_eq!(ready.wait(Deadline::after(DEADLINE)), vec![pid]);
     wait_child(child);
 }
 

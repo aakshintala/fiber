@@ -344,7 +344,7 @@ impl Running {
     #[track_caller]
     fn wait(self) -> (ExitStatus, Vec<Value>, String) {
         let watchdog = self._watchdog;
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         let mut out = self.taken;
         while let Ok(line) = self.lines.try_recv() {
             out.push(line);

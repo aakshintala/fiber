@@ -1418,7 +1418,7 @@ end }})"#,
         .recv(&started)
         .expect("the waiter started");
     assert!(
-        clock.await_thread_parked(waiter_id, None, WAIT),
+        clock.await_thread_parked(waiter_id, None, fakes::Deadline::after(WAIT)),
         "the session barrier parks while its exec is held"
     );
     assert!(

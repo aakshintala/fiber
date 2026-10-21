@@ -1175,7 +1175,11 @@ fn cancellation_ends_a_token_lock_wait_on_a_running_server() {
             .unwrap();
     });
     Deadline::after(WITHIN).recv_or_fail(&received_busy, "the call polls the held token lock");
-    assert!(setup.fake.await_parked(deadline, WITHIN));
+    assert!(
+        setup
+            .fake
+            .await_parked(deadline, fakes::Deadline::after(WITHIN))
+    );
     cancel.cancel();
     assert_eq!(
         Deadline::after(WITHIN).recv_or_fail(&received, "the call is cancelled"),
@@ -2122,7 +2126,9 @@ fn a_call_queued_behind_a_stalled_notice_is_never_sent_once_timed_out() {
         queued.send(answer).expect("collected");
     });
     assert!(
-        setup.fake.await_parked(deadline, WITHIN),
+        setup
+            .fake
+            .await_parked(deadline, fakes::Deadline::after(WITHIN)),
         "the queued call waits on its deadline within {WITHIN:?}"
     );
     assert!(

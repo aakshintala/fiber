@@ -246,7 +246,7 @@ fn driver_shell_past_a_mebibyte_returns_its_complete_artifact() {
         "fiber left a process in its group"
     );
     drop(stdout);
-    watchdog.stand_down(deadline.cleanup());
+    watchdog.stand_down(deadline.cleanup_phase());
 
     let lines: Vec<Value> = raw
         .iter()

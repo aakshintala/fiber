@@ -475,7 +475,11 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     // scheduler parks at the deadline, so the caller is named.
     let park = asked + Duration::from_secs(36_000) + GRACE;
     assert!(
-        clock.await_thread_parked(held_thread.thread().id(), Some(park), WAIT),
+        clock.await_thread_parked(
+            held_thread.thread().id(),
+            Some(park),
+            fakes::Deadline::after(WAIT)
+        ),
         "the held sign parked past its check at its grace"
     );
     clock.advance_when_parked(
@@ -578,7 +582,11 @@ fn a_running_call_values_are_reported_until_it_finishes() {
     let park = asked + Duration::from_secs(36_000) + GRACE;
     for round in 1..=17_u32 {
         assert!(
-            clock.await_thread_parked(held_thread.thread().id(), Some(park), WAIT),
+            clock.await_thread_parked(
+                held_thread.thread().id(),
+                Some(park),
+                fakes::Deadline::after(WAIT)
+            ),
             "round {round}: the held sign parked past its check at its grace"
         );
         clock.advance_when_parked(
@@ -704,7 +712,11 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
     for call in 2..=17 {
         let park1 = asked1 + Duration::from_secs(36_000) + GRACE;
         assert!(
-            clock.await_thread_parked(held1.thread().id(), Some(park1), WAIT),
+            clock.await_thread_parked(
+                held1.thread().id(),
+                Some(park1),
+                fakes::Deadline::after(WAIT)
+            ),
             "call {call}: call 1 parked past its check at its grace"
         );
         clock.advance_when_parked(
@@ -962,7 +974,11 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
             if round > 1 {
                 let park = asked + Duration::from_secs(36_000) + GRACE;
                 assert!(
-                    clock.await_thread_parked(threads[0].thread().id(), Some(park), WAIT),
+                    clock.await_thread_parked(
+                        threads[0].thread().id(),
+                        Some(park),
+                        fakes::Deadline::after(WAIT)
+                    ),
                     "calls {calls}: round {round} waits for the first sign to park at its grace"
                 );
                 clock.advance_when_parked(

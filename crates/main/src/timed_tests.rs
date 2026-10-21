@@ -124,16 +124,16 @@ impl ChildFixture {
     /// watchdog then kills its answering group.
     fn finish(self, within: Duration) {
         assert!(
-            fakes::matching_exits(&self.leaf, within),
+            fakes::matching_exits(&self.leaf, fakes::Deadline::after(within)),
             "a stub wrapper outlived the test"
         );
         for group in self.group_ids() {
             assert!(
-                fakes::group_empties(group, within),
+                fakes::group_empties(group, fakes::Deadline::after(within)),
                 "stub process group {group} outlived the test"
             );
         }
-        self.matching.stand_down(within);
+        self.matching.stand_down(fakes::Deadline::after(within));
     }
 
     fn group_ids(&self) -> Vec<u32> {
@@ -244,10 +244,10 @@ fn guarded_stub_child() {
         .expect("waiting for the answering stub");
     std::fs::write(output_path, &output.stdout).expect("saving the answering output");
     assert!(
-        fakes::group_empties(group, CALL_WITHIN),
+        fakes::group_empties(group, fakes::Deadline::after(CALL_WITHIN)),
         "answering process group {group} did not empty"
     );
-    watchdog.stand_down(CALL_WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(CALL_WITHIN));
     assert!(
         output.status.success(),
         "answering stub exited with {}",

@@ -174,7 +174,7 @@ fn running_admission_holds_a_command_request_without_writing_it() {
         Some(Delivery::InnerCall(_))
     ));
     assert_eq!(saved_kinds(&home), ["session_started"]);
-    watchdog.stand_down(Duration::from_secs(3));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(3)));
 }
 
 struct Unanswered(Arc<std::sync::atomic::AtomicBool>);
@@ -226,7 +226,7 @@ fn an_alone_request_after_command_end_or_shutdown_writes_nothing_and_never_calls
         assert!(!taken.load(std::sync::atomic::Ordering::SeqCst));
         assert!(!answered.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(saved_kinds(&home), ["session_started"]);
-        watchdog.stand_down(Duration::from_secs(3));
+        watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(3)));
     }
 }
 
@@ -298,7 +298,7 @@ fn the_drain_runs_commands_in_order_and_preserves_interleaved_model_switches() {
                 .collect::<Vec<_>>(),
             kinds
         );
-        watchdog.stand_down(Duration::from_secs(3));
+        watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(3)));
     }
 }
 
@@ -1939,5 +1939,5 @@ fn running_admission_rejects_a_reconnect_until_the_turn_ends() {
         rejection.message,
         "A turn is running; reconnect once it ends."
     );
-    watchdog.stand_down(Duration::from_secs(3));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(3)));
 }

@@ -135,7 +135,7 @@ fn take_prompt(inbox: &mpsc::Receiver<Delivery>) -> contract::inbox::Ack {
 /// closed. Empty when the test consumed everything it was owed.
 fn drain(client: &Client) -> Vec<Value> {
     let mut lines = Vec::new();
-    while let Some(line) = client.recv(DEADLINE) {
+    while let Some(line) = client.recv(fakes::Deadline::after(DEADLINE)) {
         lines.push(line);
     }
     lines

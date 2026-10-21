@@ -371,7 +371,7 @@ impl Running {
                 panic!("the stderr reader ended without its text")
             }
         };
-        self.watchdog.stand_down(self.deadline.cleanup());
+        self.watchdog.stand_down(self.deadline.cleanup_phase());
         (status, stderr)
     }
 }

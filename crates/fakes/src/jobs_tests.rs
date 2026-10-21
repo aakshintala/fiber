@@ -69,7 +69,7 @@ fn open_creates_a_file_under_the_directory_and_records_the_start() {
     );
     assert_eq!(jobs.started(), vec![opened.started.clone()]);
     drop(opened.end);
-    let dropped = jobs.ended(DEADLINE).unwrap();
+    let dropped = jobs.ended(Deadline::after(DEADLINE)).unwrap();
     assert_eq!(dropped.job_id, opened.started.job_id);
     assert_eq!(dropped.status, Outcome::Failed);
     assert_eq!(
@@ -150,7 +150,10 @@ fn stop_calls_that_jobs_stop_and_end_is_delivered() {
         ))
         .unwrap();
     let id = opened.started.job_id.clone();
-    assert!(jobs.ended(Duration::from_millis(1)).is_none());
+    assert!(
+        jobs.ended(Deadline::after(Duration::from_millis(1)))
+            .is_none()
+    );
     assert!(!jobs.stop(&JobId("j_missing".into())));
     assert!(
         fired_rx.try_recv().is_err(),
@@ -181,11 +184,14 @@ fn stop_calls_that_jobs_stop_and_end_is_delivered() {
         job_id: JobId("j_other".into()),
         ..done.clone()
     });
-    let delivered = jobs.ended(DEADLINE).unwrap();
+    let delivered = jobs.ended(Deadline::after(DEADLINE)).unwrap();
     assert_eq!(delivered.job_id, id);
     assert_eq!(delivered.status, Outcome::Completed);
     assert_eq!(delivered.process, done.process);
-    assert!(jobs.ended(Duration::from_millis(1)).is_none());
+    assert!(
+        jobs.ended(Deadline::after(Duration::from_millis(1)))
+            .is_none()
+    );
 }
 
 #[test]
@@ -226,7 +232,10 @@ fn failing_open_is_io_and_records_nothing() {
     assert!(text.contains("could not be created"), "{text}");
     assert!(text.contains("unavailable.log"), "{text}");
     assert!(jobs.started().is_empty());
-    assert!(jobs.ended(Duration::from_millis(1)).is_none());
+    assert!(
+        jobs.ended(Deadline::after(Duration::from_millis(1)))
+            .is_none()
+    );
 }
 
 #[test]
@@ -315,7 +324,7 @@ fn a_jobs_deltas_are_recorded_in_order_and_other_events_ignored() {
         })
     };
     let deltas = jobs.deltas();
-    assert!(!deltas.wait_for_text("ab", Duration::from_millis(1)));
+    assert!(!deltas.wait_for_text("ab", Deadline::after(Duration::from_millis(1))));
     opened.emit.emit(&delta("a"));
     opened.emit.emit(&Event::ToolCallDelta(Progress {
         text: Some("ignored".to_owned()),
@@ -327,8 +336,8 @@ fn a_jobs_deltas_are_recorded_in_order_and_other_events_ignored() {
         vec![(id.clone(), "a".to_owned()), (id, "b".to_owned())]
     );
     assert_eq!(deltas.text(), "ab");
-    assert!(deltas.wait_for_text("ab", DEADLINE));
-    assert!(!deltas.wait_for_text("abc", Duration::from_millis(1)));
+    assert!(deltas.wait_for_text("ab", Deadline::after(DEADLINE)));
+    assert!(!deltas.wait_for_text("abc", Deadline::after(Duration::from_millis(1))));
 }
 
 #[test]
@@ -359,7 +368,7 @@ fn wait_for_text_sees_a_delta_emitted_after_the_wait_started() {
                 },
             }));
         });
-        assert!(deltas.wait_for_text("hell", DEADLINE));
+        assert!(deltas.wait_for_text("hell", Deadline::after(DEADLINE)));
     });
 }
 

@@ -150,7 +150,7 @@ fn a_held_reply_nobody_releases_becomes_a_500_at_its_deadline() {
     let ack = Deadline::after(READ_WITHIN).recv_or_fail(&acks, "the held response's wait");
     assert_eq!(ack.phase, "to wait out the held response");
     assert!(
-        clock.await_thread_parked(ack.thread, ack.until, READ_WITHIN),
+        clock.await_thread_parked(ack.thread, ack.until, Deadline::after(READ_WITHIN)),
         "the hold parks on the clock before it moves"
     );
     clock.advance(Duration::from_secs(5));

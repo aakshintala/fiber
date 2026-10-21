@@ -2557,7 +2557,7 @@ fn answer_within(client: &Client, id: &str) -> Option<Value> {
 fn answers_within(client: &Client, ids: &[&str]) -> Vec<Option<Value>> {
     let mut answers: Vec<Option<Value>> = vec![None; ids.len()];
     while answers.iter().any(Option::is_none) {
-        let Some(line) = client.recv(DEADLINE) else {
+        let Some(line) = client.recv(fakes::Deadline::after(DEADLINE)) else {
             break;
         };
         if let Some(slot) = ids
