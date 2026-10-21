@@ -278,11 +278,12 @@ fn login_with_notices_prints_the_config_notice_as_one_line_first() {
 }
 
 #[test]
-fn login_with_notices_still_logs_in_when_the_config_does_not_load() {
+fn login_with_a_config_that_does_not_load_fails_instead_of_logging_in() {
     let setup = Setup::new();
     setup.install("acme", None, None);
     // The project's file is invalid JSON, so the notices load fails, while
-    // the global file the login writes stays fine.
+    // the global file the login writes stays fine: the host step's own
+    // load still fails the login instead of skipping to a success report.
     let (_, project) = crate::project_of(&setup.home(), &std::env::current_dir().unwrap()).unwrap();
     let file = setup
         .home()
@@ -309,11 +310,9 @@ fn login_with_notices_still_logs_in_when_the_config_does_not_load() {
         },
         loading,
     );
-    result.unwrap();
-    assert_eq!(
-        String::from_utf8(err).unwrap(),
-        "fiber: stored credentials/acme/default\n"
-    );
+    let error = failed(result);
+    assert!(matches!(error, CliError::Config(_)), "{error:?}");
+    assert_eq!(String::from_utf8(err).unwrap(), "");
 }
 
 #[test]
@@ -1841,6 +1840,86 @@ fn a_project_empty_hides_the_saved_host_and_names_its_file() {
     assert!(
         err.contains(&format!(
             "fiber: saved `workspace` globally, but {} sets it empty and hides it.",
+            file.display()
+        )),
+        "{err:?}"
+    );
+    assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
+}
+
+#[test]
+fn a_broken_project_config_fails_the_login_instead_of_reporting_success() {
+    // The store never reads the project file, so the key lands before the
+    // host step loads it: the broken file must fail the login, never read
+    // as no gaps with a success report.
+    let setup = Setup::new();
+    install_host(&setup.home(), json!({"workspace": {}}));
+    let (_, project) = crate::project_of(&setup.home(), &std::env::current_dir().unwrap()).unwrap();
+    let dir = setup.home().join("projects").join(project.as_str());
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("config.json"), "{bad").unwrap();
+    let (result, err) = setup.login(Some("acme"), true, "1\n", &mut Fake::new(KEY));
+    let error = failed(result);
+    assert!(matches!(error, CliError::Config(_)), "{error:?}");
+    assert!(!err.contains("fiber: stored"), "{err:?}");
+}
+
+/// Installs the `acme` provider whose host placeholder is the dotted
+/// setting `parent.child`: the model URL needs no placeholder, so the
+/// reviewer still lists it once the gap is answered.
+fn install_dotted_host(home: &Path) {
+    let dir = home.join("extensions").join("acme");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    let mut manifest = json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    manifest["providers"] = serde_json::Value::Object(
+        [("acme".to_owned(), json!(["https://fixed.example/v1"]))]
+            .into_iter()
+            .collect(),
+    );
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    write_record(&dir);
+    fs::write(
+        dir.join("providers").join("acme.json"),
+        json!({
+            "name": "acme",
+            "placeholders": {"parent.child": {}},
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "https://fixed.example/v1", "context_window": 1000}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_nested_project_empty_hides_the_saved_host_and_names_its_file() {
+    // The mask reads the dotted setting through the parsed path, so a
+    // nested empty project value still names its file after the save.
+    let setup = Setup::new();
+    install_dotted_host(&setup.home());
+    let (_, project) = crate::project_of(&setup.home(), &std::env::current_dir().unwrap()).unwrap();
+    let dir = setup
+        .home()
+        .join("projects")
+        .join(project.as_str())
+        .join("config");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("acme.json"), r#"{"parent":{"child":""}}"#).unwrap();
+    let (result, err) = setup.login(
+        Some("acme"),
+        true,
+        "adb-1.example\n1\n",
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert_eq!(
+        saved_host(&setup),
+        json!({"parent": {"child": "adb-1.example"}})
+    );
+    let file = dir.join("acme.json");
+    assert!(
+        err.contains(&format!(
+            "fiber: saved `parent.child` globally, but {} sets it empty and hides it.",
             file.display()
         )),
         "{err:?}"

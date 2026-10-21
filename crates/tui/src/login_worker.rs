@@ -157,7 +157,9 @@ impl Drop for LoginWorker {
 /// post alone: the host save's own reviewer job reads the reviewer
 /// after the save, since a read now would list the models before the
 /// host exists. No gaps, or a gaps read that failed, posts the reviewer
-/// read as today; a failed gaps read posts its error between them. A
+/// read as today; a failed gaps read posts its error between them and
+/// forwards it as the reviewer error, so the stored end names the failure
+/// without a reviewer read that could complete the login. A
 /// failed login posts only its `Done`. A reviewer-only job always reads
 /// both: after a host save the reviewer must follow even when a masked
 /// gap still reads. A spawn failure is dropped: the view stays waiting
@@ -199,21 +201,35 @@ fn start_browser(
                 step: LoginStep::Done(result),
             }));
             if stored {
-                let gaps = seam.gaps(&name);
-                let read_reviewer = match &gaps {
-                    Ok(gaps) => gaps.is_empty(),
-                    Err(_) => true,
-                };
-                drop(out.send(Input::Login {
-                    ticket,
-                    step: LoginStep::Host(gaps),
-                }));
-                if read_reviewer {
-                    let choices = seam.reviewer_models(&name, clock);
-                    drop(out.send(Input::Login {
-                        ticket,
-                        step: LoginStep::Reviewer(choices),
-                    }));
+                match seam.gaps(&name) {
+                    Ok(gaps) => {
+                        let read_reviewer = gaps.is_empty();
+                        drop(out.send(Input::Login {
+                            ticket,
+                            step: LoginStep::Host(Ok(gaps)),
+                        }));
+                        if read_reviewer {
+                            let choices = seam.reviewer_models(&name, clock);
+                            drop(out.send(Input::Login {
+                                ticket,
+                                step: LoginStep::Reviewer(choices),
+                            }));
+                        }
+                    }
+                    Err(error) => {
+                        drop(out.send(Input::Login {
+                            ticket,
+                            step: LoginStep::Host(Err(error.clone())),
+                        }));
+                        // The gaps failure is the reviewer result: a
+                        // reviewer success must never complete the login
+                        // while the host error is ignored. The stored end
+                        // keeps the credential and names the failure.
+                        drop(out.send(Input::Login {
+                            ticket,
+                            step: LoginStep::Reviewer(Err(error)),
+                        }));
+                    }
                 }
             }
         }

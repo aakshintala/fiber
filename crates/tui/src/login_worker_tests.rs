@@ -334,7 +334,7 @@ fn a_browser_success_posts_done_then_the_reviewer_result() {
 }
 
 #[test]
-fn a_failed_gaps_read_posts_its_error_and_the_reviewer_still_runs() {
+fn a_failed_gaps_read_forwards_its_error_as_the_reviewer_result() {
     let seam = seam();
     if let Ok(mut answer) = seam.gaps_answer.lock() {
         *answer = Err(ConfigureError {
@@ -367,8 +367,9 @@ fn a_failed_gaps_read_posts_its_error_and_the_reviewer_still_runs() {
     let (ticket, step) = next(&rx, &wait);
     assert_eq!(ticket, LoginTicket(14));
     assert!(matches!(step, LoginStep::Done(Ok(_))), "{step:?}");
-    // Only the failure adds a gaps error: the reviewer read still runs
-    // after it, so the view can stage the host error first.
+    // The gaps failure posts its error, then forwards it as the reviewer
+    // result: the stored end names the failure with the credential kept,
+    // and no reviewer read runs that could complete the login over it.
     let (ticket, step) = next(&rx, &wait);
     assert_eq!(ticket, LoginTicket(14));
     match step {
@@ -383,8 +384,20 @@ fn a_failed_gaps_read_posts_its_error_and_the_reviewer_still_runs() {
     }
     let (ticket, step) = next(&rx, &wait);
     assert_eq!(ticket, LoginTicket(14));
-    assert!(matches!(step, LoginStep::Reviewer(Ok(_))), "{step:?}");
-    assert_eq!(seam.reviewer_reads(), ["codex"]);
+    match step {
+        LoginStep::Reviewer(Err(error)) => {
+            assert_eq!(error.code, ErrorCode::ConfigInvalid);
+            assert_eq!(error.message, "gaps unreadable");
+        }
+        LoginStep::Open(_)
+        | LoginStep::Code { .. }
+        | LoginStep::Done(_)
+        | LoginStep::Reviewer(Ok(_))
+        | LoginStep::Host(_) => {
+            panic!("the reviewer result held something else: {step:?}")
+        }
+    }
+    assert!(seam.reviewer_reads().is_empty());
     assert_eq!(seam.gap_reads(), ["codex"]);
 }
 

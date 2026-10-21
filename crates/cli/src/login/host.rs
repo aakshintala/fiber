@@ -20,13 +20,11 @@ use crate::CliError;
 /// The host questions for provider `name`: at a terminal each presence
 /// gap is asked for and saved globally; on a pipe one remedy line per
 /// gap is printed. Always before the stored line, never after. An
-/// unreadable working directory or configuration asks nothing and prints
-/// nothing: the login keeps yesterday's outcome, since no project means
-/// no mask to name.
+/// unreadable working directory, an unreadable configuration, or a failed
+/// placeholder lookup fails the login: a broken config never reads as no
+/// gaps with a success report.
 pub(super) fn hosts(io: &mut LoginIo<'_>, name: &str) -> Result<(), CliError> {
-    let Some((workspace, project)) = project_of(io.home) else {
-        return Ok(());
-    };
+    let (workspace, project) = project_of(io.home)?;
     if io.terminal {
         ask_all(io, name, &workspace, &project)
     } else {
@@ -34,23 +32,23 @@ pub(super) fn hosts(io: &mut LoginIo<'_>, name: &str) -> Result<(), CliError> {
     }
 }
 
-/// The working directory's project, when it can be read.
-fn project_of(home: &Path) -> Option<(PathBuf, ProjectKey)> {
-    let workspace = std::env::current_dir().ok()?;
-    let (_, project) = crate::project_of(home, &workspace).ok()?;
-    Some((workspace, project))
+/// The working directory's project: an unreadable directory or project
+/// fails the login instead of skipping its host step.
+fn project_of(home: &Path) -> Result<(PathBuf, ProjectKey), CliError> {
+    let workspace = std::env::current_dir().map_err(CliError::CurrentDirectory)?;
+    let (_, project) = crate::project_of(home, &workspace)?;
+    Ok((workspace, project))
 }
 
-/// The configuration over `home` for `workspace`'s project, when it can
-/// be loaded.
-fn load(home: &Path, workspace: &Path, project: &ProjectKey) -> Option<Config> {
-    Config::load(Sources {
+/// The configuration over `home` for `workspace`'s project: a broken
+/// configuration fails the login instead of skipping its host step.
+fn load(home: &Path, workspace: &Path, project: &ProjectKey) -> Result<Config, CliError> {
+    Ok(Config::load(Sources {
         home: home.to_path_buf(),
         workspace: workspace.to_path_buf(),
         project: project.clone(),
         overrides: Vec::new(),
-    })
-    .ok()
+    })?)
 }
 
 /// The process environment: present-but-invalid reads as present, since
@@ -60,20 +58,17 @@ fn environment(var: &str) -> Option<String> {
 }
 
 /// Provider `name`'s presence gaps in declaration order: each setting
-/// with its declared environment variable.
+/// with its declared environment variable. A failed lookup fails the
+/// login instead of reading as no gaps.
 fn gaps(
     home: &Path,
     providers: &Providers,
     name: &str,
     workspace: &Path,
     project: &ProjectKey,
-) -> Vec<(String, Option<String>)> {
-    let Some(config) = load(home, workspace, project) else {
-        return Vec::new();
-    };
-    providers
-        .unset_placeholders(&config, &environment, name)
-        .unwrap_or_default()
+) -> Result<Vec<(String, Option<String>)>, CliError> {
+    let config = load(home, workspace, project)?;
+    Ok(providers.unset_placeholders(&config, &environment, name)?)
 }
 
 /// Asks for every presence gap of provider `name` in declaration order,
@@ -92,7 +87,7 @@ fn ask_all(
     // gap from the re-query, so it asks once and never again.
     let mut answered: Vec<String> = Vec::new();
     loop {
-        let Some((key, env)) = gaps(io.home, io.providers, name, workspace, project)
+        let Some((key, env)) = gaps(io.home, io.providers, name, workspace, project)?
             .into_iter()
             .find(|(key, _)| !answered.contains(key))
         else {
@@ -170,7 +165,7 @@ fn remedies(
 ) -> Result<(), CliError> {
     let extension = io.providers.extension_of(name).unwrap_or(name);
     let file = config::dir_name(extension);
-    for (key, env) in gaps(io.home, io.providers, name, workspace, project) {
+    for (key, env) in gaps(io.home, io.providers, name, workspace, project)? {
         match env {
             Some(variable) => writeln!(
                 io.err,
@@ -231,7 +226,9 @@ pub fn save_host(
 }
 
 /// The project settings file whose empty value hides the saved global
-/// `key`, when the project layer sets it empty.
+/// `key`, when the project layer sets it empty. `key` is a dotted key in
+/// the `path::parse` syntax the settings reader uses, so a nested empty
+/// project value still reads as the mask.
 fn masked_by_project(
     home: &Path,
     project: &ProjectKey,
@@ -241,8 +238,16 @@ fn masked_by_project(
     let file = settings_file(&home.join("projects").join(project.as_str()), extension);
     let bytes = fs::read(&file).ok()?;
     let json: Value = serde_json::from_slice(&bytes).ok()?;
-    match json.get(key) {
-        Some(Value::String(empty)) if empty.is_empty() => Some(file),
-        _ => None,
+    let segments = config::path::parse(key)?;
+    let mut value = &json;
+    for segment in &segments {
+        value = value.get(segment)?;
+    }
+    if let Value::String(empty) = value
+        && empty.is_empty()
+    {
+        Some(file)
+    } else {
+        None
     }
 }
