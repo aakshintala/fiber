@@ -281,6 +281,15 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
             ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
         }
+        cli::Invocation::Run(Some(cli::Commands::Feedback(args)), _) => {
+            match cli::ask_parts(&args.prompt) {
+                Ok((prompt, dash)) => feedback(prompt, dash, clock),
+                Err(_) => {
+                    eprintln!("fiber: {}", cli::FEEDBACK_SHAPE);
+                    2
+                }
+            }
+        }
         // The hidden search subcommands hold no feature logic: they only
         // call into `tools` (`docs/architecture.md`, "The call rules").
         cli::Invocation::Run(Some(cli::Commands::Grep { args }), _) => tools::grep_main(args),
@@ -510,6 +519,55 @@ fn ask(
     match resume {
         Some(resuming) => resume::ask_resume(resuming, overrides, prompt, clock, &signals, fiber),
         None => ask_new(overrides, prompt, worktree, clock, &signals, fiber),
+    }
+}
+
+/// `fiber feedback`: resolves the description like `fiber ask` resolves
+/// its prompt, then runs the shared report writer; the path prints on
+/// stdout.
+fn feedback(arg: Option<String>, dash: bool, clock: Arc<dyn contract::clock::Clock>) -> i32 {
+    let stdin = io::stdin();
+    let description = match doors::prompt(arg, dash, &mut stdin.lock(), stdin.is_terminal()) {
+        Ok(description) => description,
+        // Stdin shapes that yield no description carry `ask`'s no-prompt
+        // sentence; the report writer's empty-description sentence names
+        // the command the person ran.
+        Err(error) if error.code == ErrorCode::Usage => {
+            return fail(::cli::FeedbackError::EmptyDescription.into());
+        }
+        Err(error) => return fail(error),
+    };
+    let home = match config::fiber_home_path_from_env() {
+        Ok(home) => home,
+        Err(error) => return fail(failure(error.code(), error.to_string())),
+    };
+    let workspace = match std::env::current_dir() {
+        Ok(workspace) => workspace,
+        Err(source) => {
+            return fail(failed(
+                ErrorCode::IoFailed,
+                format!("the current directory: {source}"),
+            ));
+        }
+    };
+    let version = cli::bare_version();
+    let context = ::cli::ReportContext {
+        version: &version,
+        cwd: &workspace,
+        clock: clock.as_ref(),
+        doctor: &|| {
+            ::cli::capture(&home, &workspace, &version, clock.as_ref(), &McpClient)
+                .map(|(report, _)| report)
+                .map_err(|error| ::cli::FeedbackError::Doctor(error.to_string()))
+        },
+    };
+    match ::cli::write(&description, &context) {
+        Ok(done) => {
+            // A closed stdout leaves nobody to tell, as `fiber --version` does.
+            writeln!(io::stdout().lock(), "{}", done.path.display()).unwrap_or(());
+            0
+        }
+        Err(error) => fail(error.into()),
     }
 }
 
