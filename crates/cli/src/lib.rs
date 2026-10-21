@@ -106,6 +106,11 @@ mod sessions_list;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod sessions_search;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
+mod setup;
 mod table;
 
 #[cfg(test)]
@@ -140,6 +145,7 @@ pub use sessions::{delete, export};
 pub use sessions_list::list as sessions_list;
 pub use sessions_list::resolve_listed;
 pub use sessions_search::search as sessions_search;
+pub use setup::{Completions, Hub, SetupFlags, setup};
 
 /// What `fiber logout` says when it is given no provider.
 pub const LOGOUT_SHAPE: &str =

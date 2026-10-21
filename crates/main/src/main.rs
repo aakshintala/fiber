@@ -278,6 +278,9 @@ fn run() -> i32 {
             };
             ::cli::run_logout(args.provider.as_deref(), target)
         }
+        cli::Invocation::Run(Some(cli::Commands::Setup(args)), _) => {
+            setup_entry(args, clock, read_signals::CancelOnSignal::new)
+        }
         cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
             ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
         }
@@ -454,6 +457,81 @@ fn models_entry(
         fiber,
         &runner,
     )
+}
+
+/// `fiber setup`: answers each install question with its command, killing
+/// what its credential commands left on a normal return and on a
+/// foreground signal. The guard is built before the runner, so a refused
+/// registration returns before any credential command starts.
+#[allow(
+    clippy::print_stderr,
+    reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
+)]
+fn setup_entry(
+    args: cli::SetupArgs,
+    clock: Arc<dyn contract::clock::Clock>,
+    register: Register,
+) -> i32 {
+    let reads = Arc::new(crate::switch::Reads::default());
+    let guards = match read_signals::guarded(&reads, &clock, &read_signals::FOREGROUND, register) {
+        Ok(guards) => guards,
+        Err(error) => return fail(error),
+    };
+    // Bound in watcher-then-cancel order, so the watcher drops first: a
+    // taken signal's exit lands before the plain cancel runs.
+    let (_cancel, _watcher) = guards;
+    let runner = |command: &mut std::process::Command, timeout: std::time::Duration| {
+        reads.credential(command, timeout, &*clock)
+    };
+    let completions = match (args.completions, args.no_completions) {
+        (Some(shell), false) => ::cli::Completions::Yes(setup_shell(shell)),
+        (None, true) => ::cli::Completions::No,
+        (None, false) => ::cli::Completions::Unset,
+        (Some(_), true) => {
+            eprintln!(
+                "fiber: The arguments '--completions <shell>' and '--no-completions' cannot be used together. Run `fiber --help` for usage."
+            );
+            return 2;
+        }
+    };
+    let hub = match (args.hub, args.no_hub) {
+        (true, false) => ::cli::Hub::Yes,
+        (false, true) => ::cli::Hub::No,
+        (false, false) => ::cli::Hub::Unset,
+        (true, true) => {
+            eprintln!(
+                "fiber: The arguments '--hub' and '--no-hub' cannot be used together. Run `fiber --help` for usage."
+            );
+            return 2;
+        }
+    };
+    let flags = ::cli::SetupFlags {
+        provider: args.provider,
+        model: args.model,
+        thinking: args.thinking,
+        import: args
+            .import
+            .into_iter()
+            .map(config::ImportSource::from)
+            .collect(),
+        completions,
+        hub,
+    };
+    ::cli::setup(
+        &flags,
+        Arc::clone(&clock),
+        Arc::new(tools::PathLocks::new()),
+        &runner,
+    )
+}
+
+/// The shell name the setup completions line names: the parser's spelling.
+fn setup_shell(shell: crate::completion::Shell) -> String {
+    match shell {
+        crate::completion::Shell::Bash => "bash".to_owned(),
+        crate::completion::Shell::Zsh => "zsh".to_owned(),
+        crate::completion::Shell::Fish => "fish".to_owned(),
+    }
 }
 
 /// `fiber refresh-model-lists`: refreshes the named providers' cached
