@@ -346,6 +346,89 @@ fn places(home: &Path) -> Vec<super::place::Place> {
     super::place::sessions(home)
 }
 
+fn write_first_line(dir: &Path, payload: &serde_json::Value) {
+    write_log(dir, started_line(payload).as_bytes());
+}
+
+#[test]
+fn lenient_first_lines_pin_the_recorded_workspace_and_repository() {
+    let home = fakes::TempDir::new("log-escalations-values");
+    let root = home.path();
+    let dir = |id: &str| session_dir(root, "proj", id);
+    // Strings pin the recorded values; the repository wins over the workspace.
+    write_first_line(&dir("s_01"), &json!({"workspace": "/w"}));
+    write_first_line(
+        &dir("s_02"),
+        &json!({"workspace": "/w", "worktree": {"repository": "/r"}}),
+    );
+    // Wrong workspace types read as absent: ints, float, bool, map and seq.
+    write_first_line(&dir("s_03"), &json!({"workspace": 7}));
+    write_first_line(&dir("s_04"), &json!({"workspace": -7}));
+    write_first_line(&dir("s_05"), &json!({"workspace": 7.5}));
+    write_first_line(&dir("s_06"), &json!({"workspace": true}));
+    write_first_line(&dir("s_07"), &json!({"workspace": {"nested": 1}}));
+    write_first_line(&dir("s_08"), &json!({"workspace": ["/w"]}));
+    // A null workspace and a missing one read as absent too.
+    write_first_line(&dir("s_09"), &json!({"workspace": null}));
+    write_first_line(&dir("s_10"), &json!({}));
+    // A payload that is present but not an object still counts the session
+    // with no identity: ints, float, bool, string, seq and null.
+    for (id, payload) in [
+        ("s_11", json!(7)),
+        ("s_12", json!(-7)),
+        ("s_13", json!(7.5)),
+        ("s_14", json!(true)),
+        ("s_15", json!("text")),
+        ("s_16", json!(["a"])),
+        ("s_17", json!(null)),
+    ] {
+        write_first_line(&dir(id), &payload);
+    }
+    // No payload drops the session; a null worktree and a worktree that is
+    // not an object keep the workspace.
+    write_log(&dir("s_18"), b"{\"kind\":\"session_started\"}\n");
+    write_first_line(&dir("s_19"), &json!({"workspace": "/w", "worktree": null}));
+    for (id, worktree) in [
+        ("s_20", json!(7)),
+        ("s_21", json!(true)),
+        ("s_22", json!("text")),
+        ("s_23", json!(["/r"])),
+        ("s_24", json!({"path": "/w"})),
+    ] {
+        write_first_line(&dir(id), &json!({"workspace": "/w", "worktree": worktree}));
+    }
+    let found = places(home.path());
+    let listed: Vec<String> = found
+        .iter()
+        .map(|p| p.dir.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    let mut expected: Vec<String> = (1..=17)
+        .map(|n| format!("s_{n:02}"))
+        .chain((19..=24).map(|n| format!("s_{n:02}")))
+        .collect();
+    expected.sort();
+    assert_eq!(listed, expected);
+    let identity = |id: &str| {
+        found
+            .iter()
+            .find(|p| p.dir.file_name().unwrap() == id)
+            .unwrap()
+            .identity
+            .clone()
+    };
+    assert_eq!(identity("s_01"), Some("/w".into()));
+    assert_eq!(identity("s_02"), Some("/r".into()));
+    for id in [
+        "s_03", "s_04", "s_05", "s_06", "s_07", "s_08", "s_09", "s_10", "s_11", "s_12", "s_13",
+        "s_14", "s_15", "s_16", "s_17",
+    ] {
+        assert_eq!(identity(id), None, "{id}");
+    }
+    for id in ["s_19", "s_20", "s_21", "s_22", "s_23", "s_24"] {
+        assert_eq!(identity(id), Some("/w".into()), "{id}");
+    }
+}
+
 #[test]
 fn the_narrow_scan_lists_the_wide_scans_sessions_in_its_order() {
     let home = setup_population();

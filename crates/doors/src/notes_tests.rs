@@ -404,6 +404,33 @@ fn an_unreadable_git_dir_gives_no_remote_item_with_ci_still_present() {
 }
 
 #[test]
+fn remote_urls_keep_only_the_fetch_url_when_push_differs() {
+    let root = fakes::TempDir::new("doors-notes-push");
+    let workspace = repo(root.path(), "work");
+    git(
+        &workspace,
+        &["remote", "add", "origin", "git@example.com:acme/fiber.git"],
+    );
+    git(
+        &workspace,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            "git@example.com:acme/push.git",
+        ],
+    );
+    assert_eq!(
+        super::remote_urls(&workspace),
+        [(
+            "origin".to_owned(),
+            "git@example.com:acme/fiber.git".to_owned()
+        )]
+    );
+}
+
+#[test]
 fn a_non_zero_remote_listing_gives_no_remote_item() {
     let root = fakes::TempDir::new("doors-notes-remote-fail");
     let plain = root.path().join("plain");
@@ -432,6 +459,22 @@ fn an_npmrc_gives_only_its_stripped_registry_lines() {
     for item in &found {
         assert!(!item.contains("SECRET-TOKEN"), "no token line: {item}");
     }
+}
+
+#[test]
+fn an_at_scoped_non_registry_key_is_excluded() {
+    let root = fakes::TempDir::new("doors-notes-npmrc-scope");
+    let workspace = root.path().join("work");
+    write_file(
+        &workspace.join(".npmrc"),
+        "@acme:registry=https://npm.example.com/\n\
+         @acme:authToken=SECRET-TOKEN\n",
+    );
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(
+        found,
+        ["registry .npmrc: https://npm.example.com/".to_owned()]
+    );
 }
 
 #[test]
@@ -472,6 +515,44 @@ fn all_registry_files_give_only_their_registry_lines() {
         assert!(!item.contains("secret"), "no secret: {item}");
         assert!(!item.contains("user"), "no userinfo: {item}");
     }
+}
+
+#[test]
+fn registry_and_registries_sections_are_both_kept() {
+    let root = fakes::TempDir::new("doors-notes-cargo-sections");
+    let workspace = root.path().join("work");
+    write_file(
+        &workspace.join(".cargo/config.toml"),
+        "[registry]\n\
+         index = \"https://cargo:secret@example.com/index\"\n\
+         [registries.acme]\n\
+         registry = \"https://cargo:secret@example.com/acme\"\n",
+    );
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(
+        found,
+        [
+            "registry .cargo/config.toml: https://example.com/index".to_owned(),
+            "registry .cargo/config.toml: https://example.com/acme".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn a_non_registry_key_in_a_registry_section_is_excluded() {
+    let root = fakes::TempDir::new("doors-notes-cargo-key");
+    let workspace = root.path().join("work");
+    write_file(
+        &workspace.join(".cargo/config.toml"),
+        "[registry]\n\
+         other = \"secret\"\n\
+         registry = \"https://cargo:secret@example.com/r\"\n",
+    );
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(
+        found,
+        ["registry .cargo/config.toml: https://example.com/r".to_owned()]
+    );
 }
 
 #[test]
@@ -535,6 +616,29 @@ fn nine_ci_files_trim_to_eight_in_path_order() {
     assert!(found[7].contains("job07.yml"), "{}", found[7]);
     assert!(
         found.iter().all(|item| !item.contains("job08")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_non_yml_workflow_file_is_excluded() {
+    let root = fakes::TempDir::new("doors-notes-ci-ext");
+    let workspace = root.path().join("work");
+    write_file(&workspace.join(".github/workflows/job.yml"), "name: job\n");
+    write_file(
+        &workspace.join(".github/workflows/other.yaml"),
+        "name: other\n",
+    );
+    write_file(
+        &workspace.join(".github/workflows/notes.txt"),
+        "not a workflow\n",
+    );
+    let found = files_text(&files_evidence(&workspace));
+    assert_eq!(found.len(), 2);
+    assert!(found[0].contains("job.yml"), "{}", found[0]);
+    assert!(found[1].contains("other.yaml"), "{}", found[1]);
+    assert!(
+        found.iter().all(|item| !item.contains("notes.txt")),
         "{found:?}"
     );
 }

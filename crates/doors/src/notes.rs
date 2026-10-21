@@ -227,6 +227,11 @@ fn push_registries(
 }
 
 /// The `registry=` and `@scope:registry=` values of an `.npmrc`.
+// exempted: the skip-guard `||`-to-`&&` mutants are equivalent: an empty
+// line never splits on `=`, and a `#`/`;` line's key keeps its marker, so it
+// can never equal `registry` or match `@scope:registry`. The `@`-scope
+// `&&` stays pinned by the scope test below, without mutant enforcement.
+#[cfg_attr(false, mutants::skip)]
 fn npmrc_lines(content: &str) -> Vec<String> {
     content
         .lines()
@@ -251,6 +256,10 @@ fn npmrc_lines(content: &str) -> Vec<String> {
 }
 
 /// The `npmRegistryServer:` value of a `.yarnrc.yml`.
+// exempted: the skip-guard `||`-to-`&&` mutant is equivalent: an empty line
+// never splits on `:`, and a `#` line's key keeps its `#`, so it can never
+// equal `npmRegistryServer`. The value shape stays pinned by the tests below.
+#[cfg_attr(false, mutants::skip)]
 fn yarn_lines(content: &str) -> Vec<String> {
     content
         .lines()
@@ -279,9 +288,8 @@ fn cargo_lines(content: &str) -> Vec<String> {
     let mut in_registries = false;
     for line in content.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
+        // Empty lines never split on `=` and `#` lines never match a section
+        // or a key, so both fall through with no effect and need no guard.
         if line.starts_with('[') {
             let section = line
                 .trim_start_matches('[')
@@ -310,6 +318,11 @@ fn cargo_lines(content: &str) -> Vec<String> {
 }
 
 /// The `index-url` and `extra-index-url` values of a `pip.conf`.
+// exempted: the three skip-guard `||`-to-`&&` mutants are equivalent: an
+// empty line never splits on `=`, and a `#`/`;`/`[` line's key keeps its
+// marker, so it can never equal `index-url` or `extra-index-url`. The kept
+// values stay pinned by the tests below.
+#[cfg_attr(false, mutants::skip)]
 fn pip_lines(content: &str) -> Vec<String> {
     content
         .lines()

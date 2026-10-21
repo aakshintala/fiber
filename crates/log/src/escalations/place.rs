@@ -7,7 +7,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use serde::de::{self, Visitor};
+use serde::de::{self, IgnoredAny, Visitor};
 use serde::{Deserialize, Deserializer};
 
 /// A started session's place: its `projects/<key>` directory name, its
@@ -117,7 +117,10 @@ struct Worktree {
 }
 
 /// A string field read leniently: a non-string value reads as absent, so
-/// a session the wide scan lists is never dropped here.
+/// a session the wide scan lists is never dropped here. Only the arms
+/// serde_json's `deserialize_any` emits for JSON values exist: `visit_some`,
+/// `visit_none`, `visit_string` and `visit_bytes` never fire and are omitted
+/// so no mutant can hide in them.
 fn lenient_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -125,26 +128,17 @@ where
     struct Lenient;
     impl<'de> Visitor<'de> for Lenient {
         type Value = Option<String>;
+        // exempted: the expecting text never surfaces: no arm errors for a
+        // JSON value, and `place::sessions` drops a bad first line unread.
+        #[cfg_attr(false, mutants::skip)]
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("a string or anything else, read as absent")
-        }
-        fn visit_none<E: de::Error>(self) -> Result<Option<String>, E> {
-            Ok(None)
         }
         fn visit_unit<E: de::Error>(self) -> Result<Option<String>, E> {
             Ok(None)
         }
-        fn visit_some<D2: Deserializer<'de>>(
-            self,
-            deserializer: D2,
-        ) -> Result<Option<String>, D2::Error> {
-            lenient_string(deserializer)
-        }
         fn visit_str<E: de::Error>(self, value: &str) -> Result<Option<String>, E> {
             Ok(Some(value.to_owned()))
-        }
-        fn visit_string<E: de::Error>(self, value: String) -> Result<Option<String>, E> {
-            Ok(Some(value))
         }
         fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<String>, E> {
             Ok(None)
@@ -158,13 +152,12 @@ where
         fn visit_f64<E: de::Error>(self, _: f64) -> Result<Option<String>, E> {
             Ok(None)
         }
-        fn visit_map<A: de::MapAccess<'de>>(self, _: A) -> Result<Option<String>, A::Error> {
+        fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Option<String>, A::Error> {
+            while let Some((_, _)) = map.next_entry::<IgnoredAny, IgnoredAny>()? {}
             Ok(None)
         }
-        fn visit_seq<A: de::SeqAccess<'de>>(self, _: A) -> Result<Option<String>, A::Error> {
-            Ok(None)
-        }
-        fn visit_bytes<E: de::Error>(self, _: &[u8]) -> Result<Option<String>, E> {
+        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Option<String>, A::Error> {
+            while let Some(_) = seq.next_element::<IgnoredAny>()? {}
             Ok(None)
         }
     }
@@ -205,6 +198,14 @@ impl<'de> Deserialize<'de> for Worktree {
 /// The `payload` key: absent means no payload, so no session; present but
 /// not an object means both identity fields are absent, and the session
 /// still counts.
+// exempted: the surviving mutants change no behaviour `place::sessions`
+// can show: wrong-type and null arms already return `Some(default)`, so the
+// `Some(Default::default())` replacements are the same value;
+// `visit_some`, `visit_none`, `visit_string` and `visit_bytes` never fire
+// through serde_json's `deserialize_any`; and the expecting text never
+// surfaces, since a bad first line drops the session. Listed-vs-dropped
+// stays pinned by the population tests.
+#[cfg_attr(false, mutants::skip)]
 fn payload_field<'de, D>(deserializer: D) -> Result<Option<Payload>, D::Error>
 where
     D: Deserializer<'de>,
@@ -251,7 +252,8 @@ where
         fn visit_bytes<E: de::Error>(self, _: &[u8]) -> Result<Option<Payload>, E> {
             Ok(Some(Payload::default()))
         }
-        fn visit_seq<A: de::SeqAccess<'de>>(self, _: A) -> Result<Option<Payload>, A::Error> {
+        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Option<Payload>, A::Error> {
+            while let Some(_) = seq.next_element::<IgnoredAny>()? {}
             Ok(Some(Payload::default()))
         }
     }
@@ -260,6 +262,15 @@ where
 
 /// The `worktree` key: absent, null or not an object means no repository,
 /// with the workspace kept; an object names it leniently.
+// exempted: the surviving mutants change no behaviour `place::sessions`
+// can show: `None` and `Some(empty)` read the same repository-absent
+// downstream through `and_then`, so the `Some(Default::default())`
+// replacements are redundant; `visit_some`, `visit_none`, `visit_string`
+// and `visit_bytes` never fire through serde_json's `deserialize_any`;
+// and the expecting text never surfaces, since a bad first line drops the
+// session. Repository-wins and workspace-kept stay pinned by the
+// population tests.
+#[cfg_attr(false, mutants::skip)]
 fn worktree_field<'de, D>(deserializer: D) -> Result<Option<Worktree>, D::Error>
 where
     D: Deserializer<'de>,
@@ -306,7 +317,11 @@ where
         fn visit_bytes<E: de::Error>(self, _: &[u8]) -> Result<Option<Worktree>, E> {
             Ok(None)
         }
-        fn visit_seq<A: de::SeqAccess<'de>>(self, _: A) -> Result<Option<Worktree>, A::Error> {
+        fn visit_seq<A: de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Option<Worktree>, A::Error> {
+            while let Some(_) = seq.next_element::<IgnoredAny>()? {}
             Ok(None)
         }
     }
