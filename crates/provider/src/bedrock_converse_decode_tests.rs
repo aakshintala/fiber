@@ -214,6 +214,62 @@ fn an_event_that_is_not_json_fails_as_stream_incomplete() {
 }
 
 #[test]
+fn blocks_open_at_once_are_kept_apart_by_their_index() {
+    let stream = [
+        event("messageStart", &json!({"role": "assistant"})),
+        event(
+            "contentBlockStart",
+            &json!({"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "tooluse_a", "name": "read"}}}),
+        ),
+        event(
+            "contentBlockStart",
+            &json!({"contentBlockIndex": 2, "start": {"toolUse": {"toolUseId": "tooluse_b", "name": "grep"}}}),
+        ),
+        event(
+            "contentBlockDelta",
+            &json!({"contentBlockIndex": 1, "delta": {"toolUse": {"input": "{\"path\":\"a.md\"}"}}}),
+        ),
+        event(
+            "contentBlockDelta",
+            &json!({"contentBlockIndex": 2, "delta": {"toolUse": {"input": "{\"pattern\":\"x\"}"}}}),
+        ),
+        event("contentBlockStop", &json!({"contentBlockIndex": 1})),
+        event("contentBlockStop", &json!({"contentBlockIndex": 2})),
+        event("messageStop", &json!({"stopReason": "tool_use"})),
+        event("metadata", &json!({"usage": {}})),
+    ]
+    .concat();
+    let (reply, deltas) = decoded(&stream[..]);
+    let reply = reply.unwrap();
+    let calls: Vec<(&str, serde_json::Value)> = reply
+        .actions
+        .iter()
+        .map(|action| match action {
+            ReplyAction::ToolCall(call) => (call.name.as_str(), call.arguments.clone()),
+            ReplyAction::Text(_)
+            | ReplyAction::Reasoning(_)
+            | ReplyAction::Hosted(_)
+            | ReplyAction::HostedResult { .. } => panic!("{action:?}"),
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            ("read", json!({"path": "a.md"})),
+            ("grep", json!({"pattern": "x"}))
+        ]
+    );
+    let positions: Vec<u32> = deltas
+        .iter()
+        .map(|delta| match delta {
+            Delta::ToolCallArguments(d) => d.index,
+            Delta::Text(_) | Delta::Reasoning(_) => panic!("{delta:?}"),
+        })
+        .collect();
+    assert_eq!(positions, [0, 1]);
+}
+
+#[test]
 fn a_tool_calls_input_in_several_deltas_joins_in_order_under_its_position() {
     let stream = [
         event("messageStart", &json!({"role": "assistant"})),

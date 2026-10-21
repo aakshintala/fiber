@@ -683,6 +683,53 @@ fn extra_body_is_laid_over_the_inference_and_model_fields_key_by_key() {
 }
 
 #[test]
+fn an_extra_body_object_for_any_other_field_replaces_fiber_s() {
+    let mut extra = Map::new();
+    extra.insert("toolConfig".into(), json!({"toolChoice": {"any": {}}}));
+    let request = ModelRequest {
+        tools: vec![tool("read", "reads a file")],
+        ..harness::request()
+    };
+    let body = body_of(
+        |server| Endpoint {
+            extra_body: extra.clone(),
+            ..endpoint(server)
+        },
+        &request,
+    );
+    assert_eq!(body["toolConfig"], json!({"toolChoice": {"any": {}}}));
+}
+
+#[test]
+fn an_assistant_part_with_no_words_sends_no_text_block() {
+    let request = ModelRequest {
+        conversation: vec![
+            user("look"),
+            Input::Assistant {
+                model: format!("bedrock/{MODEL}"),
+                text: String::new(),
+                provider_item: None,
+            },
+            call(
+                "a_1",
+                Some("tooluse_Ab12Cd34Ef"),
+                "read",
+                json!({"path": "a.md"}),
+            ),
+            result("a_1", "contents", false, Vec::new()),
+        ],
+        ..harness::request()
+    };
+    let body = body_of(endpoint, &request);
+    assert_eq!(
+        body["messages"][1],
+        json!({"role": "assistant", "content": [
+            {"toolUse": {"toolUseId": "tooluse_Ab12Cd34Ef", "name": "read", "input": {"path": "a.md"}}},
+        ]})
+    );
+}
+
+#[test]
 fn only_a_request_that_must_leave_out_max_tokens_declines_to_warm() {
     let server = ProviderServer::start(Vec::<Response>::new()).unwrap();
     let converse = |field| {
