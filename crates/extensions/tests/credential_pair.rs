@@ -114,6 +114,7 @@ fn data(name: &str, credential_name: Option<&str>) -> config::ProviderData {
         models: Vec::new(),
         reviewer_model: None,
         login: None,
+        credential_label: None,
     }
 }
 

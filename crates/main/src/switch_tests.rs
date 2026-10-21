@@ -2138,6 +2138,7 @@ fn fake_data() -> config::ProviderData {
         models: Vec::new(),
         reviewer_model: None,
         login: None,
+        credential_label: None,
     }
 }
 

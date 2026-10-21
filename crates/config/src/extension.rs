@@ -142,6 +142,23 @@ pub struct ProviderData {
     /// (`docs/configuration.md`, "A provider's data"). Absent means a key.
     #[serde(default)]
     pub login: Option<Login>,
+    /// What a credential label names, for a provider whose `credential()`
+    /// supplies the credential and reads nothing Fiber stores; absent for
+    /// one that reads a stored credential (`docs/model-routing.md`, "What a
+    /// provider extension declares").
+    #[serde(default)]
+    pub credential_label: Option<CredentialLabel>,
+}
+
+/// What a credential label names for a provider whose `credential()` reads
+/// nothing Fiber stores (`docs/configuration.md`, "A provider's data").
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialLabel {
+    /// What a label names, such as `AWS profile`.
+    pub names: String,
+    /// What the `default` label reads, such as the environment.
+    pub default: String,
 }
 
 /// How `fiber login` signs in for a provider
@@ -409,18 +426,28 @@ pub fn read_providers(dir: &Path) -> Result<Vec<ProviderData>, ConfigError> {
         .into_iter()
         .map(|file| {
             let data: ProviderData = read_typed(&file, "a provider's data")?;
-            if file
+            if !file
                 .file_stem()
                 .is_some_and(|stem| stem == data.name.as_str())
             {
-                Ok(data)
-            } else {
-                Err(ConfigError::WrongType {
+                return Err(ConfigError::WrongType {
                     source_name: file.display().to_string(),
                     key: "name".into(),
                     expected: "the file's own name, without `.json`".into(),
-                })
+                });
             }
+            // A provider that reads nothing stored has no key source and no
+            // login (`docs/configuration.md`, "A provider's data").
+            if data.credential_label.is_some()
+                && (data.login.is_some() || data.credential.is_some())
+            {
+                return Err(ConfigError::WrongType {
+                    source_name: file.display().to_string(),
+                    key: "credential_label".into(),
+                    expected: "declared without `login` or `credential`".into(),
+                });
+            }
+            Ok(data)
         })
         .collect()
 }

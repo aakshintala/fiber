@@ -8,8 +8,8 @@ mod common;
 
 use common::Setup;
 use config::{
-    CredentialSource, Login, Protocol, provider_files, read_manifest, read_package_text,
-    read_providers,
+    CredentialLabel, CredentialSource, Login, Protocol, provider_files, read_manifest,
+    read_package_text, read_providers,
 };
 use contract::ErrorCode;
 
@@ -587,6 +587,7 @@ fn required_fields_only_read_every_default() {
     assert!(data.placeholders.is_empty());
     assert_eq!(data.reviewer_model, None);
     assert_eq!(data.login, None);
+    assert_eq!(data.credential_label, None);
     let [bare, flat] = data.models.as_slice() else {
         panic!("{:?}", data.models);
     };
@@ -643,6 +644,38 @@ fn an_unknown_login_is_a_provider_data_error() {
     let err = read_providers(&dir).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
     assert!(err.to_string().contains("a provider's data"), "{err}");
+}
+
+#[test]
+fn credential_label_reads_alone_and_is_invalid_beside_login_or_a_key_source() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    let label = r#""credential_label":{"names":"AWS profile","default":"the environment"}"#;
+    setup.write(
+        &dir.join("providers/p.json"),
+        &format!(r#"{{"name":"p",{label},"models":[]}}"#),
+    );
+    assert_eq!(
+        read_providers(&dir).unwrap()[0].credential_label,
+        Some(CredentialLabel {
+            names: "AWS profile".into(),
+            default: "the environment".into(),
+        })
+    );
+    // A provider that reads nothing stored has no login and no key source
+    // (`docs/configuration.md`, "A provider's data").
+    for beside in [r#""login":"browser""#, r#""credential":{"env":"P_KEY"}"#] {
+        setup.write(
+            &dir.join("providers/p.json"),
+            &format!(r#"{{"name":"p",{label},{beside},"models":[]}}"#),
+        );
+        let err = read_providers(&dir).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{beside}");
+        assert!(
+            matches!(&err, config::ConfigError::WrongType { key, .. } if key == "credential_label"),
+            "{beside}: {err}"
+        );
+    }
 }
 
 #[test]

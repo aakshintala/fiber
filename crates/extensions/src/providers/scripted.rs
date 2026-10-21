@@ -62,6 +62,7 @@ impl Providers {
                 models: Vec::new(),
                 reviewer_model: None,
                 login: None,
+                credential_label: None,
             });
         if data.models.iter().any(|model| model.id == id) {
             return;

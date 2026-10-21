@@ -278,6 +278,7 @@ fn gap_providers(placeholders: BTreeMap<String, Placeholder>) -> Providers {
             models: Vec::new(),
             reviewer_model: None,
             login: None,
+            credential_label: None,
         },
     );
     let mut extension_of = BTreeMap::new();
@@ -451,12 +452,22 @@ fn validate_host_delegates_to_the_model_list_rule() {
 
 #[test]
 fn unconfigured_without_a_variable_names_the_login_and_config_remedies() {
-    let notice = unconfigured("acme", "m", "acme", "workspace", None);
+    let notice = unconfigured("acme", "m", "acme", "workspace", None, true);
     assert_eq!(
         notice.message,
         "The model `acme/m` needs the setting `workspace` for its base URL, \
          which has no value. Run `fiber login acme`, or set `workspace` in \
          `config/acme.json` in Fiber home."
+    );
+}
+
+#[test]
+fn unconfigured_without_login_names_the_config_remedy_alone() {
+    let notice = unconfigured("acme", "m", "acme", "workspace", None, false);
+    assert_eq!(
+        notice.message,
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         which has no value. Set `workspace` in `config/acme.json` in Fiber home."
     );
 }
 
@@ -468,6 +479,7 @@ fn unconfigured_with_an_absent_variable_names_the_hub_environment_and_both_remed
         "databricks",
         "workspace",
         Some("DATABRICKS_HOST"),
+        true,
     );
     assert_eq!(
         notice.message,

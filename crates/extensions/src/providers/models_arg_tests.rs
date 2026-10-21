@@ -47,6 +47,7 @@ fn models_arg_returns_a_credential_read_failure() {
             models: Vec::new(),
             reviewer_model: None,
             login: None,
+            credential_label: None,
         },
     );
     let providers = Providers {

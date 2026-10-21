@@ -747,6 +747,7 @@ impl Providers {
                         placeholders: BTreeMap::new(),
                         reviewer_model: None,
                         login: None,
+                        credential_label: None,
                     },
                 );
             }
@@ -821,6 +822,7 @@ impl Providers {
                 .unwrap_or_default();
             let mut left_out = Vec::new();
             if let Some(data) = self.by_name.get_mut(&provider_name) {
+                let login = data.credential_label.is_none();
                 let mut kept = Vec::new();
                 for mut model in data.models.drain(..) {
                     let template = model.base_url.clone();
@@ -842,6 +844,7 @@ impl Providers {
                                 &extension,
                                 &name,
                                 variable,
+                                login,
                             );
                             left_out.push((model.id.clone(), notice.message.clone()));
                             notices.push(notice);
@@ -928,6 +931,7 @@ impl Providers {
             placeholders: BTreeMap::new(),
             reviewer_model: None,
             login: None,
+            credential_label: None,
         })
     }
 

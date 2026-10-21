@@ -7,8 +7,8 @@
 use std::path::Path;
 
 use config::{
-    Config, ConfigError, Origin, Presence, ProviderData, ScriptRead, Sources, mcp_servers,
-    read_script, read_secret,
+    Config, ConfigError, CredentialLabel, Origin, Presence, ProviderData, ScriptRead, Sources,
+    mcp_servers, read_script, read_secret,
 };
 use contract::ErrorCode;
 use extensions::{Model, Providers, is_enabled};
@@ -334,6 +334,18 @@ impl Checked<'_> {
             };
             self.lines.push(format!("{}:", clean(name)));
             let selected = self.config.credentials().credential_label(data);
+            if let Some(reads) = &data.credential_label {
+                // Its `credential()` reads nothing stored, so no stored file
+                // is its credential, and only that code could check the
+                // label: doctor runs none (`docs/invocation.md`, "Commands
+                // and flags").
+                self.lines.push(format!(
+                    "  * {}  {}, read by credential() (not checked)",
+                    clean(&selected),
+                    clean(&label_source(reads, &selected)),
+                ));
+                continue;
+            }
             let mut rows: Vec<(String, Row)> = self
                 .config
                 .credentials()
@@ -483,6 +495,17 @@ fn secrets(home: &Path, config: &Config, inventory: &Providers) -> Vec<String> {
         }
     }
     lines
+}
+
+/// What `label` reads for a provider whose `credential()` reads nothing
+/// stored: its `default` source, or the thing a label names, such as
+/// `AWS profile work`.
+fn label_source(reads: &CredentialLabel, label: &str) -> String {
+    if label == "default" {
+        reads.default.clone()
+    } else {
+        format!("{} {label}", reads.names)
+    }
 }
 
 /// The missing-key line: the plain default wording, or the `--as` one.

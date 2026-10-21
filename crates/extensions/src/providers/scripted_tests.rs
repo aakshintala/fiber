@@ -337,6 +337,7 @@ fn add_scripted_replaces_an_entry_it_did_not_build() {
             }],
             reviewer_model: None,
             login: None,
+            credential_label: None,
         },
     );
     providers.add_scripted("scripted/s.json");

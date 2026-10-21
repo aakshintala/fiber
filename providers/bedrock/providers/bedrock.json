@@ -1,4 +1,8 @@
 {
+  "credential_label": {
+    "default": "AWS_BEARER_TOKEN_BEDROCK, AWS keys in the environment, or the AWS CLI's default chain",
+    "names": "AWS profile"
+  },
   "models": [
     {
       "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
