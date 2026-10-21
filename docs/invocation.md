@@ -403,6 +403,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `shell` | `command` (string); `send` (boolean, default false) |
 | `command` | `name` (string); `text` (string, optional), what the person typed after the name |
 | `close` | `now` (boolean, default false) |
+| `import` | `source` (string, optional), `claude-code` or `codex`; absent means both sources |
 
 ### What each command does
 
@@ -438,7 +439,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands and screens"). Rejected `unknown_command` for a name no extension registered. |
 | `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. With `now`, it starts a shutdown instead ("Shutdown"): the turn in flight ends, every job and delegate stops, and the session exits 0. A `close` with `now` is accepted also after `close`. |
-| `import` | (Built in P2.) Runs the same one-time import `fiber import` runs (`docs/configuration.md`, "Importing"), and reports the same imported and left-behind lists. |
+| `import` | Runs the same one-time import `fiber import` runs (`docs/configuration.md`, "Importing"), and reports the same imported and left-behind lists. |
 
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
@@ -1276,7 +1277,12 @@ git library is linked in. `git worktree add` runs the repository's hooks, so
 a `post-checkout` hook can set up the new tree. Every other git command the
 `worktree` module runs, including those of `fiber sessions prune`, runs with
 the repository's hooks off (`-c core.hooksPath=/dev/null`), so removing a
-worktree can't hang on a hook. A supervisor that wants its own tree still makes it
+worktree can't hang on a hook. Every git `fiber sessions prune` runs, discovery
+and worktree reads alike, carries the scrubbed environment as well:
+`core.fsmonitor` off (`-c core.fsmonitor=false`), `GIT_OPTIONAL_LOCKS` and
+`GIT_TERMINAL_PROMPT` pinned to `0`, and `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_COMMON_DIR` and `GIT_INDEX_FILE` removed, so a redirected environment
+cannot move the prune to another repository. A supervisor that wants its own tree still makes it
 and passes the path.
 
 ## Deleting and pruning

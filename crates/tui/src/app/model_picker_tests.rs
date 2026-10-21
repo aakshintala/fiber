@@ -3438,6 +3438,17 @@ fn chip_rows() -> Value {
     ]})
 }
 
+/// The hub's import-pending answer: the offer resolve asks it
+/// first on every remote hello, so every scripted wire opens
+/// with it. Denied stays down without touching the pick.
+fn pending() -> (String, Value, Result<Value, Rejection>) {
+    (
+        "configure".to_owned(),
+        json!({"operation": "import_pending"}),
+        Ok(json!({"pending": false})),
+    )
+}
+
 fn global_file() -> (String, Value, Result<Value, Rejection>) {
     (
         "configure".to_owned(),
@@ -3573,7 +3584,7 @@ fn open_mode(app: &App) -> Option<crate::model_picker::Mode> {
 
 #[test]
 fn the_chip_read_runs_before_the_start_pick_and_not_twice() {
-    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings()]);
+    let (mut app, hub) = scripted_remote(vec![pending(), global_file(), chip_settings()]);
     // Before the link the start pick owes but writes nothing.
     app.start_model_pick();
     assert!(app.model_picker.open.is_none());
@@ -3596,7 +3607,12 @@ fn the_chip_read_runs_before_the_start_pick_and_not_twice() {
 
 #[test]
 fn the_start_pick_drops_when_the_chip_names_a_model() {
-    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings(), chip_settings()]);
+    let (mut app, hub) = scripted_remote(vec![
+        pending(),
+        global_file(),
+        chip_settings(),
+        chip_settings(),
+    ]);
     app.owe_start_pick();
     hub.start();
     let (mut app, _) = fold(app, hub_hello());
@@ -3613,6 +3629,7 @@ fn the_start_pick_drops_when_the_chip_names_a_model() {
 #[test]
 fn the_start_pick_opens_once_when_the_chip_names_no_model() {
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_settings_scoped("[\"hub/m\",\"hub/n\"]"),
         models_with(&["hub/m", "hub/n"]),
@@ -3648,8 +3665,11 @@ fn explicit_opens_run_at_once_while_the_chip_read_is_owed() {
         crate::model_picker::Mode::Scope,
         crate::model_picker::Mode::Choose,
     ] {
-        let (mut app, hub) =
-            scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
+        let (mut app, hub) = scripted_remote(vec![
+            pending(),
+            global_file(),
+            chip_settings_scoped("[\"hub/m\"]"),
+        ]);
         // The seeded catalogue holds the chip's model, so a thinking
         // open lands on its row instead of falling back to Choose.
         app.on_models(Ok(three()));
@@ -3684,7 +3704,11 @@ fn explicit_opens_run_at_once_while_the_chip_read_is_owed() {
 
 #[test]
 fn explicit_opens_by_key_and_click_run_at_once_while_owed() {
-    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
+    let (mut app, hub) = scripted_remote(vec![
+        pending(),
+        global_file(),
+        chip_settings_scoped("[\"hub/m\"]"),
+    ]);
     app.on_models(Ok(three()));
     assert_eq!(press_key(&mut app, Key::CtrlL), Effect::None);
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
@@ -3698,7 +3722,11 @@ fn explicit_opens_by_key_and_click_run_at_once_while_owed() {
 
 #[test]
 fn an_explicit_open_drops_the_owed_start_pick() {
-    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
+    let (mut app, hub) = scripted_remote(vec![
+        pending(),
+        global_file(),
+        chip_settings_scoped("[\"hub/m\"]"),
+    ]);
     app.owe_start_pick();
     app.open_model_picker(crate::model_picker::Mode::Choose);
     // The hello answers with no model, but the pick is gone: the open
@@ -3716,6 +3744,7 @@ fn an_explicit_open_drops_the_owed_start_pick() {
 #[test]
 fn a_rejected_chip_read_notices_once_and_waits_for_reconnect() {
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         // The reconnect reads again over the cached global file.
@@ -3750,6 +3779,7 @@ fn a_rejected_chip_read_notices_once_and_waits_for_reconnect() {
 #[test]
 fn choosing_a_workspace_rereads_the_chips_at_once() {
     let (app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_settings(),
         chip_settings_at("/hub/p"),
@@ -3769,7 +3799,7 @@ fn choosing_a_workspace_rereads_the_chips_at_once() {
 
 #[test]
 fn choosing_a_workspace_while_down_reads_at_the_next_hello() {
-    let (mut app, hub) = scripted_remote(vec![chip_settings_at("/hub/p")]);
+    let (mut app, hub) = scripted_remote(vec![pending(), chip_settings_at("/hub/p")]);
     // The player runs before the choice, so a wrong-state choice answers
     // at once instead of parking the test thread: the asserts below fail
     // before any hang guard. With the link down the choice writes nothing
@@ -3790,8 +3820,11 @@ fn choosing_a_workspace_while_down_reads_at_the_next_hello() {
 fn flagged_keys_survive_the_chip_read() {
     // The layer names `model=flag/m`: the answer never replaces it,
     // while thinking, unnamed, is replaced.
-    let (mut app, hub) =
-        scripted_remote_named(vec![global_file(), chip_settings()], Some("flag/m"), None);
+    let (mut app, hub) = scripted_remote_named(
+        vec![pending(), global_file(), chip_settings()],
+        Some("flag/m"),
+        None,
+    );
     app.set_launch_overrides(vec!["model=flag/m".to_owned()]);
     hub.start();
     let (app, _) = fold(app, hub_hello());
@@ -3801,8 +3834,11 @@ fn flagged_keys_survive_the_chip_read() {
     assert!(chips.contains(&"[thinking: high]".to_owned()), "{chips:?}");
     quiet(&hub.watcher);
     // With `thinking=low` named, thinking is kept too.
-    let (mut app, hub) =
-        scripted_remote_named(vec![global_file(), chip_settings()], None, Some("low"));
+    let (mut app, hub) = scripted_remote_named(
+        vec![pending(), global_file(), chip_settings()],
+        None,
+        Some("low"),
+    );
     app.set_launch_overrides(vec!["thinking=low".to_owned()]);
     hub.start();
     let (app, _) = fold(app, hub_hello());
@@ -3829,6 +3865,7 @@ fn a_local_start_pick_opens_at_once() {
 #[test]
 fn the_start_pick_opens_over_the_workspace_picker() {
     let (app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_settings_scoped("[\"hub/m\",\"hub/n\"]"),
         models_with(&["hub/m", "hub/n"]),
@@ -3875,6 +3912,7 @@ fn the_start_pick_opens_over_the_workspace_picker() {
 #[test]
 fn a_failed_read_then_a_reconnect_opens_the_pick_once() {
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         chip_settings_scoped("[\"hub/m\"]"),
@@ -3897,6 +3935,7 @@ fn the_deferred_start_pick_reads_models_at_the_chosen_workspace() {
     // workspace answers the next chip read with no model, and the
     // owed pick opens over its catalogue.
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         chip_settings_scoped_at("/hub/p", "[\"hub/m\"]"),
@@ -3928,6 +3967,7 @@ fn the_deferred_start_pick_reads_models_at_the_chosen_workspace() {
 #[test]
 fn a_failed_read_then_an_explicit_open_stays_single() {
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         chip_settings_scoped("[\"hub/m\"]"),
@@ -3951,6 +3991,7 @@ fn a_failed_read_then_an_explicit_open_stays_single() {
 fn the_chip_answer_keeps_each_toggle() {
     // The chosen workspace reads directly, with no `global_file`.
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         (
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
@@ -3995,14 +4036,17 @@ fn the_chip_answer_keeps_each_toggle() {
 #[test]
 fn a_twice_toggled_row_keeps_its_mark_against_an_answer_omitting_it() {
     // The chosen workspace reads directly, with no `global_file`.
-    let (mut app, hub) = scripted_remote(vec![(
-        "configure".to_owned(),
-        json!({"operation": "settings", "workspace": "/hub"}),
-        Ok(json!({"rows": [
-            {"key": "scoped_models", "shown": "value", "value": "[\"acme/m1\"]",
-             "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-        ]})),
-    )]);
+    let (mut app, hub) = scripted_remote(vec![
+        pending(),
+        (
+            "configure".to_owned(),
+            json!({"operation": "settings", "workspace": "/hub"}),
+            Ok(json!({"rows": [
+                {"key": "scoped_models", "shown": "value", "value": "[\"acme/m1\"]",
+                 "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+            ]})),
+        ),
+    ]);
     app.on_models(Ok(three()));
     app.model_picker.scoped = vec!["acme/m2".to_owned()];
     // The remote home opens with the workspace picker showing; choosing
@@ -4030,6 +4074,7 @@ fn a_failed_chip_read_keeps_the_placeholders_marks() {
     // The chosen workspace reads directly, with no `global_file`;
     // the save writes the marked list, here empty.
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         chip_rejection("invalid_arguments", "bad settings"),
         (
             "configure".to_owned(),
@@ -4070,6 +4115,7 @@ fn a_catalogue_answer_after_the_toggle_keeps_it_by_reference() {
     // link-up choice re-reads them at once at the new workspace: the
     // placeholder survives both reads.
     let (app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_settings_scoped("[\"acme/m2\"]"),
         chip_settings_scoped_at("/hub", "[\"acme/m2\"]"),
@@ -4108,6 +4154,7 @@ fn a_catalogue_answer_after_the_toggle_keeps_it_by_reference() {
 fn a_mark_cell_click_joins_the_toggled_set() {
     // The chosen workspace reads directly, with no `global_file`.
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         (
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
