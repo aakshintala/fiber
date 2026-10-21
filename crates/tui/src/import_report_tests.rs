@@ -5,10 +5,9 @@
 //! with both counts and no notice rows; scrolled to the bottom the last
 //! row and the footer show; Esc closes it with no notices left behind.
 
-use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 
-use crate::app::commands::commands_testkit::{attached, enter, now, sent, session_line};
+use crate::app::commands::commands_testkit::{attached, enter, now, painted, sent, session_line};
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::link::Line;
@@ -37,45 +36,6 @@ fn big_result() -> Value {
     })
 }
 
-/// `app` painted whole on an 80x24 in-memory screen.
-fn painted(app: &mut App) -> crate::screen::Screen<TestBackend> {
-    painted_sized(app, 80, 24)
-}
-
-/// `app` painted whole on a `width` by `height` in-memory screen; the
-/// app is resized to match first, so paging and framing agree.
-fn painted_sized(app: &mut App, width: u16, height: u16) -> crate::screen::Screen<TestBackend> {
-    app.set_size(width, height);
-    let vars = [("COLORTERM".to_owned(), "truecolor".to_owned())];
-    let (look, _) = crate::look::Look::new(crate::ThemeSetting::Follow, &|name| {
-        vars.iter()
-            .find(|(set, _)| set == name)
-            .map(|(_, value)| value.clone())
-    });
-    let mut screen = crate::screen::Screen::new(TestBackend::new(width, height), width, height)
-        .expect("a screen");
-    screen.set_look(look);
-    screen
-        .draw_with(app, None, crate::view::render)
-        .expect("a draw");
-    screen
-}
-
-/// A painted screen's text, one row per line.
-fn painted_text(screen: &crate::screen::Screen<TestBackend>) -> String {
-    let buf = screen.backend().buffer();
-    (0..buf.area.height)
-        .map(|y| {
-            (0..buf.area.width)
-                .map(|x| buf[(x, y)].symbol().to_owned())
-                .collect::<String>()
-                .trim_end()
-                .to_owned()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 #[test]
 fn an_accepted_import_with_120_lines_opens_one_report_and_adds_no_notices() {
     let mut app = attached();
@@ -94,7 +54,7 @@ fn an_accepted_import_with_120_lines_opens_one_report_and_adds_no_notices() {
         app.notices().is_empty(),
         "an accepted import adds no notices"
     );
-    let text = painted_text(&painted(&mut app));
+    let text = painted(&mut app, 80, 24).0;
     assert!(
         text.contains("Imported from Codex"),
         "the report names the source:\n{text}"
@@ -104,9 +64,7 @@ fn an_accepted_import_with_120_lines_opens_one_report_and_adds_no_notices() {
         "the copied section counts its items:\n{text}"
     );
     insta::assert_snapshot!("import_report_120_lines", text);
-    // One tall paint shows the whole overlay with both counts.
-    app.set_size(80, 140);
-    let whole = painted_text(&painted_sized(&mut app, 80, 140));
+    let whole = painted(&mut app, 80, 140).0;
     assert!(
         whole.contains("Left behind · 60"),
         "the left-behind section counts its items:\n{whole}"
@@ -121,7 +79,7 @@ fn an_accepted_import_with_120_lines_opens_one_report_and_adds_no_notices() {
     for _ in 0..30 {
         assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
     }
-    let bottom = painted_text(&painted(&mut app));
+    let bottom = painted(&mut app, 80, 24).0;
     assert!(
         bottom.contains("left-60.json"),
         "the last left-behind row shows at the bottom:\n{bottom}"
@@ -136,7 +94,7 @@ fn an_accepted_import_with_120_lines_opens_one_report_and_adds_no_notices() {
         app.notices().is_empty(),
         "closing the report leaves no notices"
     );
-    let closed = painted_text(&painted(&mut app));
+    let closed = painted(&mut app, 80, 24).0;
     assert!(
         !closed.contains("Imported from Codex"),
         "Esc closes the report:\n{closed}"
@@ -367,9 +325,8 @@ fn the_report_close_click_closes_the_report() {
     let mut app = attached();
     app.set_size(80, 24);
     open_small_report(&mut app);
-    let screen = painted(&mut app);
-    let close = screen
-        .targets()
+    let (_, targets) = painted(&mut app, 80, 24);
+    let close = targets
         .iter()
         .find(|target| target.id == TargetId::CloseOverlay)
         .expect("the report draws its ✕")
@@ -377,7 +334,7 @@ fn the_report_close_click_closes_the_report() {
     assert_eq!(app.on_click(close), Effect::None);
     assert!(app.import_report().is_none());
     assert!(app.notices().is_empty());
-    let closed = painted_text(&painted(&mut app));
+    let closed = painted(&mut app, 80, 24).0;
     assert!(!closed.contains("Copied · 20"), "{closed}");
 }
 
@@ -387,14 +344,12 @@ fn home_paints_the_report_with_both_counts_and_a_swallow_target() {
     use crate::mouse::TargetId;
     let mut app = home_app();
     open_direct(&mut app, Some("codex"));
-    let screen = painted(&mut app);
-    let shown = painted_text(&screen);
+    let (shown, targets) = painted(&mut app, 80, 24);
     assert!(shown.contains("Imported from Codex"), "{shown}");
     assert!(shown.contains("Copied · 20"), "{shown}");
     assert!(shown.contains("Imported items apply"), "{shown}");
     assert!(
-        screen
-            .targets()
+        targets
             .iter()
             .any(|target| target.id == TargetId::Home(Spot::Question)),
         "clicks on the report stay with the report:\n{shown}"

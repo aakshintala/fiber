@@ -396,6 +396,15 @@ impl App {
     /// then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
+        // The import report owns its keys while open, ahead of every
+        // other key path: Esc closes it, arrows and pages scroll it,
+        // Ctrl+C passes through to quit, and anything else is
+        // swallowed so nothing reaches the draft, list or conversation
+        // behind it. It runs ahead of the anchor reset, so report
+        // keys never discard the conversation's held position.
+        if let Some(effect) = self.report_key(&key) {
+            return effect;
+        }
         if matches!(
             key,
             Key::PageUp
@@ -410,14 +419,6 @@ impl App {
                 | Key::CtrlR
         ) {
             self.screen.pages_mut().clear_anchor();
-        }
-        // The import report owns its keys while open, ahead of every
-        // other key path: Esc closes it, arrows and pages scroll it,
-        // Ctrl+C passes through to quit, and anything else is
-        // swallowed so nothing reaches the draft, list or conversation
-        // behind it.
-        if let Some(effect) = self.report_key(&key) {
-            return effect;
         }
         // The key map opens above the picker: Esc closes whatever is
         // on top, so its keys never reach the picker underneath.

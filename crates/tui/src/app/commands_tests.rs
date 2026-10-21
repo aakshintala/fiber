@@ -300,6 +300,58 @@ fn a_rejected_import_adds_one_notice_and_opens_no_report() {
 }
 
 #[test]
+fn report_keys_keep_the_held_conversation_position() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    // One durable row for the held anchor to name.
+    let held = Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(0)),
+        payload: json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "hi"}]}]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
+    assert!(app.on_line(held).is_empty());
+    app.screen.pages_mut().hold_anchor(
+        &contract::SessionId(SESSION.to_owned()),
+        contract::Seq(0),
+        0,
+    );
+    // The open report's keys scroll it without discarding the held
+    // position: the anchor reset runs only past the report's keys.
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let accepted = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha"],
+                    "skills": [],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert!(
+        app.screen.pages_mut().anchored_row().is_some(),
+        "report keys keep the held position"
+    );
+}
+
+#[test]
 fn a_rejected_import_keeps_the_existing_notice_path() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import vim"));

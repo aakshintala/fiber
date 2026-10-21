@@ -573,6 +573,32 @@ mod unit_tests {
     }
 
     #[test]
+    fn a_row_spanning_the_item_reason_boundary_counts_the_dropped_space_with_the_item() {
+        // The item's word runs past the row, so the middle row spans
+        // the `item: reason` boundary: the wrap drops the boundary's
+        // space, and the `WrapSpace` offset counts it on the item
+        // side. Without the offset the boundary moves one cell into
+        // the item, dimming its trailing space and shifting the
+        // reason's start.
+        let report = ImportReport::open(
+            None,
+            ImportedNames::default(),
+            vec![LeftBehindEntry {
+                item: "abcdefghijklmnopqrstuv".to_owned(),
+                reason: "why not".to_owned(),
+            }],
+        );
+        let rows = report.rows(14);
+        assert_eq!(rows.len(), 6);
+        let row = &rows[4];
+        assert_eq!(row.spans.len(), 2);
+        assert_eq!(row.spans[0].content, "opqrstuv: ");
+        assert_eq!(row.spans[0].style, Style::new());
+        assert_eq!(row.spans[1].content, "why");
+        assert_eq!(row.spans[1].style, Style::new().add_modifier(Modifier::DIM));
+    }
+
+    #[test]
     fn scrolling_by_rows_holds_at_both_edges() {
         let report = full();
         // Fourteen body rows in a two-row frame scroll twelve.

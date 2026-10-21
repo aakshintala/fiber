@@ -30,7 +30,7 @@ pub(super) enum Ask {
     Delete(SessionId),
     /// An `import` from the first-run offer, carrying its source: a hub command answered
     /// once, never resent, never on a session line.
-    Import { source: Option<String> },
+    Import { source: String },
 }
 
 /// The foot's question: deleting an exited session through the hub.
@@ -401,14 +401,10 @@ impl App {
             home.questions.asks.insert(
                 command.clone(),
                 Ask::Import {
-                    source: Some(source.to_owned()),
+                    source: source.to_owned(),
                 },
             );
         }
-        // The source rides beside the pending entry under the command's
-        // id, so the accepted answer's report names it.
-        self.import_sources
-            .insert(command.clone(), Some(source.to_owned()));
         match self
             .outbox
             .send(command, Kind::Command, Draft::default(), line)
@@ -488,10 +484,6 @@ impl App {
             Some(Ask::Import { source }) => source,
             _ => return None,
         };
-        // The answer folds the source entry on every path: accepted
-        // consumes it into the report, any other fold drops it, so a
-        // late answer finds nothing.
-        self.import_sources.remove(id);
         if !accepted {
             // The hub refused the offer's import: the feed and recent
             // rows' notice, with the offer staying open for a retry.
@@ -508,7 +500,7 @@ impl App {
             self.notices.push(&code, refusal(payload));
             return Some(Vec::new());
         };
-        self.import_answered(source, &accepted);
+        self.import_answered(Some(source), &accepted);
         self.close_import_prompt();
         Some(Vec::new())
     }
