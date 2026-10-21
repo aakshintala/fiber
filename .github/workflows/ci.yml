@@ -234,9 +234,9 @@ jobs:
       matrix:
         runner: [ubuntu-24.04]
     runs-on: ${{ matrix.runner }}
-    # Cold 15m38s with the 1.99.1 toolchain (run 39264236189 on #2815, which
-    # missed every cache); the bound is twice that, rounded up (docs/ci.md,
-    # "Job time limits").
+    # Cold 16m27s with the 1.99.1 toolchain (run 39564649711 on this PR,
+    # which missed every cache); the bound is twice that, rounded up
+    # (docs/ci.md, "Job time limits").
     timeout-minutes: 35
     env:
       BASE: ${{ needs.select.outputs.base }}
@@ -360,11 +360,10 @@ jobs:
       matrix:
         runner: [ubuntu-24.04-arm, macos-26]
     runs-on: ${{ matrix.runner }}
-    # Cold with the 1.99.1 toolchain (run 39264236189 on #2815, which missed
-    # every cache): Linux arm64 12m55s; macOS over 25m26s, cancelled in
-    # `cargo test --doc`. Each bound is twice its cold figure, rounded up
-    # (docs/ci.md, "Job time limits").
-    timeout-minutes: ${{ matrix.runner == 'macos-26' && 60 || 30 }}
+    # Cold with the 1.99.1 toolchain (run 39564649711 on this PR, which
+    # missed every cache): Linux arm64 14m46s; macOS 30m38s. Each bound is
+    # twice its cold figure, rounded up (docs/ci.md, "Job time limits").
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 62 || 30 }}
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps: *test-steps
