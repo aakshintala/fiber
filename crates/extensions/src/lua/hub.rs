@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use contract::RequestId;
 use contract::clock::{Clock, Wake};
 use contract::diag::DebugLog;
+use contract::events::{Event, Notice};
 use contract::inbox::Delivery;
 use contract::tool::InnerCalls;
 use serde_json::Value;
@@ -26,12 +27,13 @@ use serde_json::Value;
 use crate::Error;
 use crate::host::Reply;
 use crate::host::script::HostScript;
+use contract::ErrorCode;
 
 use super::asks::PendingAsk;
 use super::{ENTRY, GRACE, LOAD_TIMEOUT, Target, expired, timeout_ms};
 
 pub(super) use super::declared::CallbackTimeouts;
-pub(crate) use super::declared::{DeclaredHooks, HookPhase};
+pub(crate) use super::declared::{DeclaredHooks, DeclaredWatchers, HookPhase};
 
 pub(super) use super::errors::{StopReason, not_registered, stopped, timed_out};
 
@@ -249,6 +251,39 @@ impl Hub {
         self.notify();
     }
 
+    /// Records a watcher delivery's end: a failure gives a `notice` naming
+    /// the extension through the late-bound emitter (dropped after the
+    /// seal, when the drain collects failures itself instead), and the
+    /// watcher's busy bit clears. The result is dropped unless the drain
+    /// keeps it to collect: a mid-session delivery has no waiter.
+    pub(super) fn finish_watcher(
+        &self,
+        name: &str,
+        id: u64,
+        index: usize,
+        result: Result<Value, Error>,
+    ) {
+        if let Err(e) = &result {
+            self.emit(Event::Notice(Notice {
+                code: ErrorCode::ExtensionFailed,
+                message: format!(
+                    "The `watcher:{index}` watcher failed, so its event was dropped: {e}"
+                ),
+                extension: Some(name.to_owned()),
+            }));
+        }
+        let mut shared = self.lock();
+        if shared.abandon.as_ref().is_some_and(|watch| watch.id == id) {
+            shared.abandon = None;
+        }
+        shared.watcher_busy.remove(&index);
+        if !shared.keep_watcher_done {
+            shared.calls.remove(&id);
+        }
+        drop(shared);
+        self.notify();
+    }
+
     /// Hands the call `id`'s parked callback the answer to what it waits on.
     /// A stopped extension's thread takes no more replies, so the reply is
     /// dropped, releasing a credential lock in it.
@@ -426,6 +461,15 @@ pub(crate) struct Shared {
     /// Set by `abandon`: a leaked thread of this VM may still run Lua, and
     /// its `host.delegate` is refused from here on.
     pub(super) abandoned: bool,
+    /// The watchers with a delivery queued or running, by watcher index:
+    /// an ephemeral offer skips while its watcher is here. Set when the
+    /// thread starts or resumes the delivery, cleared when it finishes.
+    /// Durable offers always queue, whatever is here.
+    pub(super) watcher_busy: HashSet<usize>,
+    /// While set, a finished watcher delivery keeps its result for the
+    /// drain to collect instead of dropping it. Only the session-end drain
+    /// sets it, when no mid-session delivery waits on anything.
+    pub(super) keep_watcher_done: bool,
 }
 
 /// What a waiter drops after it releases the hub lock: the deliveries
@@ -541,10 +585,13 @@ pub(super) enum Next {
     Sleep(Option<Instant>),
 }
 
-/// A running hook or command answers at its deadline; every other target
+/// A running hook, watcher or command answers at its deadline; every other target
 /// waits out its grace.
 fn answers_at_deadline(target: &Target) -> bool {
-    matches!(target, Target::Hook { .. } | Target::Command(_))
+    matches!(
+        target,
+        Target::Hook { .. } | Target::Watcher { .. } | Target::Command(_)
+    )
 }
 
 impl Shared {

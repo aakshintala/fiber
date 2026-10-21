@@ -49,14 +49,15 @@ pub(super) const CHECK_EVERY: u32 = 1000;
 
 /// The Lua half of the host's globals: `coroutine.wrap` over the armed
 /// `coroutine.create`, `require`, `fiber.command`, `fiber.provider`,
-/// `fiber.hook`, `fiber.tool` and `fiber.search_backend`, which fill the tables the prelude returns. Lua's own `wrap`
+/// `fiber.hook`, `fiber.watch`, `fiber.tool` and `fiber.search_backend`, which fill the tables the prelude returns. Lua's own `wrap`
 /// is a separate C function that would make an unarmed coroutine.
 // A callback's timeout is in milliseconds (docs/extensions.md, "How an
 // extension runs"). A hook's phase and `on_failure` are docs/extensions.md,
 // "When several hooks share a point" and "When a hook fails".
 pub(super) const PRELUDE: &str = r#"
 local create, load_module, rethrow_panic, loading = ...
-local commands, providers, hooks, problems, violations = {}, {}, {}, {}, {}
+local commands, providers, hooks, watchers, problems, violations = {}, {}, {}, {}, {}, {}
+local registered_files = {}
 local registered_files = {}
 
 local function refuse_registration(message, level)
@@ -180,6 +181,40 @@ local function hook(point, spec)
   list[#list + 1] = { phase = phase, on_failure = spec.on_failure, timeout = spec.timeout, run = spec.run }
 end
 
+-- A watcher that does not register leaves a problem for Fiber's notice, and the entry
+-- script goes on. The id in the problem is the watcher's place among the
+-- extension's registered watchers, from 0.
+local function watch(kinds, spec)
+  init_registration('watch')
+  local id = #watchers
+  local function refuse(why)
+    problems[#problems + 1] = "`watcher:" .. id .. "` watcher not registered: " .. why
+  end
+  if type(kinds) ~= "table" then
+    return refuse("`kinds` must be a list of event kinds")
+  end
+  local wanted = {}
+  for i = 1, #kinds do
+    local kind = kinds[i]
+    if type(kind) ~= "string" or kind == "" then
+      return refuse("`kinds` must be a list of event kinds")
+    end
+    wanted[#wanted + 1] = kind
+  end
+  if #wanted == 0 then
+    return refuse("`kinds` must be a list of event kinds")
+  end
+  if type(spec) ~= "table" then
+    return refuse("it takes a table of `timeout` and `run`")
+  end
+  if spec.timeout == nil then return refuse("missing `timeout`") end
+  if math.type(spec.timeout) ~= "integer" or spec.timeout <= 0 then
+    return refuse("`timeout` must be a whole number of milliseconds above 0")
+  end
+  if type(spec.run) ~= "function" then return refuse("`run` must be a function") end
+  watchers[#watchers + 1] = { kinds = wanted, timeout = spec.timeout, run = spec.run }
+end
+
 fiber = {
   command = function(name, spec)
     init_registration('command')
@@ -237,9 +272,10 @@ fiber = {
     providers[name] = registered
   end,
   hook = hook,
+  watch = watch,
 }
 
-return commands, providers, hooks, problems, violations
+return commands, providers, hooks, watchers, problems, violations
 "#;
 
 /// A Lua extension in a session. Creating one runs no Lua: the VM and its
@@ -609,6 +645,12 @@ impl LuaExtension {
         self.registered(|timeouts| timeouts.hooks.clone())
     }
 
+    /// Every watcher the entry script registered, and why each one it
+    /// tried and could not register was refused. Starts the extension.
+    pub(crate) fn watchers(&self) -> Result<DeclaredWatchers, Error> {
+        self.registered(|timeouts| timeouts.watchers.clone())
+    }
+
     /// Runs the hook `index` registered at `point`, in registration order
     /// from 0, passing `arg`, and returns what its `run` returned as JSON.
     #[cfg(test)]
@@ -900,6 +942,11 @@ pub(crate) enum Target {
         /// Its place among the hooks registered there, from 0.
         index: usize,
     },
+    /// A watcher `fiber.watch` registered.
+    Watcher {
+        /// Its place among the extension's watchers, from 0.
+        index: usize,
+    },
     /// A timer `host.after` or `host.every` set, firing on the hub's
     /// clock in the gaps of the session's stream.
     Timer {
@@ -956,7 +1003,7 @@ pub(crate) fn http_observation(hub: &Hub, target: &Target) -> Option<host::HttpO
     })
 }
 /// The callback's name as an error names it: a command's name,
-/// `<provider>.<function>`, a hook's point, a tool's name, a search
+/// `<provider>.<function>`, a hook's point, `watcher:<index>`, a tool's name, a search
 /// backend's name, or
 /// `<tool>.effects`.
 impl std::fmt::Display for Target {
@@ -965,6 +1012,7 @@ impl std::fmt::Display for Target {
             Self::Command(name) => f.write_str(name),
             Self::Provider { name, function, .. } => write!(f, "{name}.{function}"),
             Self::Hook { point, .. } => f.write_str(point),
+            Self::Watcher { index } => write!(f, "watcher:{index}"),
             Self::Timer { id } => write!(f, "timer {id}"),
             Self::Tool(name) => f.write_str(name),
             Self::Search(name) => f.write_str(name),
@@ -1001,7 +1049,7 @@ pub(crate) use host_calls::{
 };
 pub(crate) use hub::Hub;
 use hub::{CallbackTimeouts, Gate, Next, Phase, Shared};
-pub(crate) use hub::{DeclaredHooks, HookPhase};
+pub(crate) use hub::{DeclaredHooks, DeclaredWatchers, HookPhase};
 #[cfg(test)]
 pub(crate) use schedule::fail_next_spawn_for;
 pub(crate) use tool::{DeclaredTool, effects_from, urls_from};
