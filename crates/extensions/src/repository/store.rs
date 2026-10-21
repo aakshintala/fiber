@@ -1,12 +1,13 @@
 //! Approvals and pinned copies in Fiber home (`docs/state.md`, "What each
 //! part holds"): `projects/<key>/approvals/<hash>` for an extension or a
-//! hook, `approvals/<hash>` for an MCP server, and `pinned/<hash>/` for the
-//! copy. The approval file is the last thing an approval writes, so an
+//! hook, `approvals/<hash>` for an MCP server, `projects/<key>/servers/<hash>`
+//! for each project that approved that server copy, and `pinned/<hash>/`
+//! for the copy. The approval file is the last thing an approval writes, so an
 //! approval never lacks its copy; a kill before it leaves an unfinished
 //! copy, which the next approval removes and builds again. `fiber sessions
 //! prune` collects a finished copy only when at least one project's
-//! `approvals/<hash>` names it and no per-machine `approvals/<hash>` does;
-//! a copy with no approval record anywhere is kept.
+//! `approvals/<hash>` or `servers/<hash>` names it; a copy with no project
+//! record anywhere is kept.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -125,7 +126,8 @@ pub struct KeptCopy {
     pub hash: String,
     /// The copy's directory.
     pub dir: PathBuf,
-    /// The project keys with `projects/<key>/approvals/<hash>`, sorted.
+    /// The project keys with `projects/<key>/approvals/<hash>` or
+    /// `projects/<key>/servers/<hash>`, sorted.
     pub owners: Vec<String>,
     /// Whether the per-machine `approvals/<hash>` names it.
     pub machine_wide: bool,
@@ -308,8 +310,9 @@ impl Store {
     }
 
     /// Every `pinned/<hash>` that has an approval record: `owners` are the
-    /// project keys with `projects/<key>/approvals/<hash>`, sorted, and
-    /// `machine_wide` is the per-machine `approvals/<hash>`. An approval
+    /// project keys with `projects/<key>/approvals/<hash>` or
+    /// `projects/<key>/servers/<hash>`, sorted, and `machine_wide` is the
+    /// per-machine `approvals/<hash>`. An approval
     /// without its copy is not listed. Takes no lock. Any listing error
     /// other than `NotFound` is `Err` naming the path.
     pub fn kept_copies(home: &Path) -> Result<Vec<KeptCopy>, Error> {
@@ -343,6 +346,23 @@ impl Store {
                         }
                         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                         Err(e) => return Err(io_error(&approvals)(e)),
+                    }
+                    // A server copy's project records live beside the
+                    // extension and hook approvals: each names one more
+                    // project that approved the copy.
+                    let servers = path.join("servers");
+                    match fs::read_dir(&servers) {
+                        Ok(records) => {
+                            for record in records {
+                                let record = record.map_err(io_error(&servers))?;
+                                let name = record.file_name().to_string_lossy().into_owned();
+                                if is_hash(&name) {
+                                    owners.entry(name).or_default().push(key.clone());
+                                }
+                            }
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(io_error(&servers)(e)),
                     }
                 }
             }

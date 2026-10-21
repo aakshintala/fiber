@@ -534,7 +534,8 @@ fn kept_copies_lists_each_hash_once_with_sorted_owners() {
     assert!(!hook_entry.machine_wide);
     assert_eq!(hook_entry.dir, repo.home().join("pinned").join(&digest));
     let server_entry = kept.iter().find(|k| k.hash == server_hash).unwrap();
-    assert!(server_entry.owners.is_empty());
+    // The approving project also holds a server record for the copy.
+    assert_eq!(server_entry.owners, vec!["prune-a".to_owned()]);
     assert!(server_entry.machine_wide);
     // Sorted by hash.
     let mut sorted = hashes.clone();
@@ -838,6 +839,53 @@ fn never_removes_the_server_project_record_and_writes_no_new_one() {
             .is_err()
     );
     assert!(repo.home().join("approvals").join(&digest).is_file());
+}
+
+#[test]
+fn kept_copies_lists_server_project_records_as_owners() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, "prune-a").approve(&item, &digest).unwrap();
+    // The same server copy approved by a second project: both name an
+    // owner, alongside the per-machine record.
+    store(&repo, "prune-b").approve(&item, &digest).unwrap();
+    let kept = Store::kept_copies(&repo.home()).unwrap();
+    let entry = kept.iter().find(|k| k.hash == digest).unwrap();
+    assert_eq!(
+        entry.owners,
+        vec!["prune-a".to_owned(), "prune-b".to_owned()]
+    );
+    assert!(entry.machine_wide);
+}
+
+#[test]
+fn kept_copies_ignores_non_hash_names_in_the_servers_dir() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, KEY).approve(&item, &digest).unwrap();
+    // Names that are not 64 lowercase hex name no owner: one just short
+    // of the hash length, one of the right length in the wrong case.
+    let servers = repo.home().join("projects").join(KEY).join("servers");
+    fs::write(servers.join("a".repeat(63)), "{}").unwrap();
+    fs::write(servers.join("B".repeat(64)), "{}").unwrap();
+    let kept = Store::kept_copies(&repo.home()).unwrap();
+    let entry = kept.iter().find(|k| k.hash == digest).unwrap();
+    assert_eq!(entry.owners, vec![KEY.to_owned()]);
+    assert_eq!(kept.len(), 1);
+}
+
+#[test]
+fn kept_copies_fails_closed_on_an_unreadable_servers_dir() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let digest = hashed(&item);
+    store(&repo, KEY).approve(&item, &digest).unwrap();
+    let servers = repo.home().join("projects").join(KEY).join("servers");
+    let _guard = RestoreMode::set(&servers, 0o000);
+    let err = Store::kept_copies(&repo.home()).unwrap_err();
+    assert!(err.to_string().contains("servers"), "{err}");
 }
 
 #[test]
