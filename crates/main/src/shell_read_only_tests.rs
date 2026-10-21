@@ -4,6 +4,7 @@
 use super::ShellReadOnly;
 use super::{refresh_shell_read_only, shell_read_only};
 use crate::test_support::Rig;
+use fakes::Deadline;
 
 fn read(rig: &Rig, overrides: &[&str]) -> Vec<(String, Vec<String>)> {
     let config = rig.config(overrides.iter().copied());
@@ -241,7 +242,7 @@ fn refresh_recovers_a_poisoned_lock() {
     let victim = handle.clone();
     let poisoned = fakes::within(
         "shell.read_only lock poisoned",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             std::thread::spawn(move || {
                 let _guard = victim.lock().unwrap();

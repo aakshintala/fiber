@@ -354,12 +354,16 @@ fn an_open_reads_and_finishes_once() {
     let call = provider::openai_completions::Completions::new(endpoint)
         .request(&harness::request())
         .observed(observation(&log, &clock, 1).with_model("m".to_owned()));
-    let text = fakes::within("the open read", harness::DEADLINE, move || {
-        let mut body = call.open().expect("the open sends");
-        let mut text = String::new();
-        std::io::Read::read_to_string(&mut body, &mut text).unwrap();
-        text
-    });
+    let text = fakes::within(
+        "the open read",
+        Deadline::after(harness::DEADLINE),
+        move || {
+            let mut body = call.open().expect("the open sends");
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut body, &mut text).unwrap();
+            text
+        },
+    );
     assert!(!text.is_empty());
     assert!(server.await_requests(1, Deadline::after(harness::DEADLINE)));
     let lines = log.lines();

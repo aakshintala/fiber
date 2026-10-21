@@ -422,7 +422,7 @@ fn a_failed_append_returns_before_calling_the_ack() {
             "notes append failure child",
             child,
             b"trap '' XFSZ\nexec \"$@\"\n",
-            DEADLINE,
+            Deadline::after(DEADLINE),
         );
         assert!(
             output.status.success(),

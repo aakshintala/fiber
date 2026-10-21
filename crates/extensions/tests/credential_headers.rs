@@ -53,15 +53,19 @@ fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaPr
 
 #[track_caller]
 fn signer_of(provider: &Arc<LuaProvider>) -> Arc<dyn Signer> {
-    fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(provider);
-        move || {
-            provider
-                .signer(pair(provider.name(), "default"))
-                .unwrap()
-                .unwrap()
-        }
-    })
+    fakes::within(
+        "provider.signer",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(provider);
+            move || {
+                provider
+                    .signer(pair(provider.name(), "default"))
+                    .unwrap()
+                    .unwrap()
+            }
+        },
+    )
 }
 
 /// A row of the clash table: a header `credential()` returns, the headers
@@ -436,10 +440,14 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     let provider = LuaProvider::new(extension, "p");
     let signer = signer_of(&provider);
     // A token fetched and replaced before any sign leaves no trace.
-    let unused = fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(&provider);
-        move || provider.token(&pair(provider.name(), "default"))
-    })
+    let unused = fakes::within(
+        "provider.token",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.token(&pair(provider.name(), "default"))
+        },
+    )
     .unwrap();
     assert_eq!(unused.expose(), "tok-unused");
     // No code under test waits on the clock here; the token call returned
@@ -1091,15 +1099,23 @@ fn a_held_fetch_never_holds_the_token_lock() {
         "the first fetch reaches the server"
     );
     // The fetch is held, yet the cache reads return at once.
-    fakes::within("provider.cached_token", fakes::MUST_SUCCEED_WITHIN, {
-        let provider = Arc::clone(&provider);
-        move || provider.cached_token(&pair)
-    });
+    fakes::within(
+        "provider.cached_token",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let provider = Arc::clone(&provider);
+            move || provider.cached_token(&pair)
+        },
+    );
     let signer = signer_of(&provider);
-    fakes::within("signer.credentials", fakes::MUST_SUCCEED_WITHIN, {
-        let signer = Arc::clone(&signer);
-        move || signer.credentials()
-    });
+    fakes::within(
+        "signer.credentials",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let signer = Arc::clone(&signer);
+            move || signer.credentials()
+        },
+    );
     tokens.release();
     let token = Deadline::after(WAIT)
         .recv(&done_rx)

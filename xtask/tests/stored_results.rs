@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use fakes::{TempDir, finished};
+use fakes::{Deadline, TempDir, finished};
 
 /// How long a test waits for one child, in real time; a passing run never
 /// waits on it, it only bounds a hang.
@@ -31,7 +31,7 @@ fn run(what: &str, mut command: Command) -> (Option<i32>, String) {
         .process_group(0)
         .spawn()
         .unwrap();
-    let output = finished(what, child, &[], CHILD_WITHIN);
+    let output = finished(what, child, &[], Deadline::after(CHILD_WITHIN));
     let text =
         String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap();
     (output.status.code(), text)

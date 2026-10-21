@@ -285,7 +285,7 @@ fn many_connections_leave_nothing_held() {
             }
             drop(client);
             let socket = socket.clone();
-            fakes::within("forty connections", DEADLINE, move || {
+            fakes::within("forty connections", Deadline::after(DEADLINE), move || {
                 for i in 0..40 {
                     let client = Client::connect(&socket).unwrap();
                     client
@@ -2340,18 +2340,22 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     // The ack precedes the connection's own `clients` line, so the test
     // reads that line before quiesce: one still unwritten would be taken
     // for a line that followed quiesce.
-    let lines = fakes::within("the joining client's clients line", DEADLINE, move || {
-        let wait = Deadline::after(DEADLINE);
-        loop {
-            let line = wait
-                .recv(&lines)
-                .expect("the joining client's clients line arrives");
-            if line.kind == "clients" {
-                break;
+    let lines = fakes::within(
+        "the joining client's clients line",
+        Deadline::after(DEADLINE),
+        move || {
+            let wait = Deadline::after(DEADLINE);
+            loop {
+                let line = wait
+                    .recv(&lines)
+                    .expect("the joining client's clients line arrives");
+                if line.kind == "clients" {
+                    break;
+                }
             }
-        }
-        lines
-    });
+            lines
+        },
+    );
     opened.session.quiesce();
     drop(connected);
     wait_idle(&gate);
@@ -2360,7 +2364,7 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     late.send(&subscribe_line("c_late", "full")).unwrap();
     let _ack = recv(&late);
     opened.log.append(&notice(), None, None).unwrap();
-    let _lines = fakes::within("the notice", DEADLINE, move || {
+    let _lines = fakes::within("the notice", Deadline::after(DEADLINE), move || {
         let wait = Deadline::after(DEADLINE);
         loop {
             let line = wait.recv(&lines).expect("the notice arrives");

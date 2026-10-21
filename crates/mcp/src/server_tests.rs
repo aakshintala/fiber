@@ -107,16 +107,17 @@ fn a_call_round_trips() {
     // Calling code that blocks is a wait too (`docs/testing.md`, "Waits and
     // timeouts"): the call runs on a thread and its result is received
     // with a deadline naming the wait.
-    let (answer, opened) = fakes::within("the call to `echo`", WITHIN, move || {
-        let answer = call_tool(
-            &opened.server,
-            "echo",
-            json!({"text": "hi"}),
-            Duration::from_secs(30),
-            &fakes::CancelToken::new(),
-        );
-        (answer, opened)
-    });
+    let (answer, opened) =
+        fakes::within("the call to `echo`", Deadline::after(WITHIN), move || {
+            let answer = call_tool(
+                &opened.server,
+                "echo",
+                json!({"text": "hi"}),
+                Duration::from_secs(30),
+                &fakes::CancelToken::new(),
+            );
+            (answer, opened)
+        });
     assert_eq!(
         answer.expect("the call answers"),
         json!({"content": [{"type": "text", "text": "hi"}]})
@@ -315,15 +316,19 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
     // handles it; the waiter wrote `notifications/cancelled` before it
     // answered, so the answer to a later call proves it is logged.
     let after = std::sync::Arc::clone(&server);
-    let answer = fakes::within("a call after the cancel", WITHIN, move || {
-        call_tool(
-            &after,
-            "echo",
-            json!({}),
-            Duration::from_secs(30),
-            &fakes::CancelToken::new(),
-        )
-    });
+    let answer = fakes::within(
+        "a call after the cancel",
+        Deadline::after(WITHIN),
+        move || {
+            call_tool(
+                &after,
+                "echo",
+                json!({}),
+                Duration::from_secs(30),
+                &fakes::CancelToken::new(),
+            )
+        },
+    );
     assert_eq!(answer.expect("echo answers"), json!({"content": []}));
     let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
     let cancelled = log
@@ -450,15 +455,19 @@ fn a_server_killed_mid_call_is_gone() {
     fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
     await_gone(&shared);
     // Gone is set, so the call answers without parking on the clock.
-    let answer = fakes::within("a call to a gone server", WITHIN, move || {
-        call_tool(
-            &opened.server,
-            "hang",
-            json!({}),
-            Duration::from_secs(1),
-            &fakes::CancelToken::new(),
-        )
-    });
+    let answer = fakes::within(
+        "a call to a gone server",
+        Deadline::after(WITHIN),
+        move || {
+            call_tool(
+                &opened.server,
+                "hang",
+                json!({}),
+                Duration::from_secs(1),
+                &fakes::CancelToken::new(),
+            )
+        },
+    );
     assert_eq!(answer, Err(CallError::Gone));
 }
 
@@ -470,7 +479,7 @@ fn garbage_on_stdout_is_ignored() {
     let opened = setup.start_expect(Duration::from_secs(5));
     let (answer, opened) = fakes::within(
         "the call to `echo` past garbage on stdout",
-        WITHIN,
+        Deadline::after(WITHIN),
         move || {
             let answer = call_tool(
                 &opened.server,
@@ -504,15 +513,19 @@ fn closing_stdin_lets_the_server_exit_on_eof() {
     opened.server.shutdown();
     await_gone(&shared);
     // Gone is set, so the call answers without parking on the clock.
-    let answer = fakes::within("a call to a gone server", WITHIN, move || {
-        call_tool(
-            &opened.server,
-            "hang",
-            json!({}),
-            Duration::from_secs(1),
-            &fakes::CancelToken::new(),
-        )
-    });
+    let answer = fakes::within(
+        "a call to a gone server",
+        Deadline::after(WITHIN),
+        move || {
+            call_tool(
+                &opened.server,
+                "hang",
+                json!({}),
+                Duration::from_secs(1),
+                &fakes::CancelToken::new(),
+            )
+        },
+    );
     assert_eq!(answer, Err(CallError::Gone));
 }
 
@@ -528,9 +541,11 @@ fn dropping_the_server_reaps_the_child() {
         fakes::kill_pid(pid, "0").expect("probe"),
         "the server runs before the drop",
     );
-    fakes::within("the drop to kill and reap the server", WITHIN, move || {
-        drop(opened.server)
-    });
+    fakes::within(
+        "the drop to kill and reap the server",
+        Deadline::after(WITHIN),
+        move || drop(opened.server),
+    );
     assert!(
         !fakes::kill_pid(pid, "0").expect("probe"),
         "pid {pid} is still there after the drop"
@@ -547,16 +562,20 @@ fn server_requests_are_answered_ping_ok_and_unknown_32601() {
     // reader answers each one through the shared writer channel before it
     // reads the `initialize` reply, and `start` returns only after that
     // reply. So once `start` returns, the answers are already logged.
-    let (answer, opened) = fakes::within("a call after the server's requests", WITHIN, move || {
-        let answer = call_tool(
-            &opened.server,
-            "echo",
-            json!({}),
-            Duration::from_secs(30),
-            &fakes::CancelToken::new(),
-        );
-        (answer, opened)
-    });
+    let (answer, opened) = fakes::within(
+        "a call after the server's requests",
+        Deadline::after(WITHIN),
+        move || {
+            let answer = call_tool(
+                &opened.server,
+                "echo",
+                json!({}),
+                Duration::from_secs(30),
+                &fakes::CancelToken::new(),
+            );
+            (answer, opened)
+        },
+    );
     assert_eq!(answer.expect("echo answers"), json!({"content": []}));
     let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
     assert!(
@@ -631,16 +650,20 @@ fn elicitations_with_no_call_in_flight_are_declined_unlogged() {
     // The fixture prints `noise` before it reads anything, but the
     // answers reach `requests.log` through the writer thread: an echo
     // round trip proves every earlier line is logged.
-    let (echo, opened) = fakes::within("a call after the elicitations", WITHIN, move || {
-        let answer = call_tool(
-            &opened.server,
-            "echo",
-            json!({}),
-            Duration::from_secs(30),
-            &fakes::CancelToken::new(),
-        );
-        (answer, opened)
-    });
+    let (echo, opened) = fakes::within(
+        "a call after the elicitations",
+        Deadline::after(WITHIN),
+        move || {
+            let answer = call_tool(
+                &opened.server,
+                "echo",
+                json!({}),
+                Duration::from_secs(30),
+                &fakes::CancelToken::new(),
+            );
+            (answer, opened)
+        },
+    );
     echo.expect("echo answers");
     let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
     let declined = log
@@ -1002,14 +1025,19 @@ fn watch_reap_locks() -> mpsc::Receiver<&'static str> {
 #[track_caller]
 fn await_lock(locks: mpsc::Receiver<&'static str>, which: &'static str, wait: &Deadline) {
     let wait = *wait;
-    fakes::within("the reap to reach its lock", WITHIN, move || {
-        loop {
-            let reached = wait.recv_or_fail(&locks, &format!("the reap reached the {which} lock"));
-            if reached == which {
-                return;
+    fakes::within(
+        "the reap to reach its lock",
+        Deadline::after(WITHIN),
+        move || {
+            loop {
+                let reached =
+                    wait.recv_or_fail(&locks, &format!("the reap reached the {which} lock"));
+                if reached == which {
+                    return;
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 /// Pauses the next signaller at [`super::before_signal`]: `entered` hears
@@ -1368,9 +1396,11 @@ fn a_server_that_stops_reading_stdin_ends_every_call_gone() {
         });
     }
     drop(done);
-    let outputs = fakes::within("every wedged call to end", WITHIN, move || {
-        results.into_iter().collect::<Vec<_>>()
-    });
+    let outputs = fakes::within(
+        "every wedged call to end",
+        Deadline::after(WITHIN),
+        move || results.into_iter().collect::<Vec<_>>(),
+    );
     assert_eq!(outputs.len(), calls);
     for output in &outputs {
         assert_eq!(

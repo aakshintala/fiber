@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use crate::configure::Seam;
 use crate::test_support::{Rig, install_extension};
+use fakes::Deadline;
 
 /// One named wall-clock deadline for every blocking read: a refresh
 /// joins its discovery threads before answering (`docs/testing.md`,
@@ -349,7 +350,7 @@ fn hub_models_refresh_every_runs_the_refresh() {
     let workspace = rig.workspace.clone();
     let clock = fakes::clock::FakeClock::new();
     let wall_ms = contract::clock::wall_ms(clock.wall());
-    let catalogue = fakes::within("the every refresh", DEADLINE, move || {
+    let catalogue = fakes::within("the every refresh", Deadline::after(DEADLINE), move || {
         let seam = Seam::new(home);
         seam.configure(
             "models",
@@ -391,18 +392,22 @@ fn hub_models_refresh_stale_checks_the_age() {
     date_cache(&rig.home, "acme", Duration::from_secs(90), wall);
     let home = rig.home.clone();
     let workspace = rig.workspace.clone();
-    let catalogue = fakes::within("the fresh stale refresh", DEADLINE, move || {
-        let seam = Seam::new(home);
-        seam.configure(
-            "models",
-            json!({"workspace": workspace, "refresh": "stale"})
-                .as_object()
-                .unwrap(),
-            fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .unwrap()
-    });
+    let catalogue = fakes::within(
+        "the fresh stale refresh",
+        Deadline::after(DEADLINE),
+        move || {
+            let seam = Seam::new(home);
+            seam.configure(
+                "models",
+                json!({"workspace": workspace, "refresh": "stale"})
+                    .as_object()
+                    .unwrap(),
+                fakes::clock::FakeClock::new(),
+            )
+            .unwrap()
+            .unwrap()
+        },
+    );
     assert_eq!(references(&catalogue), ["acme/cached"]);
     assert!(
         server.requests().is_empty(),
@@ -412,7 +417,7 @@ fn hub_models_refresh_stale_checks_the_age() {
     date_cache(&rig.home, "acme", Duration::from_secs(25 * 60 * 60), wall);
     let home = rig.home.clone();
     let workspace = rig.workspace.clone();
-    let catalogue = fakes::within("the stale refresh", DEADLINE, move || {
+    let catalogue = fakes::within("the stale refresh", Deadline::after(DEADLINE), move || {
         let seam = Seam::new(home);
         seam.configure(
             "models",

@@ -52,7 +52,7 @@ fn a_failure_after_a_recorded_signal_reports_only_the_signal() {
     let out = fakes::rerun_within(
         &this("a_failure_after_a_recorded_signal_reports_only_the_signal"),
         &[(CHILD, "signal")],
-        RERUN_WITHIN,
+        Deadline::after(RERUN_WITHIN),
     );
     assert_eq!(out.status.code(), Some(143), "the signal's code wins");
     assert!(
@@ -74,7 +74,7 @@ fn a_failure_with_no_signal_is_reported() {
     let out = fakes::rerun_within(
         &this("a_failure_with_no_signal_is_reported"),
         &[(CHILD, "1")],
-        RERUN_WITHIN,
+        Deadline::after(RERUN_WITHIN),
     );
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -90,7 +90,7 @@ fn a_failure_with_no_signal_is_reported() {
 /// `report` returns.
 #[track_caller]
 fn report_child(signalled: bool) {
-    fakes::within("report_child", CHILD_DEADLINE, move || {
+    fakes::within("report_child", Deadline::after(CHILD_DEADLINE), move || {
         let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
         let signals = doors::Signals::install(clock, None).unwrap();
         let (tx, rx) = mpsc::channel();

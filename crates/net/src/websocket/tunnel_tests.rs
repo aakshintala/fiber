@@ -1,4 +1,5 @@
 use super::*;
+use fakes::Deadline;
 use std::io::Read;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
@@ -86,104 +87,121 @@ fn dial_distinguishes_a_timeout_from_other_connect_errors() {
 
 #[test]
 fn resolver_gets_connect_limit_and_its_answer_is_dialled() {
-    fakes::within("resolved connection", Duration::from_secs(5), || {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let recorder = Arc::new(Recording {
-            addr: listener.local_addr().unwrap(),
-            calls: Mutex::new(Vec::new()),
-        });
-        let mut via = via();
-        via.limits =
-            crate::Limits::new(Duration::from_millis(123), Duration::from_secs(300)).unwrap();
-        via.resolver = recorder.clone();
-        let (stream, tail) = connect(&endpoint(1), &via).unwrap();
-        assert!(tail.is_empty());
-        assert_eq!(stream.peer_addr().unwrap(), recorder.addr);
-        assert_eq!(
-            *recorder.calls.lock().unwrap(),
-            vec![Duration::from_millis(123)]
-        );
-        assert_eq!(Via::from_env().limits, crate::LIMITS);
-    });
+    fakes::within(
+        "resolved connection",
+        Deadline::after(Duration::from_secs(5)),
+        || {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let recorder = Arc::new(Recording {
+                addr: listener.local_addr().unwrap(),
+                calls: Mutex::new(Vec::new()),
+            });
+            let mut via = via();
+            via.limits =
+                crate::Limits::new(Duration::from_millis(123), Duration::from_secs(300)).unwrap();
+            via.resolver = recorder.clone();
+            let (stream, tail) = connect(&endpoint(1), &via).unwrap();
+            assert!(tail.is_empty());
+            assert_eq!(stream.peer_addr().unwrap(), recorder.addr);
+            assert_eq!(
+                *recorder.calls.lock().unwrap(),
+                vec![Duration::from_millis(123)]
+            );
+            assert_eq!(Via::from_env().limits, crate::LIMITS);
+        },
+    );
 }
 
 #[test]
 fn proxy_tunnels_and_no_proxy_dials_direct() {
-    fakes::within("proxy and bypass", Duration::from_secs(5), || {
-        let proxy = fakes::ConnectProxy::start().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let mut via = via();
-        via.proxy = Some(ureq::Proxy::new(&proxy.url()).unwrap());
-        let (mut stream, _) = connect(&endpoint(port), &via).unwrap();
-        stream.write_all(b"through").unwrap();
-        let (mut peer, _) = listener.accept().unwrap();
-        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
-        let mut bytes = [0; 7];
-        peer.read_exact(&mut bytes).unwrap();
-        assert_eq!(&bytes, b"through");
-        assert_eq!(proxy.connects(), vec![format!("127.0.0.1:{port}")]);
-        stream.shutdown(std::net::Shutdown::Both).unwrap();
-        drop(peer);
-        let direct = fakes::ConnectProxy::start().unwrap();
-        via.proxy = Some(
-            ureq::Proxy::builder(ureq::ProxyProtocol::Http)
-                .host("127.0.0.1")
-                .port(direct.port())
-                .no_proxy("127.0.0.1")
-                .build()
-                .unwrap(),
-        );
-        let (stream, _) = connect(&endpoint(port), &via).unwrap();
-        assert_eq!(stream.peer_addr().unwrap().port(), port);
-        assert!(direct.connects().is_empty());
-    });
+    fakes::within(
+        "proxy and bypass",
+        Deadline::after(Duration::from_secs(5)),
+        || {
+            let proxy = fakes::ConnectProxy::start().unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let mut via = via();
+            via.proxy = Some(ureq::Proxy::new(&proxy.url()).unwrap());
+            let (mut stream, _) = connect(&endpoint(port), &via).unwrap();
+            stream.write_all(b"through").unwrap();
+            let (mut peer, _) = listener.accept().unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+            let mut bytes = [0; 7];
+            peer.read_exact(&mut bytes).unwrap();
+            assert_eq!(&bytes, b"through");
+            assert_eq!(proxy.connects(), vec![format!("127.0.0.1:{port}")]);
+            stream.shutdown(std::net::Shutdown::Both).unwrap();
+            drop(peer);
+            let direct = fakes::ConnectProxy::start().unwrap();
+            via.proxy = Some(
+                ureq::Proxy::builder(ureq::ProxyProtocol::Http)
+                    .host("127.0.0.1")
+                    .port(direct.port())
+                    .no_proxy("127.0.0.1")
+                    .build()
+                    .unwrap(),
+            );
+            let (stream, _) = connect(&endpoint(port), &via).unwrap();
+            assert_eq!(stream.peer_addr().unwrap().port(), port);
+            assert!(direct.connects().is_empty());
+        },
+    );
 }
 
 #[test]
 fn proxy_basic_credentials_and_buffered_bytes_survive() {
-    fakes::within("proxy authorization", Duration::from_secs(5), || {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let (mut peer, _) = listener.accept().unwrap();
-            peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-            let (request, _) = handshake::headers(&mut peer).unwrap();
-            peer.write_all(b"HTTP/1.1 200 Connection established\r\n\r\nfirst")
-                .unwrap();
-            tx.send(request).unwrap();
-        });
-        let mut via = via();
-        via.proxy = Some(ureq::Proxy::new(&format!("http://user:pw@127.0.0.1:{port}")).unwrap());
-        let (mut stream, mut tail) = connect(&endpoint(999), &via).unwrap();
-        stream.read_to_end(&mut tail).unwrap();
-        assert_eq!(tail, b"first");
-        let request =
-            fakes::Deadline::after(Duration::from_secs(5)).recv_or_fail(&rx, "CONNECT request");
-        assert_eq!(
-            request,
-            "CONNECT 127.0.0.1:999 HTTP/1.1\r\nHost: 127.0.0.1:999\r\nProxy-Authorization: Basic dXNlcjpwdw==\r\n\r\n"
-        );
-    });
+    fakes::within(
+        "proxy authorization",
+        Deadline::after(Duration::from_secs(5)),
+        || {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let (mut peer, _) = listener.accept().unwrap();
+                peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let (request, _) = handshake::headers(&mut peer).unwrap();
+                peer.write_all(b"HTTP/1.1 200 Connection established\r\n\r\nfirst")
+                    .unwrap();
+                tx.send(request).unwrap();
+            });
+            let mut via = via();
+            via.proxy =
+                Some(ureq::Proxy::new(&format!("http://user:pw@127.0.0.1:{port}")).unwrap());
+            let (mut stream, mut tail) = connect(&endpoint(999), &via).unwrap();
+            stream.read_to_end(&mut tail).unwrap();
+            assert_eq!(tail, b"first");
+            let request =
+                fakes::Deadline::after(Duration::from_secs(5)).recv_or_fail(&rx, "CONNECT request");
+            assert_eq!(
+                request,
+                "CONNECT 127.0.0.1:999 HTTP/1.1\r\nHost: 127.0.0.1:999\r\nProxy-Authorization: Basic dXNlcjpwdw==\r\n\r\n"
+            );
+        },
+    );
 }
 
 #[test]
 fn refused_and_unsupported_proxies_are_named_without_passwords() {
-    fakes::within("proxy failures", Duration::from_secs(5), || {
-        let server =
-            fakes::RawHttpServer::start(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
-                .unwrap();
-        let mut via = via();
-        via.proxy = Some(ureq::Proxy::new(&server.url()).unwrap());
-        assert!(
-            matches!(connect(&endpoint(1),&via),Err(Error::ProxyRefused{status_line}) if status_line.contains("407"))
-        );
-        via.proxy = Some(ureq::Proxy::new("socks5://user:pw@127.0.0.1:1").unwrap());
-        let error = connect(&endpoint(1), &via).unwrap_err();
-        assert!(matches!(&error,Error::ProxyScheme{scheme} if scheme=="socks5"));
-        assert!(!error.to_string().contains("pw"));
-    });
+    fakes::within(
+        "proxy failures",
+        Deadline::after(Duration::from_secs(5)),
+        || {
+            let server =
+                fakes::RawHttpServer::start(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+                    .unwrap();
+            let mut via = via();
+            via.proxy = Some(ureq::Proxy::new(&server.url()).unwrap());
+            assert!(
+                matches!(connect(&endpoint(1),&via),Err(Error::ProxyRefused{status_line}) if status_line.contains("407"))
+            );
+            via.proxy = Some(ureq::Proxy::new("socks5://user:pw@127.0.0.1:1").unwrap());
+            let error = connect(&endpoint(1), &via).unwrap_err();
+            assert!(matches!(&error,Error::ProxyScheme{scheme} if scheme=="socks5"));
+            assert!(!error.to_string().contains("pw"));
+        },
+    );
 }
 
 #[test]

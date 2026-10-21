@@ -80,7 +80,9 @@ fn two_names_share_a_url_token_but_a_changed_url_does_not() {
             fake.requests()[offset].header("authorization"),
             expected.as_deref()
         );
-        fakes::within("remote stop", WITHIN, move || started.servers.stop());
+        fakes::within("remote stop", Deadline::after(WITHIN), move || {
+            started.servers.stop()
+        });
     }
 }
 

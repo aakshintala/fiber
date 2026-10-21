@@ -516,7 +516,7 @@ fn failures(
     protocol: &'static str,
     calls: Vec<Box<dyn ModelCall>>,
 ) -> Vec<(contract::shapes::Failure, Option<bool>)> {
-    fakes::within("the calls to fail", DEADLINE, move || {
+    fakes::within("the calls to fail", Deadline::after(DEADLINE), move || {
         calls
             .into_iter()
             .map(|call| {

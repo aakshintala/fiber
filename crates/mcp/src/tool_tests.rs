@@ -14,6 +14,7 @@ use crate::error::McpError;
 use crate::server_json::{CallResult, Content, Resource};
 use crate::slot::{Death, Fault};
 use crate::test_support::WITHIN;
+use fakes::Deadline;
 
 fn arguments() -> Map<String, Value> {
     Map::new()
@@ -128,13 +129,17 @@ fn a_dead_link_is_unavailable() {
         std::sync::Weak::new(),
         dir.path(),
     );
-    let output = fakes::within("the call to `echo` on a dead server", WITHIN, move || {
-        tool.run(
-            &arguments(),
-            &fakes::CancelToken::new(),
-            &fakes::Recorder::default(),
-        )
-    });
+    let output = fakes::within(
+        "the call to `echo` on a dead server",
+        Deadline::after(WITHIN),
+        move || {
+            tool.run(
+                &arguments(),
+                &fakes::CancelToken::new(),
+                &fakes::Recorder::default(),
+            )
+        },
+    );
     assert_eq!(
         output.error.as_ref().map(|error| &error.code),
         Some(&ErrorCode::McpServerUnavailable)
@@ -977,7 +982,7 @@ fn run_asking_asks_naming_the_configured_server() {
         ],
     );
     let moved = tool.clone();
-    let output = fakes::within("the asking call", WITHIN, move || {
+    let output = fakes::within("the asking call", Deadline::after(WITHIN), move || {
         moved.run_asking(
             &Default::default(),
             &fakes::CancelToken::new(),

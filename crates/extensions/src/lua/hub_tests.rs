@@ -322,7 +322,7 @@ fn in_child(name: &str) -> bool {
         Err(_) => {
             fakes::within(
                 "kill -KILL on the child",
-                fakes::MUST_SUCCEED_WITHIN,
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN),
                 move || {
                     drop(fakes::kill_pid(pid, "KILL"));
                 },

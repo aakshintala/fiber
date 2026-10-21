@@ -209,7 +209,7 @@ fn ran(rx: &mpsc::Receiver<Output>, wait: &Deadline) -> Output {
 #[track_caller]
 fn effects(tool: &Arc<LuaTool>, arguments: Value) -> Result<Effects, EffectsError> {
     let tool = Arc::clone(tool);
-    fakes::within("the effects call", WAIT, move || {
+    fakes::within("the effects call", Deadline::after(WAIT), move || {
         tool.effects(&args(arguments))
     })
 }
@@ -256,7 +256,10 @@ fiber.command("count", { timeout = 1000, run = function() return tostring(calls)
 fn command(ext: &Arc<LuaExtension>, name: &str) -> String {
     let ext = Arc::clone(ext);
     let name = name.to_owned();
-    fakes::within("the command", WAIT, move || ext.command(&name, "")).expect("the command ran")
+    fakes::within("the command", Deadline::after(WAIT), move || {
+        ext.command(&name, "")
+    })
+    .expect("the command ran")
 }
 
 #[test]
@@ -723,7 +726,7 @@ fn session_with(setup: &Setup, overrides: &[&str]) -> Arc<SessionExtensions> {
     })
     .unwrap();
     let home = setup.home();
-    let loaded = fakes::within("the extensions to load", WAIT, move || {
+    let loaded = fakes::within("the extensions to load", Deadline::after(WAIT), move || {
         let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
         SessionExtensions::load(&home, &config, FakeClock::new(), locks, None)
     });
@@ -1051,8 +1054,10 @@ fiber.tool("probe", {
     let tools = session.tools();
     let (_, probe) = tools.first().expect("the tool is declared");
     let probe = Arc::clone(probe);
-    fakes::within("the effects call", WAIT, move || probe.effects(&Map::new()))
-        .expect("the effects function ran");
+    fakes::within("the effects call", Deadline::after(WAIT), move || {
+        probe.effects(&Map::new())
+    })
+    .expect("the effects function ran");
     match Deadline::after(WAIT).recv(&inbox) {
         Ok(Delivery::ExtensionExec(exec)) => assert_eq!(exec.process.exit_code, Some(4)),
         other => panic!("expected the effects function's extension_exec, got {other:?}"),

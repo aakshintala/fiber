@@ -30,6 +30,7 @@ use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, CommandId, ErrorCode, SessionId, TurnId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
 use serde_json::{Map, Value, json};
@@ -1964,7 +1965,7 @@ fn a_partial_failure_after_deltas_times_its_hold() {
 // though the provider fast-cancels.
 #[test]
 fn a_cancel_mid_call_times_one_scope() {
-    fakes::within("a cancel mid call", WAIT, || {
+    fakes::within("a cancel mid call", Deadline::after(WAIT), || {
         let mut world = build(Build {
             probe_state: true,
             ..plain_build(vec![Answer::Hold {
@@ -2081,7 +2082,7 @@ fn a_stream_write_error_closes_one_scope_and_returns_the_error() {
 
 #[test]
 fn a_retry_measures_runs_without_the_backoff() {
-    fakes::within("a retry without its backoff", WAIT, || {
+    fakes::within("a retry without its backoff", Deadline::after(WAIT), || {
         let mut world = build(Build {
             observe: true,
             probe_state: true,
@@ -2135,7 +2136,7 @@ fn a_retry_measures_runs_without_the_backoff() {
 
 #[test]
 fn a_cancel_during_the_backoff_runs_nothing_more() {
-    fakes::within("a cancel during the backoff", WAIT, || {
+    fakes::within("a cancel during the backoff", Deadline::after(WAIT), || {
         let mut world = build(Build {
             retry: Some(crate::Retry {
                 attempts: 3,
@@ -2768,7 +2769,7 @@ fn a_cancel_before_note_admission_times_handoff_but_no_note_model() {
 
 #[test]
 fn a_cancel_mid_note_times_handoff_and_the_entered_note() {
-    fakes::within("a cancel mid note", WAIT, || {
+    fakes::within("a cancel mid note", Deadline::after(WAIT), || {
         let mut world = auto_world(vec![
             run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
             Answer::Hold {

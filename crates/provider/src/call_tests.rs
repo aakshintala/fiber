@@ -12,6 +12,7 @@ use std::time::Duration;
 use contract::diag::{DebugLog, ProviderRequest};
 
 use super::*;
+use fakes::Deadline;
 
 /// Captures the lines a record writes.
 struct Capture {
@@ -478,11 +479,15 @@ fn run_call(
     Vec<contract::provider::Delta>,
 ) {
     use contract::provider::ModelCall as _;
-    fakes::within("the call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    })
+    fakes::within(
+        "the call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = call.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    )
 }
 
 /// A clock that counts its `now()` reads, delegating the time itself.

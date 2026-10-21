@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use extensions::{Origin, Request};
+use fakes::Deadline;
 
 use super::{Io, install, list, remove, update_all};
 use crate::CliError;
@@ -42,7 +43,7 @@ fn public_install_wrapper_propagates_project_scope() {
     let output = fakes::rerun_prepared(
         &name,
         &[(SCOPED_CHILD, "1")],
-        Duration::from_secs(20),
+        Deadline::after(Duration::from_secs(20)),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -70,148 +71,156 @@ fn public_install_wrapper_propagates_project_scope() {
 
 #[test]
 fn scoped_git_dependencies_keep_existing_global_state_and_write_all_projects_first() {
-    fakes::within("scoped dependency writes", Duration::from_secs(40), || {
-        let setup = Setup::new();
-        let root = "example.com/acme/root";
-        let dep = "example.com/acme/dep";
-        let new = "example.com/acme/new";
-        let mut paths = std::collections::BTreeMap::new();
-        for name in [dep, new, root] {
-            let m = if name == root {
-                let mut m = manifest(root);
-                m["depends"] = serde_json::json!({dep:"1.1", new:"1.0"});
-                m
-            } else {
-                manifest(name)
-            };
-            let source = setup.source(name, &m, &[]);
-            fakes::git::git(&source, &["init", "--quiet"]);
-            fakes::git::git(&source, &["add", "."]);
-            fakes::git::git(&source, &["commit", "--quiet", "-m", "release"]);
-            fakes::git::git(&source, &["tag", "v1.0.0"]);
-            if name == dep {
-                fakes::git::git(&source, &["tag", "v1.1.0"]);
-                assert_eq!(
-                    run_install(
-                        &setup.home(),
-                        Request::Path(source.clone()),
-                        &Origin::github(),
-                        false,
-                        &mut Unread
-                    )
-                    .1
-                    .unwrap(),
-                    0
-                );
+    fakes::within(
+        "scoped dependency writes",
+        Deadline::after(Duration::from_secs(40)),
+        || {
+            let setup = Setup::new();
+            let root = "example.com/acme/root";
+            let dep = "example.com/acme/dep";
+            let new = "example.com/acme/new";
+            let mut paths = std::collections::BTreeMap::new();
+            for name in [dep, new, root] {
+                let m = if name == root {
+                    let mut m = manifest(root);
+                    m["depends"] = serde_json::json!({dep:"1.1", new:"1.0"});
+                    m
+                } else {
+                    manifest(name)
+                };
+                let source = setup.source(name, &m, &[]);
+                fakes::git::git(&source, &["init", "--quiet"]);
+                fakes::git::git(&source, &["add", "."]);
+                fakes::git::git(&source, &["commit", "--quiet", "-m", "release"]);
+                fakes::git::git(&source, &["tag", "v1.0.0"]);
+                if name == dep {
+                    fakes::git::git(&source, &["tag", "v1.1.0"]);
+                    assert_eq!(
+                        run_install(
+                            &setup.home(),
+                            Request::Path(source.clone()),
+                            &Origin::github(),
+                            false,
+                            &mut Unread
+                        )
+                        .1
+                        .unwrap(),
+                        0
+                    );
+                }
+                paths.insert(name.to_owned(), source);
             }
-            paths.insert(name.to_owned(), source);
-        }
-        let origin = Origin::new("git", move |name| {
-            format!("file://{}", paths[name].display())
-        });
-        let workspace = setup.root.path().join("workspace");
-        fs::create_dir(&workspace).unwrap();
-        let (_, project) = crate::project_of(&setup.home(), &workspace).unwrap();
-        let scope = super::ScopedInstall { workspace, project };
-        let code = install(
-            &setup.home(),
-            Request::Install(root.into()),
-            Some(&scope),
-            FIBER_VERSION,
-            &origin,
-            &fakes::clock::SystemClock,
-            Io {
-                terminal: false,
-                input: &mut Unread,
-                err: &mut Vec::new(),
-            },
-        )
-        .unwrap();
-        assert_eq!(code, 0);
-        let (global, project) = scope_files(&setup);
-        assert_eq!(
-            json_file(&global),
-            serde_json::json!({"extensions":{root:{"enabled":false},new:{"enabled":false}}})
-        );
-        assert_eq!(
-            json_file(&project),
-            serde_json::json!({"extensions":{root:{"enabled":true},new:{"enabled":true},dep:{"enabled":true}}})
-        );
-        let listed = extensions::list(&setup.home(), &fakes::clock::SystemClock).unwrap();
-        assert_eq!(listed.installed.len(), 3);
-        assert_eq!(
-            listed
-                .installed
-                .iter()
-                .find(|i| i.name == dep)
-                .unwrap()
-                .version,
-            "v1.1.0"
-        );
-    });
+            let origin = Origin::new("git", move |name| {
+                format!("file://{}", paths[name].display())
+            });
+            let workspace = setup.root.path().join("workspace");
+            fs::create_dir(&workspace).unwrap();
+            let (_, project) = crate::project_of(&setup.home(), &workspace).unwrap();
+            let scope = super::ScopedInstall { workspace, project };
+            let code = install(
+                &setup.home(),
+                Request::Install(root.into()),
+                Some(&scope),
+                FIBER_VERSION,
+                &origin,
+                &fakes::clock::SystemClock,
+                Io {
+                    terminal: false,
+                    input: &mut Unread,
+                    err: &mut Vec::new(),
+                },
+            )
+            .unwrap();
+            assert_eq!(code, 0);
+            let (global, project) = scope_files(&setup);
+            assert_eq!(
+                json_file(&global),
+                serde_json::json!({"extensions":{root:{"enabled":false},new:{"enabled":false}}})
+            );
+            assert_eq!(
+                json_file(&project),
+                serde_json::json!({"extensions":{root:{"enabled":true},new:{"enabled":true},dep:{"enabled":true}}})
+            );
+            let listed = extensions::list(&setup.home(), &fakes::clock::SystemClock).unwrap();
+            assert_eq!(listed.installed.len(), 3);
+            assert_eq!(
+                listed
+                    .installed
+                    .iter()
+                    .find(|i| i.name == dep)
+                    .unwrap()
+                    .version,
+                "v1.1.0"
+            );
+        },
+    );
 }
 
 #[test]
 fn a_later_scope_key_failure_keeps_completed_keys_and_never_runs_install_steps() {
-    fakes::within("partial scope writes", Duration::from_secs(20), || {
-        let setup = Setup::new();
-        let dep = "example.com/acme/dep";
-        let dep_source = setup.source("dep", &manifest(dep), &[]);
-        for args in [
-            vec!["init", "--quiet"],
-            vec!["add", "."],
-            vec!["commit", "--quiet", "-m", "release"],
-            vec!["tag", "v1.0.0"],
-        ] {
-            fakes::git::git(&dep_source, &args);
-        }
-        let origin = Origin::new("git", move |_| format!("file://{}", dep_source.display()));
-        let marker = setup.root.path().join("install-step");
-        let mut m = manifest("z\"acme");
-        m["depends"] = serde_json::json!({dep:"1.0"});
-        m["install"] = serde_json::json!([
-            "sh",
-            "-c",
-            format!("printf marker > '{}'", marker.display())
-        ]);
-        let source = setup.source("root", &m, &[]);
-        let workspace = setup.root.path().join("workspace");
-        fs::create_dir(&workspace).unwrap();
-        let (_, project) = crate::project_of(&setup.home(), &workspace).unwrap();
-        let scope = super::ScopedInstall { workspace, project };
-        let failure = install(
-            &setup.home(),
-            Request::Path(source),
-            Some(&scope),
-            FIBER_VERSION,
-            &origin,
-            &fakes::clock::SystemClock,
-            Io {
-                terminal: false,
-                input: &mut Unread,
-                err: &mut Vec::new(),
-            },
-        )
-        .unwrap_err();
-        assert!(
-            matches!(&failure, CliError::Config(_)),
-            "expected Config, got {failure:?}"
-        );
-        assert_eq!(failure.code(), ErrorCode::Usage);
-        let (global, project) = scope_files(&setup);
-        assert_eq!(
-            json_file(&project),
-            serde_json::json!({"extensions":{dep:{"enabled":true}}})
-        );
-        assert!(!global.exists());
-        assert!(!marker.exists());
-        assert!(
-            extensions::list(&setup.home(), &fakes::clock::SystemClock)
-                .unwrap()
-                .installed
-                .is_empty()
-        );
-    });
+    fakes::within(
+        "partial scope writes",
+        Deadline::after(Duration::from_secs(20)),
+        || {
+            let setup = Setup::new();
+            let dep = "example.com/acme/dep";
+            let dep_source = setup.source("dep", &manifest(dep), &[]);
+            for args in [
+                vec!["init", "--quiet"],
+                vec!["add", "."],
+                vec!["commit", "--quiet", "-m", "release"],
+                vec!["tag", "v1.0.0"],
+            ] {
+                fakes::git::git(&dep_source, &args);
+            }
+            let origin = Origin::new("git", move |_| format!("file://{}", dep_source.display()));
+            let marker = setup.root.path().join("install-step");
+            let mut m = manifest("z\"acme");
+            m["depends"] = serde_json::json!({dep:"1.0"});
+            m["install"] = serde_json::json!([
+                "sh",
+                "-c",
+                format!("printf marker > '{}'", marker.display())
+            ]);
+            let source = setup.source("root", &m, &[]);
+            let workspace = setup.root.path().join("workspace");
+            fs::create_dir(&workspace).unwrap();
+            let (_, project) = crate::project_of(&setup.home(), &workspace).unwrap();
+            let scope = super::ScopedInstall { workspace, project };
+            let failure = install(
+                &setup.home(),
+                Request::Path(source),
+                Some(&scope),
+                FIBER_VERSION,
+                &origin,
+                &fakes::clock::SystemClock,
+                Io {
+                    terminal: false,
+                    input: &mut Unread,
+                    err: &mut Vec::new(),
+                },
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&failure, CliError::Config(_)),
+                "expected Config, got {failure:?}"
+            );
+            assert_eq!(failure.code(), ErrorCode::Usage);
+            let (global, project) = scope_files(&setup);
+            assert_eq!(
+                json_file(&project),
+                serde_json::json!({"extensions":{dep:{"enabled":true}}})
+            );
+            assert!(!global.exists());
+            assert!(!marker.exists());
+            assert!(
+                extensions::list(&setup.home(), &fakes::clock::SystemClock)
+                    .unwrap()
+                    .installed
+                    .is_empty()
+            );
+        },
+    );
 }
 
 fn scoped_install(
@@ -260,7 +269,7 @@ fn json_file(file: &Path) -> serde_json::Value {
 fn scoped_install_writes_keys_before_commit_and_other_commands_keep_them() {
     fakes::within(
         "scoped keys before install",
-        Duration::from_secs(20),
+        Deadline::after(Duration::from_secs(20)),
         || {
             let setup = Setup::new();
             let workspace = setup.root.path().join("workspace");
@@ -332,7 +341,7 @@ fn scoped_install_writes_keys_before_commit_and_other_commands_keep_them() {
 fn existing_installs_keep_global_state_and_fresh_installs_replace_stale_keys() {
     fakes::within(
         "scoped freshness configuration",
-        Duration::from_secs(20),
+        Deadline::after(Duration::from_secs(20)),
         || {
             for global in [None, Some(false), Some(true)] {
                 let setup = Setup::new();
@@ -395,7 +404,7 @@ fn existing_installs_keep_global_state_and_fresh_installs_replace_stale_keys() {
 fn scope_write_failures_stop_install_and_keep_completed_project_keys() {
     fakes::within(
         "scope write failure ordering",
-        Duration::from_secs(20),
+        Deadline::after(Duration::from_secs(20)),
         || {
             for broken_project in [true, false] {
                 let setup = Setup::new();
@@ -437,7 +446,7 @@ fn scope_write_failures_stop_install_and_keep_completed_project_keys() {
 fn declined_scope_and_failed_fresh_or_replacement_installs_preserve_safety() {
     fakes::within(
         "scope approval and install failure",
-        Duration::from_secs(20),
+        Deadline::after(Duration::from_secs(20)),
         || {
             let setup = Setup::new();
             let source = setup.source("acme", &manifest("acme"), &[]);
@@ -531,56 +540,60 @@ fn assert_no_staging(home: &Path) {
 
 #[test]
 fn first_party_install_returns_the_install_summary_and_missing_login_without_asking() {
-    fakes::within("first-party install", Duration::from_secs(20), || {
-        let setup = Setup::new();
-        let repo = first_party_repo();
-        let origin = fixture_origin(repo.path());
-        let config = first_party_config(&setup);
-        let clock = fakes::clock::FakeClock::new();
-        let plan = extensions::plan(
-            &setup.home(),
-            &Request::Install("openai".into()),
-            FIBER_VERSION,
-            &origin,
-            &*clock,
-        )
-        .unwrap();
-        let expected: Vec<_> = super::approve::summary_text(&super::summaries(&plan))
-            .lines()
-            .map(str::to_owned)
-            .collect();
-        drop(plan);
-        let answer = super::install_first_party(
-            &setup.home(),
-            &config,
-            "openai",
-            FIBER_VERSION,
-            &origin,
-            &*clock,
-        )
-        .unwrap();
-        assert_eq!(answer.installed, [FIRST_PARTY]);
-        assert_eq!(answer.summary, expected);
-        assert_eq!(
-            answer.summary[0],
-            format!("Install {FIRST_PARTY} from {FIRST_PARTY}")
-        );
-        assert!(
-            answer
-                .summary
-                .contains(&"Provider openai: https://example.com".to_owned())
-        );
-        assert_eq!(
-            answer.login,
-            [super::LoginNeed {
-                provider: "openai".into(),
-                error: None
-            }]
-        );
-        let installed = extensions::list(&setup.home(), &*clock).unwrap().installed;
-        assert_eq!(installed.len(), 1);
-        assert_eq!(installed[0].name, FIRST_PARTY);
-    });
+    fakes::within(
+        "first-party install",
+        Deadline::after(Duration::from_secs(20)),
+        || {
+            let setup = Setup::new();
+            let repo = first_party_repo();
+            let origin = fixture_origin(repo.path());
+            let config = first_party_config(&setup);
+            let clock = fakes::clock::FakeClock::new();
+            let plan = extensions::plan(
+                &setup.home(),
+                &Request::Install("openai".into()),
+                FIBER_VERSION,
+                &origin,
+                &*clock,
+            )
+            .unwrap();
+            let expected: Vec<_> = super::approve::summary_text(&super::summaries(&plan))
+                .lines()
+                .map(str::to_owned)
+                .collect();
+            drop(plan);
+            let answer = super::install_first_party(
+                &setup.home(),
+                &config,
+                "openai",
+                FIBER_VERSION,
+                &origin,
+                &*clock,
+            )
+            .unwrap();
+            assert_eq!(answer.installed, [FIRST_PARTY]);
+            assert_eq!(answer.summary, expected);
+            assert_eq!(
+                answer.summary[0],
+                format!("Install {FIRST_PARTY} from {FIRST_PARTY}")
+            );
+            assert!(
+                answer
+                    .summary
+                    .contains(&"Provider openai: https://example.com".to_owned())
+            );
+            assert_eq!(
+                answer.login,
+                [super::LoginNeed {
+                    provider: "openai".into(),
+                    error: None
+                }]
+            );
+            let installed = extensions::list(&setup.home(), &*clock).unwrap().installed;
+            assert_eq!(installed.len(), 1);
+            assert_eq!(installed[0].name, FIRST_PARTY);
+        },
+    );
 }
 
 #[test]
@@ -606,46 +619,183 @@ fn first_party_install_rejects_scripted_before_fetching() {
 
 #[test]
 fn first_party_install_keeps_fetch_failures_and_cleans_staging() {
-    fakes::within("first-party fetch failure", Duration::from_secs(20), || {
-        let setup = Setup::new();
-        let origin = fixture_origin(&setup.root.path().join("absent"));
-        let clock = fakes::clock::FakeClock::new();
-        let error = super::install_first_party(
-            &setup.home(),
-            &first_party_config(&setup),
-            "openai",
-            FIBER_VERSION,
-            &origin,
-            &*clock,
-        )
-        .unwrap_err();
-        assert_eq!(error.code(), ErrorCode::ExtensionNotFound);
-        assert!(
-            matches!(
-                &error,
-                CliError::Extensions(extensions::Error::NoRepository { .. })
-            ),
-            "expected Extensions(NoRepository), got {error:?}"
-        );
-        assert!(
-            extensions::list(&setup.home(), &*clock)
-                .unwrap()
-                .installed
-                .is_empty()
-        );
-        assert_no_staging(&setup.home());
-    });
+    fakes::within(
+        "first-party fetch failure",
+        Deadline::after(Duration::from_secs(20)),
+        || {
+            let setup = Setup::new();
+            let origin = fixture_origin(&setup.root.path().join("absent"));
+            let clock = fakes::clock::FakeClock::new();
+            let error = super::install_first_party(
+                &setup.home(),
+                &first_party_config(&setup),
+                "openai",
+                FIBER_VERSION,
+                &origin,
+                &*clock,
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), ErrorCode::ExtensionNotFound);
+            assert!(
+                matches!(
+                    &error,
+                    CliError::Extensions(extensions::Error::NoRepository { .. })
+                ),
+                "expected Extensions(NoRepository), got {error:?}"
+            );
+            assert!(
+                extensions::list(&setup.home(), &*clock)
+                    .unwrap()
+                    .installed
+                    .is_empty()
+            );
+            assert_no_staging(&setup.home());
+        },
+    );
 }
 
 #[test]
 fn first_party_install_reinstalls_an_installed_provider() {
-    fakes::within("first-party reinstall", Duration::from_secs(20), || {
-        let setup = Setup::new();
-        let repo = first_party_repo();
-        let origin = fixture_origin(repo.path());
-        let config = first_party_config(&setup);
-        let clock = fakes::clock::FakeClock::new();
-        for _ in 0..2 {
+    fakes::within(
+        "first-party reinstall",
+        Deadline::after(Duration::from_secs(20)),
+        || {
+            let setup = Setup::new();
+            let repo = first_party_repo();
+            let origin = fixture_origin(repo.path());
+            let config = first_party_config(&setup);
+            let clock = fakes::clock::FakeClock::new();
+            for _ in 0..2 {
+                let answer = super::install_first_party(
+                    &setup.home(),
+                    &config,
+                    "openai",
+                    FIBER_VERSION,
+                    &origin,
+                    &*clock,
+                )
+                .unwrap();
+                assert_eq!(answer.installed, [FIRST_PARTY]);
+            }
+            assert_eq!(
+                extensions::list(&setup.home(), &*clock)
+                    .unwrap()
+                    .installed
+                    .len(),
+                1
+            );
+        },
+    );
+}
+
+#[test]
+fn first_party_install_rejects_an_unreadable_existing_provider_before_commit() {
+    fakes::within(
+        "first-party existing data",
+        Deadline::after(Duration::from_secs(20)),
+        || {
+            let setup = Setup::new();
+            let source = setup.source(
+                "a",
+                &manifest("a"),
+                &[provider("pa", &["https://example.com"])],
+            );
+            let clock = fakes::clock::FakeClock::new();
+            extensions::plan(
+                &setup.home(),
+                &Request::Path(source),
+                FIBER_VERSION,
+                &Origin::github(),
+                &*clock,
+            )
+            .unwrap()
+            .commit()
+            .unwrap();
+            write_file(
+                &setup.home().join("extensions/a/providers/pa.json"),
+                "not JSON",
+            );
+            let repo = first_party_repo();
+            let error = super::install_first_party(
+                &setup.home(),
+                &first_party_config(&setup),
+                "openai",
+                FIBER_VERSION,
+                &fixture_origin(repo.path()),
+                &*clock,
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), ErrorCode::ConfigInvalid);
+            assert!(
+                matches!(&error, CliError::Extensions(extensions::Error::Config(..))),
+                "expected Extensions(Config), got {error:?}"
+            );
+            let installed = extensions::list(&setup.home(), &*clock).unwrap().installed;
+            assert_eq!(
+                installed
+                    .iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["a"]
+            );
+            assert_no_staging(&setup.home());
+        },
+    );
+}
+
+#[test]
+fn first_party_install_rejects_an_unreadable_cache_before_commit() {
+    fakes::within(
+        "first-party staged cache",
+        Deadline::after(Duration::from_secs(20)),
+        || {
+            let setup = Setup::new();
+            let repo = first_party_repo();
+            let cache = setup.home().join("cache/models/openai.json");
+            fs::create_dir_all(&cache).unwrap();
+            let clock = fakes::clock::FakeClock::new();
+            let error = super::install_first_party(
+                &setup.home(),
+                &first_party_config(&setup),
+                "openai",
+                FIBER_VERSION,
+                &fixture_origin(repo.path()),
+                &*clock,
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), ErrorCode::IoFailed);
+            let CliError::Extensions(extensions::Error::Config(config::ConfigError::Io {
+                file,
+                ..
+            })) = &error
+            else {
+                panic!("expected Extensions(Config(Io)), got {error:?}");
+            };
+            assert_eq!(file, &cache);
+            assert!(
+                extensions::list(&setup.home(), &*clock)
+                    .unwrap()
+                    .installed
+                    .is_empty()
+            );
+            assert_no_staging(&setup.home());
+        },
+    );
+}
+
+#[test]
+fn first_party_install_checks_present_empty_and_unreadable_keys_without_exposing_them() {
+    fakes::within(
+        "first-party login check",
+        Deadline::after(Duration::from_secs(20)),
+        || {
+            let setup = Setup::new();
+            let repo = first_party_repo();
+            let origin = fixture_origin(repo.path());
+            let config = first_party_config(&setup);
+            let clock = fakes::clock::FakeClock::new();
+            let key = setup.home().join("credentials/openai/default");
+            write_file(&key, "secret-key");
             let answer = super::install_first_party(
                 &setup.home(),
                 &config,
@@ -655,165 +805,49 @@ fn first_party_install_reinstalls_an_installed_provider() {
                 &*clock,
             )
             .unwrap();
-            assert_eq!(answer.installed, [FIRST_PARTY]);
-        }
-        assert_eq!(
-            extensions::list(&setup.home(), &*clock)
-                .unwrap()
-                .installed
-                .len(),
-            1
-        );
-    });
-}
-
-#[test]
-fn first_party_install_rejects_an_unreadable_existing_provider_before_commit() {
-    fakes::within("first-party existing data", Duration::from_secs(20), || {
-        let setup = Setup::new();
-        let source = setup.source(
-            "a",
-            &manifest("a"),
-            &[provider("pa", &["https://example.com"])],
-        );
-        let clock = fakes::clock::FakeClock::new();
-        extensions::plan(
-            &setup.home(),
-            &Request::Path(source),
-            FIBER_VERSION,
-            &Origin::github(),
-            &*clock,
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
-        write_file(
-            &setup.home().join("extensions/a/providers/pa.json"),
-            "not JSON",
-        );
-        let repo = first_party_repo();
-        let error = super::install_first_party(
-            &setup.home(),
-            &first_party_config(&setup),
-            "openai",
-            FIBER_VERSION,
-            &fixture_origin(repo.path()),
-            &*clock,
-        )
-        .unwrap_err();
-        assert_eq!(error.code(), ErrorCode::ConfigInvalid);
-        assert!(
-            matches!(&error, CliError::Extensions(extensions::Error::Config(..))),
-            "expected Extensions(Config), got {error:?}"
-        );
-        let installed = extensions::list(&setup.home(), &*clock).unwrap().installed;
-        assert_eq!(
-            installed
-                .iter()
-                .map(|entry| entry.name.as_str())
-                .collect::<Vec<_>>(),
-            ["a"]
-        );
-        assert_no_staging(&setup.home());
-    });
-}
-
-#[test]
-fn first_party_install_rejects_an_unreadable_cache_before_commit() {
-    fakes::within("first-party staged cache", Duration::from_secs(20), || {
-        let setup = Setup::new();
-        let repo = first_party_repo();
-        let cache = setup.home().join("cache/models/openai.json");
-        fs::create_dir_all(&cache).unwrap();
-        let clock = fakes::clock::FakeClock::new();
-        let error = super::install_first_party(
-            &setup.home(),
-            &first_party_config(&setup),
-            "openai",
-            FIBER_VERSION,
-            &fixture_origin(repo.path()),
-            &*clock,
-        )
-        .unwrap_err();
-        assert_eq!(error.code(), ErrorCode::IoFailed);
-        let CliError::Extensions(extensions::Error::Config(config::ConfigError::Io {
-            file, ..
-        })) = &error
-        else {
-            panic!("expected Extensions(Config(Io)), got {error:?}");
-        };
-        assert_eq!(file, &cache);
-        assert!(
-            extensions::list(&setup.home(), &*clock)
-                .unwrap()
-                .installed
-                .is_empty()
-        );
-        assert_no_staging(&setup.home());
-    });
-}
-
-#[test]
-fn first_party_install_checks_present_empty_and_unreadable_keys_without_exposing_them() {
-    fakes::within("first-party login check", Duration::from_secs(20), || {
-        let setup = Setup::new();
-        let repo = first_party_repo();
-        let origin = fixture_origin(repo.path());
-        let config = first_party_config(&setup);
-        let clock = fakes::clock::FakeClock::new();
-        let key = setup.home().join("credentials/openai/default");
-        write_file(&key, "secret-key");
-        let answer = super::install_first_party(
-            &setup.home(),
-            &config,
-            "openai",
-            FIBER_VERSION,
-            &origin,
-            &*clock,
-        )
-        .unwrap();
-        assert!(answer.login.is_empty());
-        write_file(&key, "");
-        let answer = super::install_first_party(
-            &setup.home(),
-            &config,
-            "openai",
-            FIBER_VERSION,
-            &origin,
-            &*clock,
-        )
-        .unwrap();
-        assert_eq!(
-            answer.login,
-            [super::LoginNeed {
-                provider: "openai".into(),
-                error: None
-            }]
-        );
-        fs::remove_file(&key).unwrap();
-        fs::create_dir(&key).unwrap();
-        let answer = super::install_first_party(
-            &setup.home(),
-            &config,
-            "openai",
-            FIBER_VERSION,
-            &origin,
-            &*clock,
-        )
-        .unwrap();
-        assert_eq!(answer.login.len(), 1);
-        assert_eq!(answer.login[0].provider, "openai");
-        let error = answer.login[0].error.as_ref().unwrap();
-        assert!(error.contains(&key.display().to_string()));
-        assert!(!error.contains("secret-key"));
-    });
+            assert!(answer.login.is_empty());
+            write_file(&key, "");
+            let answer = super::install_first_party(
+                &setup.home(),
+                &config,
+                "openai",
+                FIBER_VERSION,
+                &origin,
+                &*clock,
+            )
+            .unwrap();
+            assert_eq!(
+                answer.login,
+                [super::LoginNeed {
+                    provider: "openai".into(),
+                    error: None
+                }]
+            );
+            fs::remove_file(&key).unwrap();
+            fs::create_dir(&key).unwrap();
+            let answer = super::install_first_party(
+                &setup.home(),
+                &config,
+                "openai",
+                FIBER_VERSION,
+                &origin,
+                &*clock,
+            )
+            .unwrap();
+            assert_eq!(answer.login.len(), 1);
+            assert_eq!(answer.login[0].provider, "openai");
+            let error = answer.login[0].error.as_ref().unwrap();
+            assert!(error.contains(&key.display().to_string()));
+            assert!(!error.contains("secret-key"));
+        },
+    );
 }
 
 #[test]
 fn first_party_install_rejects_a_staged_dependency_with_an_unreadable_addendum() {
     fakes::within(
         "first-party staged addendum",
-        Duration::from_secs(20),
+        Deadline::after(Duration::from_secs(20)),
         || {
             let setup = Setup::new();
             let repo = first_party_repo();
@@ -1674,7 +1708,7 @@ fn run_case(case: &str) {
     let output = fakes::rerun_prepared(
         &full_test_name,
         &[(CHILD, case)],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command.env("FIBER_HOME", &home).env(CHILD_SOURCE, &source);
             if case == "install-by-name" {
@@ -1805,7 +1839,7 @@ fn run_dir_case(case: &str) {
     let output = fakes::rerun_prepared(
         &full_test_name,
         &[(DIR_CHILD, case)],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command.env("FIBER_HOME", setup.home());
         },

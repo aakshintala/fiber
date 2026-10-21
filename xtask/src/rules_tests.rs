@@ -2,7 +2,7 @@ use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use fakes::finished;
+use fakes::{Deadline, finished};
 
 use super::*;
 
@@ -1378,7 +1378,7 @@ fn run_scanner_bound_probe(case: &str) {
         &format!("scanner bound probe {case}"),
         child,
         &[],
-        CURSOR_PROBE_WITHIN,
+        Deadline::after(CURSOR_PROBE_WITHIN),
     );
     assert!(
         output.status.success(),
@@ -1854,7 +1854,7 @@ fn run_cursor_stall_probe(case: &str) {
         &format!("source cursor probe {case}"),
         child,
         &[],
-        CURSOR_PROBE_WITHIN,
+        Deadline::after(CURSOR_PROBE_WITHIN),
     );
     assert!(
         output.status.success(),

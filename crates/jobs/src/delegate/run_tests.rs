@@ -538,46 +538,55 @@ fn release_fifo(fifo: &std::path::Path, bytes: &[u8]) {
     use std::os::unix::fs::OpenOptionsExt as _;
     let fifo = fifo.to_path_buf();
     let bytes = bytes.to_vec();
-    within("a reader opens the fifo", DEADLINE, move || {
-        loop {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
-                .open(&fifo)
-            {
-                Ok(mut fifo) => {
-                    fifo.write_all(&bytes)
-                        .expect("a few bytes always fit the pipe");
-                    return;
-                }
-                Err(source)
-                    if source.raw_os_error() == Some(rustix::io::Errno::NXIO.raw_os_error()) =>
+    within(
+        "a reader opens the fifo",
+        Deadline::after(DEADLINE),
+        move || {
+            loop {
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+                    .open(&fifo)
                 {
-                    thread::yield_now();
+                    Ok(mut fifo) => {
+                        fifo.write_all(&bytes)
+                            .expect("a few bytes always fit the pipe");
+                        return;
+                    }
+                    Err(source)
+                        if source.raw_os_error()
+                            == Some(rustix::io::Errno::NXIO.raw_os_error()) =>
+                    {
+                        thread::yield_now();
+                    }
+                    Err(source) => panic!("opening {fifo:?} for writing failed: {source}"),
                 }
-                Err(source) => panic!("opening {fifo:?} for writing failed: {source}"),
             }
-        }
-    });
+        },
+    );
 }
 
 /// A pid `shell` wrote to `pid`: the leader's, or a member's.
 #[track_caller]
 fn pid_in_file(pid: &std::path::Path) -> u32 {
     let pid = pid.to_path_buf();
-    within("the leader writes its pid", DEADLINE, move || {
-        loop {
-            let Ok(text) = std::fs::read_to_string(&pid) else {
-                thread::yield_now();
-                continue;
-            };
-            let Ok(pid) = text.trim().parse() else {
-                thread::yield_now();
-                continue;
-            };
-            return pid;
-        }
-    })
+    within(
+        "the leader writes its pid",
+        Deadline::after(DEADLINE),
+        move || {
+            loop {
+                let Ok(text) = std::fs::read_to_string(&pid) else {
+                    thread::yield_now();
+                    continue;
+                };
+                let Ok(pid) = text.trim().parse() else {
+                    thread::yield_now();
+                    continue;
+                };
+                return pid;
+            }
+        },
+    )
 }
 
 /// Waits until the fake watch ran `n` times, under one wall-clock
@@ -624,14 +633,18 @@ fn wake_retry(rig: &Rig, at: std::time::Instant, gap: Duration, calls: usize) {
 #[track_caller]
 fn wait_ready(path: &std::path::Path) {
     let path = path.to_path_buf();
-    within("the child arms its traps", DEADLINE, move || {
-        loop {
-            if std::fs::read_to_string(&path).is_ok_and(|text| !text.trim().is_empty()) {
-                return;
+    within(
+        "the child arms its traps",
+        Deadline::after(DEADLINE),
+        move || {
+            loop {
+                if std::fs::read_to_string(&path).is_ok_and(|text| !text.trim().is_empty()) {
+                    return;
+                }
+                thread::yield_now();
             }
-            thread::yield_now();
-        }
-    });
+        },
+    );
 }
 
 /// Waits, driving the fake clock, until `pgid` leaves the jobs list:
@@ -1899,7 +1912,7 @@ fn a_member_outliving_a_stop_is_killed_and_the_job_still_cancels() {
     rig.start(&shell, BOUND, 1024);
     let pgid = pid_in_file(&leader);
     let watchdog = Watchdog::group(pgid);
-    let survivor: u32 = within("the member writes its pid", DEADLINE, {
+    let survivor: u32 = within("the member writes its pid", Deadline::after(DEADLINE), {
         let member = member.clone();
         move || loop {
             let Ok(text) = std::fs::read_to_string(&member) else {
@@ -2051,7 +2064,7 @@ fn a_blocked_watch_still_lets_a_stop_through() {
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
-    within("the first watch call", DEADLINE, {
+    within("the first watch call", Deadline::after(DEADLINE), {
         let script = Arc::clone(&rig.script);
         move || {
             while script.calls().is_empty() {

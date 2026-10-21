@@ -15,7 +15,7 @@ use contract::shapes::Failure;
 use contract::tool::{Output, Tool};
 use contract::{ErrorCode, SessionId};
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, Recorder, TempDir};
+use fakes::{CancelToken, Deadline, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 
 use super::{Attempt, DelegateMessage, Launch, Steer, Steered};
@@ -326,7 +326,7 @@ fn depth_refuses_before_steering_or_resuming_with_the_same_definition() {
         );
         for call in [args(&id.0, "hello"), Map::new()] {
             let tool = Arc::clone(&rig.tool);
-            let output = fakes::within("depth refusal", DEADLINE, move || {
+            let output = fakes::within("depth refusal", Deadline::after(DEADLINE), move || {
                 tool.run(&call, &CancelToken::new(), &Recorder::default())
             });
             assert_eq!(code_of(&output), ErrorCode::DepthExceeded);

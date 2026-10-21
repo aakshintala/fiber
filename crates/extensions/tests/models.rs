@@ -21,7 +21,7 @@ use serde_json::json;
 fn enabled_loading_filters_packages_not_provider_ids_and_inventory_stays_complete() {
     fakes::within(
         "Providers::load_enabled",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         || {
             let setup = Setup::new();
             let full = "github.com/aakshintala/fiber/providers/opencode";
@@ -88,7 +88,7 @@ fn enabled_loading_filters_packages_not_provider_ids_and_inventory_stays_complet
 fn disabled_packages_are_skipped_before_provider_files_secrets_and_cached_models() {
     fakes::within(
         "Providers::load_enabled",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         || {
             let setup = Setup::new();
             let mut m = manifest("acme");
@@ -1275,12 +1275,16 @@ fn a_stale_list_refreshes_once_and_the_cache_is_replaced() {
         clock.wall() - DAY - std::time::Duration::from_secs(1),
     );
     let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
-    let models = fakes::within("lua.refresh", fakes::MUST_SUCCEED_WITHIN, move || {
-        lua.refresh(Some(DAY), ModelsArg::default())
-            .unwrap()
-            .join()
-            .unwrap()
-    })
+    let models = fakes::within(
+        "lua.refresh",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            lua.refresh(Some(DAY), ModelsArg::default())
+                .unwrap()
+                .join()
+                .unwrap()
+        },
+    )
     .unwrap();
     assert_eq!(
         models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
@@ -1297,12 +1301,16 @@ fn without_a_maximum_even_a_fresh_list_refreshes() {
     wrote(&home, "acme", &["old"]);
     set_cache_mtime(&home, "acme", clock.wall());
     let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
-    fakes::within("lua.refresh", fakes::MUST_SUCCEED_WITHIN, move || {
-        lua.refresh(None, ModelsArg::default())
-            .unwrap()
-            .join()
-            .unwrap()
-    })
+    fakes::within(
+        "lua.refresh",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            lua.refresh(None, ModelsArg::default())
+                .unwrap()
+                .join()
+                .unwrap()
+        },
+    )
     .unwrap();
     assert_eq!(cached_ids(&home, "acme"), ["new"]);
 }
@@ -1325,9 +1333,11 @@ fn two_providers_over_one_stale_list_refresh_it_once() {
     let b = second.refresh(Some(DAY), ModelsArg::default());
     assert!(a.is_some(), "the first refresh starts");
     assert!(b.is_none(), "the second sees the first's lock");
-    fakes::within("refresh.join", fakes::MUST_SUCCEED_WITHIN, move || {
-        a.unwrap().join().unwrap()
-    })
+    fakes::within(
+        "refresh.join",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || a.unwrap().join().unwrap(),
+    )
     .unwrap();
     assert_eq!(cached_ids(&home, "acme"), ["new"]);
 }
@@ -1406,9 +1416,11 @@ fn refresh_lists_starts_only_the_stale_provider_with_a_credential() {
     let names: Vec<&str> = started.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(names, ["stale"]);
     for (_, handle) in started {
-        fakes::within("handle.join", fakes::MUST_SUCCEED_WITHIN, move || {
-            handle.join().unwrap()
-        })
+        fakes::within(
+            "handle.join",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || handle.join().unwrap(),
+        )
         .unwrap();
     }
     // Only the stale provider with a credential ran: the fresh list and
@@ -2205,8 +2217,10 @@ fn models_receives_the_session_key_beside_the_workspace_host() {
         ),
     );
     let home = setup.home();
-    let (notices, cached) =
-        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+    let (notices, cached) = fakes::within(
+        "providers.add_lua",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
             let mut providers = providers;
             let notices = providers.add_lua(
                 "acme-ext",
@@ -2217,7 +2231,8 @@ fn models_receives_the_session_key_beside_the_workspace_host() {
             );
             let cached = cached_ids(&home, "acme");
             (notices, cached)
-        });
+        },
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(cached, ["k1@h.example"]);
 }
@@ -2246,8 +2261,10 @@ fn the_workspace_host_falls_back_to_the_environment() {
         ),
     );
     let home = setup.home();
-    let (notices, cached) =
-        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+    let (notices, cached) = fakes::within(
+        "providers.add_lua",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
             let mut providers = providers;
             let notices = providers.add_lua(
                 "acme-ext",
@@ -2258,7 +2275,8 @@ fn the_workspace_host_falls_back_to_the_environment() {
             );
             let cached = cached_ids(&home, "acme");
             (notices, cached)
-        });
+        },
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(cached, ["k1@e.example"]);
 }
@@ -2285,8 +2303,10 @@ fn models_receives_no_key_for_a_provider_that_registers_credential() {
     );
     let config = config(&setup, &[]);
     let home = setup.home();
-    let (notices, cached) =
-        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+    let (notices, cached) = fakes::within(
+        "providers.add_lua",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
             let mut providers = providers;
             let notices = providers.add_lua(
                 "acme-ext",
@@ -2297,7 +2317,8 @@ fn models_receives_no_key_for_a_provider_that_registers_credential() {
             );
             let cached = cached_ids(&home, "acme");
             (notices, cached)
-        });
+        },
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(cached, ["nil@static"]);
 }
@@ -2317,8 +2338,10 @@ fn models_is_not_called_while_the_workspace_has_no_value() {
     );
     let lua = lua_bare(&setup, "ext", "acme", "error(\"must not run\")");
     let home = setup.home();
-    let (mut providers, notices, config) =
-        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+    let (mut providers, notices, config) = fakes::within(
+        "providers.add_lua",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
             let mut providers = providers;
             let config = config(&setup, &[]);
             let notices = providers.add_lua(
@@ -2329,7 +2352,8 @@ fn models_is_not_called_while_the_workspace_has_no_value() {
                 &env_empty,
             );
             (providers, notices, config)
-        });
+        },
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(
         config::read_model_cache(&home, "acme").unwrap().is_none(),
@@ -2356,8 +2380,10 @@ fn models_is_not_called_while_the_workspace_is_not_a_host() {
     );
     let lua = lua_bare(&setup, "ext", "acme", "error(\"must not run\")");
     let home = setup.home();
-    let (mut providers, notices, config) =
-        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+    let (mut providers, notices, config) = fakes::within(
+        "providers.add_lua",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
             let mut providers = providers;
             let config = config(&setup, &["extensions.\"acme-ext\".settings.workspace=a/b"]);
             let notices = providers.add_lua(
@@ -2368,7 +2394,8 @@ fn models_is_not_called_while_the_workspace_is_not_a_host() {
                 &env_empty,
             );
             (providers, notices, config)
-        });
+        },
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(
         config::read_model_cache(&home, "acme").unwrap().is_none(),
@@ -2412,22 +2439,28 @@ fn refresh_lists_passes_the_key_and_host_to_the_thread() {
             "https://{workspace}/v1",
         ),
     );
-    let started = fakes::within("refresh_lists", fakes::MUST_SUCCEED_WITHIN, move || {
-        extensions::refresh_lists(
-            &[lua],
-            &providers,
-            &config,
-            Some(DAY),
-            &fakes::children::grouped_output,
-            &env_empty,
-        )
-    });
+    let started = fakes::within(
+        "refresh_lists",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            extensions::refresh_lists(
+                &[lua],
+                &providers,
+                &config,
+                Some(DAY),
+                &fakes::children::grouped_output,
+                &env_empty,
+            )
+        },
+    );
     assert_eq!(started.len(), 1);
     assert_eq!(started[0].0, "acme");
     for (_, handle) in started {
-        fakes::within("handle.join", fakes::MUST_SUCCEED_WITHIN, move || {
-            handle.join().unwrap()
-        })
+        fakes::within(
+            "handle.join",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || handle.join().unwrap(),
+        )
         .unwrap();
     }
     assert_eq!(cached_ids(&setup.home(), "acme"), ["k1@h.example"]);
@@ -2457,16 +2490,20 @@ fn refresh_lists_starts_nothing_while_the_workspace_has_no_value() {
             "https://{workspace}/v1",
         ),
     );
-    let started = fakes::within("refresh_lists", fakes::MUST_SUCCEED_WITHIN, move || {
-        extensions::refresh_lists(
-            &[lua],
-            &providers,
-            &config,
-            Some(DAY),
-            &fakes::children::grouped_output,
-            &env_empty,
-        )
-    });
+    let started = fakes::within(
+        "refresh_lists",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            extensions::refresh_lists(
+                &[lua],
+                &providers,
+                &config,
+                Some(DAY),
+                &fakes::children::grouped_output,
+                &env_empty,
+            )
+        },
+    );
     assert!(started.is_empty());
     assert_eq!(cached_ids(&setup.home(), "acme"), ["old"]);
 }
@@ -2506,25 +2543,31 @@ fn a_models_failure_redacts_the_key() {
         key: Some(Secret::new("dapi-secret".into())),
         placeholders: std::collections::BTreeMap::new(),
     };
-    let err = fakes::within("lua.list_models", fakes::MUST_SUCCEED_WITHIN, move || {
-        lua.list_models(&arg)
-    })
+    let err = fakes::within(
+        "lua.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || lua.list_models(&arg),
+    )
     .unwrap_err();
     let text = err.to_string();
     assert!(text.contains("[redacted]"), "{text}");
     assert!(!text.contains("dapi-secret"), "{text}");
     let lua = lua_bare_arg(&setup, "ext", "acme", "error(\"saw \" .. arg.key)");
     let config = config(&setup, &[]);
-    let notices = fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
-        let mut providers = providers;
-        providers.add_lua(
-            "acme-ext",
-            &lua,
-            &config,
-            &fakes::children::grouped_output,
-            &env_empty,
-        )
-    });
+    let notices = fakes::within(
+        "providers.add_lua",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let mut providers = providers;
+            providers.add_lua(
+                "acme-ext",
+                &lua,
+                &config,
+                &fakes::children::grouped_output,
+                &env_empty,
+            )
+        },
+    );
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
     assert!(
@@ -2562,25 +2605,31 @@ fn a_models_non_list_return_redacts_the_key() {
         key: Some(Secret::new("dapi-secret".into())),
         placeholders: std::collections::BTreeMap::new(),
     };
-    let err = fakes::within("lua.list_models", fakes::MUST_SUCCEED_WITHIN, move || {
-        lua.list_models(&arg)
-    })
+    let err = fakes::within(
+        "lua.list_models",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || lua.list_models(&arg),
+    )
     .unwrap_err();
     let text = err.to_string();
     assert!(text.contains("[redacted]"), "{text}");
     assert!(!text.contains("dapi-secret"), "{text}");
     let lua = lua_bare_arg(&setup, "ext", "acme", "arg.key");
     let config = config(&setup, &[]);
-    let notices = fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
-        let mut providers = providers;
-        providers.add_lua(
-            "acme-ext",
-            &lua,
-            &config,
-            &fakes::children::grouped_output,
-            &env_empty,
-        )
-    });
+    let notices = fakes::within(
+        "providers.add_lua",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let mut providers = providers;
+            providers.add_lua(
+                "acme-ext",
+                &lua,
+                &config,
+                &fakes::children::grouped_output,
+                &env_empty,
+            )
+        },
+    );
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
     assert!(

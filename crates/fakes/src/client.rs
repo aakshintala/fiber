@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::deadline::Deadline;
+
 /// How long `Drop` waits for the reader thread to stop, in real time.
 ///
 /// The `shutdown(Both)` just before wakes the reader's `read` at once, so
@@ -225,9 +227,11 @@ fn stop_reader(handle: JoinHandle<()>, deadline: Duration) {
     if std::thread::panicking() {
         return;
     }
-    match crate::within("the fake client's reader to stop", deadline, move || {
-        handle.join()
-    }) {
+    match crate::within(
+        "the fake client's reader to stop",
+        Deadline::after(deadline),
+        move || handle.join(),
+    ) {
         Ok(()) | Err(_) => {}
     }
 }

@@ -88,7 +88,7 @@ fn a_token_debug_names_its_fields_and_hides_both_secrets() {
 }
 
 fn auth(bearer: Arc<Bearer>) -> Result<Authorization, Outcome> {
-    fakes::within("token authorization", WITHIN, move || {
+    fakes::within("token authorization", Deadline::after(WITHIN), move || {
         bearer.authorization(&TestRefresh)
     })
 }
@@ -184,14 +184,18 @@ fn refresh_saves_rotated_tokens_when_stopped_after_post() {
     }
     let server = OauthServer::start(vec![OauthReply::token("at-2", "rt-2", 3600)]);
     let (_setup, files, bearer) = fixture(&server.url(), Some(0));
-    fakes::within("refresh stopped after reply", WITHIN, move || {
-        let wait = StoppedAfterPost(AtomicBool::new(false));
-        let result = bearer.authorization(&wait);
-        assert!(wait.stopped());
-        assert_eq!(record(&files)["generation"], 2);
-        assert_eq!(record(&files)["refresh_token"], "rt-2");
-        assert_eq!(result.unwrap(), Authorization::Send("Bearer at-2".into()));
-    });
+    fakes::within(
+        "refresh stopped after reply",
+        Deadline::after(WITHIN),
+        move || {
+            let wait = StoppedAfterPost(AtomicBool::new(false));
+            let result = bearer.authorization(&wait);
+            assert!(wait.stopped());
+            assert_eq!(record(&files)["generation"], 2);
+            assert_eq!(record(&files)["refresh_token"], "rt-2");
+            assert_eq!(result.unwrap(), Authorization::Send("Bearer at-2".into()));
+        },
+    );
 }
 #[test]
 fn optional_refresh_fields_and_saturating_expiry() {

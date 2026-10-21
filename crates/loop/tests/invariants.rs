@@ -26,6 +26,7 @@ use contract::inbox::{Ack, Delivery};
 use contract::provider::{Input, ModelCall, ModelRequest, Provider, ToolDefinition};
 use contract::shapes::Question;
 use contract::tool::Tool;
+use fakes::Deadline;
 use fakes::ScriptedProvider;
 use r#loop::{Loop, TurnCancel};
 use proptest::prelude::*;
@@ -69,23 +70,27 @@ fn finish_turn(
     mut watcher: log::Watcher,
     ended: mpsc::Receiver<(Loop, Option<TurnOutcome>)>,
 ) -> (log::Watcher, Vec<Envelope>, Loop, Option<TurnOutcome>) {
-    fakes::within("the turn's end and its lines", CASE_DEADLINE, move || {
-        let (looped, outcome) = ended.recv().unwrap();
-        let mut lines = Vec::new();
-        loop {
-            match watcher.recv() {
-                Ok(Some(line)) => {
-                    let last = line.kind == "turn_completed";
-                    lines.push(line);
-                    if last {
-                        return (watcher, lines, looped, outcome);
+    fakes::within(
+        "the turn's end and its lines",
+        Deadline::after(CASE_DEADLINE),
+        move || {
+            let (looped, outcome) = ended.recv().unwrap();
+            let mut lines = Vec::new();
+            loop {
+                match watcher.recv() {
+                    Ok(Some(line)) => {
+                        let last = line.kind == "turn_completed";
+                        lines.push(line);
+                        if last {
+                            return (watcher, lines, looped, outcome);
+                        }
                     }
+                    Ok(None) => panic!("the log ended before turn_completed"),
+                    Err(err) => panic!("the log failed before turn_completed: {err}"),
                 }
-                Ok(None) => panic!("the log ended before turn_completed"),
-                Err(err) => panic!("the log failed before turn_completed: {err}"),
             }
-        }
-    })
+        },
+    )
 }
 
 /// Every line until `done` accepts the lines accumulated so far, under one
@@ -99,7 +104,7 @@ fn read_lines_until(
     done: impl Fn(&[Envelope]) -> bool + Send + 'static,
 ) -> (log::Watcher, Vec<Envelope>) {
     let what_owned = what.to_owned();
-    fakes::within(what, CASE_DEADLINE, move || {
+    fakes::within(what, Deadline::after(CASE_DEADLINE), move || {
         loop {
             if done(&lines) {
                 return (watcher, lines);

@@ -1502,7 +1502,7 @@ fn child_guard(rig: &ServiceRig) -> fakes::Watchdog {
     let pidfile = rig._dir.path().join("child.pid");
     let pid: u32 = fakes::within(
         "the child writes its pid",
-        Duration::from_secs(3),
+        Deadline::after(Duration::from_secs(3)),
         move || loop {
             let Ok(text) = std::fs::read_to_string(&pidfile) else {
                 std::thread::yield_now();
@@ -1585,14 +1585,18 @@ fn await_started(rig: &ServiceRig, id: &contract::JobId) {
 /// Waits until the registry lists no running job.
 fn await_idle(rig: &ServiceRig) {
     let jobs = Arc::clone(&rig.delegates.jobs);
-    fakes::within("the job ends", Duration::from_secs(3), move || {
-        loop {
-            if contract::jobs::Jobs::running(jobs.as_ref()).is_empty() {
-                return;
+    fakes::within(
+        "the job ends",
+        Deadline::after(Duration::from_secs(3)),
+        move || {
+            loop {
+                if contract::jobs::Jobs::running(jobs.as_ref()).is_empty() {
+                    return;
+                }
+                std::thread::yield_now();
             }
-            std::thread::yield_now();
-        }
-    });
+        },
+    );
 }
 
 fn arguments() -> serde_json::Map<String, serde_json::Value> {

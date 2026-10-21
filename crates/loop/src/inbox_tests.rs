@@ -217,7 +217,7 @@ fn an_alone_request_after_command_end_or_shutdown_writes_nothing_and_never_calls
         };
         fakes::within(
             "drop stopped command request",
-            Duration::from_secs(3),
+            Deadline::after(Duration::from_secs(3)),
             move || {
                 looped.run_alone(request).unwrap();
             },
@@ -259,7 +259,7 @@ fn the_drain_runs_commands_in_order_and_preserves_interleaved_model_switches() {
         }
         let looped = fakes::within(
             "boundary command drain",
-            Duration::from_secs(3),
+            Deadline::after(Duration::from_secs(3)),
             move || {
                 looped.drain(&TurnId("t_1".into())).unwrap();
                 looped

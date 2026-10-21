@@ -15,6 +15,7 @@ use tui::{Configure, LoginNeed};
 
 use crate::configure::Seam;
 use crate::test_support::Rig;
+use fakes::Deadline;
 
 const NAME: &str = "github.com/aakshintala/fiber/providers/openai";
 
@@ -62,34 +63,38 @@ fn call(
 
 #[test]
 fn hub_install_returns_summary_and_omits_absent_login_errors() {
-    fakes::within("hub provider install", Duration::from_secs(20), || {
-        let rig = Rig::new("fiber-configure-install-wire");
-        let repo = repository();
-        let seam = Seam::with_origin(rig.home.clone(), origin(repo.path()));
-        let result = call(&seam, &rig.workspace).unwrap().unwrap();
-        assert_eq!(
-            result,
-            json!({"installed":[NAME],"summary":summary(),"login":[{"provider":"openai"}]})
-        );
-        let key = rig.home.join("credentials/openai/default");
-        fs::create_dir_all(&key).unwrap();
-        let result = call(&seam, &rig.workspace).unwrap().unwrap();
-        assert_eq!(result["installed"], json!([NAME]));
-        assert_eq!(result["login"][0]["provider"], "openai");
-        assert!(
-            result["login"][0]["error"]
-                .as_str()
-                .unwrap()
-                .contains(&key.display().to_string())
-        );
-    });
+    fakes::within(
+        "hub provider install",
+        Deadline::after(Duration::from_secs(20)),
+        || {
+            let rig = Rig::new("fiber-configure-install-wire");
+            let repo = repository();
+            let seam = Seam::with_origin(rig.home.clone(), origin(repo.path()));
+            let result = call(&seam, &rig.workspace).unwrap().unwrap();
+            assert_eq!(
+                result,
+                json!({"installed":[NAME],"summary":summary(),"login":[{"provider":"openai"}]})
+            );
+            let key = rig.home.join("credentials/openai/default");
+            fs::create_dir_all(&key).unwrap();
+            let result = call(&seam, &rig.workspace).unwrap().unwrap();
+            assert_eq!(result["installed"], json!([NAME]));
+            assert_eq!(result["login"][0]["provider"], "openai");
+            assert!(
+                result["login"][0]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&key.display().to_string())
+            );
+        },
+    );
 }
 
 #[test]
 fn hub_install_rejections_preserve_configuration_and_fetch_error_codes() {
     fakes::within(
         "hub provider install failure",
-        Duration::from_secs(20),
+        Deadline::after(Duration::from_secs(20)),
         || {
             let rig = Rig::new("fiber-configure-install-wire-error");
             let seam = Seam::with_origin(rig.home.clone(), origin(&rig.root.path().join("absent")));
@@ -114,7 +119,7 @@ fn hub_install_rejections_preserve_configuration_and_fetch_error_codes() {
 fn fresh_install_returns_summary_and_login_then_stored_key_removes_login() {
     fakes::within(
         "configure provider install",
-        Duration::from_secs(20),
+        Deadline::after(Duration::from_secs(20)),
         || {
             let rig = Rig::new("fiber-configure-install");
             let repo = repository();

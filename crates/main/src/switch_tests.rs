@@ -208,7 +208,7 @@ fn keyed(label: &str) -> (String, crate::lua_providers::KeyAndSigner) {
 fn reload_reviewer_uses_the_route_label_and_publishes_only_other_provider_reads() {
     fakes::within(
         "reload reviewer credential publication",
-        DEADLINE,
+        Deadline::after(DEADLINE),
         move || {
             let fixture = fixture("fiber-reload-reviewer-labels");
             let work = fixture.root.path().join("work-key");
@@ -448,7 +448,7 @@ fn bounded(
     chosen: Option<ThinkingLevel>,
 ) -> Result<r#loop::Prepared, contract::inbox::Rejection> {
     let (switching, args) = (Arc::clone(switching), args.clone());
-    fakes::within("the preparation", DEADLINE, move || {
+    fakes::within("the preparation", Deadline::after(DEADLINE), move || {
         prepare(&switching, &quiet(), &args, None, chosen)
     })
 }
@@ -466,7 +466,7 @@ fn bounded_with(
         args.clone(),
         label.map(str::to_owned),
     );
-    fakes::within("the preparation", DEADLINE, move || {
+    fakes::within("the preparation", Deadline::after(DEADLINE), move || {
         prepare(&switching, &quiet(), &args, label.as_deref(), chosen)
     })
 }

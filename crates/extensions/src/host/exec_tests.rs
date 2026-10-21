@@ -35,7 +35,7 @@ fn group_lives(pgid: u32) -> bool {
 #[track_caller]
 fn ready_in(dir: &std::path::Path) -> fakes::children::Ready {
     let dir = dir.to_path_buf();
-    fakes::within("the ready fifo", DEADLINE, move || {
+    fakes::within("the ready fifo", Deadline::after(DEADLINE), move || {
         fakes::children::Ready::new(&dir)
     })
 }
@@ -960,13 +960,17 @@ fn stop_pid_reaps_an_exited_child_without_signalling() {
         i32::try_from(child.id()).expect("the exited child's pid fits in an i32"),
     )
     .expect("the exited child's pid is not zero");
-    fakes::within("the exited child", fakes::MUST_SUCCEED_WITHIN, move || {
-        rustix::process::waitid(
-            WaitId::Pid(pid),
-            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
-        )
-        .expect("waitid sees the exit");
-    });
+    fakes::within(
+        "the exited child",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            rustix::process::waitid(
+                WaitId::Pid(pid),
+                WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+            )
+            .expect("waitid sees the exit");
+        },
+    );
     let shared = super::Shared::default();
     assert!(
         !super::stop_pid(&mut child, &shared, Signal::TERM),

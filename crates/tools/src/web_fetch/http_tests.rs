@@ -167,7 +167,7 @@ fn pair() -> (TcpStream, TcpStream) {
     let addr = listener.local_addr().unwrap();
     let (client, server) = fakes::within(
         "the client to connect and the listener to accept it",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             let client = TcpStream::connect(addr).unwrap();
             let (server, _) = listener.accept().unwrap();
@@ -386,7 +386,7 @@ fn park_returns_at_once_for_a_finished_hop() {
 #[track_caller]
 fn head_of(address: SocketAddr, uri: &str) -> super::Head {
     let uri: Uri = uri.parse().unwrap();
-    fakes::within("the head of one GET", SIGNAL, move || {
+    fakes::within("the head of one GET", Deadline::after(SIGNAL), move || {
         let request = super::Get {
             uri: &uri,
             pinned: Some(&[address]),

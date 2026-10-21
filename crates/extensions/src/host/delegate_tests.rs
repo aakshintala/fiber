@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use contract::shapes::Failure;
 use contract::{ErrorCode, JobId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use mlua::{Lua, Value as LuaValue};
 use serde_json::{Map, Value};
@@ -182,9 +183,11 @@ fn command_init(body: &str) -> String {
 #[track_caller]
 fn go(ext: &Arc<LuaExtension>) -> Result<String, crate::Error> {
     let held = Arc::clone(ext);
-    fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || {
-        held.command("go", "")
-    })
+    fakes::within(
+        "held.command",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || held.command("go", ""),
+    )
 }
 
 /// The `pcall` verdict for a call with this spec and opts: `ok` with the
@@ -468,9 +471,11 @@ fn entry_script_and_a_missing_service_raise_closing() {
     let init = format!("host.delegate({GOOD_SPEC}, {GOOD_OPTS})\n");
     let (_dir, ext, _clock) = rigged(&init, Some(&fake), true);
     let held = Arc::clone(&ext);
-    match fakes::within("held.commands", fakes::MUST_SUCCEED_WITHIN, move || {
-        held.commands()
-    }) {
+    match fakes::within(
+        "held.commands",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || held.commands(),
+    ) {
         Err(crate::Error::Lua { message, .. }) => {
             assert_eq!(message, "host.delegate: not available while init.lua runs");
         }

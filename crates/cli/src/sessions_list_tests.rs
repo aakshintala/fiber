@@ -496,7 +496,7 @@ fn list_exits_zero_on_success_and_fail_code_on_hub_failure() {
         let output = fakes::rerun_prepared(
             &format!("{name}::list_exits_zero_on_success_and_fail_code_on_hub_failure"),
             &[(CHILD, case)],
-            HUB_DEADLINE,
+            Deadline::after(HUB_DEADLINE),
             |command| {
                 command.current_dir(&workspace);
             },

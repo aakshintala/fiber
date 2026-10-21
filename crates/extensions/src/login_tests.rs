@@ -6,6 +6,7 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
@@ -64,7 +65,7 @@ fn constructing_a_login_provider_runs_no_lua() {
     let marker_copy = marker.clone();
     fakes::within(
         "lazy login construction",
-        Duration::from_secs(5),
+        Deadline::after(Duration::from_secs(5)),
         move || {
             let provider = login_provider(
                 &home,
@@ -145,7 +146,7 @@ fn login_provider_applies_the_manifest_memory_cap_in_mib() {
 
     let functions = fakes::within(
         "provider VM registration",
-        Duration::from_secs(5),
+        Deadline::after(Duration::from_secs(5)),
         move || provider.functions(),
     );
     assert_eq!(functions.unwrap(), ["credential"]);
@@ -231,7 +232,7 @@ fn login_provider_fails_when_the_vm_registers_an_undeclared_provider() {
     .unwrap();
     let err = fakes::within(
         "refused provider login",
-        Duration::from_secs(5),
+        Deadline::after(Duration::from_secs(5)),
         move || provider.login("acme", None, crate::LoginMethod::Browser),
     )
     .unwrap_err();

@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 
 use crate::MUST_SUCCEED_WITHIN;
 use crate::TempDir;
+use crate::deadline::Deadline;
 
 /// Runs `git` with the test identity in `dir` and returns its trimmed
 /// stdout. Git leads its own process group and runs under
@@ -38,7 +39,7 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
         .spawn()
         .unwrap();
     let what = format!("git {args:?}");
-    let out = crate::finished(&what, child, &[], MUST_SUCCEED_WITHIN);
+    let out = crate::finished(&what, child, &[], Deadline::after(MUST_SUCCEED_WITHIN));
     assert!(out.status.success(), "git {args:?}: {out:?}");
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
@@ -79,7 +80,7 @@ pub fn branch_exists(repo: &Path, branch: &str) -> bool {
         Err(_) => return false,
     };
     let what = format!("git rev-parse --verify --quiet refs/heads/{branch}");
-    crate::finished(&what, child, &[], MUST_SUCCEED_WITHIN)
+    crate::finished(&what, child, &[], Deadline::after(MUST_SUCCEED_WITHIN))
         .status
         .success()
 }

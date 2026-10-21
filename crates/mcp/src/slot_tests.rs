@@ -1393,7 +1393,9 @@ fn call_asking_forwards_the_asker_without_leaving_the_seam() {
     let started = setup.start(vec![setup.spec("fx")]);
     let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
     let serving = Arc::clone(&slot);
-    let server = fakes::within("the serve", WITHIN, move || match serving.run("ask") {
+    let server = fakes::within("the serve", Deadline::after(WITHIN), move || match serving
+        .run("ask")
+    {
         Run::Call(server, _) => server,
         Run::Removed(_) => panic!("the server still lists ask"),
         Run::Failed(failed) => panic!("the server runs: {}", failed.error),
@@ -1406,7 +1408,7 @@ fn call_asking_forwards_the_asker_without_leaving_the_seam() {
             },
         )],
     );
-    let called = fakes::within("the asking call", WITHIN, move || {
+    let called = fakes::within("the asking call", Deadline::after(WITHIN), move || {
         let empty = serde_json::Map::new();
         let params = crate::rpc::Named {
             arguments: &empty,

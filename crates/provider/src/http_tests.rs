@@ -221,29 +221,33 @@ fn called(
 ) -> Posted {
     let headers = headers.to_vec();
     let cancel = std::sync::Arc::clone(cancel);
-    fakes::within(&format!("the call to {url}"), CALL_WITHIN, move || {
-        let mut secrets = crate::redact::Secrets::default();
-        let sent = super::post_signed(
-            &url,
-            &headers,
-            body,
-            signer.as_deref(),
-            &route,
-            &cancel,
-            &mut secrets,
-        );
-        let outcome = match sent {
-            Ok((mut stream, flag, _)) => {
-                let mut text = String::new();
-                match std::io::Read::read_to_string(&mut stream, &mut text) {
-                    Ok(_) => Ok((text, flag)),
-                    Err(err) => Err(crate::Error::Connection(err.to_string())),
+    fakes::within(
+        &format!("the call to {url}"),
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut secrets = crate::redact::Secrets::default();
+            let sent = super::post_signed(
+                &url,
+                &headers,
+                body,
+                signer.as_deref(),
+                &route,
+                &cancel,
+                &mut secrets,
+            );
+            let outcome = match sent {
+                Ok((mut stream, flag, _)) => {
+                    let mut text = String::new();
+                    match std::io::Read::read_to_string(&mut stream, &mut text) {
+                        Ok(_) => Ok((text, flag)),
+                        Err(err) => Err(crate::Error::Connection(err.to_string())),
+                    }
                 }
-            }
-            Err(err) => Err(err),
-        };
-        (outcome, secrets)
-    })
+                Err(err) => Err(err),
+            };
+            (outcome, secrets)
+        },
+    )
 }
 
 /// Runs one `post_signed` with a fresh [`Secrets`] on its own thread and
@@ -451,9 +455,11 @@ fn tls_runs_end_to_end_inside_the_tunnel() {
         matches!(result, Err(crate::Error::Connection(_))),
         "a tunnel to nowhere fails to connect: {result:?}"
     );
-    fakes::within("the origin thread to return", HANDSHAKE_WITHIN, move || {
-        origin.join()
-    })
+    fakes::within(
+        "the origin thread to return",
+        Deadline::after(HANDSHAKE_WITHIN),
+        move || origin.join(),
+    )
     .unwrap();
 }
 
@@ -1128,7 +1134,7 @@ fn observed_with(
     let cancel = std::sync::Arc::clone(cancel);
     fakes::within(
         &format!("the observed call to {url}"),
-        CALL_WITHIN,
+        Deadline::after(CALL_WITHIN),
         move || {
             let mut secrets = crate::redact::Secrets::default();
             let sent = super::post_signed_observed(
@@ -1950,11 +1956,15 @@ fn a_fixed_header_only_secret_is_redacted_from_the_recorded_path() {
         plain_decode,
     )
     .observed(observation);
-    let reply = fakes::within("the call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    });
+    let reply = fakes::within(
+        "the call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = call.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
     assert!(reply.0.is_ok(), "the call reads: {:?}", reply.0);
     let lines = log.serialized();
     assert_eq!(lines.len(), 1);
@@ -2021,11 +2031,15 @@ fn a_fixed_bearer_token_is_redacted_from_the_recorded_path() {
         plain_decode,
     )
     .observed(observation);
-    let reply = fakes::within("the call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    });
+    let reply = fakes::within(
+        "the call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = call.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
     assert!(reply.0.is_ok(), "the call reads: {:?}", reply.0);
     let lines = log.serialized();
     assert_eq!(lines.len(), 1);
@@ -2358,17 +2372,21 @@ fn an_observed_open_with_timing_times_one_connector_scope() {
         &net,
     );
     let worker = std::sync::Arc::clone(&net);
-    let text = fakes::within("the observed open to return", CALL_WITHIN, move || {
-        let mut body = call.open().expect("the open sends");
-        assert_eq!(
-            worker.calls(),
-            1,
-            "the open counts its scope before any read"
-        );
-        let mut text = String::new();
-        std::io::Read::read_to_string(&mut body, &mut text).unwrap();
-        text
-    });
+    let text = fakes::within(
+        "the observed open to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut body = call.open().expect("the open sends");
+            assert_eq!(
+                worker.calls(),
+                1,
+                "the open counts its scope before any read"
+            );
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut body, &mut text).unwrap();
+            text
+        },
+    );
     assert_eq!(text, "ok", "the observed body reads unchanged");
     // No code under test waits on the clock here; the observed call has returned, so this move only proves later moves add no scope (ruling 6179406086).
     clock.advance(std::time::Duration::from_millis(50));
@@ -2410,11 +2428,15 @@ fn an_observed_run_with_timing_times_one_scope_and_reads_the_reply() {
         &clock,
         &net,
     );
-    let reply = fakes::within("the observed call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    });
+    let reply = fakes::within(
+        "the observed call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = call.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
     assert!(reply.0.is_ok(), "the observed run reads: {:?}", reply.0);
     assert_connector_scope(&net);
     let plain = crate::call::Call::new(
@@ -2425,11 +2447,15 @@ fn an_observed_run_with_timing_times_one_scope_and_reads_the_reply() {
         b"{}".to_vec(),
         plain_decode,
     );
-    let plain = fakes::within("the plain call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = plain.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    });
+    let plain = fakes::within(
+        "the plain call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = plain.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
     assert_eq!(
         format!("{:?}", reply.0),
         format!("{:?}", plain.0),
@@ -2472,11 +2498,15 @@ fn an_observed_run_without_timing_writes_its_line_with_no_net_scope() {
         )
         .with_model("m".to_owned()),
     );
-    let reply = fakes::within("the untimed call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    });
+    let reply = fakes::within(
+        "the untimed call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = call.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
     assert!(reply.0.is_ok(), "the untimed run reads: {:?}", reply.0);
     assert_eq!(
         log.serialized().len(),
@@ -2534,11 +2564,15 @@ fn an_info_observation_never_invokes_its_timing() {
         .with_model("m".to_owned())
         .with_timing(panic_timing),
     );
-    let info = fakes::within("the info call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = observed.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    });
+    let info = fakes::within(
+        "the info call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = observed.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
     let plain = crate::call::Call::new(
         &endpoint,
         &request,
@@ -2547,11 +2581,15 @@ fn an_info_observation_never_invokes_its_timing() {
         b"{}".to_vec(),
         plain_decode,
     );
-    let plain = fakes::within("the plain call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = plain.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    });
+    let plain = fakes::within(
+        "the plain call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = plain.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
     assert_eq!(
         format!("{:?}", info.0),
         format!("{:?}", plain.0),
@@ -2586,11 +2624,15 @@ fn a_precancelled_call_starts_no_scope() {
         &net,
     );
     timed.cancel();
-    let failed = fakes::within("the cancelled call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = timed.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    });
+    let failed = fakes::within(
+        "the cancelled call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = timed.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
     let plain = crate::call::Call::new(
         &endpoint,
         &request,
@@ -2602,7 +2644,7 @@ fn a_precancelled_call_starts_no_scope() {
     plain.cancel();
     let plain = fakes::within(
         "the plain cancelled call to return",
-        CALL_WITHIN,
+        Deadline::after(CALL_WITHIN),
         move || {
             let mut deltas = Vec::new();
             let reply = plain.run(&mut |delta| deltas.push(delta));
@@ -2629,12 +2671,16 @@ fn a_precancelled_call_starts_no_scope() {
 /// failure below must match its plain twin, send nothing and time nothing.
 fn pre_send_outcome(build: impl FnOnce() -> crate::call::Call + Send + 'static) -> String {
     use contract::provider::ModelCall as _;
-    fakes::within("the pre-send call to return", CALL_WITHIN, move || {
-        let call = build();
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |delta| deltas.push(delta));
-        format!("{reply:?}")
-    })
+    fakes::within(
+        "the pre-send call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let call = build();
+            let mut deltas = Vec::new();
+            let reply = call.run(&mut |delta| deltas.push(delta));
+            format!("{reply:?}")
+        },
+    )
 }
 
 #[test]
@@ -2723,11 +2769,15 @@ fn a_refused_observed_run_times_one_scope_without_milestones() {
         &clock,
         &net,
     );
-    let failed = fakes::within("the refused call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = timed.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    });
+    let failed = fakes::within(
+        "the refused call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = timed.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
     let plain = crate::call::Call::new(
         &endpoint,
         &request,
@@ -2736,11 +2786,15 @@ fn a_refused_observed_run_times_one_scope_without_milestones() {
         b"{}".to_vec(),
         plain_decode,
     );
-    let ordinary = fakes::within("the plain refused call to return", CALL_WITHIN, move || {
-        let mut deltas = Vec::new();
-        let reply = plain.run(&mut |delta| deltas.push(delta));
-        (reply, deltas)
-    });
+    let ordinary = fakes::within(
+        "the plain refused call to return",
+        Deadline::after(CALL_WITHIN),
+        move || {
+            let mut deltas = Vec::new();
+            let reply = plain.run(&mut |delta| deltas.push(delta));
+            (reply, deltas)
+        },
+    );
     assert_eq!(
         format!("{:?}", failed.0),
         format!("{:?}", ordinary.0),
@@ -2772,7 +2826,7 @@ fn an_observed_proxy_send_times_its_one_socket() {
     let cancel = std::sync::Arc::default();
     let (sent, body, _) = fakes::within(
         "the observed proxy send and response body to be read",
-        CALL_WITHIN,
+        Deadline::after(CALL_WITHIN),
         move || {
             let mut secrets = crate::redact::Secrets::default();
             let sent = super::post_signed_observed(

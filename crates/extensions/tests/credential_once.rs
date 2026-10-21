@@ -12,6 +12,7 @@ use std::sync::Arc;
 use common::{Setup, install, manifest, provider, write};
 use config::{Config, ProjectKey, Sources};
 use extensions::{LuaExtension, LuaProvider, Providers};
+use fakes::Deadline;
 use serde_json::json;
 
 #[test]
@@ -54,8 +55,10 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
     .unwrap();
 
     // Discovery: no model cache, so `add_lua` asks for the credential.
-    let (discovered, config) =
-        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+    let (discovered, config) = fakes::within(
+        "providers.add_lua",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
             let notices = providers.add_lua(
                 "acme-ext",
                 &lua,
@@ -65,16 +68,21 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
             );
             assert!(notices.is_empty(), "{notices:?}");
             (providers, config)
-        });
+        },
+    );
     // The session's own read.
-    let key = fakes::within("credential_with", fakes::MUST_SUCCEED_WITHIN, move || {
-        let data = discovered.data("acme");
-        config
-            .credentials()
-            .credential_with(&data, "default", &fakes::children::grouped_output)
-            .map(|read| read.secret)
-            .unwrap()
-    });
+    let key = fakes::within(
+        "credential_with",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let data = discovered.data("acme");
+            config
+                .credentials()
+                .credential_with(&data, "default", &fakes::children::grouped_output)
+                .map(|read| read.secret)
+                .unwrap()
+        },
+    );
     assert_eq!(key.expose(), "key");
     assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);
 }

@@ -36,7 +36,12 @@ pub fn fifo(path: impl AsRef<Path>) {
         Ok(child) => child,
         Err(err) => panic!("mkfifo {}: {err}", path.display()),
     };
-    let output = crate::finished(&what, child, &[], crate::MUST_SUCCEED_WITHIN);
+    let output = crate::finished(
+        &what,
+        child,
+        &[],
+        crate::Deadline::after(crate::MUST_SUCCEED_WITHIN),
+    );
     assert!(
         output.status.success(),
         "mkfifo {} failed ({}): {}",

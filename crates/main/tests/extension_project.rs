@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
 
-use fakes::ProviderServer;
+use fakes::{Deadline, ProviderServer};
 use serde_json::{Value, json};
 use support::{HELLO_KINDS, Run, Setup, hello_inline_completed, run_to_exit, write_json};
 
@@ -129,7 +129,7 @@ fn keys(setup: &Setup, workspace: &Path) -> Value {
 fn ordinary_package_loads_only_in_a_and_repository_cannot_enable_it_in_b() {
     fakes::within(
         "ordinary scoped session journey",
-        Duration::from_secs(40),
+        Deadline::after(Duration::from_secs(40)),
         || {
             let setup = Setup::new();
             let server = ProviderServer::start([
@@ -197,7 +197,7 @@ fn ordinary_package_loads_only_in_a_and_repository_cannot_enable_it_in_b() {
 fn scoped_provider_package_serves_a_but_neither_provider_is_available_in_b() {
     fakes::within(
         "provider scoped session journey",
-        Duration::from_secs(40),
+        Deadline::after(Duration::from_secs(40)),
         || {
             let setup = Setup::new();
             let provider = support::package::opencode_go_ask_server(vec![hello_inline_completed()]);
@@ -282,7 +282,7 @@ fn scoped_provider_package_serves_a_but_neither_provider_is_available_in_b() {
 fn existing_global_install_keeps_loading_in_b_and_scoped_b_can_join_a() {
     fakes::within(
         "existing and joining scoped sessions",
-        Duration::from_secs(40),
+        Deadline::after(Duration::from_secs(40)),
         || {
             let setup = Setup::new();
             let server =
@@ -310,7 +310,7 @@ fn existing_global_install_keeps_loading_in_b_and_scoped_b_can_join_a() {
 fn previously_scoped_package_adds_b_without_changing_global_false() {
     fakes::within(
         "joining a scoped extension",
-        Duration::from_secs(40),
+        Deadline::after(Duration::from_secs(40)),
         || {
             let setup = Setup::new();
             let server =
@@ -339,7 +339,7 @@ fn previously_scoped_package_adds_b_without_changing_global_false() {
 fn git_worktrees_share_project_scope() {
     fakes::within(
         "git worktree project scope",
-        Duration::from_secs(40),
+        Deadline::after(Duration::from_secs(40)),
         || {
             let setup = Setup::new();
             let server = ProviderServer::start([hello_inline_completed()]).unwrap();
@@ -376,7 +376,7 @@ fn git_worktrees_share_project_scope() {
 fn failed_fresh_install_keeps_keys_but_no_session_loads_the_absent_package() {
     fakes::within(
         "failed scoped install session journey",
-        Duration::from_secs(40),
+        Deadline::after(Duration::from_secs(40)),
         || {
             let setup = Setup::new();
             let server =

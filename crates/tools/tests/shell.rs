@@ -83,7 +83,7 @@ fn run_on(
     let recorder = Arc::clone(recorder);
     fakes::within(
         &format!("the shell command {}", arguments["command"]),
-        DEADLINE,
+        Deadline::after(DEADLINE),
         move || shell.run(&arguments, &CancelToken::new(), recorder.as_ref()),
     )
 }
@@ -2114,7 +2114,7 @@ fn print_steps(
 ) -> std::fs::File {
     let clock = Arc::clone(&run.clock);
     let jobs = Arc::clone(&run.jobs);
-    fakes::within("monitor steps", STEPS, move || {
+    fakes::within("monitor steps", Deadline::after(STEPS), move || {
         let mut feed = feed;
         for (step, line) in steps {
             clock.advance_when_parked(Some(deadline), None, step, &Deadline::after(DEADLINE));

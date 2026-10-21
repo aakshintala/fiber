@@ -22,6 +22,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::shapes::Failure;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -858,9 +859,11 @@ fn a_hub_answers_when_one_speaks_hub_hello() {
     let home = setup.home();
     let _hub = speaking_hub(&home);
     let clock = setup.clock.clone();
-    assert!(fakes::within("the probe", DEADLINE, move || hub_answers(
-        &home, &*clock, DEADLINE
-    )));
+    assert!(fakes::within(
+        "the probe",
+        Deadline::after(DEADLINE),
+        move || hub_answers(&home, &*clock, DEADLINE)
+    ));
 }
 
 #[test]
@@ -869,9 +872,11 @@ fn no_hub_answers_on_an_absent_socket_and_none_is_started() {
     let home = setup.home();
     let clock = setup.clock.clone();
     let probed = home.clone();
-    assert!(!fakes::within("the probe", DEADLINE, move || hub_answers(
-        &probed, &*clock, DEADLINE
-    )));
+    assert!(!fakes::within(
+        "the probe",
+        Deadline::after(DEADLINE),
+        move || hub_answers(&probed, &*clock, DEADLINE)
+    ));
     assert!(!home.join("run/hub").exists());
 }
 
@@ -881,7 +886,7 @@ fn system_run_reports_the_exit_code_and_stderr() {
     let marker = dir.path().join("runner").display().to_string();
     let watchdog = fakes::Watchdog::matching(&marker);
     let failing = marker.clone();
-    let ran = fakes::within("sh", DEADLINE, move || {
+    let ran = fakes::within("sh", Deadline::after(DEADLINE), move || {
         system_run(
             "sh",
             &["-c".to_owned(), "echo oops >&2; exit 3".to_owned(), failing],
@@ -896,7 +901,7 @@ fn system_run_reports_the_exit_code_and_stderr() {
             stderr: "oops\n".to_owned(),
         }
     );
-    let ran = fakes::within("true", DEADLINE, move || {
+    let ran = fakes::within("true", Deadline::after(DEADLINE), move || {
         system_run("sh", &["-c".to_owned(), "true".to_owned(), marker])
     })
     .unwrap();
@@ -957,7 +962,7 @@ fn child_exit(test: &str, case: &str, vars: &[(&str, &Path)]) -> i32 {
     let output = fakes::rerun_prepared(
         &format!("{test}::hub_wrappers_exit_without_the_manager"),
         &[(CHILD, "1"), (CASE, case)],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command.env_remove("XDG_CONFIG_HOME");
             for (key, value) in vars {

@@ -61,7 +61,7 @@ fn read_until(
     done: impl Fn(&Envelope) -> bool + Send + 'static,
 ) -> (Watcher, Vec<Envelope>) {
     let what_owned = what.to_owned();
-    fakes::within(what, DEADLINE, move || {
+    fakes::within(what, Deadline::after(DEADLINE), move || {
         let mut watcher = watcher;
         let mut lines = Vec::new();
         loop {
@@ -2785,9 +2785,13 @@ fn a_job_listed_while_idle_holds_the_deadline_gets_the_check_and_its_end_restart
     // The wait read the job running past the deadline, and did not end:
     // the session was unattended that long, so the check is given.
     let wait = Deadline::after(DEADLINE);
-    fakes::within("the wait to read the jobs", DEADLINE, move || {
-        while wait.recv(&read).expect("the wait read the jobs") == 0 {}
-    });
+    fakes::within(
+        "the wait to read the jobs",
+        Deadline::after(DEADLINE),
+        move || {
+            while wait.recv(&read).expect("the wait read the jobs") == 0 {}
+        },
+    );
     assert_check(&world.next_turn(), JOB);
     // The job ends with its final state already claimed: no turn starts,
     // and the delay counts from when the wait saw no job running.

@@ -13,6 +13,7 @@ use std::time::Duration;
 use common::Setup;
 use config::{Config, ConfigError, CredentialSource, ProviderData, Secret, store_credential};
 use contract::ErrorCode;
+use fakes::Deadline;
 
 fn acme(credential: Option<CredentialSource>) -> ProviderData {
     ProviderData {
@@ -801,14 +802,18 @@ fn a_command_runs_once_however_often_the_credential_is_read() {
     let script = format!("echo run >> '{}'; printf key", marker.display());
     let provider = acme(command(&["sh", "-c", &script]));
     let read = marker.clone();
-    let (runs, keys) = fakes::within("default_key", fakes::MUST_SUCCEED_WITHIN, move || {
-        let keys = [
-            default_key(&config, &provider).unwrap(),
-            default_key(&config, &provider).unwrap(),
-            default_key(&config.clone(), &provider).unwrap(),
-        ];
-        (std::fs::read_to_string(read).unwrap().lines().count(), keys)
-    });
+    let (runs, keys) = fakes::within(
+        "default_key",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let keys = [
+                default_key(&config, &provider).unwrap(),
+                default_key(&config, &provider).unwrap(),
+                default_key(&config.clone(), &provider).unwrap(),
+            ];
+            (std::fs::read_to_string(read).unwrap().lines().count(), keys)
+        },
+    );
     assert_eq!(runs, 1);
     assert!(keys.iter().all(|key| key.expose() == "key"));
 }

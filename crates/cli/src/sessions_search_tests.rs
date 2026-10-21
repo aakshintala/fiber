@@ -20,6 +20,7 @@ use std::time::Duration;
 use contract::events::Event;
 use contract::session_search::LIMIT;
 use contract::{Envelope, ErrorCode, SessionId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -753,7 +754,7 @@ fn search_exits_zero_on_success_and_usage_on_a_bad_home() {
         let output = fakes::rerun_prepared(
             &format!("{name}::search_exits_zero_on_success_and_usage_on_a_bad_home"),
             &[(CHILD, case)],
-            CHILD_DEADLINE,
+            Deadline::after(CHILD_DEADLINE),
             |command| {
                 command
                     .env("FIBER_HOME", &home_value)

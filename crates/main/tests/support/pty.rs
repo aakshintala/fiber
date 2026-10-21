@@ -1127,8 +1127,12 @@ pub(crate) fn list_processes(within: Duration) -> String {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let output = fakes::within("ps to list every process", within, move || command.output())
-        .expect("ps to list every process");
+    let output = fakes::within(
+        "ps to list every process",
+        Deadline::after(within),
+        move || command.output(),
+    )
+    .expect("ps to list every process");
     assert!(
         output.status.success(),
         "ps to list every process failed: {}",

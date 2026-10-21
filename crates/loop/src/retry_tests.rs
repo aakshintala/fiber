@@ -461,23 +461,27 @@ impl RetryRun {
     #[track_caller]
     fn wait_for_event(&mut self, kind: &'static str, deadline: Duration) {
         let watcher = self.watcher.take().expect("the log watcher is available");
-        let (watcher, lines) = fakes::within(&format!("log event {kind}"), deadline, move || {
-            let mut watcher = watcher;
-            let mut lines = Vec::new();
-            loop {
-                match watcher.recv() {
-                    Ok(Some(line)) => {
-                        let reached = line.kind == kind;
-                        lines.push(line);
-                        if reached {
-                            return (watcher, lines);
+        let (watcher, lines) = fakes::within(
+            &format!("log event {kind}"),
+            Deadline::after(deadline),
+            move || {
+                let mut watcher = watcher;
+                let mut lines = Vec::new();
+                loop {
+                    match watcher.recv() {
+                        Ok(Some(line)) => {
+                            let reached = line.kind == kind;
+                            lines.push(line);
+                            if reached {
+                                return (watcher, lines);
+                            }
                         }
+                        Ok(None) => panic!("the session log ended before {kind}"),
+                        Err(error) => panic!("reading the session log before {kind}: {error}"),
                     }
-                    Ok(None) => panic!("the session log ended before {kind}"),
-                    Err(error) => panic!("reading the session log before {kind}: {error}"),
                 }
-            }
-        });
+            },
+        );
         self.watcher = Some(watcher);
         for line in &lines {
             self.note(line);

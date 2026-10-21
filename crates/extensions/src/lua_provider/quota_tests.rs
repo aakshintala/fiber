@@ -68,9 +68,11 @@ fn pair_with(label: &str) -> CredentialPair {
 fn read(provider: &Arc<LuaProvider>) -> QuotaEntry {
     let provider = Arc::clone(provider);
     let pair = pair();
-    fakes::within("provider.quota", fakes::MUST_SUCCEED_WITHIN, move || {
-        provider.quota(&pair, None)
-    })
+    fakes::within(
+        "provider.quota",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || provider.quota(&pair, None),
+    )
 }
 
 fn percent(name: &str, used: f64, resets_at: Option<u64>) -> Quota {
@@ -402,9 +404,11 @@ fn denied() -> fakes::Response {
 fn read_label(provider: &Arc<LuaProvider>, label: &str) -> QuotaEntry {
     let provider = Arc::clone(provider);
     let pair = pair_with(label);
-    fakes::within("provider.quota", fakes::MUST_SUCCEED_WITHIN, move || {
-        provider.quota(&pair, None)
-    })
+    fakes::within(
+        "provider.quota",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || provider.quota(&pair, None),
+    )
 }
 
 #[test]
@@ -459,14 +463,14 @@ fn quota_now_returns_while_the_vm_is_busy_and_starts_only_one_fetch() {
     server.hold();
     let provider = http_quota_provider(&root, &server.url(), FakeClock::new());
     assert!(
-        fakes::within("registers", fakes::MUST_SUCCEED_WITHIN, {
+        fakes::within("registers", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
             let provider = provider.clone();
             move || provider.registers("quota")
         })
         .unwrap()
     );
     assert_eq!(
-        fakes::within("quota_now", fakes::MUST_SUCCEED_WITHIN, {
+        fakes::within("quota_now", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
             let provider = provider.clone();
             move || provider.quota_now(&pair(), None)
         }),
@@ -477,7 +481,7 @@ fn quota_now_returns_while_the_vm_is_busy_and_starts_only_one_fetch() {
         "the fetch reached the held server"
     );
     assert_eq!(
-        fakes::within("quota_now", fakes::MUST_SUCCEED_WITHIN, {
+        fakes::within("quota_now", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
             let provider = provider.clone();
             move || provider.quota_now(&pair(), None)
         }),
@@ -528,7 +532,7 @@ fn quota_now_refetches_only_after_the_freshness_boundary() {
     );
     assert_eq!(server.requests().len(), 2);
     assert_eq!(
-        fakes::within("quota_now", fakes::MUST_SUCCEED_WITHIN, {
+        fakes::within("quota_now", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
             let provider = provider.clone();
             move || provider.quota_now(&pair(), None)
         }),
@@ -619,7 +623,7 @@ fn quota_now_expires_an_overdue_flight_without_waiting() {
             }
         };
         assert_eq!(
-            fakes::within("quota_now", fakes::MUST_SUCCEED_WITHIN, {
+            fakes::within("quota_now", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
                 let provider = provider.clone();
                 move || provider.quota_now(&pair(), None)
             }),
@@ -920,9 +924,11 @@ fn quoted(
     let lua = Arc::clone(lua);
     let inner = inner as Arc<dyn contract::provider::Provider>;
     let pair = pair();
-    fakes::within("lua.with_quota", fakes::MUST_SUCCEED_WITHIN, move || {
-        lua.with_quota(inner, pair, None)
-    })
+    fakes::within(
+        "lua.with_quota",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || lua.with_quota(inner, pair, None),
+    )
     .unwrap()
 }
 
@@ -937,9 +943,11 @@ fn with_quota_without_quota_is_the_inner_provider_itself() {
     let wrapped = {
         let inner = Arc::clone(&inner);
         let pair = pair();
-        fakes::within("lua.with_quota", fakes::MUST_SUCCEED_WITHIN, move || {
-            lua.with_quota(inner, pair, None)
-        })
+        fakes::within(
+            "lua.with_quota",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || lua.with_quota(inner, pair, None),
+        )
         .unwrap()
     };
     assert!(std::ptr::addr_eq(
@@ -957,10 +965,14 @@ fn a_model_call_fetches_off_the_request_path_without_waiting() {
     let lua = http_quota_provider(&root, &server.url(), clock);
     let inner = Arc::new(crate::test_support::Inner::default());
     let wrapped = quoted(&lua, Arc::clone(&inner));
-    let _call = fakes::within("wrapped.call", fakes::MUST_SUCCEED_WITHIN, {
-        let wrapped = Arc::clone(&wrapped);
-        move || wrapped.call(&crate::test_support::request())
-    });
+    let _call = fakes::within(
+        "wrapped.call",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let wrapped = Arc::clone(&wrapped);
+            move || wrapped.call(&crate::test_support::request())
+        },
+    );
     assert_eq!(
         inner.calls.load(std::sync::atomic::Ordering::SeqCst),
         1,
@@ -1063,9 +1075,11 @@ fn quoted_forwards_calls_tools_warms_and_cost_lookup() {
         let wrapped = {
             let lua = Arc::clone(&lua);
             let pair = pair();
-            fakes::within("lua.with_quota", fakes::MUST_SUCCEED_WITHIN, move || {
-                lua.with_quota(priced, pair, None)
-            })
+            fakes::within(
+                "lua.with_quota",
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+                move || lua.with_quota(priced, pair, None),
+            )
             .unwrap()
         };
         let tools = [ToolDefinition {
@@ -1101,10 +1115,14 @@ fn a_failed_fetch_never_reaches_the_caller() {
     let lua = http_quota_provider(&root, &server.url(), FakeClock::new());
     let inner = Arc::new(crate::test_support::Inner::default());
     let wrapped = quoted(&lua, Arc::clone(&inner));
-    let _call = fakes::within("wrapped.call", fakes::MUST_SUCCEED_WITHIN, {
-        let wrapped = Arc::clone(&wrapped);
-        move || wrapped.call(&crate::test_support::request())
-    });
+    let _call = fakes::within(
+        "wrapped.call",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let wrapped = Arc::clone(&wrapped);
+            move || wrapped.call(&crate::test_support::request())
+        },
+    );
     assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(read(&lua), QuotaEntry::Unreachable { last: None });
 }
@@ -1125,7 +1143,7 @@ fn sign_runs_while_a_quota_fetch_is_held() {
     );
     // The fetch is parked on `host.http`, which does not hold the extension's
     // thread: `sign()` on the request path still runs.
-    let found = fakes::within("lua.sign", fakes::MUST_SUCCEED_WITHIN, {
+    let found = fakes::within("lua.sign", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
         let lua = Arc::clone(&lua);
         move || {
             lua.sign(&contract::signing::SignRequest {
@@ -1160,7 +1178,7 @@ fn fetch_quota_passes_label_credential_and_key() {
         let provider = Arc::clone(&provider);
         fakes::within(
             "provider.fetch_quota",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || provider.fetch_quota(&pair(), Some(&key)),
         )
     }
@@ -1179,7 +1197,7 @@ fn fetch_quota_passes_label_credential_and_key() {
         let provider = Arc::clone(&provider);
         fakes::within(
             "provider.fetch_quota",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || provider.fetch_quota(&pair(), None),
         )
     }
@@ -1202,9 +1220,11 @@ fn a_read_passes_its_key() {
     let key = Secret::new("sk-test".to_owned());
     let found = {
         let provider = Arc::clone(&provider);
-        fakes::within("provider.quota", fakes::MUST_SUCCEED_WITHIN, move || {
-            provider.quota(&pair(), Some(&key))
-        })
+        fakes::within(
+            "provider.quota",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || provider.quota(&pair(), Some(&key)),
+        )
     };
     assert_eq!(
         found,
@@ -1242,9 +1262,11 @@ fn a_model_call_fetches_with_the_bound_key() {
     let wrapped = {
         let lua = Arc::clone(&lua);
         let inner = inner as Arc<dyn contract::provider::Provider>;
-        fakes::within("lua.with_quota", fakes::MUST_SUCCEED_WITHIN, move || {
-            lua.with_quota(inner, pair(), Some(key))
-        })
+        fakes::within(
+            "lua.with_quota",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || lua.with_quota(inner, pair(), Some(key)),
+        )
         .unwrap()
     };
     let _call = wrapped.call(&crate::test_support::request());
@@ -1262,9 +1284,11 @@ fn a_model_call_fetches_with_the_bound_key() {
     // no fetch of its own.
     let found = {
         let lua = Arc::clone(&lua);
-        fakes::within("lua.quota", fakes::MUST_SUCCEED_WITHIN, move || {
-            lua.quota(&pair(), None)
-        })
+        fakes::within(
+            "lua.quota",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || lua.quota(&pair(), None),
+        )
     };
     assert_eq!(found, QuotaEntry::Reported(percent("primary", 10.0, None)));
     assert_eq!(
@@ -1282,7 +1306,7 @@ fn fetch_quota_reports_a_bad_return_and_a_raise_as_errors() {
         let provider = Arc::clone(&provider);
         fakes::within(
             "provider.fetch_quota",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || provider.fetch_quota(&pair(), None),
         )
     }
@@ -1297,7 +1321,7 @@ fn fetch_quota_reports_a_bad_return_and_a_raise_as_errors() {
         let provider = Arc::clone(&provider);
         fakes::within(
             "provider.fetch_quota",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || provider.fetch_quota(&pair(), None),
         )
     }
@@ -1330,7 +1354,7 @@ fn fetch_quota_passes_the_current_token_and_headers() {
         let provider = Arc::clone(&provider);
         fakes::within(
             "provider.fetch_quota",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || provider.fetch_quota(&pair(), None),
         )
     }
@@ -1359,7 +1383,7 @@ fn fetch_quota_sends_no_token_or_headers_to_a_key_provider() {
         let provider = Arc::clone(&provider);
         fakes::within(
             "provider.fetch_quota",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || provider.fetch_quota(&pair(), Some(&key)),
         )
     }
@@ -1405,7 +1429,7 @@ fn observed_and_ordinary_calls_share_one_due_quota_refresh() {
         let inner = Arc::clone(&inner) as Arc<dyn contract::provider::Provider>;
         fakes::within(
             "lua.with_quota_observed",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 lua.with_quota_observed(inner, Some(observe), pair(), None)
                     .unwrap()
@@ -1421,7 +1445,7 @@ fn observed_and_ordinary_calls_share_one_due_quota_refresh() {
         QuotaEntry::Reported(percent("primary", 10.0, None)),
         "the ordinary call's trigger fetched"
     );
-    let _observed = fakes::within("factory", fakes::MUST_SUCCEED_WITHIN, {
+    let _observed = fakes::within("factory", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
         let request = crate::test_support::request();
         move || factory(&request, std::num::NonZeroU32::new(2).unwrap())
     });
@@ -1459,7 +1483,7 @@ fn the_observed_factory_respects_freshness_for_its_bound_pair() {
         let inner = Arc::clone(&inner) as Arc<dyn contract::provider::Provider>;
         fakes::within(
             "lua.with_quota_observed",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 lua.with_quota_observed(inner, Some(observe), pair(), None)
                     .unwrap()
@@ -1469,12 +1493,16 @@ fn the_observed_factory_respects_freshness_for_its_bound_pair() {
     let factory = factory.expect("a quota provider keeps the factory");
     let trigger = |attempt: u32| {
         let factory = factory.clone();
-        fakes::within("factory", fakes::MUST_SUCCEED_WITHIN, move || {
-            factory(
-                &crate::test_support::request(),
-                std::num::NonZeroU32::new(attempt).unwrap(),
-            )
-        })
+        fakes::within(
+            "factory",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                factory(
+                    &crate::test_support::request(),
+                    std::num::NonZeroU32::new(attempt).unwrap(),
+                )
+            },
+        )
     };
     let _observed = trigger(1);
     assert_eq!(
@@ -1520,7 +1548,7 @@ fn with_quota_observed_without_quota_keeps_both_inputs() {
         let observe = Arc::clone(&observe);
         fakes::within(
             "lua.with_quota_observed",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 lua.with_quota_observed(inner, Some(observe), pair(), None)
                     .unwrap()
@@ -1548,9 +1576,11 @@ fn with_quota_observed_failure_matches_with_quota() {
     let plain = {
         let lua = Arc::clone(&lua);
         let inner = Arc::clone(&inner);
-        fakes::within("lua.with_quota", fakes::MUST_SUCCEED_WITHIN, move || {
-            lua.with_quota(inner, pair(), None)
-        })
+        fakes::within(
+            "lua.with_quota",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || lua.with_quota(inner, pair(), None),
+        )
     };
     assert!(plain.is_err(), "the broken provider fails with_quota");
     let observed = {
@@ -1558,7 +1588,7 @@ fn with_quota_observed_failure_matches_with_quota() {
         let inner = Arc::clone(&inner);
         fakes::within(
             "lua.with_quota_observed",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || lua.with_quota_observed(inner, Some(observe), pair(), None),
         )
     };
@@ -1575,7 +1605,7 @@ fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
     // A fresh label never fetched: pending.
     assert!(fakes::within(
         "quota_pending",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let provider = provider.clone();
             move || provider.quota_pending(&pair())
@@ -1590,7 +1620,7 @@ fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
     );
     assert!(!fakes::within(
         "quota_pending",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let provider = provider.clone();
             move || provider.quota_pending(&pair())
@@ -1604,7 +1634,7 @@ fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
         .failed = true;
     assert!(!fakes::within(
         "quota_pending",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let provider = provider.clone();
             move || provider.quota_pending(&pair())
@@ -1617,7 +1647,7 @@ fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
     let busy = http_quota_provider(&root, &server.url(), FakeClock::new());
     assert!(fakes::within(
         "quota_pending",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         {
             let busy = busy.clone();
             move || busy.quota_pending(&pair())
@@ -1634,7 +1664,7 @@ fn wait_flight(provider: &Arc<LuaProvider>, wait: QuotaFlight) -> QuotaEntry {
     let pair = pair();
     fakes::within(
         "provider.wait_quota",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || provider.wait_quota(&pair, wait),
     )
 }

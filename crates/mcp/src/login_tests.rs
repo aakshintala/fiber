@@ -12,7 +12,7 @@ use super::callback::{MAX_HEAD, SILENT_POLLS, Served, answer, decode};
 use super::*;
 use crate::test_support::{FakeTokens, WITHIN};
 use contract::mcp_tokens::TokenFiles;
-use fakes::{ProviderServer, Request, Response};
+use fakes::{Deadline, ProviderServer, Request, Response};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -2518,11 +2518,15 @@ fn a_connection_silent_for_the_given_count_is_dropped_on_that_poll() {
             wait.recv_or_fail(&silence, "the second silent poll");
             wait.recv_or_fail(&silence, "the third silent poll");
             // The drop closes the connection: read to the close.
-            fakes::within("the dropped connection's close", WITHIN, || {
-                let mut idle = idle;
-                let mut byte = [0_u8; 1];
-                while idle.read(&mut byte).expect("the idle connection's close") != 0 {}
-            });
+            fakes::within(
+                "the dropped connection's close",
+                Deadline::after(WITHIN),
+                || {
+                    let mut idle = idle;
+                    let mut byte = [0_u8; 1];
+                    while idle.read(&mut byte).expect("the idle connection's close") != 0 {}
+                },
+            );
             let served = wait.recv_or_fail(&received, "the dropped connection's answer");
             assert!(served.is_none(), "a silent connection is dropped");
             // No fourth poll: the drop came on the third.

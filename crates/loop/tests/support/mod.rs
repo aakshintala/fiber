@@ -74,7 +74,7 @@ pub(crate) fn read_until(
     done: impl Fn(&Envelope) -> bool + Send + 'static,
 ) -> (Watcher, Vec<Envelope>) {
     let what_owned = what.to_owned();
-    fakes::within(what, DEADLINE, move || {
+    fakes::within(what, Deadline::after(DEADLINE), move || {
         let mut watcher = watcher;
         let mut lines = Vec::new();
         loop {

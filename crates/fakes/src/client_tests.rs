@@ -142,9 +142,11 @@ fn recv_until_returns_none_at_once_when_the_socket_closes() {
     let client = Client::connect(&path).unwrap();
     let server = accept_within(&listener);
     drop(server);
-    let got = within("a closed socket", Duration::from_secs(10), move || {
-        client.recv_until(Duration::from_secs(60), |_| false)
-    });
+    let got = within(
+        "a closed socket",
+        Deadline::after(Duration::from_secs(10)),
+        move || client.recv_until(Duration::from_secs(60), |_| false),
+    );
     assert!(got.is_none(), "a close with no match returns none");
 }
 
@@ -196,7 +198,7 @@ fn send_by_delivers_the_line_with_a_newline() {
     let end = clock.origin() + Duration::from_secs(60);
     let read = drain(server, || {});
     let left_clock = Arc::clone(&clock);
-    let client = within("send_by", MUST, move || {
+    let client = within("send_by", Deadline::after(MUST), move || {
         client
             .send_by(r#"{"id":1}"#, &|| left_until(&left_clock, end))
             .unwrap();
@@ -213,7 +215,7 @@ fn send_by_delivers_the_line_with_a_newline() {
 fn send_by_keeps_a_newline_the_line_already_has() {
     let (_dir, client, server) = pair();
     let read = drain(server, || {});
-    let client = within("send_by", MUST, move || {
+    let client = within("send_by", Deadline::after(MUST), move || {
         client.send_by("{}\n", &|| MUST).unwrap();
         client
     });
@@ -238,10 +240,14 @@ fn send_by_does_not_renew_its_deadline_across_partial_writes() {
     });
     let line = "x".repeat(1 << 20);
     let left_clock = Arc::clone(&clock);
-    let (sent, client) = within("send_by", Duration::from_secs(10), move || {
-        let sent = client.send_by(&line, &|| left_until(&left_clock, end));
-        (sent, client)
-    });
+    let (sent, client) = within(
+        "send_by",
+        Deadline::after(Duration::from_secs(10)),
+        move || {
+            let sent = client.send_by(&line, &|| left_until(&left_clock, end));
+            (sent, client)
+        },
+    );
     drop(client);
     let got = Deadline::after(MUST)
         .recv(&read)
@@ -262,7 +268,7 @@ fn send_by_does_not_renew_its_deadline_across_partial_writes() {
 fn send_by_at_zero_writes_nothing() {
     let (_dir, client, server) = pair();
     let read = drain(server, || {});
-    let (sent, client) = within("send_by", MUST, move || {
+    let (sent, client) = within("send_by", Deadline::after(MUST), move || {
         (client.send_by("{}", &|| Duration::ZERO), client)
     });
     drop(client);
@@ -282,7 +288,7 @@ fn send_by_reads_what_is_left_once_per_4_kib_chunk() {
         let (_dir, client, server) = pair();
         let read = drain(server, || {});
         let line = "x".repeat(len);
-        let (calls, client) = within("send_by", MUST, move || {
+        let (calls, client) = within("send_by", Deadline::after(MUST), move || {
             let calls = AtomicUsize::new(0);
             client
                 .send_by(&line, &|| {
@@ -347,7 +353,7 @@ fn send_by_returns_ok_when_the_peer_closes_before_the_reset() {
 fn send_by_returns_the_write_error_when_the_peer_is_gone() {
     let (_dir, client, server) = pair();
     drop(server);
-    let (result, client) = within("send_by", MUST, move || {
+    let (result, client) = within("send_by", Deadline::after(MUST), move || {
         let result = client.send_by("{}", &|| MUST);
         (result, client)
     });

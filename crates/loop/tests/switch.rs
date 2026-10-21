@@ -2650,7 +2650,7 @@ fn run_deferred_case(case: &DeferredCase) {
     inbox_tx.send(support::delivery("next")).unwrap();
     let (_looped, outcome) = fakes::within(
         &format!("case {name}: the next turn"),
-        DEADLINE,
+        Deadline::after(DEADLINE),
         move || {
             let outcome = looped.turn().unwrap();
             (looped, outcome)

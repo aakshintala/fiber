@@ -884,7 +884,7 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
     let output = fakes::rerun_prepared(
         &format!("{name}::login_of_an_unknown_provider_is_a_usage_failure"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        fakes::Deadline::after(CHILD_DEADLINE),
         |command| {
             command.env("FIBER_HOME", home.path());
         },
@@ -911,7 +911,7 @@ fn login_of_an_unknown_provider_names_the_home_installed_providers() {
     let output = fakes::rerun_prepared(
         &format!("{name}::login_of_an_unknown_provider_names_the_home_installed_providers"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        fakes::Deadline::after(CHILD_DEADLINE),
         |command| {
             command.env("FIBER_HOME", setup.home());
         },

@@ -25,6 +25,7 @@ use contract::SessionId;
 use contract::clock::Clock;
 use contract::diag::{Op, Timing};
 use contract::events::{Event, SessionStarted, Variables, VariablesSource};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
 
@@ -214,7 +215,7 @@ impl Drop for Scope {
 fn create_opens_one_stamped_line_and_a_second_open_writes_nothing() {
     fakes::within(
         "create_opens_one_stamped_line_and_a_second_open_writes_nothing",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = fakes::TempDir::new("doors-timing-create-home");
             let repo = repo("doors-timing-create");
@@ -262,7 +263,7 @@ fn create_opens_one_stamped_line_and_a_second_open_writes_nothing() {
 fn recreation_stamp_excludes_the_lock_claim_and_the_downgrade() {
     fakes::within(
         "recreation_stamp_excludes_the_lock_claim_and_the_downgrade",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = fakes::TempDir::new("doors-timing-recreate-home");
             let repo = repo("doors-timing-recreate");
@@ -325,7 +326,7 @@ fn recreation_stamp_excludes_the_lock_claim_and_the_downgrade() {
 fn a_failed_add_makes_no_isolation_and_no_opener() {
     fakes::within(
         "a_failed_add_makes_no_isolation_and_no_opener",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             let home = fakes::TempDir::new("doors-timing-failed-home");
             let repo = repo("doors-timing-failed");
@@ -366,55 +367,59 @@ fn a_failed_add_makes_no_isolation_and_no_opener() {
 
 #[test]
 fn a_clean_removal_times_the_one_remove_call() {
-    fakes::within("a_clean_removal_times_the_one_remove_call", BUDGET, || {
-        let home = fakes::TempDir::new("doors-timing-remove-home");
-        let repo = repo("doors-timing-remove");
-        let clock = FakeClock::new();
-        let id = SessionId("s_0123456789abcdef".into());
-        let isolation = isolate(
-            repo.path(),
-            home.path(),
-            &id,
-            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-            &direct,
-        )
-        .unwrap();
-        let path = isolation.path().to_path_buf();
-        // The scope covers the one real removal: present at the
-        // call, gone at the guard's drop. A stamp moved later fails
-        // the first assert, an early drop the second.
-        let path_call = path.clone();
-        let path_drop = path.clone();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_in = Arc::clone(&calls);
-        let timing: Timing = Arc::new(move |op, tool, started| {
-            if op == Op::WorktreeCreate {
+    fakes::within(
+        "a_clean_removal_times_the_one_remove_call",
+        Deadline::after(BUDGET),
+        || {
+            let home = fakes::TempDir::new("doors-timing-remove-home");
+            let repo = repo("doors-timing-remove");
+            let clock = FakeClock::new();
+            let id = SessionId("s_0123456789abcdef".into());
+            let isolation = isolate(
+                repo.path(),
+                home.path(),
+                &id,
+                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                &direct,
+            )
+            .unwrap();
+            let path = isolation.path().to_path_buf();
+            // The scope covers the one real removal: present at the
+            // call, gone at the guard's drop. A stamp moved later fails
+            // the first assert, an early drop the second.
+            let path_call = path.clone();
+            let path_drop = path.clone();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let calls_in = Arc::clone(&calls);
+            let timing: Timing = Arc::new(move |op, tool, started| {
+                if op == Op::WorktreeCreate {
+                    assert_eq!(tool, None);
+                    assert!(started.is_some(), "the create guard starts stamped");
+                    let guard = CreateEnd;
+                    return Some(Box::new(guard) as Box<dyn Send>);
+                }
+                assert_eq!(op, Op::WorktreeRemove);
                 assert_eq!(tool, None);
-                assert!(started.is_some(), "the create guard starts stamped");
-                let guard = CreateEnd;
-                return Some(Box::new(guard) as Box<dyn Send>);
-            }
-            assert_eq!(op, Op::WorktreeRemove);
-            assert_eq!(tool, None);
-            assert!(started.is_none(), "the remove guard starts unstamped");
-            assert!(exists(&path_call), "the worktree stands at the call");
-            calls_in.fetch_add(1, Ordering::SeqCst);
-            let guard = Presence {
-                path: path_drop.clone(),
-            };
-            Some(Box::new(guard) as Box<dyn Send>)
-        });
-        isolation.opener()(&timing);
-        // One create call so far; the removal has not run yet.
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        isolation.end();
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "exactly one remove scope");
-        assert!(!exists(&path), "the path is gone");
-        assert!(
-            !branch_exists(repo.path(), &format!("fiber/{}", id.0)),
-            "the branch is gone"
-        );
-    });
+                assert!(started.is_none(), "the remove guard starts unstamped");
+                assert!(exists(&path_call), "the worktree stands at the call");
+                calls_in.fetch_add(1, Ordering::SeqCst);
+                let guard = Presence {
+                    path: path_drop.clone(),
+                };
+                Some(Box::new(guard) as Box<dyn Send>)
+            });
+            isolation.opener()(&timing);
+            // One create call so far; the removal has not run yet.
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            isolation.end();
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "exactly one remove scope");
+            assert!(!exists(&path), "the path is gone");
+            assert!(
+                !branch_exists(repo.path(), &format!("fiber/{}", id.0)),
+                "the branch is gone"
+            );
+        },
+    );
 }
 
 /// The create probe's guard: held for the stamped scope, dropped at its end.
@@ -435,7 +440,7 @@ impl Drop for Presence {
 fn failed_and_branch_kept_removals_write_one_line_with_the_warn_unchanged() {
     fakes::within(
         "failed_and_branch_kept_removals_write_one_line_with_the_warn_unchanged",
-        BUDGET,
+        Deadline::after(BUDGET),
         || {
             // A locked worktree fails its removal: one remove line, and
             // the warn line reads exactly as before.
@@ -526,186 +531,190 @@ fn failed_and_branch_kept_removals_write_one_line_with_the_warn_unchanged() {
 
 #[test]
 fn kept_paths_write_no_remove_line() {
-    fakes::within("kept_paths_write_no_remove_line", BUDGET, || {
-        // An untracked file keeps the worktree.
-        {
-            let home = fakes::TempDir::new("doors-timing-kept-untracked-home");
-            let repo = repo("doors-timing-kept-untracked");
-            let clock = FakeClock::new();
-            let id = "s_0123456789abcdef";
-            let isolation = isolate(
-                repo.path(),
-                home.path(),
-                &SessionId(id.into()),
-                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-                &direct,
-            )
-            .unwrap();
-            let path = isolation.path().to_path_buf();
-            fs::write(path.join("notes.txt"), "scratch").unwrap();
-            let capture = Capture::new(Arc::clone(&clock));
-            isolation.opener()(&capture.timing());
-            isolation.end();
-            assert!(exists(&path));
-            assert_eq!(capture.calls(), 1, "create only, no remove");
-            assert!(!home.path().join("logs").exists(), "no diagnostic line");
-        }
-        // A modified tracked file keeps the worktree.
-        {
-            let home = fakes::TempDir::new("doors-timing-kept-modified-home");
-            let repo = repo("doors-timing-kept-modified");
-            let clock = FakeClock::new();
-            let id = "s_0123456789abcdef";
-            let isolation = isolate(
-                repo.path(),
-                home.path(),
-                &SessionId(id.into()),
-                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-                &direct,
-            )
-            .unwrap();
-            let path = isolation.path().to_path_buf();
-            fs::write(path.join("file.txt"), "precious change").unwrap();
-            let capture = Capture::new(Arc::clone(&clock));
-            isolation.opener()(&capture.timing());
-            isolation.end();
-            assert!(exists(&path));
-            assert_eq!(capture.calls(), 1, "create only, no remove");
-        }
-        // A commit beyond the base keeps the worktree.
-        {
-            let home = fakes::TempDir::new("doors-timing-kept-commit-home");
-            let repo = repo("doors-timing-kept-commit");
-            let clock = FakeClock::new();
-            let id = "s_0123456789abcdef";
-            let isolation = isolate(
-                repo.path(),
-                home.path(),
-                &SessionId(id.into()),
-                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-                &direct,
-            )
-            .unwrap();
-            let path = isolation.path().to_path_buf();
-            fs::write(path.join("more.txt"), "y").unwrap();
-            run_git(&path, &["add", "."]);
-            run_git(&path, &["commit", "--quiet", "-m", "second"]);
-            let capture = Capture::new(Arc::clone(&clock));
-            isolation.opener()(&capture.timing());
-            isolation.end();
-            assert!(exists(&path));
-            assert_eq!(capture.calls(), 1, "create only, no remove");
-        }
-        // A held share keeps the worktree with no line.
-        {
-            let home = fakes::TempDir::new("doors-timing-kept-share-home");
-            let repo = repo("doors-timing-kept-share");
-            let clock = FakeClock::new();
-            let id = "s_0123456789abcdef";
-            let isolation = isolate(
-                repo.path(),
-                home.path(),
-                &SessionId(id.into()),
-                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-                &direct,
-            )
-            .unwrap();
-            let path = isolation.path().to_path_buf();
-            let _shared = super::share(&path).unwrap();
-            let capture = Capture::new(Arc::clone(&clock));
-            isolation.opener()(&capture.timing());
-            isolation.end();
-            assert!(exists(&path));
-            assert_eq!(capture.calls(), 1, "create only, no remove");
-        }
-        // A busy session log keeps the worktree.
-        {
-            let home = fakes::TempDir::new("doors-timing-kept-busy-home");
-            let repo = repo("doors-timing-kept-busy");
-            let clock = FakeClock::new();
-            let id = "s_0123456789abcdef";
-            let isolation = isolate(
-                repo.path(),
-                home.path(),
-                &SessionId(id.into()),
-                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-                &direct,
-            )
-            .unwrap();
-            let path = isolation.path().to_path_buf();
-            let sessions = home
-                .path()
-                .join("projects")
-                .join(key_of(repo.path()))
-                .join("sessions");
-            let _holder = held(&sessions, id, path.to_str().unwrap());
-            let capture = Capture::new(Arc::clone(&clock));
-            isolation.opener()(&capture.timing());
-            isolation.end();
-            assert!(exists(&path));
-            assert_eq!(capture.calls(), 1, "create only, no remove");
-        }
-        // A switched branch keeps the worktree.
-        {
-            let home = fakes::TempDir::new("doors-timing-kept-switched-home");
-            let repo = repo("doors-timing-kept-switched");
-            let clock = FakeClock::new();
-            let id = "s_0123456789abcdef";
-            let isolation = isolate(
-                repo.path(),
-                home.path(),
-                &SessionId(id.into()),
-                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-                &direct,
-            )
-            .unwrap();
-            let path = isolation.path().to_path_buf();
-            run_git(&path, &["switch", "--quiet", "-c", "other"]);
-            let capture = Capture::new(Arc::clone(&clock));
-            isolation.opener()(&capture.timing());
-            isolation.end();
-            assert!(exists(&path));
-            assert_eq!(capture.calls(), 1, "create only, no remove");
-        }
-        // A rewound creator keeps the worktree.
-        {
-            let home = fakes::TempDir::new("doors-timing-kept-rewound-home");
-            let repo = repo("doors-timing-kept-rewound");
-            let clock = FakeClock::new();
-            let id = "s_0123456789abcdef";
-            let isolation = isolate(
-                repo.path(),
-                home.path(),
-                &SessionId(id.into()),
-                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-                &direct,
-            )
-            .unwrap();
-            let path = isolation.path().to_path_buf();
-            let sessions = home
-                .path()
-                .join("projects")
-                .join(key_of(repo.path()))
-                .join("sessions");
-            let holder = held(&sessions, id, path.to_str().unwrap());
-            holder
-                .append(
-                    &Event::Rewound(contract::events::Rewound {
-                        new_session_id: SessionId("s_ffffffffffffffff".into()),
-                        seq: contract::Seq(1),
-                        from_session_id: None,
-                        summary: None,
-                    }),
-                    None,
-                    None,
+    fakes::within(
+        "kept_paths_write_no_remove_line",
+        Deadline::after(BUDGET),
+        || {
+            // An untracked file keeps the worktree.
+            {
+                let home = fakes::TempDir::new("doors-timing-kept-untracked-home");
+                let repo = repo("doors-timing-kept-untracked");
+                let clock = FakeClock::new();
+                let id = "s_0123456789abcdef";
+                let isolation = isolate(
+                    repo.path(),
+                    home.path(),
+                    &SessionId(id.into()),
+                    Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                    &direct,
                 )
                 .unwrap();
-            drop(holder);
-            let capture = Capture::new(Arc::clone(&clock));
-            isolation.opener()(&capture.timing());
-            isolation.end();
-            assert!(exists(&path));
-            assert_eq!(capture.calls(), 1, "create only, no remove");
-        }
-    });
+                let path = isolation.path().to_path_buf();
+                fs::write(path.join("notes.txt"), "scratch").unwrap();
+                let capture = Capture::new(Arc::clone(&clock));
+                isolation.opener()(&capture.timing());
+                isolation.end();
+                assert!(exists(&path));
+                assert_eq!(capture.calls(), 1, "create only, no remove");
+                assert!(!home.path().join("logs").exists(), "no diagnostic line");
+            }
+            // A modified tracked file keeps the worktree.
+            {
+                let home = fakes::TempDir::new("doors-timing-kept-modified-home");
+                let repo = repo("doors-timing-kept-modified");
+                let clock = FakeClock::new();
+                let id = "s_0123456789abcdef";
+                let isolation = isolate(
+                    repo.path(),
+                    home.path(),
+                    &SessionId(id.into()),
+                    Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                    &direct,
+                )
+                .unwrap();
+                let path = isolation.path().to_path_buf();
+                fs::write(path.join("file.txt"), "precious change").unwrap();
+                let capture = Capture::new(Arc::clone(&clock));
+                isolation.opener()(&capture.timing());
+                isolation.end();
+                assert!(exists(&path));
+                assert_eq!(capture.calls(), 1, "create only, no remove");
+            }
+            // A commit beyond the base keeps the worktree.
+            {
+                let home = fakes::TempDir::new("doors-timing-kept-commit-home");
+                let repo = repo("doors-timing-kept-commit");
+                let clock = FakeClock::new();
+                let id = "s_0123456789abcdef";
+                let isolation = isolate(
+                    repo.path(),
+                    home.path(),
+                    &SessionId(id.into()),
+                    Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                    &direct,
+                )
+                .unwrap();
+                let path = isolation.path().to_path_buf();
+                fs::write(path.join("more.txt"), "y").unwrap();
+                run_git(&path, &["add", "."]);
+                run_git(&path, &["commit", "--quiet", "-m", "second"]);
+                let capture = Capture::new(Arc::clone(&clock));
+                isolation.opener()(&capture.timing());
+                isolation.end();
+                assert!(exists(&path));
+                assert_eq!(capture.calls(), 1, "create only, no remove");
+            }
+            // A held share keeps the worktree with no line.
+            {
+                let home = fakes::TempDir::new("doors-timing-kept-share-home");
+                let repo = repo("doors-timing-kept-share");
+                let clock = FakeClock::new();
+                let id = "s_0123456789abcdef";
+                let isolation = isolate(
+                    repo.path(),
+                    home.path(),
+                    &SessionId(id.into()),
+                    Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                    &direct,
+                )
+                .unwrap();
+                let path = isolation.path().to_path_buf();
+                let _shared = super::share(&path).unwrap();
+                let capture = Capture::new(Arc::clone(&clock));
+                isolation.opener()(&capture.timing());
+                isolation.end();
+                assert!(exists(&path));
+                assert_eq!(capture.calls(), 1, "create only, no remove");
+            }
+            // A busy session log keeps the worktree.
+            {
+                let home = fakes::TempDir::new("doors-timing-kept-busy-home");
+                let repo = repo("doors-timing-kept-busy");
+                let clock = FakeClock::new();
+                let id = "s_0123456789abcdef";
+                let isolation = isolate(
+                    repo.path(),
+                    home.path(),
+                    &SessionId(id.into()),
+                    Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                    &direct,
+                )
+                .unwrap();
+                let path = isolation.path().to_path_buf();
+                let sessions = home
+                    .path()
+                    .join("projects")
+                    .join(key_of(repo.path()))
+                    .join("sessions");
+                let _holder = held(&sessions, id, path.to_str().unwrap());
+                let capture = Capture::new(Arc::clone(&clock));
+                isolation.opener()(&capture.timing());
+                isolation.end();
+                assert!(exists(&path));
+                assert_eq!(capture.calls(), 1, "create only, no remove");
+            }
+            // A switched branch keeps the worktree.
+            {
+                let home = fakes::TempDir::new("doors-timing-kept-switched-home");
+                let repo = repo("doors-timing-kept-switched");
+                let clock = FakeClock::new();
+                let id = "s_0123456789abcdef";
+                let isolation = isolate(
+                    repo.path(),
+                    home.path(),
+                    &SessionId(id.into()),
+                    Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                    &direct,
+                )
+                .unwrap();
+                let path = isolation.path().to_path_buf();
+                run_git(&path, &["switch", "--quiet", "-c", "other"]);
+                let capture = Capture::new(Arc::clone(&clock));
+                isolation.opener()(&capture.timing());
+                isolation.end();
+                assert!(exists(&path));
+                assert_eq!(capture.calls(), 1, "create only, no remove");
+            }
+            // A rewound creator keeps the worktree.
+            {
+                let home = fakes::TempDir::new("doors-timing-kept-rewound-home");
+                let repo = repo("doors-timing-kept-rewound");
+                let clock = FakeClock::new();
+                let id = "s_0123456789abcdef";
+                let isolation = isolate(
+                    repo.path(),
+                    home.path(),
+                    &SessionId(id.into()),
+                    Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                    &direct,
+                )
+                .unwrap();
+                let path = isolation.path().to_path_buf();
+                let sessions = home
+                    .path()
+                    .join("projects")
+                    .join(key_of(repo.path()))
+                    .join("sessions");
+                let holder = held(&sessions, id, path.to_str().unwrap());
+                holder
+                    .append(
+                        &Event::Rewound(contract::events::Rewound {
+                            new_session_id: SessionId("s_ffffffffffffffff".into()),
+                            seq: contract::Seq(1),
+                            from_session_id: None,
+                            summary: None,
+                        }),
+                        None,
+                        None,
+                    )
+                    .unwrap();
+                drop(holder);
+                let capture = Capture::new(Arc::clone(&clock));
+                isolation.opener()(&capture.timing());
+                isolation.end();
+                assert!(exists(&path));
+                assert_eq!(capture.calls(), 1, "create only, no remove");
+            }
+        },
+    );
 }

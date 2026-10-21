@@ -20,7 +20,7 @@ use std::time::Duration;
 use contract::tool::Tool;
 use fakes::alloc::{Bytes, Counting, bytes_during};
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, ProviderServer, Recorder, Response, TempDir, within};
+use fakes::{CancelToken, Deadline, ProviderServer, Recorder, Response, TempDir, within};
 use serde_json::{Map, Value};
 use tools::WebFetch;
 
@@ -110,7 +110,7 @@ fn fetch(content_type: &str, page: Vec<u8>) -> Fetched {
     let tool = WebFetch::new(artifacts, FakeClock::new()).with_proxy(None);
     let mut arguments = Map::new();
     arguments.insert("url".to_owned(), Value::String(url));
-    let (result, measured, addr) = within("the fetch", FETCH, move || {
+    let (result, measured, addr) = within("the fetch", Deadline::after(FETCH), move || {
         let ((), calibration) = bytes_during(|| drop(black_box(Vec::<u8>::with_capacity(1024))));
         assert_eq!(
             calibration.peak(),

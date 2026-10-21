@@ -235,12 +235,12 @@ fn the_watcher_drains_a_listed_group_before_it_finishes() {
     );
     let error = late.expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
-    let _listed = fakes::within("the killed command", DEADLINE, move || {
+    let _listed = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         listed.join().unwrap()
     });
     // The guard's drop joins the watcher: bounded on its own thread, so a
     // hung settle fails here instead of hanging the binary.
-    fakes::within("the guard's drop", DEADLINE, move || {
+    fakes::within("the guard's drop", Deadline::after(DEADLINE), move || {
         drop(guard);
     });
     watchdog.stand_down(DEADLINE);
@@ -316,9 +316,13 @@ fn repeat_signals_and_the_return_guard_share_the_first_end() {
     // The normal-return guard drops onto the same spent end: it answers at
     // once instead of parking, so the bounded drop below would fail it.
     let plain = CancelAndSettle(Arc::clone(&reads), Arc::clone(&clock));
-    fakes::within("the return guard's drop", DEADLINE, move || {
-        drop(plain);
-    });
+    fakes::within(
+        "the return guard's drop",
+        Deadline::after(DEADLINE),
+        move || {
+            drop(plain);
+        },
+    );
     release.send(()).expect("the spawn's release");
     let error = Deadline::after(DEADLINE)
         .recv(&late)
@@ -329,7 +333,7 @@ fn repeat_signals_and_the_return_guard_share_the_first_end() {
         fakes::matching_exits(&marker, DEADLINE),
         "the late group is gone"
     );
-    fakes::within("the guard's drop", DEADLINE, move || {
+    fakes::within("the guard's drop", Deadline::after(DEADLINE), move || {
         drop(guard);
     });
     holding.stand_down(DEADLINE);
@@ -454,7 +458,7 @@ fn a_registered_signal_cancels_settles_and_then_finishes_with_its_number() {
     // The guard's drop joins the watcher: bounded on its own thread, so a
     // hung settle fails here instead of hanging the binary. `within` never
     // joins its thread.
-    fakes::within("the guard's drop", DEADLINE, move || {
+    fakes::within("the guard's drop", Deadline::after(DEADLINE), move || {
         drop(guard);
     });
     assert_eq!(fired, SIGTERM);
@@ -517,7 +521,7 @@ fn the_watcher_settles_an_in_flight_spawn_before_it_finishes() {
     // The watcher took the signal once the cancel landed: a `run` past a
     // cancel refuses without starting its read. The spin ends on the
     // refusal, never on the clock.
-    fakes::within("the watcher's cancel", DEADLINE, {
+    fakes::within("the watcher's cancel", Deadline::after(DEADLINE), {
         let reads = Arc::clone(&reads);
         move || loop {
             if reads.run("credential read", || ()).is_err() {
@@ -909,7 +913,7 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
     // exiting: survival past the cancel proves no exit, and the
     // cancelled read proves the production calls ran. The spin ends on
     // the refusal, never on the clock.
-    fakes::within("the watcher's cancel", DEADLINE, {
+    fakes::within("the watcher's cancel", Deadline::after(DEADLINE), {
         let reads = Arc::clone(&reads);
         move || loop {
             if reads.run("credential read", || ()).is_err() {

@@ -49,7 +49,7 @@ impl Setup {
     ) -> (Arc<crate::server::Server>, crate::cache::Cached) {
         let url = format!("{}/mcp", server.url());
         let clock = self.clock();
-        let opened = fakes::within("the remote start", WITHIN, move || {
+        let opened = fakes::within("the remote start", Deadline::after(WITHIN), move || {
             super::start(
                 &url,
                 Arc::new(crate::test_support::FakeTokens::default()),
@@ -71,7 +71,7 @@ impl Setup {
     fn start_err(&self, url: &str, timeout: Duration) -> StartError {
         let url = url.to_owned();
         let clock = self.clock();
-        let started = fakes::within("the remote start", WITHIN, move || {
+        let started = fakes::within("the remote start", Deadline::after(WITHIN), move || {
             super::start(
                 &url,
                 Arc::new(crate::test_support::FakeTokens::default()),
@@ -95,7 +95,7 @@ impl Setup {
     fn start_at(&self, url: &str, timeout: Duration) -> Arc<crate::server::Server> {
         let url = url.to_owned();
         let clock = self.clock();
-        let opened = fakes::within("the remote start", WITHIN, move || {
+        let opened = fakes::within("the remote start", Deadline::after(WITHIN), move || {
             super::start(
                 &url,
                 Arc::new(crate::test_support::FakeTokens::default()),
@@ -164,7 +164,7 @@ fn token_start(
     files: Arc<crate::test_support::FakeTokens>,
 ) -> Result<OpenServer, StartError> {
     let clock = setup.clock();
-    fakes::within("OAuth remote start", WITHIN, move || {
+    fakes::within("OAuth remote start", Deadline::after(WITHIN), move || {
         super::start(
             &url,
             files,
@@ -219,7 +219,9 @@ fn every_request_carries_only_its_urls_bearer() {
                 )
                 .is_ok()
         );
-        fakes::within("remote stop", WITHIN, move || server.stop());
+        fakes::within("remote stop", Deadline::after(WITHIN), move || {
+            server.stop()
+        });
         let requests = fake.requests();
         assert_eq!(
             requests
@@ -255,7 +257,9 @@ fn an_in_window_token_sends_before_its_background_refresh_finishes() {
     auth.release();
     Deadline::after(WITHIN).recv_or_fail(&received, "the background token is saved");
     assert_eq!(files.state.lock().unwrap().writes, 2);
-    fakes::within("remote stop", WITHIN, move || opened.server.stop());
+    fakes::within("remote stop", Deadline::after(WITHIN), move || {
+        opened.server.stop()
+    });
 }
 
 #[test]
@@ -269,7 +273,9 @@ fn a_refresh_request_carries_no_bearer() {
     let setup = Setup::new();
     let url = format!("{}/mcp", fake.url());
     let opened = token_start(&setup, url.clone(), token_files(&url, &auth.url(), Some(0))).unwrap();
-    fakes::within("remote stop", WITHIN, move || opened.server.stop());
+    fakes::within("remote stop", Deadline::after(WITHIN), move || {
+        opened.server.stop()
+    });
     assert_eq!(auth.requests().len(), 1);
     assert_eq!(auth.requests()[0].header("authorization"), None);
     for request in fake.requests() {
@@ -361,12 +367,18 @@ fn listed_names(listed: &crate::cache::Cached) -> Vec<String> {
 fn socket_pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("the local listener binds");
     let address = listener.local_addr().expect("the listener address");
-    let client = fakes::within("the local socket connect", WITHIN, move || {
-        TcpStream::connect(address)
-    })
+    let client = fakes::within(
+        "the local socket connect",
+        Deadline::after(WITHIN),
+        move || TcpStream::connect(address),
+    )
     .expect("the local socket connects");
-    let (peer, _) = fakes::within("the local socket accept", WITHIN, move || listener.accept())
-        .expect("the local socket is accepted");
+    let (peer, _) = fakes::within(
+        "the local socket accept",
+        Deadline::after(WITHIN),
+        move || listener.accept(),
+    )
+    .expect("the local socket is accepted");
     (client, peer)
 }
 
@@ -916,7 +928,9 @@ fn initialized_only_fails_the_start_on_401() {
         .unwrap();
         let setup = Setup::new();
         let (server, _) = setup.start(&fake, Duration::from_secs(5));
-        fakes::within("remote stop", WITHIN, move || server.stop());
+        fakes::within("remote stop", Deadline::after(WITHIN), move || {
+            server.stop()
+        });
         assert_eq!(fake.requests()[1].method, "POST");
     }
 }
@@ -1014,7 +1028,9 @@ fn a_pump_login_failure_refuses_waiting_calls() {
             .is_ok()
     );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    fakes::within("remote stop", WITHIN, move || server.stop());
+    fakes::within("remote stop", Deadline::after(WITHIN), move || {
+        server.stop()
+    });
 }
 
 #[test]
@@ -1172,7 +1188,9 @@ fn cancellation_ends_a_token_lock_wait_on_a_running_server() {
     worker.join().unwrap();
     assert_eq!(auth.request_count(), 0);
     drop(held);
-    fakes::within("remote stop", WITHIN, move || server.stop());
+    fakes::within("remote stop", Deadline::after(WITHIN), move || {
+        server.stop()
+    });
 }
 #[test]
 fn a_rejected_refresh_fails_the_start_without_changing_the_record() {
@@ -1226,7 +1244,9 @@ fn a_refresh_reply_up_to_the_body_cap_renews_the_login() {
         let url = format!("{}/mcp", fake.url());
         let opened =
             token_start(&setup, url.clone(), token_files(&url, &auth.url(), Some(0))).unwrap();
-        fakes::within("remote stop", WITHIN, move || opened.server.stop());
+        fakes::within("remote stop", Deadline::after(WITHIN), move || {
+            opened.server.stop()
+        });
         assert_eq!(auth.requests().len(), 1, "row {name}: one refresh");
         let requests = fake.requests();
         assert!(
@@ -2430,7 +2450,7 @@ fn a_start_through_a_proxy_tunnels_to_the_server() {
         .unwrap();
     let url = format!("{}/mcp", server.url());
     let clock = setup.clock();
-    let opened = fakes::within("the remote start", WITHIN, move || {
+    let opened = fakes::within("the remote start", Deadline::after(WITHIN), move || {
         super::start(
             &url,
             Arc::new(crate::test_support::FakeTokens::default()),

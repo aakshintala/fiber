@@ -26,51 +26,56 @@ use fakes::{Deadline, NoLock};
 
 #[test]
 fn catalogue_and_cached_model_lists_follow_project_configuration() {
-    fakes::within("project model catalogue", Duration::from_secs(10), || {
-        let setup = Setup::new();
-        let model = json!([{"id":"m", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}]);
-        setup.install("acme", "p", &model);
-        setup.install("other", "other", &model);
-        setup.write_config(&json!({"extensions":{"acme":{"enabled":false}}}));
-        config::write_model_cache(&setup.home(), "p", &model).unwrap();
-        let (providers, _, notices) =
-            providers_and_config(&setup.home(), &setup.workspace()).unwrap();
-        assert!(notices.is_empty());
-        assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
-        let (providers, _, notices) = crate::model_lists::model_lists(
-            &setup.home(),
-            &setup.workspace(),
-            crate::model_lists::ModelLists::Cached,
-            &|_| unreachable!("cached lists start no extensions"),
-            &fakes::children::grouped_output,
-        )
-        .unwrap();
-        assert!(notices.is_empty());
-        assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
-        let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
-        config::set(
-            &setup.home(),
-            &setup.workspace(),
-            &project,
-            config::Layer::Project,
-            "extensions.acme.enabled",
-            json!(true),
-        )
-        .unwrap();
-        let (providers, _, _) = providers_and_config(&setup.home(), &setup.workspace()).unwrap();
-        assert_eq!(providers.names().collect::<Vec<_>>(), ["other", "p"]);
-        let other_workspace = setup.root.path().join("elsewhere");
-        fs::create_dir(&other_workspace).unwrap();
-        let (providers, _, _) = providers_and_config(&setup.home(), &other_workspace).unwrap();
-        assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
-    });
+    fakes::within(
+        "project model catalogue",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            let model = json!([{"id":"m", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}]);
+            setup.install("acme", "p", &model);
+            setup.install("other", "other", &model);
+            setup.write_config(&json!({"extensions":{"acme":{"enabled":false}}}));
+            config::write_model_cache(&setup.home(), "p", &model).unwrap();
+            let (providers, _, notices) =
+                providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+            assert!(notices.is_empty());
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+            let (providers, _, notices) = crate::model_lists::model_lists(
+                &setup.home(),
+                &setup.workspace(),
+                crate::model_lists::ModelLists::Cached,
+                &|_| unreachable!("cached lists start no extensions"),
+                &fakes::children::grouped_output,
+            )
+            .unwrap();
+            assert!(notices.is_empty());
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+            let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
+            config::set(
+                &setup.home(),
+                &setup.workspace(),
+                &project,
+                config::Layer::Project,
+                "extensions.acme.enabled",
+                json!(true),
+            )
+            .unwrap();
+            let (providers, _, _) =
+                providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other", "p"]);
+            let other_workspace = setup.root.path().join("elsewhere");
+            fs::create_dir(&other_workspace).unwrap();
+            let (providers, _, _) = providers_and_config(&setup.home(), &other_workspace).unwrap();
+            assert_eq!(providers.names().collect::<Vec<_>>(), ["other"]);
+        },
+    );
 }
 
 #[test]
 fn refresh_skips_disabled_malformed_provider_data_and_refreshes_enabled_control() {
     fakes::within(
         "filtered background model refresh",
-        Duration::from_secs(20),
+        Deadline::after(Duration::from_secs(20)),
         || {
             let setup = Setup::new();
             setup.install_lua("enabled", "good", &lua_list("new"));
@@ -667,7 +672,7 @@ fn models_exits_zero_and_prints_the_row() {
     let output = fakes::rerun_prepared(
         &format!("{name}::models_exits_zero_and_prints_the_row"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -699,7 +704,7 @@ fn models_with_a_relative_fiber_home_is_a_usage_failure() {
     let output = fakes::rerun_prepared(
         &format!("{name}::models_with_a_relative_fiber_home_is_a_usage_failure"),
         &[(CHILD, "1"), ("FIBER_HOME", "relative")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command.current_dir(setup.workspace());
         },
@@ -760,7 +765,7 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
     let output = fakes::rerun_prepared(
         &format!("{name}::models_spawns_its_refresh_child_from_the_recorded_path"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -812,7 +817,7 @@ fn models_with_an_unusable_recorded_path_still_prints_from_the_cache() {
     let output = fakes::rerun_prepared(
         &format!("{name}::models_with_an_unusable_recorded_path_still_prints_from_the_cache"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -1279,7 +1284,7 @@ fn the_hidden_refresh_child_refreshes_a_stale_list() {
     let output = fakes::rerun_prepared(
         &format!("{name}::the_hidden_refresh_child_refreshes_a_stale_list"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())
@@ -1371,7 +1376,7 @@ fn a_repository_settings_file_cannot_supply_the_host() {
     let output = fakes::rerun_prepared(
         &format!("{name}::a_repository_settings_file_cannot_supply_the_host"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command
                 .env("FIBER_HOME", setup.home())

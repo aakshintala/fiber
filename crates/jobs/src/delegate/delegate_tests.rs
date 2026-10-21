@@ -539,9 +539,13 @@ fn eof_before_exit_reports_without_a_clock_move() {
     // The child closed stdout before blocking on the fifo, so its exit
     // follows this write with no stdout event and no clock move: the
     // runner must still reap it and report.
-    within("the child reads the fifo", DEADLINE, move || {
-        std::fs::write(&fifo, "\n").unwrap();
-    });
+    within(
+        "the child reads the fifo",
+        Deadline::after(DEADLINE),
+        move || {
+            std::fs::write(&fifo, "\n").unwrap();
+        },
+    );
     let deadline = Deadline::after(DEADLINE);
     let Delivery::Job(notice) = deadline
         .recv(&rig.inbox)

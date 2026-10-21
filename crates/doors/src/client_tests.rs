@@ -30,7 +30,7 @@ mod import_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use fakes::{Client, TempDir};
+    use fakes::{Client, Deadline, TempDir};
     use serde_json::Value;
 
     use super::support::{Opened, kind, rejection, response, send, subscribe};
@@ -162,7 +162,7 @@ mod import_tests {
         let output = fakes::rerun_prepared(
             &format!("{}::{test}", child_name()),
             &[(CHILD, case)],
-            CHILD_WITHIN,
+            Deadline::after(CHILD_WITHIN),
             |command| match person {
                 Some(dir) => {
                     command.env("HOME", dir);

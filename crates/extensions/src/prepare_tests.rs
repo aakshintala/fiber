@@ -184,15 +184,19 @@ fn a_held_download_fails_within_the_limit() {
     let server = fakes::ProviderServer::start([]).unwrap();
     server.hold_from(1, Duration::from_secs(30));
     let url = format!("{}/tool", server.url());
-    let err = fakes::within("a held download", DOWNLOAD_WITHIN, move || {
-        download_with(
-            "probe",
-            &url,
-            None,
-            net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
-        )
-        .unwrap_err()
-    });
+    let err = fakes::within(
+        "a held download",
+        Deadline::after(DOWNLOAD_WITHIN),
+        move || {
+            download_with(
+                "probe",
+                &url,
+                None,
+                net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
+            )
+            .unwrap_err()
+        },
+    );
     assert!(
         matches!(err, crate::Error::Download { .. }),
         "a held download fails as its download failed: {err}"
@@ -205,15 +209,19 @@ fn a_held_download_fails_within_the_limit() {
 fn a_stalled_download_body_fails_and_closes() {
     let server = fakes::ProviderServer::start([fakes::Response::stall(200, "abc", 1000)]).unwrap();
     let url = format!("{}/tool", server.url());
-    let err = fakes::within("a stalled download", DOWNLOAD_WITHIN, move || {
-        download_with(
-            "probe",
-            &url,
-            None,
-            net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
-        )
-        .unwrap_err()
-    });
+    let err = fakes::within(
+        "a stalled download",
+        Deadline::after(DOWNLOAD_WITHIN),
+        move || {
+            download_with(
+                "probe",
+                &url,
+                None,
+                net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
+            )
+            .unwrap_err()
+        },
+    );
     assert!(
         matches!(err, crate::Error::Download { .. }),
         "a stalled download fails as its download failed: {err}"

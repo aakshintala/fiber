@@ -4,6 +4,8 @@
 
 use std::process::ExitStatus;
 
+use fakes::Deadline;
+
 use super::*;
 
 const NAME: &str = "acme.api_key";
@@ -263,7 +265,7 @@ fn child(test: &str, home: &Path, stdin: &str) -> ExitStatus {
     let output = fakes::rerun_prepared(
         &format!("{module}::{test}"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             // The write finishes before spawn, so a child that refuses
             // before reading no longer races it; every input fits PIPE_BUF.

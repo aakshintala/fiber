@@ -665,7 +665,7 @@ fn cap_boundaries_hold_on_both_paths() {
             ProviderServer::start_responding(move |_| Response::status(status, body.clone()))
                 .unwrap();
         let request = get(&server.url(), None);
-        let plain = fakes::within("perform", fakes::MUST_SUCCEED_WITHIN, {
+        let plain = fakes::within("perform", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
             let request = HttpRequest {
                 method: request.method.clone(),
                 url: request.url.clone(),
@@ -677,21 +677,25 @@ fn cap_boundaries_hold_on_both_paths() {
         });
         let (sink, _) = Watching::new();
         let held = sink.clone();
-        let seen = fakes::within("perform_observed", fakes::MUST_SUCCEED_WITHIN, {
-            let request = HttpRequest {
-                method: "GET".to_owned(),
-                url: server.url(),
-                headers: Vec::new(),
-                body: None,
-                timeout: None,
-            };
-            move || {
-                perform_observed(
-                    &request,
-                    observed("p", Purpose::Quota, held.clone(), FakeClock::new()),
-                )
-            }
-        });
+        let seen = fakes::within(
+            "perform_observed",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            {
+                let request = HttpRequest {
+                    method: "GET".to_owned(),
+                    url: server.url(),
+                    headers: Vec::new(),
+                    body: None,
+                    timeout: None,
+                };
+                move || {
+                    perform_observed(
+                        &request,
+                        observed("p", Purpose::Quota, held.clone(), FakeClock::new()),
+                    )
+                }
+            },
+        );
         assert_eq!(plain, seen);
         let records = sink.records();
         assert_eq!(records.len(), 1);
@@ -1276,9 +1280,11 @@ fn spawn_failure_starts_no_request_or_record() {
     let ext = LuaExtension::new("ext", dir.path(), dir.path(), clock)
         .with_diagnostics(sink.clone() as Arc<dyn DebugLog>);
     fail_next_spawn_for("sf");
-    let err = fakes::within("ext.provider_call", fakes::MUST_SUCCEED_WITHIN, move || {
-        ext.provider_call("sf", "models", serde_json::Value::Null)
-    })
+    let err = fakes::within(
+        "ext.provider_call",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || ext.provider_call("sf", "models", serde_json::Value::Null),
+    )
     .unwrap_err();
     assert_eq!(err.code(), ErrorCode::IoFailed);
     assert!(server.requests().is_empty(), "a failed spawn sends nothing");
@@ -1506,7 +1512,7 @@ fn late_workers_emit_once_and_drop_late_replies() {
         "the expired callback returns its timeout: {err:?}"
     );
     // The next callback runs on the live VM.
-    fakes::within("ext.hook", fakes::MUST_SUCCEED_WITHIN, {
+    fakes::within("ext.hook", Deadline::after(fakes::MUST_SUCCEED_WITHIN), {
         let ext = Arc::clone(&ext);
         move || ext.hook("turn_start", 0, serde_json::Value::Null)
     })

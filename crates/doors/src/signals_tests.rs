@@ -824,7 +824,7 @@ fn a_real_sigterm_while_booting_exits_143() {
     let output = fakes::rerun_within(
         &format!("{name}::a_real_sigterm_while_booting_exits_143"),
         &[(CHILD, "1")],
-        CHILD_WITHIN,
+        Deadline::after(CHILD_WITHIN),
     );
     assert_eq!(output.status.code(), Some(143), "{}", output.status);
 }

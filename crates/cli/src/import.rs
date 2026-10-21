@@ -63,6 +63,7 @@ mod tests {
 
     use std::time::Duration;
 
+    use fakes::Deadline;
     use fakes::TempDir;
     use fakes::clock::FakeClock;
 
@@ -98,7 +99,7 @@ mod tests {
         let output = fakes::rerun_prepared(
             &format!("{}::import_without_a_home_dir_exits_nonzero", child_name()),
             &[(CHILD, "1")],
-            CHILD_WITHIN,
+            Deadline::after(CHILD_WITHIN),
             |command| {
                 command
                     .env("FIBER_HOME", fixture.path().join("home"))
@@ -126,7 +127,7 @@ mod tests {
         let output = fakes::rerun_prepared(
             &format!("{}::import_success_exits_zero", child_name()),
             &[(CHILD_SUCCESS, "1")],
-            CHILD_WITHIN,
+            Deadline::after(CHILD_WITHIN),
             |command| {
                 command
                     .env("FIBER_HOME", fixture.path().join("home"))

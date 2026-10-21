@@ -51,7 +51,7 @@ fn listed(reads: &Reads) -> Vec<u32> {
 /// assert.
 #[track_caller]
 fn generation_reaches(wake: &Arc<Parker>, target: u64, what: &str) {
-    fakes::within(what, DEADLINE, {
+    fakes::within(what, Deadline::after(DEADLINE), {
         let wake = Arc::clone(wake);
         move || loop {
             let seen = wake.generation();
@@ -100,7 +100,7 @@ fn poll_step(
 #[test]
 fn run_returns_the_reads_value() {
     let reads = Reads::default();
-    let value = fakes::within("the read", DEADLINE, move || {
+    let value = fakes::within("the read", Deadline::after(DEADLINE), move || {
         reads.run("credential read", || 7)
     });
     assert_eq!(value.unwrap(), 7);
@@ -127,7 +127,7 @@ fn cancel_ends_a_blocked_run_with_closing_and_a_late_value_changes_nothing() {
         .recv(&began)
         .expect("the read started");
     reads.cancel();
-    let rejected = fakes::within("the cancelled run", DEADLINE, move || {
+    let rejected = fakes::within("the cancelled run", Deadline::after(DEADLINE), move || {
         waiter.join().unwrap()
     });
     let failure = rejected.expect_err("a cancelled read is no value");
@@ -160,12 +160,12 @@ fn cancel_ends_a_blocked_run_started_before_a_quick_one_with_closing() {
     // replaces A's wake, and its finish removes A's entry, so the cancel
     // below never wakes A.
     let probe = Arc::clone(&reads);
-    let quick = fakes::within("the quick run", DEADLINE, move || {
+    let quick = fakes::within("the quick run", Deadline::after(DEADLINE), move || {
         probe.run("credential read", || 1)
     });
     assert_eq!(quick.unwrap(), 1);
     reads.cancel();
-    let rejected = fakes::within("the cancelled run", DEADLINE, move || {
+    let rejected = fakes::within("the cancelled run", Deadline::after(DEADLINE), move || {
         waiter.join().unwrap()
     });
     let failure = rejected.expect_err("a cancelled read is no value");
@@ -193,7 +193,7 @@ fn a_value_answered_after_cancel_is_closing() {
         .expect("the run answered");
     reads.cancel();
     open.send(()).unwrap();
-    let failure = fakes::within("the cancelled run", DEADLINE, move || {
+    let failure = fakes::within("the cancelled run", Deadline::after(DEADLINE), move || {
         waiter.join().unwrap()
     })
     .expect_err("a read answered after cancel is no value");
@@ -208,7 +208,7 @@ fn run_after_cancel_is_closing_without_running_the_read() {
     reads.cancel();
     let ran = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&ran);
-    let failure = fakes::within("the refused read", DEADLINE, move || {
+    let failure = fakes::within("the refused read", Deadline::after(DEADLINE), move || {
         reads.run("credential read", move || {
             flag.store(true, Ordering::SeqCst)
         })
@@ -242,14 +242,19 @@ fn a_command_leads_its_own_group_and_is_listed_until_the_group_empties() {
     assert_eq!(pid, pgid, "the command leads its own group");
     assert_eq!(listed(&reads), vec![pid], "listed while it runs");
     std::fs::write(&go, "").unwrap();
-    let output = fakes::within("the command", DEADLINE, move || running.join().unwrap()).unwrap();
+    let output = fakes::within("the command", Deadline::after(DEADLINE), move || {
+        running.join().unwrap()
+    })
+    .unwrap();
     assert_eq!(String::from_utf8_lossy(&output.stdout), "key\n");
     assert!(fakes::group_empties(pid, DEADLINE));
     // The next command prunes the empty group.
     let probe = Arc::clone(&reads);
-    let pruned = fakes::within("the pruning command", DEADLINE, move || {
-        probe.command(&mut sh("true"))
-    });
+    let pruned = fakes::within(
+        "the pruning command",
+        Deadline::after(DEADLINE),
+        move || probe.command(&mut sh("true")),
+    );
     pruned.unwrap();
     assert!(!listed(&reads).contains(&pid), "{:?}", listed(&reads));
     watchdog.stand_down(DEADLINE);
@@ -272,7 +277,7 @@ fn cancel_kills_a_running_command_and_it_errs() {
     let pid: u32 = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pid);
     reads.cancel();
-    let error = fakes::within("the killed command", DEADLINE, move || {
+    let error = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running.join().unwrap()
     })
     .expect_err("a killed command");
@@ -295,7 +300,7 @@ fn a_descendant_keeps_its_group_listed_and_cancel_kills_it() {
     // so only a command-line watchdog covers the spawn itself.
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let first = Arc::clone(&reads);
-    let output = fakes::within("the first command", DEADLINE, move || {
+    let output = fakes::within("the first command", Deadline::after(DEADLINE), move || {
         first.command(&mut sh(&script)).unwrap()
     });
     assert_eq!(String::from_utf8_lossy(&output.stdout), "key\n");
@@ -303,9 +308,11 @@ fn a_descendant_keeps_its_group_listed_and_cancel_kills_it() {
     let watchdog = fakes::Watchdog::group(group);
     assert!(fakes::kill_group(group, "0").unwrap(), "sleep lives"); // A later command prunes only empty groups: `sleep` keeps this one.
     let probe = Arc::clone(&reads);
-    fakes::within("the pruning command", DEADLINE, move || {
-        probe.command(&mut sh("true")).unwrap()
-    });
+    fakes::within(
+        "the pruning command",
+        Deadline::after(DEADLINE),
+        move || probe.command(&mut sh("true")).unwrap(),
+    );
     assert!(listed(&reads).contains(&group), "{:?}", listed(&reads));
     reads.cancel();
     assert!(fakes::group_empties(group, DEADLINE), "cancel killed sleep");
@@ -336,8 +343,12 @@ fn a_cancel_between_a_read_starting_and_its_spawn_starts_no_command() {
         .expect("the job started");
     reads.cancel();
     open.send(()).unwrap();
-    let error = fakes::within("the refused command", DEADLINE, move || job.join().unwrap())
-        .expect_err("a cancelled command");
+    let error = fakes::within(
+        "the refused command",
+        Deadline::after(DEADLINE),
+        move || job.join().unwrap(),
+    )
+    .expect_err("a cancelled command");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(!marker.exists(), "the command never started");
     assert!(listed(&reads).is_empty());
@@ -1225,14 +1236,14 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         fakes::group_empties(pid_a, DEADLINE),
         "the cancel killed group A"
     );
-    let late_a = fakes::within("the killed command", DEADLINE, move || {
+    let late_a = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running_a.join().unwrap()
     })
     .expect_err("a killed command");
     match release_tx.send(()) {
         Ok(()) | Err(_) => {}
     }
-    let error = fakes::within("the late command", DEADLINE, move || {
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
         running_b.join().unwrap()
     })
     .expect_err("a command spawned after the cancel");
@@ -1386,7 +1397,10 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
         ("the second command", running_b),
         ("the third command", running_c),
     ] {
-        fakes::within(what, DEADLINE, move || running.join().unwrap()).unwrap();
+        fakes::within(what, Deadline::after(DEADLINE), move || {
+            running.join().unwrap()
+        })
+        .unwrap();
     }
     watchdog_a.stand_down(DEADLINE);
     watchdog_b.stand_down(DEADLINE);
@@ -1635,7 +1649,7 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     match fakes::kill_group(pgid, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    let _finished = fakes::within("the killed command", DEADLINE, move || {
+    let _finished = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running.join().unwrap()
     });
     watchdog.stand_down(DEADLINE);
@@ -1762,7 +1776,7 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
     match fakes::kill_group(pgid, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    let _finished = fakes::within("the killed command", DEADLINE, move || {
+    let _finished = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running.join().unwrap()
     });
     watchdog.stand_down(DEADLINE);
@@ -1832,7 +1846,7 @@ fn settle_sends_again_until_srch_then_never_again() {
     match fakes::kill_group(pgid, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    let _finished = fakes::within("the killed command", DEADLINE, move || {
+    let _finished = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running.join().unwrap()
     });
     assert!(
@@ -1942,12 +1956,16 @@ fn settle_drains_two_groups_together_within_one_bound() {
     );
     // Reap both command threads on every path: the first was killed up
     // front, the second through the shared settlement.
-    let _one = fakes::within("the first killed command", DEADLINE, move || {
-        running_one.join().unwrap()
-    });
-    let _two = fakes::within("the second killed command", DEADLINE, move || {
-        running_two.join().unwrap()
-    });
+    let _one = fakes::within(
+        "the first killed command",
+        Deadline::after(DEADLINE),
+        move || running_one.join().unwrap(),
+    );
+    let _two = fakes::within(
+        "the second killed command",
+        Deadline::after(DEADLINE),
+        move || running_two.join().unwrap(),
+    );
     assert!(
         fakes::group_empties(pgid_one, DEADLINE),
         "the scripted group is gone"
@@ -2037,7 +2055,7 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
     match fakes::kill_group(pgid, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    let _finished = fakes::within("the killed command", DEADLINE, move || {
+    let _finished = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         running.join().unwrap()
     });
     assert!(
@@ -2197,8 +2215,10 @@ fn repeat_shutdowns_reuse_the_first_end() {
         "a settle past the shared end answers false at once"
     );
     release.send(()).expect("the spawn's release");
-    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
-        .expect_err("a command spawned after the cancel");
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
+        held.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
         fakes::matching_exits(marker, DEADLINE),
@@ -2239,8 +2259,10 @@ fn an_overflowing_shutdown_end_expires_at_once() {
         "overflow stores now, not None"
     );
     release.send(()).expect("the spawn's release");
-    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
-        .expect_err("a command spawned after the cancel");
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
+        held.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
         fakes::matching_exits(marker, DEADLINE),
@@ -2655,7 +2677,7 @@ fn a_failed_spawn_does_not_leave_the_count_raised() {
     // the bound fails the test instead of hanging the binary. The exact
     // count pins the decrement at once, so a `+=` or `/=` mutant fails
     // here instead of running out the settle below.
-    let error = fakes::within("the failed spawn", DEADLINE, {
+    let error = fakes::within("the failed spawn", Deadline::after(DEADLINE), {
         let reads = Arc::clone(&reads);
         move || reads.command(&mut missing)
     })
@@ -2729,8 +2751,10 @@ fn settle_gives_up_at_the_bound() {
     );
     reads.cancel();
     release.send(()).expect("the spawn's release");
-    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
-        .expect_err("a command spawned after the cancel");
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
+        held.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
         fakes::matching_exits(marker, DEADLINE),
@@ -2775,8 +2799,10 @@ fn settle_wakes_on_a_clock_advance_with_no_earlier_subscription() {
     );
     reads.cancel();
     release.send(()).expect("the spawn's release");
-    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
-        .expect_err("a command spawned after the cancel");
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
+        held.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
         fakes::matching_exits(marker, DEADLINE),
@@ -2843,8 +2869,10 @@ fn settle_pins_zero_true_and_held_false_at_once() {
     );
     reads.cancel();
     release.send(()).expect("the spawn's release");
-    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
-        .expect_err("a command spawned after the cancel");
+    let error = fakes::within("the late command", Deadline::after(DEADLINE), move || {
+        held.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
         fakes::matching_exits(marker, DEADLINE),

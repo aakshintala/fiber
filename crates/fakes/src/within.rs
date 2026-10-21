@@ -17,7 +17,7 @@ pub const MUST_SUCCEED_WITHIN: Duration = Duration::from_secs(10);
 #[track_caller]
 pub fn within<T: Send + 'static>(
     what: &str,
-    deadline: Duration,
+    deadline: Deadline,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> T {
     let (done, finished) = std::sync::mpsc::channel();
@@ -30,10 +30,11 @@ pub fn within<T: Send + 'static>(
         Ok(_) => {}
         Err(err) => panic!("could not start a thread for {what}: {err}"),
     }
-    match Deadline::after(deadline).recv(&finished) {
+    let within = deadline.left();
+    match deadline.recv(&finished) {
         Ok(Ok(value)) => value,
         Ok(Err(payload)) => panic!("the wait for {what} panicked: {}", describe(&payload)),
-        Err(_) => panic!("waited {deadline:?} for {what}"),
+        Err(_) => panic!("waited {within:?} for {what}"),
     }
 }
 

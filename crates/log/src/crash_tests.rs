@@ -12,6 +12,7 @@ use std::process::Output;
 use std::time::Duration;
 
 use super::{attach, file_name, install, message, report};
+use fakes::Deadline;
 
 /// The child's marker: set, the test installs the hook and panics instead of
 /// asserting, so the parent observes the file, stderr and the abort.
@@ -71,7 +72,7 @@ fn rerun(test: &str, scenario: &str, home: &Path) -> Output {
     fakes::rerun_within(
         &this(test),
         &[(CHILD, scenario), (HOME, home.as_str())],
-        CHILD_WITHIN,
+        Deadline::after(CHILD_WITHIN),
     )
 }
 

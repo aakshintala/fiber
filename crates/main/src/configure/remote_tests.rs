@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::configure::tests::{Dirs, write};
+use fakes::Deadline;
 
 fn call(seam: &Seam, operation: &str, args: Value) -> Result<Option<Value>, Failure> {
     seam.configure(
@@ -253,7 +254,7 @@ fn remote_operations_round_trip_their_wire_shapes() {
     let global_save = global.clone();
     let (seam, saved) = fakes::within(
         "round-trip global notes save",
-        std::time::Duration::from_secs(10),
+        Deadline::after(std::time::Duration::from_secs(10)),
         move || {
             let saved = result(
                 &seam,
@@ -278,7 +279,7 @@ fn remote_operations_round_trip_their_wire_shapes() {
     let project_stale = project.clone();
     let stale = fakes::within(
         "round-trip stale notes save",
-        std::time::Duration::from_secs(10),
+        Deadline::after(std::time::Duration::from_secs(10)),
         move || {
             result(
                 &seam,
@@ -438,7 +439,7 @@ fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
         );
         let (back, outcome) = fakes::within(
             "valid notes layers save",
-            std::time::Duration::from_secs(10),
+            Deadline::after(std::time::Duration::from_secs(10)),
             move || {
                 let outcome = call(&seam, operation, args);
                 (seam, outcome)
@@ -999,7 +1000,7 @@ fn remote_git(workspace: &Path, args: &[&str]) {
         "remote search git",
         child,
         &[],
-        std::time::Duration::from_secs(10),
+        fakes::Deadline::after(std::time::Duration::from_secs(10)),
     );
     assert!(
         output.status.success(),
@@ -1022,7 +1023,7 @@ fn remote_search_uses_the_workspaces_listing_and_the_given_home() {
     let mut search = seam.file_search(&workspace, Some(&home));
     let result = fakes::within(
         "hub workspace search",
-        std::time::Duration::from_secs(10),
+        Deadline::after(std::time::Duration::from_secs(10)),
         move || {
             assert_eq!(
                 search.search("alpha", &|| false),
@@ -1054,9 +1055,11 @@ fn remote_search_reports_the_first_git_error_line_and_caps_both_modes() {
     fs::create_dir_all(&workspace).unwrap();
     let seam = Seam::new(home.clone());
     let mut search = seam.file_search(&workspace, Some(&home));
-    let result = fakes::within("git error", std::time::Duration::from_secs(10), move || {
-        search.search("", &|| false)
-    });
+    let result = fakes::within(
+        "git error",
+        Deadline::after(std::time::Duration::from_secs(10)),
+        move || search.search("", &|| false),
+    );
     let error = result.unwrap().unwrap_err();
     assert!(error.contains("not a git repository"), "{error}");
     assert!(!error.contains('\n'));
@@ -1070,7 +1073,7 @@ fn remote_search_reports_the_first_git_error_line_and_caps_both_modes() {
         let mut search = seam.file_search(&workspace, Some(&workspace));
         fakes::within(
             "bounded remote searches",
-            std::time::Duration::from_secs(10),
+            Deadline::after(std::time::Duration::from_secs(10)),
             move || {
                 for query in ["match", "~/match"] {
                     let rows = search.search(query, &|| false).unwrap().unwrap();

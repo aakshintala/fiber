@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use contract::diag::{Op, Timing};
 use contract::tool::Cancel;
+use fakes::Deadline;
 use fakes::Watchdog;
 
 struct Never;
@@ -201,7 +202,7 @@ fn read_output(read: Arc<dyn contract::tool::Tool>) -> contract::tool::Output {
         "path".to_owned(),
         serde_json::Value::String("a.png".to_owned()),
     );
-    fakes::within("the read call", CALL_WITHIN, move || {
+    fakes::within("the read call", Deadline::after(CALL_WITHIN), move || {
         read.run(&arguments, &Never, &Quiet)
     })
 }
@@ -280,7 +281,7 @@ fn timed_files_and_images_share_one_timing() {
     assert_eq!(probe.closed.load(Ordering::SeqCst), 1);
 
     let bytes = PNG.to_vec();
-    let reference = fakes::within("the images call", CALL_WITHIN, move || {
+    let reference = fakes::within("the images call", Deadline::after(CALL_WITHIN), move || {
         images.process(&bytes, &Never)
     });
     let reference = reference.expect("the image");
@@ -317,7 +318,7 @@ fn untimed_builtin_matches_with_no_timing_calls() {
         "{output:?}"
     );
     let bytes = PNG.to_vec();
-    let reference = fakes::within("the images call", CALL_WITHIN, move || {
+    let reference = fakes::within("the images call", Deadline::after(CALL_WITHIN), move || {
         images.process(&bytes, &Never)
     })
     .expect("the image");

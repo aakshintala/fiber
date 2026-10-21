@@ -420,7 +420,7 @@ fn a_released_port_lets_a_foreign_listener_reset_the_redirect() {
     // cannot hang the test on the connect or the read.
     fakes::within(
         "the reset redirect to fail with ConnectionReset",
-        WAIT,
+        Deadline::after(WAIT),
         move || {
             let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, released)).unwrap();
             stream.set_read_timeout(Some(WAIT)).unwrap();
@@ -458,18 +458,22 @@ fn a_held_listener_serves_the_redirect_with_no_gap_for_a_foreign_listener() {
     };
     // The whole redirect runs under one wall-clock deadline, so a mutant
     // cannot hang the test on the connect or the read.
-    let reply = fakes::within("the held listener to serve the redirect", WAIT, move || {
-        let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
-        stream.set_read_timeout(Some(WAIT)).unwrap();
-        std::io::Write::write_all(
-            &mut stream,
-            b"GET /?code=abc&state=s HTTP/1.1\r\nHost: x\r\n\r\n",
-        )
-        .unwrap();
-        let mut reply = String::new();
-        stream.read_to_string(&mut reply).unwrap();
-        reply
-    });
+    let reply = fakes::within(
+        "the held listener to serve the redirect",
+        Deadline::after(WAIT),
+        move || {
+            let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+            stream.set_read_timeout(Some(WAIT)).unwrap();
+            std::io::Write::write_all(
+                &mut stream,
+                b"GET /?code=abc&state=s HTTP/1.1\r\nHost: x\r\n\r\n",
+            )
+            .unwrap();
+            let mut reply = String::new();
+            stream.read_to_string(&mut reply).unwrap();
+            reply
+        },
+    );
     assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
     assert_eq!(
         browser.seen.lock().unwrap().as_slice(),

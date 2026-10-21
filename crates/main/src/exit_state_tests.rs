@@ -3,6 +3,7 @@
 use contract::events::{CallStatus, Event};
 use contract::hook::{AfterToolCall, ContextOutcome, Hooks, TurnEnd};
 use extensions::SessionExtensions;
+use fakes::Deadline;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -42,7 +43,7 @@ fn load(
     .unwrap();
     let session = fakes::within(
         "extension state loaded",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             Arc::new(SessionExtensions::load(
                 &home,
@@ -66,7 +67,7 @@ fn make_log(root: &fakes::TempDir) -> log::Log {
 fn closing(session: Arc<SessionExtensions>) -> String {
     fakes::within(
         "closed state hook answered",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             let answer = session.turn_end(&TurnEnd {
                 reply: "done",
@@ -125,7 +126,7 @@ fn exit_state_never_writes_a_dropped_changes_lines() {
     let held = session.clone();
     fakes::within(
         "changed hook returned",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             held.after_tool(&AfterToolCall {
                 tool: "read",

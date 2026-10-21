@@ -409,7 +409,7 @@ fn the_public_entry_maps_package_and_fiber_outcomes_to_exit_codes() {
     let output = fakes::rerun_prepared(
         &test,
         &[(CHILD, "1"), ("TMPDIR", "/tmp")],
-        TEST_WAIT,
+        Deadline::after(TEST_WAIT),
         |_| {},
     );
     assert!(

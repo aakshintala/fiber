@@ -189,7 +189,7 @@ impl Home {
         let time = clock.clone();
         let session = fakes::within(
             "SessionExtensions::load",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 let mut session =
                     SessionExtensions::load(&home, &cfg, time, Arc::new(NoLock), None);
@@ -210,7 +210,7 @@ impl Home {
         let clock = self.clock.clone();
         fakes::within(
             "session.start_provider",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || session.start_provider(&cfg, clock, Arc::new(NoLock), "acme", "acme"),
         )
         .unwrap()
@@ -222,12 +222,16 @@ fn credential(provider: Arc<LuaProvider>) {
 fn credential_for(provider: Arc<LuaProvider>, label: &str) {
     let label = label.to_owned();
     assert_eq!(
-        fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
-            provider.token(&CredentialPair {
-                credential: "acme".into(),
-                label,
-            })
-        })
+        fakes::within(
+            "provider.token",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || {
+                provider.token(&CredentialPair {
+                    credential: "acme".into(),
+                    label,
+                })
+            }
+        )
         .unwrap()
         .expose(),
         "ok"

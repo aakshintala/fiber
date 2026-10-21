@@ -21,6 +21,7 @@ use crate::CliError;
 use crate::sessions::Ask;
 use contract::clock::Clock;
 use contract::{ErrorCode, HubLine};
+use fakes::Deadline;
 use serde_json::{Map, Value, json};
 
 /// One named deadline for the fake hub's read and the test's receive.
@@ -1129,7 +1130,7 @@ fn prune_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
         let output = fakes::rerun_prepared(
             &format!("{name}::prune_exits_zero_on_success_two_on_usage_and_one_on_refusal"),
             &[("FIBER_CLI_PRUNE_CHILD", case)],
-            HUB_DEADLINE,
+            Deadline::after(HUB_DEADLINE),
             |command| {
                 command
                     .env("FIBER_HOME", setup.home())

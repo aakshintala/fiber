@@ -202,9 +202,13 @@ fn ready_at_zero_fails_naming_the_fifo_without_opening_it() {
     crate::fifo(&fifo);
     let at = fifo.clone();
     let failed = std::panic::catch_unwind(|| {
-        within("Ready::at with no time left", DEADLINE, move || {
-            drop(Ready::at(&at, &|| Duration::ZERO));
-        });
+        within(
+            "Ready::at with no time left",
+            Deadline::after(DEADLINE),
+            move || {
+                drop(Ready::at(&at, &|| Duration::ZERO));
+            },
+        );
     })
     .expect_err("Ready::at fails with no time left");
     let message = failed.downcast_ref::<String>().cloned().unwrap_or_default();

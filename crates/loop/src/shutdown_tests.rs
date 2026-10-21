@@ -379,7 +379,7 @@ fn settling_drops_a_command_request_without_taking_answering_or_logging_it() {
     };
     let world = fakes::within(
         "settle command request",
-        Duration::from_secs(3),
+        Deadline::after(Duration::from_secs(3)),
         move || {
             world
                 .looped
@@ -653,12 +653,16 @@ fn abnormal_settle_redacts_only_the_extension_owned_end() {
         .unwrap();
     jobs.end_delegate("j_extension", &world.inbox, "PRIVATE EXTENSION OUTPUT");
     jobs.end_delegate("j_model", &world.inbox, "MODEL OUTPUT");
-    let world = fakes::within("settle both job ends", DEADLINE, move || {
-        for delivery in world.looped.inbox.try_iter() {
-            world.looped.settle_one(delivery).unwrap();
-        }
-        world
-    });
+    let world = fakes::within(
+        "settle both job ends",
+        Deadline::after(DEADLINE),
+        move || {
+            for delivery in world.looped.inbox.try_iter() {
+                world.looped.settle_one(delivery).unwrap();
+            }
+            world
+        },
+    );
     assert_eq!(
         world.held.kinds(),
         [

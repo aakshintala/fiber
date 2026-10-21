@@ -441,7 +441,7 @@ fn lua_message(error: &Error) -> String {
 #[track_caller]
 fn get(port: u16, request: &str) -> String {
     let request = request.to_owned();
-    fakes::within("the oauth reply", WAIT, move || {
+    fakes::within("the oauth reply", Deadline::after(WAIT), move || {
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
         stream.set_read_timeout(Some(WAIT)).unwrap();
         stream.write_all(request.as_bytes()).unwrap();
@@ -700,13 +700,17 @@ fn callback_skips_a_connection_that_is_not_a_request_and_a_head_that_is_too_larg
     match stream.write_all(huge.as_bytes()) {
         Ok(()) | Err(_) => {}
     }
-    let reply: String = fakes::within("the oversized-head reply", WAIT, move || {
-        let mut reply = String::new();
-        match stream.read_to_string(&mut reply) {
-            Ok(_) | Err(_) => {}
-        }
-        reply
-    });
+    let reply: String = fakes::within(
+        "the oversized-head reply",
+        Deadline::after(WAIT),
+        move || {
+            let mut reply = String::new();
+            match stream.read_to_string(&mut reply) {
+                Ok(_) | Err(_) => {}
+            }
+            reply
+        },
+    );
     assert!(
         reply.is_empty() || reply.starts_with("HTTP/1.1 431"),
         "{reply}"
@@ -825,7 +829,7 @@ fn callback_dropped_at_its_timeout_frees_the_port_from_a_client_that_keeps_sendi
         }
     });
     first.write_all(b"not http\r\n\r\n").unwrap();
-    let junk: String = fakes::within("the first reply", WAIT, move || {
+    let junk: String = fakes::within("the first reply", Deadline::after(WAIT), move || {
         let mut junk = String::new();
         first.read_to_string(&mut junk).unwrap();
         junk

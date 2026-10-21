@@ -157,7 +157,7 @@ pub(crate) fn bounded<T: Send + 'static>(
     what: &str,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> T {
-    fakes::within(what, deadline.left(), work)
+    fakes::within(what, deadline, work)
 }
 
 /// Sends `signal` to process group `group` through `fakes::kill_group`: a
@@ -188,7 +188,7 @@ pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
     let text = text.to_owned();
     fakes::within(
         &format!("killing every process matching {text}"),
-        deadline.cleanup(),
+        deadline.cleanup_phase(),
         move || fakes::kill_matching(&text),
     )
 }

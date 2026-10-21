@@ -129,19 +129,23 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
     let pgid = child.id();
     let mut listing = Some(listing);
     let watchdog = Watchdog::group(pgid);
-    let member: u32 = within("the member writes its pid", DEADLINE, move || {
-        loop {
-            let Ok(text) = std::fs::read_to_string(&pidfile) else {
-                thread::yield_now();
-                continue;
-            };
-            let Ok(pid) = text.trim().parse() else {
-                thread::yield_now();
-                continue;
-            };
-            return pid;
-        }
-    });
+    let member: u32 = within(
+        "the member writes its pid",
+        Deadline::after(DEADLINE),
+        move || {
+            loop {
+                let Ok(text) = std::fs::read_to_string(&pidfile) else {
+                    thread::yield_now();
+                    continue;
+                };
+                let Ok(pid) = text.trim().parse() else {
+                    thread::yield_now();
+                    continue;
+                };
+                return pid;
+            }
+        },
+    );
     child.wait().unwrap();
     reap_locked(&mut child, &mut listing);
     assert!(listing.is_some(), "with a member surviving the token stays");
@@ -225,7 +229,7 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
 #[track_caller]
 fn wait_for_exit(pid: u32) {
     use rustix::process::{Pid, WaitId, WaitIdOptions};
-    within("the leader exits", DEADLINE, move || {
+    within("the leader exits", Deadline::after(DEADLINE), move || {
         let id = Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
         loop {
             let seen = rustix::process::waitid(

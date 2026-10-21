@@ -717,12 +717,16 @@ fn a_run_ending_after_the_extension_is_dropped_is_not_logged() {
     );
     assert_eq!(Arc::strong_count(&ext), 1, "the test holds the last handle");
     drop(ext);
-    fakes::within("File::create", fakes::MUST_SUCCEED_WITHIN, move || {
-        use std::io::Write as _;
-        std::fs::File::create(&release)
-            .and_then(|mut released| released.write_all(b"x\n"))
-            .is_ok()
-    });
+    fakes::within(
+        "File::create",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            use std::io::Write as _;
+            std::fs::File::create(&release)
+                .and_then(|mut released| released.write_all(b"x\n"))
+                .is_ok()
+        },
+    );
     match Deadline::after(WAIT).recv(&inbox) {
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
         Ok(delivery) => panic!("a run ending after the drop was logged: {delivery:?}"),
@@ -748,12 +752,16 @@ const SENTINEL: Duration = Duration::from_secs(60);
 fn timer_fifo(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     let made = path.clone();
-    let made = fakes::within("mkfifo", fakes::MUST_SUCCEED_WITHIN, move || {
-        std::process::Command::new("mkfifo")
-            .arg(&made)
-            .status()
-            .is_ok_and(|status| status.success())
-    });
+    let made = fakes::within(
+        "mkfifo",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            std::process::Command::new("mkfifo")
+                .arg(&made)
+                .status()
+                .is_ok_and(|status| status.success())
+        },
+    );
     if !made {
         panic!("mkfifo {} failed", path.display());
     }
@@ -1475,7 +1483,7 @@ fn in_child(name: &str) {
     let Ok(output) = Deadline::after(WAIT).recv(&rx) else {
         fakes::within(
             "kill -KILL on the child",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 drop(fakes::kill_pid(pid, "KILL"));
             },
@@ -1537,7 +1545,7 @@ fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
     assert!(
         !fakes::within(
             "kill -0 on the group",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || fakes::kill_group(pid, "0").unwrap_or(true)
         ),
         "the exec group is gone after the kill"

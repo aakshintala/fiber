@@ -333,7 +333,7 @@ fn bounded_returns_a_timeout_on_a_miss_and_kills_the_child() {
     let stdin = child.stdin.take().unwrap();
     let missed = crate::within(
         "bounded to give up on the hung shell",
-        DEADLINE,
+        Deadline::after(DEADLINE),
         move || bounded(child, "the hung shell", Duration::from_millis(100)),
     );
     let err = missed.unwrap_err();
@@ -375,7 +375,7 @@ fn bounded_kills_a_child_that_closed_stdout_then_hangs() {
     let pid = child.id();
     let missed = crate::within(
         "bounded to give up on the closed-stdout shell",
-        DEADLINE,
+        Deadline::after(DEADLINE),
         move || bounded(child, "the closed-stdout shell", Duration::from_millis(100)),
     );
     let err = missed.unwrap_err();
@@ -395,10 +395,11 @@ fn bounded_returns_the_status_and_stdout_of_a_child_that_exits() {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    let (status, stdout) = crate::within("bounded to return", DEADLINE, move || {
-        bounded(child, "the listing shell", DEADLINE)
-    })
-    .unwrap();
+    let (status, stdout) =
+        crate::within("bounded to return", Deadline::after(DEADLINE), move || {
+            bounded(child, "the listing shell", DEADLINE)
+        })
+        .unwrap();
     assert_eq!(status.code(), Some(3));
     assert_eq!(stdout, b"listed\n");
 }
