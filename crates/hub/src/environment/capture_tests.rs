@@ -765,7 +765,7 @@ fn a_large_environment_under_the_cap_succeeds() {
     let watchdog = fake.watchdog();
     let vars = outcome_of(&done, "the large capture").expect("the capture succeeds");
     assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
+        fakes::pids_exit(&[fake.pid()], fakes::Deadline::after(WITHIN)),
         "the shell is reaped"
     );
     let pads: Vec<&(OsString, OsString)> = vars
@@ -776,7 +776,7 @@ fn a_large_environment_under_the_cap_succeeds() {
     for (_, value) in pads {
         assert_eq!(value.to_string_lossy().len(), PAD_LEN);
     }
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
