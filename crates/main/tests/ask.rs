@@ -733,51 +733,6 @@ fn a_failing_credential_command_is_named_by_its_program_alone() {
 }
 
 #[test]
-fn a_bedrock_converse_model_fails_before_the_session() {
-    let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([]).unwrap();
-    let source = setup.root.path().join("src");
-    write(
-        &source.join("extension.json"),
-        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
-    );
-    write(
-        &source.join("providers/fake.json"),
-        &json!({
-            "name": "fake",
-            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-            "models": [{"id": "m", "protocol": "bedrock-converse", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
-        }),
-    );
-    extensions::plan(
-        &setup.home(),
-        &extensions::Request::Path(source),
-        "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m"}),
-    );
-
-    let run = setup.fiber_with_env(&["ask", "hi"], &[("FIBER_TEST_FAKE_KEY", "key")]);
-    assert_pre_session(&run, 1, "protocol_unsupported");
-    let message = run.last()["payload"]["error"]["message"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(
-        message.contains("fake/m") && message.contains("pick another model"),
-        "{message}"
-    );
-    assert!(server.requests().is_empty());
-}
-
-#[test]
 fn fiber_without_ask_is_a_usage_error_naming_fiber_ask() {
     let setup = Setup::new_with_started_deadline();
 
@@ -2805,7 +2760,7 @@ fn only_model_request(server: &ProviderServer) -> Request {
     assert_fingerprint(request, "authorization", "Bearer tok-1");
     assert_eq!(
         request.header("x-fixture-saw"),
-        Some("body_sha256,headers,method,url")
+        Some("body_sha256,headers,method,time,url")
     );
     let signature = request.header("x-fixture-signature").unwrap_or("");
     assert!(is_hex64(signature), "{signature:?}");

@@ -1,0 +1,165 @@
+{
+  "case": "classify/mistral.ministral-3-14b-instruct",
+  "model": "mistral.ministral-3-14b-instruct",
+  "region": "ap-south-1",
+  "url_path": "/model/mistral.ministral-3-14b-instruct/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "Call get_weather for Paris."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 200
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ],
+    "toolConfig": {
+      "tools": [
+        {
+          "toolSpec": {
+            "name": "get_weather",
+            "description": "Weather for a city.",
+            "inputSchema": {
+              "json": {
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": ""
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "start": {
+          "toolUse": {
+            "name": "get_weather",
+            "toolUseId": "tooluse_q3uNHnwkATmfGH0pzzAFR5"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "toolUse": {
+            "input": "{\"city\": \"Paris\"}"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "tool_use"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 181
+        },
+        "usage": {
+          "inputTokens": 81,
+          "outputTokens": 12,
+          "serverToolUsage": {},
+          "totalTokens": 93
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 81,
+    "outputTokens": 12,
+    "serverToolUsage": {},
+    "totalTokens": 93
+  },
+  "cost_usd": 1.9e-05
+}

@@ -450,7 +450,7 @@ Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
 `duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
-`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `protocol_unsupported`, `session_has_dependents`, `usage`, `version_conflict`.
+`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`.
 
 A prompt or steer that a hook refuses is rejected `message_refused`, with the
 hook's reason and extension in the message. One whose blocking hook failed is
@@ -1358,7 +1358,10 @@ that hold nothing to lose:
   is never removed.
 - **Pinned copies.** It removes each copy in `pinned/` of this repository's
   code that no worktree's files match any more (`docs/extensions.md`, "Code a
-  repository ships"). The worktrees that count are the repository's
+  repository ships"). A server copy is judged exactly as an extension copy
+  is: it is a candidate when at least one project record at
+  `projects/<key>/servers/<content-hash>` names it and every naming record's
+  project is in scope, and it is kept when no project record names it. The worktrees that count are the repository's
   `git worktree list`. The copy's approval record stays, so the same version
   checked out again is not offered again; its copy is made again from the
   worktree.

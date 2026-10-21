@@ -1,0 +1,239 @@
+{
+  "case": "tool-oss",
+  "model": "openai.gpt-oss-20b-1:0",
+  "region": "ap-south-1",
+  "url_path": "/model/openai.gpt-oss-20b-1%3A0/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "What is the weather in Paris and in Rome? Call the tool once per city, both in this reply."
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 512
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ],
+    "toolConfig": {
+      "tools": [
+        {
+          "toolSpec": {
+            "name": "get_weather",
+            "description": "Weather for a city.",
+            "inputSchema": {
+              "json": {
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "text": ""
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "reasoningContent": {
+            "text": "The user asks for weather in Paris, and Rome. They want to call the tool once per city in this reply. So we need to call get_weather twice, presumably we have to produce JSON calls. We need to output each call with city: Paris, and city: Rome. The system says \"You are terse.\" So answer should be minimal. We'll call the tool twice. We must follow the tool invocation format. We separate calls? The spec: \"call the tool once per city, both in this reply.\" That means"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "reasoningContent": {
+            "text": " we need to invoke the get_weather function twice in the same answer. The syntax: If we want to call two times, we may do separate rounds\u2014maybe separate calls. But in a single reply, possibly ask tool twice. Typically ChatGPT cannot call a tool twice in a single response; we need to send them separately, might need to"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "reasoningContent": {
+            "text": " use intermediate function calling: We can send JSON for one function call, then reply with second. But I think the multi-intent approach: we can produce two function calls in separate messages. In ChatGPT, the assistant can send a function call, then ChatGPT receives the result, then can call another. But the user wants both in reply. So maybe we can embed both calls in the same JSON block, like list"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "reasoningContent": {
+            "text": "? Usually not allowed. But we can pass approach: \"function call with city: Paris\" then commented? Honestly typical approach: we can't output two calls at once. But we can provide the calls as separate calls in the same assistant message, separated by new line. But the system might interpret as wrong. Perhaps we wrap both calls in a single JSON array? But not defined."
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "reasoningContent": {
+            "text": " Let's design to call first get_weather for Paris. Then get_weather for Rome. We'll output them in two separate lines like:\n\n```json\n{\n  \"name\": \"get_weather\",\n  \"arguments\": {\"city\":\"Paris\"}\n}\n```\nthen next call. The system says \"You are terse.\" So maybe final answer is minimal. But typically assistant must supply first function call; after execution the tool provides result"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "reasoningContent": {
+            "text": ". But here both calls requested. I think we should do function calls sequentially. Might do two calls in the same assistant output. In typical approach, ChatGPT can only send one function call at a time. So better to call first, then after that, produce second. But user says \"both in this reply\". Might be ambiguous. I think doing two calls with no description: Let's produce two function calls, so"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "reasoningContent": {
+            "text": " separate messages."
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "max_tokens"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 1365
+        },
+        "usage": {
+          "inputTokens": 148,
+          "outputTokens": 512,
+          "serverToolUsage": {},
+          "totalTokens": 660
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 148,
+    "outputTokens": 512,
+    "serverToolUsage": {},
+    "totalTokens": 660
+  },
+  "cost_usd": 0.000164
+}

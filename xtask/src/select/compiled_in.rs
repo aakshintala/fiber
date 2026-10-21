@@ -52,6 +52,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("crates/tools/prompt/guidelines.md", "tools"),
     ("providers/codex/tests/quota-two-windows.json", "main"),
     ("providers/anthropic/providers/anthropic.json", "extensions"),
+    ("providers/bedrock/providers/bedrock.json", "extensions"),
     ("providers/codex/providers/codex.json", "extensions"),
     ("providers/gemini/providers/gemini.json", "extensions"),
     ("providers/muse/providers/muse.json", "extensions"),
@@ -79,6 +80,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/openrouter/providers/openrouter.json", "main"),
     ("providers/databricks/thinking.lua", "main"),
     ("providers/anthropic/providers/anthropic.json", "config"),
+    ("providers/bedrock/providers/bedrock.json", "config"),
     ("providers/codex/providers/codex.json", "config"),
     ("providers/databricks/providers/databricks.json", "config"),
     ("providers/gemini/providers/gemini.json", "config"),
@@ -121,6 +123,121 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ),
     (
         "research/anthropic-messages-probe/raw/thinking-enabled.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/bad-model.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/cache-read.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/cache-write.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/classify/global.zai.glm-5.3.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/plain.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/plain.eventstream",
+        "main",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/reasoning-oss-low.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/redacted-first.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/redacted-first.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/signature.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/signature.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/tool-ministral.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/tool-oss.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-converse-probe/raw/validation.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/adaptive.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-bearer.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-key-id.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-model.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/bad-signature.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/cache-read.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/cache-write.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/cache-write.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/plain.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/plain.eventstream",
+        "main",
+    ),
+    ("research/bedrock-invoke-probe/raw/plain.json", "provider"),
+    (
+        "research/bedrock-invoke-probe/raw/thinking.eventstream",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/thinking.json",
+        "provider",
+    ),
+    (
+        "research/bedrock-invoke-probe/raw/tool.eventstream",
+        "provider",
+    ),
+    ("research/bedrock-invoke-probe/raw/tool.json", "provider"),
+    ("research/bedrock-invoke-probe/raw/ttl-1h.json", "provider"),
+    (
+        "research/bedrock-invoke-probe/raw/validation.json",
         "provider",
     ),
     (

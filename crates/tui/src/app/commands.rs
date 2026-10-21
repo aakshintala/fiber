@@ -188,6 +188,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_login,
     },
     CommandEntry {
+        name: "logout",
+        description: "Logs out.",
+        hint: None,
+        run: run_logout,
+    },
+    CommandEntry {
         name: "reload",
         description: "Reloads configuration, MCP servers and extensions.",
         hint: None,
@@ -373,6 +379,10 @@ fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_login(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Login))
+}
+
+fn run_logout(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_config_view(super::ConfigView::Logout))
 }
 
 fn run_keymap(app: &mut App, _rest: &str) -> Option<Effect> {
