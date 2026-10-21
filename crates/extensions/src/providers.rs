@@ -60,6 +60,10 @@ pub struct Providers {
     /// without running code; a process-only package supplies no Lua, and
     /// disabled, damaged or incompatible extensions record nothing.
     code_candidates: BTreeSet<String>,
+    /// Each loaded candidate's directory, by extension name: the pinned
+    /// copy for a repository entry, the personal install otherwise. What
+    /// [`Providers::provider_source_dir`] resolves a login to.
+    source_dirs: BTreeMap<String, std::path::PathBuf>,
 }
 
 // `Arc<LuaProvider>` has no `Debug`: the registry prints its names.
@@ -300,6 +304,17 @@ impl Providers {
         )
     }
 
+    /// Reads every installed provider merged with the repository set,
+    /// with no enabled filter: every personal install loads, as
+    /// [`Providers::load`] reads, with approved repository entries merged
+    /// in. An empty set loads what `load` loads.
+    pub fn load_all_repository(
+        home: &Path,
+        repository: &crate::RepositorySet,
+    ) -> Result<(Self, Vec<Notice>), Error> {
+        Self::load_with(home, |_: &str| true, repository)
+    }
+
     /// Reads the provider table an install will put in place before committing.
     pub fn load_planned(home: &Path, plan: &crate::Plan<'_>) -> Result<(Self, Vec<Notice>), Error> {
         let mut entries = crate::installed::read_entries(home)?;
@@ -392,6 +407,11 @@ impl Providers {
             }
             // Secrets do not depend on the provider files, so they are kept
             // even when those files leave the extension's providers out.
+            // The candidate's directory is what a login resolves the
+            // extension to: the pinned copy for a repository entry.
+            providers
+                .source_dirs
+                .insert(manifest.name.clone(), dir.clone());
             providers
                 .secrets_by_extension
                 .entry(manifest.name.clone())
@@ -884,6 +904,16 @@ impl Providers {
     /// The extension that registered `name`, if a Lua extension did.
     pub fn extension_of(&self, name: &str) -> Option<&str> {
         self.extension_of.get(name).map(String::as_str)
+    }
+
+    /// The directory of the loaded candidate that registered `provider`:
+    /// the pinned copy for a repository entry, the personal install
+    /// otherwise. `None` when the provider's extension never loaded as a
+    /// candidate, so the caller falls back to the home layout.
+    pub fn provider_source_dir(&self, provider: &str) -> Option<std::path::PathBuf> {
+        self.extension_of(provider)
+            .and_then(|extension| self.source_dirs.get(extension))
+            .cloned()
     }
 
     /// The installed data of `name`: the data file's, else one naming only
