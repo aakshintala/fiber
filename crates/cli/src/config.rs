@@ -67,10 +67,8 @@ fn run_get(
     // An extension's own setting never lives in `config.json`: it reads
     // from the extension's settings files, with the layer each value came
     // from, as `set` writes them.
-    if let Some((extension, relative)) = config::settings_key(key) {
-        return run_get_extension(
-            home, workspace, &project, &config, key, &extension, &relative, out, err,
-        );
+    if config::settings_key(key).is_some() {
+        return run_get_extension(home, workspace, &project, &config, key, out, err);
     }
     // The notes print as the reviewer reads them: each layer's text under
     // its heading, with no layer named (`docs/permissions.md`, "What the
@@ -115,11 +113,14 @@ fn run_get_extension(
     project: &ProjectKey,
     config: &Config,
     key: &str,
-    extension: &str,
-    relative: &[String],
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<(), CliError> {
+    let Some((extension, relative)) = config::settings_key(key) else {
+        return Err(CliError::ConfigKeyUnknown {
+            key: key.to_owned(),
+        });
+    };
     if relative.is_empty() {
         return Err(CliError::ConfigKeyUnknown {
             key: key.to_owned(),
@@ -127,8 +128,8 @@ fn run_get_extension(
     }
     let dir = workspace_providers(home, workspace, project)
         .ok()
-        .and_then(|(providers, _)| providers.extension_source_dir(extension))
-        .or_else(|| config::installed_dir(home, extension));
+        .and_then(|(providers, _)| providers.extension_source_dir(&extension))
+        .or_else(|| config::installed_dir(home, &extension));
     let Some(dir) = dir else {
         return Err(CliError::ConfigKeyUnknown {
             key: key.to_owned(),
@@ -138,7 +139,7 @@ fn run_get_extension(
     let repo: Vec<&str> = declared.repo_settings.iter().map(String::as_str).collect();
     match config
         .extensions()
-        .get_layered(extension, &repo, &config::path::display(relative))?
+        .get_layered(&extension, &repo, &config::path::display(&relative))?
     {
         Some((value, source)) => {
             let text = serde_json::to_string(&value).map_err(|source| CliError::ConfigValue {

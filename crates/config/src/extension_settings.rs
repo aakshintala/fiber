@@ -287,7 +287,9 @@ fn file_subtree(
     };
     match parse(file, bytes)? {
         Value::Object(map) => Ok(Some(Value::Object(map))),
-        _ => Err(top_level(&file.display().to_string())),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            Err(top_level(&file.display().to_string()))
+        }
     }
 }
 

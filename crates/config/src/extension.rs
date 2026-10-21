@@ -489,7 +489,7 @@ pub fn installed_dir(home: &Path, extension: &str) -> Option<PathBuf> {
     let dir = home
         .join("extensions")
         .join(dir_name(&crate::names::full_name(extension)));
-    dir.join("extension.json").is_file().then(|| dir)
+    dir.join("extension.json").is_file().then_some(dir)
 }
 
 /// `value` as a host: at most one leading `https://` and one trailing `/`
