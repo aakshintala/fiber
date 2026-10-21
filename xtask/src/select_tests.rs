@@ -907,12 +907,12 @@ fn a_join_onto_a_non_joined_base_binds_nothing() {
 #[test]
 fn a_format_with_a_runtime_value_is_not_a_run_time_read() {
     // The second argument is not `env!`: the macro takes a runtime value,
-    // so the read stays unreported.
+    // so the read stays unreported even though the template names a file.
     let files = [runtime_src(
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let runtime = value;\nlet bytes = std::fs::read(format!(\"{}/{}\", env!(\"CARGO_MANIFEST_DIR\"), runtime)).unwrap();\n",
+        "let runtime = value;\nlet bytes = std::fs::read(format!(\"{}/docs/x\", env!(\"CARGO_MANIFEST_DIR\"), runtime)).unwrap();\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),

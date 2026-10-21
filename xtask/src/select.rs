@@ -369,7 +369,8 @@ pub(crate) fn runtime_read_mismatches(
             {
                 joins += 1;
                 if base.is_none() {
-                    base = joined_mention(&receiver, joined).or_else(|| second_mention(&receiver, second));
+                    base = joined_mention(&receiver, joined)
+                        .or_else(|| second_mention(&receiver, second));
                 }
                 if base.is_some() {
                     for tree in group.stream() {
@@ -752,13 +753,12 @@ pub(crate) fn runtime_read_mismatches(
                                 || holds_root(&preceding, &*cx.root)
                             {
                                 Some(Vec::new())
-                            } else if let Some(name) =
-                                joined_mention(&preceding, &*cx.joined)
-                            {
+                            } else if let Some(name) = joined_mention(&preceding, &*cx.joined) {
                                 cx.joined.get(&name).cloned()
                             } else {
-                                second_mention(&preceding, &*cx.second)
-                                    .and_then(|name| cx.second.get(&name).map(|(full, _)| full.clone()))
+                                second_mention(&preceding, &*cx.second).and_then(|name| {
+                                    cx.second.get(&name).map(|(full, _)| full.clone())
+                                })
                             };
                             if let Some(chain) = base {
                                 let mut own = Vec::new();
