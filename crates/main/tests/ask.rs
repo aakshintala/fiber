@@ -769,6 +769,7 @@ Sessions:
   models [<search>] [--json]                                                                                      List the models the installed providers serve
 
 Fiber itself:
+  update                                    Update the Fiber binary and every installed extension together; `upgrade` runs the same command, with `--channel stable|nightly`
   approve [--yes]                           Show what this repository ships and approve it
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
@@ -1332,6 +1333,11 @@ fn old_extension_command_names_are_unknown() {
         &["remove", "x"][..],
         &["list"][..],
     ] {
+        if args.first() == Some(&"update") {
+            // `update` is a built command now, so it no longer belongs
+            // with the unknown old names; the rows below still do.
+            continue;
+        }
         let run = setup.run_with_stdin(args, None);
         assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
         assert!(run.raw.is_empty());

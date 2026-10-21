@@ -1396,3 +1396,158 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
         0
     );
 }
+
+/// Sends one hub command line on `stream` and reads its answer.
+fn send_command(
+    stream: &UnixStream,
+    read: &mut BufReader<UnixStream>,
+    id: &str,
+    command: &str,
+) -> serde_json::Value {
+    use std::io::Write as _;
+    let line = serde_json::json!({"id": id, "command": command, "args": {}});
+    let mut bytes = serde_json::to_vec(&line).unwrap();
+    bytes.push(b'\n');
+    stream.try_clone().unwrap().write_all(&bytes).unwrap();
+    let mut answer = String::new();
+    read.read_line(&mut answer)
+        .expect("the hub answers the command");
+    serde_json::from_str(&answer).unwrap()
+}
+
+#[test]
+fn a_local_stop_accepts_then_ends_the_hub_as_a_signal_with_sessions_intact() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    // One recorded session: the stop must leave it listed and resumable.
+    crate::testkit::write_log(&temp.dir, "s_0000000000000001", "/w", None, &[]);
+    let log_path = temp
+        .dir
+        .join("projects")
+        .join("-w")
+        .join("sessions")
+        .join("s_0000000000000001")
+        .join("events.jsonl");
+    let before = fs::read(&log_path).unwrap();
+    let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    let stream = UnixStream::connect(temp.socket()).unwrap();
+    stream.set_read_timeout(Some(DEADLINE)).unwrap();
+    let mut read = BufReader::new(stream.try_clone().unwrap());
+    let mut hello = String::new();
+    read.read_line(&mut hello).expect("the hub speaks first");
+    assert!(hello.contains("\"kind\":\"hub_hello\""));
+    // The acknowledgement arrives before the exit closes the socket: the
+    // store runs before the ack is written, and the wake after it.
+    let answer = send_command(&stream, &mut read, "c_stop", "stop");
+    assert_eq!(
+        answer.get("kind"),
+        Some(&serde_json::json!("command_accepted"))
+    );
+    assert_eq!(
+        answer
+            .get("payload")
+            .and_then(|payload| payload.get("command_id")),
+        Some(&serde_json::json!("c_stop"))
+    );
+    assert!(
+        answer
+            .get("payload")
+            .and_then(|payload| payload.get("result"))
+            .is_none(),
+        "the stop carries no result"
+    );
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
+    assert!(!temp.socket().exists());
+    assert!(temp.log().contains("The hub stopped: signal."));
+    assert_eq!(
+        fs::read(&log_path).unwrap(),
+        before,
+        "the stop leaves the session's log untouched"
+    );
+}
+
+#[test]
+fn a_stop_requested_before_the_run_starts_exits_without_waiting() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let timed: Arc<dyn Clock> = clock;
+    let hub = Arc::new(Hub::new(
+        &temp.dir,
+        "0.0.0",
+        Arc::new(FakeStarter::hang(&temp.dir)),
+        Arc::clone(&timed),
+        crate::diag::open(&temp.dir, timed),
+    ));
+    hub.request_stop();
+    let lock = crate::listen::lock(&temp.dir).unwrap().unwrap();
+    let bound = crate::listen::bind(&lock, &temp.dir).unwrap().unwrap();
+    let held = Held::new(lock, bound);
+    let got = AtomicI32::new(0);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-run".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            move || {
+                let exit = run(&hub, &held, IDLE, &got);
+                held.stop();
+                done_tx.send(exit.code()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    // The fake clock never advances: a check-after-return implementation
+    // parks to idle expiry and this deadline fails it.
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .expect("a preset stop exits without waiting"),
+        143
+    );
+    assert!(!temp.socket().exists());
+}
+
+#[test]
+fn a_stop_store_waits_on_the_tick_hold() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let timed: Arc<dyn Clock> = clock;
+    let hub = Arc::new(crate::testkit::hub(
+        &temp.dir,
+        Arc::new(FakeStarter::hang(&temp.dir)),
+        timed,
+    ));
+    // Hold the tick guard: the store below cannot land until it drops.
+    let held = hub.tick.hold();
+    // Arm the stop-store's arrival signal before spawning it: the report
+    // proves the stop thread reached the held lock, not that it was
+    // merely unscheduled.
+    let (attempt_tx, attempt_rx) = mpsc::channel();
+    *support::lock(&hub.tick.attempt) = Some(attempt_tx);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn({
+        let hub = Arc::clone(&hub);
+        move || {
+            hub.request_stop();
+            done_tx.send(()).unwrap_or(());
+        }
+    });
+    Deadline::after(DEADLINE).recv_or_fail(&attempt_rx, "the stop to reach the held lock");
+    // Still held, with the arrival proven: the store has not landed, read
+    // with no clock.
+    assert!(
+        done_rx.try_recv().is_err(),
+        "the stop store rides the tick hold"
+    );
+    drop(held);
+    Deadline::after(DEADLINE).recv_or_fail(&done_rx, "the store to land once the hold drops");
+    assert!(matches!(
+        hub.idle_wait(IDLE, &AtomicBool::new(false), &AtomicI32::new(0)),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
