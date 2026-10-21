@@ -81,6 +81,36 @@ impl contract::extension::HostDelegate for RecordingDelegate {
     }
 }
 
+/// An image child that never runs: the rig starts no servers, so no
+/// image is ever processed.
+struct DummyImages;
+
+impl contract::images::Images for DummyImages {
+    fn process(
+        &self,
+        _bytes: &[u8],
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<contract::provider::ImageRef, contract::images::ImageError> {
+        Err(contract::images::ImageError::Unreadable(
+            "unused".to_owned(),
+        ))
+    }
+}
+
+/// Starts zero servers: the reload tests exercise the preparer, which
+/// needs the handle but never restarts through it.
+fn empty_servers(rig: &Rig, clock: &Arc<dyn contract::clock::Clock>) -> mcp::Started {
+    mcp::start(
+        Vec::new(),
+        &rig.workspace,
+        &rig.workspace.join("artifacts"),
+        Arc::new(DummyImages),
+        &config::mcp_cache_dir(&rig.home),
+        clock,
+        "test",
+    )
+}
+
 struct Fixture {
     rig: Rig,
     state: Arc<State>,
@@ -151,6 +181,7 @@ impl Fixture {
         let seen = replacements.clone();
         let declared = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
         let declared_now = declared.clone();
+        let empty = empty_servers(&rig, &parts.prompt.clock);
         let state = Arc::new(State {
             sources: parts.sources,
             template: parts.prompt,
@@ -185,6 +216,9 @@ impl Fixture {
             diag: parts.diag,
             names: Mutex::new(Vec::new()),
             shell_read_only: parts.shell_read_only.clone(),
+            servers: Arc::new(empty.servers),
+            artifacts: rig.workspace.join("artifacts"),
+            images: Arc::new(DummyImages),
         });
         Self {
             rig,

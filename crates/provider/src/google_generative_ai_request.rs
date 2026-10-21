@@ -39,6 +39,64 @@ pub(crate) fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
 /// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
 /// "Bytes"). Gemini caches implicitly only, so the body carries no cache
 /// marker or key (`docs/prompt-cache.md`, "Cache markers and keys").
+/// The encoded cacheable segments beside `body()`: the
+/// `systemInstruction` value when the request sends one, the `tools`
+/// array value when it sends one, and the conversation as sent. The
+/// encoder serializes and hashes the return
+/// (`docs/prompt-cache.md`, "Cache diagnostics"); `body()` builds on
+/// the same helpers, so both hash the same bytes.
+pub(crate) fn body_segments(
+    endpoint: &Endpoint,
+    request: &ModelRequest,
+) -> (Option<Value>, Option<Value>, Vec<Value>) {
+    let system = if request.system_prompt.is_empty() {
+        None
+    } else {
+        Some(json!({"parts": [{"text": request.system_prompt}]}))
+    };
+    let tools = tools_array(request).map(|(entries, _)| Value::Array(entries));
+    (system, tools, contents(endpoint, request))
+}
+
+/// The `tools` array entries as sent with whether a hosted search rides
+/// along: `None` when the request sends neither tools nor one. Entries
+/// with a `name` are function declarations, sent in one Tool; every
+/// other entry is a hosted search, its own Tool after it (measured in
+/// `docs/model-routing.md`, "Google Generative AI wire facts").
+fn tools_array(request: &ModelRequest) -> Option<(Vec<Value>, bool)> {
+    // A rewound session's first request sends its parent's logged build
+    // verbatim, so it matches the parent's bytes (`docs/events.md`,
+    // "Rewind"): the sent declarations decide the `toolConfig` the old
+    // session sent, and an empty sent list sends neither `tools` nor one.
+    let sent = request.sent_tools.as_ref();
+    if sent.map_or(request.tools.is_empty(), |sent| sent.is_empty()) {
+        return None;
+    }
+    let wired: Vec<Value> = match sent {
+        Some(sent) => sent.iter().cloned().map(Value::Object).collect(),
+        None => wire_tools(&request.tools)
+            .into_iter()
+            .map(Value::Object)
+            .collect(),
+    };
+    let mut declarations = Vec::new();
+    let mut tools = Vec::new();
+    for tool in wired {
+        if tool.get("name").is_some() {
+            declarations.push(tool);
+        } else {
+            tools.push(tool);
+        }
+    }
+    // `tools` holds only hosted entries here: a non-empty list means
+    // a hosted search is sent.
+    let hosted = !tools.is_empty();
+    if !declarations.is_empty() {
+        tools.insert(0, json!({ "functionDeclarations": declarations }));
+    }
+    Some((tools, hosted))
+}
+
 pub(crate) fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // A rewound session's first request sends its parent's logged build
     // verbatim, so it matches the parent's bytes (`docs/events.md`,
@@ -68,34 +126,7 @@ pub(crate) fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         );
     }
     body.insert("contents".into(), Value::Array(contents(endpoint, request)));
-    if !sent.map_or(request.tools.is_empty(), |sent| sent.is_empty()) {
-        let wired: Vec<Value> = match sent {
-            Some(sent) => sent.iter().cloned().map(Value::Object).collect(),
-            None => wire_tools(&request.tools)
-                .into_iter()
-                .map(Value::Object)
-                .collect(),
-        };
-        // Entries with a `name` are function declarations, sent in one
-        // Tool; every other entry is a hosted search, its own Tool after
-        // it (measured in `docs/model-routing.md`, "Google Generative AI
-        // wire facts"). `functionDeclarations` is sent only when there
-        // is at least one.
-        let mut declarations = Vec::new();
-        let mut tools = Vec::new();
-        for tool in wired {
-            if tool.get("name").is_some() {
-                declarations.push(tool);
-            } else {
-                tools.push(tool);
-            }
-        }
-        // `tools` holds only hosted entries here: a non-empty list means
-        // a hosted search is sent.
-        let hosted = !tools.is_empty();
-        if !declarations.is_empty() {
-            tools.insert(0, json!({ "functionDeclarations": declarations }));
-        }
+    if let Some((tools, hosted)) = tools_array(request) {
         body.insert("tools".into(), Value::Array(tools));
         let mut config =
             json!({ "functionCallingConfig": function_calling(&request.tool_choice, strict) });
@@ -426,4 +457,54 @@ pub(crate) fn with(mut object: Value, extra: Option<Value>) -> Value {
 /// `raw/sse2-stream-ok.json`).
 fn carrier(signature: Value) -> Value {
     with(json!({"text": ""}), Some(signature))
+}
+
+#[cfg(test)]
+mod body_segments_tests {
+    use super::*;
+
+    /// Pins each returned segment to its exact bytes: any content change
+    /// flips one assert, so the whole-return default mutant
+    /// (`Some(Default::default()), None, vec![Default::default()]`) fails
+    /// all three.
+    #[test]
+    fn body_segments_pins_each_segment_exactly() {
+        let endpoint = Endpoint::default();
+        let request = ModelRequest {
+            system_prompt: "You are terse.".to_owned(),
+            tools: vec![ToolDefinition {
+                name: "get_weather".to_owned(),
+                description: "Get the weather.".to_owned(),
+                input_schema: json!({"type": "object"}),
+                deferred: false,
+                hosted: None,
+            }],
+            thinking: None,
+            tool_choice: "auto".to_owned(),
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            cache_key: "s_root".to_owned(),
+            conversation: vec![Input::User {
+                text: "hi".to_owned(),
+                images: Vec::new(),
+            }],
+            sent_tools: None,
+            previous_end: None,
+            max_output_tokens: None,
+            session_dir: std::path::PathBuf::new(),
+        };
+        let (system, tools, contents) = body_segments(&endpoint, &request);
+        assert_eq!(system, Some(json!({"parts": [{"text": "You are terse."}]})));
+        assert_eq!(
+            tools,
+            Some(json!([{"functionDeclarations": [{
+                "name": "get_weather",
+                "description": "Get the weather.",
+                "parametersJsonSchema": {"type": "object"},
+            }]}]))
+        );
+        assert_eq!(
+            contents,
+            vec![json!({"role": "user", "parts": [{"text": "hi"}]})]
+        );
+    }
 }

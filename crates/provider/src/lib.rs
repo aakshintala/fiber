@@ -11,6 +11,7 @@ mod anthropic_messages_decode;
 pub mod bedrock_converse;
 mod bedrock_converse_decode;
 mod bedrock_converse_request;
+mod cache_diagnostics;
 mod call;
 mod error;
 mod event_stream;

@@ -17,6 +17,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::{OldFile, PruneArgs, format_age, format_size, prune, prune_run, remove_diagnostics};
+use crate::CliError;
 use crate::sessions::Ask;
 use contract::clock::Clock;
 use contract::{ErrorCode, HubLine};
@@ -190,7 +191,7 @@ fn run_prune(
     yes: bool,
     terminal: bool,
     input: &mut dyn BufRead,
-) -> (String, String, Result<(), contract::shapes::Failure>) {
+) -> (String, String, Result<(), CliError>) {
     let mut out = Vec::new();
     let mut err = Vec::new();
     let ask = Ask {
@@ -222,7 +223,7 @@ fn run_prune_no_connect(
     yes: bool,
     terminal: bool,
     input: &mut dyn BufRead,
-) -> (String, String, Result<(), contract::shapes::Failure>) {
+) -> (String, String, Result<(), CliError>) {
     let mut out = Vec::new();
     let mut err = Vec::new();
     let ask = Ask {
@@ -393,7 +394,17 @@ fn finish_reports_the_exact_number_of_deletions_on_failure() {
         2,
     )
     .unwrap_err();
-    assert_eq!(failure.message, "1 of 5 could not be deleted");
+    assert!(
+        matches!(
+            failure,
+            CliError::PruneFailed {
+                code: ErrorCode::IoFailed,
+                failed: 1,
+                total: 5,
+            }
+        ),
+        "{failure:?}"
+    );
     assert_eq!(String::from_utf8(out).unwrap(), "freed 17 B\n");
     assert_eq!(
         String::from_utf8(err).unwrap(),
@@ -481,8 +492,17 @@ fn a_diagnostics_failure_still_deletes_everything_else() {
     );
     fs::set_permissions(&logs, fs::Permissions::from_mode(0o755)).unwrap();
     let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::IoFailed);
-    assert!(failure.message.contains("1 of 3"), "{}", failure.message);
+    assert!(
+        matches!(
+            failure,
+            CliError::PruneFailed {
+                code: ErrorCode::IoFailed,
+                failed: 1,
+                total: 3,
+            }
+        ),
+        "{failure:?}"
+    );
     let freed = session_bytes + 5;
     assert_eq!(
         out,
@@ -513,8 +533,17 @@ fn a_failed_hub_connection_fails_every_remaining_session() {
         &mut Unread,
     );
     let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::IoFailed);
-    assert!(failure.message.contains("1 of 1"), "{}", failure.message);
+    assert!(
+        matches!(
+            failure,
+            CliError::PruneFailed {
+                code: ErrorCode::IoFailed,
+                failed: 1,
+                total: 1,
+            }
+        ),
+        "{failure:?}"
+    );
     assert_eq!(
         out,
         format!(
@@ -605,8 +634,13 @@ fn neither_yes_nor_a_terminal_is_a_usage_error_with_no_scan_and_no_connect() {
         &mut Unread,
     );
     let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert!(failure.message.contains("--yes"), "{}", failure.message);
+    assert!(
+        matches!(
+            failure,
+            CliError::NobodyToAsk { ref message } if message == super::PRUNE_NOBODY
+        ),
+        "{failure:?}"
+    );
     assert_eq!(hub.connects, 0);
 }
 
@@ -726,8 +760,17 @@ fn one_rejected_session_leaves_the_others_deleted_and_counts_only_removed_bytes(
         &mut Unread,
     );
     let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::SessionHeld);
-    assert!(failure.message.contains("1 of 2"), "{}", failure.message);
+    assert!(
+        matches!(
+            failure,
+            CliError::PruneFailed {
+                code: ErrorCode::SessionHeld,
+                failed: 1,
+                total: 2,
+            }
+        ),
+        "{failure:?}"
+    );
     assert!(!dir_b.exists(), "the accepted session is gone");
     assert!(dir_a.exists(), "the rejected session stays");
     assert!(err.contains("s_00000000000000a1"), "{err}");
@@ -757,8 +800,17 @@ fn reconciliation_counts_a_removed_descendant_and_fails_only_the_root() {
         &mut Unread,
     );
     let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::SessionHeld);
-    assert!(failure.message.contains("1 of 2"), "{}", failure.message);
+    assert!(
+        matches!(
+            failure,
+            CliError::PruneFailed {
+                code: ErrorCode::SessionHeld,
+                failed: 1,
+                total: 2,
+            }
+        ),
+        "{failure:?}"
+    );
     assert!(!dir_child.exists());
     assert!(dir_root.exists());
     assert!(out.contains(&format_size(bytes_child)), "{out}");
@@ -786,7 +838,16 @@ fn partial_removal_is_a_failure_and_frees_listed_minus_remaining() {
         &mut Unread,
     );
     let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(
+        matches!(
+            failure,
+            CliError::PruneFailed {
+                code: ErrorCode::IoFailed,
+                ..
+            }
+        ),
+        "{failure:?}"
+    );
     let left = log::remaining(&dir).unwrap().unwrap();
     assert!(left < listed);
     assert!(out.contains(&format_size(listed - left)), "{out}");
@@ -814,6 +875,200 @@ fn a_not_found_on_a_diagnostics_file_is_neither_a_failure_nor_counted() {
     );
     got.unwrap();
     assert!(out.contains("freed 0 B"), "{out}");
+    assert_eq!(hub.connects, 0);
+}
+
+#[test]
+fn an_unreadable_older_than_is_usage_before_any_scan() {
+    let setup = Setup::new();
+    setup.session("s_00000000000000a1", None, 0);
+    let mut hub = FakeHub::accept_all();
+    let (out, _, got) = run_prune(
+        &setup,
+        &mut hub,
+        &args(Some("soon"), false, false, false),
+        false,
+        false,
+        &mut Unread,
+    );
+    let failure = got.unwrap_err();
+    assert!(
+        matches!(failure, CliError::OlderThanUnreadable),
+        "{failure:?}"
+    );
+    assert_eq!(out, "");
+    assert_eq!(hub.connects, 0);
+}
+
+#[test]
+fn finish_takes_the_first_failures_code() {
+    let rows = vec![super::sessions::SessionRow::Deletable {
+        id: "s_00000000000000a1".to_owned(),
+        age_days: 31,
+        bytes: 4,
+        dir: PathBuf::from("session"),
+        delete: 0,
+    }];
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let failure = super::finish(
+        &mut out,
+        &mut err,
+        &rows,
+        17,
+        vec![
+            ("a".to_owned(), ErrorCode::SessionHeld, "x".to_owned()),
+            ("b".to_owned(), ErrorCode::IoFailed, "y".to_owned()),
+        ],
+        1,
+        1,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            failure,
+            CliError::PruneFailed {
+                code: ErrorCode::SessionHeld,
+                failed: 2,
+                total: 3,
+            }
+        ),
+        "{failure:?}"
+    );
+    assert_eq!(String::from_utf8(out).unwrap(), "freed 17 B\n");
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "fiber: a could not be deleted: x\nfiber: b could not be deleted: y\n"
+    );
+}
+
+struct Closed;
+
+impl Write for Closed {
+    fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+        Err(io::Error::other("closed"))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A writer that prints the first line, then fails: the listing prints
+/// and the final `freed` line fails.
+struct FailSecondWrite {
+    done: bool,
+}
+
+impl Write for FailSecondWrite {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.done {
+            return Err(io::Error::other("closed"));
+        }
+        if bytes.contains(&b'\n') {
+            self.done = true;
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn check_forwarded_closed(got: Result<(), CliError>) {
+    let failure = got.unwrap_err();
+    assert!(
+        matches!(
+            failure,
+            CliError::Forwarded(ref forwarded)
+                if forwarded.code == ErrorCode::IoFailed
+                    && forwarded.message == "standard output: closed"
+        ),
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn a_closed_standard_output_is_io_failed_with_the_shared_sentence() {
+    let setup = Setup::new();
+    setup.session("s_00000000000000a1", None, 0);
+    let mut hub = FakeHub::accept_all();
+    let mut err = Vec::new();
+    let mut input = Unread;
+    let ask = Ask {
+        yes: false,
+        terminal: false,
+        input: &mut input,
+        err: &mut err,
+    };
+    let got = prune_run(
+        &setup.home(),
+        &setup.workspace(),
+        &args(Some("30d"), false, true, false),
+        clock().as_ref(),
+        ask,
+        &mut Closed,
+        &mut || hub.connect(),
+    );
+    check_forwarded_closed(got);
+    assert_eq!(hub.connects, 0);
+}
+
+#[test]
+fn a_closed_standard_output_on_an_empty_run_is_io_failed() {
+    let setup = Setup::new();
+    let mut hub = FakeHub::accept_all();
+    let mut err = Vec::new();
+    let mut input = Unread;
+    let ask = Ask {
+        yes: false,
+        terminal: false,
+        input: &mut input,
+        err: &mut err,
+    };
+    let got = prune_run(
+        &setup.home(),
+        &setup.workspace(),
+        &args(Some("30d"), false, true, false),
+        clock().as_ref(),
+        ask,
+        &mut Closed,
+        &mut || hub.connect(),
+    );
+    check_forwarded_closed(got);
+    assert_eq!(hub.connects, 0);
+}
+
+#[test]
+fn a_failed_write_of_the_freed_line_after_deleting_still_deletes() {
+    let setup = Setup::new();
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let mut hub = FakeHub::accept_all();
+    let mut err = Vec::new();
+    let mut input = Unread;
+    let ask = Ask {
+        yes: true,
+        terminal: false,
+        input: &mut input,
+        err: &mut err,
+    };
+    let got = prune_run(
+        &setup.home(),
+        &setup.workspace(),
+        &args(None, false, false, true),
+        clock().as_ref(),
+        ask,
+        &mut FailSecondWrite { done: false },
+        &mut || hub.connect(),
+    );
+    check_forwarded_closed(got);
+    assert!(!setup.home().join("logs/old.log").exists());
     assert_eq!(hub.connects, 0);
 }
 

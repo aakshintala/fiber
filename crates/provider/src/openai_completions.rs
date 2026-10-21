@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::io::BufRead;
 
 use contract::ProviderCallId;
+use contract::diag::PrefixHashes;
 use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
     ToolCallRequested,
@@ -91,9 +92,14 @@ impl Completions {
         request: &ModelRequest,
         observation: crate::RequestObservation,
     ) -> Box<dyn ModelCall> {
-        let call = self.request(request);
+        let mut call = self.request(request);
         if !observation.debugging() {
             return Box::new(call);
+        }
+        // The digests cost a second encoding, so they run only with the
+        // setting on; the hot path with it off is unchanged.
+        if observation.cache_diagnostics() {
+            call = call.with_hashes(hashes(&self.endpoint, request));
         }
         Box::new(call.observed(observation.with_model(self.endpoint.model.clone())))
     }
@@ -109,6 +115,43 @@ impl Provider for Completions {
     }
 }
 
+/// The tools as sent: the rewound build verbatim, else the tools Fiber
+/// builds. Shared by the body and the digests, so both hash the same
+/// bytes.
+fn wired_tools(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
+    request
+        .sent_tools
+        .clone()
+        .unwrap_or_else(|| crate::openai_completions_tools::wire_tools(endpoint, &request.tools))
+        .into_iter()
+        .map(Value::Object)
+        .collect()
+}
+
+/// The redacted prefix digests of the encoded segments: the system
+/// message, the tools and each cumulative messages prefix as sent. The
+/// system message is the first message the encoder built, exactly as
+/// sent, including any provider marker; absent when the request sends
+/// none. Tools ride the body only beside a tools list, so their digest
+/// is absent without one.
+fn hashes(endpoint: &Endpoint, request: &ModelRequest) -> PrefixHashes {
+    let sent = messages(endpoint, request);
+    // The system message the encoder built first, exactly as sent:
+    // `messages` pushes it before the conversation when the prompt is
+    // non-empty, and nothing else shapes it.
+    let system = if request.system_prompt.is_empty() {
+        None
+    } else {
+        sent.first().map(crate::cache_diagnostics::segment)
+    };
+    let tools = wired_tools(endpoint, request);
+    PrefixHashes {
+        system,
+        tools: (!tools.is_empty()).then(|| crate::cache_diagnostics::segment(&Value::Array(tools))),
+        messages: crate::cache_diagnostics::cumulative(&sent),
+    }
+}
+
 /// The request body. Its objects serialise with their keys sorted, because
 /// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
 /// "Bytes").
@@ -116,13 +159,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // A rewound session's first request sends its parent's logged build
     // verbatim, so it matches the parent's bytes (`docs/events.md`,
     // "Rewind").
-    let tools: Vec<Value> = request
-        .sent_tools
-        .clone()
-        .unwrap_or_else(|| crate::openai_completions_tools::wire_tools(endpoint, &request.tools))
-        .into_iter()
-        .map(Value::Object)
-        .collect();
+    let tools = wired_tools(endpoint, request);
     let compat = &endpoint.compat;
     let mut body = Map::new();
     body.insert("model".into(), json!(endpoint.model));

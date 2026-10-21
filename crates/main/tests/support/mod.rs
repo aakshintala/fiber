@@ -259,8 +259,13 @@ pub(crate) struct Setup {
 impl Setup {
     /// Starts the test's deadline before any setup work.
     pub(crate) fn new() -> Self {
+        Self::new_under(&std::env::temp_dir())
+    }
+
+    /// As [`Setup::new`], rooted under `parent` for a short socket path.
+    pub(crate) fn new_under(parent: &Path) -> Self {
         let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fh");
+        let root = fakes::TempDir::under(parent, "fh");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { root, deadline }
@@ -449,6 +454,39 @@ fn output_from_a_zero_exit_has_empty_text() {
 pub(crate) fn write_json(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
+}
+
+/// Every regular file under `roots` holding `needle`, sorted: the
+/// secret-output invariant's probe (`import.rs`, `mcp_commands.rs`). A
+/// root that cannot be read holds nothing, and symlinked directories are
+/// not descended into, so a linked tree cannot loop the walk.
+pub(crate) fn files_holding(roots: &[PathBuf], needle: &[u8]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut dirs: Vec<PathBuf> = roots.to_vec();
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if !path.is_symlink() {
+                    dirs.push(path);
+                }
+            } else if path.is_file()
+                && fs::read(&path)
+                    .map(|bytes| {
+                        needle.is_empty()
+                            || bytes.windows(needle.len()).any(|window| window == needle)
+                    })
+                    .unwrap_or(false)
+            {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
 }
 
 /// A hub the test started: killed on drop unless forgotten after a clean wait.
@@ -1177,8 +1215,9 @@ pub(crate) fn expected(kinds: &[&str]) -> Vec<Value> {
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
-pub(crate) const TOOL_NAMES: [&str; 16] = [
+pub(crate) const TOOL_NAMES: [&str; 17] = [
     "ask_user",
+    "delegate_fork",
     "delegate_message",
     "delegate_models",
     "delegate_spawn",

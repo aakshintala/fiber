@@ -147,6 +147,12 @@ pub(crate) fn run_with(
     // each `start` carries them in `overrides`.
     let launch_overrides = std::mem::take(&mut launch.overrides);
     app.set_home(launch);
+    // The first-run import offer resolves once, through the same seam
+    // the views read: no receipts means the home foot asks.
+    let pending = app
+        .configure_seam()
+        .is_some_and(|seam| seam.import_pending());
+    app.set_import_offer(pending);
     app.set_launch_overrides(launch_overrides);
     if pick_at_start {
         app.start_model_pick();
@@ -207,6 +213,9 @@ pub(crate) fn run_with(
     if terminal.screen.draw(&mut terminal.app, None).is_err() {
         return Ok(1);
     }
+    // Startup pushes (config reads, session restores) gain births and
+    // wakes before the first arm, so they fade like every other event.
+    terminal.app.sweep_notices(terminal.clock.now());
     terminal.write_title();
     let (tx, rx) = mpsc::channel();
     terminal.files_out = Some(tx.clone());
@@ -700,9 +709,16 @@ impl<B: Backend> Loop<B> {
         // The viewer opens the loop queued: one worker per view, each
         // answering once with `Input::Viewed`.
         self.drain_images();
+        // The pre-draw sweep births in-frame pushes (page-in loads,
+        // image failures) so the draw sees them; the post-draw sweep
+        // births renderer-failure pushes before the arm, so a push
+        // already past the fade expires before arming and never draws
+        // twice.
+        self.app.sweep_notices(self.clock.now());
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
+        self.app.sweep_notices(self.clock.now());
         // The open's `full` raise goes out after the first frame draws,
         // so no `full` line is written before it.
         if let Some(line) = self.app.take_raise() {
@@ -839,27 +855,30 @@ impl<B: Backend> Loop<B> {
     /// hold (`docs/tui.md`, "History and paging"). With no hub there is
     /// nothing to ask, and the pages draw blank.
     fn page_in(&mut self, rx: &Receiver<Input>) {
-        while let Some(range) = self.app.needs().into_iter().next() {
-            let Some(session) = self.app.paging_session().cloned() else {
+        while let Some((session, range)) = self.app.needs().into_iter().next() {
+            if self.app.paging_session().is_none() {
                 return;
-            };
+            }
             if !self.hub.has_stream() {
                 return;
             }
+            // Each range loads under its own segment's session: ancestor
+            // and descendant logs both start at `Seq(0)`, so a bare range
+            // names no page on its own.
             match self
                 .hub
                 .fetch(rx, &session, &range, &mut self.app, &self.tick)
             {
                 Ok(lines) => {
-                    self.app.load(lines);
+                    self.app.load(&session, lines);
                     // An answer that folded nothing into the page would
                     // leave it needed, and the frame asking forever.
-                    if self.app.needs().first() == Some(&range) {
+                    if self.app.needs().first() == Some(&(session.clone(), range.clone())) {
                         self.app
-                            .load_failed(&range, "the answer held none of its lines");
+                            .load_failed(&session, &range, "the answer held none of its lines");
                     }
                 }
-                Err(message) => self.app.load_failed(&range, &message),
+                Err(message) => self.app.load_failed(&session, &range, &message),
             }
         }
     }

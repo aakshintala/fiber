@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::io::BufRead;
 
+use contract::diag::PrefixHashes;
 use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
     ToolCallRequested,
@@ -86,9 +87,14 @@ impl Responses {
         request: &ModelRequest,
         observation: crate::RequestObservation,
     ) -> Box<dyn ModelCall> {
-        let call = self.request(request);
+        let mut call = self.request(request);
         if !observation.debugging() {
             return Box::new(call);
+        }
+        // The digests cost a second encoding, so they run only with the
+        // setting on; the hot path with it off is unchanged.
+        if observation.cache_diagnostics() {
+            call = call.with_hashes(hashes(&self.endpoint, request));
         }
         Box::new(call.observed(observation.with_model(self.endpoint.model.clone())))
     }
@@ -135,13 +141,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // A rewound session's first request sends its parent's logged build
     // verbatim, so it matches the parent's bytes (`docs/events.md`,
     // "Rewind").
-    let tools: Vec<Value> = request
-        .sent_tools
-        .clone()
-        .unwrap_or_else(|| wire_tools(&request.tools))
-        .into_iter()
-        .map(Value::Object)
-        .collect();
+    let tools = wired_tools(request);
     let mut body = Map::new();
     body.insert("model".into(), json!(endpoint.model));
     body.insert("instructions".into(), json!(request.system_prompt));
@@ -181,6 +181,35 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         body.insert("max_output_tokens".into(), json!(limit.max(16)));
     }
     Value::Object(body).to_string().into_bytes()
+}
+
+/// The tools as sent: the rewound build verbatim, else the tools Fiber
+/// builds. Shared by the body and the digests, so both hash the same
+/// bytes.
+fn wired_tools(request: &ModelRequest) -> Vec<Value> {
+    request
+        .sent_tools
+        .clone()
+        .unwrap_or_else(|| wire_tools(&request.tools))
+        .into_iter()
+        .map(Value::Object)
+        .collect()
+}
+
+/// The redacted prefix digests of the encoded segments: the instructions,
+/// the tools and each cumulative input prefix as sent. Responses always
+/// sends instructions and a tools list, so both digests are always
+/// present.
+fn hashes(endpoint: &Endpoint, request: &ModelRequest) -> PrefixHashes {
+    PrefixHashes {
+        system: Some(crate::cache_diagnostics::segment(&json!(
+            request.system_prompt
+        ))),
+        tools: Some(crate::cache_diagnostics::segment(&Value::Array(
+            wired_tools(request),
+        ))),
+        messages: crate::cache_diagnostics::cumulative(&input(endpoint, request)),
+    }
 }
 
 /// The conversation as Responses input items.

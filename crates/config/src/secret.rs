@@ -320,3 +320,13 @@ pub fn valid_env_key(key: &str) -> bool {
     }
     chars.all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
+
+/// Whether `name` is a server name Fiber writes: non-empty, with none of
+/// the bytes `fiber mcp add` refuses. The import shares this rule, so a
+/// name one side writes the other side reads.
+pub fn valid_server_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.bytes().any(|byte| {
+            byte == b'"' || byte == b'/' || byte.is_ascii_whitespace() || byte.is_ascii_control()
+        })
+}

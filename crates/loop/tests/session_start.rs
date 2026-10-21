@@ -400,6 +400,7 @@ fn a_rewound_loop_runs_session_start_with_reason_rewind() {
             },
         },
         r#loop::Rewound {
+            factory: None,
             from,
             worktree: None,
             how: r#loop::Continuation::Rewind {
@@ -502,6 +503,7 @@ fn a_forked_loop_runs_session_start_with_reason_fork() {
             },
         },
         r#loop::Rewound {
+            factory: None,
             from,
             worktree: None,
             how: r#loop::Continuation::Fork {

@@ -1143,3 +1143,187 @@ fn openai_search_marks_match_the_october_probe() {
             .is_none()
     );
 }
+
+#[test]
+fn opencode_go_marks_store_false_where_the_protocol_accepts_it() {
+    // The generated opencode-go file, compiled in: every openai-responses
+    // and openai-completions model carries compat.store false, since
+    // those protocols read it, while anthropic-messages and
+    // google-generative-ai models carry no store key their protocol
+    // never reads.
+    let file: Value = serde_json::from_str(include_str!(
+        "../../providers/opencode/providers/opencode-go.json"
+    ))
+    .unwrap();
+    let models = file["models"].as_array().unwrap();
+    assert!(!models.is_empty());
+    for model in models {
+        let protocol = model["protocol"].as_str().unwrap();
+        match protocol {
+            "openai-responses" | "openai-completions" => assert_eq!(
+                model["compat"]["store"],
+                Value::Bool(false),
+                "{} on {protocol} carries no store:false",
+                model["id"]
+            ),
+            _ => assert!(
+                model["compat"].get("store").is_none(),
+                "{} on {protocol} carries a store flag its protocol never reads",
+                model["id"]
+            ),
+        }
+    }
+}
+
+#[test]
+fn databricks_keys_mirror_the_lua_match_key() {
+    // Each arm of Lua `model_key`, pinned against the same services the
+    // extension's `models-model-key-strips-prefixes` case covers, plus the
+    // `/` tail, the three droppable suffixes and case-folding.
+    for (raw, key) in [
+        ("model-services/system.ai.alpha-one", "alpha-one"),
+        ("model-services/system.ai.system.ai.beta-two", "beta-two"),
+        (
+            "model-services/system.ai.databricks-gamma-three",
+            "gamma-three",
+        ),
+        ("model-services/system.ai.fw-delta-four", "delta-four"),
+        ("model-services/system.ai.meta-epsilon-five", "epsilon-five"),
+        ("model-services/system.ai.us.zeta-six", "zeta-six"),
+        ("model-services/system.ai.anthropic.eta-seven", "eta-seven"),
+        ("model-services/system.ai.theta/acme-eight", "acme-eight"),
+        ("model-services/system.ai.iota__nine", "iota-nine"),
+        ("model-services/system.ai.kappa-ten-preview", "kappa-ten"),
+        ("model-services/system.ai.kappa-ten-maas", "kappa-ten"),
+        ("model-services/system.ai.kappa-ten-it", "kappa-ten"),
+        ("model-services/system.ai.nu-thirteen-", "nu-thirteen"),
+        ("model-services/system.ai.GPT-6-Sol", "gpt-6-sol"),
+        ("claude-opus-5-20251101", "claude-opus-5-20251101"),
+        ("muse-spark-1.3", "muse-spark-1-3"),
+        ("eu.openai.gpt-6-sol", "gpt-6-sol"),
+    ] {
+        assert_eq!(databricks_model_key(raw), key, "{raw}");
+    }
+}
+
+#[test]
+fn databricks_keys_keep_lookalike_suffixes() {
+    // The stem drops only `maas`, `preview` and `it`: a trailing number,
+    // an unknown word and a bare `-` stay, and a dropped stem still trims
+    // the `-` it leaves behind.
+    for (raw, key) in [
+        (
+            "model-services/system.ai.claude-opus-5-20251101",
+            "claude-opus-5-20251101",
+        ),
+        (
+            "model-services/system.ai.model-preview-x",
+            "model-preview-x",
+        ),
+        ("model-services/system.ai.model-", "model"),
+        ("-maas", ""),
+    ] {
+        assert_eq!(databricks_model_key(raw), key, "{raw}");
+    }
+}
+
+#[test]
+fn databricks_thinking_keeps_vendor_rows_and_their_defaults() {
+    let mut vendor = vendor_package("v", "providers/openai/providers/openai.json");
+    vendor.thinking = &[
+        (
+            "gpt-6-sol",
+            &["off", "low", "medium", "high", "xhigh", "max"],
+            None,
+        ),
+        ("synth", &["low", "medium"], Some("medium")),
+    ];
+    let output = databricks_thinking(std::slice::from_ref(&vendor)).unwrap();
+    assert_eq!(output.path, DATABRICKS_THINKING);
+    assert_eq!(output.models, 2);
+    assert!(
+        output.text.contains(
+            "  [\"synth\"] = { levels = { \"low\", \"medium\" }, default = \"medium\" },\n"
+        ),
+        "{}",
+        output.text
+    );
+}
+
+#[test]
+fn databricks_thinking_inherits_known_vendor_ids() {
+    // The real tables: the Claude and GPT rows the extension case reads,
+    // with the `openai` row for the id `codex` also lists.
+    let output = databricks_thinking(&PACKAGES).unwrap();
+    assert!(
+        output.text.contains(
+            "  [\"claude-opus-5\"] = { levels = { \"low\", \"medium\", \"high\", \"xhigh\", \"max\" } },\n"
+        ),
+        "{}",
+        output.text
+    );
+    assert!(
+        output.text.contains(
+            "  [\"gpt-6-sol\"] = { levels = { \"off\", \"low\", \"medium\", \"high\", \"xhigh\", \"max\" } },\n"
+        ),
+        "{}",
+        output.text
+    );
+    assert!(!output.text.contains("default = "), "{}", output.text);
+}
+
+#[test]
+fn databricks_thinking_ignores_codex_rows() {
+    // `codex` carries ChatGPT-backend defaults that do not hold on a
+    // gateway route: its `medium` default for `gpt-6-sol` never reaches
+    // the table, while the `openai` row for the same id does.
+    let mut codex = vendor_package("c", "providers/codex/providers/codex.json");
+    codex.thinking = &[("gpt-6-sol", &["low"], Some("low"))];
+    let alone = databricks_thinking(std::slice::from_ref(&codex)).unwrap();
+    assert_eq!(alone.models, 0);
+    assert!(!alone.text.contains("gpt-6-sol"), "{}", alone.text);
+    let mut openai = vendor_package("v", "providers/openai/providers/openai.json");
+    openai.thinking = &[("gpt-6-sol", &["low", "high"], None)];
+    let input = [codex, openai];
+    let output = databricks_thinking(&input).unwrap();
+    assert_eq!(output.models, 1);
+    assert!(
+        output
+            .text
+            .contains("  [\"gpt-6-sol\"] = { levels = { \"low\", \"high\" } },\n"),
+        "{}",
+        output.text
+    );
+}
+
+#[test]
+fn databricks_thinking_rejects_a_shared_key_with_differing_rows() {
+    // `M` and `m` share the match key `m`: differing rows name both ids,
+    // while identical rows keep the first without an error.
+    let mut anthropic = vendor_package("a", "providers/anthropic/providers/anthropic.json");
+    anthropic.thinking = &[("m", &["low"], None)];
+    let mut openai = vendor_package("v", "providers/openai/providers/openai.json");
+    openai.thinking = &[("M", &["high"], None)];
+    let input = [anthropic, openai];
+    match databricks_thinking(&input) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking: `m` and `M` share a match key with differing thinking rows"
+        ),
+        Ok(_) => panic!("databricks_thinking unexpectedly succeeded"),
+    };
+    let mut anthropic = vendor_package("a", "providers/anthropic/providers/anthropic.json");
+    anthropic.thinking = &[("m", &["low"], None)];
+    let mut openai = vendor_package("v", "providers/openai/providers/openai.json");
+    openai.thinking = &[("M", &["low"], None)];
+    let input = [anthropic, openai];
+    let output = databricks_thinking(&input).unwrap();
+    assert_eq!(output.models, 1);
+    assert!(
+        output
+            .text
+            .contains("  [\"m\"] = { levels = { \"low\" } },\n"),
+        "{}",
+        output.text
+    );
+}

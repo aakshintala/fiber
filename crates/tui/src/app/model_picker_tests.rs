@@ -88,8 +88,10 @@ fn catalogue_notices_are_pushed_once_per_read() {
     assert_eq!(app.notices().len(), 2);
     assert_eq!(app.notice(), Some("second"));
     assert_eq!(first_code(&app), "model_invalid");
+    // A second identical read adds no rows: the same code with the same
+    // text while stacked dedupes (#2843: event repeats fade as one row).
     app.on_models(Ok(catalogue));
-    assert_eq!(app.notices().len(), 4);
+    assert_eq!(app.notices().len(), 2);
 }
 
 use std::time::Instant;
@@ -3436,6 +3438,17 @@ fn chip_rows() -> Value {
     ]})
 }
 
+/// The hub's import-pending answer: the offer resolve asks it
+/// first on every remote hello, so every scripted wire opens
+/// with it. Denied stays down without touching the pick.
+fn pending() -> (String, Value, Result<Value, Rejection>) {
+    (
+        "configure".to_owned(),
+        json!({"operation": "import_pending"}),
+        Ok(json!({"pending": false})),
+    )
+}
+
 fn global_file() -> (String, Value, Result<Value, Rejection>) {
     (
         "configure".to_owned(),
@@ -3571,7 +3584,7 @@ fn open_mode(app: &App) -> Option<crate::model_picker::Mode> {
 
 #[test]
 fn the_chip_read_runs_before_the_start_pick_and_not_twice() {
-    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings()]);
+    let (mut app, hub) = scripted_remote(vec![pending(), global_file(), chip_settings()]);
     // Before the link the start pick owes but writes nothing.
     app.start_model_pick();
     assert!(app.model_picker.open.is_none());
@@ -3594,7 +3607,12 @@ fn the_chip_read_runs_before_the_start_pick_and_not_twice() {
 
 #[test]
 fn the_start_pick_drops_when_the_chip_names_a_model() {
-    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings(), chip_settings()]);
+    let (mut app, hub) = scripted_remote(vec![
+        pending(),
+        global_file(),
+        chip_settings(),
+        chip_settings(),
+    ]);
     app.owe_start_pick();
     hub.start();
     let (mut app, _) = fold(app, hub_hello());
@@ -3611,6 +3629,7 @@ fn the_start_pick_drops_when_the_chip_names_a_model() {
 #[test]
 fn the_start_pick_opens_once_when_the_chip_names_no_model() {
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_settings_scoped("[\"hub/m\",\"hub/n\"]"),
         models_with(&["hub/m", "hub/n"]),
@@ -3646,8 +3665,11 @@ fn explicit_opens_run_at_once_while_the_chip_read_is_owed() {
         crate::model_picker::Mode::Scope,
         crate::model_picker::Mode::Choose,
     ] {
-        let (mut app, hub) =
-            scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
+        let (mut app, hub) = scripted_remote(vec![
+            pending(),
+            global_file(),
+            chip_settings_scoped("[\"hub/m\"]"),
+        ]);
         // The seeded catalogue holds the chip's model, so a thinking
         // open lands on its row instead of falling back to Choose.
         app.on_models(Ok(three()));
@@ -3682,7 +3704,11 @@ fn explicit_opens_run_at_once_while_the_chip_read_is_owed() {
 
 #[test]
 fn explicit_opens_by_key_and_click_run_at_once_while_owed() {
-    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
+    let (mut app, hub) = scripted_remote(vec![
+        pending(),
+        global_file(),
+        chip_settings_scoped("[\"hub/m\"]"),
+    ]);
     app.on_models(Ok(three()));
     assert_eq!(press_key(&mut app, Key::CtrlL), Effect::None);
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
@@ -3696,7 +3722,11 @@ fn explicit_opens_by_key_and_click_run_at_once_while_owed() {
 
 #[test]
 fn an_explicit_open_drops_the_owed_start_pick() {
-    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
+    let (mut app, hub) = scripted_remote(vec![
+        pending(),
+        global_file(),
+        chip_settings_scoped("[\"hub/m\"]"),
+    ]);
     app.owe_start_pick();
     app.open_model_picker(crate::model_picker::Mode::Choose);
     // The hello answers with no model, but the pick is gone: the open
@@ -3714,6 +3744,7 @@ fn an_explicit_open_drops_the_owed_start_pick() {
 #[test]
 fn a_rejected_chip_read_notices_once_and_waits_for_reconnect() {
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         // The reconnect reads again over the cached global file.
@@ -3748,6 +3779,7 @@ fn a_rejected_chip_read_notices_once_and_waits_for_reconnect() {
 #[test]
 fn choosing_a_workspace_rereads_the_chips_at_once() {
     let (app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_settings(),
         chip_settings_at("/hub/p"),
@@ -3767,7 +3799,7 @@ fn choosing_a_workspace_rereads_the_chips_at_once() {
 
 #[test]
 fn choosing_a_workspace_while_down_reads_at_the_next_hello() {
-    let (mut app, hub) = scripted_remote(vec![chip_settings_at("/hub/p")]);
+    let (mut app, hub) = scripted_remote(vec![pending(), chip_settings_at("/hub/p")]);
     // The player runs before the choice, so a wrong-state choice answers
     // at once instead of parking the test thread: the asserts below fail
     // before any hang guard. With the link down the choice writes nothing
@@ -3788,8 +3820,11 @@ fn choosing_a_workspace_while_down_reads_at_the_next_hello() {
 fn flagged_keys_survive_the_chip_read() {
     // The layer names `model=flag/m`: the answer never replaces it,
     // while thinking, unnamed, is replaced.
-    let (mut app, hub) =
-        scripted_remote_named(vec![global_file(), chip_settings()], Some("flag/m"), None);
+    let (mut app, hub) = scripted_remote_named(
+        vec![pending(), global_file(), chip_settings()],
+        Some("flag/m"),
+        None,
+    );
     app.set_launch_overrides(vec!["model=flag/m".to_owned()]);
     hub.start();
     let (app, _) = fold(app, hub_hello());
@@ -3799,8 +3834,11 @@ fn flagged_keys_survive_the_chip_read() {
     assert!(chips.contains(&"[thinking: high]".to_owned()), "{chips:?}");
     quiet(&hub.watcher);
     // With `thinking=low` named, thinking is kept too.
-    let (mut app, hub) =
-        scripted_remote_named(vec![global_file(), chip_settings()], None, Some("low"));
+    let (mut app, hub) = scripted_remote_named(
+        vec![pending(), global_file(), chip_settings()],
+        None,
+        Some("low"),
+    );
     app.set_launch_overrides(vec!["thinking=low".to_owned()]);
     hub.start();
     let (app, _) = fold(app, hub_hello());
@@ -3827,6 +3865,7 @@ fn a_local_start_pick_opens_at_once() {
 #[test]
 fn the_start_pick_opens_over_the_workspace_picker() {
     let (app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_settings_scoped("[\"hub/m\",\"hub/n\"]"),
         models_with(&["hub/m", "hub/n"]),
@@ -3873,6 +3912,7 @@ fn the_start_pick_opens_over_the_workspace_picker() {
 #[test]
 fn a_failed_read_then_a_reconnect_opens_the_pick_once() {
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         chip_settings_scoped("[\"hub/m\"]"),
@@ -3895,6 +3935,7 @@ fn the_deferred_start_pick_reads_models_at_the_chosen_workspace() {
     // workspace answers the next chip read with no model, and the
     // owed pick opens over its catalogue.
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         chip_settings_scoped_at("/hub/p", "[\"hub/m\"]"),
@@ -3926,6 +3967,7 @@ fn the_deferred_start_pick_reads_models_at_the_chosen_workspace() {
 #[test]
 fn a_failed_read_then_an_explicit_open_stays_single() {
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         chip_settings_scoped("[\"hub/m\"]"),
@@ -3949,6 +3991,7 @@ fn a_failed_read_then_an_explicit_open_stays_single() {
 fn the_chip_answer_keeps_each_toggle() {
     // The chosen workspace reads directly, with no `global_file`.
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         (
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
@@ -3993,14 +4036,17 @@ fn the_chip_answer_keeps_each_toggle() {
 #[test]
 fn a_twice_toggled_row_keeps_its_mark_against_an_answer_omitting_it() {
     // The chosen workspace reads directly, with no `global_file`.
-    let (mut app, hub) = scripted_remote(vec![(
-        "configure".to_owned(),
-        json!({"operation": "settings", "workspace": "/hub"}),
-        Ok(json!({"rows": [
-            {"key": "scoped_models", "shown": "value", "value": "[\"acme/m1\"]",
-             "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-        ]})),
-    )]);
+    let (mut app, hub) = scripted_remote(vec![
+        pending(),
+        (
+            "configure".to_owned(),
+            json!({"operation": "settings", "workspace": "/hub"}),
+            Ok(json!({"rows": [
+                {"key": "scoped_models", "shown": "value", "value": "[\"acme/m1\"]",
+                 "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+            ]})),
+        ),
+    ]);
     app.on_models(Ok(three()));
     app.model_picker.scoped = vec!["acme/m2".to_owned()];
     // The remote home opens with the workspace picker showing; choosing
@@ -4028,6 +4074,7 @@ fn a_failed_chip_read_keeps_the_placeholders_marks() {
     // The chosen workspace reads directly, with no `global_file`;
     // the save writes the marked list, here empty.
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         chip_rejection("invalid_arguments", "bad settings"),
         (
             "configure".to_owned(),
@@ -4068,6 +4115,7 @@ fn a_catalogue_answer_after_the_toggle_keeps_it_by_reference() {
     // link-up choice re-reads them at once at the new workspace: the
     // placeholder survives both reads.
     let (app, hub) = scripted_remote(vec![
+        pending(),
         global_file(),
         chip_settings_scoped("[\"acme/m2\"]"),
         chip_settings_scoped_at("/hub", "[\"acme/m2\"]"),
@@ -4106,6 +4154,7 @@ fn a_catalogue_answer_after_the_toggle_keeps_it_by_reference() {
 fn a_mark_cell_click_joins_the_toggled_set() {
     // The chosen workspace reads directly, with no `global_file`.
     let (mut app, hub) = scripted_remote(vec![
+        pending(),
         (
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
@@ -4170,7 +4219,9 @@ fn has_code(app: &App, code: &str) -> bool {
 #[test]
 fn a_send_while_busy_pushes_the_pending_notice() {
     let (mut app, seam) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn: the send's own fold must not end it, or the
+    // turn-end fold would clear the row just pushed.
+    app.on_line(turn_started());
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     assert_eq!(line["command"], json!("model"));
@@ -4220,7 +4271,9 @@ fn an_idle_send_is_silent() {
 #[test]
 fn an_accept_while_busy_adds_no_notice() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn: the acceptance changes the model without
+    // ending the turn, so the pending row stands on, silent.
+    app.on_line(turn_started());
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     let id = line["id"].as_str().expect("an id").to_owned();
@@ -4252,7 +4305,9 @@ fn an_idle_acceptance_writes_with_no_notice() {
 #[test]
 fn a_rejection_after_acceptance_pushes_without_replacing() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn: the folds must not end it, or the turn-end
+    // fold would clear the rows this test reasons about.
+    app.on_line(turn_started());
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     let id = line["id"].as_str().expect("an id").to_owned();
@@ -4269,7 +4324,8 @@ fn a_rejection_after_acceptance_pushes_without_replacing() {
 #[test]
 fn a_rejection_replaces_the_pending_notice() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn, so only the rejection path clears.
+    app.on_line(turn_started());
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     let id = line["id"].as_str().expect("an id").to_owned();
@@ -4288,7 +4344,8 @@ fn a_rejection_replaces_the_pending_notice() {
 #[test]
 fn a_duplicate_rejection_mid_turn_is_silent_and_drops_the_writes() {
     let (mut app, seam) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn, so the stranded row stands on.
+    app.on_line(turn_started());
     open(&mut app);
     // Session-only, so the wait names the row and no write waits.
     let line = sent(ctrl_s(&mut app));
@@ -4310,7 +4367,8 @@ fn a_duplicate_rejection_mid_turn_is_silent_and_drops_the_writes() {
 #[test]
 fn a_rejection_after_leaving_drops_the_stash_without_a_notice() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn, so the send's own fold ends nothing.
+    app.on_line(turn_started());
     open(&mut app);
     // Session-only, so leaving drops its whole wait.
     let line = sent(ctrl_s(&mut app));
@@ -4354,7 +4412,8 @@ fn a_dismiss_leaves_a_newer_other_code_standing() {
 #[test]
 fn a_dismiss_leaves_a_newer_other_choice_standing() {
     let (mut app, _) = choosing_app();
-    busy_mid_turn(&mut app);
+    // A real running turn, so the late rejection takes only its share.
+    app.on_line(turn_started());
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     let id = line["id"].as_str().expect("an id").to_owned();
@@ -4385,4 +4444,109 @@ fn a_dismiss_leaves_a_newer_other_choice_standing() {
         "the other choice's pending notice stands: {:?}",
         app.notices()
     );
+}
+
+/// Counts the stacked rows under `code`.
+fn count_code(app: &App, code: &str) -> usize {
+    app.notices()
+        .into_iter()
+        .filter(
+            |line| matches!(line, crate::app::NoticeLine::Notice { code: found, .. } if found == code),
+        )
+        .count()
+}
+
+/// A `turn_started` envelope for the attached session: a real running
+/// turn, so refusing a choice mid-turn ends no turn and the rejection
+/// path alone clears.
+fn turn_started() -> Line {
+    Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [(
+            "input".to_owned(),
+            json!([{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]),
+        )]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A `turn_completed` envelope for the attached session: the running
+/// turn ends, so the turn-end fold clears the applied shares.
+fn turn_completed() -> Line {
+    Line::Session(contract::Envelope {
+        kind: "turn_completed".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("outcome".to_owned(), json!("completed"))]
+            .into_iter()
+            .collect(),
+    })
+}
+
+#[test]
+fn two_identical_pending_choices_stack_and_one_rejection_leaves_one() {
+    let (mut app, _) = choosing_app();
+    app.on_line(turn_started());
+    open(&mut app);
+    let first = sent(app.on_key(Key::Enter, now()));
+    let first_id = first["id"].as_str().expect("an id").to_owned();
+    // The same choice sent again is a second notice worth of state, not
+    // a repeat: two rows, one text.
+    open(&mut app);
+    let second = sent(app.on_key(Key::Enter, now()));
+    let second_id = second["id"].as_str().expect("an id").to_owned();
+    assert_ne!(first_id, second_id);
+    assert_eq!(count_code(&app, "switch_pending"), 2);
+    assert_eq!(
+        app.notice(),
+        Some("acme/m1 · high applies when this turn ends")
+    );
+    // Rejecting the second command voids only its share: the turn still
+    // runs, so only the rejection path clears, and the surviving share
+    // keeps its text under the rejection's own notice.
+    app.on_line(refused(
+        SESSION,
+        &second_id,
+        "credential_missing",
+        "no key.",
+    ));
+    assert_eq!(count_code(&app, "switch_pending"), 1);
+    assert!(app.notices().into_iter().any(|line| matches!(line,
+        crate::app::NoticeLine::Notice { code, text, .. }
+        if code == "switch_pending" && text == "acme/m1 · high applies when this turn ends")));
+    // The turn ending applies the last share: the turn-end fold clears
+    // it, with no rejection in play.
+    app.on_line(turn_completed());
+    assert!(!has_code(&app, "switch_pending"));
+}
+
+#[test]
+fn on_models_arrival_clears_models_loading() {
+    let (mut app, _) = choosing_app();
+    app.push_notice(
+        "models_loading",
+        "The model list is not read yet; try again in a moment.".to_owned(),
+    );
+    assert!(has_code(&app, "models_loading"));
+    // The load landed, answered or not: its wait is over.
+    app.on_models(Ok(three()));
+    assert!(!has_code(&app, "models_loading"));
+    app.push_notice(
+        "models_loading",
+        "The model list is not read yet; try again in a moment.".to_owned(),
+    );
+    app.on_models(Err("gone".to_owned()));
+    assert!(!has_code(&app, "models_loading"));
 }

@@ -55,6 +55,11 @@ mod hub_unit;
     clippy::result_large_err,
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
+mod import;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod login;
 #[allow(
     clippy::result_large_err,
@@ -76,14 +81,30 @@ mod model_lists;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod models;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod prune;
 #[allow(
     clippy::result_large_err,
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod release;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod sessions;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod sessions_list;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod sessions_search;
 mod table;
 
@@ -104,12 +125,13 @@ pub use hub_refresh::hub_refresh;
 pub use hub_service::{hub_install, hub_restart, hub_uninstall};
 pub use hub_status::hub_status;
 pub use hub_token::{hub_token_list, hub_token_revoke};
+pub use import::import;
 pub use login::{
     LoginCancel, LoginName, LoginStored, LogoutTarget, ReviewerModels, browser_login, login_store,
     login_targets, providers_in, reviewer_models, run_login, run_logout, set_reviewer,
 };
-pub use mcp::{McpDeclaration, mcp_add, mcp_list, mcp_remove};
-pub use mcp_login::{mcp_login, mcp_logout};
+pub use mcp::{DeclaredServer, McpDeclaration, declared_servers, mcp_add, mcp_list, mcp_remove};
+pub use mcp_login::{login_target, mcp_login, mcp_logout};
 pub use model_lists::{ModelLists, ModelListsError, model_lists, roles_of};
 pub use models::{models, refresh_model_lists};
 pub use prune::{PruneArgs, prune};

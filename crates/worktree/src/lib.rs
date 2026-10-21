@@ -326,9 +326,13 @@ fn git_command(program: &str) -> Command {
     command
 }
 
-/// Runs Git with the [`git_command`] scrub but running the repository's
-/// hooks: only `git worktree add` is built this way.
-fn hooked_command(program: &str) -> Command {
+/// A `git` command with the scrubbed environment: `core.fsmonitor` off
+/// (`-c core.fsmonitor=false`), `GIT_OPTIONAL_LOCKS` and
+/// `GIT_TERMINAL_PROMPT` pinned to `0`, and `GIT_DIR`, `GIT_WORK_TREE`,
+/// `GIT_COMMON_DIR` and `GIT_INDEX_FILE` removed, so the caller's
+/// environment cannot redirect the invocation. The repository's hooks
+/// still run: only `git worktree add` is built this way.
+pub fn hooked_command(program: &str) -> Command {
     let mut command = Command::new(program);
     command
         .args(["-c", "core.fsmonitor=false"])

@@ -588,12 +588,13 @@ impl Paging<'_> {
     /// needs once: each load settles and trims, so re-listing after every
     /// page would walk the whole stale set once per page. Loading from the
     /// snapshot settles the same pages in the same order; a load never
-    /// needs a page the snapshot lacks.
+    /// needs a page the snapshot lacks. Each range loads under its own
+    /// segment's session: ancestor and descendant logs share their seqs.
     fn frame(&mut self) -> Result<(Duration, bool), String> {
         let started = self.clock.now();
         let wanted = self.app.needs();
         let mut loaded = false;
-        for range in &wanted {
+        for (session, range) in &wanted {
             let from = self.log.partition_point(|(seq, _)| seq < range.start());
             let mut lines = Vec::new();
             for (_, line) in self
@@ -602,16 +603,21 @@ impl Paging<'_> {
                 .skip(from)
                 .take_while(|(seq, _)| range.contains(seq))
             {
-                lines.push(serde_json::from_str(line).map_err(|error| error.to_string())?);
+                let envelope: Envelope =
+                    serde_json::from_str(line).map_err(|error| error.to_string())?;
+                if envelope.session_id == *session {
+                    lines.push(envelope);
+                }
             }
             if lines.is_empty() {
                 return Err(format!(
-                    "the log holds no lines {}..={}",
+                    "the log holds no lines {}..={} for {}",
                     range.start().0,
-                    range.end().0
+                    range.end().0,
+                    session.0
                 ));
             }
-            self.app.load(lines);
+            self.app.load(session, lines);
             loaded = true;
         }
         let mut buf = Buffer::empty(self.area);

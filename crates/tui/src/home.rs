@@ -257,6 +257,9 @@ pub(crate) struct HomeScreen {
     /// the session and everything `--cascade` adds, and its body
     /// scrolls past the frame.
     pub(crate) question: Option<String>,
+    /// The question is the first-run import offer: the import frame
+    /// draws it, never the delete frame.
+    pub(crate) question_import: bool,
     /// The delete question's scroll offset: Up shows earlier rows,
     /// Down later ones.
     pub(crate) question_scroll: usize,
@@ -949,6 +952,14 @@ pub(crate) fn delete_line(row: &Row) -> String {
         title(row),
         row.id.0
     )
+}
+
+/// The import offer's head: what the import copies and that what is
+/// already here stays. The frame below draws the per-source legend
+/// and the footer from the offer itself.
+pub(crate) fn import_head() -> String {
+    "Bring settings from another harness into this home? Skills, commands, instructions and MCP servers copy over; files already here are left behind, never overwritten."
+        .to_owned()
 }
 
 /// The cascade question on the foot: the session and every session

@@ -2,10 +2,14 @@
 //! of turns, the one preamble build with the opening message, and the
 //! instruction-file and date check, each written before `turn_started`.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use contract::TurnId;
-use contract::events::{Event, TurnOutcome, TurnStarted};
+use contract::events::{
+    Event, ToolCallCompleted, ToolInfo, ToolSource, ToolState, TurnOutcome, TurnStarted,
+};
+use contract::provider::Input;
 
 use crate::{Error, Loop, Preamble, cancel, inbox, mint, prompt, status};
 
@@ -199,7 +203,16 @@ impl Loop {
             .flatten();
         let unattended = !self.answerable;
         self.set_trigger();
-        let (system_prompt, tools, mut event) = prompt::build(
+        // Drops the previous build's factory-inserted search tool, if any:
+        // the new build reinserts it when due, so a rebuild never takes its
+        // own insert for a name the general rule already holds. The name
+        // rides the loop, not the preamble, so a switch that discards the
+        // preamble still drops it.
+        let dropped = self.inserted_search.take();
+        if let Some(previous) = &dropped {
+            self.tools.remove(previous);
+        }
+        let (system_prompt, tools, mut event, built) = prompt::build(
             &self.prompt,
             &self.model.reference,
             unattended,
@@ -208,6 +221,7 @@ impl Loop {
             self.preamble_reason,
             self.replaced.clone(),
             self.handoff.trigger_at,
+            self.tool_search.as_ref(),
         );
         // The loop owns the effective budget; the builder leaves it
         // absent and every build passes through here.
@@ -219,6 +233,27 @@ impl Loop {
         self.log
             .append(&Event::PreambleBuilt(event.clone()), None, None)?;
         let large = prompt::definitions_notice(&event);
+        // The effective deferred set the requests render logged searches
+        // against (`docs/tools.md`, "Tool search"): `None` is a model
+        // without deferral, `Some(D)` the deferred names, empty or not.
+        let deferred: Option<BTreeSet<String>> =
+            (self.tool_search.is_some() && self.provider.defers()).then(|| {
+                event
+                    .tools
+                    .iter()
+                    .filter(|tool| tool.deferred)
+                    .map(|tool| tool.name.clone())
+                    .collect()
+            });
+        let mut search = None;
+        if let Some((tool, definition)) = built {
+            let name = definition.name.clone();
+            self.tools
+                .insert(name.clone(), ("builtin".to_owned(), tool, definition));
+            search = Some(name);
+        }
+        // The insert rides the loop until the next build drops it.
+        self.inserted_search = search;
         self.preamble = Some(Preamble {
             system_prompt,
             tools,
@@ -227,7 +262,9 @@ impl Loop {
             tool_choice: event.tool_choice,
             cache_lifetime: event.cache_lifetime,
             thinking: self.prompt.thinking,
+            deferred,
         });
+        self.publish_preamble_rows(dropped.as_deref());
         // The scope ends with the installation, before the opening: the
         // opening and its notices are session content, not the build.
         drop(_timer);
@@ -282,5 +319,116 @@ impl Loop {
     /// Writes `event` before its turn started, when there is no turn id yet.
     fn append_early(&mut self, event: &Event) -> Result<(), Error> {
         self.write(event, None, None)
+    }
+}
+
+impl Loop {
+    /// Every tool a `ToolSearchResult` in the conversation holds loaded.
+    /// The conversation keeps every search result since the last handoff,
+    /// so this is the loaded set (`docs/tools.md`, "Tool search").
+    pub(crate) fn loaded_names(&self) -> BTreeSet<String> {
+        self.conversation
+            .iter()
+            .filter_map(|input| match input {
+                Input::ToolSearchResult { loaded, .. } => Some(loaded.iter().cloned()),
+                Input::User { .. }
+                | Input::Assistant { .. }
+                | Input::Reasoning { .. }
+                | Input::ToolCall { .. }
+                | Input::ToolResult { .. } => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// Publishes every declared tool's row through `ToolRows`, when set:
+    /// each tool's effective state, deferred or in full (`docs/tools.md`,
+    /// "Seeing the tools"). A dropped search the rebuild did not declare
+    /// again publishes its removal first, so `/tools` lists every declared
+    /// tool and nothing else. With no setter the publication is skipped.
+    fn publish_preamble_rows(&self, dropped: Option<&str>) {
+        let Some(rows) = self.tool_rows.as_ref() else {
+            return;
+        };
+        if let Some(name) = dropped.filter(|name| !self.tools.contains_key(*name)) {
+            (rows.declare)(name, None);
+        }
+        let deferred = self
+            .preamble
+            .as_ref()
+            .and_then(|preamble| preamble.deferred.as_ref());
+        for (name, (by, _, definition)) in &self.tools {
+            let state = if deferred.is_some_and(|deferred| deferred.contains(name)) {
+                ToolState::Deferred
+            } else {
+                ToolState::Full
+            };
+            let source = match by.as_str() {
+                "builtin" => ToolSource::Builtin,
+                _ => ToolSource::Extension {
+                    extension: by.clone(),
+                },
+            };
+            let bytes = serde_json::to_vec(definition)
+                .map(|encoded| encoded.len() as u64)
+                .unwrap_or(u64::MAX);
+            (rows.declare)(
+                name,
+                Some(ToolInfo {
+                    name: name.clone(),
+                    source,
+                    state,
+                    bytes,
+                    tokens: None,
+                }),
+            );
+            (rows.state)(name, state);
+        }
+    }
+
+    /// Publishes `Loaded` for every name a completed search loaded that the
+    /// request defers (`docs/tools.md`, "Tool search"): publishing a name
+    /// that already shows `Loaded` is a no-op. With no deferral or no
+    /// setter nothing publishes.
+    pub(crate) fn publish_completion_rows(&self, completed: &ToolCallCompleted) {
+        let Some(rows) = self.tool_rows.as_ref() else {
+            return;
+        };
+        let Some(deferred) = self
+            .preamble
+            .as_ref()
+            .and_then(|preamble| preamble.deferred.as_ref())
+        else {
+            return;
+        };
+        let Some(loaded) = completed.loaded.as_ref() else {
+            return;
+        };
+        for name in loaded {
+            if deferred.contains(name) {
+                (rows.state)(name, ToolState::Loaded);
+            }
+        }
+    }
+
+    /// Moves the loaded names a completed handoff dropped back to
+    /// `Deferred`: only names the loaded set lost publish (`docs/tools.md`,
+    /// "Tool search"). With no deferral or no setter nothing publishes.
+    pub(crate) fn publish_handoff_rows(&self, before: &BTreeSet<String>) {
+        let Some(rows) = self.tool_rows.as_ref() else {
+            return;
+        };
+        if self
+            .preamble
+            .as_ref()
+            .and_then(|preamble| preamble.deferred.as_ref())
+            .is_none()
+        {
+            return;
+        }
+        let after = self.loaded_names();
+        for name in before.difference(&after) {
+            (rows.state)(name, ToolState::Deferred);
+        }
     }
 }

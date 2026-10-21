@@ -4,7 +4,6 @@
 //! repository ships").
 
 use std::collections::{BTreeSet, HashMap};
-use std::hash::{BuildHasher, RandomState};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -17,7 +16,7 @@ use contract::events::{
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
 use crate::ext::{Handle, Renderer};
@@ -31,6 +30,8 @@ use notices::Notices;
 use overlay::Overlay;
 use steering::Steering;
 
+#[cfg(test)]
+pub(crate) use notices::FADE;
 pub(crate) use notices::NoticeLine;
 
 #[path = "notices.rs"]
@@ -40,8 +41,8 @@ mod steering;
 
 mod attention;
 mod chrome;
-#[path = "app_commands.rs"]
-mod commands;
+pub(crate) mod commands;
+mod completion;
 mod config_views;
 #[path = "copy.rs"]
 pub(crate) mod copy;
@@ -63,6 +64,7 @@ pub(crate) mod model_picker;
 mod mouse;
 mod moving;
 mod offer;
+mod outbox;
 mod overlay;
 pub(crate) mod panel;
 mod paste;
@@ -78,6 +80,7 @@ use screen::Screen;
 
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
+pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
 pub(crate) use session_views::SessionView;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
@@ -94,25 +97,6 @@ pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// What the quit hint says.
 pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
-
-/// What the terminal is attached to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Phase {
-    /// No session yet.
-    Starting,
-    /// `start` sent, or held until the hub connects; waiting for its answer.
-    Pending {
-        /// The `start` command's id.
-        command_id: String,
-    },
-    /// Attached to a session.
-    Attached {
-        /// The session.
-        session: SessionId,
-        /// Whether a turn is running.
-        busy: bool,
-    },
-}
 
 /// What a key does.
 #[derive(Debug, PartialEq, Eq)]
@@ -159,34 +143,6 @@ pub(crate) enum Effect {
     ReadImage(u64),
     /// Open this file in the editor (`docs/tui.md`, "Swapped views").
     OpenFile(PathBuf),
-}
-
-/// Which command the terminal sent and waits on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Start,
-    Prompt,
-    Steer,
-    Cancel,
-    Reply,
-    SteerDrop,
-    Shell,
-    /// A built-in command such as `handoff`, `reload` or `close`.
-    Command,
-}
-
-/// The hub connection, as the terminal sees it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Link {
-    /// Not connected yet: an Enter is held until `hub_hello`.
-    Waiting,
-    /// The hub spoke a `hub_hello` this terminal reads.
-    Up,
-    /// The hub could not be reached or hung up; the terminal retries with
-    /// backoff (`docs/tui.md`, "A dropped connection").
-    Down,
-    /// The hub runs a schema this terminal cannot read: never retried.
-    Refused,
 }
 
 /// What clicking a line, or Enter on it, opens, keyed by an id that stays
@@ -237,14 +193,13 @@ pub(crate) struct App {
     /// The one clipboard image read at a time, and its ticket.
     paste: paste::Paste,
     phase: Phase,
-    link: Link,
+    /// The commands waiting for their answer, with the link they go out
+    /// on, the lines held until the hub connects, and the written lines
+    /// a reconnect sends again.
+    pub(crate) outbox: outbox::Outbox,
     /// The attached session's image fetches and queued viewer opens
     /// (`docs/tui.md`, "Images").
     images: images::Images,
-    /// Lines held until the hub connects: the `start` of an early Enter.
-    held: Vec<String>,
-    /// Commands waiting for their answer: kind and the draft they carried.
-    pending: HashMap<String, (Kind, Draft)>,
     /// The notices floating over the conversation.
     notices: Notices,
     /// The conversation's size, scroll and pages (`docs/tui.md`, "History
@@ -268,8 +223,8 @@ pub(crate) struct App {
     steering: Steering,
     /// The session's name, from the latest `session_named`.
     name: Option<String>,
-    /// The `/` and `@` panels and the key map overlay.
-    overlays: commands::Overlays,
+    /// The `/` and `@` panels.
+    completion: completion::Completion,
     /// Prompt recall and the Ctrl+R panel.
     history: history::History,
     /// "Copied" shows, from a click on `copy` to the next key or click.
@@ -349,10 +304,8 @@ impl App {
             draft: Draft::default(),
             paste: paste::Paste::default(),
             phase: Phase::Starting,
-            link: Link::Waiting,
+            outbox: outbox::Outbox::default(),
             images: images::Images::default(),
-            held: Vec::new(),
-            pending: HashMap::new(),
             notices: Notices::default(),
             screen: Screen::new(),
             handle: Handle::default(),
@@ -363,7 +316,7 @@ impl App {
             offer: crate::offer::Offer::default(),
             steering: Steering::default(),
             name: None,
-            overlays: commands::Overlays::default(),
+            completion: completion::Completion::default(),
             history: history::History::default(),
             copied: false,
             pending_turn: None,
@@ -399,6 +352,9 @@ impl App {
     pub(crate) fn attach(&mut self, session: SessionId) {
         self.end_overlay();
         self.switch_session(&session);
+        // Another session's stale rows end with the attachment; the open
+        // session's own notice stands until `stream_reopened` ends it.
+        self.notices.clear_code_except("stream_closed", &session.0);
         // A fresh attachment supersedes an exit that arrived after the
         // last one: opening resumes the session, and its live update has
         // yet to land.
@@ -543,12 +499,11 @@ impl App {
     }
 
     /// Folds one line from the hub, returning command lines to send. An
-    /// answer first releases the line kept for resending.
+    /// answer releases the line kept for resending as it folds.
     pub(crate) fn on_line(&mut self, line: Line) -> Vec<String> {
         if self.pass_line(&line) {
             return Vec::new();
         }
-        self.answered_line(&line);
         let mut lines = match self.home_line(&line) {
             Some(consumed) => consumed,
             None => match line {
@@ -582,13 +537,18 @@ impl App {
             .any(|(held, pass)| held == session && matches!(pass, Pass::Until(_)))
     }
 
-    /// The args of the open's next tail read: none when the tail is
-    /// filled or ended, or no read runs.
+    /// The args of the open's next tail read: none when the walk
+    /// reached the chain root or ended, when no read runs, or when the
+    /// display filled while the held run still reads its own segment.
+    /// Past a segment start the read keeps going for the joint total:
+    /// a `seq 0` with an unfollowed parent still asks. The pass counts
+    /// the lines above a filled display, so the open holds only the
+    /// filled run plus each seam crossing.
     pub(crate) fn tail_next(&mut self) -> Option<Value> {
         let Overlay::Reading(tail) = &self.overlay else {
             return None;
         };
-        if tail.ended() {
+        if tail.chain_done() {
             return None;
         }
         let mut fresh = self.attached_screen().pages().fresh();
@@ -597,7 +557,7 @@ impl App {
                 fresh.apply(line);
             }
         }
-        if tail.filled(&fresh, self.conversation_height()) {
+        if tail.filled(&fresh, self.conversation_height()) && !tail.seam_pending() {
             return None;
         }
         Some(tail.next_args())
@@ -775,14 +735,19 @@ impl App {
     /// Swaps the pass's second `Pages` in at its boundary: the preview's
     /// opens carry, focus remaps to the same call or clears, the
     /// selection clears, the kept busy applies, and the overlay ends. A
-    /// held landing keeps the preview's place: the top row's own `seq`
-    /// and its offset among that line's rows are read before the swap,
-    /// and after the unfreeze applies any deferred width the top is the
-    /// fold's row with that `seq`, at that offset kept within its rows,
-    /// or the end when the fold lacks the `seq`. A dropped page keeps
-    /// the old width's rows until it loads, so the pages hold the anchor
-    /// and each load finds the top again.
+    /// held landing keeps the preview's place: the top row's segment
+    /// session with its own `seq` and its offset among that line's rows
+    /// are read before the swap, and after the unfreeze applies any
+    /// deferred width the top is the fold's row with that session and
+    /// `seq`, at that offset kept within its rows, or the end when the
+    /// fold lacks it. A dropped page keeps the old width's rows until
+    /// it loads, so the pages hold the anchor and each load finds the
+    /// top again.
     fn land(&mut self, mut fold: Pages, held: bool) {
+        // The preview's closed ancestor runs land in the fold front
+        // beside the carried opens, under their own sessions, before the
+        // swap; the fold still replays the own log only.
+        self.attached_screen().pages().carry_chain(&mut fold);
         self.attached_screen().pages().carry_opens(&mut fold);
         let focus = self.focus.take();
         self.focus = focus.and_then(|id| self.remap_focus(id, &fold));
@@ -796,9 +761,9 @@ impl App {
         };
         std::mem::swap(self.attached_screen_mut().pages_mut(), &mut fold);
         self.end_overlay();
-        if let Some((seq, offset)) = anchor {
+        if let Some((session, seq, offset)) = anchor {
             let pages = self.attached_screen_mut().pages_mut();
-            pages.hold_anchor(seq, offset);
+            pages.hold_anchor(&session, seq, offset);
             match pages.anchored_row() {
                 Some(row) => {
                     self.screen.jump_kept(row);
@@ -812,10 +777,10 @@ impl App {
         }
     }
 
-    /// The `seq` of the preview's top row and the row's offset among
-    /// that line's rows: the anchor a held landing keeps. None while
-    /// following or when the page holds no line.
-    fn top_anchor(&self) -> Option<(Seq, usize)> {
+    /// The preview's top row segment session with its `seq` and the
+    /// row's offset among that line's rows: the anchor a held landing
+    /// keeps. None while following or when the page holds no line.
+    fn top_anchor(&self) -> Option<(SessionId, Seq, usize)> {
         let top = self.attached_screen().top()?;
         self.attached_screen().pages().row_seq(top)
     }
@@ -920,6 +885,8 @@ impl App {
                 let session = SessionId(session.to_owned());
                 match line.kind.as_str() {
                     "stream_reopened" => {
+                        // The cause ended for this session: its notice goes.
+                        self.notices.clear_code("stream_closed", &session.0);
                         self.passes.retain(|(held, _)| held != &session);
                         if let Some(last) = line.payload.get("last_seq").and_then(Value::as_u64) {
                             self.passes.push((session.clone(), Pass::Until(Seq(last))));
@@ -1025,15 +992,22 @@ impl App {
         self.notices.push(code, text);
     }
 
+    /// Births unborn notices and removes expired events; the frame calls
+    /// it before each draw and again after, and `run_with` calls it
+    /// before the first arm.
+    pub(crate) fn sweep_notices(&mut self, now: Instant) {
+        self.notices.sweep(now);
+    }
+
     /// The hub could not be reached, or runs a schema this terminal cannot
     /// read: the notice for the first failure in a run, and a held `start`
     /// fails as if rejected.
     pub(crate) fn connect_failed(&mut self, notice: String) {
-        self.link = Link::Down;
+        self.outbox.link = Link::Down;
         if self.notice_due() {
             self.notices.push("connection_failed", notice);
         }
-        self.held.clear();
+        self.outbox.held.clear();
         if let Phase::Pending { command_id } = &self.phase {
             let id = command_id.clone();
             self.fail(&id);
@@ -1048,8 +1022,8 @@ impl App {
         self.passes.clear();
         self.abandoned_history.clear();
         self.end_overlay();
-        if self.link == Link::Up {
-            self.link = Link::Down;
+        if self.outbox.is_up() {
+            self.outbox.link = Link::Down;
             self.notices
                 .push("connection_failed", "Connection lost.".to_owned());
         }
@@ -1080,7 +1054,7 @@ impl App {
                 .ok()
                 .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
             {
-                if self.is_kept(&id) {
+                if self.outbox.is_kept(&id) {
                     continue;
                 }
                 self.fail(&id);
@@ -1092,7 +1066,7 @@ impl App {
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the
     /// connection has not ended since.
     pub(crate) fn connected(&self) -> bool {
-        self.link == Link::Up
+        self.outbox.is_up()
     }
 
     /// The attached session, if any.
@@ -1284,17 +1258,28 @@ impl App {
         self.screen.pages().shown(top, height)
     }
 
-    /// The seq ranges of pages the next frame needs and does not hold.
-    pub(crate) fn needs(&self) -> Vec<RangeInclusive<Seq>> {
+    /// The pinned header, if any: none while an item view covers the
+    /// conversation or while following.
+    pub(crate) fn pinned_row(&self) -> Option<crate::window::Pin> {
+        if self.item_open() {
+            return None;
+        }
+        self.screen.pin(self.conversation_height())
+    }
+
+    /// The seq ranges of pages the next frame needs and does not hold,
+    /// each with its segment's session.
+    pub(crate) fn needs(&self) -> Vec<(SessionId, RangeInclusive<Seq>)> {
         if self.pass_open() {
             return Vec::new();
         }
         self.screen.needs(self.conversation_height())
     }
 
-    /// Folds a fetched range's durable lines into their pages.
-    pub(crate) fn load(&mut self, lines: Vec<Envelope>) {
-        self.screen.pages_mut().load(&lines);
+    /// Folds a fetched range's durable lines into their pages, the
+    /// window's segment: every line in a page shares its session.
+    pub(crate) fn load(&mut self, session: &SessionId, lines: Vec<Envelope>) {
+        self.screen.pages_mut().load(session, &lines);
         // A held landing's top, found again at the width the load counted.
         // The pass stays live while a stale page is still owed, after it
         // closed: the anchor lets go only once every stale page is counted
@@ -1306,10 +1291,16 @@ impl App {
         self.settle();
     }
 
-    /// Loading `range` failed: its rows stay blank and the notice says why.
+    /// Loading `range` of segment `session` failed: its rows stay blank
+    /// and the notice says why.
     /// A failed page ends a whole-turn copy waiting on dropped pages.
-    pub(crate) fn load_failed(&mut self, range: &RangeInclusive<Seq>, message: &str) {
-        self.screen.pages_mut().fail(*range.start());
+    pub(crate) fn load_failed(
+        &mut self,
+        session: &SessionId,
+        range: &RangeInclusive<Seq>,
+        message: &str,
+    ) {
+        self.screen.pages_mut().fail(session, *range.start());
         if !self.pass_open() {
             self.screen.pages_mut().clear_anchor();
         }
@@ -1394,9 +1385,9 @@ impl App {
         let command_id = hub_string(&hub.payload, "command_id");
         match hub.kind.as_str() {
             "hub_hello" if hub.schema_version == contract::SCHEMA_VERSION => {
-                let mut lines = std::mem::take(&mut self.held);
+                let mut lines = std::mem::take(&mut self.outbox.held);
                 lines.extend(self.reconnected());
-                self.link = Link::Up;
+                self.outbox.link = Link::Up;
                 lines
             }
             "hub_hello" => {
@@ -1407,7 +1398,7 @@ impl App {
                     hub.schema_version,
                     contract::SCHEMA_VERSION
                 ));
-                self.link = Link::Refused;
+                self.outbox.link = Link::Refused;
                 Vec::new()
             }
             "command_accepted" => {
@@ -1428,7 +1419,7 @@ impl App {
                     .and_then(|result| result.get("session_id"))
                     .and_then(Value::as_str)
                     .map(|id| SessionId(id.to_owned()));
-                match (self.pending.remove(&id), session) {
+                match (self.outbox.answered(&id), session) {
                     (Some((Kind::Start, draft)), Some(session)) => {
                         self.model_picker.start_model = None;
                         self.started(session, draft)
@@ -1467,8 +1458,14 @@ impl App {
             // keep what arrived, say so, and leave the retry to a reopen.
             "stream_closed" => {
                 let closed = hub_string(&hub.payload, "session_id");
-                if closed.as_deref() == self.session().map(|session| session.0.as_str()) {
-                    self.notices.push("stream_closed", STREAM_CLOSED.to_owned());
+                if closed.as_deref() == self.session().map(|session| session.0.as_str())
+                    && let Some(session) = closed
+                {
+                    self.notices.push_identified(
+                        "stream_closed",
+                        session,
+                        STREAM_CLOSED.to_owned(),
+                    );
                 }
                 Vec::new()
             }
@@ -1495,11 +1492,11 @@ impl App {
         // A refused `model` command drops the writes its acceptance
         // would have made.
         self.model_picker_rejected(id);
-        match self.pending.get(id) {
+        match self.outbox.pending.get(id) {
             None => {}
             // Another client may have dropped or amended the row first.
             Some((Kind::Cancel | Kind::SteerDrop, _)) => {
-                self.pending.remove(id);
+                self.outbox.pending.remove(id);
             }
             Some((
                 Kind::Start
@@ -1514,13 +1511,56 @@ impl App {
                 self.fail(id);
             }
         }
+        // A refusal settles the command: its kept line goes out no more.
+        self.outbox.answered(id);
+    }
+
+    /// An accepted `import`: one notice per report line, as `fiber import`
+    /// prints them, plus a `/reload` reminder, since imported items apply
+    /// on the next reload. A rejection folds through `refused` unchanged.
+    fn import_answered(&mut self, accepted: &CommandAccepted) {
+        let Some(CommandResult::Import {
+            imported,
+            left_behind,
+        }) = &accepted.result
+        else {
+            return;
+        };
+        for name in &imported.skills {
+            self.push_notice("imported", format!("imported skill {name}"));
+        }
+        for name in &imported.commands {
+            self.push_notice("imported", format!("imported command {name}"));
+        }
+        for name in &imported.instructions {
+            self.push_notice("imported", format!("imported instruction {name}"));
+        }
+        for name in &imported.mcp_servers {
+            self.push_notice("imported", format!("imported server {name}"));
+        }
+        for left in left_behind {
+            self.push_notice(
+                "imported",
+                format!("left behind {}: {}", left.item, left.reason),
+            );
+        }
+        self.push_notice(
+            "imported",
+            "Run /reload to apply the imported items.".to_owned(),
+        );
     }
 
     /// Drops a pending command, returning its draft to an empty box.
     fn fail(&mut self, id: &str) {
-        let Some((kind, draft)) = self.pending.remove(id) else {
-            return;
-        };
+        if let Some((kind, draft)) = self.outbox.fail(id) {
+            self.apply_failed(id, kind, draft);
+        }
+    }
+
+    /// Applies a popped command's failure: its draft back in an empty
+    /// box, `Starting` after a `start`, the queue and the offer after a
+    /// `reply`. The only place reaching them for a failure.
+    pub(crate) fn apply_failed(&mut self, id: &str, kind: Kind, draft: Draft) {
         if self.draft.is_empty() {
             self.draft.put_back(draft);
         }
@@ -1550,6 +1590,7 @@ impl App {
         {
             let id = accepted.command_id.0.clone();
             self.model_picker_accepted(&id, &envelope.session_id);
+            self.credential_accepted(&accepted);
         }
         // The open delegate's lines fold into the swapped screen, never
         // touching the attached busy flag; their command answers still
@@ -1559,7 +1600,7 @@ impl App {
             match envelope.kind.as_str() {
                 "command_accepted" => {
                     if let Some(accepted) = read!(envelope, CommandAccepted) {
-                        self.pending.remove(&accepted.command_id.0);
+                        self.outbox.answered(&accepted.command_id.0);
                     }
                 }
                 "command_rejected" => {
@@ -1585,7 +1626,7 @@ impl App {
                         // No `commands_answered`: a `commands` answer from
                         // another session is ignored, and a resent command
                         // needs only its pending entry closed.
-                        self.pending.remove(&accepted.command_id.0);
+                        self.outbox.answered(&accepted.command_id.0);
                     }
                 }
                 "command_rejected" => {
@@ -1609,7 +1650,7 @@ impl App {
         self.items_line(envelope);
         self.output_line(envelope);
         self.session_views_line(envelope);
-        self.config_views_line(envelope);
+        send.extend(self.config_views_line(envelope));
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)
         {
@@ -1629,8 +1670,9 @@ impl App {
         match envelope.kind.as_str() {
             "command_accepted" => {
                 if let Some(accepted) = read!(envelope, CommandAccepted) {
-                    let sent = self.pending.remove(&accepted.command_id.0);
+                    let sent = self.outbox.answered(&accepted.command_id.0);
                     self.commands_answered(&accepted);
+                    self.import_answered(&accepted);
                     changed |= self.offer.file_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell
@@ -1656,7 +1698,7 @@ impl App {
                 }
             }
             "reloaded" => {
-                if self.link == Link::Up {
+                if self.outbox.is_up() {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
             }
@@ -1699,7 +1741,13 @@ impl App {
 
     fn set_busy(&mut self, busy: bool) {
         if let Phase::Attached { busy: flag, .. } = &mut self.phase {
+            let ending = *flag && !busy;
             *flag = busy;
+            if ending {
+                // The turn applied every pending choice: the applied
+                // shares go with it.
+                self.notices.clear_code_all("switch_pending");
+            }
         }
     }
 
@@ -1709,28 +1757,6 @@ impl App {
         self.screen.page(up, height);
         self.settle();
     }
-}
-
-/// A new command id from random bytes, as `doors::mint` makes one: `c_`
-/// and 16 hex digits. `tui` keeps its own copy because it may not depend on
-/// `doors`. `RandomState` seeds its keys from the operating system's
-/// randomness.
-pub(crate) fn mint() -> String {
-    format!("c_{:016x}", RandomState::new().hash_one(()))
-}
-
-/// A command for a session: `session_id` beside `id`, `command` and `args`.
-pub(crate) fn session_command(
-    id: &str,
-    command: &str,
-    session: &SessionId,
-    args: Option<Value>,
-) -> Value {
-    let mut line = json!({"id": id, "command": command, "session_id": session.0});
-    if let (Some(args), Some(object)) = (args, line.as_object_mut()) {
-        object.insert("args".to_owned(), args);
-    }
-    line
 }
 
 /// The text parts of a message, joined.

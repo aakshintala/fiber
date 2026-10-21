@@ -85,7 +85,7 @@ pub(crate) fn resume(
     };
     let mut listed = |name: &str| {
         let mut connect = || crate::connect_hub(&home, &target, &fiber, &clock);
-        ::cli::resolve_listed(&selector, name, &mut connect)
+        ::cli::resolve_listed(&selector, name, &mut connect).map_err(Failure::from)
     };
     let id = match route(&target, &mut local, &mut listed) {
         Ok(id) => id,

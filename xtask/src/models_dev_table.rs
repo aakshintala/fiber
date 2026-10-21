@@ -360,6 +360,15 @@ const OPENCODE_SESSION: &str = r#"{"compat":{"cache_key_header":"x-opencode-sess
 /// The same, plus the token-limit field for `openai-completions` models.
 const OPENCODE_COMPLETIONS: &str =
     r#"{"compat":{"cache_key_header":"x-opencode-session","max_tokens":true}}"#;
+/// The Go `openai-responses` layer: the header plus `store: false`, since
+/// a table layer replaces the whole `compat` object rather than
+/// deep-merging it.
+const OPENCODE_GO_RESPONSES: &str =
+    r#"{"compat":{"cache_key_header":"x-opencode-session","store":false}}"#;
+/// The Go `openai-completions` layer: the header, the token-limit field,
+/// and `store: false`.
+const OPENCODE_GO_COMPLETIONS: &str =
+    r#"{"compat":{"cache_key_header":"x-opencode-session","max_tokens":true,"store":false}}"#;
 /// A gateway Claude model on a legacy budget tier: the budget flag beside
 /// the gateway cache-key header, since a table layer replaces the whole
 /// `compat` object rather than deep-merging it.
@@ -386,8 +395,8 @@ const OPENCODE_GO: Package = Package {
         // x-api-key alone authenticates Go's /v1/messages
         // (research/opencode-xapikey-probe).
         ("anthropic-messages", OPENCODE_SESSION),
-        ("openai-completions", OPENCODE_COMPLETIONS),
-        ("openai-responses", OPENCODE_SESSION),
+        ("openai-completions", OPENCODE_GO_COMPLETIONS),
+        ("openai-responses", OPENCODE_GO_RESPONSES),
         ("google-generative-ai", OPENCODE_SESSION),
     ],
     by_model: &[],

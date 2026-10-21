@@ -9,9 +9,12 @@ use super::{new_york, time_of_day, utc_minute};
 
 /// A text prompt starting a turn.
 fn prompt(text: &str) -> crate::turn::images::Prompt {
-    crate::turn::images::prompt_of(&[contract::shapes::ContentPart::Text {
-        text: text.to_owned(),
-    }])
+    crate::turn::images::prompt_of(
+        &contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        &[contract::shapes::ContentPart::Text {
+            text: text.to_owned(),
+        }],
+    )
 }
 
 #[test]

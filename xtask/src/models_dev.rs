@@ -353,6 +353,142 @@ fn thinking_row<'a>(
         })
 }
 
+/// The generated Databricks thinking module, from the repository root:
+/// `cargo xtask models-dev` writes it beside the provider files.
+pub(crate) const DATABRICKS_THINKING: &str = "providers/databricks/thinking.lua";
+
+/// The match key of a Databricks service or catalog name, mirroring Lua
+/// `model_key` in `providers/databricks/providers/databricks.lua`:
+/// lower-cased, each vendor prefix stripped once in order, the part after
+/// the last `/`, runs outside `a-z0-9` as one `-`, one trailing `-maas`,
+/// `-preview` or `-it` dropped, and one leading and trailing `-` trimmed.
+pub(crate) fn databricks_model_key(raw: &str) -> String {
+    let mut value = raw.to_ascii_lowercase();
+    for prefix in [
+        "model-services/system.ai.",
+        "system.ai.",
+        "databricks-",
+        "fw-",
+        "meta-",
+    ] {
+        if let Some(rest) = value.strip_prefix(prefix) {
+            value = rest.to_owned();
+        }
+    }
+    for group in [
+        ["global.", "us.", "eu.", "apac."].as_slice(),
+        ["xai.", "anthropic.", "openai.", "google."].as_slice(),
+    ] {
+        for prefix in group {
+            if let Some(rest) = value.strip_prefix(prefix) {
+                value = rest.to_owned();
+                break;
+            }
+        }
+    }
+    if let Some(tail) = value.rsplit('/').next() {
+        value = tail.to_owned();
+    }
+    let mut squashed = String::with_capacity(value.len());
+    let mut gap = false;
+    for byte in value.bytes() {
+        if byte.is_ascii_lowercase() || byte.is_ascii_digit() {
+            squashed.push(byte as char);
+            gap = false;
+        } else if !gap {
+            squashed.push('-');
+            gap = true;
+        }
+    }
+    if let Some(cut) = squashed.rfind('-') {
+        let stem = &squashed[cut + 1..];
+        if !stem.is_empty()
+            && stem.bytes().all(|byte| byte.is_ascii_alphabetic())
+            && matches!(stem, "maas" | "preview" | "it")
+        {
+            squashed.truncate(cut);
+        }
+    }
+    let trimmed = squashed.strip_prefix('-').unwrap_or(&squashed);
+    trimmed.strip_suffix('-').unwrap_or(trimmed).to_owned()
+}
+
+/// One row of the Databricks thinking table: the match key with its
+/// vendor levels and default.
+struct ThinkingRow<'a> {
+    /// The vendor model id the row comes from, naming the source.
+    id: &'a str,
+    /// The vendor row's levels, in vocabulary order.
+    levels: &'a [&'a str],
+    /// The vendor row's default, if it names one.
+    default: Option<&'a str>,
+}
+
+/// The `thinking.lua` module for the databricks package from `packages`'
+/// thinking rows: one row per match key (`databricks_model_key`) of the
+/// four thinking-vendor packages (`is_thinking_vendor`), so a discovered
+/// model takes the row of the vendor model it serves. `codex` rows never
+/// feed it, as their defaults do not hold on a gateway route. Keys are
+/// sorted for stable bytes. A key two ids share with differing rows is
+/// an error naming both ids, as silent wrong levels would be worse.
+pub(crate) fn databricks_thinking(packages: &[Package]) -> Result<Output, String> {
+    let mut rows: std::collections::BTreeMap<String, ThinkingRow<'_>> =
+        std::collections::BTreeMap::new();
+    for package in packages
+        .iter()
+        .filter(|package| is_thinking_vendor(package))
+    {
+        for (id, levels, default) in package.thinking {
+            let key = databricks_model_key(id);
+            if let Some(kept) = rows.get(&key) {
+                if kept.levels != *levels || kept.default != *default {
+                    return Err(format!(
+                        "databricks thinking: `{}` and `{id}` share a match key with differing thinking rows",
+                        kept.id
+                    ));
+                }
+                continue;
+            }
+            rows.insert(
+                key,
+                ThinkingRow {
+                    id,
+                    levels,
+                    default: *default,
+                },
+            );
+        }
+    }
+    let mut text = String::from(
+        "-- Never hand-edit: `cargo xtask models-dev` regenerates this module\n\
+         -- from the thinking rows of the `anthropic`, `gemini`, `openai`\n\
+         -- and `muse` packages (`docs/model-routing.md`, \"What a provider\n\
+         -- extension declares\"). A discovered `databricks` model takes the\n\
+         -- row its bare service name's match key names; a service with no\n\
+         -- row keeps no levels.\n\
+         return {\n",
+    );
+    for (key, row) in &rows {
+        let mut levels = String::new();
+        for level in row.levels {
+            if !levels.is_empty() {
+                levels.push_str(", ");
+            }
+            levels.push_str(&format!("\"{level}\""));
+        }
+        text.push_str(&format!("  [\"{key}\"] = {{ levels = {{ {levels} }}"));
+        if let Some(default) = row.default {
+            text.push_str(&format!(", default = \"{default}\""));
+        }
+        text.push_str(" },\n");
+    }
+    text.push_str("}\n");
+    Ok(Output {
+        path: DATABRICKS_THINKING,
+        text,
+        models: rows.len(),
+    })
+}
 /// One generated model: its derived fields, then the table layers, with a
 /// later key replacing an earlier one.
 fn generate_model(
@@ -546,8 +682,8 @@ pub(crate) fn fetch(url: &str) -> Result<Vec<u8>, String> {
 }
 
 /// `cargo xtask models-dev [--from FILE]`: reads `FILE`, or fetches
-/// `MODELS_DEV_URL`, then trims and generates. Only when both succeed does
-/// it write `SNAPSHOT` and every `Output` under `root` (creating parent
+/// `MODELS_DEV_URL`, then trims and generates. Only when trim, generate and
+/// the Databricks thinking table all succeed does it write `SNAPSHOT` and every `Output` under `root` (creating parent
 /// directories). Prints `<path>: <n> models` per file to stdout and each
 /// left-out line to stderr.
 pub(crate) fn run(root: &Path, from: Option<&Path>) -> Result<(), String> {
@@ -562,12 +698,14 @@ pub(crate) fn run(root: &Path, from: Option<&Path>) -> Result<(), String> {
         serde_json::from_slice(&bytes).map_err(|error| format!("{source}: {error}"))?;
     let trimmed = trim(&catalog)?;
     let (outputs, left_out) = generate(&trimmed, &PACKAGES)?;
+    let thinking = databricks_thinking(&PACKAGES)?;
     let snapshot =
         serde_json::to_string_pretty(&trimmed).map_err(|error| format!("{source}: {error}"))?;
     let mut writes = vec![(root.join(SNAPSHOT), snapshot + "\n")];
     for output in &outputs {
         writes.push((root.join(output.path), output.text.clone()));
     }
+    writes.push((root.join(thinking.path), thinking.text.clone()));
     for (path, text) in &writes {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -578,6 +716,7 @@ pub(crate) fn run(root: &Path, from: Option<&Path>) -> Result<(), String> {
     for output in &outputs {
         println!("{}: {} models", output.path, output.models);
     }
+    println!("{}: {} rows", thinking.path, thinking.models);
     for line in &left_out {
         eprintln!("{line}");
     }

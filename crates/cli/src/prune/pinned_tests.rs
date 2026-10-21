@@ -180,7 +180,7 @@ fn run_prune(
     force: bool,
     terminal: bool,
     input: &mut dyn BufRead,
-) -> (String, String, Result<(), contract::shapes::Failure>) {
+) -> (String, String, Result<(), crate::CliError>) {
     let args = PruneArgs {
         older_than: None,
         cascade: false,
@@ -1332,7 +1332,17 @@ fn pinned_and_diagnostic_totals_add_up_on_failure() {
     let mut input: &[u8] = b"";
     let (out, err, got) = run_prune(&home, &branches.repo, false, true, false, false, &mut input);
     let failure = got.unwrap_err();
-    assert_eq!(failure.message, "1 of 2 could not be deleted");
+    assert!(
+        matches!(
+            failure,
+            crate::CliError::PruneFailed {
+                code: contract::ErrorCode::IoFailed,
+                failed: 1,
+                total: 2,
+            }
+        ),
+        "{failure:?}"
+    );
     assert!(err.contains("old.log could not be deleted"), "{err}");
     assert!(copy_dir(&home, &branches.b).symlink_metadata().is_err());
     assert!(logs.join("old.log").is_file());

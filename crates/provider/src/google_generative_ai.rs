@@ -6,6 +6,7 @@
 //! carrying the candidate's `finishReason`
 //! (`research/google-generative-ai-probe`).
 
+use contract::diag::PrefixHashes;
 use contract::provider::{ModelCall, ModelRequest, Provider, ToolDefinition};
 use serde_json::{Map, Value};
 
@@ -87,9 +88,14 @@ impl Gemini {
         request: &ModelRequest,
         observation: crate::RequestObservation,
     ) -> Box<dyn ModelCall> {
-        let call = self.request(request);
+        let mut call = self.request(request);
         if !observation.debugging() {
             return Box::new(call);
+        }
+        // The digests cost a second encoding, so they run only with the
+        // setting on; the hot path with it off is unchanged.
+        if observation.cache_diagnostics() {
+            call = call.with_hashes(hashes(&self.endpoint, request));
         }
         Box::new(call.observed(observation.with_model(self.endpoint.model.clone())))
     }
@@ -102,6 +108,19 @@ impl Provider for Gemini {
 
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
         wire_tools(tools)
+    }
+}
+
+/// The redacted prefix digests of the encoded segments: the
+/// `systemInstruction`, the `tools` array and each cumulative `contents`
+/// prefix as sent. Either segment is absent when the request sends none.
+fn hashes(endpoint: &Endpoint, request: &ModelRequest) -> PrefixHashes {
+    let (system, tools, contents) =
+        crate::google_generative_ai_request::body_segments(endpoint, request);
+    PrefixHashes {
+        system: system.map(|system| crate::cache_diagnostics::segment(&system)),
+        tools: tools.map(|tools| crate::cache_diagnostics::segment(&tools)),
+        messages: crate::cache_diagnostics::cumulative(&contents),
     }
 }
 

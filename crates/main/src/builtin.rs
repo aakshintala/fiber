@@ -146,6 +146,7 @@ pub(crate) fn builtin_timed(
         registered(delegates.message())?,
         registered(delegates.models())?,
         registered(delegates.tool())?,
+        registered(delegates.fork())?,
         registered(files.edit())?,
         registered(tools::Handoff)?,
         registered(tools::NameSession)?,

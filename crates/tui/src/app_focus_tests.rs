@@ -1330,15 +1330,19 @@ fn envelopes_of(lines: &[Line]) -> Vec<contract::Envelope> {
 
 /// Loads every page `app` needs from `envelopes`, as the frame loop does.
 fn load_needed(app: &mut App, envelopes: &[contract::Envelope]) {
-    while let Some(range) = app.needs().first().cloned() {
+    while let Some((session, range)) = app.needs().first().cloned() {
         let chunk: Vec<contract::Envelope> = envelopes
             .iter()
             .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
             .cloned()
             .collect();
         assert!(!chunk.is_empty(), "no lines for {range:?}");
-        app.load(chunk);
-        assert_ne!(app.needs().first(), Some(&range), "loading did not settle");
+        app.load(&session, chunk);
+        assert_ne!(
+            app.needs().first(),
+            Some(&(session, range)),
+            "loading did not settle"
+        );
     }
 }
 
@@ -1450,8 +1454,8 @@ fn a_failed_history_load_releases_a_whole_turn_copy_waiting_on_dropped_pages() {
     let (mut app, _, prior) = pending_copy();
     let needs: Vec<_> = app.needs().into_iter().collect();
     assert!(!needs.is_empty(), "nothing asked for the dropped pages");
-    for range in &needs {
-        app.load_failed(range, "boom");
+    for (session, range) in &needs {
+        app.load_failed(session, range, "boom");
     }
     assert_eq!(app.pages().pinned(), prior);
 }
@@ -1612,4 +1616,176 @@ fn the_overlay_cross_closes_the_search_panel_on_home() {
     let id = cross(&mut app).id;
     assert_eq!(app.on_click(id), Effect::None);
     assert!(app.completions().is_none());
+}
+
+/// An app with one group holding two read calls, the first with `lines`
+/// lines of output: the ledger and the first call opened.
+fn opened_call(lines: usize) -> (App, Target, Target, Target) {
+    let mut app = attached(60, 10);
+    let input = serde_json::json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    app.on_line(envelope("turn_started", input, None));
+    app.on_line(envelope(
+        "assistant_message_started",
+        serde_json::json!({}),
+        Some("a_m"),
+    ));
+    app.on_line(envelope(
+        "tool_call_requested",
+        serde_json::json!({"name": "read", "arguments": {"path": "src/0.rs"}}),
+        Some("a_c0"),
+    ));
+    let detail: Vec<String> = (1..=lines).map(|n| format!("L{n:04} of call")).collect();
+    app.on_line(envelope(
+        "tool_call_completed",
+        serde_json::json!({"status": "completed",
+            "content": [{"type": "text", "text": detail.join("\n")}]}),
+        Some("a_c0"),
+    ));
+    app.on_line(envelope(
+        "tool_call_requested",
+        serde_json::json!({"name": "read", "arguments": {"path": "src/1.rs"}}),
+        Some("a_c1"),
+    ));
+    app.on_line(envelope(
+        "tool_call_completed",
+        serde_json::json!({"status": "completed",
+            "content": [{"type": "text", "text": "ok"}]}),
+        Some("a_c1"),
+    ));
+    let tail: Vec<String> = (1..=12).map(|n| format!("tail {n}")).collect();
+    app.on_line(envelope(
+        "assistant_message_delta",
+        serde_json::json!({"text": tail.join("\n")}),
+        Some("a_m"),
+    ));
+    app.on_line(envelope(
+        "text_completed",
+        serde_json::json!({"text": tail.join("\n")}),
+        Some("a_m"),
+    ));
+    app.on_line(envelope(
+        "assistant_message_completed",
+        serde_json::json!({"outcome": "completed"}),
+        Some("a_m"),
+    ));
+    app.on_line(envelope(
+        "turn_completed",
+        serde_json::json!({"outcome": "completed"}),
+        None,
+    ));
+    let targets = app.targets();
+    let group = targets
+        .iter()
+        .find_map(|(_, target)| matches!(target, Target::Group(_)).then_some(*target))
+        .expect("a group target");
+    app.open(group);
+    let mut calls = app
+        .targets()
+        .into_iter()
+        .filter_map(|(_, target)| matches!(target, Target::Call(_)).then_some(target));
+    let call = calls.next().expect("a first call");
+    let second = calls.next().expect("a second call");
+    app.open(call);
+    (app, group, call, second)
+}
+
+/// The absolute row of `line` in the open page's text: the first wrapped
+/// row of the first text with its target.
+fn text_row(app: &App, target: Target) -> usize {
+    let (rows, _) = app.pages().page_text(0).expect("the open page");
+    let width = app.pages().wrap_width();
+    let mut row = 0usize;
+    for (line, line_target) in &rows {
+        if *line_target == Some(target) {
+            return row;
+        }
+        row += crate::view::rows(line.clone(), width);
+    }
+    panic!("no row for {target:?}");
+}
+
+#[test]
+fn focus_steps_under_the_pin() {
+    let (mut app, _, call, second) = opened_call(30);
+    frame(&mut app);
+    let more = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, Target::CallView(_)).then_some(target))
+        .expect("a more target");
+    let more_row = text_row(&app, more);
+    // The top sits on the more row, so the call pins row 0 over it: the
+    // covered row keeps no hit and is no focus stop.
+    app.jump(more_row);
+    let stops = frame(&mut app);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the call pins the top row"
+    );
+    assert!(
+        !stops.iter().any(|stop| stop.id == TargetId::Line(more)),
+        "the covered row is no stop: {:?}",
+        stops
+            .iter()
+            .map(|stop| (stop.id, stop.rect))
+            .collect::<Vec<_>>()
+    );
+    // BackTab focuses the newest item, the second call; stepping up
+    // reaches the covered more row and reveals it under the pin.
+    key(&mut app, Key::BackTab);
+    assert_eq!(app.focused(), Some(TargetId::Line(second)));
+    let focused = TargetId::Line(more);
+    key(&mut app, Key::Up);
+    assert_eq!(app.focused(), Some(focused));
+    assert_eq!(
+        app.top(),
+        Some(more_row.saturating_sub(1)),
+        "the more row lands one row below the top"
+    );
+    let stops = frame(&mut app);
+    assert_eq!(
+        rect_of(&stops, focused).y,
+        1,
+        "the more row is under the pin"
+    );
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the pin stays on the call"
+    );
+}
+
+#[test]
+fn turn_end_clears_switch_pending_notices() {
+    let mut app = attached(80, 24);
+    app.phase = super::super::Phase::Attached {
+        session: contract::SessionId(SESSION.to_owned()),
+        busy: true,
+    };
+    app.push_notice("switch_pending", "a applies when this turn ends".to_owned());
+    app.push_notice("switch_pending", "b applies when this turn ends".to_owned());
+    assert_eq!(app.notices().len(), 2);
+    // Staying busy, or already idle, ends nothing.
+    app.set_busy(true);
+    assert_eq!(app.notices().len(), 2);
+    // The true-to-false fold clears the applied shares.
+    app.set_busy(false);
+    assert!(app.notices().is_empty());
+    // Clearing twice is a no-op.
+    app.set_busy(false);
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn loaded_history_clears_its_loading_notice() {
+    let (mut app, envelopes, _) = pending_copy();
+    assert_eq!(app.notice(), Some("Loading history…"));
+    load_needed(&mut app, &envelopes);
+    app.focus = Some(TargetId::Turn(0));
+    // The landed copy answers the press, and the wait's notice goes
+    // with the pending turn.
+    let _ = app.on_key(Key::Char('y'), now());
+    assert!(app.notices().is_empty(), "{:?}", app.notices());
 }

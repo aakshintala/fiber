@@ -41,9 +41,12 @@ impl Eq for Match {}
 #[derive(Debug)]
 pub(super) struct Fetch {
     /// The command's id: only its answer folds into the scan.
-    id: String,
+    pub(super) id: String,
     /// The page it reads.
     pub(super) page: usize,
+    /// The page's segment session: the request names it, and the
+    /// answer folds into that segment's scan.
+    pub(super) session: contract::SessionId,
     /// The generation it scans for: older than the current one is stale,
     /// and its answer folds nothing.
     pub(super) generation: u64,
@@ -505,10 +508,15 @@ impl Find {
     /// chunk: at most one request is ever on the wire, whatever the
     /// generation. Captures the layout the fetch reads under, so an
     /// answer for an old table layout never stamps the new width.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fetch carries the scan's page, session, width, revision and held lines"
+    )]
     pub(super) fn send(
         &mut self,
         id: String,
         page: usize,
+        session: contract::SessionId,
         width: u16,
         revision: u64,
         held: Vec<contract::Envelope>,
@@ -517,6 +525,7 @@ impl Find {
         self.fetch = Some(Fetch {
             id,
             page,
+            session,
             generation: self.generation,
             width,
             revision,

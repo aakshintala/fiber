@@ -124,6 +124,9 @@ pub(crate) struct Fake {
     pub(crate) skill_switched: Mutex<Vec<SkillSwitched>>,
     /// What `skill_text` answers.
     pub(crate) texts: Mutex<Result<String, ConfigureError>>,
+    /// What `import_pending` answers: false keeps existing tests'
+    /// homes offer-free.
+    pub(crate) pending: Mutex<bool>,
     /// Every `/keys` save asked for, in order.
     pub(crate) keys_saved: Mutex<Vec<Vec<KeyEdit>>>,
     /// The theme files `themes` lists.
@@ -180,6 +183,7 @@ impl Fake {
     /// A seam answering `rows`, saving every write.
     pub(crate) fn new(rows: Vec<SettingRow>) -> Self {
         Self {
+            pending: Mutex::new(false),
             rows: Mutex::new(Ok(rows)),
             reads: Mutex::new(Vec::new()),
             writes: Mutex::new(Vec::new()),
@@ -692,6 +696,9 @@ impl Configure for Fake {
         Ok(())
     }
 
+    fn import_pending(&self) -> bool {
+        self.pending.lock().is_ok_and(|pending| *pending)
+    }
     fn skill_text(&self, path: &Path) -> Result<String, ConfigureError> {
         let _ = path;
         self.texts.lock().map_or_else(

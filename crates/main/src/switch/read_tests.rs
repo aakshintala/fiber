@@ -177,6 +177,32 @@ fn cancel_ends_a_blocked_run_started_before_a_quick_one_with_closing() {
 }
 
 #[test]
+fn a_value_answered_after_cancel_is_closing() {
+    let reads = Arc::new(Reads::default());
+    let (entered, pausing) = mpsc::channel();
+    let (open, release) = mpsc::channel::<()>();
+    reads.pause_at_answered(entered, release);
+    let waiter = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.run("credential read", || 9))
+    };
+    // The value arrived and the run holds it; the cancel lands between
+    // the answer and the run's check on every run.
+    Deadline::after(DEADLINE)
+        .recv(&pausing)
+        .expect("the run answered");
+    reads.cancel();
+    open.send(()).unwrap();
+    let failure = fakes::within("the cancelled run", DEADLINE, move || {
+        waiter.join().unwrap()
+    })
+    .expect_err("a read answered after cancel is no value");
+    assert_eq!(failure.code, ErrorCode::Closing);
+    assert_eq!(failure.message, "The session is shutting down.");
+    assert!(reads.lock().waiting.is_empty());
+}
+
+#[test]
 fn run_after_cancel_is_closing_without_running_the_read() {
     let reads = Reads::default();
     reads.cancel();

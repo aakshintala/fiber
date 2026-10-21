@@ -375,10 +375,123 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Reload(ack));
         }
+        Command::Import(args) => import(conn, id, &args),
+        Command::McpServers => {
+            let Some(refresh) = conn.gate.servers_refresh() else {
+                unknown(conn, id, name);
+                return;
+            };
+            let tools = conn
+                .gate
+                .tools
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            match refresh(tools) {
+                Ok(rows) => {
+                    accept(conn, id, Some(CommandResult::McpServers { servers: rows }));
+                }
+                Err(failure) => reject(conn, Some(id), failure.code, &failure.message),
+            }
+        }
+        Command::McpReconnect(args) => {
+            let ack = inbox_ack(conn, id);
+            conn.gate.deliver(Delivery::McpReconnect(args, ack));
+        }
+        Command::McpLogin(args) => {
+            // The login waits on the loopback callback, so it runs on
+            // its own thread and answers once it ends: accepted at once
+            // is the admission, not the answer (`docs/mcp.md`,
+            // "Servers, their state and the per-server commands").
+            let Some(login) = conn.gate.mcp_login() else {
+                unknown(conn, id, name);
+                return;
+            };
+            let ack = inbox_ack(conn, id);
+            let server = args.server.clone();
+            let gate = Arc::clone(&conn.gate);
+            let deliver: Arc<dyn Fn(Delivery) + Send + Sync> =
+                Arc::new(move |delivery| gate.deliver(delivery));
+            thread::spawn(move || match login(&server, deliver) {
+                Ok(()) => ack.0(Ok(None)),
+                Err(failure) => ack.0(Err(Rejection {
+                    code: failure.code,
+                    message: failure.message,
+                })),
+            });
+        }
         Command::OfferedFile(args) => crate::offered::answer(conn, id, &args),
         Command::Unknown => unknown(conn, id, name),
         Command::ArtifactPage(args) => crate::artifact::run(conn, id, args),
     }
+}
+
+/// Copies another harness's configuration into Fiber home, once
+/// (`docs/configuration.md`, "Importing"): the same shared import `fiber
+/// import` runs, answered at once on the reader thread. With no `source`
+/// both sources run, each independent: one source's completed receipt
+/// short-circuits only that source, and the first failure rejects, so a
+/// retry short-circuits what landed and completes the rest.
+fn import(conn: &mut Conn, id: CommandId, args: &contract::commands::ImportArgs) {
+    use config::{ImportSource, source_home};
+    let sources: &[ImportSource] = match args.source.as_deref() {
+        None => &[ImportSource::ClaudeCode, ImportSource::Codex],
+        Some("claude-code") => &[ImportSource::ClaudeCode],
+        Some("codex") => &[ImportSource::Codex],
+        Some(_) => {
+            reject(
+                conn,
+                Some(id),
+                ErrorCode::InvalidArguments,
+                "`source` must be `claude-code` or `codex`.",
+            );
+            return;
+        }
+    };
+    let Some(home_env) = std::env::var_os("HOME") else {
+        reject(
+            conn,
+            Some(id),
+            ErrorCode::IoFailed,
+            "HOME is not set, so the source home cannot be found.",
+        );
+        return;
+    };
+    let clock = Arc::clone(&conn.gate.clock);
+    let mut imported = contract::events::ImportedNames::default();
+    let mut left_behind = Vec::new();
+    for source in sources {
+        let report = match config::import_source(
+            &conn.gate.home,
+            &source_home(std::path::Path::new(&home_env), *source),
+            *source,
+            clock.as_ref(),
+        ) {
+            Ok(report) => report,
+            Err(error) => {
+                reject(conn, Some(id), error.code(), &error.to_string());
+                return;
+            }
+        };
+        imported.mcp_servers.extend(report.imported.mcp_servers);
+        imported.skills.extend(report.imported.skills);
+        imported.commands.extend(report.imported.commands);
+        imported.instructions.extend(report.imported.instructions);
+        left_behind.extend(report.left_behind.into_iter().map(|left| {
+            contract::events::LeftBehindEntry {
+                item: left.item,
+                reason: left.reason,
+            }
+        }));
+    }
+    accept(
+        conn,
+        id,
+        Some(CommandResult::Import {
+            imported,
+            left_behind,
+        }),
+    );
 }
 
 /// Accepted when `done`, else rejected `stale_request` with `message`. For

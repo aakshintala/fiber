@@ -565,7 +565,7 @@ fn a_dropped_page_is_fetched_with_history_and_scanned_on_its_answer() {
     let start = app.pages().index().start(0);
     assert_eq!(app.top(), Some(start));
     let first = log.first().and_then(|line| line.seq).expect("a first seq");
-    assert!(app.needs().iter().any(|range| range.contains(&first)));
+    assert!(app.needs().iter().any(|(_, range)| range.contains(&first)));
 }
 
 #[test]
@@ -864,6 +864,18 @@ pub(super) fn dropped_fetch() -> (App, Vec<contract::Envelope>, String) {
     first.extend(app.find_outgoing());
     assert_eq!(first.len(), 1, "one fetch on the wire");
     (app, log, first.into_iter().next().unwrap_or_default())
+}
+
+#[test]
+fn an_answered_fetch_drops_its_kept_line() {
+    let (mut app, log, fetch) = dropped_fetch();
+    let (id, from, to) = command(&fetch);
+    // The loop writes the fetch: a reconnect would send it again.
+    app.outbox.wrote(&fetch);
+    assert!(app.outbox.is_kept(&id));
+    app.on_line(hub_answer(&id, &log, from, to));
+    assert!(!app.outbox.is_kept(&id));
+    assert!(app.outbox.pending.is_empty());
 }
 
 #[test]
@@ -1739,7 +1751,7 @@ fn revealing_a_match_on_a_dropped_page_loads_it_in_the_same_step() {
     let start = app.pages().index().start(0);
     assert_eq!(app.top(), Some(start));
     let first = log.first().and_then(|line| line.seq).expect("a first seq");
-    assert!(app.needs().iter().any(|range| range.contains(&first)));
+    assert!(app.needs().iter().any(|(_, range)| range.contains(&first)));
 }
 
 #[test]
@@ -2610,7 +2622,11 @@ fn dropping_and_reloading_at_the_same_width_rescans_nothing() {
         assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     }
     assert_eq!(app.find.current_index(), Some(9));
-    app.load(lines.clone());
+    let session = lines
+        .first()
+        .map(|line| line.session_id.clone())
+        .expect("the log names its session");
+    app.load(&session, lines.clone());
     assert!(
         app.pages().part(1).is_some(),
         "the middle page loads resident"
@@ -2627,7 +2643,7 @@ fn dropping_and_reloading_at_the_same_width_rescans_nothing() {
     // Back onto it before reloading: the window must cover the page for
     // the reload to stick, and the reveal still gives up.
     app.jump(app.pages().index().start(1));
-    app.load(lines);
+    app.load(&session, lines);
     assert!(app.pages().part(1).is_some(), "the page reloads");
     let work = crate::work::take();
     assert_eq!(
@@ -2815,5 +2831,449 @@ fn a_moved_revision_on_a_dropped_page_counts_the_rescan_once() {
             app.pages().index().pages()[0].last_seq.0
         ),
         "the fetch reads the moved page"
+    );
+}
+
+/// The ancestor's session: the chain's first segment.
+const ANCESTOR: &str = "s_bbbbbbbbbbbbbbbb";
+
+/// A durable line numbered `seq` in segment `session`.
+fn segment(
+    seq: &mut u64,
+    session: &str,
+    kind: &str,
+    action: Option<&str>,
+    payload: Value,
+) -> contract::Envelope {
+    *seq += 1;
+    contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 1_000 + *seq,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action.map(|id| contract::ActionId(id.to_owned())),
+        seq: Some(contract::Seq(*seq - 1)),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    }
+}
+
+/// One turn's eight lines under `session`, numbered from `seq`; the
+/// first ancestor turn carries the needle.
+fn chain_turn(seq: &mut u64, session: &str, turn: usize, needle: bool) -> Vec<contract::Envelope> {
+    let message = format!("f_m{turn}");
+    let thought = format!("f_r{turn}");
+    let reply = if needle {
+        "the needle hides here".to_owned()
+    } else {
+        format!("reply {turn}")
+    };
+    let prompt = format!("prompt {turn}");
+    [
+        segment(
+            seq,
+            session,
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": prompt}]}]}),
+        ),
+        segment(seq, session, "step_started", None, json!({})),
+        segment(
+            seq,
+            session,
+            "assistant_message_started",
+            Some(&message),
+            json!({}),
+        ),
+        segment(seq, session, "reasoning_started", Some(&thought), json!({})),
+        segment(
+            seq,
+            session,
+            "reasoning_completed",
+            Some(&thought),
+            json!({"text": "weigh it"}),
+        ),
+        segment(
+            seq,
+            session,
+            "text_completed",
+            Some(&message),
+            json!({"text": reply}),
+        ),
+        segment(
+            seq,
+            session,
+            "assistant_message_completed",
+            Some(&message),
+            json!({"outcome": "completed"}),
+        ),
+        segment(
+            seq,
+            session,
+            "turn_completed",
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ]
+    .into_iter()
+    .collect()
+}
+
+#[test]
+fn an_ancestor_fetch_names_its_session() {
+    let mut app = attached(40, 10);
+    // The ancestor run pages straight into the preview, as history
+    // would; the own run streams live.
+    let mut aseq = 0u64;
+    for turn in 0..12 {
+        for line in chain_turn(&mut aseq, ANCESTOR, turn, turn == 0) {
+            app.attached_screen_mut().pages_mut().apply(&line);
+        }
+    }
+    let mut dseq = 0u64;
+    for turn in 12..14 {
+        for line in chain_turn(&mut dseq, SESSION, turn, false) {
+            app.on_line(Line::Session(line));
+        }
+    }
+    // Off the top: the ancestor's closed pages drop.
+    assert!(
+        app.pages().part(0).is_none(),
+        "the ancestor's first page dropped"
+    );
+    // The search fetches the dropped ancestor page first.
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    let mut generation = app.find.generation();
+    for ch in "needle".chars() {
+        generation += 1;
+        assert_eq!(
+            app.on_key(Key::Char(ch), now()),
+            Effect::FindPause {
+                generation,
+                after: FIND_PAUSE,
+            }
+        );
+    }
+    let outgoing = app.find_due(generation);
+    assert_eq!(outgoing.len(), 1, "one fetch on the wire");
+    let command: Value = serde_json::from_str(&outgoing[0]).expect("a history command");
+    assert_eq!(command["command"], "history");
+    assert_eq!(
+        command["args"]["session_id"].as_str(),
+        Some(ANCESTOR),
+        "the fetch names the page's segment"
+    );
+    let fetch = app.find.take_fetch().expect("the ancestor fetch");
+    assert_eq!(
+        fetch.session,
+        contract::SessionId(ANCESTOR.to_owned()),
+        "the in-flight fetch carries the page's session"
+    );
+    let page = app
+        .pages()
+        .index()
+        .pages()
+        .get(fetch.page)
+        .unwrap_or_else(|| panic!("page {}", fetch.page));
+    assert_eq!(page.session, contract::SessionId(ANCESTOR.to_owned()));
+}
+
+/// An app with one group holding one read call with `lines` detail lines,
+/// the `needles` of them holding "needle {n}", then `tail` filler reply
+/// lines: the ledger and the call stay open. Returns the app, the logged
+/// lines the fake hub answers from, the call, the first opened content
+/// row and the needle rows.
+fn pinned_search_app(
+    lines: usize,
+    needles: &[usize],
+    tail: usize,
+) -> (
+    App,
+    Vec<contract::Envelope>,
+    crate::app::Target,
+    usize,
+    Vec<usize>,
+) {
+    let mut app = attached(60, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "assistant_message_started",
+        json!({}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "tool_call_requested",
+        json!({"name": "read", "arguments": {"path": "src/0.rs"}}),
+        Some("a_c0"),
+    ));
+    let detail: Vec<String> = (1..=lines)
+        .map(|n| {
+            if needles.contains(&n) {
+                format!("L{n:04} needle {n} of call")
+            } else {
+                format!("L{n:04} of call")
+            }
+        })
+        .collect();
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "tool_call_completed",
+        json!({"status": "completed",
+            "content": [{"type": "text", "text": detail.join("\n")}]}),
+        Some("a_c0"),
+    ));
+    let filler: Vec<String> = (1..=tail).map(|n| format!("tail {n}")).collect();
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "assistant_message_delta",
+        json!({"text": filler.join("\n")}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": filler.join("\n")}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "assistant_message_completed",
+        json!({"outcome": "completed"}),
+        Some("a_m"),
+    ));
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    let group = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, crate::app::Target::Group(_)).then_some(target))
+        .expect("a group target");
+    app.open(group);
+    let call = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, crate::app::Target::Call(_)).then_some(target))
+        .expect("a call target");
+    app.open(call);
+    let (rows, texts) = app.pages().page_text(0).expect("the resident page");
+    let width = app.pages().wrap_width();
+    let mut row = 0usize;
+    let mut first = None;
+    let mut matches = Vec::new();
+    let mut call_row = None;
+    for ((line, target), text) in rows.iter().zip(&texts) {
+        if *target == Some(call) && call_row.is_none() {
+            call_row = Some(row);
+        }
+        if first.is_none() && text.scopes.last() == Some(&call) {
+            first = Some(row);
+        }
+        if line.to_string().contains("needle") {
+            matches.push(row);
+        }
+        row += crate::view::rows(line.clone(), width);
+    }
+    let header = call_row.expect("the call row");
+    assert_eq!(
+        first,
+        Some(header + 1),
+        "the opened content follows the call row"
+    );
+    (app, log, call, first.expect("opened rows"), matches)
+}
+
+#[test]
+fn the_current_match_lands_under_the_pin() {
+    let (mut app, log, call, first, needles) = pinned_search_app(30, &[5, 15], 12);
+    assert_eq!(needles.len(), 2, "two needle rows");
+    // The top sits inside the opened output, so the call pins it.
+    app.jump(first + 2);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the call pins the top row"
+    );
+    search_all(&mut app, &log, "needle");
+    // The first match already shows, so nothing scrolls; next-match
+    // moves to the second, hidden one, landing it under the pin.
+    assert_eq!(
+        app.top(),
+        Some(first + 2),
+        "the visible first match does not scroll"
+    );
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        app.top(),
+        Some(needles[1] - 1),
+        "next-match lands under the pin"
+    );
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the pin stays on the call"
+    );
+}
+
+#[test]
+fn a_match_on_the_pinned_top_row_moves_under_the_pin() {
+    let (mut app, log, call, _, needles) = pinned_search_app(30, &[5], 12);
+    assert_eq!(needles.len(), 1, "one needle row");
+    // The top sits on the match, pinned over by the call.
+    app.jump(needles[0]);
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the call pins the match row"
+    );
+    search_all(&mut app, &log, "needle");
+    assert_eq!(
+        app.top(),
+        Some(needles[0] - 1),
+        "the match moves under the pin"
+    );
+    assert_eq!(
+        app.pinned_row().map(|pin| pin.target),
+        Some(call),
+        "the pin stays on the call"
+    );
+}
+
+#[test]
+fn no_pin_no_offset() {
+    let mut app = attached(60, 10);
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+        None,
+    ));
+    let filler: Vec<String> = (1..=4).map(|n| format!("filler {n}")).collect();
+    for line in filler {
+        app.on_line(numbered(
+            &mut log,
+            &mut seq,
+            "text_completed",
+            json!({"text": line}),
+            Some("a_m"),
+        ));
+    }
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        json!({"text": "a needle in the open"}),
+        Some("a_m"),
+    ));
+    let tail: Vec<String> = (1..=12).map(|n| format!("tail {n}")).collect();
+    for line in tail {
+        app.on_line(numbered(
+            &mut log,
+            &mut seq,
+            "text_completed",
+            json!({"text": line}),
+            Some("a_m"),
+        ));
+    }
+    app.on_line(numbered(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        json!({"outcome": "completed"}),
+        None,
+    ));
+    app.jump(0);
+    search_all(&mut app, &log, "needle");
+    let (rows, _) = app.pages().page_text(0).expect("the resident page");
+    let width = app.pages().wrap_width();
+    let mut row = 0usize;
+    let mut at = None;
+    for (line, _) in &rows {
+        if line.to_string().contains("needle") {
+            at = Some(row);
+            break;
+        }
+        row += crate::view::rows(line.clone(), width);
+    }
+    let at = at.expect("a needle row");
+    assert_eq!(
+        app.top(),
+        Some(at),
+        "with no pin the match lands on the top row"
+    );
+    assert_eq!(app.pinned_row(), None, "nothing pins");
+}
+
+/// The search-incomplete notice's identity: the text `find_lost` pushes.
+fn search_text() -> String {
+    "Could not search all of history: connection lost".to_owned()
+}
+
+#[test]
+fn a_completed_rescan_clears_the_search_text() {
+    let (mut app, log, _) = dropped_fetch();
+    app.find_lost();
+    assert_eq!(app.notice(), Some(search_text().as_str()));
+    // The settle finds nothing resident to rescan, but its pump
+    // refetches the dropped page: with a fetch in flight the notice
+    // stands.
+    app.settle_find();
+    assert_eq!(app.notice(), Some(search_text().as_str()));
+    let mut outgoing = app.find_outgoing();
+    assert_eq!(outgoing.len(), 1, "the pump refetches the dropped page");
+    let (id, from, to) = command(&outgoing.remove(0));
+    app.on_line(hub_answer(&id, &log, from, to));
+    // The answer landed: the next settle walks the whole order with
+    // nothing on the wire, and the search is whole again.
+    app.settle_find();
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn unscanned_positions_keep_the_search_text_with_no_fetch() {
+    let (mut app, _, _) = dropped_fetch();
+    // The link going down clears the fetch but leaves dropped pages
+    // unscanned, and the pump stays quiet while it is down: exactly
+    // one completion side holds.
+    app.disconnected();
+    assert!(!app.find.fetching(), "no fetch on the wire");
+    assert!(
+        app.find.cursor() < app.pages().page_count(),
+        "dropped pages still unscanned"
+    );
+    assert_eq!(app.notice(), Some(search_text().as_str()));
+    app.settle_find();
+    // Pins the && in the rescan-complete clear: || would clear on the
+    // no-fetch side alone.
+    assert_eq!(
+        app.notice(),
+        Some(search_text().as_str()),
+        "unscanned positions keep the text with no fetch"
     );
 }

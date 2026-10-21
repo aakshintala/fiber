@@ -18,80 +18,13 @@ use contract::inbox::Delivery;
 use contract::jobs::{JobRecord, Jobs as _};
 use contract::tool::Tool as _;
 use fakes::Deadline;
-use fakes::clock::FakeClock;
-use fakes::{Recorder, TempDir, Watchdog, within};
+use fakes::{Recorder, Watchdog, within};
 
 use super::DelegateSpawn;
 use super::models::Resolve;
-use super::run::{Launch, Launched, Watch, mint_session_id};
+use super::run::{Fresh, Launch, Launched, Start, mint_session_id};
+use super::test_rig::{DEADLINE, Rig, child_group, rig};
 use crate::registry::Registry;
-
-/// How long a test waits on the wall clock before it fails.
-const DEADLINE: Duration = Duration::from_secs(3);
-
-struct Rig {
-    _dir: TempDir,
-    registry: Arc<Registry>,
-    clock: Arc<FakeClock>,
-    inbox: mpsc::Receiver<Delivery>,
-    sessions: std::path::PathBuf,
-    launched: mpsc::Receiver<Launched>,
-    launch_count: Arc<AtomicUsize>,
-    launch: Launch,
-    watch: Watch,
-}
-
-fn rig() -> Rig {
-    let dir = TempDir::new("fiber-delegate-spawn");
-    let clock = FakeClock::new();
-    let artifacts = dir.path().join("artifacts");
-    std::fs::create_dir(&artifacts).unwrap();
-    let sessions = dir.path().join("sessions");
-    std::fs::create_dir(&sessions).unwrap();
-    let registry = Registry::new(
-        artifacts,
-        Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-        Arc::new(Recorder::default()),
-    );
-    let (inbox_tx, inbox_rx) = mpsc::channel();
-    registry.deliver_to(inbox_tx);
-    let (launched_tx, launched_rx) = mpsc::channel();
-    let launch_count = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&launch_count);
-    let pid = dir.path().join("child.pid");
-    let launch: Launch = Arc::new(move |launched: &Launched| {
-        counted.fetch_add(1, Ordering::SeqCst);
-        let _sent = launched_tx.send(Launched {
-            depth: launched.depth,
-            session_id: launched.session_id.clone(),
-            job_id: launched.job_id.clone(),
-            parent: launched.parent.clone(),
-            model: launched.model.clone(),
-            prompt: launched.prompt.clone(),
-            workspace: launched.workspace.clone(),
-            resume: false,
-            credential: launched.credential.clone(),
-        });
-        let mut command = Command::new("sh");
-        command.args([
-            "-c",
-            &format!("echo $$ > '{}'; exec sleep 60", pid.display()),
-        ]);
-        command
-    });
-    let watch: Watch = Arc::new(|_, _, _| Err(std::io::Error::other("refused")));
-    Rig {
-        _dir: dir,
-        registry,
-        clock,
-        inbox: inbox_rx,
-        sessions,
-        launched: launched_rx,
-        launch_count,
-        launch,
-        watch,
-    }
-}
 
 /// Receives the stopped delegate's notice and asserts it ended cancelled.
 #[track_caller]
@@ -118,27 +51,6 @@ fn resolve() -> Resolve {
         catalogue: Arc::from("Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/m"),
         credential: Arc::new(|_| Ok(None)),
     }
-}
-
-/// The `sleep` the rig's launcher started, read from its pidfile: armed
-/// as its watchdog so a failing test leaves no child behind.
-#[track_caller]
-fn child_group(rig: &Rig) -> Watchdog {
-    let pid = rig._dir.path().join("child.pid");
-    let pid: u32 = within("the child writes its pid", DEADLINE, move || {
-        loop {
-            let Ok(text) = std::fs::read_to_string(&pid) else {
-                std::thread::yield_now();
-                continue;
-            };
-            let Ok(pid) = text.trim().parse() else {
-                std::thread::yield_now();
-                continue;
-            };
-            return pid;
-        }
-    });
-    Watchdog::group(pid)
 }
 
 fn tool(rig: &Rig) -> DelegateSpawn {
@@ -311,7 +223,10 @@ fn a_role_starts_its_resolved_reference_and_records_it() {
         .recv(&rig.launched)
         .expect("the launcher ran");
     assert_eq!(launched.job_id, started.job_id);
-    assert_eq!(launched.model, "fake/m:high");
+    let Start::Fresh(Fresh::Spawn { model, .. }) = &launched.start else {
+        panic!("a spawn launches fresh");
+    };
+    assert_eq!(model, "fake/m:high");
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
 }
@@ -368,7 +283,10 @@ fn a_good_call_returns_its_receipt_with_started_records() {
     assert_eq!(launched.job_id, started.job_id);
     assert_eq!(launched.session_id, delegate.delegate_session_id);
     assert_eq!(launched.parent.0, "s_parent");
-    assert_eq!(launched.model, "fake/m");
+    let Start::Fresh(Fresh::Spawn { model, .. }) = &launched.start else {
+        panic!("a spawn launches fresh");
+    };
+    assert_eq!(model, "fake/m");
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
 }
@@ -1033,8 +951,11 @@ fn a_role_credential_reaches_the_launcher() {
     let launched = Deadline::after(DEADLINE)
         .recv(&rig.launched)
         .expect("the launcher ran");
-    assert_eq!(launched.model, "fake/m:high");
-    assert_eq!(launched.credential, Some("work".to_owned()));
+    let Start::Fresh(Fresh::Spawn { model, credential }) = &launched.start else {
+        panic!("a spawn launches fresh");
+    };
+    assert_eq!(model, "fake/m:high");
+    assert_eq!(*credential, Some("work".to_owned()));
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
 }
@@ -1055,8 +976,11 @@ fn a_full_reference_launches_with_no_credential() {
     let launched = Deadline::after(DEADLINE)
         .recv(&rig.launched)
         .expect("the launcher ran");
-    assert_eq!(launched.model, "fake/m");
-    assert_eq!(launched.credential, None);
+    let Start::Fresh(Fresh::Spawn { model, credential }) = &launched.start else {
+        panic!("a spawn launches fresh");
+    };
+    assert_eq!(model, "fake/m");
+    assert_eq!(*credential, None);
     assert_eq!(rig.registry.stop_delegates(), 1);
     assert_cancelled_notice(&rig);
 }

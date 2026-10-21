@@ -227,6 +227,7 @@ fn reload_reviewer_uses_the_route_label_and_publishes_only_other_provider_reads(
             let here = crate::Here {
                 workspace: fixture.workspace.clone(),
                 clock: switching.loader().clock,
+                cache_diagnostics: false,
             };
             let route = r#loop::ReloadRoute {
                 model: "fake/m".into(),

@@ -91,11 +91,7 @@ pub(crate) fn config_failure(e: ConfigError) -> Failure {
 /// credential file name: non-empty, with no `"`, `/`, NUL, whitespace or
 /// control character.
 fn check_name(name: &str) -> Result<(), CliError> {
-    let bad = name.is_empty()
-        || name.bytes().any(|byte| {
-            byte == b'"' || byte == b'/' || byte.is_ascii_whitespace() || byte.is_ascii_control()
-        });
-    if bad {
+    if !config::valid_server_name(name) {
         return Err(CliError::McpName {
             name: name.to_owned(),
         });
@@ -574,23 +570,40 @@ fn is_approved(
         .is_some_and(|decision| decision == Decision::Approve))
 }
 
-/// `fiber mcp list`: one row per declaration, sorted by name then layer:
-/// the name, the layer, and for a repository's server whether it is
-/// approved. Nothing else about a declaration prints: a declaration can
+/// One configured MCP server: what `fiber mcp list` prints and what the
+/// hub's `mcp_servers` answer builds its rows from (`docs/mcp.md`,
+/// "Servers, their state and the per-server commands"): its name, the
+/// layer that declares it, and for a repository's server whether it is
+/// approved. Nothing else about a declaration travels: a declaration can
 /// hold tokens.
-pub(crate) fn run_list(
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DeclaredServer {
+    /// The server's name.
+    pub name: String,
+    /// The layer declaring it.
+    pub layer: Layer,
+    /// Whether a repository's server is approved; always true for the
+    /// global and project layers, which need no approval.
+    pub approved: bool,
+}
+
+/// Every declared MCP server, sorted by name then layer (global, project,
+/// repository): the rows `fiber mcp list` prints, and the hub's
+/// `mcp_servers` snapshot base. An unreadable configuration fails as
+/// `run_list` always failed it; a server is listed exactly when `run_list`
+/// listed it.
+pub fn declared_servers(
     home: &Path,
     workspace: &Path,
-    streams: Streams<'_>,
     clock: &Arc<dyn Clock>,
-) -> Result<(), CliError> {
-    let Streams { out, err: _ } = streams;
+    overrides: &[String],
+) -> Result<Vec<DeclaredServer>, CliError> {
     let (_, project) = project_of(home, workspace)?;
     let config = Config::load(Sources {
         home: home.to_path_buf(),
         workspace: workspace.to_path_buf(),
         project: project.clone(),
-        overrides: Vec::new(),
+        overrides: overrides.to_vec(),
     })?;
     let mut rows: Vec<(String, Layer)> = Vec::new();
     for layer in [Layer::Global, Layer::Project, Layer::Repository] {
@@ -607,10 +620,40 @@ pub(crate) fn run_list(
             .cmp(&right.0)
             .then(layer_order(left.1).cmp(&layer_order(right.1)))
     });
+    // Approval resolves in listing order, as `run_list` always resolved
+    // it, so a failing row reports the same error.
+    let mut declared = Vec::with_capacity(rows.len());
+    for (name, layer) in rows {
+        let approved = if layer == Layer::Repository {
+            is_approved(home, workspace, &project, &name, clock)?
+        } else {
+            true
+        };
+        declared.push(DeclaredServer {
+            name,
+            layer,
+            approved,
+        });
+    }
+    Ok(declared)
+}
+
+/// `fiber mcp list`: one row per declaration, sorted by name then layer:
+/// the name, the layer, and for a repository's server whether it is
+/// approved. Nothing else about a declaration prints: a declaration can
+/// hold tokens.
+pub(crate) fn run_list(
+    home: &Path,
+    workspace: &Path,
+    streams: Streams<'_>,
+    clock: &Arc<dyn Clock>,
+) -> Result<(), CliError> {
+    let Streams { out, err: _ } = streams;
+    let rows = declared_servers(home, workspace, clock, &[])?;
     let mut table: Vec<Vec<String>> = Vec::new();
-    for (name, layer) in &rows {
-        let approval = if *layer == Layer::Repository {
-            if is_approved(home, workspace, &project, name, clock)? {
+    for row in &rows {
+        let approval = if row.layer == Layer::Repository {
+            if row.approved {
                 "approved"
             } else {
                 "not approved"
@@ -619,8 +662,8 @@ pub(crate) fn run_list(
             ""
         };
         table.push(vec![
-            name.clone(),
-            layer_word(*layer).to_owned(),
+            row.name.clone(),
+            layer_word(row.layer).to_owned(),
             approval.to_owned(),
         ]);
     }

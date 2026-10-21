@@ -24,6 +24,27 @@ pub struct ReloadRoute {
 pub type PrepareReload =
     Arc<dyn Fn(&ReloadRoute) -> Result<ReloadPrepared, Rejection> + Send + Sync>;
 
+/// Restarts one MCP server, as a reload restarts its servers: adopted
+/// when the session never started it, served in place otherwise. The
+/// entry declares the tools itself, through the session's declarer, and
+/// returns the registry's news with the server lines to write; the loop
+/// merges the registry, writes the lines, and answers once they are
+/// written.
+pub type ReconnectServer = Arc<dyn Fn(&str) -> Result<Reconnected, Rejection> + Send + Sync>;
+
+/// What a reconnect restarted: the loop registry's news and the log's.
+pub struct Reconnected {
+    /// The server's tools after the restart, with their owners, for the
+    /// loop's registry.
+    pub tools: Vec<(String, Arc<dyn Tool>)>,
+    /// Qualified tool names the restart dropped, for the loop's
+    /// registry.
+    pub removed: Vec<String>,
+    /// The `mcp_server_failed`/`mcp_server_ready` lines the restart
+    /// observed, in order, written before the answer.
+    pub records: Vec<contract::tool::ServerRecord>,
+}
+
 /// Configuration-derived preamble inputs, excluding the session's route.
 pub struct PromptPatch {
     /// Replacement system prompt text.
@@ -99,6 +120,61 @@ impl Loop {
     pub fn reloader(mut self, prepare: PrepareReload) -> Self {
         self.reloader = Some(prepare);
         self
+    }
+
+    /// Restarts failed servers with `reconnect`; absent this, reconnect
+    /// is unsupported.
+    pub fn reconnector(mut self, reconnect: ReconnectServer) -> Self {
+        self.reconnector = Some(reconnect);
+        self
+    }
+
+    pub(crate) fn take_reconnect(&mut self, server: String, ack: Ack) -> Result<(), Error> {
+        use crate::inbox::{CLOSING, accept, reject};
+        use contract::events::Event;
+        if self.closing {
+            reject(ack, contract::ErrorCode::Closing, CLOSING);
+            return Ok(());
+        }
+        let Some(reconnect) = self.reconnector.clone() else {
+            reject(
+                ack,
+                contract::ErrorCode::InvalidArguments,
+                "This session cannot reconnect servers.",
+            );
+            return Ok(());
+        };
+        match reconnect(&server) {
+            Ok(reconnected) => {
+                for name in &reconnected.removed {
+                    self.tools.remove(name);
+                }
+                for (owner, tool) in &reconnected.tools {
+                    let definition = tool.definition();
+                    self.tools.insert(
+                        definition.name.clone(),
+                        (owner.clone(), Arc::clone(tool), definition),
+                    );
+                }
+                for record in &reconnected.records {
+                    let event = match record {
+                        contract::tool::ServerRecord::Failed(failed) => {
+                            Event::McpServerFailed(failed.clone())
+                        }
+                        contract::tool::ServerRecord::Ready(ready) => {
+                            Event::McpServerReady(ready.clone())
+                        }
+                    };
+                    self.write(&event, None, None)?;
+                }
+                accept(ack);
+                Ok(())
+            }
+            Err(rejection) => {
+                reject(ack, rejection.code, &rejection.message);
+                Ok(())
+            }
+        }
     }
 
     pub(crate) fn take_reload(&mut self, ack: Ack) -> Result<(), Error> {

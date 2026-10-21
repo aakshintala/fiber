@@ -89,7 +89,7 @@ fn failures_saturate_at_the_maximum() {
     assert_eq!(app.next_retry(), Some(Duration::from_secs(30)));
     assert_eq!(app.reconnect.failures, u32::MAX);
     // Never up: the attempt number saturates too.
-    app.link = Link::Down;
+    app.outbox.link = Link::Down;
     assert_eq!(app.banner(), banner(u64::from(u32::MAX)));
 }
 
@@ -109,7 +109,7 @@ fn a_hub_hello_resets_the_count() {
 fn a_refused_schema_never_retries() {
     let mut app = App::new(PathBuf::from("/w"));
     app.on_line(newer());
-    assert_eq!(app.link, Link::Refused);
+    assert_eq!(app.outbox.link, Link::Refused);
     assert_eq!(app.next_retry(), None);
     assert_eq!(app.reconnect.failures, 0);
     // The reader's end of the refused stream changes nothing.
@@ -162,7 +162,7 @@ fn before_the_first_connection_the_banner_starts_at_attempt_two() {
 fn no_banner_while_waiting_up_or_refused() {
     let mut waiting = App::new(PathBuf::from("/w"));
     waiting.reconnect.failures = 1;
-    assert_eq!(waiting.link, Link::Waiting);
+    assert_eq!(waiting.outbox.link, Link::Waiting);
     assert_eq!(waiting.banner(), None);
     let mut up = App::new(PathBuf::from("/w"));
     up.on_line(hello());
@@ -186,7 +186,7 @@ fn no_banner_at_zero_failures_while_down() {
     app.on_line(hello());
     // A failed write: the link is down before the reader's end arrives.
     app.write_failed(&[]);
-    assert_eq!(app.link, Link::Down);
+    assert_eq!(app.outbox.link, Link::Down);
     assert_eq!(app.banner(), None);
     app.next_retry();
     assert_eq!(app.banner(), banner(1));
@@ -211,8 +211,8 @@ fn enter_while_refused_keeps_the_draft_and_holds_nothing() {
     }
     assert_eq!(app.on_key(Key::Enter, now), Effect::None);
     assert_eq!(app.draft(), "hi");
-    assert!(app.held.is_empty());
-    assert!(app.pending.is_empty());
+    assert!(app.outbox.held.is_empty());
+    assert!(app.outbox.pending.is_empty());
 }
 
 /// The banner row's y and the conversation's top row, drawn at the app's
@@ -362,7 +362,7 @@ fn raise_id(app: &mut App) -> String {
 /// Writes `lines` as the loop does once each write succeeds.
 fn write(app: &mut App, lines: Vec<String>) -> Vec<String> {
     for line in &lines {
-        app.wrote(line);
+        app.outbox.wrote(line);
     }
     lines
 }
@@ -449,7 +449,7 @@ fn first_key(app: &App) -> u64 {
 fn the_first_hub_hello_reopens_nothing() {
     let mut app = home();
     app.attach(contract::SessionId(S_A.to_owned()));
-    app.wrote(
+    app.outbox.wrote(
         &json!({"id": "c_1", "command": "prompt", "session_id": S_A, "args": {}}).to_string(),
     );
     let lines = parsed(&app.on_line(hello()));
@@ -499,7 +499,7 @@ fn the_wire_after_hub_hello_gates_commands_after_subscribe_kept_feed_recent() {
     linked(&mut app);
     started(&mut app, S_A);
     let prompt = app
-        .reconnect
+        .outbox
         .kept
         .first()
         .map(|kept| kept.line.clone())
@@ -658,7 +658,8 @@ fn subscribe_and_commands_are_not_resent() {
 fn a_hub_command_is_not_resent() {
     let mut app = home();
     linked(&mut app);
-    app.wrote(&json!({"id": "c_1", "command": "delete", "args": {"session": S_B}}).to_string());
+    app.outbox
+        .wrote(&json!({"id": "c_1", "command": "delete", "args": {"session": S_B}}).to_string());
     let lines = parsed(&reconnect(&mut app));
     assert_eq!(names(&lines), ["feed", "recent", "sessions"]);
 }
@@ -688,7 +689,7 @@ fn cancel(id: &str, session: &str) -> String {
 fn a_kept_command_for_another_session_follows_a_summary_subscribe() {
     let mut app = home();
     linked(&mut app);
-    app.wrote(&cancel("c_1", S_B));
+    app.outbox.wrote(&cancel("c_1", S_B));
     let lines = reconnect(&mut app);
     let values = parsed(&lines);
     assert_eq!(
@@ -705,8 +706,8 @@ fn two_kept_commands_for_one_other_session_share_one_subscribe() {
     let mut app = home();
     linked(&mut app);
     started(&mut app, S_A);
-    app.wrote(&cancel("c_1", S_B));
-    app.wrote(&cancel("c_2", S_B));
+    app.outbox.wrote(&cancel("c_1", S_B));
+    app.outbox.wrote(&cancel("c_2", S_B));
     let values = parsed(&reconnect(&mut app));
     assert_eq!(
         names(&values),
@@ -747,13 +748,13 @@ fn a_written_close_then_home_then_reconnect_resends_it_and_its_answer_settles() 
     assert_eq!(lines[2]["id"], close[0]["id"]);
     fold(&mut app, accepted(S_A, &id_of(&close[0])));
     assert!(
-        app.reconnect
+        app.outbox
             .kept
             .iter()
             .all(|kept| kept.id != id_of(&close[0]))
     );
     assert!(
-        !app.pending.contains_key(&id_of(&close[0])),
+        !app.outbox.pending.contains_key(&id_of(&close[0])),
         "the resent close's answer settles its pending entry"
     );
     let again = parsed(&reconnect(&mut app));
@@ -770,9 +771,9 @@ fn a_rejected_resent_close_from_another_session_notes_and_settles() {
     let lines = parsed(&reconnect(&mut app));
     assert_eq!(lines[2]["id"], close[0]["id"]);
     fold(&mut app, refused(S_A, &id_of(&close[0]), "busy", "Busy."));
-    assert!(!app.pending.contains_key(&id_of(&close[0])));
+    assert!(!app.outbox.pending.contains_key(&id_of(&close[0])));
     assert!(
-        app.reconnect
+        app.outbox
             .kept
             .iter()
             .all(|kept| kept.id != id_of(&close[0]))
@@ -847,7 +848,7 @@ fn a_pending_start_returns_to_the_draft_on_reconnect() {
     assert_eq!(app.phase, Phase::Starting);
     assert_eq!(app.draft(), "hi");
     assert_eq!(app.notice(), Some(UNANSWERED));
-    assert!(app.pending.is_empty());
+    assert!(app.outbox.pending.is_empty());
 }
 
 #[test]
@@ -864,8 +865,9 @@ fn a_duplicate_command_rejection_closes_the_entry_silently() {
         &mut app,
         refused(S_A, &prompt_id(&opening), "duplicate_command", "Seen."),
     );
-    assert!(app.pending.is_empty());
-    assert_eq!(app.notice(), Some("Connection lost."));
+    assert!(app.outbox.pending.is_empty());
+    // The reconnect ended the drop's cause: its notice goes with it.
+    assert_eq!(app.notice(), None);
     assert_eq!(app.draft(), "");
 }
 
@@ -883,7 +885,7 @@ fn another_rejection_still_returns_the_draft() {
         &mut app,
         refused(S_A, &prompt_id(&opening), "busy", "Busy."),
     );
-    assert!(app.pending.is_empty());
+    assert!(app.outbox.pending.is_empty());
     assert_eq!(app.notice(), Some("Busy."));
     assert_eq!(app.draft(), "hi");
 }
@@ -923,8 +925,8 @@ fn a_failed_resend_keeps_the_line_and_leaves_the_draft() {
     // The resend never goes out: the write fails.
     app.write_failed(&[resent]);
     assert_eq!(app.draft(), "");
-    assert!(app.pending.contains_key(&id));
-    assert!(app.reconnect.kept.iter().any(|kept| kept.id == id));
+    assert!(app.outbox.pending.contains_key(&id));
+    assert!(app.outbox.kept.iter().any(|kept| kept.id == id));
     let again = parsed(&reconnect(&mut app));
     let prompts: Vec<&Value> = again
         .iter()
@@ -947,7 +949,8 @@ fn a_feed_answer_from_before_the_drop_is_ignored() {
             json!({"command_id": before[0]["id"], "code": "internal", "message": "old feed"}),
         ),
     );
-    assert_eq!(app.notice(), Some("Connection lost."));
+    // The reconnect ended the drop's cause: its notice goes with it.
+    assert_eq!(app.notice(), None);
 }
 
 #[test]

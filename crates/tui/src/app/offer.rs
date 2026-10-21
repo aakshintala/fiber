@@ -2,7 +2,7 @@
 //! "Approving what a repository ships"). The offer's state lives in
 //! [`crate::offer`]; this module routes input to it and sends its answer.
 
-use super::{App, Effect, Kind, Link, mint};
+use super::{App, Effect, Kind, mint};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::offer::{FileAction, OfferKey, Row, Spot};
@@ -63,7 +63,7 @@ impl App {
     }
 
     fn ask_offered_file(&mut self, action: FileAction) -> Effect {
-        if self.link != Link::Up {
+        if !self.outbox.is_up() {
             return Effect::None;
         }
         let Some(session) = self.session().cloned() else {
@@ -84,7 +84,7 @@ impl App {
     /// Sends the offer's answer. With the link down nothing goes out and
     /// the offer stays open.
     fn send_offer(&mut self) -> Effect {
-        if self.link != Link::Up {
+        if !self.outbox.is_up() {
             return Effect::None;
         }
         let Some(session) = self.session().cloned() else {
@@ -94,7 +94,9 @@ impl App {
         let Some(line) = self.offer.answer(&id, &session) else {
             return Effect::None;
         };
-        self.pending.insert(id, (Kind::Reply, Draft::default()));
+        self.outbox
+            .pending
+            .insert(id, (Kind::Reply, Draft::default()));
         Effect::Send(vec![line])
     }
 

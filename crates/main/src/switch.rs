@@ -454,6 +454,10 @@ impl Switching {
             let here = crate::Here {
                 workspace: loader.workspace.clone(),
                 clock: Arc::clone(&loader.clock),
+                cache_diagnostics: shared
+                    .startup_config
+                    .flag("cache.diagnostics", None)
+                    .unwrap_or_default(),
             };
             let provider = connect(
                 resolved,
@@ -720,6 +724,10 @@ pub(crate) fn prepare(
     let here = crate::Here {
         workspace: now.loader.workspace.clone(),
         clock: Arc::clone(&now.loader.clock),
+        cache_diagnostics: now
+            .config
+            .flag("cache.diagnostics", None)
+            .unwrap_or_default(),
     };
     // The session's route with its observed factory when the session
     // shared its writer; without one the switch carries no factories.

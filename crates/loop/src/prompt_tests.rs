@@ -380,3 +380,461 @@ fn definitions_notice_ignores_deferred_tools() {
     let deferred = vec![sent("a", "mcp__s", true, 10_000)];
     assert!(super::definitions_notice(&built(100, deferred)).is_none());
 }
+
+/// A test tool with a fixed definition and guidelines, for build tests.
+struct BuildTool {
+    definition: contract::provider::ToolDefinition,
+    guidelines: Option<String>,
+}
+
+impl contract::tool::Tool for BuildTool {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        self.definition.clone()
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        contract::tool::Output::default()
+    }
+
+    fn guidelines(&self) -> Option<String> {
+        self.guidelines.clone()
+    }
+}
+
+fn tool_definition(name: &str, deferred: bool) -> contract::provider::ToolDefinition {
+    contract::provider::ToolDefinition {
+        name: name.into(),
+        description: format!("The test tool {name}."),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": false
+        }),
+        deferred,
+        hosted: None,
+    }
+}
+
+fn registered(
+    name: &str,
+    by: &str,
+    deferred: bool,
+    guidelines: Option<&str>,
+) -> (
+    String,
+    std::sync::Arc<dyn contract::tool::Tool>,
+    contract::provider::ToolDefinition,
+) {
+    let tool = std::sync::Arc::new(BuildTool {
+        definition: tool_definition(name, deferred),
+        guidelines: guidelines.map(str::to_owned),
+    });
+    (by.into(), tool, tool_definition(name, deferred))
+}
+
+/// A provider answering `defers`, never called by `build`.
+struct DefersProvider {
+    defers: bool,
+}
+
+struct NoCall;
+
+impl contract::provider::ModelCall for NoCall {
+    fn run(
+        &self,
+        _: &mut dyn FnMut(contract::provider::Delta),
+    ) -> Result<contract::provider::Reply, contract::provider::CallError> {
+        Err(contract::provider::CallError::Cancelled {
+            usage: Box::new(contract::provider::CallUsage::unnamed(
+                contract::provider::InputSize {
+                    bytes: 0,
+                    media: false,
+                },
+            )),
+        })
+    }
+
+    fn cancel(&self) {}
+}
+
+impl contract::provider::Provider for DefersProvider {
+    fn call(&self, _: &contract::provider::ModelRequest) -> Box<dyn contract::provider::ModelCall> {
+        Box::new(NoCall)
+    }
+
+    fn wire_tools(
+        &self,
+        tools: &[contract::provider::ToolDefinition],
+    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        fakes::wire_tools(tools)
+    }
+
+    fn defers(&self) -> bool {
+        self.defers
+    }
+}
+
+/// A factory building the search tool `tool_search`, recording its inputs.
+#[allow(
+    clippy::type_complexity,
+    reason = "the test observes the factory's catalogue and sources"
+)]
+fn search_factory(
+    seen: &std::sync::Arc<
+        std::sync::Mutex<Vec<(Vec<contract::provider::ToolDefinition>, Vec<String>)>>,
+    >,
+) -> crate::ToolSearchFactory {
+    let seen = std::sync::Arc::clone(seen);
+    std::sync::Arc::new(
+        move |catalogue: &[contract::provider::ToolDefinition], sources: &[String]| {
+            seen.lock()
+                .unwrap()
+                .push((catalogue.to_vec(), sources.to_vec()));
+            std::sync::Arc::new(BuildTool {
+                definition: contract::provider::ToolDefinition {
+                    name: "tool_search".into(),
+                    description: "Finds deferred tools.".into(),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "minLength": 1},
+                            "limit": {"type": "integer", "minimum": 1, "default": 8}
+                        },
+                        "required": ["query"],
+                        "additionalProperties": false
+                    }),
+                    deferred: false,
+                    hosted: None,
+                },
+                guidelines: Some("Search guide.".into()),
+            }) as std::sync::Arc<dyn contract::tool::Tool>
+        },
+    )
+}
+
+fn build_inputs() -> PromptInputs {
+    empty_inputs()
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    reason = "test helper wires one build; the tuple is the build's"
+)]
+fn run_build(
+    inputs: &PromptInputs,
+    tools: &std::collections::BTreeMap<
+        String,
+        (
+            String,
+            std::sync::Arc<dyn contract::tool::Tool>,
+            contract::provider::ToolDefinition,
+        ),
+    >,
+    defers: bool,
+    factory: Option<&crate::ToolSearchFactory>,
+    replaced: Vec<contract::events::ToolReplaced>,
+) -> (
+    String,
+    Vec<contract::provider::ToolDefinition>,
+    contract::events::PreambleBuilt,
+    Option<(
+        std::sync::Arc<dyn contract::tool::Tool>,
+        contract::provider::ToolDefinition,
+    )>,
+) {
+    super::build(
+        inputs,
+        "m",
+        false,
+        tools,
+        &DefersProvider { defers },
+        contract::events::PreambleReason::Start,
+        replaced,
+        None,
+        factory,
+    )
+}
+
+fn tools_map(
+    entries: Vec<(
+        String,
+        std::sync::Arc<dyn contract::tool::Tool>,
+        contract::provider::ToolDefinition,
+    )>,
+) -> std::collections::BTreeMap<
+    String,
+    (
+        String,
+        std::sync::Arc<dyn contract::tool::Tool>,
+        contract::provider::ToolDefinition,
+    ),
+> {
+    entries
+        .into_iter()
+        .map(|(by, tool, definition)| (definition.name.clone(), (by, tool, definition)))
+        .collect()
+}
+
+fn sent_deferred(event: &contract::events::PreambleBuilt, name: &str) -> bool {
+    event
+        .tools
+        .iter()
+        .find(|tool| tool.name == name)
+        .unwrap()
+        .deferred
+}
+
+fn sent_names(event: &contract::events::PreambleBuilt) -> Vec<String> {
+    event.tools.iter().map(|tool| tool.name.clone()).collect()
+}
+
+#[test]
+fn build_with_factory_defers_a_deferred_tool_and_adds_the_search() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let tools = tools_map(vec![
+        registered("alpha", "fx", true, Some("Alpha guide.")),
+        registered("beta", "builtin", false, Some("Beta guide.")),
+    ]);
+    let (system, definitions, event, built) =
+        run_build(&build_inputs(), &tools, true, Some(&factory), Vec::new());
+    assert!(sent_deferred(&event, "alpha"));
+    assert!(!sent_deferred(&event, "beta"));
+    let (tool, definition) = built.expect("a search is due");
+    assert_eq!(definition.name, "tool_search");
+    assert!(!definition.deferred);
+    assert_eq!(tool.definition().name, "tool_search");
+    assert_eq!(sent_names(&event), ["alpha", "beta", "tool_search"]);
+    let search = event
+        .tools
+        .iter()
+        .find(|tool| tool.name == "tool_search")
+        .unwrap();
+    assert!(!search.deferred);
+    assert_eq!(search.registered_by, "builtin");
+    assert!(
+        definitions
+            .iter()
+            .any(|definition| definition.name == "tool_search")
+    );
+    assert!(!system.contains("Alpha guide."));
+    assert!(system.contains("Beta guide."));
+    assert!(system.contains("Search guide."));
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(
+        seen[0]
+            .0
+            .iter()
+            .map(|definition| definition.name.clone())
+            .collect::<Vec<_>>(),
+        ["alpha"]
+    );
+    assert_eq!(seen[0].1, ["fx"]);
+}
+
+#[test]
+fn build_merges_the_search_ahead_of_later_registered_names() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let tools = tools_map(vec![
+        registered("alpha", "fx", true, Some("Alpha guide.")),
+        registered("zebra", "fy", false, Some("Zebra guide.")),
+    ]);
+    let (_, definitions, event, built) =
+        run_build(&build_inputs(), &tools, true, Some(&factory), Vec::new());
+    built.expect("a search is due");
+    assert_eq!(sent_names(&event), ["alpha", "tool_search", "zebra"]);
+    assert_eq!(
+        definitions
+            .iter()
+            .map(|definition| definition.name.clone())
+            .collect::<Vec<_>>(),
+        ["alpha", "tool_search", "zebra"]
+    );
+}
+
+#[test]
+fn build_without_a_factory_defers_nothing() {
+    let tools = tools_map(vec![registered("alpha", "fx", true, Some("Alpha guide."))]);
+    let (system, definitions, event, built) =
+        run_build(&build_inputs(), &tools, true, None, Vec::new());
+    assert!(built.is_none());
+    assert!(!sent_deferred(&event, "alpha"));
+    assert!(!sent_names(&event).contains(&"tool_search".to_owned()));
+    assert!(
+        !definitions
+            .iter()
+            .any(|definition| definition.name == "tool_search")
+    );
+    assert!(system.contains("Alpha guide."));
+}
+
+#[test]
+fn build_on_a_model_without_deferral_defers_nothing() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let tools = tools_map(vec![registered("alpha", "fx", true, Some("Alpha guide."))]);
+    let (system, definitions, event, built) =
+        run_build(&build_inputs(), &tools, false, Some(&factory), Vec::new());
+    assert!(built.is_none());
+    assert!(!sent_deferred(&event, "alpha"));
+    assert!(!sent_names(&event).contains(&"tool_search".to_owned()));
+    assert!(
+        !definitions
+            .iter()
+            .any(|definition| definition.name == "tool_search")
+    );
+    assert!(system.contains("Alpha guide."));
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[test]
+fn build_with_no_deferred_tool_builds_no_search() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let tools = tools_map(vec![registered("beta", "builtin", false, None)]);
+    let (_, _, event, built) = run_build(&build_inputs(), &tools, true, Some(&factory), Vec::new());
+    assert!(built.is_none());
+    assert!(!sent_names(&event).contains(&"tool_search".to_owned()));
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[test]
+fn build_per_tool_key_overrides_the_definition() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let mut inputs = build_inputs();
+    inputs.deferrals = crate::prompt::Deferrals {
+        tools: [("x".to_owned(), false), ("y".to_owned(), true)]
+            .into_iter()
+            .collect(),
+        full_servers: std::collections::BTreeSet::new(),
+    };
+    let tools = tools_map(vec![
+        registered("x", "fx", true, None),
+        registered("y", "ex", false, None),
+    ]);
+    let (_, _, event, built) = run_build(&inputs, &tools, true, Some(&factory), Vec::new());
+    assert!(!sent_deferred(&event, "x"));
+    assert!(sent_deferred(&event, "y"));
+    assert!(built.is_some());
+}
+
+#[test]
+fn build_full_servers_declare_their_tools_in_full() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let mut inputs = build_inputs();
+    inputs.deferrals = crate::prompt::Deferrals {
+        tools: std::collections::BTreeMap::new(),
+        full_servers: ["fx".to_owned()].into_iter().collect(),
+    };
+    let tools = tools_map(vec![
+        registered("fx_echo", "fx", true, None),
+        registered("mcp_resources", "builtin", true, None),
+    ]);
+    let (_, _, event, built) = run_build(&inputs, &tools, true, Some(&factory), Vec::new());
+    assert!(!sent_deferred(&event, "fx_echo"));
+    assert!(sent_deferred(&event, "mcp_resources"));
+    assert!(built.is_some());
+}
+
+#[test]
+fn build_per_tool_key_wins_over_full_servers() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let mut inputs = build_inputs();
+    inputs.deferrals = crate::prompt::Deferrals {
+        tools: [("fx_tool".to_owned(), true)].into_iter().collect(),
+        full_servers: ["fx".to_owned()].into_iter().collect(),
+    };
+    let tools = tools_map(vec![registered("fx_tool", "fx", true, None)]);
+    let (_, _, event, _) = run_build(&inputs, &tools, true, Some(&factory), Vec::new());
+    assert!(sent_deferred(&event, "fx_tool"));
+}
+
+#[test]
+fn build_leaves_a_configured_search_name_in_full() {
+    let mut inputs = build_inputs();
+    inputs.deferrals = crate::prompt::Deferrals {
+        tools: [("tool_search".to_owned(), true)].into_iter().collect(),
+        full_servers: std::collections::BTreeSet::new(),
+    };
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let tools = tools_map(vec![
+        registered("tool_search", "ex", false, Some("Ext search guide.")),
+        registered("alpha", "fx", true, None),
+    ]);
+    let (system, _, event, built) = run_build(&inputs, &tools, true, Some(&factory), Vec::new());
+    assert!(built.is_none(), "the factory tool is not registered");
+    assert!(!sent_deferred(&event, "tool_search"));
+    assert!(system.contains("Ext search guide."));
+    assert_eq!(
+        event.replaced,
+        vec![contract::events::ToolReplaced {
+            name: "tool_search".into(),
+            from: "builtin".into(),
+            to: "ex".into(),
+        }]
+    );
+}
+
+#[test]
+fn build_without_a_factory_records_no_search_replacement() {
+    let mut inputs = build_inputs();
+    inputs.deferrals = crate::prompt::Deferrals {
+        tools: [("tool_search".to_owned(), true)].into_iter().collect(),
+        full_servers: std::collections::BTreeSet::new(),
+    };
+    let tools = tools_map(vec![
+        registered("tool_search", "ex", false, None),
+        registered("alpha", "fx", true, None),
+    ]);
+    let (_, _, event, built) = run_build(&inputs, &tools, true, None, Vec::new());
+    assert!(built.is_none());
+    assert!(event.replaced.is_empty());
+}
+
+#[test]
+fn build_sources_are_sorted_unique_and_leave_builtin_out() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let tools = tools_map(vec![
+        registered("a1", "zeta", true, None),
+        registered("a2", "alpha", true, None),
+        registered("a3", "alpha", true, None),
+        registered("b", "builtin", true, None),
+    ]);
+    let (_, _, event, built) = run_build(&build_inputs(), &tools, true, Some(&factory), Vec::new());
+    assert!(built.is_some());
+    assert!(sent_deferred(&event, "b"), "a builtin tool still defers");
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].1, ["alpha", "zeta"]);
+}

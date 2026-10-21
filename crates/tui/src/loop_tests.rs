@@ -8,6 +8,7 @@ use super::{
 };
 use crate::app::App;
 use crate::link::Line;
+use contract::clock::Clock;
 use contract::{Envelope, Seq};
 use fakes::Deadline;
 use ratatui::backend::TestBackend;
@@ -619,6 +620,162 @@ fn the_paging_report_times_the_resize_and_absent_search() {
     );
 }
 
+/// A clock reading a scripted instant per `now()` call: the frame calls
+/// `now()` for `items_due`, the pre-draw sweep and the post-draw sweep
+/// in that order, so the script sets each sweep's instant exactly. No
+/// fake-clock advance and no real-clock read.
+struct ScriptClock {
+    script: Vec<std::time::Instant>,
+    at: std::sync::atomic::AtomicUsize,
+}
+
+impl ScriptClock {
+    fn clock(script: Vec<std::time::Instant>) -> Arc<Self> {
+        Arc::new(Self {
+            script,
+            at: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+}
+
+impl contract::clock::Clock for ScriptClock {
+    fn now(&self) -> std::time::Instant {
+        let at = self.at.fetch_add(1, Ordering::SeqCst);
+        self.script[at.min(self.script.len() - 1)]
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH
+    }
+
+    fn sleep(&self, _d: Duration) {}
+
+    fn wait_until(
+        &self,
+        _until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        wait(Some(Duration::ZERO));
+    }
+
+    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
+}
+
+/// The frame sweeps notices before the draw and again before arming.
+/// Frame one's script births the pushed event at the pre-draw sweep,
+/// shows it in the draw, then expires it at the post-draw sweep past
+/// the fade: the draw saw it, but nothing arms and nothing stacks.
+/// Frame two births its event after the fade with a steady clock and
+/// arms its expiry; frame three past that expiry removes it before
+/// the draw, so it never draws. A missing pre-draw sweep would leave
+/// frame one's event unborn at the draw and stacked past the post-draw
+/// expiry; a missing post-draw sweep would stack it and arm its wake.
+#[test]
+fn frames_sweep_notices_before_and_after_the_draw() {
+    let origin = fakes::clock::FakeClock::new().origin();
+    let past = origin + crate::app::FADE + Duration::from_secs(1);
+    // Three `now()` reads per frame: `items_due`, the pre-draw sweep,
+    // the post-draw sweep.
+    let clock = ScriptClock::clock(vec![
+        origin,
+        origin,
+        past, // frame one: birth, then expiry
+        past,
+        past,
+        past, // frame two: birth after the fade
+        past + crate::app::FADE + Duration::from_secs(1),
+        past + crate::app::FADE + Duration::from_secs(1),
+        past + crate::app::FADE + Duration::from_secs(1),
+    ]);
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    let prompt = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    let mut seq = 0u64;
+    for (kind, action, payload) in [
+        ("turn_started", None, prompt),
+        (
+            "tool_call_requested",
+            Some("a_t0"),
+            json!({"name": "read", "arguments": {}}),
+        ),
+        (
+            "assistant_message_completed",
+            Some("a_m"),
+            json!({"outcome": "completed"}),
+        ),
+        (
+            "tool_call_completed",
+            Some("a_t0"),
+            json!({"status": "completed", "content": []}),
+        ),
+        ("turn_completed", None, json!({"outcome": "completed"})),
+    ] {
+        seq += 1;
+        app.on_line(Line::Session(line(kind, Some(seq), action, payload)));
+    }
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let screen =
+        Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen,
+        hub: Connection::new(None),
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: clock.clone(),
+        wakeups: 0,
+        files_out: None,
+        search: None,
+        reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
+        paste_reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
+        open_command: None,
+        viewer: Vec::new(),
+        images_dir: PathBuf::new(),
+        title: crate::osc::Title::default(),
+        shape: crate::osc::Shape::default(),
+        tick: crate::tick::TickThread::idle(),
+    };
+    lp.hub.store(ours);
+    drop(theirs);
+    let (_tx, rx) = mpsc::channel();
+    lp.app
+        .push_notice("io_failed", "frame fade probe".to_owned());
+    // Frame one: the pre-draw sweep births the pushed event at the
+    // birth instant, the draw shows it, and the post-draw sweep past
+    // the fade expires it before arming: drawn once, stacked never.
+    assert_eq!(lp.frame(&rx), None);
+    assert!(shown(&lp).contains("frame fade probe"), "{}", shown(&lp));
+    assert!(lp.app.notices().is_empty());
+    assert_eq!(lp.app.take_wake(), None);
+    // Frame two after the fade: the pre-draw sweep births the new push
+    // at its instant and the arm covers its expiry.
+    lp.app.push_notice("io_failed", "second probe".to_owned());
+    assert_eq!(lp.frame(&rx), None);
+    assert!(shown(&lp).contains("second probe"), "{}", shown(&lp));
+    assert_eq!(notice_codes(&lp.app), ["io_failed"]);
+    assert_eq!(lp.app.take_wake(), Some(past + crate::app::FADE));
+    // Frame three past that expiry: the pre-draw sweep removes it
+    // before the draw, so it never draws and nothing arms.
+    assert_eq!(lp.frame(&rx), None);
+    assert!(lp.app.notices().is_empty());
+    assert!(!shown(&lp).contains("second probe"), "{}", shown(&lp));
+    assert_eq!(lp.app.take_wake(), None);
+}
+
 /// A clock that ticks one millisecond per `now()`, so the paging jig's
 /// report holds nonzero durations. The origin is the fake clock's, since
 /// reading the process clock is banned in tests.
@@ -1226,6 +1383,39 @@ fn stall_report_names_finished_helpers() {
     );
 }
 
+/// Pumps folds until `stop` arrives: each fold signal renews the
+/// no-progress window and sends one release, so a slow machine folds
+/// every chunk within the window; `stop`'s arrival ends the pump, so the
+/// window never covers a held answer. A stop that lands while the pump
+/// waits still ends it through the recheck: the hub's park arrives with
+/// a ping on the fold channel, and the run thread's finish arrives as
+/// its fold senders hang up. `idle` names the wait in the error when
+/// neither a fold nor the stop arrives.
+fn pump_until_stop<T>(
+    window: Duration,
+    reached: &mpsc::Receiver<()>,
+    release: &mpsc::Sender<()>,
+    stop: &mpsc::Receiver<T>,
+    idle: &str,
+) -> Result<T, String> {
+    loop {
+        if let Ok(stop) = stop.try_recv() {
+            return Ok(stop);
+        }
+        // One fresh window per signal through the shared deadline
+        // type: each fold renews the no-progress bound.
+        match Deadline::after(window).recv(reached) {
+            Ok(()) => {
+                release.send(()).unwrap_or(());
+            }
+            Err(_) => match stop.try_recv() {
+                Ok(stop) => return Ok(stop),
+                Err(_) => return Err(format!("{idle} for {window:?}")),
+            },
+        }
+    }
+}
+
 /// Drains the run thread chunk by chunk: each fold signal renews the
 /// no-progress window and sends one release, so a slow machine folds
 /// every chunk within the window while the whole log takes what it
@@ -1236,19 +1426,71 @@ fn drain_by_chunk<T>(
     release: &mpsc::Sender<()>,
     finished: &mpsc::Receiver<T>,
 ) -> Result<T, String> {
-    loop {
-        // One fresh window per signal through the shared deadline
-        // type: each fold renews the no-progress bound.
-        match Deadline::after(window).recv(reached) {
-            Ok(()) => {
-                release.send(()).unwrap_or(());
+    pump_until_stop(window, reached, release, finished, "no fold")
+}
+
+/// Unpacks a waited run thread return: the value, or a panic naming the
+/// run thread's state and each helper thread's last step, so the next
+/// sighting shows which stall candidate happened.
+#[track_caller]
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+fn unpack_wait<T>(
+    waited: Result<T, String>,
+    prefix: String,
+    finished: &mpsc::Receiver<(i32, Loop<TestBackend>)>,
+    hub_progress: &Mutex<HubProgress>,
+    hub_done: &mpsc::Receiver<()>,
+    reader_done: &mpsc::Receiver<()>,
+) -> T {
+    match waited {
+        Ok(done) => done,
+        Err(err) => {
+            let prefix = format!("{prefix}: {err}");
+            match finished.try_recv() {
+                Ok(_) => panic!("{prefix}\nrun thread finished after the drain gave up"),
+                Err(finished_state) => panic!(
+                    "{prefix}\n{}",
+                    stall_report(
+                        &finished_state,
+                        &hub_progress
+                            .lock()
+                            .map(|held| held.clone())
+                            .unwrap_or_default(),
+                        &hub_done.try_recv(),
+                        &reader_done.try_recv(),
+                    ),
+                ),
             }
-            Err(_) => match finished.try_recv() {
-                Ok(done) => return Ok(done),
-                Err(_) => return Err(format!("no fold for {window:?}")),
-            },
         }
     }
+}
+
+#[test]
+fn the_park_ends_the_pump_without_a_fold() {
+    let (_reached_tx, reached) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let (parked_tx, parked) = mpsc::channel();
+    parked_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("park: {err}"));
+    drop(parked_tx);
+    pump_until_stop(DRAIN, &reached, &release_tx, &parked, "no fold nor park")
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert!(release.try_recv().is_err(), "no fold was released");
+}
+
+#[test]
+fn no_fold_and_no_park_fails_the_pump_window() {
+    let (reached_tx, reached) = mpsc::channel();
+    let (release_tx, _release) = mpsc::channel();
+    let (parked_tx, parked) = mpsc::channel::<()>();
+    // No fold and no park will ever arrive: both senders hang up, so
+    // the pump fails on the hangup without outlasting any window.
+    drop(reached_tx);
+    drop(parked_tx);
+    let err = pump_until_stop(DRAIN, &reached, &release_tx, &parked, "no fold nor park")
+        .expect_err("the pump ended with no fold and no park");
+    assert!(err.contains("no fold nor park"), "{err}");
 }
 
 #[test]
@@ -1467,6 +1709,20 @@ fn resume_open_replays_the_log_to_the_tail() {
     // release it, and dropping the sender on panic releases it too.
     let (subscribed_tx, subscribed) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
+    // The fold seam the pump and the drain share: one `reached` per hub
+    // chunk, one `release` per signal. The hub holds a clone to ping the
+    // pump awake when it parks at history.
+    let (fold_reached_tx, fold_reached) = mpsc::channel();
+    let (fold_release_tx, fold_release) = mpsc::channel();
+    let fold_ping_tx = fold_reached_tx.clone();
+    // The pause point holding the history answer: the hub signals it
+    // read history, then waits on a channel whose sender the test owns,
+    // so the hold needs no deadline of its own. The pump releases folds
+    // until the park, then the test releases the answer, so the drain
+    // that follows bounds replay chunks only, never the held answer.
+    // Dropping the sender on panic releases the hub the same way.
+    let (history_parked_tx, history_parked) = mpsc::channel();
+    let (history_release_tx, history_release) = mpsc::channel();
     // The hub signals when it finishes its writes, so the test waits on
     // the hub's answer instead of the drain window alone.
     let (hub_done_tx, hub_done) = mpsc::channel();
@@ -1538,6 +1794,15 @@ fn resume_open_replays_the_log_to_the_tail() {
                         write(session_ack(&id, json!({"commands": []})));
                     }
                     Some("history") => {
+                        // Parked with the question read: the loop asked
+                        // and waits in its answer, so no fold follows
+                        // until the test releases the answer. The ping
+                        // wakes the fold pump, which sees the park and
+                        // stops; the answer goes out only after the
+                        // test's release.
+                        history_parked_tx.send(()).unwrap_or(());
+                        fold_ping_tx.send(()).unwrap_or(());
+                        history_release.recv().unwrap_or(());
                         let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
                         let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
                         write(session_ack(
@@ -1566,8 +1831,6 @@ fn resume_open_replays_the_log_to_the_tail() {
     // bounds one chunk, never the whole log. Dropping the sender lets
     // every later fold through, and a panicking test releases the loop
     // the same way.
-    let (fold_reached_tx, fold_reached) = mpsc::channel();
-    let (fold_release_tx, fold_release) = mpsc::channel();
     std::thread::Builder::new()
         .name("resume-run".to_owned())
         .spawn(move || {
@@ -1592,6 +1855,29 @@ fn resume_open_replays_the_log_to_the_tail() {
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
     drop(release_tx);
+    // The hub parked at history with the loop waiting in its answer:
+    // pump folds until the park, so the no-progress window never covers
+    // the held answer. The park's ping wakes the pump, which sees the
+    // park and stops. Panicking drops the history release sender, which
+    // releases the held hub thread too.
+    unpack_wait(
+        pump_until_stop(
+            DRAIN,
+            &fold_reached,
+            &fold_release_tx,
+            &history_parked,
+            "no fold nor park",
+        ),
+        format!("the loop neither folded nor parked at history for {DRAIN:?}"),
+        &finished,
+        &hub_progress,
+        &hub_done,
+        &reader_done,
+    );
+    history_release_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    drop(history_release_tx);
     // The drain pumps the fold chunk by chunk: each signal renews the
     // no-progress window, so a slow machine folds every chunk within
     // `DRAIN` while the whole log takes what it takes. Panicking drops
@@ -1600,27 +1886,14 @@ fn resume_open_replays_the_log_to_the_tail() {
     // now: the drain error still panics, and the panic names the run
     // thread's state and each helper thread's last step, so the next
     // sighting shows which stall candidate happened.
-    let (code, lp) = match drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished) {
-        Ok(done) => done,
-        Err(err) => {
-            let prefix = format!("the loop folded no chunk for {DRAIN:?}: {err}");
-            match finished.try_recv() {
-                Ok(_) => panic!("{prefix}\nrun thread finished after the drain gave up"),
-                Err(finished_state) => panic!(
-                    "{prefix}\n{}",
-                    stall_report(
-                        &finished_state,
-                        &hub_progress
-                            .lock()
-                            .map(|held| held.clone())
-                            .unwrap_or_default(),
-                        &hub_done.try_recv(),
-                        &reader_done.try_recv(),
-                    ),
-                ),
-            }
-        }
-    };
+    let (code, lp) = unpack_wait(
+        drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished),
+        format!("the loop folded no chunk for {DRAIN:?}"),
+        &finished,
+        &hub_progress,
+        &hub_done,
+        &reader_done,
+    );
     drop(fold_release_tx);
     // The hub's writes and the reader's EOF are ready once the loop has
     // returned: hang guards, not drain bounds.
@@ -2242,4 +2515,115 @@ fn a_disconnect_among_full_batches_ends_the_batch_with_its_own_frame() {
     push_markers(&mut inputs, tail, &mut seq, &mut turn);
     assert_eq!(run_queued(&mut lp, rx, tx, inputs), 0);
     assert_eq!(flushes.get(), 3);
+}
+
+/// A hub line of `kind` for `session`.
+fn hub_for(kind: &str, session: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: kind.to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"session_id": session})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// The notice rows' codes, oldest first.
+fn notice_codes(app: &App) -> Vec<String> {
+    app.notices()
+        .into_iter()
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { code, .. } => Some(code),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn take_wake_folds_the_notices_wake() {
+    let clock = fakes::clock::FakeClock::new();
+    let t0 = clock.now();
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    // Quiet: no motion, no items, no notices.
+    assert_eq!(app.take_wake(), None);
+    // One event: the wake is its expiry.
+    app.push_notice("io_failed", "x".to_owned());
+    app.sweep_notices(t0);
+    assert_eq!(
+        app.take_wake(),
+        Some(t0 + std::time::Duration::from_secs(10))
+    );
+    // Two staggered events: the earlier expiry wins.
+    app.push_notice("config_invalid", "y".to_owned());
+    app.sweep_notices(t0 + std::time::Duration::from_secs(5));
+    assert_eq!(
+        app.take_wake(),
+        Some(t0 + std::time::Duration::from_secs(10))
+    );
+    // Past the first notice's fade only it expires: the younger notice
+    // stands, and the wake moves to its expiry.
+    app.sweep_notices(t0 + std::time::Duration::from_secs(10));
+    assert_eq!(notice_codes(&app), ["config_invalid"]);
+    assert_eq!(
+        app.take_wake(),
+        Some(t0 + std::time::Duration::from_secs(15))
+    );
+    // Past every fade the wake is gone with the rows.
+    app.sweep_notices(t0 + std::time::Duration::from_secs(15));
+    assert!(app.notices().is_empty());
+    assert_eq!(app.take_wake(), None);
+}
+
+#[test]
+fn reopen_clears_only_the_closed_sessions_stream_closed() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    // A close for the open session shows; one for another session is not
+    // this terminal's cause.
+    app.on_line(hub_for("stream_closed", SESSION));
+    assert_eq!(notice_codes(&app), ["stream_closed"]);
+    app.on_line(hub_for("stream_closed", "s_bbbbbbbbbbbbbbbb"));
+    assert_eq!(notice_codes(&app), ["stream_closed"]);
+    // Attaching elsewhere drops only the other session's stale row.
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    assert!(app.notices().is_empty());
+    // A close for the now-open session shows until its reopen ends it.
+    app.on_line(hub_for("stream_closed", "s_bbbbbbbbbbbbbbbb"));
+    assert_eq!(notice_codes(&app), ["stream_closed"]);
+    app.on_line(hub_for("stream_reopened", "s_bbbbbbbbbbbbbbbb"));
+    assert!(app.notices().is_empty());
+    // A stale reopen for a session with no row changes nothing.
+    app.on_line(hub_for("stream_reopened", SESSION));
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn login_url_survives_sweeps_and_falls_to_dismiss() {
+    let clock = fakes::clock::FakeClock::new();
+    let t0 = clock.now();
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.push_notice("login_url", "open the link to log in".to_owned());
+    app.push_notice("io_failed", "x".to_owned());
+    app.sweep_notices(t0);
+    // Past the fade the event is gone and the condition stands: no
+    // terminal-visible signal ends it, only the person's ✕ does.
+    app.sweep_notices(t0 + std::time::Duration::from_secs(30));
+    assert_eq!(notice_codes(&app), ["login_url"]);
+    let id = app
+        .notices()
+        .into_iter()
+        .find_map(|line| match line {
+            crate::app::NoticeLine::Notice { id, .. } => Some(id),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .expect("the login row");
+    app.on_click(crate::mouse::TargetId::DismissNotice(id));
+    assert!(app.notices().is_empty());
 }

@@ -24,7 +24,7 @@ impl Setup {
     fn new_with_home() -> Self {
         let setup = Self {
             deadline: Deadline::start(),
-            root: fakes::TempDir::new("fiber-ext-remove-missing"),
+            root: fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-ext-remove-missing"),
         };
         fs::create_dir_all(setup.home()).unwrap();
         setup

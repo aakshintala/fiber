@@ -40,6 +40,7 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         } => Some(item(command, &output, &process)),
         CommandResult::Rewind { .. }
         | CommandResult::Tools { .. }
+        | CommandResult::McpServers { .. }
         | CommandResult::Commands { .. }
         | CommandResult::Skills { .. }
         | CommandResult::Quota { .. }
@@ -51,7 +52,8 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         | CommandResult::OfferedFile { .. }
         | CommandResult::Start { .. }
         | CommandResult::Status { .. }
-        | CommandResult::Subscribe { .. } => None,
+        | CommandResult::Subscribe { .. }
+        | CommandResult::Import { .. } => None,
     }
 }
 

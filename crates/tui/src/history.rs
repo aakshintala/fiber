@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::commands::{Completions, Rows};
 use super::overlay::Overlay;
-use super::{App, Effect, Link, mint};
+use super::{App, Effect, mint};
 use crate::keys::{Edit, Key};
 use crate::slash::{SHOWN, window_start};
 
@@ -374,7 +374,7 @@ impl App {
     /// The next page while the search panel is open, one at a time until
     /// the history ends.
     fn more(&mut self) -> Effect {
-        let up = self.link == Link::Up;
+        let up = self.outbox.is_up();
         let line = self
             .history
             .search
@@ -426,7 +426,7 @@ impl App {
     /// asked for and the recall waits for it. With no more pages nothing
     /// changes.
     fn older(&mut self) -> Effect {
-        let up = self.link == Link::Up;
+        let up = self.outbox.is_up();
         let mut lines = Vec::new();
         if !self.history.started {
             lines.extend(self.history.fetch(up));
