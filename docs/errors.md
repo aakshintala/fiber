@@ -120,6 +120,16 @@ name one it lists. `model_unconfigured` means the model needs its host: set
 the setting it names. `extension_missing` means the provider is not installed:
 install it. None of these is retried.
 
+### `model_unconfigured` remedies
+
+Three fixes, in the order the message names them. `fiber login
+<provider>` asks for the host after the credential is stored and saves it
+globally. Setting the named setting in `config/<extension>.json` in Fiber
+home fills it for every project at once. When the message names an
+environment variable, exporting it in the shell profile and running `fiber
+hub refresh` fills it: the hub reads its environment when it starts, so a
+newly exported variable needs a refresh before the list sees it.
+
 ## A failed model call
 
 A failed model call is an assistant message that completed with a failed
