@@ -208,6 +208,7 @@ fn sign_cases_forward_the_request_and_match_the_added_headers() {
             assert(arg.url == "https://example.test/signed")
             assert(arg.headers["x-input"] == "input")
             assert(arg.body_sha256 == host.sha256(""))
+            assert(arg.time == 1700000000)
             return {["x-signed"] = "signature"}
         end}})
     "#,

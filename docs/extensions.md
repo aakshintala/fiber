@@ -617,7 +617,8 @@ A provider may have five pieces of Lua:
 
 Each function is `{ timeout, run }`, like `fiber.command`: `timeout` in
 milliseconds, `run` the function Fiber calls. Only `sign()` runs while a
-request is being sent. It sees the body's SHA-256, never the body. A `sign()`
+request is being sent. It sees the body's SHA-256, never the body, and the
+time in whole Unix seconds as `time`. A `sign()`
 that errors or returns unusable headers fails the call with `credential_failed`
 (`docs/errors.md`). Here is `providers/acme.lua` for a gateway that lists its
 models at `/models`:
@@ -744,8 +745,9 @@ The credential functions take these arguments:
   returned email, or `default`
 - `credential`: `{}`, with an optional `label`; returns
   `{token, expires_at, headers}` from the provider's credential cache
-- `sign`: `{method, url, headers}`; signs an empty-body request and returns
-  the headers the signer adds
+- `sign`: `{method, url, headers}`; signs an empty-body request at the case
+  clock's time, which starts at 1,700,000,000 Unix seconds, and returns the
+  headers the signer adds
 
 `credentials` maps `<credential>/<label>` to stored JSON, written before the
 first call. `expect_credentials` checks those files after the calls, using

@@ -1,0 +1,31 @@
+{
+  "call": {
+    "provider": "bedrock",
+    "function": "sign",
+    "arg": {
+      "method": "GET",
+      "url": "https://service.us-east-1.amazonaws.com/?Param2=value2&Param1=value1",
+      "headers": {
+        "Host": "example.amazonaws.com",
+        "X-Amz-Date": "20150830T123600Z"
+      }
+    }
+  },
+  "host": {
+    "exec": [
+      {
+        "request": {
+          "program": "/bin/sh"
+        },
+        "reply": {
+          "code": 0,
+          "stdout": "\u0000AKIDEXAMPLE\u0000wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY\u0000",
+          "stderr": ""
+        }
+      }
+    ]
+  },
+  "returns": {
+    "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500"
+  }
+}

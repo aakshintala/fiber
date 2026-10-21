@@ -131,15 +131,15 @@ policy is `docs/model-routing.md`, "When a model call fails".
 
 | Code | What it covers | Retried |
 |---|---|---|
-| `rate_limited` | HTTP 429 other than a quota or billing error; an OpenRouter in-flight budget 402 that carries a `Retry-After` in seconds | yes |
-| `provider_unavailable` | HTTP 5xx, including 503 and 529 overload, HTTP 408 and HTTP 409 | yes |
+| `rate_limited` | HTTP 429 other than a quota or billing error; an OpenRouter in-flight budget 402 that carries a `Retry-After` in seconds; an AWS throttling exception ("Recognising an AWS exception") | yes |
+| `provider_unavailable` | HTTP 5xx, including 503 and 529 overload, HTTP 408 and HTTP 409; an AWS server or model-stream exception ("Recognising an AWS exception") | yes |
 | `connection_failed` | DNS, TLS, a refused or dropped connection, no address connecting within 15 seconds each, or a connection silent for 300 seconds (`docs/model-routing.md`, "When a model call fails"), or a client could not reach a listed hub | yes |
 | `stream_incomplete` | a stream that ended before its protocol's terminal event, an `openai-responses` terminal event whose status is `in_progress` or `queued`, or an error inside an HTTP 200 response that no other code matches | yes |
 | `quota_exceeded` | quota, billing or a subscription limit, as an HTTP status or inside the stream ("Recognising a quota or billing error") | never |
-| `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh the token endpoint rejected, a login with nobody attached, or a login that did not finish within `credential()`'s timeout | never |
+| `authentication_failed` | HTTP 401, a rejected key, an AWS exception refusing the signature or the credential ("Recognising an AWS exception"), an OAuth refresh the token endpoint rejected, a login with nobody attached, or a login that did not finish within `credential()`'s timeout | never |
 | `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/handoff.md`, "Overflow") |
 | `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter` and a Gemini safety finish reason | never |
-| `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, Google Vertex's `NOT_FOUND` for a `Publisher model`, which also covers a model the project may not call, or OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"). A 404 alone is not enough, since a wrong base URL also returns 404 | never |
+| `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, Google Vertex's `NOT_FOUND` for a `Publisher model`, which also covers a model the project may not call, OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"), or Bedrock's "The provided model identifier is invalid."; or AWS names a `ResourceNotFoundException`. A 404 alone is not enough, since a wrong base URL also returns 404 | never |
 | `invalid_request` | any other HTTP 4xx; for a 404 the message names the status and the requested host and path, never the query string | never |
 | `unknown_stop_reason` | a stop or finish reason the protocol does not map; the message carries the raw value | never |
 | `paused_too_long` | a reply was still paused (`pause_turn`) after 5 continuations in a row; the message carries `pause_turn` | never |
@@ -221,9 +221,37 @@ workspace's spend-limit 429, which carries `retry-after` and has no field
 telling it apart from a rate limit; and an OpenRouter in-flight budget 402
 that carries a `Retry-After` in seconds.
 
-Amazon Bedrock waits for its framing: no Fiber request reaches its Invoke
-API yet, so its quota exception is classified in the ticket that builds it
-(#221).
+Amazon Bedrock's `ServiceQuotaExceededException` is not matched: no probe has
+reached it, so whether it is `quota_exceeded` or `rate_limited` is unsettled
+("Not settled here"), and it is `invalid_request`, as any other 400 is.
+
+### Recognising an AWS exception
+
+AWS names an exception only in the `X-Amzn-ErrorType` header of a failed
+response, and in the `:exception-type` of an exception message inside the
+stream (`docs/model-routing.md`, "Bedrock Invoke wire facts"). The name,
+matched without regard to case, decides the code:
+
+- `AccessDeniedException`, `UnrecognizedClientException`,
+  `InvalidSignatureException`, `IncompleteSignatureException`,
+  `MissingAuthenticationTokenException` and `ExpiredTokenException`:
+  `authentication_failed`. Bedrock answers a malformed API key with
+  `AccessDeniedException`.
+- `ThrottlingException` and `ModelNotReadyException`: `rate_limited`.
+- `InternalServerException`, `ServiceUnavailableException`,
+  `ModelStreamErrorException`, `ModelTimeoutException` and
+  `ModelErrorException`: `provider_unavailable`.
+- `ResourceNotFoundException`: `model_not_found`.
+
+Any other name, `ValidationException` among them, leaves the code to the
+status and the body, as for any provider: Bedrock's "The provided model
+identifier is invalid." is `model_not_found`, "prompt is too long"
+`context_overflow`, and the rest of its 400s `invalid_request`. Inside the
+stream a `validationException` is `invalid_request`, unless its message is an
+overflow, and any other name `stream_incomplete`.
+
+A usage-limit body wins over the name, then authentication, then a quota or
+billing shape, as for every provider.
 
 ### Output tokens
 
@@ -395,5 +423,9 @@ dynamically — are events: they fade after one showing.
   the probe; their matches rest on protocol documentation until one is seen.
   Quota and billing matches rest on vendor documentation
   (`research/provider-errors/quota.md`) until a live body is seen.
+  AWS's throttling, server and model-stream exceptions, and every exception
+  inside a Bedrock stream, rest on AWS's documentation of Bedrock's errors
+  until one is seen. Bedrock's `ServiceQuotaExceededException` is unmatched
+  until a probe shows whether it is a quota or a rate limit.
   ChatGPT/codex documents no usage-limit body, so its match rests on reference
   implementations (`docs/model-routing.md`, "Protocols and providers").

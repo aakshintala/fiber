@@ -1355,6 +1355,7 @@ fn assert_same_error(ordinary: &crate::Error, observed: &crate::Error) {
                 body: a_body,
                 retry_after: a_wait,
                 should_retry: a_retry,
+                error_type: a_type,
                 ..
             },
             crate::Error::Status {
@@ -1362,6 +1363,7 @@ fn assert_same_error(ordinary: &crate::Error, observed: &crate::Error) {
                 body: b_body,
                 retry_after: b_wait,
                 should_retry: b_retry,
+                error_type: b_type,
                 ..
             },
         ) => {
@@ -1369,6 +1371,7 @@ fn assert_same_error(ordinary: &crate::Error, observed: &crate::Error) {
             assert_eq!(a_body, b_body, "error bodies match byte for byte");
             assert_eq!(a_wait, b_wait);
             assert_eq!(a_retry, b_retry);
+            assert_eq!(a_type, b_type);
         }
         (
             crate::Error::Stalled {
@@ -1460,6 +1463,48 @@ fn error_bodies_match_the_ordinary_path_byte_for_byte() {
         panic!("an overlong 500 is a status failure: {observed:?}");
     };
     assert_eq!(body, "");
+}
+
+#[test]
+fn both_sends_keep_the_aws_exception_name() {
+    let (ordinary, observed) = both_sends(
+        || {
+            fakes::Response::status(500, r#"{"message":"boom"}"#).header(
+                "x-amzn-ErrorType",
+                "InternalServerException:http://internal.amazon.com/coral/com.amazon.bedrock/",
+            )
+        },
+        r#"{"message":"boom"}"#.len() as u64,
+    );
+    assert_same_error(&ordinary, &observed);
+    let crate::Error::Status { error_type, .. } = &observed else {
+        panic!("a 500 is a status failure: {observed:?}");
+    };
+    assert_eq!(error_type.as_deref(), Some("InternalServerException"));
+}
+
+#[test]
+fn the_aws_exception_name_is_the_header_before_its_first_colon() {
+    for (header, name) in [
+        (
+            Some("ThrottlingException:http://internal.amazon.com/coral/com.amazon.bedrock/"),
+            Some("ThrottlingException"),
+        ),
+        (Some(" ThrottlingException "), Some("ThrottlingException")),
+        (Some(":http://internal.amazon.com/"), None),
+        (Some(""), None),
+        (None, None),
+    ] {
+        let mut response = fakes::Response::status(429, r#"{"message":"slow down"}"#);
+        if let Some(header) = header {
+            response = response.header("x-amzn-errortype", header);
+        }
+        let server = fakes::ProviderServer::start([response]).unwrap();
+        let crate::Error::Status { error_type, .. } = failed_status(&server) else {
+            panic!("not a status failure");
+        };
+        assert_eq!(error_type.as_deref(), name, "{header:?}");
+    }
 }
 
 #[test]
