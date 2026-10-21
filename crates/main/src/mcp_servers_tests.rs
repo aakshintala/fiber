@@ -326,6 +326,127 @@ fn a_settled_failure_reads_needs_login_before_its_line_is_written() {
     servers.stop();
 }
 
+/// The startup's settled failure for the remote server with `reason`:
+/// what the commit writes and the reader's seed carries together.
+fn settled_failure(reason: contract::events::ServerFailure) -> contract::events::McpServerFailed {
+    contract::events::McpServerFailed {
+        server: "remote".into(),
+        reason,
+        will_restart: false,
+        error: contract::shapes::Failure {
+            code: contract::ErrorCode::McpServerUnavailable,
+            message: "The MCP server `remote` failed to start: it needs a login.".into(),
+            retry_after_ms: None,
+            provider: None,
+        },
+    }
+}
+
+/// The `mcp_servers` rows for the remote server with `seed` settled and
+/// `lines` already written: the pre-commit gap holds no lines, and the
+/// post-commit log folds over the seed.
+fn seeded_rows(
+    seed: std::collections::HashMap<String, contract::events::McpServerFailed>,
+    lines: &[contract::events::Event],
+) -> Vec<contract::events::McpServerRow> {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"remote": {"url": "https://example.com/mcp"}}}}));
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let sessions = setup.rig.root.path().join("sessions");
+    let log = std::sync::Arc::new(
+        log::Log::create(
+            &sessions,
+            contract::SessionId("s_seed".into()),
+            clock.clone(),
+        )
+        .expect("the log opens"),
+    );
+    for line in lines {
+        log.append(line, None, None).expect("the line appends");
+    }
+    let servers = empty_servers(&setup.rig, &clock);
+    let waiting = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let refresh = super::servers_refresh_seeded(
+        seed,
+        sources_of(&setup.rig),
+        servers.clone(),
+        std::sync::Arc::downgrade(&log),
+        clock,
+        waiting,
+    );
+    let rows = refresh(Vec::new()).expect("the refresh reads");
+    servers.stop();
+    rows
+}
+
+#[test]
+fn a_seeded_start_failure_reads_failed() {
+    // The seed keeps the failure's own reason: a start that failed
+    // reads `failed`, never the `needs-login` of a failure that wants
+    // a login. A mutant mapping every seed to one state fails here.
+    let mut seed = std::collections::HashMap::new();
+    seed.insert(
+        "remote".to_owned(),
+        settled_failure(contract::events::ServerFailure::StartFailed),
+    );
+    let rows = seeded_rows(seed, &[]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "remote");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::Failed,
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_ready_line_clears_the_seed() {
+    // A restart's ready supersedes the startup's failure whether the
+    // failure came from the seed or the log: without the removal the
+    // restarted server would read failed. A mutant that keeps seeded
+    // entries past a ready fails here.
+    let mut seed = std::collections::HashMap::new();
+    seed.insert(
+        "remote".to_owned(),
+        settled_failure(contract::events::ServerFailure::NotLoggedIn),
+    );
+    let ready = contract::events::Event::McpServerReady(contract::events::McpServerReady {
+        server: "remote".into(),
+    });
+    let rows = seeded_rows(seed, &[ready]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "remote");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::Connecting,
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_written_failure_line_agrees_with_the_seed() {
+    // The commit writes the same failures the seed carries: folding
+    // the lines over the seed leaves the settled row, so readers
+    // before and after the commit agree. A mutant that lets the lines
+    // drop a seeded entry fails here.
+    let mut seed = std::collections::HashMap::new();
+    seed.insert(
+        "remote".to_owned(),
+        settled_failure(contract::events::ServerFailure::NotLoggedIn),
+    );
+    let failed = contract::events::Event::McpServerFailed(settled_failure(
+        contract::events::ServerFailure::NotLoggedIn,
+    ));
+    let rows = seeded_rows(seed, &[failed]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "remote");
+    assert_eq!(
+        rows[0].state,
+        contract::events::McpServerState::NeedsLogin,
+        "{rows:?}"
+    );
+}
+
 #[test]
 fn a_persons_server_becomes_a_spec_with_defaults() {
     let setup = Setup::new();

@@ -470,14 +470,25 @@ pub(crate) struct McpProviders {
 impl crate::reload::State {
     /// Builds the MCP hub providers from the session's own configuration,
     /// servers, declaration writer and log: the same inputs the startup
-    /// used, so queries, logins and reconnects agree with it.
-    pub(crate) fn mcp_providers(&self) -> McpProviders {
+    /// used, so queries, logins and reconnects agree with it. `settled`
+    /// is the startup's failures, which the commit writes after the door
+    /// starts serving: seeding the reader with them keeps every query's
+    /// rows on the settled outcome from the first one served.
+    pub(crate) fn mcp_providers(
+        &self,
+        settled: &[contract::events::McpServerFailed],
+    ) -> McpProviders {
         // One entry per server with a login running, holding its
         // authorization URL while it waits for the callback. The session
         // shares the one map its providers close over.
         let waiting = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let seed: HashMap<String, contract::events::McpServerFailed> = settled
+            .iter()
+            .map(|failure| (failure.server.clone(), failure.clone()))
+            .collect();
         McpProviders {
-            refresh: servers_refresh(
+            refresh: servers_refresh_seeded(
+                seed,
                 self.sources.clone(),
                 Arc::clone(&self.servers),
                 Arc::downgrade(&self.log),
@@ -499,17 +510,31 @@ impl crate::reload::State {
 
 /// The `mcp_servers` answer's reader with the startup's settled failures
 /// carried alongside, so a query served before the startup commit wrote
-/// their lines can read the settled rows. (The fold does not consult the
-/// seed yet.)
+/// their lines reads the settled rows. The seed holds the same failures
+/// the commit is about to write, so the rows agree either way.
 fn servers_refresh_seeded(
-    _seed: HashMap<String, contract::events::McpServerFailed>,
+    seed: HashMap<String, contract::events::McpServerFailed>,
     sources: config::Sources,
     servers: Arc<mcp::Servers>,
     log: std::sync::Weak<log::Log>,
     clock: Arc<dyn contract::clock::Clock>,
     waiting: Arc<std::sync::Mutex<HashMap<String, Option<String>>>>,
 ) -> doors::ServersRefresh {
-    servers_refresh(sources, servers, log, clock, waiting)
+    servers_refresh_inner(seed, sources, servers, log, clock, waiting)
+}
+
+/// Reads the `mcp_servers` answer with no settled failures outstanding:
+/// for a reader built outside the startup, where every failure it can
+/// report already sits in the log it folds.
+#[cfg(test)]
+fn servers_refresh(
+    sources: config::Sources,
+    servers: Arc<mcp::Servers>,
+    log: std::sync::Weak<log::Log>,
+    clock: Arc<dyn contract::clock::Clock>,
+    waiting: Arc<std::sync::Mutex<HashMap<String, Option<String>>>>,
+) -> doors::ServersRefresh {
+    servers_refresh_inner(HashMap::new(), sources, servers, log, clock, waiting)
 }
 
 /// Reads the `mcp_servers` answer from the tools answer's rows: one row
@@ -517,7 +542,8 @@ fn servers_refresh_seeded(
 /// own log so a mid-session death reads failed exactly as the startup
 /// notice did (`docs/mcp.md`, "Servers, their state and the per-server
 /// commands").
-fn servers_refresh(
+fn servers_refresh_inner(
+    seed: HashMap<String, contract::events::McpServerFailed>,
     sources: config::Sources,
     servers: Arc<mcp::Servers>,
     log: std::sync::Weak<log::Log>,
@@ -532,7 +558,11 @@ fn servers_refresh(
             &sources.overrides,
         )
         .map_err(Failure::from)?;
-        let mut failed: HashMap<String, contract::events::McpServerFailed> = HashMap::new();
+        // The startup's settled failures first: a query served before
+        // the commit wrote their lines reads the settled rows, and the
+        // lines below fold over them, so readers before and after the
+        // commit agree.
+        let mut failed: HashMap<String, contract::events::McpServerFailed> = seed.clone();
         if let Some(log) = log.upgrade() {
             let count = usize::try_from(log.count()).unwrap_or(usize::MAX);
             let envelopes = log.range(0, count).map_err(|error| Failure {
