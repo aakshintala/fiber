@@ -542,3 +542,37 @@ fn terminal_refusal_installs_nothing() {
     assert_eq!(fs::read(&world.binary).unwrap(), OLD_BINARY);
     assert_eq!(member_version(&world.home), "0.1.0");
 }
+
+/// `update` reports its run's exit code: a failed tag fetch exits one.
+/// The failure answers before any git runs, so the hardcoded origin never
+/// leaves the loopback server.
+#[test]
+fn update_maps_a_failed_tag_fetch_to_exit_one() {
+    let root = fakes::TempDir::new("fiber-cli-update-exit");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let server = fakes::ProviderServer::start_routed(
+        [("/releases", fakes::Response::status(500, "boom"))],
+        fakes::Response::status(404, "not found"),
+    )
+    .unwrap();
+    let bases = ReleaseBases {
+        web: server.url(),
+        api: server.url(),
+    };
+    let mut err = Vec::new();
+    let code = super::update(
+        &home,
+        "0.1.0",
+        TRIPLE,
+        Channel::Stable,
+        &bases,
+        &fakes::clock::SystemClock,
+        Io {
+            terminal: false,
+            input: &mut Cursor::new(b"".as_slice()),
+            err: &mut err,
+        },
+    );
+    assert_eq!(code, 1);
+}

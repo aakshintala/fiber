@@ -520,6 +520,36 @@ fn fetch_nightly_tag_picks_the_newest_base_then_date() {
     );
 }
 
+/// Two entries equal in (base, date) keep the deterministic winner: the
+/// strictly-greater comparison holds the first the list names, in either
+/// order. The `v` prefix is not part of the key, so `v0.3.0-nightly.D`
+/// and `0.3.0-nightly.D` tie.
+#[test]
+fn fetch_nightly_tag_keeps_the_first_of_equal_base_and_date() {
+    let server = update_fixture(
+        b"marker",
+        serde_json::json!([
+            {"tag_name": "v0.3.0-nightly.20240101", "prerelease": true, "draft": false},
+            {"tag_name": "0.3.0-nightly.20240101", "prerelease": true, "draft": false},
+        ]),
+    );
+    assert_eq!(
+        super::fetch_nightly_tag(&server.url()).unwrap(),
+        "v0.3.0-nightly.20240101"
+    );
+    let server = update_fixture(
+        b"marker",
+        serde_json::json!([
+            {"tag_name": "0.3.0-nightly.20240101", "prerelease": true, "draft": false},
+            {"tag_name": "v0.3.0-nightly.20240101", "prerelease": true, "draft": false},
+        ]),
+    );
+    assert_eq!(
+        super::fetch_nightly_tag(&server.url()).unwrap(),
+        "0.3.0-nightly.20240101"
+    );
+}
+
 #[test]
 fn fetch_nightly_tag_skips_what_is_not_a_matching_release() {
     let list = serde_json::json!([

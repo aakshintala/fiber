@@ -327,3 +327,41 @@ fn tag_commit_names_a_missing_tag_and_its_repository() {
     assert!(err.to_string().contains("v9.9.9"), "{err}");
     assert!(err.to_string().contains("github.com/acme/x"), "{err}");
 }
+
+/// The fake `git` answering `ls-remote`, so a failed listing names the
+/// repository the URL asked for.
+fn failing_git(url: String) -> Origin {
+    let git = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fake-git/git")
+        .to_string_lossy()
+        .into_owned();
+    Origin::new(git, move |_| url.clone())
+}
+
+/// `ls-remote` failing with a missing-repository error maps to
+/// `NoRepository`, naming the repository: the guard's true arm.
+#[test]
+fn tag_commit_reports_a_missing_repository() {
+    let clock = fakes::clock::FakeClock::new();
+    let err = failing_git("https://fake-missing-repo/x".to_owned())
+        .tag_commit("github.com/acme/x", "v1", clock.as_ref())
+        .unwrap_err();
+    let Error::NoRepository { name, .. } = &err else {
+        panic!("a missing repository is NoRepository: {err}");
+    };
+    assert_eq!(name, "github.com/acme/x");
+}
+
+/// `ls-remote` failing any other way stays a `Git` failure: the guard's
+/// false arm. An authentication failure is not a missing repository.
+#[test]
+fn tag_commit_keeps_a_non_missing_git_failure() {
+    let clock = fakes::clock::FakeClock::new();
+    let err = failing_git("https://fake-broken-repo/x".to_owned())
+        .tag_commit("github.com/acme/x", "v1", clock.as_ref())
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Git { .. }),
+        "a non-missing failure stays git: {err}"
+    );
+}

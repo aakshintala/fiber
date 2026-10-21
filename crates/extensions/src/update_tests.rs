@@ -330,6 +330,51 @@ fn an_update_moves_every_member_and_leaves_a_removed_first_party_absent() {
     );
 }
 
+/// `fresh` holds only members not yet installed: the installed widget
+/// the update moves is not fresh, while the dependency its newer tag
+/// newly needs joins the plan fresh.
+#[test]
+fn fresh_names_hold_only_members_not_yet_installed() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.member("github.com/acme/dep", "1.0.0");
+    setup.install("github.com/acme/widget");
+    // The newer widget newly depends on dep, which nothing installed.
+    setup.release_manifest(
+        "github.com/acme/widget",
+        "1.1.0",
+        &serde_json::json!({
+            "name": "github.com/acme/widget",
+            "version": "1.1.0",
+            "fiber": "0.0.0",
+            "api": 1,
+            "depends": { "github.com/acme/dep": "1.0.0" },
+        })
+        .to_string(),
+    );
+    setup.tag_release();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+    )
+    .unwrap();
+    let mut fresh: Vec<&str> = staged.plan().fresh_names().collect();
+    fresh.sort();
+    assert_eq!(fresh, ["github.com/acme/dep"]);
+}
+
 #[test]
 fn an_archive_member_keeps_its_requested_and_floor() {
     let mut setup = Setup::new();
@@ -406,6 +451,55 @@ fn docs_are_installed_when_absent() {
     assert_eq!(
         fs::read_to_string(setup.home().join("docs/v")).unwrap(),
         "new"
+    );
+}
+
+/// Dropping a staged update without committing removes the staged docs
+/// and installs nothing: the fresh directory beside `docs/` is gone and
+/// the installed tree is untouched.
+#[test]
+fn dropping_a_staged_update_removes_the_staged_docs_and_installs_nothing() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    let before = setup.installed_state();
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+    )
+    .unwrap();
+    // The docs sit staged beside `docs/`, not yet swapped in.
+    let fresh: Vec<PathBuf> = fs::read_dir(setup.home())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(".docs-"))
+        })
+        .collect();
+    assert_eq!(fresh.len(), 1, "one staged docs directory: {fresh:?}");
+    drop(staged);
+    assert!(
+        !fresh[0].exists(),
+        "dropping the staged update removes the staged docs"
+    );
+    assert_eq!(
+        setup.installed_state(),
+        before,
+        "dropping the staged update installs nothing"
     );
 }
 
