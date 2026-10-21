@@ -55,9 +55,10 @@ A provider is data, plus up to five optional Lua functions: `models()`
 discovers its model list, `quota()` reports its quota, `credential()` returns a
 token and its expiry, `sign()` adds headers to a request, and `cost()` looks up
 the cost of a call that ended without one. Only `sign()` runs on the request
-path. It receives the method, the URL, the headers and the
-SHA-256 of the body, and returns headers to add. It never sees or changes the
-body.
+path. It receives the method, the URL, the headers, the SHA-256 of the body
+and the time, and returns headers to add. The time is read from the injected
+clock, so a signature under test is the same on every run. It never sees or
+changes the body.
 
 Authentication beyond a key is extension code, not Rust. An OAuth login is an
 extension's `credential()`, built on native host calls for the parts every

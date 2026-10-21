@@ -32,7 +32,14 @@ A failed model call adds two optional fields:
   `sign()` failed, `message` is the first line of the extension's error and
   `status` is absent. Before it is stored, every credential value and every
   header value the credential, `credential()` or `sign()` supplied is replaced
-  with `[redacted]`. Fiber's `message` then names the provider and the function, such as "acme's credential() failed. Run `fiber login acme`.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
+  with `[redacted]`. Fiber's `message` then names the provider and the function, such as "acme's credential() failed.", and a `credential()` that fails at startup adds the same `provider` to `fiber_exited.error`.
+  It advises `fiber login <provider>` only when the provider's data declares
+  `login` (`docs/model-routing.md`, "What a provider extension declares"):
+  "codex's credential() failed. Run `fiber login codex`." For any other
+  provider `fiber login` stores a key, which a provider with `credential()`
+  never reads, so the extension's own first line, in `provider.message`,
+  names the remedy. The sentences for a login that needed a person, or that
+  did not finish in time, advise it too.
 
 ## Where a code comes from
 
