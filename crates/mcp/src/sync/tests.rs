@@ -10,6 +10,7 @@ use contract::tool::ServerRecord;
 use fakes::Deadline;
 use serde_json::json;
 
+use crate::slot::Served;
 use crate::test_support::FakeImages;
 use crate::test_support::{Setup, WITHIN};
 use crate::{SyncRow, classify_sync, commit_sync, stage_sync};
@@ -428,6 +429,115 @@ fn classify_starts_a_lazy_slot_and_commit_swaps_it_for_a_live_one() {
     assert!(
         servers.slot("fx").is_some_and(|slot| slot.is_live()),
         "the commit swapped the lazy slot for a live one"
+    );
+    setup.stop(servers);
+}
+
+#[test]
+fn classify_replaces_a_down_slot_and_the_commit_files_it_restarted() {
+    // A slot whose first start failed stays `Down` with its restart
+    // unused: the same spec takes the replace path beside the old
+    // slot, and the commit files it under `restarted`, never
+    // `started`.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    setup.result("echo", HI);
+    let spec = setup.spec("fx");
+    let images = FakeImages::ok();
+    // The first start writes the cache; the second declares from it
+    // without spawning; failing that first serve leaves the slot
+    // `Down`.
+    let first = setup.start_with_images(vec![spec.clone()], Arc::clone(&images));
+    setup.stop(first.servers);
+    let started = setup.start_with_images(vec![spec.clone()], Arc::clone(&images));
+    let slot = started.servers.slot("fx").expect("the lazy slot");
+    setup.write("fail-start", "");
+    assert!(
+        matches!(setup.serve(&slot), Served::Failed(_)),
+        "the first serve fails"
+    );
+    let rows = classify_sync(vec![spec.clone()], &started.servers);
+    assert!(
+        matches!(rows.as_slice(), [SyncRow::Replace { .. }]),
+        "a down slot takes the replace path"
+    );
+    std::fs::remove_file(setup.dir.path().join("fail-start")).expect("fail-start");
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a replacement stages");
+    let owned = setup.owned_inputs(&images);
+    let synced = commit_sync(staged, &servers, &owned.inputs());
+    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
+    assert!(
+        synced.servers.started.is_empty(),
+        "a down slot never files under started"
+    );
+    let echo = synced
+        .tools
+        .iter()
+        .find(|(_, _, info)| info.name == "mcp__fx__echo")
+        .expect("the replacement is declared");
+    assert!(
+        setup.run(&echo.1).error.is_none(),
+        "the replacement answers"
+    );
+    assert!(
+        servers.slot("fx").is_some_and(|slot| slot.is_live()),
+        "the commit swapped the down slot for a live one"
+    );
+    setup.stop(servers);
+}
+
+#[test]
+fn classify_replaces_a_dead_slot_and_the_commit_files_it_restarted() {
+    // A death seen while idle, then a failed restart, leaves the slot
+    // `Dead`: the same spec still takes the replace path beside the
+    // old slot, and the commit files it under `restarted`, never
+    // `started`.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    setup.result("echo", HI);
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    setup.kill(&started);
+    setup.write("fail-start", "");
+    assert!(
+        matches!(setup.serve(&slot), Served::Failed(_)),
+        "the restart fails"
+    );
+    let images = FakeImages::ok();
+    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
+    assert!(
+        matches!(rows.as_slice(), [SyncRow::Replace { .. }]),
+        "a dead slot takes the replace path"
+    );
+    std::fs::remove_file(setup.dir.path().join("fail-start")).expect("fail-start");
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a replacement stages");
+    let owned = setup.owned_inputs(&images);
+    let synced = commit_sync(staged, &servers, &owned.inputs());
+    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
+    assert!(
+        synced.servers.started.is_empty(),
+        "a dead slot never files under started"
+    );
+    let echo = synced
+        .tools
+        .iter()
+        .find(|(_, _, info)| info.name == "mcp__fx__echo")
+        .expect("the replacement is declared");
+    assert!(
+        setup.run(&echo.1).error.is_none(),
+        "the replacement answers"
+    );
+    assert!(
+        servers.slot("fx").is_some_and(|slot| slot.is_live()),
+        "the commit swapped the dead slot for a live one"
     );
     setup.stop(servers);
 }

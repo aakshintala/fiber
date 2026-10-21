@@ -17,7 +17,7 @@ use crate::error::McpError;
 use crate::server_json::ListedTool;
 use crate::slot::{Relisted, Run, Served, Slot, State};
 use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Started};
-use crate::test_support::{Setup, WITHIN, await_until};
+use crate::test_support::{Setup, WITHIN};
 
 impl Setup {
     /// Writes the cache for `spec` holding `tools` and no prompts, as a
@@ -1511,20 +1511,20 @@ impl Setup {
         std::fs::read(self.cache().join("fx.json")).expect("the cache file")
     }
 
-    /// Kills the fake's server and waits until `slot`'s reader has seen
-    /// the exit: the commit-after-death tests kill after staging, when
-    /// the servers already moved onto the stage thread.
+    /// Kills the running server of `started`'s only slot and waits until its
+    /// reader has seen the exit: `Server::stop` signals the group and its
+    /// gone-wait returns on the reader's acknowledgement, never a poll —
+    /// the commit-after-death tests kill after staging, when the servers
+    /// already moved onto the stage thread.
     #[track_caller]
     pub(crate) fn kill_slot(&self, slot: &std::sync::Arc<Slot>) {
-        fakes::kill_pid(self.pid(), "KILL").expect("the server dies");
-        let killed = std::sync::Arc::clone(slot);
-        await_until("the killed server to be gone", move || {
-            if let State::Running { server, .. } = &*super::lock(&killed.state) {
-                server.is_gone()
-            } else {
-                false
+        let server = match &*super::lock(&slot.state) {
+            State::Running { server, .. } => std::sync::Arc::clone(server),
+            State::NotStarted { .. } | State::Down { .. } | State::Dead { .. } => {
+                panic!("kill_slot needs a running server")
             }
-        });
+        };
+        server.stop();
     }
 }
 
@@ -1838,13 +1838,29 @@ fn relist_dying_mid_prompts_list_carries_the_same_restarting_death() {
     let cache_before = setup.cache_bytes();
     // `prompts.json` becomes a FIFO no one writes: `prompts/list` hangs.
     std::fs::remove_file(setup.dir.path().join("prompts.json")).expect("prompts.json");
-    fakes::fifo(setup.dir.path().join("prompts.json"));
+    let fifo = setup.dir.path().join("prompts.json");
+    fakes::fifo(&fifo);
+    // Opened on a thread: the open blocks until the fixture opens the
+    // FIFO to answer the re-list's `prompts/list`, so its return is the
+    // fixture's acknowledgement that the re-list is parked inside
+    // `prompts/list` — the kill below always lands mid-list. Held open,
+    // so the fixture's read stays blocked until the kill.
+    let (held_tx, held) = mpsc::channel();
+    std::thread::spawn(move || {
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&fifo)
+            .expect("the fixture reads prompts/list");
+        held_tx.send(writer).expect("collected");
+    });
     let (done, result) = mpsc::channel();
     let relisting = Arc::clone(&slot);
     std::thread::spawn(move || {
         done.send(relisting.relist()).expect("collected");
     });
-    setup.await_requests("prompts/list", 2);
+    let _held = Deadline::after(WITHIN)
+        .recv(&held)
+        .expect("the re-list reaches prompts/list");
     setup.kill(&started);
     let records = match Deadline::after(WITHIN)
         .recv(&result)
@@ -1889,7 +1905,6 @@ fn relist_past_its_deadline_carries_the_deadline_and_touches_nothing() {
     std::thread::spawn(move || {
         done.send(slot.relist()).expect("collected");
     });
-    setup.await_requests("tools/list", 2);
     setup.fake.advance_when_parked(
         Some(deadline),
         None,

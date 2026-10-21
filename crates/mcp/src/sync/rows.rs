@@ -47,8 +47,8 @@ pub enum SyncRow {
 /// A key mismatch or a `startup_timeout`/`call_timeout`/`required`
 /// difference takes the replace path; a running slot with a matching
 /// key and timeouts keeps; a running slot that died or expired replaces;
-/// a slot that never serves (`NotStarted`, `Down`, `Dead`) and a name
-/// with no slot start fresh. Any other difference rebuilds at declare
+/// a `Down` or `Dead` slot replaces beside the old one; a `NotStarted`
+/// slot and a name with no slot start fresh. Any other difference rebuilds at declare
 /// time with no restart.
 pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncRow> {
     let slots = servers
@@ -86,10 +86,15 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
                     // Running but gone or expired: it died while idle, so
                     // the re-list would only fall back; replace beside it.
                     SyncRow::Replace { spec }
+                } else if slot.served_before() {
+                    // `Down` or `Dead`: it served before and serves no
+                    // more, so the sync swaps it beside the old slot and
+                    // the commit files the name under `restarted`.
+                    SyncRow::Replace { spec }
                 } else {
-                    // `NotStarted`, `Down` or `Dead`: nothing serves, so
-                    // the single-spec start runs fresh and the commit
-                    // swaps the leftover slot out.
+                    // `NotStarted`: nothing ever served, so the
+                    // single-spec start runs fresh and the commit swaps
+                    // the leftover slot out.
                     SyncRow::Start { spec }
                 }
             }

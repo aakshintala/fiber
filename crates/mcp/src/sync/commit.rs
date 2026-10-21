@@ -34,52 +34,6 @@ pub struct Synced {
     pub prompt_sources: Prompts,
 }
 
-/// Installs a freshly shadow-started slot at commit: swaps the stale
-/// slot out, writes its cache, declares its tools and files it under
-/// `restarted` (a replacement) or `started` (a fresh start).
-fn install_opened(
-    installing: &mut Synced,
-    servers: &Servers,
-    staged: ShadowStaged,
-    all_sources: &mut Vec<PromptSource>,
-    inputs: &SyncInputs,
-) {
-    let ShadowStaged::Replaced {
-        spec,
-        slot,
-        listed,
-        used,
-        records: carried,
-        disposition,
-        sources,
-    } = staged
-    else {
-        unreachable!("commit files failures through install_failed");
-    };
-    let name = spec.name.clone();
-    // A fresh start swaps a leftover slot out, and a replacement swaps
-    // the stale spec out: a lazy `NotStarted` or failed slot with the
-    // same name never serves again once the commit installs the new one.
-    servers.remove(&name);
-    servers
-        .slots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push(slot);
-    cache::write(inputs.cache, &name, &spec.key(), &listed);
-    installing.tools.extend(used);
-    installing.records.extend(carried);
-    installing.records.push(ServerRecord::Ready(McpServerReady {
-        server: name.clone(),
-    }));
-    all_sources.extend(sources);
-    if disposition == Disposition::Restarted {
-        installing.servers.restarted.push(name);
-    } else {
-        installing.servers.started.push(name);
-    }
-}
-
 /// Installs a non-required shadow-start failure at commit: the old slot
 /// is already gone for a replacement, the detected exits ride first and
 /// the failure rides its failed record and the `failed` entry, filed
@@ -118,11 +72,7 @@ fn install_failed(
         reason: failure.reason,
         error: failure.error,
     });
-    if disposition == Disposition::Restarted {
-        installing.servers.restarted.push(name);
-    } else {
-        installing.servers.started.push(name);
-    }
+    disposition.file(&mut installing.servers, name);
 }
 
 /// Commits the staged sync: the install runs only after every required
@@ -164,8 +114,34 @@ pub fn commit_sync(
                 installing.tools.extend(used);
                 installing.servers.kept.push(name);
             }
-            StagedRow::Shadow(staged @ ShadowStaged::Replaced { .. }) => {
-                install_opened(&mut installing, servers, staged, &mut all_sources, inputs);
+            StagedRow::Shadow(ShadowStaged::Up {
+                spec,
+                slot,
+                listed,
+                used,
+                records: carried,
+                disposition,
+                sources,
+            }) => {
+                let name = spec.name.clone();
+                // A fresh start swaps a leftover slot out, and a
+                // replacement swaps the stale spec out: a lazy
+                // `NotStarted` or failed slot with the same name never
+                // serves again once the commit installs the new one.
+                servers.remove(&name);
+                servers
+                    .slots
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(slot);
+                cache::write(inputs.cache, &name, &spec.key(), &listed);
+                installing.tools.extend(used);
+                installing.records.extend(carried);
+                installing.records.push(ServerRecord::Ready(McpServerReady {
+                    server: name.clone(),
+                }));
+                all_sources.extend(sources);
+                disposition.file(&mut installing.servers, name);
             }
             StagedRow::Shadow(ShadowStaged::Failed {
                 spec,

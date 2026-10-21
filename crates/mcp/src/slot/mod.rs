@@ -270,6 +270,16 @@ impl Slot {
         &self.spec
     }
 
+    /// Whether the slot served before and serves no more: `Down`
+    /// after a first death, `Dead` after a second or a stop. The
+    /// reload replaces those beside the old slot (shadow-start first,
+    /// commit swaps, the name lands in `restarted`); a `NotStarted`
+    /// slot never served and starts fresh through the forced stage
+    /// path.
+    pub(crate) fn served_before(&self) -> bool {
+        matches!(&*lock(&self.state), State::Down { .. } | State::Dead { .. })
+    }
+
     /// Whether the server runs now: the slot holds a live server. The
     /// hub's `mcp_servers` answer reads this live, so a server that
     /// died mid-session reads not-running and its row falls back to the

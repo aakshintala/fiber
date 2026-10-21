@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use contract::events::McpServerFailed;
+use contract::events::{McpServerFailed, ReloadedServers};
 
 use crate::cache::Cached;
 use crate::prompt::PromptSource;
@@ -40,6 +40,18 @@ pub(super) enum Disposition {
     Started,
 }
 
+impl Disposition {
+    /// Files `name` under `restarted` (a replacement) or `started` (a
+    /// fresh start).
+    pub(super) fn file(self, servers: &mut ReloadedServers, name: String) {
+        if self == Disposition::Restarted {
+            servers.restarted.push(name);
+        } else {
+            servers.started.push(name);
+        }
+    }
+}
+
 /// The staged sync: every kept re-list outcome and every shadow-started
 /// replacement, with staged tools and staged cache writes. Opaque to
 /// `main`, which passes it from stage to commit.
@@ -47,13 +59,13 @@ pub struct StagedSync {
     pub(super) rows: Vec<StagedRow>,
 }
 
-/// What one shadow start staged: only a replacement or a failure, so
-/// the callers' matches need no unreachable arm. The stage loop files
-/// each as its commit row.
+/// What one shadow start staged: a successful shadow start or its
+/// failure, so the callers' matches need no unreachable arm. The stage
+/// loop files each as its commit row.
 pub(super) enum ShadowStaged {
-    /// The shadow-started replacement with its staged tools, cache
-    /// payload and prompt sources.
-    Replaced {
+    /// A successful shadow start — a replacement or a fresh start —
+    /// with its staged tools, cache payload and prompt sources.
+    Up {
         spec: ServerSpec,
         slot: Arc<Slot>,
         listed: Cached,
@@ -114,7 +126,7 @@ fn stage_shadow(
     ) {
         Shadowed::Up(opened) => {
             shadows.push(Arc::clone(&opened.slot));
-            Ok(ShadowStaged::Replaced {
+            Ok(ShadowStaged::Up {
                 spec,
                 slot: opened.slot,
                 listed: opened.listed,

@@ -1295,15 +1295,11 @@ impl Fixture {
     /// Runs `tool` with no arguments: the fake answers from its
     /// `call-<tool>.json`.
     fn run(&self, tool: &Arc<dyn contract::tool::Tool>) -> contract::tool::Output {
-        struct NoCancel;
-        impl contract::tool::Cancel for NoCancel {
-            fn is_cancelled(&self) -> bool {
-                false
-            }
-
-            fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
-        }
-        tool.run(&Default::default(), &NoCancel, &fakes::Recorder::default())
+        tool.run(
+            &Default::default(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+        )
     }
 
     fn declared_names(&self) -> Vec<String> {
@@ -1467,30 +1463,7 @@ fn reload_routes_a_replaced_servers_kept_prompt_through_the_replacement() {
     )
     .unwrap();
     fixture.rewrite(json!({"fx": fx.entry(json!({}))}));
-    let config = fixture.rig.config(Vec::<String>::new());
-    let specs = crate::mcp_servers::specs(&config).expect("the specs read");
-    let workspace = fixture.state.sources.workspace.clone();
-    let artifacts = fixture.state.artifacts.clone();
-    let cache = config::mcp_cache_dir(&fixture.state.sources.home);
-    let clock = fixture.state.template.clock.clone();
-    let started = fakes::within(
-        "servers start",
-        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        move || {
-            mcp::start_observed(
-                specs.specs,
-                &workspace,
-                &artifacts,
-                Arc::new(DummyImages),
-                &cache,
-                &clock,
-                "test",
-                None,
-            )
-        },
-    );
-    assert!(started.failed.is_empty(), "{:?}", started.failed);
-    fixture.state = Arc::new(assemble(&fixture.state, started));
+    fixture.relaunch();
     fixture.servers = vec![fx];
     assert!(
         fixture
@@ -1538,15 +1511,7 @@ fn reload_routes_a_replaced_servers_kept_prompt_through_the_replacement() {
         "the kept prompt name rides the carried rows: {:?}",
         carried.0
     );
-    struct NoCancel;
-    impl contract::tool::Cancel for NoCancel {
-        fn is_cancelled(&self) -> bool {
-            false
-        }
-
-        fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
-    }
-    let fetched = (carried.1)("fx", "greet", "", &NoCancel);
+    let fetched = (carried.1)("fx", "greet", "", &fakes::CancelToken::new());
     assert!(fetched.error.is_none(), "{:?}", fetched.error);
     assert!(
         fetched.content.iter().any(|part| matches!(
@@ -1609,6 +1574,38 @@ fn reload_replaces_a_dead_server_beside_the_old_slot() {
             ] if failed.reason == contract::events::ServerFailure::Died
         ),
         "the detected death rides before the ready"
+    );
+}
+
+#[test]
+fn reload_replaces_a_dead_slot_beside_the_old_one() {
+    // A death the session already observed leaves the slot `Dead`
+    // once its restart fails: the reload shadow-starts the same spec
+    // fresh and files it under `restarted`, never `started`.
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    let pid = fixture.servers[0].pid();
+    fixture.servers[0].kill();
+    std::fs::write(fixture.servers[0].dir.join("fail-start"), "").unwrap();
+    assert!(
+        fixture.run(&fixture.tool("mcp__fx__echo")).error.is_some(),
+        "the restart fails and the slot dies"
+    );
+    std::fs::remove_file(fixture.servers[0].dir.join("fail-start")).unwrap();
+    let prepared = fixture.prepare();
+    assert_eq!(prepared.server_sync.servers.restarted, ["fx"]);
+    assert!(
+        prepared.server_sync.servers.started.is_empty(),
+        "a dead slot never files under started"
+    );
+    assert_ne!(
+        fixture.servers[0].pid(),
+        pid,
+        "the replacement answers from its own server"
+    );
+    assert!(
+        run_named(&prepared.tools, &fixture, "mcp__fx__echo")
+            .error
+            .is_none()
     );
 }
 
@@ -1823,15 +1820,7 @@ fn reload_starts_an_approved_in_session_repository_server_with_its_prompts() {
     assert_eq!(carried.0[0].name, "greet");
     assert_eq!(carried.0[0].tag, "db");
     let fetch = &carried.1;
-    struct NoCancel;
-    impl contract::tool::Cancel for NoCancel {
-        fn is_cancelled(&self) -> bool {
-            false
-        }
-
-        fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
-    }
-    let fetched = fetch("db", "greet", "", &NoCancel);
+    let fetched = fetch("db", "greet", "", &fakes::CancelToken::new());
     assert!(fetched.error.is_none());
     assert!(
         fetched.content.iter().any(|part| matches!(
@@ -2066,15 +2055,7 @@ fn reload_appends_a_started_servers_prompts_while_keeping_every_startup_row() {
     // The appended row fetches through the carried sources, as a
     // startup row fetches through the startup ones.
     let fetch = &carried.1;
-    struct NoCancel;
-    impl contract::tool::Cancel for NoCancel {
-        fn is_cancelled(&self) -> bool {
-            false
-        }
-
-        fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
-    }
-    let fetched = fetch("new", "greet", "", &NoCancel);
+    let fetched = fetch("new", "greet", "", &fakes::CancelToken::new());
     assert!(fetched.error.is_none());
     assert!(
         fetched.content.iter().any(|part| matches!(

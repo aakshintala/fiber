@@ -269,7 +269,6 @@ impl Loop {
         // answers through the new slot.
         let mut sync = prepared.server_sync;
         if let Some((rows, extra)) = sync.new_prompts.take()
-            && !rows.is_empty()
             && let Some(prompts) = self.server_prompts.as_mut()
         {
             let tags: HashSet<String> = rows.iter().map(|row| row.tag.clone()).collect();
