@@ -877,21 +877,21 @@ fn a_jobs_stop_cancels_the_delegate_which_exits_143() {
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     assert!(
-        parent.await_requests(1, setup.deadline.left()),
+        parent.await_requests(1, Duration::from_secs(5)),
         "the spawn call was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(2, setup.deadline.left()),
+        parent.await_requests(2, Duration::from_secs(5)),
         "the verdict was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(3, setup.deadline.left()),
+        parent.await_requests(3, Duration::from_secs(5)),
         "the stop was requested"
     );
     assert!(
-        child.await_requests(1, setup.deadline.left()),
+        child.await_requests(1, Duration::from_secs(5)),
         "the child stalled its model call"
     );
     parent.release();
@@ -969,7 +969,7 @@ fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
         .unwrap()
         .to_owned();
     assert!(
-        child.await_requests(1, setup.deadline.left()),
+        child.await_requests(1, Duration::from_secs(5)),
         "the child stalled its model call"
     );
     // Subscribed before the kill: the child's exit is awaited on this
@@ -1022,7 +1022,7 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
         .unwrap()
         .to_owned();
     assert!(
-        child.await_requests(1, setup.deadline.left()),
+        child.await_requests(1, Duration::from_secs(5)),
         "the child stalled its model call"
     );
     let client = running.connect(&setup, &id);
@@ -1142,21 +1142,21 @@ fn a_turn_that_hits_the_budget_stops_its_running_delegate() {
         &["--model", "pa/m", "--prompt", "scan the tree"],
     );
     assert!(
-        parent.await_requests(1, setup.deadline.left()),
+        parent.await_requests(1, Duration::from_secs(5)),
         "the spawn call was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(2, setup.deadline.left()),
+        parent.await_requests(2, Duration::from_secs(5)),
         "the verdict was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(3, setup.deadline.left()),
+        parent.await_requests(3, Duration::from_secs(5)),
         "the read was requested"
     );
     assert!(
-        child.await_requests(1, setup.deadline.left()),
+        child.await_requests(1, Duration::from_secs(5)),
         "the child stalled its model call"
     );
     parent.release();
@@ -1237,7 +1237,7 @@ fn a_delegate_skips_repository_code_nobody_approved() {
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     assert!(
-        parent.await_requests(4, setup.deadline.left()),
+        parent.await_requests(4, Duration::from_secs(5)),
         "the parent's ending-notice turn was requested"
     );
     child.release();
@@ -1348,12 +1348,12 @@ fn a_delegate_fails_on_a_required_server_nobody_approved() {
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     assert!(
-        parent.await_requests(1, setup.deadline.left()),
+        parent.await_requests(1, Duration::from_secs(5)),
         "the spawn call was requested"
     );
     parent.release_one();
     assert!(
-        parent.await_requests(2, setup.deadline.left()),
+        parent.await_requests(2, Duration::from_secs(5)),
         "the verdict was requested"
     );
     declare_db(setup.root.path(), &json!({"required": true}));
