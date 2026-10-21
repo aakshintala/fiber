@@ -18,6 +18,11 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
 
 Rolling back is installing an older version the same way. There is no Homebrew formula and no `cargo install`.
 
+The script follows a channel setting, stable by default: `--channel nightly`
+or `FIBER_CHANNEL=nightly` installs the newest nightly pre-release instead.
+An explicit `FIBER_VERSION` wins over the channel. What each channel reads
+is [Installing](../releasing.md).
+
 ## Updating
 
 `fiber update` updates the binary and every installed extension together, and nothing else: never configuration, credentials, sessions, rules, approvals, pinned copies or extension data. How it stages every download before the first rename, and what it does when the hub is running, is [Updating](../releasing.md).
