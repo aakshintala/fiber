@@ -840,3 +840,170 @@ fn set_of_a_model_in_an_all_unconfigured_provider_warns() {
             .unwrap();
     assert_eq!(written, json!({"model": "acme/m"}));
 }
+
+impl Setup {
+    /// Runs `get` in `workspace` with in-memory writers.
+    fn get_in(&self, workspace: &Path, key: &str) -> (Result<(), CliError>, String, String) {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let result = run_get(&self.home(), workspace, key, &mut out, &mut err);
+        (
+            result,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
+    }
+
+    /// Inits git in the workspace and declares these repository extension
+    /// packages, so the workspace reads as a project repository shipping
+    /// them.
+    fn declare_repo(&self, pkgs: &[RepoPkg<'_>]) {
+        fakes::git::git(&self.workspace(), &["init", "--quiet"]);
+        let mut paths = Vec::new();
+        for (dir, manifest, files) in pkgs {
+            paths.push(json!({"path": dir}));
+            fs::create_dir_all(self.workspace().join(dir)).unwrap();
+            fs::write(
+                self.workspace().join(dir).join("extension.json"),
+                manifest.to_string(),
+            )
+            .unwrap();
+            for (file, text) in files.iter() {
+                let path = self.workspace().join(dir).join(file);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, text).unwrap();
+            }
+        }
+        let config_dir = self.workspace().join(".fiber");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.json"),
+            json!({"repository_extensions": paths}).to_string(),
+        )
+        .unwrap();
+    }
+
+    /// Approves the declared extension `name` for the workspace's project.
+    fn approve_repo(&self, name: &str) {
+        let clock = fakes::clock::FakeClock::new();
+        let (_, project) = crate::project_of(&self.home(), &self.workspace()).unwrap();
+        let items = extensions::declared_items(&self.workspace(), &*clock).unwrap();
+        let item = items.into_iter().find(|found| found.name == name).unwrap();
+        let mut index = extensions::Index::load(&self.home());
+        let digest = extensions::hash(&mut index, &item).unwrap();
+        extensions::Store::new(&self.home(), &project, clock)
+            .approve(&item, &digest)
+            .unwrap();
+    }
+}
+
+/// One repository package the tests declare: its dir, its manifest and
+/// its files, each `(path, text)`.
+type RepoPkg<'a> = (&'a str, serde_json::Value, &'a [(&'a str, &'a str)]);
+
+/// The manifest of the repository extension `name` registering `provider`.
+fn repo_manifest(name: &str, provider: &str) -> serde_json::Value {
+    let mut manifest = json!({
+        "name": name,
+        "version": "v1.0.0",
+        "fiber": "0.0.0",
+        "api": extensions::API,
+    });
+    manifest["providers"] = json!({provider: ["http://127.0.0.1:1/v1"]});
+    manifest
+}
+
+/// The data file of the provider `name` serving these model ids.
+fn repo_data(name: &str, ids: &[&str]) -> String {
+    let models: Vec<serde_json::Value> = ids.iter().map(|id| model(id)).collect();
+    json!({"name": name, "models": models}).to_string()
+}
+
+#[test]
+fn set_model_checks_against_repository_models() {
+    let setup = Setup::new();
+    let manifest = repo_manifest("fiber.test/acme", "acme");
+    let data = repo_data("acme", &["repo-model"]);
+    setup.declare_repo(&[("repo", manifest, &[("providers/acme.json", data.as_str())])]);
+    setup.approve_repo("fiber.test/acme");
+    // A repository-only model is accepted, as an installed one is.
+    setup
+        .set(Layer::Global, "model", "acme/repo-model")
+        .unwrap();
+    // A typo is rejected with the repository reference as the closest
+    // match: the check runs against the merged providers.
+    let result = setup.set(Layer::Global, "model", "acme/typo-model");
+    match result {
+        Err(CliError::ModelNone { closest, .. }) => {
+            assert_eq!(closest, vec!["acme/repo-model".to_owned()]);
+        }
+        other => panic!("a typo model checks clean: {other:?}"),
+    }
+}
+
+#[test]
+fn set_model_rejects_a_model_only_the_shadowed_install_serves() {
+    let setup = Setup::new();
+    install(&setup.home(), "acme", "acme", &models(&["personal-model"]));
+    let manifest = repo_manifest("acme", "acme");
+    let data = repo_data("acme", &["repo-model"]);
+    setup.declare_repo(&[("repo", manifest, &[("providers/acme.json", data.as_str())])]);
+    setup.approve_repo("acme");
+    // The repository copy wins: its model sets, the shadowed install's
+    // model no longer names anything installed.
+    setup
+        .set(Layer::Global, "model", "acme/repo-model")
+        .unwrap();
+    assert!(matches!(
+        setup.set(Layer::Global, "model", "acme/personal-model"),
+        Err(CliError::ModelNone { .. })
+    ));
+    // The shadow notice prints once on the accepting run.
+    let (_, err) = setup.set_capturing(Layer::Global, "model", "acme/repo-model");
+    assert_eq!(
+        err.lines()
+            .filter(|line| line.contains("in place of your install"))
+            .count(),
+        1,
+        "{err:?}"
+    );
+}
+
+#[test]
+fn outside_the_project_config_reads_only_the_installed_providers() {
+    let setup = Setup::new();
+    install(&setup.home(), "acme", "acme", &models(&["big"]));
+    // A damaged directory: its notice pins the home-only load's notices.
+    let broken = setup.home().join("extensions").join("broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(
+        broken.join("extension.json"),
+        json!({"name": "broken", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
+    )
+    .unwrap();
+    setup.write(
+        &setup.home().join("config.json"),
+        &json!({"model": "acme/big"}),
+    );
+    let elsewhere = setup.root.path().join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    let (result, out, err) = setup.get_in(&elsewhere, "model");
+    result.unwrap();
+    assert_eq!(
+        out,
+        format!(
+            "\"acme/big\" from {}\n",
+            setup.home().join("config.json").display()
+        )
+    );
+    // Outside the project the notices are the installed load's, as at
+    // Base: no repository set merges in.
+    let (_, loading) = extensions::Providers::load(&setup.home()).unwrap();
+    assert_eq!(
+        err.lines().collect::<Vec<_>>(),
+        loading
+            .iter()
+            .map(|notice| notice.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
