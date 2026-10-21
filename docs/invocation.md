@@ -1027,6 +1027,7 @@ websocket for everything it does.
 | `write_config` | `workspace` (absolute string), `path`, `text`, `version` (strings) | Writes the text only while the file still has that version; otherwise rejects `stale_request` without writing. Parses no text. |
 | `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
+| `placeholder_env` | `names` (array of strings) | Answers with the hub's captured values for the named placeholders, absent names omitted, so the list and the session agree (`docs/model-routing.md`, "Model discovery"). |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
 | `devices` | none | Answers with the paired devices. |
 | `revoke` | `device` (string) | Revokes the device's token, which may be the asking client's own, and closes its live connections. |

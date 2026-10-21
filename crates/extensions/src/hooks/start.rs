@@ -2,8 +2,9 @@
 //! switch needs a provider that is not loaded (`docs/model-routing.md`,
 //! "Model discovery").
 
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
@@ -16,6 +17,39 @@ use super::SessionExtensions;
 use crate::host::Session;
 use crate::lua::LuaExtension;
 use crate::{Error, LuaProvider};
+
+/// Whether `dir` is a pinned repository copy: it lives under the pinned
+/// directory, where repository copies live, so a pinned copy never reads
+/// a personal install of the same dependency.
+pub(crate) fn is_repository_copy(dir: &Path, home: &Path) -> bool {
+    dir.starts_with(config::pinned_dir(home))
+}
+
+/// Where each manifest `depends` entry lives, by its name: the directory
+/// a qualified `require` loads from. Every key is mapped, including one
+/// holding a colon: matching, not the map, decides, so the longest key
+/// prefix wins. A repository copy reads its own `.fiber-depends`, never
+/// Fiber home, so a missing entry still names the dependency there
+/// instead of leaking across the boundary.
+pub fn dep_dirs(
+    home: &Path,
+    dir: &Path,
+    depends: &BTreeMap<String, String>,
+    is_repository_copy: bool,
+) -> BTreeMap<String, PathBuf> {
+    let root = if is_repository_copy {
+        config::extensions_dir(&dir.join(".fiber-depends"))
+    } else {
+        config::extensions_dir(home)
+    };
+    let mut deps = BTreeMap::new();
+    for name in depends.keys() {
+        if let Ok(slug) = crate::install::slug(name) {
+            deps.insert(name.clone(), root.join(slug));
+        }
+    }
+    deps
+}
 
 /// The VM of the extension `name`, installed in `dir`, set up as a session
 /// runs it: its settings checked, its session, secrets, memory cap and hook
@@ -45,6 +79,12 @@ pub(super) fn start_vm(
             locks,
         })
         .with_secrets(manifest.secrets.clone());
+    // A repository copy reads its own `.fiber-depends`: the predicate
+    // below is where those copies live, so a pinned copy never reads a
+    // personal install of the same dependency.
+    let is_repository_copy = is_repository_copy(dir, home);
+    extension =
+        extension.with_dependencies(dep_dirs(home, dir, &manifest.depends, is_repository_copy));
     if let Some(cap) = manifest
         .memory_mib
         .and_then(|mib| usize::try_from(mib).ok())
@@ -203,5 +243,95 @@ impl SessionExtensions {
             }
         };
         Ok(LuaProvider::new(lua, provider))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
+
+    use super::*;
+
+    const DEP: &str = "example.com/acme/strings";
+
+    /// The manifest `fiber.test/root` with these `depends`, read back the
+    /// way the session reads it.
+    fn manifest_with_depends(dir: &Path, depends: &str) -> Manifest {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("extension.json"),
+            format!(
+                "{{\"name\":\"fiber.test/root\",\"version\":\"v1.0.0\",\"fiber\":\"0.1.0\",\"api\":1,\"depends\":{depends}}}"
+            ),
+        )
+        .unwrap();
+        config::read_manifest(dir).unwrap()
+    }
+
+    #[test]
+    fn a_personal_install_maps_each_dependency_into_fiber_home() {
+        let home = fakes::TempDir::new("fiber-dep-dirs-personal");
+        let dir = home.path().join("extensions").join("fiber.test-root");
+        let manifest = manifest_with_depends(&dir, r#"{"example.com/acme/strings":"1.0"}"#);
+        let deps = dep_dirs(home.path(), &dir, &manifest.depends, false);
+        assert_eq!(
+            deps.get(DEP),
+            Some(
+                &home
+                    .path()
+                    .join("extensions")
+                    .join("example.com-acme-strings")
+            )
+        );
+    }
+
+    #[test]
+    fn a_repository_copy_maps_each_dependency_into_its_own_depends() {
+        let home = fakes::TempDir::new("fiber-dep-dirs-copy");
+        let dir = home.path().join("pinned").join("abc123");
+        let manifest = manifest_with_depends(&dir, r#"{"example.com/acme/strings":"1.0"}"#);
+        let deps = dep_dirs(home.path(), &dir, &manifest.depends, true);
+        assert_eq!(
+            deps.get(DEP),
+            Some(
+                &dir.join(".fiber-depends")
+                    .join("extensions")
+                    .join("example.com-acme-strings")
+            )
+        );
+    }
+
+    #[test]
+    fn a_missing_copy_local_dependency_stays_copy_local_with_no_home_fallback() {
+        let home = fakes::TempDir::new("fiber-dep-dirs-missing");
+        let dir = home.path().join("pinned").join("abc123");
+        let manifest = manifest_with_depends(&dir, r#"{"example.com/acme/strings":"1.0"}"#);
+        // Nothing is installed under the copy yet: the map still points
+        // there, so a require names the dependency instead of reading
+        // a personal install of the same name.
+        assert!(!dir.join(".fiber-depends").exists());
+        let deps = dep_dirs(home.path(), &dir, &manifest.depends, true);
+        let mapped = deps.get(DEP).unwrap();
+        assert!(mapped.starts_with(dir.join(".fiber-depends")));
+        assert!(!mapped.starts_with(config::extensions_dir(home.path())));
+    }
+
+    #[test]
+    fn a_depends_key_holding_a_colon_is_mapped_for_longest_prefix_matching() {
+        let home = fakes::TempDir::new("fiber-dep-dirs-colon");
+        let dir = home.path().join("extensions").join("fiber.test-root");
+        let manifest = manifest_with_depends(&dir, r#"{"github.com/acme/lib:aux":"1.0"}"#);
+        // Matching, not the map, decides: the colon-holding key stays in
+        // the map so the longest prefix wins at require time.
+        let deps = dep_dirs(home.path(), &dir, &manifest.depends, false);
+        assert_eq!(
+            deps.get("github.com/acme/lib:aux"),
+            Some(
+                &home
+                    .path()
+                    .join("extensions")
+                    .join(config::dir_name("github.com/acme/lib:aux"))
+            )
+        );
     }
 }
