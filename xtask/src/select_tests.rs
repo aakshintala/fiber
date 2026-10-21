@@ -871,18 +871,152 @@ fn a_manifest_token_providers_read_stays_with_the_package_reader_check() {
 }
 
 #[test]
-fn a_three_level_chain_is_not_a_run_time_read() {
-    // The second read is a vehicle: the old check over-reported a top-level
-    // escaping docs literal, so the red run fails here too.
+fn a_crate_internal_providers_path_is_a_run_time_read() {
+    // Only a root `providers/` or `extensions/` path yields to the
+    // package-reader check: a crate-internal segment stays a run-time read.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let p = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"src/providers/file.bin\");\nlet bytes = std::fs::read(&p).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/release.rs: reads src/providers/file.bin at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_join_onto_a_non_joined_base_binds_nothing() {
+    // `tmp` never joins onto the manifest directory, so `q` binds nothing
+    // and the read through `q` stays unreported.
     let files = [runtime_src(
         "contract",
         "crates/contract/src/golden_tests.rs",
         "src/golden_tests.rs",
-        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = base.join(\"data\");\nlet q = p.join(\"sub\");\nlet bytes = std::fs::read(q.join(\"docs/out.bin\")).unwrap();\nlet esc = std::fs::read(\"../../../docs/secret.md\").unwrap();\n",
+        "let tmp = tempdir().unwrap();\nlet q = tmp.join(\"data\");\nlet bytes = std::fs::read(&q).unwrap();\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_format_with_a_runtime_value_is_not_a_run_time_read() {
+    // The second argument is not `env!`: the macro takes a runtime value,
+    // so the read stays unreported.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let runtime = value;\nlet bytes = std::fs::read(format!(\"{}/{}\", env!(\"CARGO_MANIFEST_DIR\"), runtime)).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_format_without_the_manifest_dir_is_not_a_run_time_read() {
+    // No literal names the manifest directory, so the template has no
+    // repository root and the read stays unreported.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let bytes = std::fs::read(format!(\"{}/{}\", \"a/b\", \"c/d\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_format_plain_bare_word_suffix_is_not_a_run_time_read() {
+    // The template names no file and the plain suffix holds no slash:
+    // a bare word is a computed value, not a repository path.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let bytes = std::fs::read(format!(\"{}{}\", env!(\"CARGO_MANIFEST_DIR\"), \"x\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_bound_name_filters_absolute_and_escaping_joins() {
+    // Each bound suffix fails one filter: absolute, escaping, and the
+    // junk marker the containment check rejects, so no read reports.
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet k = base.join(\"/proc/cpuinfo\");\nlet b = std::fs::read(&k).unwrap();\nlet e = base.join(\"../../../docs/secret.md\");\nlet c = std::fs::read(&e).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_read_dir_inside_a_read_argument_never_reports() {
+    // The directory read forces its argument out of read mode, so the
+    // manifest-rooted join inside it never reports.
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet x = std::fs::read_to_string(std::fs::read_dir(base.join(\"data\")).unwrap()).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_concat_skips_marker_junk_and_bare_words() {
+    // Only the path-like suffix reports: the marker, the junk slash and
+    // the bare word each hit one arm of the skip.
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "let doc = read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/\", \"x\", \"/docs/ci.md\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/lib.rs: reads /docs/ci.md at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_three_level_chain_is_a_run_time_read() {
+    // A join onto a two-level bound name still names a repository file:
+    // the report names the final join's literals.
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/golden_tests.rs",
+        "src/golden_tests.rs",
+        "let base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet p = base.join(\"data\");\nlet q = p.join(\"sub\");\nlet bytes = std::fs::read(q.join(\"docs/out.bin\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/golden_tests.rs: reads docs/out.bin at run time; compile it in with include_str! or include_bytes!"
+        ]
     );
 }
 
@@ -904,13 +1038,13 @@ fn a_manifest_rooted_format_read_of_a_contained_path_is_a_run_time_read() {
 
 #[test]
 fn an_escaping_or_absolute_format_suffix_is_not_a_run_time_read() {
-    // The last read is a vehicle: the old check over-reported a top-level
-    // escaping docs literal, so the red run fails here too.
+    // An escaping template and an absolute suffix never report, even when
+    // the file holds the manifest token elsewhere.
     let files = [runtime_src(
         "main",
         "crates/main/tests/release.rs",
         "tests/release.rs",
-        "let a = std::fs::read(format!(\"{}/../../../docs/x.md\", env!(\"CARGO_MANIFEST_DIR\"))).unwrap();\nlet b = std::fs::read(format!(\"{}/{}\", env!(\"CARGO_MANIFEST_DIR\"), \"/proc/docs/x\")).unwrap();\nlet esc = std::fs::read(\"../../../docs/secret.md\").unwrap();\n",
+        "let a = std::fs::read(format!(\"{}/../../../docs/x.md\", env!(\"CARGO_MANIFEST_DIR\"))).unwrap();\nlet b = std::fs::read(format!(\"{}/{}\", env!(\"CARGO_MANIFEST_DIR\"), \"/proc/docs/x\")).unwrap();\n",
     )];
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),

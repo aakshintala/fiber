@@ -151,14 +151,18 @@ fn resolve_in_root(manifest_dir: &str, pieces: &[String]) -> Option<String> {
 }
 
 /// Whether a resolved repository path stays with the package-reader check:
-/// it names a first-party package and the file holds the manifest token,
-/// which is exactly what `package_reader_mismatches` claims, so this check
-/// leaves it alone and reports it bare.
+/// it names a first-party package at the repository root and the file holds
+/// the manifest token, which is exactly what `package_reader_mismatches`
+/// claims, so this check leaves it alone and reports it bare. A
+/// crate-internal `providers` or `extensions` segment, such as
+/// `crates/main/src/providers/file.bin`, is not a root package path, so it
+/// stays a run-time read here.
 fn yields_to_packages(resolved: &str, has_manifest: bool) -> bool {
     has_manifest
-        && resolved
-            .split('/')
-            .any(|segment| segment == "providers" || segment == "extensions")
+        && (resolved == "providers"
+            || resolved == "extensions"
+            || resolved.starts_with("providers/")
+            || resolved.starts_with("extensions/"))
 }
 
 /// Whether `text`, the inside of a string literal joined onto a path,
@@ -239,11 +243,10 @@ fn all_literals(stream: TokenStream, out: &mut Vec<String>) {
 ///   the manifest directory, inside the argument of such a read: the
 ///   receiver holds the manifest literal, or holds an identifier an
 ///   earlier `let` bound to the manifest directory itself, or holds an
-///   identifier an earlier `let` bound to a one-level join. A `let`
+///   identifier an earlier `let` bound to a join chain rooted there. A `let`
 ///   holding such a join reports its literals when a read takes the name,
-///   through two levels of `let`; a third level stays unreported. A join
-///   onto any other base, a join outside every read, and an absolute or
-///   escaping suffix never report.
+///   through any number of `let`s. A join onto any other base, a join
+///   outside every read, and an absolute or escaping suffix never report.
 ///
 /// A literal nested inside another call is a computed path, not a named
 /// one: `read_to_string(home.join("docs/README.md"))` reads a temporary
@@ -264,7 +267,7 @@ pub(crate) fn runtime_read_mismatches(
     struct Walk<'a> {
         root: &'a mut BTreeSet<String>,
         joined: &'a mut BTreeMap<String, Vec<String>>,
-        second: &'a mut BTreeMap<String, Vec<String>>,
+        second: &'a mut BTreeMap<String, (Vec<String>, Vec<String>)>,
         manifest_dir: &'a str,
         has_manifest: bool,
         found: &'a mut BTreeSet<String>,
@@ -323,8 +326,26 @@ pub(crate) fn runtime_read_mismatches(
             TokenTree::Punct(_) | TokenTree::Literal(_) => None,
         })
     }
-    /// The two-level value of a `let` holding a single top-level `join`
-    /// onto a one-level joined name: the full suffix chain from the
+    /// The first name in `tokens` bound to a deeper join chain, searching
+    /// inside groups: the base a later join builds on once the chain has
+    /// already left the one-level map.
+    fn second_mention(
+        tokens: &[TokenTree],
+        second: &BTreeMap<String, (Vec<String>, Vec<String>)>,
+    ) -> Option<String> {
+        tokens.iter().find_map(|tree| match tree {
+            TokenTree::Ident(ident) => {
+                let name = ident.to_string();
+                second.contains_key(name.as_str()).then_some(name)
+            }
+            TokenTree::Group(group) => {
+                second_mention(&group.stream().into_iter().collect::<Vec<_>>(), second)
+            }
+            TokenTree::Punct(_) | TokenTree::Literal(_) => None,
+        })
+    }
+    /// The chained value of a `let` holding a single top-level `join`
+    /// onto a joined name: the full suffix chain from the
     /// manifest directory for the containment check, and the join's own
     /// literals for the report. A second top-level join, a join onto any
     /// other base, and the manifest literal itself as a suffix bind
@@ -332,6 +353,7 @@ pub(crate) fn runtime_read_mismatches(
     fn join_on_joined(
         rhs: &[TokenTree],
         joined: &BTreeMap<String, Vec<String>>,
+        second: &BTreeMap<String, (Vec<String>, Vec<String>)>,
     ) -> Option<(Vec<String>, Vec<String>)> {
         let mut own = Vec::new();
         let mut base: Option<String> = None;
@@ -347,7 +369,7 @@ pub(crate) fn runtime_read_mismatches(
             {
                 joins += 1;
                 if base.is_none() {
-                    base = joined_mention(&receiver, joined);
+                    base = joined_mention(&receiver, joined).or_else(|| second_mention(&receiver, second));
                 }
                 if base.is_some() {
                     for tree in group.stream() {
@@ -378,7 +400,11 @@ pub(crate) fn runtime_read_mismatches(
         if own.is_empty() {
             return None;
         }
-        let mut chain = joined.get(&base).cloned().unwrap_or_default();
+        let mut chain = joined
+            .get(&base)
+            .cloned()
+            .or_else(|| second.get(&base).map(|(full, _)| full.clone()))
+            .unwrap_or_default();
         chain.extend(own.clone());
         Some((chain, own))
     }
@@ -470,7 +496,7 @@ pub(crate) fn runtime_read_mismatches(
     /// The literals a read reports through a bound name: when the
     /// argument of a read is one name, directly or behind `&` with an
     /// optional trailing comma. A one-level join reports the literals
-    /// resolving inside the repository; a two-level join reports its own
+    /// resolving inside the repository; a deeper join reports its own
     /// literals, the full chain having been contained at binding.
     fn read_name(group: &proc_macro2::Group, cx: &Walk) -> Option<Vec<String>> {
         let mut tokens = group.stream().into_iter().peekable();
@@ -486,8 +512,8 @@ pub(crate) fn runtime_read_mismatches(
             Some(TokenTree::Punct(mark)) if mark.as_char() == ',' && tokens.next().is_none() => {}
             _ => return None,
         }
-        if let Some(literals) = cx.second.get(&name.to_string()) {
-            return Some(literals.clone());
+        if let Some((_, own)) = cx.second.get(&name.to_string()) {
+            return Some(own.clone());
         }
         let literals = cx.joined.get(&name.to_string())?;
         let kept: Vec<String> = literals
@@ -508,7 +534,7 @@ pub(crate) fn runtime_read_mismatches(
     /// optional `: <type>`, `=`), rebind the name to its value through
     /// the terminating `;`: a value joining onto the manifest directory
     /// binds the name to the joined literals; a value joining onto a
-    /// one-level joined name binds the name to the second join's literals
+    /// joined name binds the name to the latest join's literals
     /// when the full chain stays inside the repository; a value holding
     /// the manifest literal and no `join` binds the name to the manifest
     /// directory itself; any other value unbinds the name. Walk the
@@ -571,7 +597,7 @@ pub(crate) fn runtime_read_mismatches(
         // them.
         let shadowed = join_on_root(&rhs, &*cx.root);
         let chained = if shadowed.is_none() {
-            join_on_joined(&rhs, &*cx.joined)
+            join_on_joined(&rhs, &*cx.joined, &*cx.second)
         } else {
             None
         };
@@ -587,13 +613,13 @@ pub(crate) fn runtime_read_mismatches(
         } else if let Some((chain, own)) = chained {
             // The full chain must resolve inside the repository and stay
             // out of the package reader's paths: the report names only
-            // the second join's literals, which no longer carry the base.
+            // the latest join's literals, which no longer carry the base.
             let contained = resolve_in_root(cx.manifest_dir, &chain)
                 .is_some_and(|resolved| !yields_to_packages(&resolved, cx.has_manifest));
             cx.root.remove(name.as_str());
             cx.joined.remove(name.as_str());
             if contained {
-                cx.second.insert(name, own);
+                cx.second.insert(name, (chain, own));
             } else {
                 cx.second.remove(name.as_str());
             }
@@ -726,9 +752,13 @@ pub(crate) fn runtime_read_mismatches(
                                 || holds_root(&preceding, &*cx.root)
                             {
                                 Some(Vec::new())
-                            } else {
+                            } else if let Some(name) =
                                 joined_mention(&preceding, &*cx.joined)
-                                    .and_then(|name| cx.joined.get(&name).cloned())
+                            {
+                                cx.joined.get(&name).cloned()
+                            } else {
+                                second_mention(&preceding, &*cx.second)
+                                    .and_then(|name| cx.second.get(&name).map(|(full, _)| full.clone()))
                             };
                             if let Some(chain) = base {
                                 let mut own = Vec::new();
