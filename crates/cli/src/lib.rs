@@ -52,6 +52,7 @@ mod feedback;
 mod hub_list;
 mod hub_pair;
 mod hub_refresh;
+mod hub_env;
 mod hub_service;
 mod hub_status;
 mod hub_token;
