@@ -71,6 +71,7 @@ fn extension_usage_carries_its_line() {
         | crate::inbox::Delivery::ExtensionJob(..)
         | crate::inbox::Delivery::Interaction(_)
         | crate::inbox::Delivery::Resolved(..)
+        | crate::inbox::Delivery::DelegateUsage { .. }
         | crate::inbox::Delivery::InnerCall(_)
         | crate::inbox::Delivery::ExtensionLog(_)
         | crate::inbox::Delivery::Cancelled

@@ -812,6 +812,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::ProposeNotes(..)
             | Delivery::ExtensionJob(..)
             | Delivery::ExtensionUsage(_)
+            | Delivery::DelegateUsage { .. }
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
             | Delivery::Shell(..)

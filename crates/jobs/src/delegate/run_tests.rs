@@ -281,6 +281,7 @@ impl Rig {
             watch,
             after,
             timeout,
+            None,
         );
         let launched = Launched {
             depth: 1,
@@ -1965,6 +1966,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         watch,
         None,
         None,
+        None,
     );
     // The stop sets the bound; the member ignores nothing and no other
     // thread signals this group.
@@ -2263,6 +2265,7 @@ fn run_watch(
     let waker: Arc<dyn contract::clock::Wake> = Arc::new(Parker::new());
     Watcher {
         watch,
+        job_id: crate::registry::mint_job_id(),
         session_id: SessionId("s_child".into()),
         after: None,
         fold: Arc::new(Mutex::new(Fold::default())),
@@ -2271,7 +2274,9 @@ fn run_watch(
         clock: Arc::clone(clock) as Arc<dyn contract::clock::Clock>,
         last_check: Arc::clone(last_check),
         stat,
+        output_path: std::path::PathBuf::from("missing.log"),
         wake: waker,
+        on_usage: None,
     }
     .run();
 }
@@ -2428,6 +2433,7 @@ fn the_fold_starts_from_the_run_boundary() {
         watch,
         Some(5),
         None,
+        None,
     );
     let launched = Launched {
         depth: 1,
@@ -2483,4 +2489,498 @@ fn minted_command_ids_carry_their_prefix_and_differ() {
         );
     }
     assert_ne!(first, second, "two mints differ");
+}
+
+/// A `usage_recorded` envelope as a delegate writes it: `seq` orders the
+/// stream, the payload is the call's [`UsageRecorded`].
+fn usage_envelope(seq: u64, generation: &str, cost: Option<f64>) -> Envelope {
+    use contract::events::UsageRecorded;
+    use contract::shapes::Tokens;
+    use contract::{GenerationId, SessionId as Sid};
+    let _ = Sid;
+    let recorded = UsageRecorded {
+        generation_id: GenerationId(generation.into()),
+        model: "fake/m".into(),
+        tokens: Tokens {
+            input: 10,
+            cache_read: 0,
+            cache_write: std::collections::BTreeMap::new(),
+            output: 5,
+        },
+        input_bytes: 100,
+        input_media: None,
+        web_searches: None,
+        cost,
+        subscription: None,
+        extension: None,
+        origin_session_id: None,
+        reviewer: None,
+    };
+    envelope(
+        seq,
+        "usage_recorded",
+        serde_json::to_value(recorded).unwrap(),
+    )
+}
+
+/// Starts the rig's runner with `on_usage` as the watcher's tap, mirroring
+/// [`Rig::start_timeout`]: build the runner, spawn, record, drive.
+fn start_with_usage(
+    rig: &Rig,
+    shell: &str,
+    bound: Duration,
+    cap: u64,
+    on_usage: Option<super::UsageForward>,
+) -> mpsc::Receiver<()> {
+    let shell = shell.to_owned();
+    let script = Arc::clone(&rig.script);
+    let watch = Arc::new(
+        move |id: &SessionId, after: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
+            script.watch(id, after, on_line)
+        },
+    );
+    let events = rig.events.clone();
+    let launch: Launch = Arc::new(move |_: &Launched| {
+        let mut command = Command::new("sh");
+        command.args(["-c", shell.as_str()]);
+        command
+    });
+    let (runner, stop) = Runner::new(
+        rig.job.clone(),
+        SessionId("s_child".into()),
+        events.clone(),
+        Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
+        bound,
+        cap,
+        watch,
+        None,
+        None,
+        on_usage,
+    );
+    let launched = Launched {
+        depth: 1,
+        session_id: SessionId("s_child".into()),
+        job_id: rig.job.clone(),
+        parent: SessionId("s_parent".into()),
+        prompt: "hi".into(),
+        workspace: rig.events.parent().unwrap().to_path_buf(),
+        start: Start::Fresh(Fresh::Spawn {
+            model: "fake/m".into(),
+            credential: None,
+        }),
+    };
+    let (child, listing) = runner.spawn(&launch, &launched).unwrap();
+    let (_started, finish) = rig.registry.open_started(
+        rig.job.clone(),
+        "delegate_spawn".into(),
+        "scan".into(),
+        events.to_string_lossy().into_owned(),
+        stop,
+        crate::support::delegate_started(&rig.job.0),
+    );
+    let (done, waited) = mpsc::channel();
+    thread::spawn(move || {
+        runner.drive(child, Some(listing), finish);
+        let _sent = done.send(());
+    });
+    waited
+}
+
+/// [`reported`], collecting the `DelegateUsage` deliveries the watcher's
+/// tap forwards ahead of the runner's report: the take loops past them,
+/// stashing each, until the `Job` notice arrives. A scoped driver thread
+/// advances the fake clock exactly as `reported_before` does.
+#[track_caller]
+fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(JobId, SessionId, String)>) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let driver_stop = Arc::clone(&stop);
+    let clock = Arc::clone(&rig.clock);
+    let deadline = Deadline::after(DEADLINE);
+    thread::scope(|scope| {
+        scope.spawn(move || {
+            let mut carried: Option<Instant> = None;
+            loop {
+                if driver_stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                if deadline.left().is_zero() {
+                    panic!(
+                        "the runner did not report; now={:?} parked={:?}",
+                        clock.now(),
+                        clock.parked()
+                    );
+                }
+                let mut candidate = carried.take();
+                if candidate.is_some_and(|watched| watched <= clock.now()) {
+                    candidate = None;
+                }
+                match candidate.or_else(|| park_ahead(&clock)) {
+                    Some(until) => {
+                        let now = clock.now();
+                        match until.checked_duration_since(now) {
+                            Some(gap) if gap <= super::POLL => match try_step(&clock, until, gap) {
+                                Step::Moved | Step::NoPark => {}
+                                Step::Next(watched) => {
+                                    carried = Some(watched);
+                                }
+                            },
+                            _ => thread::yield_now(),
+                        }
+                    }
+                    None => thread::yield_now(),
+                }
+            }
+        });
+        let mut usages = Vec::new();
+        let notice = loop {
+            let result = Deadline::after(DEADLINE).recv(&rig.inbox);
+            match result {
+                Ok(Delivery::Job(notice)) => {
+                    stop.store(true, Ordering::Relaxed);
+                    break notice;
+                }
+                Ok(Delivery::DelegateUsage {
+                    job_id,
+                    session,
+                    line,
+                }) => {
+                    usages.push((job_id, session, line.generation_id.0.clone()));
+                }
+                Ok(other) => panic!("expected the runner's report, got {other:?}"),
+                Err(_) => {
+                    stop.store(true, Ordering::Relaxed);
+                    panic!(
+                        "the runner did not report; now={:?} parked={:?}",
+                        rig.clock.now(),
+                        rig.clock.parked()
+                    )
+                }
+            }
+        };
+        (notice, usages)
+    })
+}
+
+#[test]
+fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
+    let rig = rig(vec![WatchReply::Exited(vec![
+        usage_envelope(1, "g_1", Some(0.1)),
+        envelope(2, "usage_recorded", serde_json::json!({})),
+        fiber_exited_line(3, "Done."),
+    ])]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let tapped = Arc::clone(&seen);
+    rig.registry.install_usage_tap(Some(Arc::new(move |line| {
+        tapped.lock().unwrap().push(line.generation_id.0.clone());
+    })));
+    let waited = start_with_usage(
+        &rig,
+        "exit 0",
+        BOUND,
+        1 << 20,
+        Some(rig.registry.usage_forward()),
+    );
+    let _waited = waited;
+    let (notice, usages) = reported_with_usage(&rig);
+    // The well-formed line reaches the tap with the delegate's session id;
+    // the malformed one never does, and `fiber_exited` still ends watch.
+    assert_eq!(seen.lock().unwrap().as_slice(), ["g_1"]);
+    assert_eq!(usages.len(), 1);
+    assert_eq!(usages[0].0, rig.job);
+    assert_eq!(usages[0].1, SessionId("s_child".into()));
+    assert_eq!(usages[0].2, "g_1");
+    assert_eq!(notice.completed.status, Outcome::Completed);
+}
+
+/// Runs one watch call against a log file holding `file_seqs` usage
+/// lines while the socket yields `streamed` then closes, collecting the
+/// forwarded generations in order: what the backfill replays, what the
+/// socket streams, and what neither sends twice.
+fn run_backfill(
+    file_seqs: &[u64],
+    streamed: Vec<Envelope>,
+    after: Option<u64>,
+) -> Vec<(JobId, SessionId, String)> {
+    let dir = TempDir::new("fiber-backfill");
+    let path = dir.path().join("events.jsonl");
+    let mut text = String::new();
+    for seq in file_seqs {
+        text.push_str(
+            &serde_json::to_string(&usage_envelope(*seq, &format!("g_{seq}"), Some(0.1))).unwrap(),
+        );
+        text.push('\n');
+    }
+    std::fs::write(&path, text).unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let tapped = Arc::clone(&seen);
+    let on_usage: super::UsageForward = Arc::new(
+        move |job_id: JobId, session: SessionId, line: contract::events::UsageRecorded| {
+            tapped
+                .lock()
+                .unwrap()
+                .push((job_id, session, line.generation_id.0.clone()));
+        },
+    );
+    let watch: Watch = Arc::new(
+        move |_: &SessionId, _: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
+            for line in &streamed {
+                on_line(line);
+            }
+            Ok(Watched::Closed)
+        },
+    );
+    let clock = FakeClock::new();
+    let waker: Arc<dyn contract::clock::Wake> = Arc::new(Parker::new());
+    Watcher {
+        watch,
+        job_id: crate::registry::mint_job_id(),
+        session_id: SessionId("s_child".into()),
+        after,
+        fold: Arc::new(Mutex::new(Fold::default())),
+        shared: Shared::new(Arc::clone(&clock) as Arc<dyn contract::clock::Clock>, BOUND),
+        cap: 1 << 20,
+        clock: Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        last_check: Arc::new(Mutex::new(None)),
+        stat: Arc::new(|| 0),
+        output_path: path,
+        wake: waker,
+        on_usage: Some(on_usage),
+    }
+    .run();
+    let seen = seen.lock().unwrap().clone();
+    assert!(
+        seen.iter()
+            .all(|(job, session, _)| *session == SessionId("s_child".into()) && *job == seen[0].0),
+        "every forward names the delegate's job and session: {seen:?}"
+    );
+    seen
+}
+
+#[test]
+fn the_backfill_forwards_file_usage_the_socket_missed() {
+    // The socket closes without yielding: a delegate that exits before
+    // the first subscribe connects still forwards its file's usage, in
+    // `seq` order.
+    let seen = run_backfill(&[1, 2], Vec::new(), None);
+    let generations: Vec<&str> = seen
+        .iter()
+        .map(|(_, _, generation)| generation.as_str())
+        .collect();
+    assert_eq!(generations, ["g_1", "g_2"]);
+}
+
+#[test]
+fn the_backfill_skips_what_the_socket_streamed() {
+    // The socket streams `g_1` live; the file holds `g_1` and `g_2`: the
+    // backfill sends only `g_2`, so neither path forwards a `seq` twice.
+    let seen = run_backfill(&[1, 2], vec![usage_envelope(1, "g_1", Some(0.1))], None);
+    let generations: Vec<&str> = seen
+        .iter()
+        .map(|(_, _, generation)| generation.as_str())
+        .collect();
+    assert_eq!(generations, ["g_1", "g_2"]);
+}
+
+#[test]
+fn the_backfill_skips_lines_at_or_before_after() {
+    // The run's boundary is `after`: a line at or before it belongs to
+    // an earlier run, so the backfill forwards only past it.
+    let seen = run_backfill(&[1, 2], Vec::new(), Some(1));
+    let generations: Vec<&str> = seen
+        .iter()
+        .map(|(_, _, generation)| generation.as_str())
+        .collect();
+    assert_eq!(generations, ["g_2"]);
+}
+
+#[test]
+fn the_reap_replays_file_usage_the_socket_never_saw() {
+    // The socket closes without yielding: the delegate writes its usage
+    // straight to its log file and exits. The reap's file replay still
+    // forwards the line once, whichever of the watch-end and reap-end
+    // replays runs first.
+    let rig = rig(vec![WatchReply::Closed(Vec::new())]);
+    let line = serde_json::to_string(&usage_envelope(9, "g_9", Some(0.5))).unwrap();
+    let shell = format!(
+        "printf '%s\\n' '{line}' >> '{}'; exit 0",
+        rig.events.display()
+    );
+    let waited = start_with_usage(
+        &rig,
+        &shell,
+        BOUND,
+        1 << 20,
+        Some(rig.registry.usage_forward()),
+    );
+    let _waited = waited;
+    let (notice, usages) = reported_with_usage(&rig);
+    assert_eq!(usages.len(), 1, "the file line forwards once: {usages:?}");
+    assert_eq!(usages[0].0, rig.job);
+    assert_eq!(usages[0].1, SessionId("s_child".into()));
+    assert_eq!(usages[0].2, "g_9");
+    // The bare shell reports no `fiber_exited`, so the job ends without
+    // a result; the forward is what this test proves.
+    let _ = notice;
+}
+
+/// The tripwire the tap drives: per-generation billed spend, a budget,
+/// and a stop-all counter standing in for the loop's delegate stop.
+struct TripTap {
+    billed: Mutex<std::collections::HashMap<String, f64>>,
+    sum: Mutex<f64>,
+    budget: f64,
+    tripped: AtomicBool,
+    stops: std::sync::atomic::AtomicUsize,
+}
+
+impl TripTap {
+    fn tap(&self, line: &contract::events::UsageRecorded) {
+        let billed = line.cost.unwrap_or(0.0);
+        {
+            let mut owned = self.billed.lock().unwrap();
+            let mut sum = self.sum.lock().unwrap();
+            let before = owned.get(&line.generation_id.0).copied().unwrap_or(0.0);
+            *sum += billed - before;
+            owned.insert(line.generation_id.0.clone(), billed);
+        }
+        if *self.sum.lock().unwrap() >= self.budget && !self.tripped.swap(true, Ordering::SeqCst) {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn sum(&self) -> f64 {
+        *self.sum.lock().unwrap()
+    }
+
+    fn stops(&self) -> usize {
+        self.stops.load(Ordering::SeqCst)
+    }
+}
+
+#[test]
+fn the_trip_calls_stop_once_on_crossing_and_never_before() {
+    let rig = rig(vec![WatchReply::Exited(vec![
+        usage_envelope(1, "g_1", Some(0.1)),
+        usage_envelope(2, "g_2", Some(0.15)),
+        usage_envelope(3, "g_3", Some(0.1)),
+        fiber_exited_line(4, "Done."),
+    ])]);
+    let trip = Arc::new(TripTap {
+        billed: Mutex::new(std::collections::HashMap::new()),
+        sum: Mutex::new(0.0),
+        budget: 0.2,
+        tripped: AtomicBool::new(false),
+        stops: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let tapped = Arc::clone(&trip);
+    rig.registry.install_usage_tap(Some(Arc::new(move |line| {
+        tapped.tap(&line);
+    })));
+    let waited = start_with_usage(
+        &rig,
+        "exit 0",
+        BOUND,
+        1 << 20,
+        Some(rig.registry.usage_forward()),
+    );
+    let _waited = waited;
+    let (notice, usages) = reported_with_usage(&rig);
+    // Below the budget nothing trips; the crossing trips once; the line
+    // after never trips again.
+    assert!((trip.sum() - 0.35).abs() < 1e-9);
+    assert_eq!(trip.stops(), 1);
+    assert_eq!(usages.len(), 3);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+}
+
+#[test]
+fn a_correction_applies_only_its_delta() {
+    let rig = rig(vec![WatchReply::Exited(vec![
+        usage_envelope(1, "g_1", Some(0.1)),
+        usage_envelope(2, "g_1", Some(0.18)),
+        fiber_exited_line(3, "Done."),
+    ])]);
+    let trip = Arc::new(TripTap {
+        billed: Mutex::new(std::collections::HashMap::new()),
+        sum: Mutex::new(0.0),
+        budget: 10.0,
+        tripped: AtomicBool::new(false),
+        stops: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let tapped = Arc::clone(&trip);
+    rig.registry.install_usage_tap(Some(Arc::new(move |line| {
+        tapped.tap(&line);
+    })));
+    let waited = start_with_usage(
+        &rig,
+        "exit 0",
+        BOUND,
+        1 << 20,
+        Some(rig.registry.usage_forward()),
+    );
+    let _waited = waited;
+    let (notice, usages) = reported_with_usage(&rig);
+    // The second arrival of the same generation adds only its delta, so
+    // the spend holds the latest billed figure once, not twice.
+    assert!((trip.sum() - 0.18).abs() < 1e-9);
+    assert_eq!(trip.stops(), 0);
+    assert_eq!(usages.len(), 2);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+}
+
+#[test]
+fn sibling_arrivals_racing_a_publication_lose_no_delta_and_trip_once() {
+    let rig = rig(vec![WatchReply::Exited(vec![fiber_exited_line(
+        1, "Done.",
+    )])]);
+    let trip = Arc::new(TripTap {
+        billed: Mutex::new(std::collections::HashMap::new()),
+        sum: Mutex::new(0.0),
+        budget: 0.5,
+        tripped: AtomicBool::new(false),
+        stops: std::sync::atomic::AtomicUsize::new(0),
+    });
+    rig.registry.install_usage_tap(Some(Arc::new({
+        let trip = Arc::clone(&trip);
+        move |line| trip.tap(&line)
+    })));
+    let forward = rig.registry.usage_forward();
+    // Sibling watcher threads forward distinct generations while the
+    // publication reads beside them: every delta lands, and the crossing
+    // trips exactly once.
+    std::thread::scope(|scope| {
+        for thread in 0..8 {
+            let forward = Arc::clone(&forward);
+            let job = rig.job.clone();
+            scope.spawn(move || {
+                for n in 0..4 {
+                    let generation = format!("g_{thread}_{n}");
+                    forward(
+                        job.clone(),
+                        SessionId("s_child".into()),
+                        contract::events::UsageRecorded {
+                            generation_id: contract::GenerationId(generation),
+                            model: "fake/m".into(),
+                            tokens: contract::shapes::Tokens {
+                                input: 10,
+                                cache_read: 0,
+                                cache_write: std::collections::BTreeMap::new(),
+                                output: 5,
+                            },
+                            input_bytes: 100,
+                            input_media: None,
+                            web_searches: None,
+                            cost: Some(0.05),
+                            subscription: None,
+                            extension: None,
+                            origin_session_id: None,
+                            reviewer: None,
+                        },
+                    );
+                }
+            });
+        }
+    });
+    assert!((trip.sum() - 1.6).abs() < 1e-9);
+    assert_eq!(trip.stops(), 1);
 }

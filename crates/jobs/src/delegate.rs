@@ -573,6 +573,7 @@ impl Starter<'_> {
                     Arc::clone(self.watch),
                     None,
                     timeout,
+                    Some(self.registry.usage_forward()),
                 );
                 let (child, listing) = runner
                     .spawn(self.launch, &launched)

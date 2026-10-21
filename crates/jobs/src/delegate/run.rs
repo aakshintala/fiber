@@ -224,6 +224,10 @@ fn kill_due(kill_at: Option<Instant>, now: Instant) -> bool {
 struct Fold {
     last_seq: Option<u64>,
     socket: Option<FiberExited>,
+    /// The last usage `seq` forwarded to the loop, by the socket stream
+    /// or the file backfill: a reconnect or backfill never forwards one
+    /// at or before it twice.
+    usage_seq: Option<u64>,
     /// A watcher thread is inside the blocking socket read.
     outstanding: bool,
     /// The running watch's result, for the runner to take once.
@@ -238,6 +242,13 @@ enum WatchResult {
     /// The connection closed or refused: the runner backs off.
     Retry,
 }
+
+/// Forwards one tapped `usage_recorded` to the loop: the registry's
+/// callback built from its weak self, carrying the delegate's job and
+/// session with the line. The watcher invokes it outside every lock, in
+/// stream order; a missing tap keeps the existing unwired behavior.
+pub(crate) type UsageForward =
+    Arc<dyn Fn(JobId, SessionId, contract::events::UsageRecorded) + Send + Sync>;
 
 /// Whether `seq` is a line the watch delivers: a `seq` past the last one
 /// seen, or a line without one. A reconnect replays what the fold already
@@ -265,6 +276,10 @@ pub(crate) struct Runner {
     bound: Duration,
     cap: u64,
     watch: Watch,
+    /// Forwards each well-formed `usage_recorded` envelope to the loop,
+    /// with the delegate's job and session. `None` keeps the existing
+    /// unwired behavior.
+    on_usage: Option<UsageForward>,
     deadline: Option<Instant>,
     /// The `seq` of the delegate log's last complete line before this
     /// run spawned: lines at or before it belong to an earlier run, so
@@ -296,6 +311,7 @@ impl Runner {
         watch: Watch,
         after: Option<u64>,
         timeout: Option<Duration>,
+        on_usage: Option<UsageForward>,
     ) -> (Self, Stop) {
         let deadline = timeout.and_then(|timeout| clock.now().checked_add(timeout));
         let shared = Shared::new(Arc::clone(&clock), bound);
@@ -313,6 +329,7 @@ impl Runner {
                 bound,
                 cap,
                 watch,
+                on_usage,
                 deadline,
                 after,
                 shared,
@@ -426,6 +443,18 @@ impl Runner {
                 }
             }
             if let Some(status) = group::reap_locked(&mut child, &mut listing) {
+                // The socket misses a delegate that exits before the
+                // first subscribe connects, when no watch ever ends: the
+                // file replay after the reap still forwards its usage,
+                // before the report wakes the waiter.
+                Watcher::replay_usage(
+                    &self.output_path,
+                    self.after,
+                    &fold,
+                    &self.job_id,
+                    &self.session_id,
+                    &self.on_usage,
+                );
                 let stdout = match drained {
                     Some(line) => line,
                     None => self.await_drain(&drain_rx),
@@ -479,6 +508,7 @@ impl Runner {
                 let output_path = self.output_path.clone();
                 let watcher = Watcher {
                     watch: Arc::clone(&self.watch),
+                    job_id: self.job_id.clone(),
                     session_id: self.session_id.clone(),
                     after: self.after,
                     fold: Arc::clone(&fold),
@@ -486,8 +516,13 @@ impl Runner {
                     cap: self.cap,
                     clock: Arc::clone(&self.clock),
                     last_check: Arc::clone(&self.last_cap_check),
-                    stat: Arc::new(move || log_len(&output_path)),
+                    stat: Arc::new({
+                        let output_path = output_path.clone();
+                        move || log_len(&output_path)
+                    }),
+                    output_path,
                     wake: Arc::clone(&wake),
+                    on_usage: self.on_usage.clone(),
                 };
                 thread::spawn(|| watcher.run());
             }
@@ -580,6 +615,7 @@ type Stat = Arc<dyn Fn() -> u64 + Send + Sync>;
 /// reaped: a watch that outlives the child ends at EOF.
 struct Watcher {
     watch: Watch,
+    job_id: JobId,
     session_id: SessionId,
     /// The run's boundary, passed to every watch call.
     after: Option<u64>,
@@ -594,7 +630,14 @@ struct Watcher {
     /// Reads the log's length. The runner wires the real file; tests
     /// count calls through here.
     stat: Stat,
+    /// The delegate's log file. The runner wires the real path; the
+    /// backfill replays it, so a delegate that exits before the first
+    /// subscribe connects still forwards its usage.
+    output_path: PathBuf,
     wake: Arc<dyn Wake>,
+    /// Forwards each well-formed `usage_recorded` envelope to the loop.
+    /// `None` keeps the existing unwired behavior.
+    on_usage: Option<UsageForward>,
 }
 
 impl Watcher {
@@ -612,6 +655,24 @@ impl Watcher {
                     None
                 }
             };
+            // Taps each well-formed `usage_recorded` envelope in stream
+            // order, outside the fold lock: malformed lines never reach
+            // the loop, as the fold already ignores every non-`fiber_exited`
+            // kind, and neither the stream nor the file backfill below
+            // forwards a `seq` at or before the last one sent. The send
+            // runs after the tap returns, still with no lock held
+            // across it.
+            if envelope.kind == "usage_recorded"
+                && let Some(forward) = &self.on_usage
+                && let Ok(line) = serde_json::from_value::<contract::events::UsageRecorded>(
+                    serde_json::Value::Object(envelope.payload.clone()),
+                )
+                && let Some(seq) = envelope.seq.map(|seq| seq.0)
+                && Self::fresh_usage(&self.fold, after, seq)
+            {
+                forward(self.job_id.clone(), self.session_id.clone(), line);
+                lock(&self.fold).usage_seq = Some(seq);
+            }
             // The cap is stat'ed at most once per poll interval, read
             // from the session clock: envelopes inside one interval share
             // the first stat, so a burst of lines costs one metadata
@@ -634,6 +695,11 @@ impl Watcher {
                 lock(&self.fold).socket = Some(exited);
             }
         });
+        // The socket misses a delegate that exits before the first
+        // subscribe connects, so the file replays what the stream never
+        // delivered, in `seq` order. Either path's lines are never sent
+        // twice, whichever ran first.
+        self.backfill_usage();
         {
             let mut fold = lock(&self.fold);
             fold.outstanding = false;
@@ -649,6 +715,84 @@ impl Watcher {
         // Wakes the runner's park at once: the result must not wait for
         // the next clock move.
         self.wake.wake();
+    }
+
+    /// Whether `seq` is a usage line the loop has not seen: past the
+    /// run's boundary and past the last usage either path forwarded.
+    /// Checked under the fold lock; the forward runs outside it, then
+    /// claims the `seq` under the same lock.
+    fn fresh_usage(fold: &Mutex<Fold>, after: Option<u64>, seq: u64) -> bool {
+        if after.is_some_and(|bound| seq <= bound) {
+            return false;
+        }
+        let fold = lock(fold);
+        fold.usage_seq.is_none_or(|sent| seq > sent)
+    }
+
+    /// Replays the delegate's log file for `usage_recorded` lines the
+    /// socket stream never delivered: past the run's boundary and the
+    /// last forwarded `seq`, in `seq` order. A missing or torn file
+    /// forwards nothing; the next watch or backfill sees the lines once
+    /// the writer finishes them.
+    fn backfill_usage(&self) {
+        Self::replay_usage(
+            &self.output_path,
+            self.after,
+            &self.fold,
+            &self.job_id,
+            &self.session_id,
+            &self.on_usage,
+        );
+    }
+
+    /// The file replay both the watcher (after every watch ends) and the
+    /// runner (after reaping the child) share: past `after` and the last
+    /// forwarded `seq` in the shared fold, in `seq` order. The runner's
+    /// call covers a delegate that exits before the first subscribe
+    /// connects, when no watch ever ends; either path never forwards a
+    /// `seq` twice.
+    fn replay_usage(
+        output_path: &std::path::Path,
+        after: Option<u64>,
+        fold: &Mutex<Fold>,
+        job_id: &JobId,
+        session_id: &SessionId,
+        on_usage: &Option<UsageForward>,
+    ) {
+        let Some(forward) = on_usage.clone() else {
+            return;
+        };
+        let Ok(text) = std::fs::read_to_string(output_path) else {
+            return;
+        };
+        let mut pending: Vec<(u64, contract::events::UsageRecorded)> = Vec::new();
+        for raw in text.lines() {
+            let Ok(envelope) = serde_json::from_str::<contract::Envelope>(raw) else {
+                continue;
+            };
+            if envelope.kind != "usage_recorded" {
+                continue;
+            }
+            let Some(seq) = envelope.seq.map(|seq| seq.0) else {
+                continue;
+            };
+            if after.is_some_and(|bound| seq <= bound) {
+                continue;
+            }
+            let Ok(line) = serde_json::from_value(serde_json::Value::Object(envelope.payload))
+            else {
+                continue;
+            };
+            pending.push((seq, line));
+        }
+        pending.sort_by_key(|(seq, _)| *seq);
+        for (seq, line) in pending {
+            if !Self::fresh_usage(fold, after, seq) {
+                continue;
+            }
+            forward(job_id.clone(), session_id.clone(), line);
+            lock(fold).usage_seq = Some(seq);
+        }
     }
 }
 

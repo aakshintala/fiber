@@ -505,3 +505,81 @@ fn a_correction_after_saturation_gives_the_fold_s_exact_total() {
     ledger.record(&line("a", None, None, 1));
     assert_eq!(ledger.usage().tokens.input, 2);
 }
+
+#[test]
+fn spend_exactly_at_the_budget_trips() {
+    use super::Tripwire;
+    let mut trip = Tripwire::from_ledger(&Ledger::default(), Some(1.0));
+    assert!(trip.apply(&line("g1", None, Some(1.0), 0)));
+}
+
+#[test]
+fn spend_just_under_the_budget_does_not_trip() {
+    use super::Tripwire;
+    let mut trip = Tripwire::from_ledger(&Ledger::default(), Some(1.0));
+    assert!(!trip.apply(&line("g1", None, Some(0.99), 0)));
+}
+
+#[test]
+fn a_downward_correction_subtracts_but_never_untrips() {
+    use super::Tripwire;
+    let mut trip = Tripwire::from_ledger(&Ledger::default(), Some(1.0));
+    assert!(trip.apply(&line("g1", None, Some(1.5), 0)));
+    assert!(!trip.apply(&line("g1", None, Some(0.25), 0)));
+    assert!(!trip.apply(&line("g2", None, Some(0.5), 0)));
+}
+
+#[test]
+fn sibling_arrivals_racing_a_publication_trip_exactly_once() {
+    use super::Tripwire;
+    use std::sync::{Arc, Mutex};
+    let trip = Arc::new(Mutex::new(Tripwire::from_ledger(
+        &Ledger::default(),
+        Some(1.0),
+    )));
+    let claims = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut handles = Vec::new();
+    for (id, cost) in [("g1", 0.4), ("g2", 0.4), ("g3", 0.4)] {
+        let trip = Arc::clone(&trip);
+        let claims = Arc::clone(&claims);
+        handles.push(std::thread::spawn(move || {
+            let line = line(id, None, Some(cost), 0);
+            if trip
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .apply(&line)
+            {
+                claims.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }));
+    }
+    let trip_publish = Arc::clone(&trip);
+    handles.push(std::thread::spawn(move || {
+        trip_publish
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .publish_missing(&line("g0", None, Some(0.4), 0));
+    }));
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    assert_eq!(claims.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(
+        !trip
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .apply(&line("g4", None, Some(0.0), 0))
+    );
+}
+#[test]
+fn a_null_cost_line_bills_zero() {
+    use super::Tripwire;
+    assert_eq!(Tripwire::billed_cost(&line("g1", None, None, 0)), 0.0);
+    assert_eq!(
+        Tripwire::billed_cost(&line("g2", Some(true), Some(2.0), 0)),
+        0.0
+    );
+    let mut trip = Tripwire::from_ledger(&Ledger::default(), Some(1.0));
+    assert!(!trip.apply(&line("g1", None, None, 0)));
+    assert!(!trip.apply(&line("g2", Some(true), Some(2.0), 0)));
+}

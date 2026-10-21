@@ -183,6 +183,7 @@ fn open_without_the_registry_arc_records_nothing() {
         inner: Mutex::new(super::Inner {
             jobs: Vec::new(),
             inbox: None,
+            usage_tap: None,
             foreground: Vec::new(),
             extension_starts_closed: false,
         }),

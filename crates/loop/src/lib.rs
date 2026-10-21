@@ -318,6 +318,11 @@ pub struct Loop {
     cut_off: bool,
     /// Usage lines this loop has written, latest per generation.
     ledger: usage::Ledger,
+    /// The spend the delegate-socket reader shares: per-generation billed
+    /// costs, the accumulated sum, the budget and the one-way trip. The
+    /// watcher applies each tapped line under its lock; the loop
+    /// publishes each ledgered line under the same lock.
+    pub(crate) spend_trip: std::sync::Arc<std::sync::Mutex<usage::Tripwire>>,
     /// Costs looked up after their calls ended, to write as they settle.
     late_cost: late_cost::LateCost,
     pub(crate) lifecycle: lifecycle::State,
@@ -589,6 +594,9 @@ impl Loop {
             contract::SessionId(session_id.clone()),
             Arc::clone(log.clock()),
         );
+        let spend_trip = std::sync::Arc::new(std::sync::Mutex::new(usage::Tripwire::from_ledger(
+            &ledger, None,
+        )));
         Ok(Self {
             status_tap: None,
             log,
@@ -646,6 +654,7 @@ impl Loop {
             changes,
             cut_off: false,
             ledger,
+            spend_trip,
             late_cost: late_cost::LateCost::default(),
             lifecycle: lifecycle::State::new(reason, &contract::SessionId(session_id.clone())),
             budget: None,
@@ -693,9 +702,15 @@ impl Loop {
     }
 
     /// Caps billed spend at `usd` US dollars. `None` is no limit
-    /// (`docs/loop.md`, "Spending budget").
+    /// (`docs/loop.md`, "Spending budget"). Publishes the budget to the
+    /// spend tripwire under its lock; the trip itself fires on spend
+    /// arrivals and at the request-time budget end, never here.
     pub fn budget(mut self, usd: Option<f64>) -> Self {
         self.budget = usd;
+        self.spend_trip
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_budget(usd);
         self
     }
 

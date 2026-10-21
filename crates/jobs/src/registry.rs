@@ -103,6 +103,10 @@ struct Inner {
     /// The loop's inbox, which a job's end is sent to. `None` until
     /// [`contract::jobs::Jobs::deliver_to`].
     inbox: Option<Sender<Delivery>>,
+    /// The watcher-side budget update the loop installed, if any. Held
+    /// under this lock, cloned out before it runs, so the tap never runs
+    /// with the lock held.
+    usage_tap: Option<contract::jobs::UsageTap>,
     /// Running foreground calls, held weakly (`Jobs::foreground`).
     foreground: Vec<Weak<dyn Fn() -> bool + Send + Sync>>,
     /// The loop set this on an end path, before that path's first
@@ -183,6 +187,7 @@ impl Registry {
             inner: Mutex::new(Inner {
                 jobs: Vec::new(),
                 inbox: None,
+                usage_tap: None,
                 foreground: Vec::new(),
                 extension_starts_closed: false,
             }),
@@ -310,6 +315,35 @@ impl Registry {
     /// Whether a session has wired its inbox for delegate starts and ends.
     pub(crate) fn has_inbox(&self) -> bool {
         lock(&self.inner).inbox.is_some()
+    }
+
+    /// The forwarding callback the delegate runner taps each well-formed
+    /// `usage_recorded` envelope with: the loop's budget update first, on
+    /// the watcher thread, then the inbox offer. Cloned taps and senders
+    /// run after the lock is released; a registry without a tap or inbox
+    /// keeps the existing unwired behavior. Never retains a strong
+    /// registry reference in the callback the registry stores.
+    pub(crate) fn usage_forward(self: &Arc<Self>) -> super::delegate::run::UsageForward {
+        let weak = Arc::downgrade(self);
+        Arc::new(move |job_id, session, line| {
+            let Some(registry) = weak.upgrade() else {
+                return;
+            };
+            let (tap, inbox) = {
+                let inner = lock(&registry.inner);
+                (inner.usage_tap.clone(), inner.inbox.clone())
+            };
+            if let Some(tap) = tap {
+                tap(line.clone());
+            }
+            if let Some(inbox) = inbox {
+                let _sent = inbox.send(Delivery::DelegateUsage {
+                    job_id: job_id.clone(),
+                    session: session.clone(),
+                    line,
+                });
+            }
+        })
     }
 
     /// Sends the stop of every running job whose `JobStarted.extension` is
@@ -848,6 +882,10 @@ impl contract::jobs::Jobs for Registry {
     fn close_extension_starts(&self) {
         let _gate = lock(&self.start_gate);
         lock(&self.inner).extension_starts_closed = true;
+    }
+
+    fn install_usage_tap(&self, tap: Option<contract::jobs::UsageTap>) {
+        lock(&self.inner).usage_tap = tap;
     }
 }
 

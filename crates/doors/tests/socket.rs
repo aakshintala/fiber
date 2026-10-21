@@ -222,7 +222,8 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
         | Delivery::ExtensionLog(_)
         | Delivery::ProposeNotes(..)
         | Delivery::ExtensionJob(..)
-        | Delivery::ExtensionUsage(_) => {
+        | Delivery::ExtensionUsage(_)
+        | Delivery::DelegateUsage { .. } => {
             panic!("no job runs here")
         }
     }
@@ -1540,6 +1541,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::ProposeNotes(..)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
+                | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
@@ -1583,6 +1585,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::ProposeNotes(..)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
+                | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
@@ -1678,6 +1681,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::ProposeNotes(..)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
+                | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the credential arrives as a credential"),
             }
@@ -1778,6 +1782,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ProposeNotes(..)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
+                | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -1825,6 +1830,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ProposeNotes(..)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
+                | Delivery::DelegateUsage { .. }
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -5972,6 +5978,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::ExtensionLog(_)
                 | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
+        | Delivery::DelegateUsage { .. }
                 | Delivery::Model(..)
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("propose_notes arrives as itself"),

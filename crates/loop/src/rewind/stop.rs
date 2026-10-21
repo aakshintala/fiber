@@ -193,6 +193,7 @@ impl Loop {
             | Delivery::ProposeNotes(..)
             | Delivery::ExtensionJob(..)
             | Delivery::ExtensionUsage(_)
+            | Delivery::DelegateUsage { .. }
             | Delivery::Shell(..)
             | Delivery::Cancelled) => {
                 crate::rewind::command::refuse_after_rewound(other);

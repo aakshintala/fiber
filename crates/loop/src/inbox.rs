@@ -546,6 +546,7 @@ impl Loop {
             | Delivery::ExtensionJob(..)
             | Delivery::ProposeNotes(..)
             | Delivery::ExtensionUsage(_)
+            | Delivery::DelegateUsage { .. }
             | Delivery::InnerCall(_)
             | Delivery::Cancelled
             | Delivery::Shell(..)) => {
@@ -688,6 +689,11 @@ impl Loop {
                 self.record_extension_job(started, delegate)?
             }
             Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
+            Delivery::DelegateUsage {
+                job_id,
+                session,
+                line,
+            } => self.copy_usage(&job_id, &session, line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
@@ -880,6 +886,11 @@ impl Loop {
                 self.record_extension_job(started, delegate)?
             }
             Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
+            Delivery::DelegateUsage {
+                job_id,
+                session,
+                line,
+            } => self.copy_usage(&job_id, &session, line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,

@@ -153,6 +153,7 @@ impl DelegateMessage {
                 Arc::clone(&watch),
                 after,
                 None,
+                Some(self.registry.usage_forward()),
             );
             let (child, listing) = match runner.spawn(&launch, &launched) {
                 Ok(started) => started,

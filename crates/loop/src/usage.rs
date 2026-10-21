@@ -3,7 +3,7 @@
 //! spending budget, so the two cannot drift.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use contract::events::{Event, Notice, UsageRecorded};
 use contract::provider::{CallUsage, Cost, CostLookup, Tier};
@@ -209,7 +209,61 @@ impl crate::Loop {
     ) -> Result<(), crate::Error> {
         self.write(&Event::UsageRecorded(recorded.clone()), turn, action)?;
         self.ledger.record(recorded);
+        self.record_usage(recorded);
         Ok(())
+    }
+
+    /// Copies a delegate's `usage_recorded` into this log: sets
+    /// `origin_session_id` to the sending delegate when absent, preserves
+    /// it when present so a grandchild's line still names the originator,
+    /// then writes and ledgers it with no turn and no action. Copies are
+    /// never looked up, so they never schedule a late cost. A copy that
+    /// claims the one-way trip stops delegates at once, as a tap arrival
+    /// does: foreign spend arriving mid-turn or mid-wait is stopped
+    /// promptly, while the loop's own spend waits for the request-time
+    /// budget end.
+    pub(crate) fn copy_usage(
+        &mut self,
+        _job: &contract::JobId,
+        session: &contract::SessionId,
+        line: UsageRecorded,
+    ) -> Result<(), crate::Error> {
+        let mut copied = line;
+        if copied.origin_session_id.is_none() {
+            copied.origin_session_id = Some(session.clone());
+        }
+        self.put_usage(&copied, None, None)?;
+        self.publish_usage(&copied);
+        Ok(())
+    }
+
+    /// Records one ledgered line on the spend tripwire without claiming
+    /// the trip: the loop's own spend waits for the request-time budget
+    /// end, so an over-budget turn stops delegates exactly once there.
+    /// Only copies and tap arrivals claim, for a prompt stop while the
+    /// loop is parked or mid-turn on foreign spend.
+    fn record_usage(&self, recorded: &UsageRecorded) {
+        self.spend_trip
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .record(recorded);
+    }
+
+    /// Publishes one ledgered line to the spend tripwire, stopping
+    /// delegates at once when it claims the one-way trip. The tripwire
+    /// lock is released before the stop, and the stop tolerates ended
+    /// jobs, so a trip racing a job end stops nothing twice.
+    fn publish_usage(&self, recorded: &UsageRecorded) {
+        let tripped = {
+            let mut trip = self
+                .spend_trip
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            trip.apply(recorded)
+        };
+        if tripped && let Some(jobs) = &self.ending.jobs {
+            jobs.stop_delegates();
+        }
     }
 }
 
@@ -332,6 +386,112 @@ impl Ledger {
     /// from the sum.
     pub(crate) fn spend(&self) -> f64 {
         self.usage().cost.unwrap_or(0.0)
+    }
+
+    /// The held lines, in first-recorded order: the tripwire starts from
+    /// these, so a resume keeps its restored spend.
+    pub(crate) fn lines(&self) -> &[UsageRecorded] {
+        &self.calls
+    }
+}
+
+/// The spend the loop has seen, shared with the delegate-socket reader:
+/// one leaf mutex protecting the per-generation billed-cost map, the
+/// accumulated billed spend, the optional budget and the one-way tripped
+/// flag. Every access holds it; the stop and the inbox send run after it
+/// is released, so the watcher never holds it across a stop or a send.
+#[derive(Debug)]
+pub(crate) struct Tripwire {
+    billed: BTreeMap<GenerationId, f64>,
+    sum: f64,
+    budget: Option<f64>,
+    tripped: bool,
+}
+
+impl Tripwire {
+    /// The billed dollars one line counts: zero for subscription lines
+    /// and for lines with no known cost.
+    pub(crate) fn billed_cost(line: &UsageRecorded) -> f64 {
+        if line.subscription == Some(true) {
+            0.0
+        } else {
+            line.cost.unwrap_or(0.0)
+        }
+    }
+
+    /// Starts from the ledger's held lines and the session budget.
+    pub(crate) fn from_ledger(ledger: &Ledger, budget: Option<f64>) -> Self {
+        let mut trip = Self {
+            billed: BTreeMap::new(),
+            sum: 0.0,
+            budget,
+            tripped: false,
+        };
+        for line in ledger.lines() {
+            let cost = Self::billed_cost(line);
+            trip.billed.insert(line.generation_id.clone(), cost);
+            trip.sum += cost;
+        }
+        trip
+    }
+
+    /// Records one line's delta (`billed(new) - billed(old)`), so a
+    /// correction adds only its difference and a re-delivery adds
+    /// nothing. Never claims the trip: loop-side publication only
+    /// reconciles the sum, leaving the claim to tap arrivals, copies
+    /// and the request-time budget end.
+    pub(crate) fn record(&mut self, line: &UsageRecorded) {
+        let new = Self::billed_cost(line);
+        let old = self.billed.get(&line.generation_id).copied().unwrap_or(0.0);
+        let known = self.billed.contains_key(&line.generation_id);
+        if !known || new != old {
+            self.billed.insert(line.generation_id.clone(), new);
+            self.sum += new - old;
+        }
+    }
+
+    /// Applies one line's delta (`billed(new) - billed(old)`), so a
+    /// correction adds only its difference and a re-delivery adds
+    /// nothing. True when this call claims the one-way trip: billed
+    /// spend reached the budget. A downward correction never untrips.
+    pub(crate) fn apply(&mut self, line: &UsageRecorded) -> bool {
+        let new = Self::billed_cost(line);
+        let old = self.billed.get(&line.generation_id).copied().unwrap_or(0.0);
+        let known = self.billed.contains_key(&line.generation_id);
+        if !known || new != old {
+            self.billed.insert(line.generation_id.clone(), new);
+            self.sum += new - old;
+        }
+        if self.tripped {
+            return false;
+        }
+        if let Some(limit) = self.budget
+            && self.sum >= limit
+        {
+            self.tripped = true;
+            return true;
+        }
+        false
+    }
+
+    /// Publishes one restored ledger line the map lacks, preserving a
+    /// watcher contribution not yet folded: a ledger snapshot older than a
+    /// racing watcher update never overwrites it. Recording only, like
+    /// every loop-side publication.
+    pub(crate) fn publish_missing(&mut self, line: &UsageRecorded) {
+        if self.billed.contains_key(&line.generation_id) {
+            return;
+        }
+        let cost = Self::billed_cost(line);
+        self.billed.insert(line.generation_id.clone(), cost);
+        self.sum += cost;
+    }
+
+    /// Publishes the session budget. Recording only: the trip is
+    /// claimed by spend arrivals and by the request-time budget end,
+    /// so attaching a budget never stops delegates on its own.
+    pub(crate) fn set_budget(&mut self, budget: Option<f64>) {
+        self.budget = budget;
     }
 }
 
