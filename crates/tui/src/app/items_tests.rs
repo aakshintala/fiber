@@ -1268,7 +1268,8 @@ fn a_click_on_a_completed_job_serial_opens_and_subscribes() {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("opening sends"),
     };
     let full = subscribes(&out);
     assert_eq!(full.len(), 1);
@@ -1302,7 +1303,8 @@ fn enter_on_a_finished_delegate_row_opens_and_subscribes() {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("opening sends"),
     };
     let full = subscribes(&out);
     assert_eq!(full.len(), 1);
@@ -1334,7 +1336,8 @@ fn open_serial_of(app: &mut App, serial: u64) -> Vec<Value> {
         | Effect::Copy(_)
         | Effect::OpenLink(_)
         | Effect::OpenFile(_)
-        | Effect::ReadImage(_) => panic!("opening sends or nothing"),
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("opening sends or nothing"),
     }
 }
 
