@@ -17,7 +17,7 @@
 
 mod support;
 
-use std::os::unix::fs::PermissionsExt as _;
+use std::path::Path;
 use std::process::Output;
 
 use fakes::{ProviderServer, Response, fingerprint};
@@ -69,49 +69,53 @@ fn run(setup: &Setup, args: &[&str], env: &[(&str, &str)]) -> Run {
 }
 
 /// The fake server answering with `responses`, the package installed
-/// against it, and a stand-in `gcloud` first on the returned `PATH` that
-/// notes each run in the returned file and prints a token that expires long
-/// after the test.
+/// against it, and the environment for `fiber ask`: the checked-in stand-in
+/// `gcloud` (`tests/fixtures/gcloud`) first on `PATH`, noting each run in the
+/// returned file, and the project in `GOOGLE_CLOUD_PROJECT`.
 fn vertex<const N: usize>(
     setup: &Setup,
     responses: [Response; N],
-) -> (ProviderServer, String, std::path::PathBuf) {
+) -> (
+    ProviderServer,
+    Vec<(&'static str, String)>,
+    std::path::PathBuf,
+) {
     let server = ProviderServer::start(responses).unwrap();
     let to = setup.root.path().join("pkg-vertex");
     support::package::copy_package("vertex", &to, ORIGIN, &server.url());
     let installed = run(setup, &["extension", "install", to.to_str().unwrap()], &[]);
     assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
 
-    let bin = setup.root.path().join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
     let ran = setup.root.path().join("gcloud-ran");
-    let gcloud = bin.join("gcloud");
-    std::fs::write(
-        &gcloud,
-        format!(
-            "#!/bin/sh\necho \"$@\" >> '{}'\nprintf '%s' '{{\"credential\": {{\"access_token\": \"vertex-test-token\", \"token_expiry\": \"2099-01-01T00:00:00Z\"}}}}'\n",
-            ran.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&gcloud, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let path = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    (server, path, ran)
+    let mut paths = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gcloud")];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(paths).unwrap().into_string().unwrap();
+    let env = vec![
+        ("PATH", path),
+        ("FIBER_TEST_GCLOUD_RAN", ran.to_str().unwrap().to_owned()),
+        ("GOOGLE_CLOUD_PROJECT", "example-project".to_owned()),
+    ];
+    (server, env, ran)
+}
+
+/// `env` as [`run`] takes it.
+fn borrowed<'a>(env: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    env.iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect()
 }
 
 #[test]
 fn a_gcloud_token_signs_every_call_of_a_turn_and_is_fetched_once() {
     let setup = Setup::new();
-    let (server, path, ran) = vertex(&setup, [Response::stream(CALL), Response::stream(ANSWER)]);
+    let (server, env, ran) = vertex(&setup, [Response::stream(CALL), Response::stream(ANSWER)]);
 
     let run = run(
         &setup,
         &["ask", "--model", "vertex/gemini-3.1-flash-lite", "hi"],
-        &[("PATH", &path), ("GOOGLE_CLOUD_PROJECT", "example-project")],
+        &borrowed(&env),
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -173,7 +177,7 @@ fn a_gcloud_token_signs_every_call_of_a_turn_and_is_fetched_once() {
 #[test]
 fn a_rejected_token_is_fiber_s_sentence_without_fiber_login() {
     let setup = Setup::new();
-    let (server, path, _) = vertex(
+    let (server, env, _) = vertex(
         &setup,
         [Response::status(401, GEMINI_BAD_TOKEN).header("content-type", "application/json")],
     );
@@ -181,7 +185,7 @@ fn a_rejected_token_is_fiber_s_sentence_without_fiber_login() {
     let run = run(
         &setup,
         &["ask", "--model", "vertex/gemini-3.1-flash-lite", "hi"],
-        &[("PATH", &path), ("GOOGLE_CLOUD_PROJECT", "example-project")],
+        &borrowed(&env),
     );
 
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
