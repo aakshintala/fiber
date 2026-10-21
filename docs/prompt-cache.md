@@ -340,7 +340,9 @@ A cache entry also expires after its lifetime with no request.
   the call under review with its declared effects, then the stage's
   instruction. Both stages send byte-identical bytes up to the stage
   instruction, so every reviewer
-  pass of either stage extends one cache chain between handoffs. At a handoff
+  pass of either stage extends one cache chain between handoffs. The
+  `reviewer_sent` cursor moves past the whole batch once, so the next review
+  reuses the cache the concurrent requests wrote. At a handoff
   the chain restarts from the kept messages (`docs/permissions.md`, "At a
   handoff"), so the reviewer misses the cache once, as the model does. A call
   must render identically when it later appears in history, because the chain
