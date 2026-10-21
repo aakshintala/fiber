@@ -17,6 +17,7 @@ mod support;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
@@ -217,6 +218,43 @@ fn await_live(client: &support::Socket, session: &str) {
             .any(|row| row["session_id"].as_str() == Some(session)),
         "the restarted hub lists the session: {listed}"
     );
+}
+
+/// A copy of the built `fiber` on another filesystem than the home, so
+/// the final rename into place must not cross filesystems: `/dev/shm`
+/// is a separate mount from the test root on Linux. Skipped only where
+/// `/dev/shm` is absent.
+#[track_caller]
+fn copy_binary_other_filesystem() -> Option<(PathBuf, PathBuf)> {
+    if !Path::new("/dev/shm").is_dir() {
+        return None;
+    }
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = PathBuf::from(format!(
+        "/dev/shm/fiber-update-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::SeqCst)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let copy = dir.join("fiber");
+    fs::copy(env!("CARGO_BIN_EXE_fiber"), &copy).unwrap();
+    Some((dir, copy))
+}
+
+/// The staged binary sits beside the installed one, so the rename into
+/// place stays on one filesystem even when the home lives elsewhere.
+#[test]
+fn update_across_filesystems_replaces_the_running_copy() {
+    let Some((dir, copy)) = copy_binary_other_filesystem() else {
+        return;
+    };
+    let setup = Setup::new();
+    let server = serve();
+    let github = Github::new(&setup);
+    let run = setup.run_update(&copy, &server, &github, &["update"], None);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(fs::read(&copy).unwrap(), MARKER);
+    fs::remove_dir_all(&dir).unwrap_or(());
 }
 
 #[test]
