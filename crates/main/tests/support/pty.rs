@@ -356,23 +356,6 @@ impl Grid {
         }
     }
 
-    /// A grid holding `rows` as its screen text, for tests that drive a
-    /// `wait_screen` predicate over held frames without spawning the
-    /// binary. Only the text rows are meaningful, never colours, cursor
-    /// or flags.
-    pub(crate) fn of_rows(rows: &[String]) -> Self {
-        let height = u16::try_from(rows.len()).unwrap_or(u16::MAX).max(1);
-        let width = rows
-            .iter()
-            .map(|row| u16::try_from(row.chars().count()).unwrap_or(u16::MAX))
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        let mut parser = vt100::Parser::new(height, width, 0);
-        parser.process(rows.join("\r\n").as_bytes());
-        Self::of(&parser)
-    }
-
     /// The screen's size as (columns, rows): the bounds for scanning
     /// cells, since row text trims trailing blanks.
     pub(crate) fn size(&self) -> (u16, u16) {

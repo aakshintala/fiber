@@ -18,7 +18,7 @@ use std::fs;
 
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
-use support::{Setup, TRUECOLOUR, write_json};
+use support::{Deadline, Setup, TRUECOLOUR, write_json};
 
 /// The first row containing `needle`.
 fn find_row(rows: &[String], needle: &str) -> Option<u16> {
@@ -162,11 +162,12 @@ fn scrolled(prev: &[String], next: &[String], up: bool) -> bool {
     false
 }
 
-/// Whether this frame proves the current wheel step or its goal: the
-/// exact predicate `wheel`'s wait evaluates, so the regression test
-/// below drives this function and no second copy of it exists.
-fn wheel_step_done(prev: &[String], next: &Grid, up: bool, goal: bool) -> bool {
-    scrolled(prev, &next.rows, up) || goal
+/// Whether this frame proves the current wheel step or its goal:
+/// `wheel`'s wait evaluates this over each frame, so the regression
+/// test below drives `wheel` itself over held frames and no second
+/// copy of it exists.
+fn wheel_step_done(prev: &[String], next: &[String], up: bool, goal: bool) -> bool {
+    scrolled(prev, next, up) || goal
 }
 
 #[test]
@@ -174,22 +175,9 @@ fn scrolled_rejects_a_repaint() {
     let grid = vec!["a".to_string(), "b".to_string(), "c".to_string()];
     assert!(!scrolled(&grid, &grid.clone(), true));
     assert!(!scrolled(&grid, &grid.clone(), false));
-}
-
-#[test]
-fn scrolled_up_needs_movement_down_the_screen() {
-    let prev = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-    let next = vec!["n".to_string(), "a".to_string(), "b".to_string()];
-    assert!(scrolled(&prev, &next, true));
-    assert!(!scrolled(&prev, &next, false));
-}
-
-#[test]
-fn scrolled_down_needs_movement_up_the_screen() {
-    let prev = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-    let next = vec!["b".to_string(), "c".to_string(), "n".to_string()];
-    assert!(scrolled(&prev, &next, false));
-    assert!(!scrolled(&prev, &next, true));
+    // An anchor the step moved down the screen still proves the step.
+    let moved = vec!["n".to_string(), "a".to_string(), "b".to_string()];
+    assert!(scrolled(&grid, &moved, true));
 }
 
 #[test]
@@ -202,22 +190,69 @@ fn scrolled_ignores_repeated_missing_and_still_anchors() {
     let next = vec!["new".to_string(), "b".to_string()];
     assert!(!scrolled(&prev, &next, true));
     assert!(!scrolled(&prev, &next, false));
+    // A unique anchor that did move still proves the step: `b` moves up
+    // the screen while `a` repeats around it.
+    let prev = vec!["a".to_string(), "a".to_string(), "b".to_string()];
+    let next = vec!["a".to_string(), "b".to_string(), "a".to_string()];
+    assert!(scrolled(&prev, &next, false));
 }
 
 #[test]
 fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
-    // This is the exact predicate `wheel`'s wait evaluates: unrelated row
-    // changes leave it pending, and only this step's movement or its goal
-    // releases it (see #2934).
+    // The faulty wait (`next.rows != prev`) passes on any row change at
+    // all, so an unrelated frame satisfied it with no wheel step written
+    // (see #2934). This drives `wheel`'s real wait over held frames: the
+    // unrelated frame must leave it pending, and only the wheel-driven
+    // frame releases it. Reverting the wait's closure to
+    // `next.rows != prev` returns the unrelated frame and fails the
+    // equality below.
     let prev = vec!["gone".to_string(), "b".to_string(), "c".to_string()];
-    let unrelated = Grid::of_rows(&["new".to_string(), "b".to_string(), "c".to_string()]);
-    assert_ne!(
-        unrelated.rows, prev,
-        "the old wait passes with no step written"
+    let unrelated = vec!["new".to_string(), "b".to_string(), "c".to_string()];
+    let wheeled = vec!["new".to_string(), "gone".to_string(), "b".to_string()];
+    assert_ne!(unrelated, prev, "the old wait passes with no step written");
+    let (main, terminal) = {
+        let pair = support::pty::open(80, 24);
+        (fs::File::from(pair.main), pair.terminal)
+    };
+    let mut run = Run::attach(main, 80, 24, Deadline::start());
+    let terminal = std::cell::RefCell::new(terminal);
+    /// Holds `rows` as the screen's top rows over whatever drew before.
+    fn hold(terminal: &std::cell::RefCell<fs::File>, rows: &[String]) {
+        use std::io::Write as _;
+        terminal
+            .borrow_mut()
+            .write_all(format!("\x1b[H\x1b[J{}", rows.join("\r\n")).as_bytes())
+            .unwrap();
+    }
+    hold(&terminal, &prev);
+    run.wait_screen("the held previous frame", |next| {
+        next.rows.iter().take(3).cloned().collect::<Vec<_>>() == prev
+    });
+    // Each check short of the goal feeds the next held frame: first the
+    // unrelated change, then the wheel-driven one.
+    let fed = std::cell::Cell::new(0u8);
+    let grid = wheel(&mut run, "one step up", true, 10, |next: &Grid| {
+        if next.rows.iter().take(3).cloned().collect::<Vec<_>>() == wheeled {
+            return true;
+        }
+        match fed.get() {
+            0 => {
+                hold(&terminal, &unrelated);
+                fed.set(1);
+            }
+            1 => {
+                hold(&terminal, &wheeled);
+                fed.set(2);
+            }
+            _ => {}
+        }
+        false
+    });
+    assert_eq!(
+        grid.rows.iter().take(3).cloned().collect::<Vec<_>>(),
+        wheeled,
+        "the wait skips the unrelated frame and returns the wheel-driven one"
     );
-    assert!(!wheel_step_done(&prev, &unrelated, true, false));
-    assert!(!wheel_step_done(&prev, &unrelated, false, false));
-    let wheeled = Grid::of_rows(&["new".to_string(), "gone".to_string(), "b".to_string()]);
     assert!(wheel_step_done(&prev, &wheeled, true, false));
     assert!(!wheel_step_done(&prev, &wheeled, false, false));
     assert!(wheel_step_done(&prev, &unrelated, true, true));
@@ -244,10 +279,9 @@ fn wheel(run: &mut Run, step: &str, up: bool, cap: usize, pred: impl Fn(&Grid) -
         }
         let prev = grid.rows.clone();
         run.write(if up { UP } else { DOWN });
-        grid = run.wait_screen(step, |next| wheel_step_done(&prev, next, up, pred(next)));
-        if pred(&grid) {
-            return grid;
-        }
+        grid = run.wait_screen(step, |next| {
+            wheel_step_done(&prev, &next.rows, up, pred(next))
+        });
     }
     grid
 }
