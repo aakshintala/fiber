@@ -820,7 +820,7 @@ none.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `generation_id` | string | yes | the provider's id for the generation, or an id Fiber mints, starting `fiber-`, when the provider named none |
+| `generation_id` | string | yes | the provider's id for the generation, on `bedrock-converse` the response's `x-amzn-RequestId` (`docs/model-routing.md`, "Bedrock Converse wire facts"), or an id Fiber mints, starting `fiber-`, when the provider named none |
 | `model` | string | yes | the model reference, `provider/model` |
 | `tokens` | `tokens` | yes | the call's tokens |
 | `input_bytes` | integer | yes | the size in bytes of the request body Fiber sent for the call: the system prompt, tool definitions and messages as serialised for the provider, with the request's settings |

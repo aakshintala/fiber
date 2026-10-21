@@ -3,6 +3,164 @@
     {
       "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
       "compat": {
+        "cache_point": true,
+        "reasoning_field": "reasoningConfig"
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.0825,
+        "cache_write": 0.33,
+        "input": 0.33,
+        "output": 2.75
+      },
+      "id": "amazon.nova-2-lite-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65535,
+      "name": "Nova 2 Lite",
+      "protocol": "bedrock-converse",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 300000,
+      "cost": {
+        "cache_read": 0.015,
+        "cache_write": 0.06,
+        "input": 0.06,
+        "output": 0.24
+      },
+      "id": "amazon.nova-lite-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Lite",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 128000,
+      "cost": {
+        "cache_read": 0.00875,
+        "cache_write": 0.035,
+        "input": 0.035,
+        "output": 0.14
+      },
+      "id": "amazon.nova-micro-v1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Micro",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 300000,
+      "cost": {
+        "cache_read": 0.2,
+        "cache_write": 0.8,
+        "input": 0.8,
+        "output": 3.2
+      },
+      "id": "amazon.nova-pro-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Pro",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 300000,
+      "cost": {
+        "cache_read": 0.01575,
+        "cache_write": 0.063,
+        "input": 0.063,
+        "output": 0.252
+      },
+      "id": "apac.amazon.nova-lite-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Lite (APAC)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 128000,
+      "cost": {
+        "cache_read": 0.00925,
+        "cache_write": 0.037,
+        "input": 0.037,
+        "output": 0.148
+      },
+      "id": "apac.amazon.nova-micro-v1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Micro (APAC)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 300000,
+      "cost": {
+        "cache_read": 0.21,
+        "cache_write": 0.84,
+        "input": 0.84,
+        "output": 3.36
+      },
+      "id": "apac.amazon.nova-pro-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Pro (APAC)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
         "bedrock_invoke": true,
         "thinking_budget": true
       },
@@ -293,6 +451,153 @@
         "xhigh",
         "max"
       ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 300000,
+      "cost": {
+        "cache_read": 0.016,
+        "cache_write": 0.064,
+        "input": 0.064,
+        "output": 0.256
+      },
+      "id": "ca.amazon.nova-lite-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Lite (CA)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 163840,
+      "cost": {
+        "input": 0.58,
+        "output": 1.68
+      },
+      "id": "deepseek.v3-v1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 81920,
+      "name": "DeepSeek-V3.1",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 163840,
+      "cost": {
+        "input": 0.62,
+        "output": 1.85
+      },
+      "id": "deepseek.v3.2",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 81920,
+      "name": "DeepSeek V3.2",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true,
+        "reasoning_field": "reasoningConfig"
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.0935,
+        "cache_write": 0.374,
+        "input": 0.374,
+        "output": 3.157
+      },
+      "id": "eu.amazon.nova-2-lite-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65535,
+      "name": "Nova 2 Lite (EU)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 300000,
+      "cost": {
+        "cache_read": 0.01725,
+        "cache_write": 0.069,
+        "input": 0.069,
+        "output": 0.276
+      },
+      "id": "eu.amazon.nova-lite-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Lite (EU)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 128000,
+      "cost": {
+        "cache_read": 0.01,
+        "cache_write": 0.04,
+        "input": 0.04,
+        "output": 0.16
+      },
+      "id": "eu.amazon.nova-micro-v1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Micro (EU)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 300000,
+      "cost": {
+        "cache_read": 0.23,
+        "cache_write": 0.92,
+        "input": 0.92,
+        "output": 3.68
+      },
+      "id": "eu.amazon.nova-pro-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Pro (EU)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
     },
     {
       "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
@@ -671,6 +976,34 @@
         "high",
         "xhigh",
         "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true,
+        "reasoning_field": "reasoningConfig"
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.075,
+        "cache_write": 0.3,
+        "input": 0.3,
+        "output": 2.5
+      },
+      "id": "global.amazon.nova-2-lite-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65535,
+      "name": "Nova 2 Lite (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high"
       ]
     },
     {
@@ -1082,6 +1415,257 @@
     },
     {
       "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.3,
+        "cache_write": 3.75,
+        "input": 3,
+        "output": 15
+      },
+      "id": "global.moonshotai.kimi-k3",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Kimi K3 (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.02,
+        "cache_write": 0.25,
+        "input": 0.2,
+        "output": 1.2,
+        "tiers": [
+          {
+            "cache_read": 0.04,
+            "cache_write": 0.5,
+            "input": 0.4,
+            "input_tokens_above": 272000,
+            "output": 1.8
+          }
+        ]
+      },
+      "id": "global.openai.gpt-5.6-luna",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Luna (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.4,
+        "cache_write": 5,
+        "input": 4,
+        "output": 20,
+        "tiers": [
+          {
+            "cache_read": 0.8,
+            "cache_write": 10,
+            "input": 8,
+            "input_tokens_above": 272000,
+            "output": 30
+          }
+        ]
+      },
+      "id": "global.openai.gpt-5.6-sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Sol (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.2,
+        "cache_write": 2.5,
+        "input": 2,
+        "output": 12,
+        "tiers": [
+          {
+            "cache_read": 0.4,
+            "cache_write": 5,
+            "input": 4,
+            "input_tokens_above": 272000,
+            "output": 18
+          }
+        ]
+      },
+      "id": "global.openai.gpt-5.6-terra",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Terra (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 1,
+        "cache_write": 12.5,
+        "input": 10,
+        "output": 50,
+        "tiers": [
+          {
+            "cache_read": 2,
+            "cache_write": 25,
+            "input": 20,
+            "input_tokens_above": 272000,
+            "output": 75
+          }
+        ]
+      },
+      "id": "global.openai.gpt-6-astra",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-6 Astra (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.01,
+        "cache_write": 0.125,
+        "input": 0.1,
+        "output": 0.5,
+        "tiers": [
+          {
+            "cache_read": 0.02,
+            "cache_write": 0.25,
+            "input": 0.2,
+            "input_tokens_above": 272000,
+            "output": 0.75
+          }
+        ]
+      },
+      "id": "global.openai.gpt-6-luna",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-6 Luna (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.2,
+        "cache_write": 2.5,
+        "input": 2,
+        "output": 10,
+        "tiers": [
+          {
+            "cache_read": 0.4,
+            "cache_write": 5,
+            "input": 4,
+            "input_tokens_above": 272000,
+            "output": 15
+          }
+        ]
+      },
+      "id": "global.openai.gpt-6-sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-6 Sol (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.1,
+        "cache_write": 2.5,
+        "input": 2,
+        "output": 10,
+        "tiers": [
+          {
+            "cache_read": 0.2,
+            "cache_write": 5,
+            "input": 4,
+            "input_tokens_above": 272000,
+            "output": 15
+          }
+        ]
+      },
+      "id": "global.openai.gpt-6.1-sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-6.1 Sol (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 500000,
+      "cost": {
+        "cache_read": 0.5,
+        "input": 2,
+        "output": 6
+      },
+      "id": "global.xai.grok-4.6",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 500000,
+      "name": "Grok 4.6 (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 500000,
+      "cost": {
+        "cache_read": 0.5,
+        "input": 2,
+        "output": 6
+      },
+      "id": "global.xai.grok-4.7",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 500000,
+      "name": "Grok 4.7 (Global)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
       "compat": {
         "bedrock_invoke": true,
         "thinking_budget": true
@@ -1164,6 +1748,90 @@
         "high",
         "xhigh",
         "max"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.022,
+        "cache_write": 0.275,
+        "input": 0.22,
+        "output": 1.32,
+        "tiers": [
+          {
+            "cache_read": 0.044,
+            "cache_write": 0.55,
+            "input": 0.44,
+            "input_tokens_above": 272000,
+            "output": 1.98
+          }
+        ]
+      },
+      "id": "in.openai.gpt-5.6-luna",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Luna (India)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 13.2,
+        "tiers": [
+          {
+            "cache_read": 0.44,
+            "cache_write": 5.5,
+            "input": 4.4,
+            "input_tokens_above": 272000,
+            "output": 19.8
+          }
+        ]
+      },
+      "id": "in.openai.gpt-5.6-terra",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Terra (India)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true,
+        "reasoning_field": "reasoningConfig"
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.099,
+        "cache_write": 0.396,
+        "input": 0.396,
+        "output": 3.311
+      },
+      "id": "jp.amazon.nova-2-lite-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65535,
+      "name": "Nova 2 Lite (JP)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high"
       ]
     },
     {
@@ -1431,6 +2099,583 @@
         "xhigh",
         "max"
       ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 204608,
+      "cost": {
+        "input": 0.3,
+        "output": 1.2
+      },
+      "id": "minimax.minimax-m2",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 128000,
+      "name": "MiniMax-M2",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 196608,
+      "cost": {
+        "input": 0.3,
+        "output": 1.2
+      },
+      "id": "minimax.minimax-m2.1",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 131072,
+      "name": "MiniMax-M2.1",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 196608,
+      "cost": {
+        "input": 0.3,
+        "output": 1.2
+      },
+      "id": "minimax.minimax-m2.5",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 98304,
+      "name": "MiniMax-M2.5",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 262144,
+      "cost": {
+        "input": 0.4,
+        "output": 2
+      },
+      "id": "mistral.devstral-2-123b",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 8192,
+      "name": "Devstral 2 123B",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 128000,
+      "cost": {
+        "input": 0.5,
+        "output": 1.5
+      },
+      "id": "mistral.magistral-small-2509",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 40000,
+      "name": "Magistral Small 1.2",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 128000,
+      "cost": {
+        "input": 0.2,
+        "output": 0.2
+      },
+      "id": "mistral.ministral-3-14b-instruct",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 4096,
+      "name": "Ministral 14B 3.0",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 256000,
+      "cost": {
+        "input": 0.1,
+        "output": 0.1
+      },
+      "id": "mistral.ministral-3-3b-instruct",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 8192,
+      "name": "Ministral 3 3B",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 128000,
+      "cost": {
+        "input": 0.15,
+        "output": 0.15
+      },
+      "id": "mistral.ministral-3-8b-instruct",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 4096,
+      "name": "Ministral 3 8B",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 262144,
+      "cost": {
+        "input": 0.5,
+        "output": 1.5
+      },
+      "id": "mistral.mistral-large-3-675b-instruct",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 8192,
+      "name": "Mistral Large 3",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 32768,
+      "cost": {
+        "input": 0.04,
+        "output": 0.04
+      },
+      "id": "mistral.voxtral-mini-3b-2507",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 4096,
+      "name": "Voxtral Mini 3B 2507",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 32768,
+      "cost": {
+        "input": 0.1,
+        "output": 0.3
+      },
+      "id": "mistral.voxtral-small-24b-2507",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 8192,
+      "name": "Voxtral Small 24B 2507",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 262144,
+      "cost": {
+        "input": 0.6,
+        "output": 2.5
+      },
+      "id": "moonshot.kimi-k2-thinking",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 16000,
+      "name": "Kimi K2 Thinking",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 262144,
+      "cost": {
+        "input": 0.6,
+        "output": 3
+      },
+      "id": "moonshotai.kimi-k2.5",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 16384,
+      "name": "Kimi K2.5",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 131072,
+      "cost": {
+        "input": 0.2,
+        "output": 0.6
+      },
+      "id": "nvidia.nemotron-nano-12b-v2",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 8192,
+      "name": "NVIDIA Nemotron Nano 12B v2 VL BF16",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 262144,
+      "cost": {
+        "input": 0.06,
+        "output": 0.24
+      },
+      "id": "nvidia.nemotron-nano-3-30b",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 8192,
+      "name": "NVIDIA Nemotron Nano 3 30B",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 131072,
+      "cost": {
+        "input": 0.06,
+        "output": 0.23
+      },
+      "id": "nvidia.nemotron-nano-9b-v2",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 8192,
+      "name": "NVIDIA Nemotron Nano 9B v2",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "reasoning_field": "reasoning_effort"
+      },
+      "context_window": 131072,
+      "cost": {
+        "input": 0.15,
+        "output": 0.6
+      },
+      "id": "openai.gpt-oss-120b-1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 128000,
+      "name": "gpt-oss-120b",
+      "protocol": "bedrock-converse",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "reasoning_field": "reasoning_effort"
+      },
+      "context_window": 131072,
+      "cost": {
+        "input": 0.07,
+        "output": 0.3
+      },
+      "id": "openai.gpt-oss-20b-1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 128000,
+      "name": "gpt-oss-20b",
+      "protocol": "bedrock-converse",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 128000,
+      "cost": {
+        "input": 0.15,
+        "output": 0.6
+      },
+      "id": "openai.gpt-oss-safeguard-120b",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 16384,
+      "name": "GPT OSS Safeguard 120B",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 128000,
+      "cost": {
+        "input": 0.07,
+        "output": 0.2
+      },
+      "id": "openai.gpt-oss-safeguard-20b",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 16384,
+      "name": "GPT OSS Safeguard 20B",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 262144,
+      "cost": {
+        "input": 0.22,
+        "output": 0.88
+      },
+      "id": "qwen.qwen3-235b-a22b-2507-v1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 131072,
+      "name": "Qwen3 235B-A22B Instruct 2507",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 32768,
+      "cost": {
+        "input": 0.15,
+        "output": 0.6
+      },
+      "id": "qwen.qwen3-32b-v1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 16384,
+      "name": "Qwen3 32B",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 262144,
+      "cost": {
+        "input": 0.15,
+        "output": 0.6
+      },
+      "id": "qwen.qwen3-coder-30b-a3b-v1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 131072,
+      "name": "Qwen3-Coder 30B-A3B Instruct",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 131072,
+      "cost": {
+        "input": 0.45,
+        "output": 1.8
+      },
+      "id": "qwen.qwen3-coder-480b-a35b-v1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 65536,
+      "name": "Qwen3-Coder 480B-A35B Instruct",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 262144,
+      "cost": {
+        "input": 0.15,
+        "output": 1.2
+      },
+      "id": "qwen.qwen3-next-80b-a3b",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 262000,
+      "name": "Qwen3-Next 80B-A3B Instruct",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 262144,
+      "cost": {
+        "input": 0.53,
+        "output": 2.66
+      },
+      "id": "qwen.qwen3-vl-235b-a22b",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 262000,
+      "name": "Qwen3 VL 235B A22B Instruct",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "reasoning_field": "reasoning_effort"
+      },
+      "context_window": 128000,
+      "cost": {
+        "input": 0.18,
+        "output": 0.72
+      },
+      "id": "us-gov.openai.gpt-oss-120b-1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 16384,
+      "name": "gpt-oss-120b (GovCloud)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "reasoning_field": "reasoning_effort"
+      },
+      "context_window": 128000,
+      "cost": {
+        "input": 0.084,
+        "output": 0.36
+      },
+      "id": "us-gov.openai.gpt-oss-20b-1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 16384,
+      "name": "gpt-oss-20b (GovCloud)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true,
+        "reasoning_field": "reasoningConfig"
+      },
+      "context_window": 1000000,
+      "cost": {
+        "cache_read": 0.0825,
+        "cache_write": 0.33,
+        "input": 0.33,
+        "output": 2.75
+      },
+      "id": "us.amazon.nova-2-lite-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 65535,
+      "name": "Nova 2 Lite (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 300000,
+      "cost": {
+        "cache_read": 0.015,
+        "cache_write": 0.06,
+        "input": 0.06,
+        "output": 0.24
+      },
+      "id": "us.amazon.nova-lite-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Lite (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 128000,
+      "cost": {
+        "cache_read": 0.00875,
+        "cache_write": 0.035,
+        "input": 0.035,
+        "output": 0.14
+      },
+      "id": "us.amazon.nova-micro-v1:0",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Micro (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "compat": {
+        "cache_point": true
+      },
+      "context_window": 300000,
+      "cost": {
+        "cache_read": 0.2,
+        "cache_write": 0.8,
+        "input": 0.8,
+        "output": 3.2
+      },
+      "id": "us.amazon.nova-pro-v1:0",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 10000,
+      "name": "Nova Pro (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
     },
     {
       "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
@@ -1838,6 +3083,305 @@
         "xhigh",
         "max"
       ]
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1048576,
+      "cost": {
+        "cache_read": 0.33,
+        "cache_write": 4.125,
+        "input": 3.3,
+        "output": 16.5
+      },
+      "id": "us.moonshotai.kimi-k3",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "Kimi K3 (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.022,
+        "cache_write": 0.275,
+        "input": 0.22,
+        "output": 1.32,
+        "tiers": [
+          {
+            "cache_read": 0.044,
+            "cache_write": 0.55,
+            "input": 0.44,
+            "input_tokens_above": 272000,
+            "output": 1.98
+          }
+        ]
+      },
+      "id": "us.openai.gpt-5.6-luna",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Luna (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.44,
+        "cache_write": 5.5,
+        "input": 4.4,
+        "output": 22,
+        "tiers": [
+          {
+            "cache_read": 0.88,
+            "cache_write": 11,
+            "input": 8.8,
+            "input_tokens_above": 272000,
+            "output": 33
+          }
+        ]
+      },
+      "id": "us.openai.gpt-5.6-sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Sol (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 13.2,
+        "tiers": [
+          {
+            "cache_read": 0.44,
+            "cache_write": 5.5,
+            "input": 4.4,
+            "input_tokens_above": 272000,
+            "output": 19.8
+          }
+        ]
+      },
+      "id": "us.openai.gpt-5.6-terra",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Terra (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 1.1,
+        "cache_write": 13.75,
+        "input": 11,
+        "output": 55,
+        "tiers": [
+          {
+            "cache_read": 2.2,
+            "cache_write": 27.5,
+            "input": 22,
+            "input_tokens_above": 272000,
+            "output": 82.5
+          }
+        ]
+      },
+      "id": "us.openai.gpt-6-astra",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-6 Astra (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.011,
+        "cache_write": 0.1375,
+        "input": 0.11,
+        "output": 0.55,
+        "tiers": [
+          {
+            "cache_read": 0.022,
+            "cache_write": 0.275,
+            "input": 0.22,
+            "input_tokens_above": 272000,
+            "output": 0.825
+          }
+        ]
+      },
+      "id": "us.openai.gpt-6-luna",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-6 Luna (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.22,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 11,
+        "tiers": [
+          {
+            "cache_read": 0.44,
+            "cache_write": 5.5,
+            "input": 4.4,
+            "input_tokens_above": 272000,
+            "output": 16.5
+          }
+        ]
+      },
+      "id": "us.openai.gpt-6-sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-6 Sol (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.11,
+        "cache_write": 2.75,
+        "input": 2.2,
+        "output": 11,
+        "tiers": [
+          {
+            "cache_read": 0.22,
+            "cache_write": 5.5,
+            "input": 4.4,
+            "input_tokens_above": 272000,
+            "output": 16.5
+          }
+        ]
+      },
+      "id": "us.openai.gpt-6.1-sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "name": "GPT-6.1 Sol (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 500000,
+      "cost": {
+        "cache_read": 0.55,
+        "input": 2.2,
+        "output": 6.6
+      },
+      "id": "us.xai.grok-4.6",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 500000,
+      "name": "Grok 4.6 (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 500000,
+      "cost": {
+        "cache_read": 0.55,
+        "input": 2.2,
+        "output": 6.6
+      },
+      "id": "us.xai.grok-4.7",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 500000,
+      "name": "Grok 4.7 (US)",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 202752,
+      "cost": {
+        "input": 0.6,
+        "output": 2.2
+      },
+      "id": "zai.glm-4.7",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 131072,
+      "name": "GLM-4.7",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 202752,
+      "cost": {
+        "input": 0.07,
+        "output": 0.4
+      },
+      "id": "zai.glm-4.7-flash",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 131072,
+      "name": "GLM-4.7-Flash",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
+    },
+    {
+      "base_url": "https://bedrock-runtime.{region}.amazonaws.com",
+      "context_window": 202752,
+      "cost": {
+        "input": 1,
+        "output": 3.2
+      },
+      "id": "zai.glm-5",
+      "input": [
+        "text"
+      ],
+      "max_output_tokens": 131072,
+      "name": "GLM-5",
+      "protocol": "bedrock-converse",
+      "thinking_levels": []
     }
   ],
   "name": "bedrock",

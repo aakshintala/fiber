@@ -2,7 +2,7 @@
 //! one message constructor each, so neither copy drifts. The session
 //! turns them into failures; doctor prints them as blockers.
 
-use config::{ModelData, Protocol};
+use config::ModelData;
 use contract::ThinkingLevel;
 
 /// The model's declared context window, in tokens: a model that declares
@@ -30,21 +30,6 @@ pub fn thinking_refusal(
             "The thinking level `{level}` is not one model `{reference}` takes: it {}.",
             takes(model),
         ))
-    }
-}
-
-/// The refusal when this Fiber speaks no `protocol`, else `None`: only
-/// `bedrock-converse` is refused, before anything is read for the model.
-pub fn protocol_refusal(protocol: Protocol, reference: &str) -> Option<String> {
-    match protocol {
-        Protocol::BedrockConverse => Some(format!(
-            "The model `{reference}` speaks a protocol this Fiber does not speak yet; pick another model."
-        )),
-        Protocol::OpenaiResponses
-        | Protocol::OpenaiCompletions
-        | Protocol::AnthropicMessages
-        | Protocol::GoogleGenerativeAi
-        | Protocol::Scripted => None,
     }
 }
 

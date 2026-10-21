@@ -1,0 +1,305 @@
+{
+  "case": "signature-replay",
+  "model": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "region": "ap-south-1",
+  "url_path": "/model/global.anthropic.claude-haiku-4-5-20251001-v1%3A0/converse-stream",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "What is 17 * 23? Answer with the number."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "reasoningContent": {
+              "reasoningText": {
+                "text": "17 * 23 = ?\n\nLet me calculate this:\n17 * 23 = 17 * 20 + 17 * 3\n= 340 + 51\n= 391",
+                "signature": "ErYCCoQBCBMQARgCKkBO86syXoPgvybhT9ui9X97JDCqCypKQw04d6y/6AvgoM+MEuECGiYlCzJznhLoL95pWMx3Kdu/fnhv0HAnCYdYMhljbGF1ZGUtaGFpa3UtNC01LTIwMjUxMDAxOABCCHRoaW5raW5nWgwwMDAwMDAwMDAwMDCoAYnb29YGEgwurcXuNQ0H14p/e8UaDLDhmInn8Vr95+zAWSIwcwNqZQdCCV7w9dPllHl+2K1iSMDRORAkeHNE840ju/tQuBIK/z+pPJEBQLWs9ddCKl/t0FbfgJi8MlR6DqnlplhzvnXyq3UyIi1Wz5sTllSHlaAeXzYVD9BXhCEmXpxW3PDMuDyhIku+iGwk+49Xtkj8FIJMXrqSYpUIAGJO9sa7sk19L6ccLKBF/Tfa2svDQRgB"
+              }
+            }
+          },
+          {
+            "text": "391"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "text": "And 18 * 23?"
+          }
+        ]
+      }
+    ],
+    "inferenceConfig": {
+      "maxTokens": 2048
+    },
+    "system": [
+      {
+        "text": "You are terse."
+      }
+    ],
+    "additionalModelRequestFields": {
+      "thinking": {
+        "type": "enabled",
+        "budget_tokens": 1024
+      }
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/vnd.amazon.eventstream"
+  },
+  "events": [
+    {
+      "headers": {
+        ":event-type": "messageStart",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "role": "assistant"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "18"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": " * 23 = 414"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "\n\nLet me verify"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": ": 18 * 23 "
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "= 18 * 20 "
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "+ 18 * 3 "
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "= 360 + 54 "
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": "= 414\n\nYes"
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": ", that's correct."
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0,
+        "delta": {
+          "reasoningContent": {
+            "signature": "EsYCCoQBCBMQARgCKkDpxDRRPv9fVaydaxa5dxKI1UJcy4wMlWoOpS3Zr4S4GYNz2WPO2JWL81s7SO3ypJmy8ofZZarU38X4nU1+7NKHMhljbGF1ZGUtaGFpa3UtNC01LTIwMjUxMDAxOABCCHRoaW5raW5nWgwwMDAwMDAwMDAwMDCoAYrb29YGEgxt7y+Xb6KUVUu4y04aDJ+oJXrsye5ILGCwUSIwks2kHAFauL+QiWds4KwdF6dYMAfHfgnfDGSdjf7+neqTE47fNIWyPwm7BDVqnwnzKm8t6hr9GXyRX73+ceDg4sq/FQruYW+JaAMarccmawO/m2EXre5+WcdEOyENAyix6X6hJAlPtx+IHYR7yQk30cjjetYCY9BNPIIzCIA5Vp3aYkaHLBLVcWnmbwN3Qrq1acf+SN+6wlQUpO1do8m/aHsYAQ=="
+          }
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 0
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockDelta",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1,
+        "delta": {
+          "text": "414"
+        }
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "contentBlockStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "contentBlockIndex": 1
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "messageStop",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "stopReason": "end_turn"
+      }
+    },
+    {
+      "headers": {
+        ":event-type": "metadata",
+        ":content-type": "application/json",
+        ":message-type": "event"
+      },
+      "payload": {
+        "metrics": {
+          "latencyMs": 950
+        },
+        "usage": {
+          "inputTokens": 72,
+          "outputTokens": 67,
+          "serverToolUsage": {},
+          "totalTokens": 139
+        }
+      }
+    }
+  ],
+  "usage": {
+    "inputTokens": 72,
+    "outputTokens": 67,
+    "serverToolUsage": {},
+    "totalTokens": 139
+  },
+  "cost_usd": 0.000407
+}
