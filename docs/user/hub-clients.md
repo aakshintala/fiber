@@ -6,7 +6,7 @@ Any program that can hold a socket can drive Fiber: a script, a phone app, or an
 
 On the hub's own machine, open the local socket `run/hub` in Fiber home ([What each part holds](../state.md#what-each-part-holds)). No token travels there.
 
-From another machine, either forward that socket over SSH and add it as a `unix:` address, or connect to the hub's port over a websocket and [`pair`](../invocation.md#remote-clients) first. Both ways are [Remote clients](../invocation.md#remote-clients): the forwarded socket needs no token because only that account can open either end, while every connection to the port opens by presenting a device token.
+From another machine, either forward that socket over SSH and add it as a `unix:` address, or connect to the hub's port over a websocket and [`pair`](../invocation.md#remote-clients) first ([Remote clients](../invocation.md#remote-clients)).
 
 ## The first exchange
 
@@ -47,34 +47,8 @@ for raw in stream:
         break
 ```
 
-Against a running hub the script prints one kind per line, in this order, exactly as the hub sent them:
+Against a running hub the script prints one kind per line, in this order, exactly as the hub sent them: [`hub_hello`](../events.md#the-envelope), [`command_accepted`](../events.md#command-acknowledgements), [`command_accepted`](../events.md#command-acknowledgements), …, [`turn_completed`](../events.md#turn_completed).
 
-```
-hub_hello
-command_accepted
-command_accepted
-session_started
-fiber_started
-extensions_loaded
-session_status
-clients
-session_status
-preamble_built
-opening_message
-turn_started
-step_started
-assistant_message_started
-assistant_message_delta
-text_completed
-usage_recorded
-assistant_message_completed
-turn_completed
-```
+The second [`command_accepted`](../events.md#command-acknowledgements) opens the replay: the lines up to its [`last_seq`](../events.md#command-acknowledgements) follow it, then the live stream runs to [`turn_completed`](../events.md#turn_completed).
 
-The `subscribe` acknowledgement ends the fold so far, and everything after it is the live stream: the prompt the [`start`](../invocation.md#what-the-hub-speaks) carried runs, and the turn's lines follow to [`turn_completed`](../events.md#turn_completed). ```json
-{"kind":"hub_hello","ts":1792601848253,"schema_version":1,"payload":{"fiber_version":"0.0.0"}}
-{"kind":"command_accepted","ts":1792601848275,"schema_version":1,"payload":{"command_id":"c_start","result":{"session_id":"s_42dcdc9b5b9b0e0e"}}}
-{"kind":"command_accepted","session_id":"s_42dcdc9b5b9b0e0e","ts":1792601848277,"schema_version":1,"payload":{"command_id":"c_sub","result":{"last_seq":2}}}
-```
-
-The second acknowledgement ends the fold so far ([`last_seq`](../events.md#command-acknowledgements)): the three log lines replayed above it, then the live stream. Every line but the hub's own carries its session, with the envelope of [The envelope](../events.md#the-envelope).
+Every line but the hub's own carries its session, with the envelope of [The envelope](../events.md#the-envelope).
