@@ -272,6 +272,9 @@ the question names any session `--cascade` would add (`docs/invocation.md`,
 "Deleting and pruning"). A row whose
 `schema_version` this terminal cannot read says "cannot attach".
 
+The mouse wheel over the list's rows scrolls the list by three rows,
+leaving the focus where it is.
+
 ### On exit
 
 The terminal is restored and one line is printed per live session: its id and

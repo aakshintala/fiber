@@ -5,7 +5,7 @@ use super::{App, Effect, Target};
 use crate::app::rail::Spot;
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::mouse::TargetId;
-use ratatui::layout::Position;
+use ratatui::layout::{Position, Rect};
 
 /// A wheel step over the conversation scrolls it this many rows: a
 /// starting point, not a measurement (`docs/tui.md`, "Turns").
@@ -141,6 +141,8 @@ impl App {
             && self.over_conversation(at)
         {
             self.scroll_conversation(up);
+        } else if self.on_home() && !self.home_modal() {
+            self.wheel_home(up, at);
         }
         let over_rail = self
             .chrome()
@@ -197,6 +199,29 @@ impl App {
     fn scroll_conversation(&mut self, up: bool) {
         let height = self.conversation_height();
         self.screen.scroll_rows(up, WHEEL_ROWS, height);
+        self.settle();
+    }
+
+    /// Scrolls home's session list by [`WHEEL_ROWS`] rows when `at` is
+    /// over its rows, clamped to the rows past its window, a modal
+    /// question or picker winning over the list (`docs/tui.md`,
+    /// "The session list"). The focus stays where it is: the frame
+    /// pulls a focused row outside the window into view.
+    fn wheel_home(&mut self, up: bool, at: Position) {
+        let Some(screen) = self.home_screen() else {
+            return;
+        };
+        let area = Rect::new(0, 0, self.screen.width(), self.screen.height());
+        let (rect, max) = crate::view::list_window(self, &screen, area);
+        if !rect.contains(at) {
+            return;
+        }
+        let next = if up {
+            self.home_list_scroll().saturating_sub(WHEEL_ROWS)
+        } else {
+            self.home_list_scroll().saturating_add(WHEEL_ROWS).min(max)
+        };
+        self.set_home_list_scroll(next);
         self.settle();
     }
 }

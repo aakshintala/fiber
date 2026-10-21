@@ -376,10 +376,186 @@ fn the_wheel_over_home_list_scrolls_it_three_rows() {
     assert_eq!(lp.app.focused(), None);
     feed(&mut lp, vec![wheel_down(10, 5)]);
     let after = shown(&lp);
-    assert!(after.contains("two"), "{after}");
-    assert!(!after.contains("one"), "{after}");
+    assert!(after.contains("✓ two"), "{after}");
+    assert!(!after.contains("✓ one"), "{after}");
     assert_eq!(lp.app.focused(), None);
     assert_eq!(lp.app.top(), None);
+}
+
+/// A 60x12 loop on home with six live sessions, more rows than the
+/// list's one-row window holds, and nothing focused.
+#[track_caller]
+fn tall_home() -> super::Loop<TestBackend> {
+    use std::path::PathBuf;
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    assert!(lp.app.on_home());
+    feed(
+        &mut lp,
+        ["one", "two", "three", "four", "five", "six"]
+            .iter()
+            .enumerate()
+            .map(|(at, name)| status(&format!("s_{at:017}"), name))
+            .collect(),
+    );
+    assert_eq!(lp.app.focused(), None);
+    lp
+}
+
+/// One wheel-up after one wheel-down returns home's list to its head.
+#[test]
+fn wheeling_up_over_home_list_returns_to_the_head() {
+    let mut lp = tall_home();
+    feed(&mut lp, vec![wheel_down(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 3);
+    feed(&mut lp, vec![wheel_up(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 0);
+    let after = shown(&lp);
+    assert!(after.contains("6 live"), "{after}");
+    assert!(!after.contains("✓ two"), "{after}");
+    assert_eq!(lp.app.focused(), None);
+}
+
+/// A wheel-up at the list's head scrolls nowhere: the offset
+/// saturates at the first row.
+#[test]
+fn wheeling_up_at_home_list_head_scrolls_nothing() {
+    let mut lp = tall_home();
+    let before = shown(&lp);
+    feed(&mut lp, vec![wheel_up(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 0);
+    assert_eq!(shown(&lp), before);
+    assert_eq!(lp.app.focused(), None);
+}
+
+/// Wheel-downs past the list's end clamp at its last window: further
+/// downs hold the offset there.
+#[test]
+fn wheeling_down_past_home_list_end_clamps_at_its_last_window() {
+    use crate::keys::{Mouse, MouseKind};
+    let mut lp = tall_home();
+    // Without a frame between the steps, the stored offset still
+    // clamps: the wheel clamps it, not just the frame.
+    for _ in 0..5 {
+        lp.app.on_wheel(&Mouse {
+            kind: MouseKind::WheelDown,
+            col: 10,
+            row: 5,
+        });
+    }
+    assert_eq!(lp.app.home_list_scroll(), 12);
+    feed(
+        &mut lp,
+        vec![
+            wheel_down(10, 5),
+            wheel_down(10, 5),
+            wheel_down(10, 5),
+            wheel_down(10, 5),
+            wheel_down(10, 5),
+        ],
+    );
+    assert_eq!(lp.app.home_list_scroll(), 12);
+    let after = shown(&lp);
+    assert!(after.contains("s_00000000000000005"), "{after}");
+    feed(&mut lp, vec![wheel_down(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 12);
+    assert_eq!(shown(&lp), after);
+}
+
+/// The wheel below the list's rows, over the box, scrolls nothing.
+#[test]
+fn the_wheel_below_home_list_rows_scrolls_nothing() {
+    let mut lp = tall_home();
+    let before = shown(&lp);
+    feed(&mut lp, vec![wheel_down(10, 7)]);
+    assert_eq!(lp.app.home_list_scroll(), 0);
+    assert_eq!(shown(&lp), before);
+    assert_eq!(lp.app.focused(), None);
+}
+
+/// The wheel over the list's rows with the workspace picker open
+/// scrolls nothing: the modal wins over the list.
+#[test]
+fn the_wheel_over_home_list_under_the_picker_scrolls_nothing() {
+    let mut lp = tall_home();
+    feed(&mut lp, vec![click(3, 9)]);
+    assert!(shown(&lp).contains("Workspaces"), "{}", shown(&lp));
+    let before = shown(&lp);
+    feed(&mut lp, vec![wheel_down(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 0);
+    assert_eq!(shown(&lp), before);
+}
+
+/// A 60x13 loop on home with one live session: three rows past the
+/// list's two-row window, the session's first row drawn, so Up from
+/// the entry bar focuses it.
+#[track_caller]
+fn solo_home() -> super::Loop<TestBackend> {
+    use std::path::PathBuf;
+    let (mut lp, _) = new_loop(TestBackend::new(60, 13), None);
+    lp.app.set_size(60, 13);
+    lp.screen
+        .resize(60, 13)
+        .unwrap_or_else(|error| panic!("resize: {error}"));
+    lp.app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    assert!(lp.app.on_home());
+    feed(&mut lp, vec![status("s_00000000000000000", "one")]);
+    assert_eq!(lp.app.focused(), None);
+    lp
+}
+
+/// Up from the entry bar focuses the drawn row, pulling it into view;
+/// the wheel then carries on from the rows shown, and typing drops
+/// the focus so the wheel moves from the stored offset again.
+#[test]
+fn home_list_wheel_carries_on_from_the_focused_rows_shown() {
+    let mut lp = solo_home();
+    assert!(shown(&lp).contains("w +"), "{}", shown(&lp));
+    feed(&mut lp, vec![Input::Bytes(b"\x1b[A".to_vec())]);
+    assert!(lp.app.focused().is_some());
+    assert_eq!(lp.app.home_list_scroll(), 1);
+    let pulled = shown(&lp);
+    assert!(pulled.contains("✓ one"), "{pulled}");
+    assert!(pulled.contains("s_00000000000000000"), "{pulled}");
+    // The wheel-down clamps at the last window, holding the pulled
+    // offset and the frame.
+    feed(&mut lp, vec![wheel_down(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 1);
+    assert_eq!(shown(&lp), pulled);
+    // The wheel-up lands before the focused row, so the frame pulls
+    // the row back into view and stores the pulled offset.
+    feed(&mut lp, vec![wheel_up(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 1);
+    assert_eq!(shown(&lp), pulled);
+    assert!(lp.app.focused().is_some());
+    // Typing drops the focus and keeps the draft's one row, so the
+    // list window stands: the next wheel-down holds the last window,
+    // and the wheel-up after it returns to the head.
+    feed(&mut lp, vec![Input::Bytes(b"x".to_vec())]);
+    assert_eq!(lp.app.focused(), None);
+    let typed = shown(&lp);
+    feed(&mut lp, vec![wheel_down(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 1);
+    assert_eq!(shown(&lp), typed);
+    feed(&mut lp, vec![wheel_up(10, 5)]);
+    assert_eq!(lp.app.home_list_scroll(), 0);
+    let after = shown(&lp);
+    assert!(after.contains("1 live"), "{after}");
+    assert!(!after.contains("s_00000000000000000"), "{after}");
 }
 
 /// An attached 60x12 loop showing [`long_session`], scrolled up one
