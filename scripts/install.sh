@@ -116,28 +116,39 @@ elif [ "$channel" = nightly ]; then
   # with `"prerelease": true`, `"draft": false` and a nightly tag. A
   # tied entry loses to the later one, so a repeated list entry changes
   # nothing. The list is pretty-printed JSON, one field per line, as the
-  # API writes it: an object opens and closes on a line of its own.
+  # API writes it. Depth is counted in braces outside strings, so nested
+  # author and asset objects never reset the candidate: fields count only
+  # at the release entry's own depth, and only its closing brace decides.
   list=$(curl -fsSL --proto-redir =https "$list_url") ||
     fail "the nightly release list could not be downloaded from $list_url."
   tag=$(printf '%s' "$list" | tr ',' '\n' | awk '
-    /^[[:space:]]*\{[[:space:]]*$/ { tag = ""; pre = ""; draft = ""; next }
-    /"tag_name"/ {
+    {
       line = $0
-      sub(/.*"tag_name"[[:space:]]*:[[:space:]]*"/, "", line)
-      sub(/".*/, "", line)
-      tag = line
-    }
-    /"prerelease"[[:space:]]*:/ { pre = ($0 ~ /:[[:space:]]*true/) ? "true" : "false" }
-    /"draft"[[:space:]]*:/ { draft = ($0 ~ /:[[:space:]]*true/) ? "true" : "false" }
-    /^[[:space:]]*\}[,]?[[:space:]]*$/ {
-      if (tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$/ && pre == "true" && draft == "false") {
-        ver = tag
-        sub(/^v/, "", ver)
-        split(ver, parts, /[.\-]/)
-        key = sprintf("%020d.%020d.%020d.%s", parts[1], parts[2], parts[3], parts[5])
-        if (best == "" || key > best) { best = key; best_tag = tag }
+      stripped = line
+      gsub(/"[^"]*"/, "\"\"", stripped)
+      opens = gsub(/\{/, "{", stripped)
+      closes = gsub(/\}/, "}", stripped)
+      if (depth == 0 && opens > 0) { tag = ""; pre = ""; draft = "" }
+      if (depth == 1 || (depth == 0 && opens > 0)) {
+        if (line ~ /"tag_name"/) {
+          tag = line
+          sub(/.*"tag_name"[[:space:]]*:[[:space:]]*"/, "", tag)
+          sub(/".*/, "", tag)
+        }
+        if (line ~ /"prerelease"[[:space:]]*:/) { pre = (line ~ /:[[:space:]]*true/) ? "true" : "false" }
+        if (line ~ /"draft"[[:space:]]*:/) { draft = (line ~ /:[[:space:]]*true/) ? "true" : "false" }
       }
-      tag = ""; pre = ""; draft = ""
+      depth += opens - closes
+      if (depth == 0 && closes > 0) {
+        if (tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$/ && pre == "true" && draft == "false") {
+          ver = tag
+          sub(/^v/, "", ver)
+          split(ver, parts, /[.\-]/)
+          key = sprintf("%020d.%020d.%020d.%s", parts[1], parts[2], parts[3], parts[5])
+          if (best == "" || key > best) { best = key; best_tag = tag }
+        }
+        tag = ""; pre = ""; draft = ""
+      }
     }
     END { if (best_tag != "") print best_tag }
   ')

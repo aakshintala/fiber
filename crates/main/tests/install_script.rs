@@ -541,6 +541,57 @@ fn the_stable_channel_ignores_nightlies() {
     }
 }
 
+/// The nightly pick tracks JSON structure: nested `author` and `assets`
+/// objects around a release's fields never reset its candidate, so the
+/// entry whose `tag_name` sits above its flags still wins
+/// (`docs/releasing.md`, "Installing").
+#[test]
+fn the_nightly_channel_survives_nested_release_objects() {
+    let setup = Setup::new_with_stub_version("0.0.10-nightly.20261018");
+    for tag in ["v0.0.9-nightly.20261018", "v0.0.10-nightly.20261018"] {
+        setup.publish_nightly(tag, &TARGETS);
+    }
+    let entry = |tag: &str| {
+        format!(
+            concat!(
+                "  {{\n",
+                "    \"tag_name\": \"{tag}\",\n",
+                "    \"author\": {{\n",
+                "      \"login\": \"octocat\"\n",
+                "    }},\n",
+                "    \"prerelease\": true,\n",
+                "    \"draft\": false,\n",
+                "    \"assets\": [\n",
+                "      {{\n",
+                "        \"name\": \"fiber.tar.gz\",\n",
+                "        \"uploader\": {{\n",
+                "          \"login\": \"octocat\"\n",
+                "        }}\n",
+                "      }}\n",
+                "    ]\n",
+                "  }}"
+            ),
+            tag = tag
+        )
+    };
+    let json = format!(
+        "[\n{},\n{}\n]\n",
+        entry("v0.0.9-nightly.20261018"),
+        entry("v0.0.10-nightly.20261018")
+    );
+    fs::write(setup.path("release/releases.json"), json).unwrap();
+    let run = setup.install_args(&LINUX_X86_64, &["--channel", "nightly"], &[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    setup.assert_installed(&setup.dest());
+    assert_eq!(
+        setup.calls().unwrap(),
+        format!(
+            "release-install 0.0.10-nightly.20261018 --base-url {}\n",
+            setup.base()
+        )
+    );
+}
+
 /// An empty list and a stable-only list fail naming the nightly channel:
 /// there is no nightly to install.
 #[test]

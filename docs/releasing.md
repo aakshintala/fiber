@@ -209,7 +209,7 @@ The binary unpacks the archives itself and refuses any entry that is not a
 file, a directory or a relative symlink inside its directory.
 
 The script is `install.sh` in the repository's `scripts/` directory. It reads only
-`FIBER_INSTALL_DIR` and `FIBER_VERSION`; the binary reads `FIBER_HOME`.
+`FIBER_INSTALL_DIR`, `FIBER_VERSION` and `FIBER_CHANNEL`; the binary reads `FIBER_HOME`.
 
 `FIBER_VERSION=0.3.0` installs that version instead of the newest, with that
 version's docs and first-party extensions. Rolling back is installing an older
