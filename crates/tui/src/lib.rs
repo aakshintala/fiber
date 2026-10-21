@@ -43,6 +43,7 @@ mod local_time;
 mod logical;
 mod login_view;
 mod login_worker;
+mod logout_view;
 mod look;
 mod markdown;
 mod mcp_view;
