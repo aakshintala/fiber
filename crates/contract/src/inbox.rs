@@ -175,8 +175,6 @@ pub enum Delivery {
     /// into the parent's log with the originator named, folded once per
     /// `generation_id` (`docs/delegates.md`, "Streams").
     DelegateUsage {
-        /// The delegate's job in its parent.
-        job_id: crate::JobId,
         /// The delegate session that sent the line.
         session: crate::SessionId,
         /// The line as the delegate wrote it.

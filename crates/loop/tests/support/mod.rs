@@ -36,7 +36,7 @@ use contract::shapes::{
 };
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{
-    ActionId, CommandId, Envelope, ErrorCode, GenerationId, JobId, RequestId, SessionId, TurnId,
+    ActionId, CommandId, Envelope, ErrorCode, GenerationId, RequestId, SessionId, TurnId,
 };
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -591,12 +591,11 @@ pub(crate) fn child_usage(
 }
 
 /// Sends one delegate copy to the session's inbox, as the watcher's tap
-/// forwards it: the delegate's job and session with the line.
-pub(crate) fn send_child(session: &Session, job: &str, child: &str, line: UsageRecorded) {
+/// forwards it: the delegate's session with the line.
+pub(crate) fn send_child(session: &Session, child: &str, line: UsageRecorded) {
     session
         .inbox
         .send(Delivery::DelegateUsage {
-            job_id: JobId(job.into()),
             session: SessionId(child.into()),
             line,
         })

@@ -113,6 +113,11 @@ struct Inner {
     /// `running()` read: every later extension-owned delegate start is
     /// refused with `closing`. Set once, never cleared.
     extension_starts_closed: bool,
+    /// A stop-all has been issued (`stop_delegates`): every delegate
+    /// commit after it stops at once, so a stop racing a gated start
+    /// cannot miss the starting delegate. Set under this lock, never
+    /// cleared: the one-way trip stays one-way.
+    stop_all_delegates: bool,
 }
 
 struct Job {
@@ -190,6 +195,7 @@ impl Registry {
                 usage_tap: None,
                 foreground: Vec::new(),
                 extension_starts_closed: false,
+                stop_all_delegates: false,
             }),
             park: Parker::new(),
             start_gate: Mutex::new(()),
@@ -302,13 +308,32 @@ impl Registry {
             registry: Some(Arc::clone(self)),
             delegate: true,
         };
-        lock(&self.inner).jobs.push(Job::running(
+        let mut inner = lock(&self.inner);
+        inner.jobs.push(Job::running(
             started.clone(),
             PathBuf::from(output_path),
             Arc::from(stop.0),
             None,
             Some(delegate),
         ));
+        // A stop-all racing this start latches under this same lock
+        // before this push, or this push lands before its scan: either
+        // way the starting delegate stops, instead of escaping the
+        // one-way trip unregistered. The stop runs with the lock
+        // released; the admission gate stays held by the caller, as when
+        // `retain_extensions` sends its stops.
+        let latched = if inner.stop_all_delegates {
+            inner.jobs.last_mut().map(|job| {
+                job.stop_sent = true;
+                Arc::clone(&job.stop)
+            })
+        } else {
+            None
+        };
+        drop(inner);
+        if let Some(stop) = latched {
+            stop();
+        }
         (started, finish)
     }
 
@@ -325,7 +350,7 @@ impl Registry {
     /// registry reference in the callback the registry stores.
     pub(crate) fn usage_forward(self: &Arc<Self>) -> super::delegate::run::UsageForward {
         let weak = Arc::downgrade(self);
-        Arc::new(move |job_id, session, line| {
+        Arc::new(move |session, line| {
             let Some(registry) = weak.upgrade() else {
                 return;
             };
@@ -338,7 +363,6 @@ impl Registry {
             }
             if let Some(inbox) = inbox {
                 let _sent = inbox.send(Delivery::DelegateUsage {
-                    job_id: job_id.clone(),
                     session: session.clone(),
                     line,
                 });
@@ -414,6 +438,20 @@ impl Registry {
             None,
             Some(delegate),
         ));
+        // As in `open_started`: a latched stop-all stops the starting
+        // delegate at once, with the lock released.
+        let latched = if inner.stop_all_delegates {
+            inner.jobs.last_mut().map(|job| {
+                job.stop_sent = true;
+                Arc::clone(&job.stop)
+            })
+        } else {
+            None
+        };
+        drop(inner);
+        if let Some(stop) = latched {
+            stop();
+        }
         finish
     }
 
@@ -826,10 +864,15 @@ impl contract::jobs::Jobs for Registry {
 
     /// Sends each running delegate its stop, once, and returns how many
     /// were sent one. Ordinary jobs keep running; ended delegates send
-    /// nothing.
+    /// nothing. Latches a stop-all under the same lock first, even when
+    /// nothing is registered: a delegate start racing this call commits
+    /// after it and observes the latch at commit, so the one-way trip
+    /// cannot miss a spawned-but-unregistered delegate. The latch never
+    /// clears; a sent stop is never sent again.
     fn stop_delegates(&self) -> usize {
         let stops: Vec<Arc<dyn Fn() + Send + Sync>> = {
             let mut inner = lock(&self.inner);
+            inner.stop_all_delegates = true;
             inner
                 .jobs
                 .iter_mut()

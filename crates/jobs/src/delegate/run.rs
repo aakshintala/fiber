@@ -244,11 +244,11 @@ enum WatchResult {
 }
 
 /// Forwards one tapped `usage_recorded` to the loop: the registry's
-/// callback built from its weak self, carrying the delegate's job and
-/// session with the line. The watcher invokes it outside every lock, in
-/// stream order; a missing tap keeps the existing unwired behavior.
+/// callback built from its weak self, carrying the delegate's session
+/// with the line. The watcher invokes it outside every lock, in stream
+/// order; a missing tap keeps the existing unwired behavior.
 pub(crate) type UsageForward =
-    Arc<dyn Fn(JobId, SessionId, contract::events::UsageRecorded) + Send + Sync>;
+    Arc<dyn Fn(SessionId, contract::events::UsageRecorded) + Send + Sync>;
 
 /// Whether `seq` is a line the watch delivers: a `seq` past the last one
 /// seen, or a line without one. A reconnect replays what the fold already
@@ -277,8 +277,8 @@ pub(crate) struct Runner {
     cap: u64,
     watch: Watch,
     /// Forwards each well-formed `usage_recorded` envelope to the loop,
-    /// with the delegate's job and session. `None` keeps the existing
-    /// unwired behavior.
+    /// with the delegate's session. `None` keeps the existing unwired
+    /// behavior.
     on_usage: Option<UsageForward>,
     deadline: Option<Instant>,
     /// The `seq` of the delegate log's last complete line before this
@@ -451,7 +451,6 @@ impl Runner {
                     &self.output_path,
                     self.after,
                     &fold,
-                    &self.job_id,
                     &self.session_id,
                     &self.on_usage,
                 );
@@ -508,7 +507,6 @@ impl Runner {
                 let output_path = self.output_path.clone();
                 let watcher = Watcher {
                     watch: Arc::clone(&self.watch),
-                    job_id: self.job_id.clone(),
                     session_id: self.session_id.clone(),
                     after: self.after,
                     fold: Arc::clone(&fold),
@@ -615,7 +613,6 @@ type Stat = Arc<dyn Fn() -> u64 + Send + Sync>;
 /// reaped: a watch that outlives the child ends at EOF.
 struct Watcher {
     watch: Watch,
-    job_id: JobId,
     session_id: SessionId,
     /// The run's boundary, passed to every watch call.
     after: Option<u64>,
@@ -671,7 +668,7 @@ impl Watcher {
                 && let Some(seq) = envelope.seq.map(|seq| seq.0)
                 && Self::claim_usage(&self.fold, after, seq)
             {
-                forward(self.job_id.clone(), self.session_id.clone(), line);
+                forward(self.session_id.clone(), line);
             }
             // The cap is stat'ed at most once per poll interval, read
             // from the session clock: envelopes inside one interval share
@@ -745,7 +742,6 @@ impl Watcher {
             &self.output_path,
             self.after,
             &self.fold,
-            &self.job_id,
             &self.session_id,
             &self.on_usage,
         );
@@ -764,7 +760,6 @@ impl Watcher {
         output_path: &std::path::Path,
         after: Option<u64>,
         fold: &Mutex<Fold>,
-        job_id: &JobId,
         session_id: &SessionId,
         on_usage: &Option<UsageForward>,
     ) {
@@ -808,7 +803,7 @@ impl Watcher {
             fresh
         };
         for (_, line) in fresh {
-            forward(job_id.clone(), session_id.clone(), line);
+            forward(session_id.clone(), line);
         }
     }
 }

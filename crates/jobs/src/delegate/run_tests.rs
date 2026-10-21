@@ -366,7 +366,7 @@ fn take_report(
     rig: &Rig,
     stop: &AtomicBool,
     expiry: &str,
-    usages: &mut Vec<(JobId, SessionId, String)>,
+    usages: &mut Vec<(SessionId, String)>,
 ) -> contract::inbox::JobNotice {
     let deadline = Deadline::after(DEADLINE);
     loop {
@@ -375,12 +375,8 @@ fn take_report(
                 stop.store(true, Ordering::Relaxed);
                 return notice;
             }
-            Ok(Delivery::DelegateUsage {
-                job_id,
-                session,
-                line,
-            }) => {
-                usages.push((job_id, session, line.generation_id.0.clone()));
+            Ok(Delivery::DelegateUsage { session, line }) => {
+                usages.push((session, line.generation_id.0.clone()));
             }
             Ok(other) => {
                 stop.store(true, Ordering::Relaxed);
@@ -2326,7 +2322,6 @@ fn run_watch(
     let waker: Arc<dyn contract::clock::Wake> = Arc::new(Parker::new());
     Watcher {
         watch,
-        job_id: crate::registry::mint_job_id(),
         session_id: SessionId("s_child".into()),
         after: None,
         fold: Arc::new(Mutex::new(Fold::default())),
@@ -2619,7 +2614,7 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
     let usages = drain_streamed_usages(&rig, usages, 2);
     let generations: Vec<&str> = usages
         .iter()
-        .map(|(_, _, generation)| generation.as_str())
+        .map(|(_, generation)| generation.as_str())
         .collect();
     assert_eq!(generations, ["g_2", "g_3"]);
     assert_eq!(notice.completed.status, Outcome::Completed);
@@ -2631,7 +2626,7 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
 /// take loops past those deliveries, stashing each, until the `Job`
 /// notice arrives.
 #[track_caller]
-fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(JobId, SessionId, String)>) {
+fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
     let stop = Arc::new(AtomicBool::new(false));
     let clock = Arc::clone(&rig.clock);
     let deadline = Deadline::after(DEADLINE);
@@ -2650,18 +2645,14 @@ fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(JobId, Se
 /// bound is the existing report deadline, loosened nowhere.
 fn drain_streamed_usages(
     rig: &Rig,
-    mut usages: Vec<(JobId, SessionId, String)>,
+    mut usages: Vec<(SessionId, String)>,
     want: usize,
-) -> Vec<(JobId, SessionId, String)> {
+) -> Vec<(SessionId, String)> {
     let deadline = Deadline::after(DEADLINE);
     while usages.len() < want {
         match deadline.recv(&rig.inbox) {
-            Ok(Delivery::DelegateUsage {
-                job_id,
-                session,
-                line,
-            }) => {
-                usages.push((job_id, session, line.generation_id.0.clone()));
+            Ok(Delivery::DelegateUsage { session, line }) => {
+                usages.push((session, line.generation_id.0.clone()));
             }
             Ok(other) => panic!("expected the streamed usage, got {other:?}"),
             Err(_) => panic!("the streamed usage never arrived"),
@@ -2706,9 +2697,8 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     let usages = drain_streamed_usages(&rig, usages, 1);
     assert_eq!(seen.lock().unwrap().as_slice(), ["g_1"]);
     assert_eq!(usages.len(), 1);
-    assert_eq!(usages[0].0, rig.job);
-    assert_eq!(usages[0].1, SessionId("s_child".into()));
-    assert_eq!(usages[0].2, "g_1");
+    assert_eq!(usages[0].0, SessionId("s_child".into()));
+    assert_eq!(usages[0].1, "g_1");
     assert_eq!(notice.completed.status, Outcome::Completed);
 }
 
@@ -2720,7 +2710,7 @@ fn run_backfill(
     file_seqs: &[u64],
     streamed: Vec<Envelope>,
     after: Option<u64>,
-) -> Vec<(JobId, SessionId, String)> {
+) -> Vec<(SessionId, String)> {
     let dir = TempDir::new("fiber-backfill");
     let path = dir.path().join("events.jsonl");
     let mut text = String::new();
@@ -2734,11 +2724,11 @@ fn run_backfill(
     let seen = Arc::new(Mutex::new(Vec::new()));
     let tapped = Arc::clone(&seen);
     let on_usage: super::UsageForward = Arc::new(
-        move |job_id: JobId, session: SessionId, line: contract::events::UsageRecorded| {
+        move |session: SessionId, line: contract::events::UsageRecorded| {
             tapped
                 .lock()
                 .unwrap()
-                .push((job_id, session, line.generation_id.0.clone()));
+                .push((session, line.generation_id.0.clone()));
         },
     );
     let watch: Watch = Arc::new(
@@ -2753,7 +2743,6 @@ fn run_backfill(
     let waker: Arc<dyn contract::clock::Wake> = Arc::new(Parker::new());
     Watcher {
         watch,
-        job_id: crate::registry::mint_job_id(),
         session_id: SessionId("s_child".into()),
         after,
         fold: Arc::new(Mutex::new(Fold::default())),
@@ -2770,8 +2759,8 @@ fn run_backfill(
     let seen = seen.lock().unwrap().clone();
     assert!(
         seen.iter()
-            .all(|(job, session, _)| *session == SessionId("s_child".into()) && *job == seen[0].0),
-        "every forward names the delegate's job and session: {seen:?}"
+            .all(|(session, _)| *session == SessionId("s_child".into())),
+        "every forward names the delegate's session: {seen:?}"
     );
     seen
 }
@@ -2784,7 +2773,7 @@ fn the_backfill_forwards_file_usage_the_socket_missed() {
     let seen = run_backfill(&[1, 2], Vec::new(), None);
     let generations: Vec<&str> = seen
         .iter()
-        .map(|(_, _, generation)| generation.as_str())
+        .map(|(_, generation)| generation.as_str())
         .collect();
     assert_eq!(generations, ["g_1", "g_2"]);
 }
@@ -2796,7 +2785,7 @@ fn the_backfill_skips_what_the_socket_streamed() {
     let seen = run_backfill(&[1, 2], vec![usage_envelope(1, "g_1", Some(0.1))], None);
     let generations: Vec<&str> = seen
         .iter()
-        .map(|(_, _, generation)| generation.as_str())
+        .map(|(_, generation)| generation.as_str())
         .collect();
     assert_eq!(generations, ["g_1", "g_2"]);
 }
@@ -2808,7 +2797,7 @@ fn the_backfill_skips_lines_at_or_before_after() {
     let seen = run_backfill(&[1, 2], Vec::new(), Some(1));
     let generations: Vec<&str> = seen
         .iter()
-        .map(|(_, _, generation)| generation.as_str())
+        .map(|(_, generation)| generation.as_str())
         .collect();
     assert_eq!(generations, ["g_2"]);
 }
@@ -2838,9 +2827,8 @@ fn the_reap_replays_file_usage_the_socket_never_saw() {
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
     assert_eq!(usages.len(), 1, "the file line forwards once: {usages:?}");
-    assert_eq!(usages[0].0, rig.job);
-    assert_eq!(usages[0].1, SessionId("s_child".into()));
-    assert_eq!(usages[0].2, "g_9");
+    assert_eq!(usages[0].0, SessionId("s_child".into()));
+    assert_eq!(usages[0].1, "g_9");
     // The bare shell reports no `fiber_exited`, so the job ends without
     // a result; the forward is what this test proves.
     let _ = notice;
@@ -2871,44 +2859,33 @@ fn raced_replays() -> Vec<String> {
     let (entered_tx, entered_rx) = mpsc::channel::<String>();
     let release = Arc::new(Barrier::new(2));
     let parked = Arc::new(AtomicBool::new(false));
-    let job = crate::registry::mint_job_id();
     let session = SessionId("s_child".into());
     let on_usage: super::UsageForward = {
         let seen = Arc::clone(&seen);
         let release = Arc::clone(&release);
         let parked = Arc::clone(&parked);
-        Arc::new(
-            move |_job: JobId, _session: SessionId, line: contract::events::UsageRecorded| {
-                seen.lock().unwrap().push(line.generation_id.0.clone());
-                let _sent = entered_tx.send(line.generation_id.0.clone());
-                if !parked.swap(true, Ordering::SeqCst) {
-                    release.wait();
-                }
-            },
-        )
+        Arc::new(move |_: SessionId, line: contract::events::UsageRecorded| {
+            seen.lock().unwrap().push(line.generation_id.0.clone());
+            let _sent = entered_tx.send(line.generation_id.0.clone());
+            if !parked.swap(true, Ordering::SeqCst) {
+                release.wait();
+            }
+        })
     };
     let first = {
         let path = path.clone();
         let fold = Arc::clone(&fold);
-        let job = job.clone();
         let session = session.clone();
         let on_usage = on_usage.clone();
         thread::spawn(move || {
-            Watcher::replay_usage(&path, None, &fold, &job, &session, &Some(on_usage));
+            Watcher::replay_usage(&path, None, &fold, &session, &Some(on_usage));
         })
     };
     // The winner is parked inside its forward; the loser now runs to
     // completion on this thread, so the order is forced, never raced.
     let entered = Deadline::after(DEADLINE).recv(&entered_rx);
     assert!(entered.is_ok(), "the first replay forwards");
-    Watcher::replay_usage(
-        &path,
-        None,
-        &fold,
-        &job,
-        &session,
-        &Some(Arc::clone(&on_usage)),
-    );
+    Watcher::replay_usage(&path, None, &fold, &session, &Some(Arc::clone(&on_usage)));
     release.wait();
     first.join().unwrap();
     let forwarded = seen.lock().unwrap().clone();
@@ -2919,14 +2896,7 @@ fn raced_replays() -> Vec<String> {
     );
     // A third replay past the race still forwards nothing: the claim
     // holds, so neither a smaller `seq` nor a repeat slips through.
-    Watcher::replay_usage(
-        &path,
-        None,
-        &fold,
-        &job,
-        &session,
-        &Some(Arc::clone(&on_usage)),
-    );
+    Watcher::replay_usage(&path, None, &fold, &session, &Some(Arc::clone(&on_usage)));
     seen.lock().unwrap().clone()
 }
 
@@ -3114,12 +3084,10 @@ fn sibling_arrivals_racing_a_publication_lose_no_delta_and_trip_once() {
     std::thread::scope(|scope| {
         for thread in 0..8 {
             let forward = Arc::clone(&forward);
-            let job = rig.job.clone();
             scope.spawn(move || {
                 for n in 0..4 {
                     let generation = format!("g_{thread}_{n}");
                     forward(
-                        job.clone(),
                         SessionId("s_child".into()),
                         contract::events::UsageRecorded {
                             generation_id: contract::GenerationId(generation),

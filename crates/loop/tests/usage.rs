@@ -448,7 +448,6 @@ fn a_direct_child_s_usage_is_copied_with_the_child_as_origin() {
     let lines = turned(&mut session, |session| {
         send_child(
             session,
-            "j_1",
             "s_child",
             child_usage("g_child", Some(0.01), None, None),
         );
@@ -481,7 +480,6 @@ fn a_grandchild_copy_keeps_its_origin() {
     let lines = turned(&mut session, |session| {
         send_child(
             session,
-            "j_1",
             "s_child",
             child_usage(
                 "g_grand",
@@ -503,8 +501,8 @@ fn a_duplicate_copy_counts_once() {
     let mut session = Session::new(vec![support::reasoning_reply("Think.", "Hi.")], None);
     turned(&mut session, |session| {
         let line = child_usage("g_child", Some(0.01), None, None);
-        send_child(session, "j_1", "s_child", line.clone());
-        send_child(session, "j_1", "s_child", line);
+        send_child(session, "s_child", line.clone());
+        send_child(session, "s_child", line);
     });
     // Both arrivals are written, but the spend holds one call: the
     // duplicate never doubles the ledger.
@@ -528,13 +526,11 @@ fn a_correction_applies_only_its_delta() {
     turned(&mut session, |session| {
         send_child(
             session,
-            "j_1",
             "s_child",
             child_usage("g_child", Some(0.10), None, None),
         );
         send_child(
             session,
-            "j_1",
             "s_child",
             child_usage("g_child", Some(0.18), None, None),
         );
@@ -554,7 +550,6 @@ fn a_subscription_copy_counts_subscription_spend() {
     let lines = turned(&mut session, |session| {
         send_child(
             session,
-            "j_1",
             "s_child",
             child_usage("g_child", Some(0.05), None, Some(true)),
         );

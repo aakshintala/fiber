@@ -21,7 +21,7 @@ use contract::events::{
 use contract::inbox::Delivery;
 use contract::provider::{Cost, Delta, Input, InputSize, ReplyAction};
 use contract::shapes::{Failure, Tokens};
-use contract::{ActionId, ErrorCode, GenerationId, JobId, Seq, SessionId};
+use contract::{ActionId, ErrorCode, GenerationId, Seq, SessionId};
 use fakes::Deadline;
 use fakes::{Scripted, reply};
 use serde_json::{Value, json};
@@ -1408,7 +1408,6 @@ fn a_copy_at_exactly_the_budget_trips() {
     );
     send_child(
         &session,
-        "j_1",
         "s_child",
         child_usage("g_1", Some(1.0), None, None),
     );
@@ -1434,7 +1433,6 @@ fn a_turn_that_ends_over_budget_stops_delegates_through_trip_and_end() {
     session
         .inbox
         .send(Delivery::DelegateUsage {
-            job_id: JobId("j_child".into()),
             session: SessionId("s_child".into()),
             line: UsageRecorded {
                 generation_id: GenerationId("g_cross".into()),
@@ -1526,13 +1524,11 @@ fn a_copy_replaying_a_ledgered_line_counts_nothing_again() {
     }
     send_child(
         &session,
-        "j_1",
         "s_child",
         child_usage("g_1", Some(0.30), None, None),
     );
     send_child(
         &session,
-        "j_1",
         "s_child",
         child_usage("g_2", Some(0.30), None, None),
     );
@@ -1544,7 +1540,6 @@ fn a_copy_replaying_a_ledgered_line_counts_nothing_again() {
     // the spend holds every line once, and the trip stays unclaimed.
     send_child(
         &session,
-        "j_1",
         "s_child",
         child_usage("g_1", Some(0.30), None, None),
     );
@@ -1605,7 +1600,6 @@ fn a_copy_tripping_the_budget_stops_delegates_through_the_trip() {
     );
     send_child(
         &session,
-        "j_1",
         "s_child",
         child_usage("g_1", Some(0.90), None, None),
     );
@@ -1615,7 +1609,6 @@ fn a_copy_tripping_the_budget_stops_delegates_through_the_trip() {
     assert_eq!(jobs.stop_delegates_calls(), 0);
     send_child(
         &session,
-        "j_1",
         "s_child",
         child_usage("g_2", Some(0.50), None, None),
     );
@@ -1648,7 +1641,6 @@ fn loop_spend_and_a_copy_trip_together() {
     assert_eq!(jobs.stop_delegates_calls(), 0);
     send_child(
         &session,
-        "j_1",
         "s_child",
         child_usage("g_1", Some(0.5), None, None),
     );
@@ -1666,7 +1658,6 @@ fn a_copy_without_its_job_lines_still_counts() {
     let mut session = Session::new(vec![reasoning_reply("Think.", "Hi.")], None);
     send_child(
         &session,
-        "j_9",
         "s_child",
         child_usage("g_9", Some(0.07), None, None),
     );
@@ -1731,13 +1722,11 @@ fn a_late_cost_for_a_copy_applies_only_its_delta() {
     let mut session = Session::new(vec![reasoning_reply("Think.", "Hi.")], None);
     send_child(
         &session,
-        "j_1",
         "s_child",
         child_usage("g_child", None, None, None),
     );
     send_child(
         &session,
-        "j_1",
         "s_child",
         child_usage("g_child", Some(0.05), None, None),
     );

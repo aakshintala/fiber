@@ -230,7 +230,6 @@ impl crate::Loop {
     /// budget end.
     pub(crate) fn copy_usage(
         &mut self,
-        _job: &contract::JobId,
         session: &contract::SessionId,
         line: UsageRecorded,
     ) -> Result<(), crate::Error> {
