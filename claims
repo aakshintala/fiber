@@ -22,5 +22,4 @@ crates/loop/src/rewind_tests.rs	368-p5	plan	2026-10-20T18:18:34Z	Amoghs-MacBook-
 crates/main/tests/sessions.rs	3a4914d2-b13d-4ee4-a38a-6b30e3bca34e	plan	2026-10-20T21:23:19Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/hub/src/start_tests.rs	lane-2437	plan	2026-10-20T21:28:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 docs/user/getting-help.md	docs/1254-doctor-user-page	grant	2026-10-21T00:37:11Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/config/src/extension_settings.rs	2909-p1	plan	2026-10-21T05:00:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/credentials/2909-login-host	
 crates/tui/src/login_worker.rs	2909-p1	plan	2026-10-21T05:00:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/credentials/2909-login-host	
