@@ -1758,6 +1758,7 @@ later release still applies.
 | `/handoff [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
+| `/logout` | Logs out ("Logging out"). |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/close` | Stops the session on screen ("Quit"). |
@@ -1840,6 +1841,29 @@ widening it. Esc goes back to the provider list.
   login with a note naming the provider; a failed save keeps it with an
   error naming the key. Footer: "↑↓ move · Enter save · Esc back". Esc
   returns to the provider list writing nothing.
+
+### Logging out
+
+`/logout` logs out from the terminal with the same delete steps as `fiber logout`. It
+opens an overlay ("Look", "Overlays") titled "Log out" with a ✕: the providers under
+"Providers", one row per stored or configured label with the default marked,
+then the extension credentials under "Secrets", the first deletable row focused.
+A row whose key comes from an environment variable, a file or a command is dim
+with its source, and Enter on it does nothing, as on a heading or the note.
+
+Enter on a deletable row asks for confirmation, naming the provider and the label,
+and, when other providers read the same stored directory, naming them: "Delete
+acme/work?" with "Also used by: beta" below it. The confirm keeps the list's
+height and shares its width, so the overlay does not jump between the steps.
+Footer: "Enter confirm · Esc back"; Esc goes back to the list deleting nothing.
+
+Confirming deletes the stored file only, leaving `providers."<name>".credential` as
+is, then re-lists the rows with the overlay still open: the deleted row is gone,
+and "Removed credentials/acme/work." shows below the list, with ", which beta also
+reads" when siblings share the stored directory. When a configured source covers
+the deleted label its dim row remains, and later sessions use that source. A
+failed delete keeps the row with the seam's message below the list. Footer on the
+list: "↑↓ move · Enter delete · Esc close".
 
 ### Quit
 

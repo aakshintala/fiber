@@ -44,11 +44,7 @@ pub(crate) enum ConfigView {
     Rules,
     /// `/login`.
     Login,
-    /// `/logout`: built by the slash table once registration wires it.
-    #[allow(
-        dead_code,
-        reason = "no production caller until registration wires `/logout`"
-    )]
+    /// `/logout`: built by the slash table below.
     Logout,
     /// `/mcp`.
     Mcp,

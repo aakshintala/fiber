@@ -70,6 +70,7 @@ const DRAWN_ORDER: &[&str] = &[
     "handoff",
     "name",
     "login",
+    "logout",
     "reload",
     "import",
     "close",

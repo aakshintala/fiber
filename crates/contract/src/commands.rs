@@ -517,6 +517,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "handoff",
     "name",
     "login",
+    "logout",
     "approvals",
     "reload",
     "import",
