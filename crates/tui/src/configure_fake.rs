@@ -12,7 +12,8 @@ use contract::clock::Clock;
 
 use crate::ThemeSetting;
 use crate::configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, NotesFile,
+    BrowserLogin, Configure, ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginShow,
+    LoginTarget, NotesFile,
     NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope, RulesSection,
     Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists,
     ToolSwitches, WriteScope,
@@ -171,6 +172,16 @@ pub(crate) struct Fake {
     pub(crate) reviewer_saves: Mutex<Vec<(String, String)>>,
     /// What reviewer saves answer.
     pub(crate) reviewer_saved: Mutex<Result<(), ConfigureError>>,
+    /// What `gaps` answers: no gaps by default, so existing tests keep
+    /// their reviewer-only flow.
+    pub(crate) gaps_answer: Mutex<Result<Vec<HostGap>, ConfigureError>>,
+    /// Every gaps read asked for, in order: the provider name.
+    pub(crate) gap_reads: Mutex<Vec<String>>,
+    /// Every host answer asked to save, in order: the provider, key and
+    /// value. The value is the person's typed answer, kept only here.
+    pub(crate) host_saves: Mutex<Vec<(String, String, String)>>,
+    /// What `save_host` answers: saved unmasked by default.
+    pub(crate) host_saved: Mutex<Result<HostSaved, ConfigureError>>,
     /// What `reviewer_notes` answers.
     pub(crate) notes: Mutex<Result<ReviewerNotes, ConfigureError>>,
     /// Every notes save asked for, in order.
@@ -230,6 +241,10 @@ impl Fake {
             })),
             reviewer_saves: Mutex::new(Vec::new()),
             reviewer_saved: Mutex::new(Ok(())),
+            gaps_answer: Mutex::new(Ok(Vec::new())),
+            gap_reads: Mutex::new(Vec::new()),
+            host_saves: Mutex::new(Vec::new()),
+            host_saved: Mutex::new(Ok(HostSaved { masked: None })),
             notes: Mutex::new(Ok(empty_notes())),
             notes_saves: Mutex::new(Vec::new()),
             notes_saved: Mutex::new(Ok(NotesSaved::Written(Vec::new()))),
@@ -241,6 +256,23 @@ impl Fake {
         self.login_names
             .lock()
             .map(|names| names.clone())
+            .unwrap_or_default()
+    }
+
+    /// The providers `gaps` was asked about so far, in order.
+    pub(crate) fn gap_reads(&self) -> Vec<String> {
+        self.gap_reads
+            .lock()
+            .map(|reads| reads.clone())
+            .unwrap_or_default()
+    }
+
+    /// The host answers `save_host` was asked to save so far, in order:
+    /// the provider, key and value.
+    pub(crate) fn host_saves(&self) -> Vec<(String, String, String)> {
+        self.host_saves
+            .lock()
+            .map(|saves| saves.clone())
             .unwrap_or_default()
     }
 
@@ -602,6 +634,41 @@ impl Configure for Fake {
             saves.push((name.to_owned(), id.to_owned()));
         }
         self.reviewer_saved.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |saved| saved.clone(),
+        )
+    }
+
+    fn gaps(&self, name: &str) -> Result<Vec<HostGap>, ConfigureError> {
+        if let Ok(mut reads) = self.gap_reads.lock() {
+            reads.push(name.to_owned());
+        }
+        self.gaps_answer.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |answer| answer.clone(),
+        )
+    }
+
+    fn save_host(
+        &self,
+        name: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<HostSaved, ConfigureError> {
+        if let Ok(mut saves) = self.host_saves.lock() {
+            saves.push((name.to_owned(), key.to_owned(), value.to_owned()));
+        }
+        self.host_saved.lock().map_or_else(
             |_| {
                 Err(ConfigureError {
                     code: ErrorCode::IoFailed,

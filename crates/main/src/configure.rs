@@ -18,7 +18,8 @@ use std::sync::Arc;
 use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
 use tui::{
-    ConfigureError, KeyEdit, Layer, LoginTarget, Revoked, RuleRow, RulesScope, RulesSection, Saved,
+    ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginTarget, Revoked, RuleRow, RulesScope,
+    RulesSection, Saved,
     SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches, WriteScope,
 };
 
@@ -303,6 +304,19 @@ impl tui::Configure for Seam {
 
     fn set_reviewer(&self, name: &str, id: &str) -> Result<(), ConfigureError> {
         login::set_reviewer(&self.home, name, id)
+    }
+
+    fn gaps(&self, _name: &str) -> Result<Vec<HostGap>, ConfigureError> {
+        todo!("task 7 serves the gaps read from the hub")
+    }
+
+    fn save_host(
+        &self,
+        _name: &str,
+        _key: &str,
+        _value: &str,
+    ) -> Result<HostSaved, ConfigureError> {
+        todo!("task 7 serves the host save from the hub")
     }
 
     fn reviewer_notes(&self, workspace: &Path) -> Result<tui::ReviewerNotes, ConfigureError> {

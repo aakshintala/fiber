@@ -2589,6 +2589,21 @@ fn a_browser_done_prepares_on_its_ticket_until_the_reviewer_lands() {
 }
 
 #[test]
+fn host_results_change_nothing_until_the_host_stage_reads_them() {
+    // The ticket is waiting on a browser login, not a gaps read: until
+    // the host stage folds them, the steps change nothing.
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    assert_eq!(
+        login.step(LoginTicket(1), crate::login_worker::LoginStep::Host(Ok(Vec::new()))),
+        None
+    );
+    assert!(!rows_open(&login));
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("Starting the login to codex"), "{screen}");
+}
+
+#[test]
 fn reviewer_results_land_only_in_preparing_on_their_ticket() {
     let answer = || crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1"))));
     // Rows, panel and ended ignore the result; choices is already chosen.

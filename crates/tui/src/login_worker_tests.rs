@@ -81,6 +81,9 @@ fn start_posts_the_end_with_the_login_s_result() {
         | LoginStep::Reviewer(_) => {
             panic!("the end held something else: {step:?}")
         }
+        LoginStep::Host(_) => {
+            unreachable!("the fixture posts no gaps read")
+        }
     }
     drop(worker);
 }
@@ -250,6 +253,9 @@ fn a_browser_success_posts_done_then_the_reviewer_result() {
         | LoginStep::Reviewer(Err(_)) => {
             panic!("the reviewer result held something else: {step:?}")
         }
+        LoginStep::Host(_) => {
+            unreachable!("the fixture posts no gaps read")
+        }
     }
     assert_eq!(seam.reviewer_reads(), ["codex"]);
 }
@@ -281,6 +287,9 @@ fn a_reviewer_only_job_reads_no_credential_and_stores_nothing() {
         | LoginStep::Done(_)
         | LoginStep::Reviewer(Err(_)) => {
             panic!("the reviewer result held something else: {step:?}")
+        }
+        LoginStep::Host(_) => {
+            unreachable!("the fixture posts no gaps read")
         }
     }
     // No browser login ran and no key was stored: the read owns neither.
@@ -322,6 +331,9 @@ fn a_reviewer_read_failure_posts_its_error() {
         | LoginStep::Reviewer(Ok(_)) => {
             panic!("the reviewer result held something else: {step:?}")
         }
+        LoginStep::Host(_) => {
+            unreachable!("the fixture posts no gaps read")
+        }
     }
 }
 
@@ -354,6 +366,9 @@ fn an_empty_reviewer_read_posts_no_models() {
         | LoginStep::Done(_)
         | LoginStep::Reviewer(Err(_)) => {
             panic!("the reviewer result held something else: {step:?}")
+        }
+        LoginStep::Host(_) => {
+            unreachable!("the fixture posts no gaps read")
         }
     }
 }

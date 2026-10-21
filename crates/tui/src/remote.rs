@@ -17,7 +17,8 @@ mod router;
 use crate::ThemeSetting;
 use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
 use crate::configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, NotesSaved,
+    BrowserLogin, Configure, ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginShow,
+    LoginTarget, NotesSaved,
     NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope, RulesSection, Saved,
     SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches,
 };
@@ -645,6 +646,17 @@ impl Configure for Remote {
             Caller::Loop,
             |_| Some(()),
         )
+    }
+    fn gaps(&self, _name: &str) -> Result<Vec<HostGap>, ConfigureError> {
+        todo!("task 6 forwards the gaps read over the driver")
+    }
+    fn save_host(
+        &self,
+        _name: &str,
+        _key: &str,
+        _value: &str,
+    ) -> Result<HostSaved, ConfigureError> {
+        todo!("task 6 forwards the host save over the driver")
     }
     fn reviewer_notes(&self, workspace: &Path) -> Result<ReviewerNotes, ConfigureError> {
         self.call(

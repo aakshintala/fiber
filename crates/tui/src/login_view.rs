@@ -690,6 +690,9 @@ impl Login {
                 None
             }
             LoginStep::Reviewer(_) => None,
+            // Task 8 folds the gaps read into the host stage; until
+            // then the step is swallowed, never the reviewer.
+            LoginStep::Host(_) => None,
         }
     }
 

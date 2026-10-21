@@ -66,6 +66,10 @@ pub(crate) enum LoginStep {
     },
     /// The login ended: what `fiber login` stored.
     Done(Result<crate::configure::Stored, crate::configure::ConfigureError>),
+    /// The gaps read ended: the provider's presence-gap placeholders
+    /// after a successful `Done`, each with its declared environment
+    /// variable. Posted only when `Done` succeeded.
+    Host(Result<Vec<crate::configure::HostGap>, crate::configure::ConfigureError>),
     /// The reviewer read ended: the provider's models with the saved
     /// pick preselected, or why they could not be read. Posted after a
     /// successful `Done`, or alone for a reviewer-only job.

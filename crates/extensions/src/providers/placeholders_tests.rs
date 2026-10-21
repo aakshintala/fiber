@@ -5,10 +5,14 @@
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
-use config::{ConfigError, Placeholder};
+use config::{Config, ConfigError, Placeholder, ProjectKey, ProviderData, Sources};
 
-use super::{Filled, Source, fill, host, hosts};
+use super::{Filled, Source, fill, host, hosts, not_a_host, unconfigured, value};
+use crate::Providers;
 
 /// A lookup that serves `value` from the setting for `name` and nothing
 /// for anything else.
@@ -258,4 +262,245 @@ fn hosts_passes_a_lookup_error_on() {
     })
     .unwrap_err();
     assert_eq!(err.code(), contract::ErrorCode::Usage);
+}
+
+/// The `acme` provider with `placeholders`, owned by extension `acme`.
+fn gap_providers(placeholders: BTreeMap<String, Placeholder>) -> Providers {
+    let mut by_name = BTreeMap::new();
+    by_name.insert(
+        "acme".to_owned(),
+        ProviderData {
+            name: "acme".to_owned(),
+            credential: None,
+            credential_name: None,
+            headers: BTreeMap::new(),
+            placeholders,
+            models: Vec::new(),
+            reviewer_model: None,
+            login: None,
+        },
+    );
+    let mut extension_of = BTreeMap::new();
+    extension_of.insert("acme".to_owned(), "acme".to_owned());
+    Providers {
+        by_name,
+        extension_of,
+        ..Default::default()
+    }
+}
+
+/// The configuration over `home` with the `p` project and no overrides.
+fn gap_config(home: &Path) -> Config {
+    Config::load(Sources {
+        home: home.to_path_buf(),
+        workspace: home.to_path_buf(),
+        project: ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    })
+    .unwrap()
+}
+
+/// Writes `text` to `home`'s global `config/acme.json`.
+fn write_global(home: &Path, text: &str) {
+    let dir = home.join("config");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("acme.json"), text).unwrap();
+}
+
+/// Writes `text` to `home`'s `projects/p/config/acme.json`.
+fn write_project(home: &Path, text: &str) {
+    let dir = home.join("projects").join("p").join("config");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("acme.json"), text).unwrap();
+}
+
+/// An environment holding `pairs`.
+fn env_of(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect()
+}
+
+#[test]
+fn gaps_lists_a_placeholder_with_no_setting_and_no_environment() {
+    let root = fakes::TempDir::new("fiber-gaps-missing");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let providers = gap_providers(declared(&[("workspace", Some("ACME_HOST"))]));
+    let config = gap_config(&home);
+    let env = env_of(&[]);
+    assert_eq!(
+        providers
+            .unset_placeholders(&config, &|name| env.get(name).cloned(), "acme")
+            .unwrap(),
+        [("workspace".to_owned(), Some("ACME_HOST".to_owned()))]
+    );
+}
+
+#[test]
+fn gaps_is_empty_when_the_setting_is_set() {
+    let root = fakes::TempDir::new("fiber-gaps-setting");
+    let home = root.path().join("home");
+    write_global(&home, r#"{"workspace":"adb-1.example"}"#);
+    let providers = gap_providers(declared(&[("workspace", Some("ACME_HOST"))]));
+    let config = gap_config(&home);
+    let env = env_of(&[]);
+    assert!(
+        providers
+            .unset_placeholders(&config, &|name| env.get(name).cloned(), "acme")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn gaps_is_empty_when_the_environment_is_set() {
+    let root = fakes::TempDir::new("fiber-gaps-env");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let providers = gap_providers(declared(&[("workspace", Some("ACME_HOST"))]));
+    let config = gap_config(&home);
+    let env = env_of(&[("ACME_HOST", "adb-2.example")]);
+    assert!(
+        providers
+            .unset_placeholders(&config, &|name| env.get(name).cloned(), "acme")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn gaps_is_empty_for_a_present_but_invalid_setting() {
+    // Presence, not validity, decides: an invalid setting is no gap, and
+    // the model list still leaves the model out with `model_unconfigured`.
+    let root = fakes::TempDir::new("fiber-gaps-invalid-setting");
+    let home = root.path().join("home");
+    write_global(&home, r#"{"workspace":"not a host!!"}"#);
+    let providers = gap_providers(declared(&[("workspace", Some("ACME_HOST"))]));
+    let config = gap_config(&home);
+    let env = env_of(&[]);
+    assert!(
+        providers
+            .unset_placeholders(&config, &|name| env.get(name).cloned(), "acme")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn gaps_is_empty_for_a_present_but_invalid_environment_value() {
+    // Presence, not validity, decides: an invalid environment value is no
+    // gap, and the model list still leaves the model out.
+    let root = fakes::TempDir::new("fiber-gaps-invalid-env");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let providers = gap_providers(declared(&[("workspace", Some("ACME_HOST"))]));
+    let config = gap_config(&home);
+    let env = env_of(&[("ACME_HOST", "not a host!!")]);
+    assert!(
+        providers
+            .unset_placeholders(&config, &|name| env.get(name).cloned(), "acme")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_project_empty_over_a_global_answer_still_reads_as_no_value() {
+    // The mask the login names: the global answer stays written, but the
+    // project layer's empty string wins the merge, so `value` finds no
+    // usable value.
+    let root = fakes::TempDir::new("fiber-gaps-mask");
+    let home = root.path().join("home");
+    write_global(&home, r#"{"workspace":"adb-1.example"}"#);
+    write_project(&home, r#"{"workspace":""}"#);
+    let config = gap_config(&home);
+    let declared = declared(&[("workspace", Some("ACME_HOST"))]);
+    let env = env_of(&[]);
+    assert_eq!(
+        value(
+            &config,
+            "acme",
+            &declared,
+            "workspace",
+            &|name| env.get(name).cloned()
+        )
+        .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn validate_host_delegates_to_the_model_list_rule() {
+    // Every input the model list fills, the prompt accepts, and every one
+    // it refuses, the prompt refuses: the same rule, the same result.
+    for value in [
+        "adb-1.example",
+        "https://adb-1.example/",
+        "https://adb-1.example:443/",
+        "adb-1.example:0",
+        "adb-1.example:65535",
+        "not a host!!",
+        "adb-1.example:65536",
+        "adb-1.example:",
+        "https://https://adb-1.example",
+        "adb-\u{00e9}.example",
+        "https://",
+        "",
+    ] {
+        assert_eq!(Providers::validate_host(value), host(value), "{value:?}");
+    }
+}
+
+#[test]
+fn unconfigured_without_a_variable_names_the_login_and_config_remedies() {
+    let notice = unconfigured("acme", "m", "acme", "workspace", None);
+    assert_eq!(
+        notice.message,
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         which has no value. Run `fiber login acme`, or set `workspace` in \
+         `config/acme.json` in Fiber home."
+    );
+}
+
+#[test]
+fn unconfigured_with_an_absent_variable_names_the_hub_environment_and_both_remedies() {
+    let notice = unconfigured("databricks", "model", "databricks", "workspace", Some("DATABRICKS_HOST"));
+    assert_eq!(
+        notice.message,
+        "The model `databricks/model` needs the setting `workspace` for its base URL, \
+         which has no value, and `DATABRICKS_HOST` is not set in the hub's environment \
+         (your login shell). Run `fiber login databricks`, or set `workspace` in \
+         `config/databricks.json` in Fiber home, or export it in your shell profile and \
+         run `fiber hub refresh`."
+    );
+}
+
+#[test]
+fn not_a_host_from_a_setting_names_the_source_without_the_value() {
+    let notice = not_a_host("acme", "m", "acme", "workspace", &Source::Setting);
+    assert_eq!(
+        notice.message,
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         whose value is not a host."
+    );
+    assert!(!notice.message.contains("evil"));
+}
+
+#[test]
+fn not_a_host_from_the_environment_names_the_variable_without_the_value() {
+    let notice = not_a_host(
+        "acme",
+        "m",
+        "acme",
+        "workspace",
+        &Source::Env("ACME_HOST".to_owned()),
+    );
+    assert_eq!(
+        notice.message,
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         which has no value, and the value of `ACME_HOST` is not a host."
+    );
+    assert!(!notice.message.contains("evil"));
 }

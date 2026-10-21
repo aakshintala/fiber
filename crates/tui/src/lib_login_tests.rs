@@ -199,6 +199,9 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
         | crate::login_worker::LoginStep::Reviewer(Err(_)) => {
             panic!("the worker posted something else: {step:?}")
         }
+        crate::login_worker::LoginStep::Host(_) => {
+            unreachable!("the fixture posts no gaps read")
+        }
     };
     feed(
         &mut lp,
@@ -290,6 +293,9 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
         | crate::login_worker::LoginStep::Done(_)
         | crate::login_worker::LoginStep::Reviewer(Err(_)) => {
             panic!("the worker posted something else: {step:?}")
+        }
+        crate::login_worker::LoginStep::Host(_) => {
+            unreachable!("the fixture posts no gaps read")
         }
     };
     feed(
@@ -383,6 +389,9 @@ fn a_key_login_asks_its_reviewer_after_the_worker_and_saves_it() {
         | crate::login_worker::LoginStep::Done(_)
         | crate::login_worker::LoginStep::Reviewer(Err(_)) => {
             panic!("the worker posted something else: {step:?}")
+        }
+        crate::login_worker::LoginStep::Host(_) => {
+            unreachable!("the fixture posts no gaps read")
         }
     };
     feed(

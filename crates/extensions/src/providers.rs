@@ -848,6 +848,33 @@ impl Providers {
         Ok(notices)
     }
 
+    /// Each declared placeholder of provider `name` with no present
+    /// value: its name with its declared environment variable, in
+    /// declaration order. A gap exists exactly when
+    /// [`placeholders::value`] returns nothing — no setting string and
+    /// no environment-variable string — regardless of validity, so a
+    /// present-but-invalid value is no gap. Read through the same lookup
+    /// [`Providers::fill_placeholders`] uses.
+    pub fn unset_placeholders(
+        &self,
+        config: &Config,
+        env: &dyn Fn(&str) -> Option<String>,
+        name: &str,
+    ) -> Result<Vec<(String, Option<String>)>, Error> {
+        let _ = (config, env, name);
+        todo!("task 2 fills the presence-gap query")
+    }
+
+    /// `value` stripped as [`placeholders::host`] strips it: at most one
+    /// leading `https://` and one trailing `/`, then a host with an
+    /// optional port. The prompt answers are validated only through here,
+    /// never by widening `placeholders::host`, so the prompt and the model
+    /// list can never disagree.
+    pub fn validate_host(value: &str) -> Option<&str> {
+        let _ = value;
+        todo!("task 2 delegates to placeholders::host")
+    }
+
     /// The extension that registered `name`, if a Lua extension did.
     pub fn extension_of(&self, name: &str) -> Option<&str> {
         self.extension_of.get(name).map(String::as_str)

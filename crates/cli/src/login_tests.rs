@@ -1548,3 +1548,467 @@ fn dropping_the_sig_guard_restores_sigint_handling() {
     backup_close.close();
     watcher.join().expect("the backup watcher joined");
 }
+
+/// Installs the `acme` provider whose model base URL names `placeholders`.
+fn install_host(home: &Path, placeholders: Value) {
+    let dir = home.join("extensions").join("acme");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    let mut manifest = json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    manifest["providers"] = serde_json::Value::Object(
+        [("acme".to_owned(), json!(["https://{workspace}/v1"]))]
+            .into_iter()
+            .collect(),
+    );
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    write_record(&dir);
+    fs::write(
+        dir.join("providers").join("acme.json"),
+        json!({
+            "name": "acme",
+            "placeholders": placeholders,
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+/// Installs the `acme` provider with two gaps: `workspace`, filled from
+/// `FIBER_TEST_2909_UNSET_HOST` when set, and `other`, with no variable.
+fn install_two_gaps(home: &Path) {
+    let dir = home.join("extensions").join("acme");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    let mut manifest = json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    manifest["providers"] = serde_json::Value::Object(
+        [(
+            "acme".to_owned(),
+            json!(["https://{workspace}/v1/{other}"]),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    write_record(&dir);
+    fs::write(
+        dir.join("providers").join("acme.json"),
+        json!({
+            "name": "acme",
+            "placeholders": {"workspace": {"env": "FIBER_TEST_2909_UNSET_HOST"}, "other": {}},
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "https://{workspace}/v1/{other}", "context_window": 1000}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+/// The global `config/acme.json` the host answers save.
+fn saved_host(setup: &Setup) -> Value {
+    serde_json::from_str(
+        &fs::read_to_string(setup.home().join("config").join("acme.json")).unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_terminal_key_login_asks_for_the_host_after_storing() {
+    let setup = Setup::new();
+    install_host(&setup.home(), json!({"workspace": {}}));
+    let (result, err) = setup.login(
+        Some("acme"),
+        true,
+        "adb-1.example\n1\n",
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    let asked = err.find("`workspace`: ").unwrap();
+    let stored = err.find("fiber: stored credentials/acme/default\n").unwrap();
+    assert!(asked < stored, "{err:?}");
+    assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
+    assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
+    assert!(!err.contains(KEY));
+}
+
+#[test]
+fn a_pasted_url_is_saved_stripped() {
+    let setup = Setup::new();
+    install_host(&setup.home(), json!({"workspace": {}}));
+    let (result, err) = setup.login(
+        Some("acme"),
+        true,
+        "https://adb-1.example/\n1\n",
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
+    assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
+}
+
+#[test]
+fn a_non_host_answer_is_refused_and_asked_again() {
+    let setup = Setup::new();
+    install_host(&setup.home(), json!({"workspace": {}}));
+    let (result, err) = setup.login(
+        Some("acme"),
+        true,
+        "not a host!!\nadb-1.example\n1\n",
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert_eq!(
+        err.matches("`workspace` is not a host; press Ctrl-D to skip.")
+            .count(),
+        1,
+        "{err:?}"
+    );
+    assert_eq!(
+        err.matches("`workspace`: ").count(),
+        2,
+        "{err:?}"
+    );
+    assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
+}
+
+#[test]
+fn a_preset_setting_skips_the_host_question() {
+    let setup = Setup::new();
+    install_host(&setup.home(), json!({"workspace": {}}));
+    let dir = setup.home().join("config");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("acme.json"), r#"{"workspace":"adb-1.example"}"#).unwrap();
+    let (result, err) = setup.login(Some("acme"), true, "1\n", &mut Fake::new(KEY));
+    result.unwrap();
+    assert!(!err.contains("`workspace`"), "{err:?}");
+    assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
+    assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
+}
+
+#[test]
+fn a_present_but_invalid_setting_asks_nothing() {
+    // Presence, not validity, decides: no prompt, and the reviewer still
+    // runs against the data file's models.
+    let setup = Setup::new();
+    install_host(&setup.home(), json!({"workspace": {}}));
+    let dir = setup.home().join("config");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("acme.json"), r#"{"workspace":"not a host!!"}"#).unwrap();
+    let (result, err) = setup.login(Some("acme"), true, "1\n", &mut Fake::new(KEY));
+    result.unwrap();
+    assert!(!err.contains("`workspace`"), "{err:?}");
+    assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
+}
+
+/// The child's marker: set, the login runs with the child's environment.
+const HOST_CHILD: &str = "FIBER_CLI_TEST_HOST_CHILD";
+
+/// The environment variable the child's placeholder reads.
+const HOST_ENV: &str = "FIBER_TEST_2909_HOST";
+
+/// Installs the `acme` provider whose `workspace` reads `HOST_ENV`.
+fn install_host_env(home: &Path) {
+    install_host(
+        home,
+        json!({"workspace": {"env": HOST_ENV}}),
+    );
+}
+
+#[test]
+fn a_preset_environment_value_skips_the_host_question() {
+    if std::env::var_os(HOST_CHILD).is_some() {
+        let setup = Setup::new();
+        install_host_env(&setup.home());
+        let (result, err) = setup.login(Some("acme"), true, "1\n", &mut Fake::new(KEY));
+        result.unwrap();
+        assert!(!err.contains("`workspace`"), "{err:?}");
+        assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
+        assert!(!setup.home().join("config").join("acme.json").exists());
+        return;
+    }
+    let name = module_path!().split_once("::").unwrap().1;
+    let output = fakes::rerun_prepared(
+        &format!("{name}::a_preset_environment_value_skips_the_host_question"),
+        &[(HOST_CHILD, "1"), (HOST_ENV, "adb-9.example")],
+        CHILD_DEADLINE,
+        |_| {},
+    );
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn a_present_but_invalid_environment_value_asks_nothing() {
+    // Presence, not validity, decides: no prompt even when the set value
+    // is not a host.
+    if std::env::var_os(HOST_CHILD).is_some() {
+        let setup = Setup::new();
+        install_host_env(&setup.home());
+        let (result, err) = setup.login(Some("acme"), true, "1\n", &mut Fake::new(KEY));
+        result.unwrap();
+        assert!(!err.contains("`workspace`"), "{err:?}");
+        assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
+        assert!(!setup.home().join("config").join("acme.json").exists());
+        return;
+    }
+    let name = module_path!().split_once("::").unwrap().1;
+    let output = fakes::rerun_prepared(
+        &format!("{name}::a_present_but_invalid_environment_value_asks_nothing"),
+        &[(HOST_CHILD, "1"), (HOST_ENV, "not a host!!")],
+        CHILD_DEADLINE,
+        |_| {},
+    );
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn without_a_terminal_a_key_login_prints_one_remedy_line_per_gap() {
+    let setup = Setup::new();
+    install_two_gaps(&setup.home());
+    let (result, err) = setup.login(
+        Some("acme"),
+        false,
+        &format!("{KEY}\n"),
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert_eq!(
+        err,
+        "fiber: `other` has no value and no environment variable fills it; \
+         set it in `config/acme.json` in Fiber home.\n\
+         fiber: `workspace` has no value; set it in `config/acme.json` in Fiber home, \
+         or export `FIBER_TEST_2909_UNSET_HOST`.\n\
+         fiber: stored credentials/acme/default\n",
+        "{err:?}"
+    );
+    assert!(!setup.home().join("config").join("acme.json").exists());
+}
+
+#[test]
+fn without_a_terminal_a_login_with_every_placeholder_present_prints_no_remedy() {
+    // Gaps are presence: a present-but-invalid setting still fills the
+    // line count with nothing, and today's output is unchanged.
+    let setup = Setup::new();
+    install_host(
+        &setup.home(),
+        json!({"workspace": {"env": "FIBER_TEST_2909_UNSET_HOST"}}),
+    );
+    let dir = setup.home().join("config");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("acme.json"), r#"{"workspace":"not a host!!"}"#).unwrap();
+    let (result, err) = setup.login(
+        Some("acme"),
+        false,
+        &format!("{KEY}\n"),
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert_eq!(err, "fiber: stored credentials/acme/default\n", "{err:?}");
+}
+
+#[test]
+fn as_label_asks_the_same_but_saves_the_host_globally() {
+    let setup = Setup::new();
+    install_host(&setup.home(), json!({"workspace": {}}));
+    let (result, err) = setup.login_as(
+        Some("acme"),
+        Some("work"),
+        true,
+        "adb-1.example\n1\n",
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert!(err.contains("`workspace`: "), "{err:?}");
+    assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
+    assert_eq!(setup.stored("acme", "work").as_deref(), Some(KEY));
+    assert!(err.contains("fiber: stored credentials/acme/work\n"), "{err:?}");
+}
+
+#[test]
+fn a_project_empty_hides_the_saved_host_and_names_its_file() {
+    let setup = Setup::new();
+    install_host(&setup.home(), json!({"workspace": {}}));
+    let (_, project) =
+        crate::project_of(&setup.home(), &std::env::current_dir().unwrap()).unwrap();
+    let dir = setup
+        .home()
+        .join("projects")
+        .join(project.as_str())
+        .join("config");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("acme.json"), r#"{"workspace":""}"#).unwrap();
+    let (result, err) = setup.login(
+        Some("acme"),
+        true,
+        "adb-1.example\n1\n",
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
+    let file = dir.join("acme.json");
+    assert!(
+        err.contains(&format!(
+            "fiber: saved `workspace` globally, but {} sets it empty and hides it.",
+            file.display()
+        )),
+        "{err:?}"
+    );
+    assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
+}
+
+#[test]
+fn end_of_input_at_the_host_prompt_saves_nothing_and_still_ends_zero() {
+    // EOF stops the questions: an empty typed line would ask again, but
+    // 0 bytes end the host step with nothing saved for any gap.
+    let setup = Setup::new();
+    install_two_gaps(&setup.home());
+    let (result, err) = setup.login(Some("acme"), true, "", &mut Fake::new(KEY));
+    result.unwrap();
+    assert_eq!(err.matches("`workspace`: ").count(), 1, "{err:?}");
+    assert!(!err.contains("is not a host"), "{err:?}");
+    assert!(!setup.home().join("config").join("acme.json").exists());
+    assert!(
+        err.contains("fiber: stored credentials/acme/default\n"),
+        "{err:?}"
+    );
+    assert!(
+        err.contains("fiber: no reviewer was set for acme; the credential stays.\n"),
+        "{err:?}"
+    );
+    assert_eq!(setup.stored("acme", "default").as_deref(), Some(KEY));
+}
+
+#[test]
+fn an_empty_typed_line_is_refused_and_asked_again() {
+    // An empty line is a typed answer, not EOF: it prints the problem
+    // line and asks again, and only EOF ends the questions.
+    let setup = Setup::new();
+    install_host(&setup.home(), json!({"workspace": {}}));
+    let (result, err) = setup.login(
+        Some("acme"),
+        true,
+        "\nadb-1.example\n1\n",
+        &mut Fake::new(KEY),
+    );
+    result.unwrap();
+    assert_eq!(
+        err.matches("`workspace` is not a host; press Ctrl-D to skip.")
+            .count(),
+        1,
+        "{err:?}"
+    );
+    assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
+}
+
+#[test]
+fn a_project_empty_over_a_global_answer_reads_as_no_value() {
+    // The mask the login names, through the existing settings path: the
+    // global answer stays written, but the project layer's empty string
+    // wins the merge, so the model list still reports no value.
+    let setup = Setup::new();
+    install_host(&setup.home(), json!({"workspace": {"env": "FIBER_TEST_2909_UNSET_HOST"}}));
+    let mut config = setup.config();
+    config
+        .extensions_mut()
+        .set(
+            "acme",
+            config::Scope::Machine,
+            "workspace",
+            Value::String("adb-1.example".to_owned()),
+        )
+        .unwrap();
+    let dir = setup.home().join("projects").join("p").join("config");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("acme.json"), r#"{"workspace":""}"#).unwrap();
+    let config = setup.config();
+    let mut providers = setup.providers();
+    let env = |_: &str| None;
+    let notices = providers.fill_placeholders(&config, &env).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(
+        notices[0].message,
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         which has no value, and `FIBER_TEST_2909_UNSET_HOST` has none either."
+    );
+}
+
+/// Installs the synthetic browser provider `acme`: `login: browser`
+/// with a local `credential()` returning a test token, and one data
+/// model whose base URL names the `workspace` placeholder. The flow opens
+/// nothing and contacts nothing.
+fn install_browser_host(home: &Path) {
+    let dir = home.join("extensions").join("acme");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({ "name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+                "providers": {"acme": ["https://{workspace}/v1"]} })
+        .to_string(),
+    )
+    .unwrap();
+    write_record(&dir);
+    fs::write(
+        dir.join("providers").join("acme.json"),
+        json!({
+            "name": "acme",
+            "login": "browser",
+            "placeholders": {"workspace": {}},
+            "models": [{
+                "id": "m", "protocol": "openai-responses",
+                "base_url": "https://{workspace}/v1", "context_window": 1000
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("providers").join("acme.lua"),
+        r#"fiber.provider("acme", {
+          credential = { timeout = 60000, run = function()
+            local stored = host.oauth.refresh(function()
+              return { token = "test-token", expires_at = 4102444800 }
+            end)
+            return { token = stored.token, expires_at = stored.expires_at, email = "alice@example.com" }
+          end }
+        })"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_terminal_browser_login_asks_for_the_host_after_storing() {
+    let setup = Setup::new();
+    install_browser_host(&setup.home());
+    let home = setup.home();
+    let providers = setup.providers();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut stdin = Cursor::new("adb-1.example\n1\n");
+        let mut keys = Plain;
+        let result = login(
+            Some("acme"),
+            None,
+            &mut LoginIo {
+                home: &home,
+                providers: &providers,
+                terminal: true,
+                stdin: &mut stdin,
+                err: &mut output,
+                keys: &mut keys,
+                device: false,
+                clock: fakes::clock::FakeClock::new(),
+            },
+        );
+        match done.send((result, String::from_utf8(output).unwrap())) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let (result, err) = fakes::Deadline::after(STAGE_WAIT)
+        .recv(&finished)
+        .unwrap_or_else(|_| panic!("browser login did not finish within {STAGE_WAIT:?}"));
+    result.unwrap();
+    let asked = err.find("`workspace`: ").unwrap();
+    let stored = err.find("fiber: stored credentials/acme/alice@example.com\n").unwrap();
+    assert!(asked < stored, "{err:?}");
+    assert_eq!(saved_host(&setup), json!({"workspace": "adb-1.example"}));
+    assert!(err.ends_with("fiber: reviewer acme m\n"), "{err:?}");
+}
