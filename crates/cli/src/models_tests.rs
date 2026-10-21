@@ -1046,9 +1046,13 @@ fn the_refresh_child_leaves_an_unnamed_uncached_provider_alone() {
     // receive completion under one named deadline.
     let (done, finished) = mpsc::channel();
     let refresh_clock = fakes::clock::FakeClock::new();
+    // `setup` stays in the parent so its home directory outlives the
+    // worker: moving it into the thread would drop the directory while
+    // the parent below still reads the cache back.
+    let worker_home = setup.home();
     thread::spawn(move || {
         refresh_named(
-            &setup.home(),
+            &worker_home,
             &["stale".to_owned()],
             &providers,
             &loaded,
