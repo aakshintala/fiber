@@ -9,21 +9,22 @@
     reason = "test code; a failure is the test's"
 )]
 
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use contract::events::{
-    Event, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted, ToolCallArgumentsDelta,
-    ToolCallCompleted, ToolCallRequested, TurnStarted,
+    CacheLifetime, Event, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
+    ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, TurnStarted,
 };
-use contract::provider::{Input, Provider};
+use contract::provider::{Delta, Input, ModelCall, ModelRequest, Provider, ToolDefinition};
 use contract::shapes::{ContentPart, Origin, Sender};
 use contract::{ActionId, CommandId, Seq, TurnId};
 use serde_json::{Map, Value, json};
 
 use super::shown::Shown;
-use super::{First, Second, read_first, read_second, render_reviewed, sections, system_prompt};
+use super::{First, ReviewerUse, Second, Stage1Worker, fanout_stage1, read_first, read_second};
+use super::{render_reviewed, sections, system_prompt};
 use fakes::{Deadline, NoRules};
 
 const PROMPT: &str = include_str!("../prompt/reviewer.md");
@@ -668,5 +669,256 @@ fn the_effects_item_names_the_call_under_review() {
             effects.starts_with("Call under review: the last tool call above, shell."),
             "{effects:?}"
         );
+    }
+}
+
+/// The batch's first-stage build matches the serial path byte for byte: one
+/// reply's three reviewed calls built in request order carry the serial
+/// path's conversations and chained cursor values, and the build moves no
+/// shared cursor.
+#[test]
+fn batch_stage1_build_matches_the_serial_path_byte_for_byte() {
+    let (mut looped, _home) = unrun_loop();
+    let ids = [
+        ActionId("a_1".into()),
+        ActionId("a_2".into()),
+        ActionId("a_3".into()),
+    ];
+    for (id, seq) in ids.iter().zip([Seq(1), Seq(2), Seq(3)]) {
+        render_reviewed(
+            &mut looped.reviewed,
+            &Event::ToolCallRequested(call("shell")),
+            Some(id),
+            Some(seq),
+        );
+    }
+    let turn = TurnId("t_test".into());
+    let tool: Arc<dyn contract::tool::Tool> = Arc::new(ReviewTool);
+    let prepareds = ["Paris", "London", "Rome"]
+        .iter()
+        .map(|city| {
+            let mut arguments = Map::new();
+            arguments.insert("city".into(), Value::String((*city).into()));
+            crate::before_tool::Prepared {
+                tool: Arc::clone(&tool),
+                arguments,
+                effects: contract::tool::Effects {
+                    declared: contract::shapes::DeclaredEffects {
+                        effects: vec![contract::shapes::Effect::Executes],
+                        reversible: true,
+                        paths: None,
+                    },
+                    subject: None,
+                    prefix: None,
+                    always_reviewed: false,
+                    hosts: None,
+                },
+                rewritten: Some(vec!["fiber.test/guard".into()]),
+            }
+        })
+        .collect::<Vec<_>>();
+    let under_call = call("shell");
+    let endpoint = super::ReviewEndpoint {
+        provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())) as Arc<dyn Provider>,
+        reference: "fake/reviewer".into(),
+        cost: None,
+        subscription: false,
+        cache_lifetime: CacheLifetime::OneHour,
+        thinking: None,
+    };
+    let shared = "shared instructions";
+    let stage = "first-pass instruction";
+    let unders = ids
+        .iter()
+        .zip(&prepareds)
+        .map(|(id, prepared)| super::UnderReview {
+            call: &under_call,
+            id,
+            turn: &turn,
+            prepared,
+        })
+        .collect::<Vec<_>>();
+    let mut sent = None;
+    let mut built = Vec::new();
+    for under in &unders {
+        let one = looped.build_stage1(under, &endpoint, shared, stage, None, sent);
+        sent = Some(one.cut);
+        built.push(one);
+    }
+    // The serial path chains from the start: the batch build moved no
+    // shared cursor, and its conversations match byte for byte.
+    let mut chained = Vec::new();
+    for under in &unders {
+        chained.push(looped.review_conversation(under, stage, None));
+    }
+    assert_eq!(built.len(), 3);
+    // The serial path chains from the start: the batch build moved no
+    // shared cursor, and the chained values match the snapshots.
+    assert_eq!(chained[0].1, None);
+    for (index, ((one, (conversation, previous)), cut)) in
+        built.iter().zip(&chained).zip([1_usize, 2, 3]).enumerate()
+    {
+        assert_eq!(
+            one.request.conversation,
+            *conversation,
+            "call {}",
+            index + 1
+        );
+        assert_eq!(one.request.previous_end, *previous, "call {}", index + 1);
+        assert_eq!(one.cut, cut, "call {}", index + 1);
+        assert!(
+            matches!(&one.reviewer_use, ReviewerUse::Stage1 { action_id } if action_id == &ids[index]),
+            "call {}",
+            index + 1
+        );
+        assert_eq!(
+            one.request.system_prompt.as_str(),
+            shared,
+            "call {}",
+            index + 1
+        );
+        assert!(one.request.thinking.is_none(), "call {}", index + 1);
+        // The first-stage output cap: `request::FIRST_STAGE_OUTPUT_TOKENS`.
+        assert_eq!(
+            one.request.max_output_tokens,
+            Some(4096),
+            "call {}",
+            index + 1
+        );
+        assert_eq!(
+            one.request.cache_lifetime,
+            CacheLifetime::OneHour,
+            "call {}",
+            index + 1
+        );
+        assert_eq!(
+            one.request.cache_key,
+            built[0].request.cache_key,
+            "call {}",
+            index + 1
+        );
+    }
+    assert_eq!(
+        built
+            .iter()
+            .map(|one| one.request.previous_end)
+            .collect::<Vec<_>>(),
+        [None, Some(1), Some(2)],
+    );
+}
+
+/// A reviewer provider that parks every call at one gate: the test waits for
+/// all three entries, proving three first-stage requests in flight together,
+/// then releases them at once.
+struct GatedReviewer {
+    entered: mpsc::Sender<()>,
+    gate: Arc<Mutex<mpsc::Receiver<()>>>,
+}
+
+struct GatedCall {
+    marker: String,
+    entered: mpsc::Sender<()>,
+    gate: Arc<Mutex<mpsc::Receiver<()>>>,
+}
+
+impl Provider for GatedReviewer {
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        fakes::wire_tools(tools)
+    }
+
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        Box::new(GatedCall {
+            marker: marker(request),
+            entered: self.entered.clone(),
+            gate: Arc::clone(&self.gate),
+        })
+    }
+}
+
+impl ModelCall for GatedCall {
+    fn run(
+        &self,
+        _sink: &mut dyn FnMut(Delta),
+    ) -> Result<contract::provider::Reply, contract::provider::CallError> {
+        let _sent = self.entered.send(());
+        // The gate is the test's own: it releases every parked call at once,
+        // so the block carries no deadline of its own.
+        let _released = self.gate.lock().unwrap().recv();
+        Ok(fakes::reply(&self.marker))
+    }
+
+    fn cancel(&self) {}
+}
+
+/// The request's marker: the first user text the test built it with.
+fn marker(request: &ModelRequest) -> String {
+    request
+        .conversation
+        .iter()
+        .find_map(|input| match input {
+            Input::User { text, .. } if text.starts_with("request ") => Some(text.clone()),
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
+        })
+        .unwrap_or_default()
+}
+
+/// The fan-out returns every reply in request order: three requests parked
+/// together come back as the three they went out as, whichever thread ran
+/// first.
+#[test]
+fn fanout_returns_every_reply_in_request_order() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (gate_tx, gate_rx) = mpsc::channel::<()>();
+    let reviewer = Arc::new(GatedReviewer {
+        entered: entered_tx,
+        gate: Arc::new(Mutex::new(gate_rx)),
+    });
+    let worker = Stage1Worker {
+        provider: reviewer as Arc<dyn Provider>,
+        observe: None,
+        cancel: Arc::new(crate::TurnCancel::default()),
+    };
+    let requests = [1, 2, 3]
+        .iter()
+        .map(|index| ModelRequest {
+            system_prompt: "shared".into(),
+            tools: Vec::new(),
+            thinking: None,
+            tool_choice: "auto".into(),
+            cache_lifetime: CacheLifetime::OneHour,
+            cache_key: "s_test:reviewer".into(),
+            conversation: vec![Input::User {
+                text: format!("request {index}"),
+                images: Vec::new(),
+            }],
+            previous_end: None,
+            sent_tools: None,
+            max_output_tokens: Some(4096),
+            session_dir: std::path::PathBuf::from("/tmp/s_test"),
+        })
+        .collect::<Vec<_>>();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let replies = fanout_stage1(&worker, requests);
+        let _sent = done_tx.send(replies);
+    });
+    let deadline = Deadline::after(Duration::from_secs(5));
+    for _ in 0..3 {
+        deadline.recv_or_fail(&entered_rx, "every stage-1 request parks at the gate");
+    }
+    drop(gate_tx);
+    let replies = deadline.recv_or_fail(&done_rx, "the fan-out returns every reply");
+    assert_eq!(replies.len(), 3);
+    for (index, reply) in replies.iter().enumerate() {
+        let text = reply
+            .as_ref()
+            .unwrap_or_else(|_| panic!("reply {} reads", index + 1))
+            .text();
+        assert_eq!(text, format!("request {}", index + 1));
     }
 }

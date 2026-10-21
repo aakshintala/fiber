@@ -300,6 +300,8 @@ pub(super) fn assembled(
         &mut providers,
         &config,
         &fakes::children::grouped_output,
+        home,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let owners = (extensions.lua_providers().iter())
@@ -958,7 +960,9 @@ fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert_eq!(
         rejection.message,
-        "The model `lit/n:high` needs the setting `workspace` for its base URL, which has no value."
+        "The model `lit/n:high` needs the setting `workspace` for its base URL, \
+         which has no value. Run `fiber login lit`, \
+         or set `workspace` in `config/lit.json` in Fiber home."
     );
 
     // The exact unconfigured literal also wins when it is the only full-ID
@@ -968,7 +972,9 @@ fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
     let rejection = rejected(&switching, &args("n:high"), None);
     assert_eq!(
         rejection.message,
-        "The model `lit/n:high` needs the setting `workspace` for its base URL, which has no value."
+        "The model `lit/n:high` needs the setting `workspace` for its base URL, \
+         which has no value. Run `fiber login lit`, \
+         or set `workspace` in `config/lit.json` in Fiber home."
     );
 }
 
@@ -1004,6 +1010,8 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         &mut providers,
         &config,
         &fakes::children::grouped_output,
+        &fixture.home,
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert!(

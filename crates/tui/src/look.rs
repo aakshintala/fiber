@@ -42,7 +42,7 @@ fn lift_rgb((red, green, blue): Rgb) -> Rgb {
 }
 
 /// The theme `tui.theme` names (`docs/configuration.md`, "Keys").
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub enum ThemeSetting {
     /// Unset, or `auto`: the theme follows the terminal's light or dark
     /// appearance.

@@ -8,6 +8,7 @@
 //! finishes. Each parked callback still ends at its own deadline. The thread
 //! quits once the extension is stopped.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -68,6 +69,7 @@ pub(super) struct Start {
     pub(super) browser: Arc<dyn Browser>,
     pub(super) session: Option<crate::host::Session>,
     pub(super) secrets: Vec<String>,
+    pub(super) deps: BTreeMap<String, PathBuf>,
 }
 
 /// Spawns the extension's thread on the first call.
@@ -85,6 +87,7 @@ pub(super) fn start(extension: &LuaExtension, shared: &mut Shared) -> Result<(),
         browser: Arc::clone(&extension.browser),
         session: extension.session.clone(),
         secrets: extension.secrets.clone(),
+        deps: extension.deps.clone(),
     };
     let hub = Arc::clone(&extension.hub);
     thread::Builder::new()
@@ -166,6 +169,7 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
                     | Target::Timer { .. }
                     | Target::Tool(_)
                     | Target::Search(_)
+                    | Target::Watcher { .. }
                     | Target::Effects(_) => host::state::Scope::Other,
                 };
                 vm.state.enter(scope);
@@ -181,6 +185,7 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
                     | Target::Timer { .. }
                     | Target::Tool(_)
                     | Target::Search(_)
+                    | Target::Watcher { .. }
                     | Target::Effects(_) => host::state::Scope::Other,
                 };
                 vm.state.enter(scope);
@@ -276,6 +281,13 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
                 // A firing past its timeout ends; an `every` keeps firing.
                 shared.calls.remove(&p.id);
                 shared.timers.end_firing(timer_id, now);
+            } else if let Target::Watcher { index } = p.target {
+                // A watcher delivery has no waiter: its timeout is a
+                // notice naming the extension, and its result is dropped.
+                let result = Err(timed_out(name, &p.target, p.timeout, false));
+                drop(shared);
+                hub.finish_watcher(name, p.id, index, result);
+                shared = hub.lock();
             } else {
                 let login = matches!(
                     shared.calls.get(&p.id),
@@ -325,7 +337,10 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
         /// starts only when no stream job is parked and no earlier stream job
         /// in the queue is held. Provider functions still run in the gaps.
         fn is_stream(target: &Target) -> bool {
-            matches!(target, Target::Command(_) | Target::Hook { .. })
+            matches!(
+                target,
+                Target::Command(_) | Target::Hook { .. } | Target::Watcher { .. }
+            )
         }
         let stream_busy = parked.iter().any(|p| is_stream(&p.target));
         let mut blocked = false;
@@ -363,6 +378,12 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
                 continue;
             };
             let deadline = job.asked.checked_add(timeout);
+            // A starting watcher delivery marks its watcher busy, so an
+            // ephemeral offer skips until it finishes; parking keeps the
+            // mark, and only the finish clears it.
+            if let Target::Watcher { index } = &job.target {
+                shared.watcher_busy.insert(*index);
+            }
             shared.calls.insert(
                 job.id,
                 Progress::Started {
@@ -471,13 +492,14 @@ struct Withheld {
     release: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
 }
 
-/// Which finished callbacks a `Withheld` pause holds: one hook point or one
-/// command name. One field holds either, so an armed pause can never name
-/// both or neither.
+/// Which finished callbacks a `Withheld` pause holds: one hook point, one
+/// command name, or one watcher's index. One field holds either, so an
+/// armed pause can never name more than one of them.
 #[cfg(test)]
 enum WithheldTarget {
     Hook(String),
     Command(String),
+    Watcher(usize),
 }
 
 #[cfg(test)]
@@ -521,7 +543,26 @@ pub(super) fn withhold_command_completion(
     });
 }
 
-/// Stops withholding hook or command completions.
+/// Withholds the finished watcher callbacks of `extension`'s watcher
+/// `index` until the test drops the matching sender and clears this.
+/// Narrow: only that extension's watcher waits, so other tests' workers
+/// pass through while it is armed.
+#[cfg(test)]
+pub(super) fn withhold_watcher_completion(
+    extension: &str,
+    index: usize,
+    release: std::sync::mpsc::Receiver<()>,
+) {
+    *WITHHELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
+        extension: extension.to_owned(),
+        target: WithheldTarget::Watcher(index),
+        release: Arc::new(Mutex::new(release)),
+    });
+}
+
+/// Stops withholding hook, command or watcher completions.
 #[cfg(test)]
 pub(super) fn release_hook_completion() {
     *WITHHELD
@@ -544,6 +585,9 @@ fn await_completion_release(extension: &str, target: &Target) {
                         point == held
                     }
                     (WithheldTarget::Command(command), Target::Command(held)) => command == held,
+                    (WithheldTarget::Watcher(index), Target::Watcher { index: held }) => {
+                        index == held
+                    }
                     _ => false,
                 }
         })
@@ -582,11 +626,21 @@ fn settle(
         Ok(Step::Done(value)) => {
             #[cfg(test)]
             await_completion_release(&start.name, target);
+            // A watcher delivery has no waiter: a failure is a notice
+            // naming the extension, and its result is dropped.
+            if let Target::Watcher { index } = target {
+                hub.finish_watcher(&start.name, id, *index, Ok(value));
+                return;
+            }
             return hub.finish(id, Ok(value));
         }
         Err(e) => {
             #[cfg(test)]
             await_completion_release(&start.name, target);
+            if let Target::Watcher { index } = target {
+                hub.finish_watcher(&start.name, id, *index, Err(e));
+                return;
+            }
             return hub.finish(id, Err(e));
         }
         Ok(Step::Suspend {

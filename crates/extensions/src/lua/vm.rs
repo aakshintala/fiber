@@ -48,6 +48,9 @@ pub(super) struct Vm {
     /// What `fiber.hook` registered: each point's hooks in order, each with
     /// its `phase`, `on_failure`, `timeout` and `run`.
     hooks: Table,
+    /// What `fiber.watch` registered: each watcher's `kinds`, `timeout`
+    /// and `run`, in registration order.
+    watchers: Table,
     /// Why each hook, command or tool the entry script tried to register
     /// was refused.
     problems: Table,
@@ -93,6 +96,7 @@ impl Vm {
             browser,
             session,
             secrets,
+            deps,
         } = start;
         let deadline =
             Deadline::new(Arc::clone(&clock)).with_interrupt(Arc::clone(&hub.lock().interrupt));
@@ -117,14 +121,16 @@ impl Vm {
         .map_err(lua_error)?;
         lua.set_memory_limit(*memory_cap).map_err(lua_error)?;
         let loading = Rc::new(RefCell::new(Some(ENTRY.to_owned())));
-        let (commands, providers, hooks, problems, violations, failures) = setup::install(
-            &lua,
-            &deadline,
-            dir.clone(),
-            *memory_cap,
-            Rc::clone(&loading),
-        )
-        .map_err(lua_error)?;
+        let (commands, providers, hooks, watchers, problems, violations, failures) =
+            setup::install(
+                &lua,
+                &deadline,
+                dir.clone(),
+                *memory_cap,
+                Rc::clone(&loading),
+                deps.clone(),
+            )
+            .map_err(lua_error)?;
         let failure_state = failures.state.clone();
         let workspace = session
             .as_ref()
@@ -192,6 +198,7 @@ impl Vm {
             commands,
             providers,
             hooks,
+            watchers,
             problems,
             tools,
             search,
@@ -312,6 +319,10 @@ impl Vm {
                             })
                     })
                 }),
+            Target::Watcher { index } => self
+                .watchers
+                .get::<Option<Table>>(index.saturating_add(1))
+                .and_then(|spec| spec.map_or(Ok(None), |spec| spec.get::<Option<Function>>("run"))),
             Target::Tool(name) => self.tools.function(name, "run"),
             Target::Search(name) => self.search.function(name),
             Target::Effects(name) => self.tools.function(name, "effects"),
@@ -329,6 +340,7 @@ impl Vm {
                 .map_or(mlua::Value::Nil, mlua::Value::String),
             Target::Provider { .. }
             | Target::Hook { .. }
+            | Target::Watcher { .. }
             | Target::Tool(_)
             | Target::Search(_)
             | Target::Effects(_) => host::to_lua(&self.lua, arg).map_err(fail)?,
@@ -392,6 +404,13 @@ impl Vm {
             timeouts.providers.insert(name, fns);
         }
         timeouts.hooks = DeclaredHooks::read(&self.hooks, &self.problems);
+        timeouts.watchers = super::declared::DeclaredWatchers::read(&self.watchers, &self.problems);
+        // A watch refusal is the watchers' own problem: the hook path
+        // never reports it twice.
+        timeouts
+            .hooks
+            .problems
+            .retain(|problem| !super::declared::is_watch_problem(problem));
         timeouts.tools = self.tools.declared();
         timeouts.search = self.search.declared();
         timeouts
@@ -430,6 +449,8 @@ impl Vm {
             | Target::Timer { .. }
             | Target::Tool(_)
             | Target::Effects(_) => host::to_json(&value).map_err(fail),
+            // A watcher changes nothing: its return value is ignored.
+            Target::Watcher { .. } => Ok(Value::Null),
             Target::Search(name) => {
                 // A field such as `title = function() end` would fail a
                 // bare JSON conversion with no backend, extension or

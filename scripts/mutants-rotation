@@ -21,8 +21,8 @@ case $epoch_day in
   '' | *[!0-9]*) echo "scripts/mutants-rotation: epoch_day '$epoch_day' is not a non-negative integer" >&2; exit 2 ;;
 esac
 
-# 16 shards a day, each holding about 800 mutants.
-days=$(( (count + 12799) / 12800 ))
+# 16 shards a day, each holding about 300 mutants.
+days=$(( (count + 4799) / 4800 ))
 if [ "$days" -lt 1 ]; then
   days=1
 fi

@@ -899,11 +899,7 @@ fn an_existing_target_is_never_overwritten() {
 
 #[test]
 fn the_fixture_pdf_counts_two_pages() {
-    let bytes = std::fs::read(format!(
-        "{}/../../research/pdf-tool-results/text.pdf",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .unwrap();
+    let bytes = include_bytes!("../../../research/pdf-tool-results/text.pdf").to_vec();
     let document = load(&bytes).unwrap();
     assert_eq!(document.get_pages().len(), 2);
 }

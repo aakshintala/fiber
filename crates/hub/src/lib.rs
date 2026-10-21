@@ -74,7 +74,7 @@ pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
 pub use crate::machine::{DeviceLogin, FileSearch, Machine, ShowCode};
 pub use crate::recent::{Left, RecentError, RecentRow, append, append_exited};
-pub use crate::spawn::SpawnStarter;
+pub use crate::spawn::{HUB_SESSION_MARKER, SpawnStarter};
 
 /// What the hub reads from the configuration when it starts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +122,9 @@ pub trait Starter: Send + Sync {
     /// session as `-c`, in order. With `worktree` true, the session runs
     /// in a new worktree of the workspace (`docs/invocation.md`,
     /// "Isolation"); the session command creates the worktree itself.
+    /// With `continues` naming a session, the session runs in that
+    /// session's worktree instead, which `start` checked is the
+    /// workspace (`docs/invocation.md`, "Isolation").
     fn start(
         &self,
         id: &SessionId,
@@ -129,6 +132,7 @@ pub trait Starter: Send + Sync {
         model: Option<&str>,
         overrides: &[&str],
         worktree: bool,
+        continues: Option<&SessionId>,
     ) -> io::Result<Box<dyn Started>>;
 
     /// Starts the session command resuming `id` in `workspace`, the launch

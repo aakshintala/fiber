@@ -338,7 +338,7 @@ the envelope's `ts`.
 | `parent` | object | no | for a delegate: `session_id`, its parent session, and `delegate_id`, the delegate's `job_id` there (`docs/delegates.md`) |
 | `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
 | `rewind` | object | no | for a rewind: `summary` (string, optional) and `note` (string) |
-| `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind or fork continues: `path` and `branch` (strings), and `repository` (string), the absolute path of the repository's git common directory, which a resume recreates a removed worktree from; `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
+| `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind, a fork, or a `start` `continues` continues: `path` and `branch` (strings), and `repository` (string), the absolute path of the repository's git common directory, which a resume recreates a removed worktree from; `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
 
 #### `rewound`
 
@@ -1383,6 +1383,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `device_login_result` | `path` (string), the stored credential relative to the hub's Fiber home (`docs/invocation.md`, "What the hub speaks") |
 | `directories` | `directories`, an array of strings, the names of the subdirectories the path holds, sorted, and `path` (string), the absolute path listed, `~/` expanded, over the hub (`docs/invocation.md`, "The hub") |
 | `status` | `running` (boolean, always true), `fiber_version` (string), `clients` (integer, the open connections, the asker included) and `variables` (object, as `session_started` carries it: the environment sessions the hub starts now get), over the hub (`docs/invocation.md`, "The hub") |
+| `placeholder_env` | `values` (object, the hub's captured value by requested placeholder name, absent names omitted, never logged), over the hub (`docs/invocation.md`, "What the hub speaks") |
 
 #### `command_rejected`
 

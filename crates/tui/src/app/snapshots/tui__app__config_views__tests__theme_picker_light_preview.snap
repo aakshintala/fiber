@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/app/config_views_tests.rs
+expression: painted_text(&lit)
+---
+  Settings › tui.theme  /settings                                    Esc returns
+ auto
+ dark  (current)
+ light
+ solar
+ solar dawn
+
+
+
+
+
+⋮
+⋮
+⋮
+
+
+
+
+
+
+ ↑↓ move · Enter choose · Esc back
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ ›
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -65,6 +65,7 @@ const DRAWN_ORDER: &[&str] = &[
     "rail",
     "rules",
     "settings",
+    "theme",
     "keys",
     "skills",
     "handoff",

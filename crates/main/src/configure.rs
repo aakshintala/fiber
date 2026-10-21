@@ -19,8 +19,9 @@ use std::sync::Arc;
 use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
 use tui::{
-    ConfigureError, KeyEdit, Layer, LoginTarget, Revoked, RuleRow, RulesScope, RulesSection, Saved,
-    SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches, WriteScope,
+    ConfigureError, HostGap, HostSaved, KeyEdit, Layer, LoginTarget, Revoked, RuleRow, RulesScope,
+    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup,
+    ToolSwitches, WriteScope,
 };
 
 use crate::switch::Reads;
@@ -231,9 +232,15 @@ impl tui::Configure for Seam {
         key: &str,
         text: &str,
     ) -> Result<Saved, ConfigureError> {
-        let (warnings, file) =
-            ::cli::config_set_text(&self.home, workspace, layer_to(layer), key, text)
-                .map_err(from_failure)?;
+        let (warnings, file) = ::cli::config_set_text(
+            &self.home,
+            workspace,
+            layer_to(layer),
+            key,
+            text,
+            &crate::clock::System,
+        )
+        .map_err(from_failure)?;
         Ok(Saved { file, warnings })
     }
 
@@ -304,6 +311,14 @@ impl tui::Configure for Seam {
 
     fn set_reviewer(&self, name: &str, id: &str) -> Result<(), ConfigureError> {
         login::set_reviewer(&self.home, name, id)
+    }
+
+    fn gaps(&self, name: &str) -> Result<Vec<HostGap>, ConfigureError> {
+        login::gaps(&self.home, name)
+    }
+
+    fn save_host(&self, name: &str, key: &str, value: &str) -> Result<HostSaved, ConfigureError> {
+        login::save_host(&self.home, name, key, value)
     }
 
     fn logout_rows(&self) -> Result<Vec<tui::LogoutRow>, ConfigureError> {

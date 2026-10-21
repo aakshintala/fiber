@@ -450,6 +450,7 @@ fn start_in(dir: &std::path::Path) -> Start {
         browser: Arc::new(crate::oauth::SystemBrowser::default()),
         session: None,
         secrets: Vec::new(),
+        deps: Default::default(),
     }
 }
 
@@ -829,6 +830,7 @@ fn an_abandon_before_admission_starts_no_host_work() {
                 Target::Command(_)
                 | Target::Provider { .. }
                 | Target::Hook { .. }
+                | Target::Watcher { .. }
                 | Target::Timer { .. }
                 | Target::Tool(_)
                 | Target::Search(_)
@@ -947,6 +949,7 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
                 Target::Provider { name, .. } => Some(name.as_str()),
                 Target::Command(_)
                 | Target::Hook { .. }
+                | Target::Watcher { .. }
                 | Target::Timer { .. }
                 | Target::Effects(_) => None,
             };
@@ -1154,6 +1157,7 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
                         browser,
                         session: None,
                         secrets: Vec::new(),
+                        deps: Default::default(),
                     },
                     &hub,
                     &mut parked,
@@ -2169,7 +2173,7 @@ fn delegate_rig(
                 Target::Search(name) => {
                     timeouts.search.insert(name.clone(), timeout);
                 }
-                Target::Timer { .. } | Target::Provider { .. } => {}
+                Target::Timer { .. } | Target::Provider { .. } | Target::Watcher { .. } => {}
             }
         } else {
             panic!("not ready");

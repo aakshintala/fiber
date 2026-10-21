@@ -69,6 +69,8 @@ pub enum HubCommand {
     Status(NoArgs),
     /// Rebuilds the hub's environment.
     Refresh(NoArgs),
+    /// Answers with the hub's captured values for the named placeholders.
+    PlaceholderEnv(PlaceholderEnvArgs),
     /// Answers with a new pairing code for the device.
     PairingCode(Device),
     /// Answers with the paired devices.
@@ -152,6 +154,9 @@ pub struct Start {
     /// With true, the session runs in a new worktree of the workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<bool>,
+    /// The session whose worktree this session continues: its id. Set from `--continues`, beside `--rewound-from`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continues: Option<SessionId>,
     /// The session's first prompt, sent after the answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<Vec<SentPart>>,
@@ -267,6 +272,16 @@ pub struct WriteConfig {
     pub text: String,
     /// The version the file still has for the write to land.
     pub version: String,
+}
+
+/// The `args` of `placeholder_env`: the placeholder variable names the
+/// client wants the hub's captured values for. Absent names are omitted
+/// from the answer, never written as `null`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlaceholderEnvArgs {
+    /// The placeholder variable names, each once.
+    pub names: Vec<String>,
 }
 
 /// The `args` of `pairing_code` and `revoke`: one device.

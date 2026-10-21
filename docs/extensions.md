@@ -101,7 +101,34 @@ A script loads another script with `require`. `require` finds files inside the
 extension's own directory and nowhere else, so one extension cannot load
 another's code by path. Code shared between extensions reaches an extension in
 one of two ways: the extension vendors a copy, or it depends on the extension
-that holds the code.
+that holds the code (see [Shared dependency modules](#shared-dependency-modules)).
+
+## Shared dependency modules
+
+An extension that needs another extension's Lua declares it in `depends`, a
+mapping of each dependency's name to the minimum version it runs with:
+`"depends": { "example.com/acme/strings": "1.0" }`. Installing the
+extension installs its dependencies beside it, at the lowest tags that meet
+every minimum: Fiber installs nothing newer than someone asked for, and a
+dependency's own `depends` resolves the same way.
+
+A script loads a dependency's module with the dependency's name, a colon, and
+the module path: `require("example.com/acme/strings:trim")`. The module path
+works exactly as it does inside the dependency — dots become directory
+separators — and everything after the first colon is the path, so a second
+colon stays in the module. A name with no colon loads the extension's own
+file; a name nobody declared, an empty module, and a leading colon all fail
+the same way, naming the unknown dependency. The modules are available from
+the moment the extension starts, in a session and in the login-time provider
+that asks for credentials.
+
+Each read canonicalizes the dependency's directory and serves only what stays
+under it: a link pointing outside the dependency is refused, and a dependency
+whose directory is missing names the dependency rather than reaching the file
+loader. A repository copy serves its own `.fiber-depends` before the
+personal install, so a copy's dependency answers even when a different
+version sits beside it, and a copy whose dependency is missing names it
+without reading Fiber home.
 
 The binary for this platform installs as `bin/<last segment of the manifest name>`: with `"name": "github.com/acme/fiber-acme"` that is `bin/fiber-acme` on every platform. A binary installed before this change gets that name at the next `fiber extension update`. A native binary is run as a process extension, or through `host.exec` ("Host calls") as `host.exec("bin/fiber-acme", args)`.
 
@@ -114,7 +141,7 @@ WASM, and full TypeScript — are in [ADR 0006](adr/0006-extension-runtime-lua.m
 
 The embedding is bare. An extension sees a stripped standard library — `table`,
 `string`, `math`, `utf8`, `coroutine` — plus a `require` limited to its own
-directory, and nothing else. There is no `io`, no `os`, no `package`, no
+directory and its declared dependencies, and nothing else. There is no `io`, no `os`, no `package`, no
 `debug`. Every capability reaches it through a host-provided global, and the
 host calls give it what a process has natively: files, programs, HTTP and
 timers. Routing them through the host lets Fiber stop them on cancel and at
@@ -1461,8 +1488,27 @@ code `closing`. A process extension then has its manifest's
 `exit_timeout_ms` to finish, and after that gets the shutdown sequence every
 child gets: SIGTERM, 800 ms, then SIGKILL (`docs/invocation.md`, "Shutdown").
 
+Before replaying, the drain waits until no watcher delivery is still
+queued or running: a durable delivery the live fan-out already covered
+runs first, so tearing the session down after the drain cannot lose it.
+The drain replays each watcher's `(cursor, end]` log range — every line at
+or after the registration end the live fan-out did not already offer — in
+extension-name order, then watcher registration order. Each watcher runs
+once per line within its declared timeout; one past it fails, and the
+stream continues with the next watcher. A failure never becomes a `notice`:
+the log already holds `fiber_exited`, so it is printed on stderr under it,
+in every session, naming the watcher and its failure. A log the drain
+cannot read, or a line it cannot read, is collected and printed the same
+way, naming the drain instead of a watcher. `host.fs` and
+`host.data_dir` keep working through the drain; `host.model` and
+`host.drive` answer `closing`, and `host.delegate` stays refused to
+watchers, as ever.
+
 When a signal stops Fiber, no extension code runs, as no hook does. The
-5-second shutdown bound has no room for it.
+5-second shutdown bound has no room for it. A signal that stops the
+drain makes Fiber exit with the signal's code; `fiber_exited` keeps the
+line it already wrote. A signal after the drain finished changes
+nothing.
 
 ## Notes for authors
 

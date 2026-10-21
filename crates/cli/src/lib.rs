@@ -49,6 +49,7 @@ mod extension_test;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod feedback;
+mod hub_env;
 mod hub_list;
 mod hub_pair;
 mod hub_refresh;
@@ -125,6 +126,7 @@ pub use extension::{
 };
 pub use extension_test::extension_test;
 pub use feedback::{FeedbackError, ReportContext, build_report, write};
+pub use hub_env::{declared_names, hub_env, lookup, placeholder_lookup};
 pub use hub_list::{hub_add, hub_remove};
 pub use hub_pair::{Address, hub_pair};
 pub use hub_refresh::hub_refresh;
@@ -134,7 +136,7 @@ pub use hub_token::{hub_token_list, hub_token_revoke};
 pub use import::import;
 pub use login::{
     LoginCancel, LoginName, LoginStored, LogoutTarget, ReviewerModels, browser_login, login_store,
-    login_targets, providers_in, reviewer_models, run_login, run_logout, set_reviewer,
+    login_targets, providers_in, reviewer_models, run_login, run_logout, save_host, set_reviewer,
 };
 pub use mcp::{DeclaredServer, McpDeclaration, declared_servers, mcp_add, mcp_list, mcp_remove};
 pub use mcp_login::{login_target, mcp_login, mcp_logout};

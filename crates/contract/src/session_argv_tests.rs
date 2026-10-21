@@ -48,6 +48,7 @@ fn full_value_lists_every_field_in_order_with_login_shell_last() {
         credential: Some("work".to_owned()),
         worktree: true,
         rewound_from: Some(SessionId("s_aaaaaaaaaaaaaaaa".to_owned())),
+        continues: Some(SessionId("s_dddddddddddddddd".to_owned())),
         forked_from: Some(SessionId("s_dddddddddddddddd".to_owned())),
         forked_seq: Some(41),
         parent: Some(SessionId("s_bbbbbbbbbbbbbbbb".to_owned())),
@@ -71,6 +72,7 @@ fn full_value_lists_every_field_in_order_with_login_shell_last() {
             "--credential=work",
             "--worktree",
             "--rewound-from=s_aaaaaaaaaaaaaaaa",
+            "--continues=s_dddddddddddddddd",
             "--forked-from=s_dddddddddddddddd",
             "--forked-seq=41",
             "--parent=s_bbbbbbbbbbbbbbbb",
@@ -143,6 +145,37 @@ fn non_utf8_workspace_passes_through_byte_for_byte() {
     };
     let argv = args.to_argv();
     assert_eq!(argv[2], OsString::from_vec(b"--workspace=/w/\xff".to_vec()));
+}
+
+#[test]
+fn continues_absent_renders_nothing_and_set_renders_once_after_rewound_from() {
+    let absent = SessionArgv {
+        rewound_from: Some(SessionId("s_aaaaaaaaaaaaaaaa".to_owned())),
+        continues: None,
+        ..SessionArgv::default()
+    };
+    assert!(
+        !rendered(&absent.to_argv())
+            .iter()
+            .any(|arg| arg.starts_with("--continues"))
+    );
+    let set = SessionArgv {
+        rewound_from: Some(SessionId("s_aaaaaaaaaaaaaaaa".to_owned())),
+        continues: Some(SessionId("s_dddddddddddddddd".to_owned())),
+        ..SessionArgv::default()
+    };
+    let argv = rendered(&set.to_argv());
+    assert_eq!(
+        argv.iter()
+            .filter(|arg| arg.starts_with("--continues"))
+            .count(),
+        1
+    );
+    let rewound_at = argv
+        .iter()
+        .position(|arg| arg == "--rewound-from=s_aaaaaaaaaaaaaaaa")
+        .expect("rewound-from renders");
+    assert_eq!(argv[rewound_at + 1], "--continues=s_dddddddddddddddd");
 }
 
 #[test]

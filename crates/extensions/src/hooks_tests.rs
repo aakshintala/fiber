@@ -16,7 +16,8 @@ use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
-use contract::events::CallStatus;
+use contract::clock::Clock as _;
+use contract::events::{CallStatus, Notice};
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks, JobDelivery};
 use contract::shapes::Process;
 use contract::tool::SpillFile;
@@ -109,6 +110,17 @@ impl Home {
     #[track_caller]
     fn load(&self, overrides: &[&str]) -> Arc<SessionExtensions> {
         self.load_with_host(overrides, None)
+    }
+
+    /// Loads with the caller's clock kept, so the test can advance fake
+    /// time past a parked deadline after the parked signal.
+    fn load_with_clock(&self, overrides: &[&str], clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
+        let config = self.config(overrides);
+        let home = self.home();
+        let locks: Arc<dyn contract::files::PathLock> = Arc::new(FakeLock::new());
+        Arc::new(bounded(move || {
+            SessionExtensions::load(&home, &config, clock, locks, None)
+        }))
     }
 
     #[track_caller]
@@ -2329,4 +2341,1022 @@ fn a_hook_given_a_call_without_a_file_sees_no_path_or_size() {
     let session = home.load(&[]);
     let answer = after_tool(&session, "x");
     assert_eq!(changed_content(&answer), Some("nil|nil"));
+}
+
+/// One delivered event's kind and payload, as a watcher test builds it.
+fn completed(n: u64) -> contract::events::Event {
+    contract::events::Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![],
+        details: Some(json!({"n": n})),
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        hosts_surfaced: vec![],
+        provider_item: None,
+        loaded: None,
+    })
+}
+
+fn noticed(message: &str) -> contract::events::Event {
+    contract::events::Event::Notice(Notice {
+        code: ErrorCode::ExtensionFailed,
+        message: message.to_owned(),
+        extension: None,
+    })
+}
+
+fn stepped() -> contract::events::Event {
+    contract::events::Event::StepStarted(contract::events::Empty {})
+}
+
+/// One `host.status` line per watcher run, sent on a channel in run
+/// order: the tests wait on the channel through a deadline, never on a
+/// sleep.
+struct StatusSignal(mpsc::Sender<String>);
+
+impl contract::emit::Emit for StatusSignal {
+    fn emit(&self, event: &contract::events::Event) {
+        if let contract::events::Event::ExtensionUi(ui) = event
+            && let contract::events::Ui::Status { status } = &ui.ui
+        {
+            let _ignored = self.0.send(status.clone());
+        }
+    }
+}
+
+/// Installs the status emitter on `session`, returning the lines' channel.
+#[track_caller]
+fn status_channel(session: &Arc<SessionExtensions>) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    session.emit_to(Arc::new(StatusSignal(tx)));
+    rx
+}
+
+/// A watcher on `tool_call_completed` beside an `after_tool` hook: each
+/// completion arrives in session order, interleaved with the hook.
+#[test]
+fn a_watcher_receives_each_completion_in_session_order_with_the_hooks() {
+    let home = Home::new();
+    home.install(
+        "ordered",
+        Some(
+            "fiber.hook(\"after_tool\", { timeout = 2000, on_failure = \"non-blocking\", run = function(call) host.status('hook:' .. call.tool) return {} end })\n\
+             fiber.watch({\"tool_call_completed\"}, { timeout = 2000, run = function(ev) host.status('watch:' .. ev.payload.details.n) end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    session.deliver(&completed(1), Some(contract::Seq(0)));
+    let (hook_tx, hook_rx) = mpsc::channel();
+    let hook_session = Arc::clone(&session);
+    thread::spawn(move || {
+        hook_tx.send(after_tool(&hook_session, "first")).unwrap();
+    });
+    // The completion queues first, so the hook waits behind it: the single
+    // worker runs them in stream order, and the hook's return proves it ran.
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the first completion"),
+        "watch:1"
+    );
+    let answer = Deadline::after(WAIT)
+        .recv(&hook_rx)
+        .expect("waited for the hook to run");
+    assert!(matches!(answer.outcome, AfterToolOutcome::Unchanged));
+    session.deliver(&completed(2), Some(contract::Seq(1)));
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the hook's line"),
+        "hook:read"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the second completion"),
+        "watch:2"
+    );
+}
+
+/// An idle watcher receives an ephemeral offer: the positive case a
+/// drop-all-ephemeral mutant fails.
+#[test]
+fn an_idle_watcher_receives_an_ephemeral_offer() {
+    let home = Home::new();
+    home.install(
+        "idle",
+        Some(
+            "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('idle:' .. ev.payload.message) end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    // An ephemeral offer carries no seq, as the log gives it none.
+    session.deliver(&noticed("hello"), None);
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the idle watcher to run"),
+        "idle:hello"
+    );
+}
+
+/// A parked watcher drops an ephemeral offer but queues the durable one,
+/// then receives it after release; the cursor only advances on seqs.
+#[test]
+fn a_parked_watcher_drops_the_ephemeral_offer_and_queues_the_durable_one() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
+    let home = Home::new();
+    home.install(
+        "busy",
+        Some(&format!(
+            "fiber.watch({{\"notice\"}}, {{ timeout = 5000, run = function(ev) host.http({{ url = \"{url}\" }}) host.status('ephemeral-ran') end }})\n\
+             fiber.watch({{\"step_started\"}}, {{ timeout = 5000, run = function(ev) host.status('durable-ran') end }})\n"
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    session.deliver(&noticed("park"), None);
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for the watcher to park on host.http"
+    );
+    // While it is parked the ephemeral offer is dropped and the durable one
+    // queues: the parked watcher is busy, and the durable one must be too,
+    // since the single worker cannot run it while the first is parked.
+    session.deliver(&noticed("dropped"), None);
+    session.deliver(&stepped(), Some(contract::Seq(7)));
+    {
+        let lua = session
+            .lua_extension("fiber.test/busy")
+            .expect("the watchers-only extension stays loaded");
+        assert!(lua.is_watcher_busy(0), "the parked watcher is busy");
+        assert!(
+            lua.is_watcher_busy(1),
+            "the durable offer queues behind the parked watcher"
+        );
+    }
+    server.release();
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the parked watcher"),
+        "ephemeral-ran"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the queued durable one"),
+        "durable-ran"
+    );
+    // The ephemeral offers carried no seq, so only the durable one moves a cursor.
+    let cursors = session
+        .cursors
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(cursors.get(&("fiber.test/busy".to_owned(), 0)), None);
+    assert_eq!(cursors.get(&("fiber.test/busy".to_owned(), 1)), Some(&7));
+}
+
+/// A kind no watcher registered for fires nothing and moves no cursor: the
+/// later matching offer proves the stream processed everything, so the
+/// unmatched one left no trace.
+#[test]
+fn an_unmatched_kind_fires_no_watcher() {
+    let home = Home::new();
+    home.install(
+        "picky",
+        Some(
+            "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('picky:' .. ev.payload.message) end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    session.deliver(&stepped(), Some(contract::Seq(3)));
+    session.deliver(&noticed("after"), None);
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the later matching offer"),
+        "picky:after"
+    );
+    // The unmatched offer queued nothing and moved no cursor: the later
+    // offer carries no seq, so the cursor map stays empty.
+    assert!(
+        session
+            .cursors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+    );
+}
+
+/// A cursor advances to each offered seq, in order.
+#[test]
+fn a_cursor_advances_to_each_offered_seq() {
+    let home = Home::new();
+    home.install(
+        "cursor",
+        Some("fiber.watch({\"step_started\"}, { timeout = 2000, run = function(ev) end })\n"),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    session.deliver(&stepped(), Some(contract::Seq(3)));
+    session.deliver(&stepped(), Some(contract::Seq(5)));
+    assert_eq!(
+        *session
+            .cursors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        [("fiber.test/cursor".to_owned(), 0, 5)]
+            .into_iter()
+            .map(|(name, index, seq)| ((name, index), seq))
+            .collect()
+    );
+}
+
+/// A watcher registered mid-session receives only events offered after its
+/// registration: A reaches the early watcher alone, B reaches both, in
+/// extension-name order.
+#[test]
+fn a_late_watcher_receives_only_events_after_its_registration() {
+    let home = Home::new();
+    home.install(
+        "early",
+        Some(
+            "fiber.watch({\"step_started\"}, { timeout = 2000, run = function(ev) host.status('early-ran') end })\n",
+        ),
+        &[],
+    );
+    let first = home.load(&[]);
+    assert!(first.notices().is_empty(), "{:?}", first.notices());
+    let first_statuses = status_channel(&first);
+    first.deliver(&stepped(), Some(contract::Seq(4)));
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&first_statuses)
+            .expect("waited for the early watcher"),
+        "early-ran"
+    );
+    home.install(
+        "late",
+        Some(
+            "fiber.watch({\"step_started\"}, { timeout = 2000, run = function(ev) host.status('late-ran') end })\n",
+        ),
+        &[],
+    );
+    // Loading again registers the late extension mid-session: A was never
+    // offered to a session that holds it.
+    let second = home.load(&[]);
+    assert!(second.notices().is_empty(), "{:?}", second.notices());
+    let second_statuses = status_channel(&second);
+    second.deliver(&stepped(), Some(contract::Seq(9)));
+    // Each extension runs on its own worker, so the two runs race: the set
+    // is what the fan-out pins — the late watcher sees only B, never A.
+    let mut ran = vec![
+        Deadline::after(WAIT)
+            .recv(&second_statuses)
+            .expect("waited for the first watcher"),
+        Deadline::after(WAIT)
+            .recv(&second_statuses)
+            .expect("waited for the second watcher"),
+    ];
+    ran.sort();
+    assert_eq!(
+        ran,
+        vec!["early-ran".to_owned(), "late-ran".to_owned()],
+        "both watchers receive only B"
+    );
+    // The first session never sees B: its stream ended at A, and the two
+    // sessions share nothing. The offer is synchronous and nothing was
+    // ever queued on the first session after A, so no worker can deliver
+    // later: the channel stays empty without waiting.
+    assert!(
+        first_statuses.try_recv().is_err(),
+        "nothing further runs on the first session"
+    );
+}
+
+/// Watchers of one extension run in registration order: the same worker
+/// serves the one stream, so the fan-out's push order is the run order.
+#[test]
+fn one_extensions_watchers_run_in_registration_order() {
+    let home = Home::new();
+    home.install(
+        "pair",
+        Some(
+            "fiber.watch({\"step_started\"}, { timeout = 2000, run = function(ev) host.status('first') end })\n\
+             fiber.watch({\"step_started\"}, { timeout = 2000, run = function(ev) host.status('second') end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    session.deliver(&stepped(), Some(contract::Seq(2)));
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the first watcher"),
+        "first"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the second watcher"),
+        "second"
+    );
+}
+
+/// One `host.status` line and one notice per watcher run, each on its own
+/// channel in arrival order: the failure tests wait on channels through a
+/// deadline, never on a sleep.
+struct Observed {
+    status: mpsc::Sender<String>,
+    notice: mpsc::Sender<String>,
+}
+
+impl contract::emit::Emit for Observed {
+    fn emit(&self, event: &contract::events::Event) {
+        if let contract::events::Event::ExtensionUi(ui) = event
+            && let contract::events::Ui::Status { status } = &ui.ui
+        {
+            let _ignored = self.status.send(status.clone());
+        }
+        if let contract::events::Event::Notice(notice) = event {
+            let _ignored = self.notice.send(notice.message.clone());
+        }
+    }
+}
+
+/// Installs the status-and-notice emitter on `session`.
+fn observe(session: &Arc<SessionExtensions>) -> (mpsc::Receiver<String>, mpsc::Receiver<String>) {
+    let (status_tx, status_rx) = mpsc::channel();
+    let (notice_tx, notice_rx) = mpsc::channel();
+    session.emit_to(Arc::new(Observed {
+        status: status_tx,
+        notice: notice_tx,
+    }));
+    (status_rx, notice_rx)
+}
+
+/// An erroring watcher emits exactly one notice naming the extension, and
+/// the stream continues with the next watcher.
+#[test]
+fn an_erroring_watcher_emits_one_notice_and_the_stream_continues() {
+    let home = Home::new();
+    home.install(
+        "broke",
+        Some(
+            "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) error('boom') end })\n\
+             fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('second-ran') end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (statuses, notices) = observe(&session);
+    session.deliver(&noticed("x"), None);
+    let notice = Deadline::after(WAIT)
+        .recv(&notices)
+        .expect("waited for the failure notice");
+    assert!(
+        notice.contains("fiber.test/broke")
+            && notice.contains("watcher:0")
+            && notice.contains("boom"),
+        "the notice names the extension, the watcher and the error, {notice:?}"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the next watcher"),
+        "second-ran"
+    );
+    // Exactly one notice: the error ends the one delivery, not the stream.
+    // Both deliveries already ended (the notice proves the first, the
+    // status proves the second), so nothing more can arrive: the channel
+    // stays empty without waiting.
+    assert!(notices.try_recv().is_err(), "no second notice follows");
+}
+
+/// A watcher parked past its timeout yields the timeout notice naming the
+/// exact declared ms, and the stream continues with the next watcher. The
+/// run sleeps with no reply coming, so only the expiry arm can end it; the
+/// session runs on a frozen fake clock, so `asked` is exactly the instant
+/// read before `deliver`, and the test advances onto the deadline, which
+/// wakes the loop through the clock subscription.
+#[test]
+fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
+    let home = Home::new();
+    home.install(
+        "slow",
+        Some(
+            "fiber.watch({\"notice\"}, { timeout = 300, run = function(ev) host.status('sleeping') host.exec('sleep', {'30'}) end })\n\
+             fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev) host.status('after-timeout') end })\n",
+        ),
+        &[],
+    );
+    let clock = FakeClock::new();
+    let session = home.load_with_clock(&[], Arc::clone(&clock));
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (statuses, notices) = observe(&session);
+    // Retire the loop's fresh boot park (unbounded, from loading): only
+    // parks made after this move count toward the wait below.
+    clock.advance(Duration::ZERO);
+    let before = clock.now();
+    session.deliver(&noticed("x"), None);
+    // The `sleeping` line proves the run reached the exec call; the park
+    // follows under the same lock hold, and `mark_parked` waits for it.
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the watcher to start"),
+        "sleeping"
+    );
+    // The delivery parks the sleeping watcher at asked + 300 ms; fake time
+    // is frozen, so asked is exactly `before`. The wall-clock deadline only
+    // bounds the waits for the parked delivery to appear and the loop to
+    // notice the move.
+    let thread = clock
+        .mark_parked(before + Duration::from_millis(300), WAIT)
+        .expect("waited for the sleeping watcher to park at its deadline")
+        .threads()
+        .pop()
+        .expect("one watcher parked at its deadline");
+    // Pin the exec runner's fresh re-park at before + 10 ms before
+    // advancing: its poll park would otherwise arrive beside the
+    // watcher's deadline park and fail the unnamed wait.
+    let poll = clock
+        .mark_parked(before + Duration::from_millis(10), WAIT)
+        .expect("waited for the exec runner to park");
+    assert!(
+        clock.await_any_parked_since(&poll, WAIT),
+        "waited for the exec runner to re-park"
+    );
+    clock.advance_when_parked(
+        Some(before + Duration::from_millis(300)),
+        Some(thread),
+        Duration::from_millis(300),
+        &Deadline::after(WAIT),
+    );
+    let notice = Deadline::after(WAIT)
+        .recv(&notices)
+        .expect("waited for the timeout notice");
+    assert!(
+        notice.contains("fiber.test/slow")
+            && notice.contains("watcher:0")
+            && notice.contains("300 ms"),
+        "the notice names the extension, the watcher and the exact declared ms, {notice:?}"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the next watcher"),
+        "after-timeout"
+    );
+}
+
+/// `host.tool` from a watcher answers the no-runner error while
+/// `host.exec` runs: the refusal names the call site, not a tool failure.
+#[test]
+fn a_watcher_refuses_host_tool_but_runs_host_exec() {
+    let home = Home::new();
+    home.install(
+        "gated",
+        Some(
+            "fiber.watch({\"notice\"}, { timeout = 2000, run = function(ev)\n\
+             local took, err = pcall(host.tool, 'read', {})\n\
+             host.status('tool:' .. tostring(took) .. ':' .. tostring(err))\n\
+             local ran = pcall(host.exec, 'true', {})\n\
+             host.status('exec:' .. tostring(ran))\n\
+             end })\n",
+        ),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    session.deliver(&noticed("x"), None);
+    let refused = Deadline::after(WAIT)
+        .recv(&statuses)
+        .expect("waited for the tool refusal");
+    assert!(
+        refused.starts_with("tool:false:")
+            && refused.contains("called outside a running tool call"),
+        "the refusal names the call site, {refused:?}"
+    );
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the exec result"),
+        "exec:true"
+    );
+}
+
+/// A watcher pushed after `seal()` still runs: the seal drops routing, not
+/// the stream. Service calls answer `closing`, local calls succeed, and the
+/// late-bound emitter is gone, so the run reports through the filesystem.
+/// The push goes through the drain's synchronous wait, as production runs
+/// it after `fiber_exited`: no file poll, the wait itself is the barrier.
+#[test]
+fn a_sealed_watchers_run_with_closing_services_and_closed_state() {
+    use contract::extension::ExtensionDoor as _;
+    let home = Home::new();
+    let probe = home.root.path().join("seal-probe");
+    home.install(
+        "sealed",
+        Some(&format!(
+            "fiber.watch({{\"notice\"}}, {{ timeout = 2000, run = function(ev)\n\
+             local out = {{}}\n\
+             local function probe(name, fn)\n\
+             local ok, err = pcall(fn)\n\
+             local detail = ok and \"ok\" or tostring((type(err) == \"table\" and (err.message or err.code)) or err)\n\
+             out[#out + 1] = name .. \":\" .. detail\n\
+             end\n\
+             probe(\"model\", function() host.model({{ model = \"fake/m\", messages = {{ {{ role = \"user\", content = \"hi\" }} }}, max_tokens = 16 }}) end)\n\
+             probe(\"drive\", function() host.drive(\"tools\", {{}}) end)\n\
+             probe(\"delegate\", function() host.delegate({{ description = \"s\", prompt = \"p\", model = \"m\" }}, {{ timeout = 5000, run = function() end }}) end)\n\
+             probe(\"state\", function() state.set(\"k\", 1) end)\n\
+             probe(\"fs\", function() host.fs.write({probe:?}, \"wrote\") end)\n\
+             probe(\"data_dir\", function() host.fs.write(host.data_dir(\"machine\") .. \"/wrote\", \"wrote\") end)\n\
+             host.fs.write({probe:?} .. \".out\", table.concat(out, \"\\n\"))\n\
+             end }})\n",
+            probe = probe.display().to_string()
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    // Production order at session end: the seal drops routing, then the
+    // state close lands with the lines it holds. The drain's synchronous
+    // push-and-wait runs the post-seal delivery, as `drain_watchers` does:
+    // it returns only after the run finished writing.
+    session.seal();
+    session.close_state();
+    let lua = session
+        .lua_extension("fiber.test/sealed")
+        .expect("the watchers-only extension stays loaded");
+    lua.drain_watcher(0, super::watcher_arg(&noticed("sealed")))
+        .expect("the sealed watcher runs");
+    let out = fs::read_to_string(probe.with_extension("out"))
+        .expect("the sealed watcher wrote its report");
+    assert!(
+        out.contains("model:host.model: the session is closing"),
+        "{out:?}"
+    );
+    assert!(
+        out.contains("drive:host.drive: the session is closing"),
+        "{out:?}"
+    );
+    assert!(
+        out.contains("delegate:host.delegate: not available here"),
+        "{out:?}"
+    );
+    assert!(out.contains("state:extension state is closed"), "{out:?}");
+    assert!(out.contains("fs:ok"), "{out:?}");
+    assert!(out.contains("data_dir:ok"), "{out:?}");
+    assert_eq!(fs::read_to_string(&probe).unwrap(), "wrote");
+}
+
+/// A watcher queued when the signal stops the hub never starts: the stop
+/// settles the parked delivery first, so the queued one stays queued.
+#[test]
+fn a_watcher_queued_at_a_signal_never_starts() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
+    let home = Home::new();
+    let second = home.root.path().join("second");
+    home.install(
+        "stopped",
+        Some(&format!(
+            "fiber.watch({{\"notice\"}}, {{ timeout = 5000, run = function(ev) host.http({{ url = \"{url}\" }}) end }})\n\
+             fiber.watch({{\"notice\"}}, {{ timeout = 5000, run = function(ev) host.fs.write({second:?}, \"second\") end }})\n"
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    session.deliver(&noticed("park"), None);
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for the first watcher to park on host.http"
+    );
+    // The one worker is parked on the first delivery, so the second stays
+    // queued behind it; the stop lands before it can ever start. The stop
+    // is synchronous, so no settle-signal is needed: after it returns the
+    // hub takes no more jobs. A parked watcher delivery has no waiter, so
+    // its abandoned run settles nothing visible.
+    session.deliver(&noticed("queued"), None);
+    crate::lua::hub::stop_every_callback();
+    server.release();
+    assert!(!second.exists(), "the queued watcher never started");
+}
+
+/// One durable `text_completed` line: notices are ephemeral and never
+/// reach the log file, so the drain's fixtures are text lines.
+fn texted(text: &str) -> contract::events::Event {
+    contract::events::Event::TextCompleted(contract::events::TextCompleted {
+        text: text.to_owned(),
+        provider_item: None,
+    })
+}
+
+/// A session-dir log holding nothing yet: the test appends after recording
+/// the watermark, so the drain's range is exactly what followed
+/// registration. The root keeps the log alive.
+fn empty_log() -> (fakes::TempDir, Arc<log::Log>, PathBuf) {
+    let root = fakes::TempDir::new("fiber-watch-drain");
+    let sessions = root.path().join("sessions");
+    let log = Arc::new(
+        log::Log::create(
+            &sessions,
+            contract::SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    (root, log, sessions.join("s_1"))
+}
+
+/// The drain replays each watcher's `(cursor, end]` range in log order on
+/// the one worker, advancing cursors and collecting nothing on success.
+#[test]
+fn drain_watchers_replays_each_watchers_range_in_order() {
+    let home = Home::new();
+    let first = home.root.path().join("first");
+    let second = home.root.path().join("second");
+    home.install(
+        "drained",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, seen = pcall(host.fs.read, {first:?}) if not ok or seen == nil then seen = \"\" end host.fs.write({first:?}, seen .. ev.payload.text .. \"\\n\") end }}) fiber.watch({{\"step_started\"}}, {{ timeout = 2000, run = function(ev) host.fs.write({second:?}, \"second\") end }})"
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&texted("a"), None, None).unwrap();
+    log.append(&texted("b"), None, None).unwrap();
+    log.append(&stepped(), None, None).unwrap();
+    let (errors, stopped) = session.drain_watchers(&log, &dir);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
+    assert_eq!(fs::read_to_string(&first).unwrap(), "a\nb\n");
+    assert_eq!(fs::read_to_string(&second).unwrap(), "second");
+    assert_eq!(
+        *session
+            .cursors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        [
+            (("fiber.test/drained".to_owned(), 0), 1),
+            (("fiber.test/drained".to_owned(), 1), 2)
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+/// A watcher with no live offers drains exactly its post-watermark range:
+/// lines before registration never reach it.
+#[test]
+fn a_late_watcher_drains_only_its_post_watermark_range() {
+    let home = Home::new();
+    let seen = home.root.path().join("seen");
+    home.install(
+        "late",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, old = pcall(host.fs.read, {seen:?}) if not ok or old == nil then old = \"\" end host.fs.write({seen:?}, old .. ev.payload.text .. \"\\n\") end }})"
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    log.append(&texted("before"), None, None).unwrap();
+    // Registered after the last live offer: nothing was ever offered live,
+    // so the cursor stays unset and the drain starts at the watermark.
+    session.set_watermark(log.count());
+    log.append(&texted("after"), None, None).unwrap();
+    let (errors, stopped) = session.drain_watchers(&log, &dir);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
+    assert_eq!(fs::read_to_string(&seen).unwrap(), "after\n");
+}
+
+/// A signal during the drain stops it at once: the parked delivery's wait
+/// answers `Stopped`, pre-signal errors still come back, and later
+/// watchers never start.
+#[test]
+fn a_signal_during_the_drain_stops_it_at_once() {
+    let home = Home::new();
+    let later = home.root.path().join("later");
+    home.install(
+        "draining",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) error('pre-signal') end }}) fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) host.status('parked') host.exec('sleep', {{'30'}}) end }}) fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) host.fs.write({later:?}, \"later\") end }})"
+        )),
+        &[],
+    );
+    let clock = FakeClock::new();
+    let session = home.load_with_clock(&[], Arc::clone(&clock));
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let statuses = status_channel(&session);
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&texted("drain-me"), None, None).unwrap();
+    let draining = Arc::clone(&session);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ignored = done_tx.send(draining.drain_watchers(&log, &dir));
+    });
+    // The fake clock is held, never advanced: only the stop can wake the
+    // parked delivery's wait.
+    assert_eq!(
+        Deadline::after(WAIT)
+            .recv(&statuses)
+            .expect("waited for the draining watcher to park"),
+        "parked"
+    );
+    crate::lua::hub::stop_every_callback();
+    // Far under the 2000 ms fixture timeout: waiting the timeout out would
+    // miss this bound, so only `Stopped` wakes it in time.
+    let (errors, stopped) = Deadline::after(Duration::from_secs(1))
+        .recv(&done_rx)
+        .expect("waited for the drain to answer the stop");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(stopped, "a signal that ends the drain reports it stopped");
+    assert!(
+        errors[0].extension.contains("fiber.test/draining"),
+        "{errors:?}"
+    );
+    assert!(errors[0].message.contains("pre-signal"), "{errors:?}");
+    assert!(!later.exists(), "no later watcher starts after the stop");
+}
+
+/// A durable delivery still queued when the drain starts runs before the
+/// drain replays past it: the live offer advanced the cursor past the only
+/// line, so the drain's range is empty and it returns at once unless the
+/// pre-replay wait holds it for the queued delivery. Without the wait the
+/// drain returns while the delivery is still queued, and the `waiting`
+/// receive below expires naming it.
+#[test]
+fn drain_watchers_waits_for_a_queued_durable_delivery() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
+    let home = Home::new();
+    let ran = home.root.path().join("ran");
+    home.install(
+        "covered",
+        Some(&format!(
+            "fiber.watch({{\"step_started\"}}, {{ timeout = 5000, run = function(ev) host.http({{ url = \"{url}\" }}) host.fs.write({ran:?}, \"ran\") end }})\n",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&stepped(), None, None).unwrap();
+    // The live offer parks on the held server and advances the cursor past
+    // the line, so the drain can replay nothing: only the pre-replay wait
+    // keeps it from returning before the queued delivery runs.
+    session.deliver(&stepped(), Some(contract::Seq(0)));
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for the live delivery to park on host.http"
+    );
+    let lua = session
+        .lua_extension("fiber.test/covered")
+        .expect("the watchers-only extension stays loaded");
+    let (wait_tx, wait_rx) = mpsc::channel();
+    lua.pause_at_drain_wait(Arc::new(move || {
+        let _ignored = wait_tx.send(());
+    }));
+    let draining = Arc::clone(&session);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ignored = done_tx.send(draining.drain_watchers(&log, &dir));
+    });
+    // The wait engaged before any release: the parked delivery is still
+    // queued, so only the wait holds the drain here.
+    Deadline::after(WAIT)
+        .recv(&wait_rx)
+        .expect("waited for the drain to wait for the queued delivery");
+    server.release();
+    let (errors, stopped) = Deadline::after(WAIT)
+        .recv(&done_rx)
+        .expect("waited for the drain after the release");
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
+    // The queued delivery ran under the wait, before the drain returned:
+    // its seq was already covered, so the drain replayed nothing and the
+    // cursor it advanced at queue time still stands.
+    assert_eq!(fs::read_to_string(&ran).unwrap(), "ran");
+    assert_eq!(
+        *session
+            .cursors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        [(("fiber.test/covered".to_owned(), 0), 0)]
+            .into_iter()
+            .collect()
+    );
+}
+
+/// A live-covered line never replays at the drain: the cursor names the
+/// last covered `seq`, so the drain starts one past it. Without the `+ 1`
+/// the covered line redelivers (`* 1` stays on it) or the bound moves the
+/// wrong way (`- 1` underflows past the range in release, panics in debug).
+#[test]
+fn drain_watchers_replays_only_past_the_live_covered_seq() {
+    let home = Home::new();
+    let seen = home.root.path().join("seen");
+    home.install(
+        "covered",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, old = pcall(host.fs.read, {seen:?}) if not ok or old == nil then old = \"\" end host.fs.write({seen:?}, old .. ev.payload.text .. \"\\n\") end }})\n",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&texted("a"), None, None).unwrap();
+    log.append(&texted("b"), None, None).unwrap();
+    // The live offer covers seq 0: the cursor advances at queue time, and
+    // the drain's pre-replay wait holds it until that delivery ran, so the
+    // live run wrote "a" before the drain replays.
+    session.deliver(&texted("a"), Some(contract::Seq(0)));
+    let (errors, stopped) = session.drain_watchers(&log, &dir);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
+    // The drain replays only "b": "a" was already covered live.
+    assert_eq!(fs::read_to_string(&seen).unwrap(), "a\nb\n");
+}
+
+/// A log directory the drain cannot open replays nothing and collects the
+/// failure: the drain is the report, since the log is closed to new lines.
+/// Without the collection the drain returns no error for the missing log.
+#[test]
+fn drain_watchers_collects_a_log_it_cannot_open() {
+    let home = Home::new();
+    let ran = home.root.path().join("ran");
+    home.install(
+        "unread",
+        Some(&format!(
+            "fiber.watch({{\"step_started\"}}, {{ timeout = 2000, run = function(ev) host.fs.write({ran:?}, \"ran\") end }})\n",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, _dir) = empty_log();
+    session.set_watermark(log.count());
+    let (errors, stopped) = session.drain_watchers(&log, &home.root.path().join("missing"));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(!stopped, "a drain that never replays was not stopped");
+    assert_eq!(errors[0].extension, "log", "{errors:?}");
+    assert_eq!(errors[0].callback, "drain", "{errors:?}");
+    assert!(
+        errors[0].message.contains("could not read the log"),
+        "{errors:?}"
+    );
+    assert!(
+        !ran.exists(),
+        "nothing replays from a log that cannot be read"
+    );
+}
+
+/// A log line that does not parse is collected, and the lines before it
+/// still replay: the failure names the line without losing its prefix.
+/// Without the collection the drain drops the bad line silent.
+#[test]
+fn drain_watchers_collects_an_unreadable_line_and_replays_its_prefix() {
+    let home = Home::new();
+    let seen = home.root.path().join("seen");
+    home.install(
+        "prefix",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, old = pcall(host.fs.read, {seen:?}) if not ok or old == nil then old = \"\" end host.fs.write({seen:?}, old .. ev.payload.text .. \"\\n\") end }})\n",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&texted("a"), None, None).unwrap();
+    // The garbage lands after the one good line in the log's file.
+    let events = dir.join("events.jsonl");
+    let mut bytes = fs::read(&events).unwrap();
+    bytes.extend_from_slice(b"not json\n");
+    fs::write(&events, bytes).unwrap();
+    let (errors, stopped) = session.drain_watchers(&log, &dir);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
+    assert_eq!(errors[0].extension, "log", "{errors:?}");
+    assert!(
+        errors[0].message.contains("unreadable log line"),
+        "{errors:?}"
+    );
+    // The good prefix still replays: only the bad line is skipped.
+    assert_eq!(fs::read_to_string(&seen).unwrap(), "a\n");
+}
+
+/// A log line that parses as JSON but not as its kind's event is
+/// collected, and never delivered: the failure names the line without
+/// offering a half-read event to any watcher. Without the collection the
+/// drain drops the corrupt line silent.
+#[test]
+fn drain_watchers_collects_a_line_it_cannot_read_as_an_event() {
+    let home = Home::new();
+    let seen = home.root.path().join("seen");
+    home.install(
+        "corrupt",
+        Some(&format!(
+            "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, old = pcall(host.fs.read, {seen:?}) if not ok or old == nil then old = \"\" end host.fs.write({seen:?}, old .. ev.payload.text .. \"\\n\") end }})\n",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (_logs, log, dir) = empty_log();
+    session.set_watermark(log.count());
+    log.append(&texted("a"), None, None).unwrap();
+    // The corrupt line copies the good one with a payload its kind cannot
+    // read, at a seq the drain's range covers, in the log's file.
+    let events = dir.join("events.jsonl");
+    let mut bytes = fs::read(&events).unwrap();
+    let first: Vec<u8> = bytes
+        .split(|b| *b == b'\n')
+        .next()
+        .unwrap_or_default()
+        .to_vec();
+    let mut bad: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    bad["payload"]["text"] = json!(123);
+    bytes.extend_from_slice(&serde_json::to_vec(&bad).unwrap());
+    bytes.push(b'\n');
+    fs::write(&events, bytes).unwrap();
+    let (errors, stopped) = session.drain_watchers(&log, &dir);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(!stopped, "a drain that runs to the end was not stopped");
+    assert_eq!(errors[0].extension, "log", "{errors:?}");
+    assert_eq!(errors[0].callback, "drain", "{errors:?}");
+    assert!(
+        errors[0].message.contains("could not read as an event"),
+        "{errors:?}"
+    );
+    // Only the good line replays: the corrupt one is never delivered.
+    assert_eq!(fs::read_to_string(&seen).unwrap(), "a\n");
+}
+
+/// A watch refusal surfaces as the registration notice naming the
+/// extension (Ruling 6): a `fiber.watch` without a `timeout` registers
+/// nothing and leaves one notice. Without the surfacing, the session
+/// loads silent.
+#[test]
+fn a_watch_refusal_surfaces_as_the_registration_notice() {
+    let home = Home::new();
+    home.install(
+        "nowatch",
+        Some("fiber.watch({\"notice\"}, { run = function(ev) end })\n"),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.watchers.is_empty(), "nothing registers");
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices[0].extension.as_deref(),
+        Some("fiber.test/nowatch"),
+        "{notices:?}"
+    );
+    assert!(
+        notices[0].message.contains("`watcher:0`")
+            && notices[0].message.contains("missing `timeout`"),
+        "{notices:?}"
+    );
 }

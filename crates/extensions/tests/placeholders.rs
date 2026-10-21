@@ -103,7 +103,9 @@ fn a_model_with_no_value_is_left_out_with_a_notice() {
     assert_eq!(notices[0].extension.as_deref(), Some("acme"));
     assert_eq!(
         notices[0].message,
-        "The model `acme/m` needs the setting `workspace` for its base URL, which has no value."
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         which has no value. Run `fiber login acme`, \
+         or set `workspace` in `config/acme.json` in Fiber home."
     );
 }
 
@@ -177,7 +179,10 @@ fn a_missing_environment_value_is_a_notice_naming_it() {
     assert_eq!(
         notices[0].message,
         "The model `acme/m` needs the setting `workspace` for its base URL, \
-         which has no value, and `ACME_HOST` has none either."
+         which has no value, and `ACME_HOST` is not set in the hub's environment \
+         (your login shell). Run `fiber login acme`, \
+         or set `workspace` in `config/acme.json` in Fiber home, \
+         or export it in your shell profile and run `fiber hub refresh`."
     );
 }
 
@@ -197,7 +202,9 @@ fn the_environment_is_read_only_for_a_declared_name() {
     assert_eq!(notices.len(), 1);
     assert_eq!(
         notices[0].message,
-        "The model `acme/m` needs the setting `workspace` for its base URL, which has no value."
+        "The model `acme/m` needs the setting `workspace` for its base URL, \
+         which has no value. Run `fiber login acme`, \
+         or set `workspace` in `config/acme.json` in Fiber home."
     );
 }
 
@@ -240,7 +247,10 @@ fn a_value_that_cannot_be_used_counts_as_no_value() {
             json!(""),
             json!({"workspace": {"env": "ACME_HOST"}}),
             "The model `acme/m` needs the setting `workspace` for its base URL, \
-          which has no value, and `ACME_HOST` has none either.",
+          which has no value, and `ACME_HOST` is not set in the hub's environment \
+          (your login shell). Run `fiber login acme`, \
+          or set `workspace` in `config/acme.json` in Fiber home, \
+          or export it in your shell profile and run `fiber hub refresh`.",
         ),
         (
             json!(5),
@@ -298,7 +308,10 @@ fn a_value_that_cannot_be_used_counts_as_no_value() {
     assert_eq!(
         notices[0].message,
         "The model `acme/m` needs the setting `workspace` for its base URL, \
-         which has no value, and `ACME_HOST` has none either."
+         which has no value, and `ACME_HOST` is not set in the hub's environment \
+         (your login shell). Run `fiber login acme`, \
+         or set `workspace` in `config/acme.json` in Fiber home, \
+         or export it in your shell profile and run `fiber hub refresh`."
     );
     // An empty setting counts as unset, so the environment fills it.
     let setup = Setup::new();

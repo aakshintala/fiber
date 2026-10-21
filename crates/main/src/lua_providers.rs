@@ -45,6 +45,11 @@ impl Access {
 /// the discovery and placeholder notices for the session's startup lines.
 pub(crate) type AddedLua = (Vec<(String, String)>, Vec<Notice>);
 
+/// One placeholder lookup `add_lua` shares across discovery, filling and
+/// the background refresh: owning its hub answer, so the two session
+/// kinds below can pick different sources behind one binding.
+type Lookup = Box<dyn Fn(&str) -> Option<String>>;
+
 /// Merges every Lua provider's models into `providers`
 /// (`docs/model-routing.md`, "Model discovery"): with no cached copy
 /// `models()` runs synchronously once at startup for a provider with a
@@ -64,9 +69,23 @@ pub(crate) fn add_lua(
     providers: &mut Providers,
     config: &Config,
     run: config::Runner<'_>,
+    home: &std::path::Path,
+    clock: &dyn contract::clock::Clock,
 ) -> Result<AddedLua, Failure> {
-    let mut notices =
-        providers.add_session(extensions, config, run, &|name| std::env::var(name).ok());
+    // A hub-spawned session carries the hub's marker
+    // (`hub::HUB_SESSION_MARKER`, set beside the startup snapshot): the
+    // process environment is that fixed snapshot, so placeholders resolve
+    // from it with no hub query at all — a `fiber hub refresh` between
+    // spawn and here must not move them under the session
+    // (`docs/invocation.md`, "A session's environment"). Anything else is
+    // an in-process `fiber ask`, which queries the hub so the session
+    // agrees with `fiber models` (issue #2909).
+    let lookup: Lookup = if std::env::var_os(hub::HUB_SESSION_MARKER).is_some() {
+        Box::new(|name: &str| std::env::var(name).ok())
+    } else {
+        Box::new(::cli::placeholder_lookup(home, providers, clock))
+    };
+    let mut notices = providers.add_session(extensions, config, run, &lookup);
     let naming: Vec<(String, String)> = providers
         .names()
         .flat_map(|name| {
@@ -83,7 +102,7 @@ pub(crate) fn add_lua(
         .collect();
     notices.extend(
         providers
-            .fill_placeholders(config, &|name| std::env::var(name).ok())
+            .fill_placeholders(config, &lookup)
             .map_err(|e| failed(e.code(), e))?,
     );
     // Detached: nothing joins them, and `fiber ask` does not wait on them
@@ -98,7 +117,7 @@ pub(crate) fn add_lua(
         config,
         Some(config::refresh_after(config)),
         run,
-        &|name| std::env::var(name).ok(),
+        &lookup,
     );
     let _detached = started;
     Ok((naming, notices))

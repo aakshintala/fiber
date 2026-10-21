@@ -177,7 +177,14 @@ pub(super) fn fill(template: &str, lookup: &Lookup<'_>) -> Result<Filled, Config
 }
 
 /// The `model_unconfigured` notice for model `id` of `provider`, whose
-/// placeholder `name` has no value.
+/// placeholder `name` has no value. It names the setting, the login
+/// that asks for it, and the config file that holds the answer — never
+/// the value. An absent environment fallback adds the hub-side refresh:
+/// the fallback is read in the hub's environment, so a newly exported
+/// variable needs `fiber hub refresh` before the list sees it. A
+/// present-but-invalid value reads the same as unset: the setting or
+/// variable already says something, so only the login and config file
+/// can replace it.
 pub(super) fn unconfigured(
     provider: &str,
     id: &str,
@@ -185,16 +192,24 @@ pub(super) fn unconfigured(
     name: &str,
     env: Option<&str>,
 ) -> Notice {
-    let message = match env {
-        Some(variable) => format!(
-            "The model `{provider}/{id}` needs the setting `{name}` for its base URL, \
-             which has no value, and `{variable}` has none either."
-        ),
-        None => format!(
-            "The model `{provider}/{id}` needs the setting `{name}` for its base URL, \
-             which has no value."
-        ),
-    };
+    let mut message = format!(
+        "The model `{provider}/{id}` needs the setting `{name}` for its base URL, \
+         which has no value"
+    );
+    if let Some(var) = env {
+        message.push_str(&format!(
+            ", and `{var}` is not set in the hub's environment (your login shell)"
+        ));
+    }
+    message.push_str(&format!(
+        ". Run `fiber login {provider}`, \
+         or set `{name}` in `config/{}.json` in Fiber home",
+        config::dir_name(extension)
+    ));
+    if env.is_some() {
+        message.push_str(", or export it in your shell profile and run `fiber hub refresh`");
+    }
+    message.push('.');
     Notice {
         code: ErrorCode::ModelUnconfigured,
         message,
