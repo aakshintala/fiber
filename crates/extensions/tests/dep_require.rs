@@ -246,6 +246,18 @@ fn an_empty_module_is_refused_as_an_unknown_dependency() {
 }
 
 #[test]
+fn an_empty_name_is_refused_as_an_unknown_dependency() {
+    let setup = Setup::new();
+    install_pair(&setup, &root_init_require("", "non-blocking"));
+    let session = load(&setup, FakeClock::new());
+    let message = refused(&session);
+    assert!(
+        message.contains("`dependency '' not installed`"),
+        "{message}"
+    );
+}
+
+#[test]
 fn a_leading_colon_is_refused_as_an_unknown_dependency() {
     let setup = Setup::new();
     install_pair(&setup, &root_init_require(":trim", "non-blocking"));
