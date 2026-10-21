@@ -174,26 +174,17 @@ pub(crate) fn shell_from_env(var: &dyn Fn(&str) -> Option<OsString>) -> Option<S
     }
 }
 
-/// The startup file's display path for the completions question.
-fn startup_display(shell: &str) -> Option<&'static str> {
-    match shell {
-        "zsh" => Some("~/.zshrc"),
-        "bash" => Some("~/.bashrc"),
-        "fish" => Some("~/.config/fish/config.fish"),
-        _ => None,
-    }
-}
-
 /// Whether the startup file for `shell` already holds its completion
 /// line: `None` for an unknown shell, which has no line to hold.
 pub(crate) fn completions_installed(home_env: &Path, shell: &str) -> Option<bool> {
     let (file, line) = startup_line(home_env, shell).ok()?;
-    Some(
-        std::fs::read_to_string(&file)
-            .unwrap_or_default()
-            .lines()
-            .any(|held| held == line),
-    )
+    // Only a missing file is a missing line: any other read error is
+    // unknown, so the question asks again and the write reports it.
+    match std::fs::read_to_string(&file) {
+        Ok(previous) => Some(previous.lines().any(|held| held == line)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Some(false),
+        Err(_) => None,
+    }
 }
 
 /// Runs the five setup steps in order against the process terminal. Each
@@ -210,6 +201,9 @@ pub fn setup(
 }
 
 /// The steps in their documented order, so a failure stops the later ones.
+/// Without a terminal each step applies its flag, and each step no flag
+/// answers prints its skip line: the same flag handling the terminal
+/// questions share.
 fn run(
     home: &Path,
     workspace: &Path,
@@ -225,70 +219,25 @@ fn run(
             home, workspace, flags, clock, locks, run, &mut stdin, &mut err,
         )
     } else {
-        run_flags(home, flags, clock)
-    }
-}
-
-/// The no-terminal path: each flag runs its command, and each step no
-/// flag answers prints its `skipped` line with that command.
-fn run_flags(home: &Path, flags: &SetupFlags, clock: &Arc<dyn Clock>) -> Result<i32, CliError> {
-    if !flags.provider.is_empty() {
-        for name in &flags.provider {
-            let code = crate::run_login(Some(name), None, false, Arc::clone(clock));
-            if code != 0 {
-                let mut err = io::stderr();
-                writeln!(err, "fiber: setup providers failed").unwrap_or(());
-                return Ok(code);
-            }
+        let mut err = io::stderr();
+        let code = step_providers(home, None, flags, clock, None, &mut err)?;
+        if code != 0 {
+            return Ok(code);
         }
-    } else {
-        skipped("providers", "run fiber login");
-    }
-    if !flags.import.is_empty() {
-        for source in &flags.import {
-            let code = crate::import(*source, clock.as_ref());
-            if code != 0 {
-                let mut err = io::stderr();
-                writeln!(err, "fiber: setup import failed").unwrap_or(());
-                return Ok(code);
-            }
+        let code = step_import(home, flags, clock, None, &mut err)?;
+        if code != 0 {
+            return Ok(code);
         }
-    } else {
-        skipped("import", "run fiber import");
-    }
-    if flags.model.is_some() || flags.thinking.is_some() {
-        if let Err(message) = write_model(home, flags.model.as_deref(), flags.thinking.as_deref()) {
-            let mut err = io::stderr();
-            writeln!(err, "fiber: setup model failed: {message}").unwrap_or(());
-            return Ok(1);
+        let code = step_model(home, None, flags, None, &mut err)?;
+        if code != 0 {
+            return Ok(code);
         }
-    } else {
-        skipped("model", "run fiber setup --model <model>");
-    }
-    match &flags.completions {
-        Completions::Yes(shell) => {
-            if let Err(message) = install_completions(shell) {
-                let mut err = io::stderr();
-                writeln!(err, "fiber: setup completions failed: {message}").unwrap_or(());
-                return Ok(1);
-            }
+        let code = step_completions(flags, None, &mut err)?;
+        if code != 0 {
+            return Ok(code);
         }
-        Completions::No => {}
-        Completions::Unset => skipped("completions", "run fiber setup --completions <shell>"),
+        step_hub(home, flags, clock, None, &mut err)
     }
-    match &flags.hub {
-        Hub::Yes => {
-            let code = crate::hub_install(None, clock.as_ref());
-            if code != 0 {
-                let mut err = io::stderr();
-                writeln!(err, "fiber: setup hub failed").unwrap_or(());
-                return Ok(code);
-            }
-        }
-        Hub::No => {}
-        Hub::Unset => skipped("hub", "run fiber setup --hub"),
-    }
-    Ok(0)
 }
 
 /// One cached model-list read serves the provider and model questions:
@@ -322,35 +271,36 @@ fn run_terminal(
     for notice in &notices {
         writeln!(err, "{notice}").map_err(CliError::StandardError)?;
     }
-    let code = ask_providers(home, &providers, flags, clock, stdin, err)?;
+    let code = step_providers(home, Some(&providers), flags, clock, Some(&mut *stdin), err)?;
     if code != 0 {
         return Ok(code);
     }
-    let code = ask_import(home, flags, clock, stdin, err)?;
+    let code = step_import(home, flags, clock, Some(&mut *stdin), err)?;
     if code != 0 {
         return Ok(code);
     }
-    let code = ask_model(home, &providers, flags, stdin, err)?;
+    let code = step_model(home, Some(&providers), flags, Some(&mut *stdin), err)?;
     if code != 0 {
         return Ok(code);
     }
-    let code = ask_completions(flags, stdin, err)?;
+    let code = step_completions(flags, Some(&mut *stdin), err)?;
     if code != 0 {
         return Ok(code);
     }
-    ask_hub(home, flags, clock, stdin, err)
+    step_hub(home, flags, clock, Some(&mut *stdin), err)
 }
 
-/// The first question: the installed providers in login-menu order with
-/// each live signed-in mark. Each picked name logs in as
-/// `fiber login <name>` does; a blank line signs in to none. A failed
-/// login keeps the finished steps and ends the setup with its code.
-fn ask_providers(
+/// The first step: the installed providers in login-menu order with each
+/// live signed-in mark. Its flag logs in as `fiber login <name>` does; a
+/// terminal is asked, and anything else prints the step's skip line. A
+/// blank line signs in to none. A failed login keeps the finished steps
+/// and ends the setup with its code.
+fn step_providers(
     home: &Path,
-    providers: &Providers,
+    providers: Option<&Providers>,
     flags: &SetupFlags,
     clock: &Arc<dyn Clock>,
-    stdin: &mut dyn BufRead,
+    stdin: Option<&mut dyn BufRead>,
     err: &mut dyn Write,
 ) -> Result<i32, CliError> {
     if !flags.provider.is_empty() {
@@ -363,6 +313,10 @@ fn ask_providers(
         }
         return Ok(0);
     }
+    let (Some(stdin), Some(providers)) = (stdin, providers) else {
+        skipped_to(err, "providers", "run fiber login");
+        return Ok(0);
+    };
     let offers = provider_offers(home, providers)?;
     if offers.is_empty() {
         skipped_to(err, "providers", "run fiber login");
@@ -395,14 +349,16 @@ fn ask_providers(
     Ok(0)
 }
 
-/// The second question: each source whose directory exists and has no
-/// completed receipt is offered as `fiber import` runs it. Completed
-/// receipts are shown as done, never asked.
-fn ask_import(
+/// The second step: each source whose directory exists and has no
+/// completed receipt is offered as `fiber import` runs it. Its flag
+/// imports as the flag names; a terminal is asked, and anything else
+/// prints the step's skip line. Completed receipts are shown as done,
+/// never asked.
+fn step_import(
     home: &Path,
     flags: &SetupFlags,
     clock: &Arc<dyn Clock>,
-    stdin: &mut dyn BufRead,
+    stdin: Option<&mut dyn BufRead>,
     err: &mut dyn Write,
 ) -> Result<i32, CliError> {
     if !flags.import.is_empty() {
@@ -415,6 +371,10 @@ fn ask_import(
         }
         return Ok(0);
     }
+    let Some(stdin) = stdin else {
+        skipped_to(err, "import", "run fiber import");
+        return Ok(0);
+    };
     let home_env = std::env::var_os("HOME").map(PathBuf::from);
     let pending: Vec<ImportSource> = [ImportSource::ClaudeCode, ImportSource::Codex]
         .into_iter()
@@ -461,15 +421,17 @@ fn ask_import(
     Ok(0)
 }
 
-/// The third question: the default model and its thinking level, from the
+/// The third step: the default model and its thinking level, from the
 /// signed-in providers' models, with the current global values
-/// preselected. A blank model keeps the current one, or leaves it unset
-/// when there is none; a failed write keeps the finished steps.
-fn ask_model(
+/// preselected. Its flags write as the flags name; a terminal is asked,
+/// and anything else prints the step's skip line. A blank model keeps the
+/// current one, or leaves it unset when there is none; a failed write
+/// keeps the finished steps.
+fn step_model(
     home: &Path,
-    providers: &Providers,
+    providers: Option<&Providers>,
     flags: &SetupFlags,
-    stdin: &mut dyn BufRead,
+    stdin: Option<&mut dyn BufRead>,
     err: &mut dyn Write,
 ) -> Result<i32, CliError> {
     if flags.model.is_some() || flags.thinking.is_some() {
@@ -480,6 +442,10 @@ fn ask_model(
         }
         return Ok(0);
     }
+    let (Some(stdin), Some(providers)) = (stdin, providers) else {
+        skipped_to(err, "model", "run fiber setup --model <model>");
+        return Ok(0);
+    };
     let models = model_offers(home, providers)?;
     if models.is_empty() {
         skipped_to(err, "model", "run fiber setup --model <model>");
@@ -553,12 +519,14 @@ fn ask_model(
     Ok(0)
 }
 
-/// The fourth question: whether to install shell completions for the
-/// shell `$SHELL` names. A step already done is shown as done and asked
-/// again, so answering yes reruns its command.
-fn ask_completions(
+/// The fourth step: whether to install shell completions for the shell
+/// `$SHELL` names. Its flag installs as the flag names; a terminal is
+/// asked, and anything else prints the step's skip line. A step already
+/// done is shown as done and asked again, so answering yes reruns its
+/// command.
+fn step_completions(
     flags: &SetupFlags,
-    stdin: &mut dyn BufRead,
+    stdin: Option<&mut dyn BufRead>,
     err: &mut dyn Write,
 ) -> Result<i32, CliError> {
     match &flags.completions {
@@ -573,6 +541,10 @@ fn ask_completions(
         }
         Completions::No => return Ok(0),
     }
+    let Some(stdin) = stdin else {
+        skipped_to(err, "completions", "run fiber setup --completions <shell>");
+        return Ok(0);
+    };
     let Some(shell) = shell_from_env(&|key| std::env::var_os(key)) else {
         skipped_to(err, "completions", "run fiber setup --completions <shell>");
         return Ok(0);
@@ -586,7 +558,13 @@ fn ask_completions(
         writeln!(err, "Completions for {shell} are installed (done).")
             .map_err(CliError::StandardError)?;
     }
-    let prompt = match (done, startup_display(&shell)) {
+    let shown = home_env.as_ref().and_then(|dir| {
+        let (file, _) = startup_line(dir, &shell).ok()?;
+        file.strip_prefix(dir)
+            .ok()
+            .map(|rest| format!("~/{}", rest.display()))
+    });
+    let prompt = match (done, shown) {
         (true, _) => format!("Install completions for {shell} again? [y/N]: "),
         (false, Some(file)) => format!("Install completions for {shell} ({file})? [y/N]: "),
         (false, None) => format!("Install completions for {shell}? [y/N]: "),
@@ -602,13 +580,15 @@ fn ask_completions(
     Ok(0)
 }
 
-/// The fifth question: whether to register the hub as a login service. A
-/// hub already registered is named, not asked.
-fn ask_hub(
+/// The fifth step: whether to register the hub as a login service. Its
+/// flag registers as the flag names; a terminal is asked, and anything
+/// else prints the step's skip line. A hub already registered is named,
+/// not asked.
+fn step_hub(
     home: &Path,
     flags: &SetupFlags,
     clock: &Arc<dyn Clock>,
-    stdin: &mut dyn BufRead,
+    stdin: Option<&mut dyn BufRead>,
     err: &mut dyn Write,
 ) -> Result<i32, CliError> {
     match &flags.hub {
@@ -623,6 +603,10 @@ fn ask_hub(
         }
         Hub::No => return Ok(0),
     }
+    let Some(stdin) = stdin else {
+        skipped_to(err, "hub", "run fiber setup --hub");
+        return Ok(0);
+    };
     let manager = crate::hub_service::manager();
     match crate::hub_status::installed(manager, home, &|key| std::env::var_os(key)) {
         Ok(true) => {
@@ -748,12 +732,6 @@ fn parse_pick(answer: &str, names: &[String]) -> Option<String> {
         .cloned()
 }
 
-/// One skipped step with the command that does it later, on stderr.
-fn skipped(step: &str, cmd: &str) {
-    let mut err = io::stderr();
-    skipped_to(&mut err, step, cmd);
-}
-
 /// `skipped <step>: <cmd>` on `err`: the step with nothing to ask and
 /// the command that does it later.
 fn skipped_to(err: &mut dyn Write, step: &str, cmd: &str) {
@@ -822,7 +800,11 @@ fn install_completions(shell: &str) -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("creating {}: {e}", parent.display()))?;
     }
-    let previous = std::fs::read_to_string(&file).unwrap_or_default();
+    let previous = match std::fs::read_to_string(&file) {
+        Ok(previous) => previous,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("reading {}: {error}", file.display())),
+    };
     if previous.lines().any(|held| held == line) {
         return Ok(());
     }

@@ -292,16 +292,30 @@ if [ -n "${HOME:-}" ]; then
 fi
 startup=
 line=
+# Single-quotes $1 for a startup-file line: POSIX shells and fish both
+# read 'a'\''b' back as a'b. A newline cannot sit on one line, so it
+# is refused with a non-zero exit.
+nl='
+'
+quote_path() {
+  case $1 in
+    *"$nl"*) return 1 ;;
+  esac
+  escaped=$(printf '%s' "$1" | sed "s/'/'\\\\''/g")
+  printf "'%s'" "$escaped"
+}
 if [ -n "$shell" ]; then
   case $shell in
     zsh) startup=$HOME/.zshrc ;;
     bash) startup=$HOME/.bashrc ;;
     fish) startup=$HOME/.config/fish/config.fish ;;
   esac
+  quoted=$(quote_path "$dest") ||
+    fail "the install directory holds a newline, so it cannot go on PATH."
   if [ "$shell" = fish ]; then
-    line="fish_add_path $dest"
+    line="fish_add_path $quoted"
   else
-    line="export PATH=\"$dest:\$PATH\""
+    line="export PATH=$quoted:\$PATH"
   fi
 fi
 

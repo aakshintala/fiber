@@ -15,11 +15,8 @@
 
 mod support;
 
-use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
-use std::os::fd::OwnedFd;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,7 +24,6 @@ use std::sync::mpsc;
 use std::thread;
 
 use fakes::ProviderServer;
-use rustix::pty;
 use serde_json::{Value, json};
 use support::{Output, Setup, group_alive};
 
@@ -240,6 +236,27 @@ fn without_flags_nothing_is_asked_and_each_skip_names_its_command() {
 }
 
 #[test]
+fn no_flags_leave_their_steps_out_without_asking() {
+    let setup = Setup::new();
+    let run = setup.run_setup(&["setup", "--no-completions", "--no-hub"], None, &[]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let lines: Vec<&str> = run.stderr.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "skipped providers: run fiber login",
+            "skipped import: run fiber import",
+            "skipped model: run fiber setup --model <model>",
+        ],
+        "{}",
+        run.stderr
+    );
+    // The refused steps wrote nothing.
+    assert!(!setup.root.path().join(".zshrc").exists());
+    assert!(setup.hub_units().is_empty());
+}
+
+#[test]
 fn a_model_flag_with_nobody_signed_in_still_writes_the_model() {
     let setup = Setup::new();
     let run = setup.run_setup(&["setup", "--model", "fake/m"], None, &[]);
@@ -271,6 +288,23 @@ fn a_startup_file_without_a_trailing_newline_keeps_its_last_line() {
         fs::read_to_string(setup.root.path().join(".zshrc")).unwrap(),
         "export KEEP=1\neval \"$(fiber completion zsh)\"\n"
     );
+}
+
+#[test]
+fn an_unreadable_startup_file_fails_before_any_write() {
+    let setup = Setup::new();
+    // A directory fails to read with an error other than `NotFound`: the
+    // step must report the read instead of wiping the file's contents.
+    fs::create_dir(setup.root.path().join(".bashrc")).unwrap();
+    let run = setup.run_setup(&["setup", "--completions", "bash"], None, &[]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert!(
+        run.stderr.contains("setup completions failed: reading"),
+        "{}",
+        run.stderr
+    );
+    // Nothing was written: the existing contents survive.
+    assert!(setup.root.path().join(".bashrc").is_dir());
 }
 
 #[test]
@@ -313,39 +347,15 @@ fn thinking_without_a_model_fails_naming_the_step() {
     assert!(!run.stderr.contains("skipped hub"), "{}", run.stderr);
 }
 
-/// A pseudo-terminal for stdin: the child reads a terminal while its
-/// prompts stay on the stderr pipe. The test types whole answers up
-/// front; every setup question reads whole lines in order, so nothing is
-/// consumed early.
-struct Terminal {
-    main: OwnedFd,
-    slave: fs::File,
-}
-
-impl Terminal {
-    #[track_caller]
-    fn open() -> Self {
-        let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
-        pty::grantpt(&main).unwrap();
-        pty::unlockpt(&main).unwrap();
-        let name = pty::ptsname(&main, Vec::new()).unwrap();
-        let path = PathBuf::from(OsStr::from_bytes(name.as_bytes()));
-        let slave = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-        Self { main, slave }
-    }
-}
-
 impl Setup {
     /// Runs `fiber` with `args` and stdin on a new pseudo-terminal fed
     /// `typed`, stdout and stderr on pipes: stdin is a terminal, so the
-    /// questions are asked.
+    /// questions are asked. The test types whole answers up front; every
+    /// setup question reads whole lines in order, so nothing is consumed
+    /// early.
     #[track_caller]
     fn run_on_terminal(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> Output {
-        let terminal = Terminal::open();
+        let terminal = support::pty::open(120, 32);
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -357,7 +367,7 @@ impl Setup {
             .env("FIBER_HOME", self.home())
             .env("FIBER_TEST_FAKE_KEY", "sk-test")
             .envs(env.iter().copied())
-            .stdin(Stdio::from(terminal.slave.try_clone().unwrap()))
+            .stdin(terminal.stdio())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let (child, watchdog) = support::spawn_watched(&mut command);

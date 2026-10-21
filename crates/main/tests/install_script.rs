@@ -13,10 +13,8 @@
 
 mod support;
 
-use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -27,7 +25,6 @@ use std::thread;
 use ::support::group;
 use fakes::Watchdog;
 use fakes::ustar::{archive, gzip, header, sha256};
-use rustix::pty;
 use support::{Deadline, Output, Setup};
 
 /// Every target a release publishes an archive for.
@@ -857,16 +854,8 @@ impl Setup {
         env: &[(&str, &str)],
         typed: &str,
     ) -> (Option<i32>, String) {
-        let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
-        pty::grantpt(&main).unwrap();
-        pty::unlockpt(&main).unwrap();
-        let name = pty::ptsname(&main, Vec::new()).unwrap();
-        let slave_path = PathBuf::from(OsStr::from_bytes(name.as_bytes()));
-        let slave = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&slave_path)
-            .unwrap();
+        let terminal = support::pty::open(120, 32);
+        let slave = terminal.terminal;
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/install.sh");
         let path = format!("{}:/usr/bin:/bin", fixture().join("bin").display());
         let mut command = Command::new("/bin/dash");
@@ -899,7 +888,7 @@ impl Setup {
         drop(slave);
         let group = child.id();
         let watchdog = Watchdog::group(group);
-        let mut main = fs::File::from(main);
+        let mut main = fs::File::from(terminal.main);
         main.write_all(typed.as_bytes()).unwrap();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
@@ -951,8 +940,72 @@ fn path_appends_the_line_once_across_a_rerun() {
     }
     assert_eq!(
         fs::read_to_string(setup.path("home/.zshrc")).unwrap(),
-        format!("export PATH=\"{}:$PATH\"\n", setup.dest().display())
+        format!("export PATH='{}':$PATH\n", setup.dest().display())
     );
+}
+
+#[test]
+fn startup_lines_quote_directories_with_shell_syntax() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    // A space, a single quote and a dollar: each would split or expand
+    // the line unquoted.
+    let custom = setup.path("my 'dir$x");
+    let run = setup.install_args(
+        &LINUX_X86_64,
+        &["--dir", custom.to_str().unwrap(), "--path"],
+        &[("SHELL", "/bin/zsh")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let startup = setup.path("home/.zshrc");
+    let escaped = custom.display().to_string().replace('\'', "'\\''");
+    assert_eq!(
+        fs::read_to_string(&startup).unwrap(),
+        format!("export PATH='{escaped}':$PATH\n")
+    );
+    // Sourcing the line puts the directory on PATH whole, not split or
+    // expanded.
+    let probed = Command::new("/bin/dash")
+        .arg("-c")
+        .arg(format!(". {}; printf '%s' \"$PATH\"", startup.display()))
+        .env_clear()
+        .env("PATH", "sentinel")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(probed.stdout).unwrap(),
+        format!("{}:sentinel", custom.display())
+    );
+
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let custom = setup.path("my dir");
+    let run = setup.install_args(
+        &LINUX_X86_64,
+        &["--dir", custom.to_str().unwrap(), "--path"],
+        &[("SHELL", "/bin/fish")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(
+        fs::read_to_string(setup.path("home/.config/fish/config.fish")).unwrap(),
+        format!("fish_add_path '{}'\n", custom.display())
+    );
+}
+
+#[test]
+fn a_directory_with_a_newline_is_refused_before_the_path_line() {
+    let setup = Setup::new_with_stub_version("0.0.9");
+    setup.publish("latest/download", &TARGETS);
+    let evil = format!("{}-evil\nline", setup.path("custom").display());
+    let run = setup.install_args(&LINUX_X86_64, &["--dir", &evil], &[("SHELL", "/bin/zsh")]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("holds a newline, so it cannot go on PATH"),
+        "{}",
+        run.stderr
+    );
+    assert!(!setup.path("home/.zshrc").exists());
 }
 
 #[test]
@@ -1049,7 +1102,7 @@ fn the_terminal_answers_put_the_binary_where_typed_and_path_on_the_line() {
     assert!(!setup.dest().join("fiber").exists());
     assert_eq!(
         fs::read_to_string(setup.path("home/.zshrc")).unwrap(),
-        format!("export PATH=\"{}:$PATH\"\n", custom.display())
+        format!("export PATH='{}':$PATH\n", custom.display())
     );
     assert_eq!(setup.setup_calls().unwrap(), "setup\nsetup\n");
 }
@@ -1063,7 +1116,7 @@ fn answering_no_to_path_prints_the_line_to_add() {
     let (code, text) = setup.install_on_tty(&LINUX_X86_64, &[], &[("SHELL", "/bin/zsh")], &typed);
     assert_eq!(code, Some(0), "{text}");
     setup.assert_installed(&custom);
-    let line = format!("export PATH=\"{}:$PATH\"", custom.display());
+    let line = format!("export PATH='{}':$PATH", custom.display());
     assert!(text.contains(&line), "{text}");
     assert!(!setup.path("home/.zshrc").exists());
 }

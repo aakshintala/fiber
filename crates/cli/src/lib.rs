@@ -7,7 +7,7 @@
 //! `fiber mcp remove`, `fiber mcp list`, `fiber mcp login`, `fiber mcp logout`, `fiber hub install`,
 //! `fiber hub uninstall`, `fiber hub status`, `fiber hub refresh`, `fiber hub add`,
 //! `fiber hub remove`, `fiber doctor`, and the hub restart
-//! `fiber update` calls, and the release install step `install.sh` runs
+//! `fiber update` calls, `fiber setup`, and the release install step `install.sh` runs
 //! (`docs/architecture.md`, "The modules"). `main` parses argv and
 //! dispatches here; this crate takes plain values.
 

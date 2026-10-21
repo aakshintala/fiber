@@ -226,3 +226,13 @@ fn completions_are_installed_only_with_the_line_present() {
     .unwrap();
     assert_eq!(completions_installed(&home_env, "zsh"), Some(true));
 }
+
+#[test]
+fn a_startup_file_that_fails_to_read_is_neither_done_nor_missing() {
+    let setup = Setup::new();
+    let home_env = setup.home();
+    // A directory fails to read with an error other than `NotFound`:
+    // the step must ask again instead of reporting no line is held.
+    fs::create_dir(home_env.join(".zshrc")).unwrap();
+    assert_eq!(completions_installed(&home_env, "zsh"), None);
+}

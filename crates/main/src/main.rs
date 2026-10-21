@@ -472,10 +472,6 @@ fn models_entry(
 /// what its credential commands left on a normal return and on a
 /// foreground signal. The guard is built before the runner, so a refused
 /// registration returns before any credential command starts.
-#[allow(
-    clippy::print_stderr,
-    reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
-)]
 fn setup_entry(
     args: cli::SetupArgs,
     clock: Arc<dyn contract::clock::Clock>,
@@ -492,27 +488,23 @@ fn setup_entry(
     let runner = |command: &mut std::process::Command, timeout: std::time::Duration| {
         reads.credential(command, timeout, &*clock)
     };
-    let completions = match (args.completions, args.no_completions) {
-        (Some(shell), false) => ::cli::Completions::Yes(setup_shell(shell)),
-        (None, true) => ::cli::Completions::No,
-        (None, false) => ::cli::Completions::Unset,
-        (Some(_), true) => {
-            eprintln!(
-                "fiber: The arguments '--completions <shell>' and '--no-completions' cannot be used together. Run `fiber --help` for usage."
-            );
-            return 2;
-        }
+    // Clap's `conflicts_with` refuses `--completions` with
+    // `--no-completions` and `--hub` with `--no-hub` before this runs,
+    // which `setup_flags_conflict_in_pairs` asserts, so both set never
+    // reaches the `else if`.
+    let completions = if args.no_completions {
+        ::cli::Completions::No
+    } else if let Some(shell) = args.completions {
+        ::cli::Completions::Yes(setup_shell(shell))
+    } else {
+        ::cli::Completions::Unset
     };
-    let hub = match (args.hub, args.no_hub) {
-        (true, false) => ::cli::Hub::Yes,
-        (false, true) => ::cli::Hub::No,
-        (false, false) => ::cli::Hub::Unset,
-        (true, true) => {
-            eprintln!(
-                "fiber: The arguments '--hub' and '--no-hub' cannot be used together. Run `fiber --help` for usage."
-            );
-            return 2;
-        }
+    let hub = if args.no_hub {
+        ::cli::Hub::No
+    } else if args.hub {
+        ::cli::Hub::Yes
+    } else {
+        ::cli::Hub::Unset
     };
     let flags = ::cli::SetupFlags {
         provider: args.provider,
