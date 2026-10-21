@@ -26,8 +26,8 @@ use serde_json::{Map, Value};
 use super::before_tool::Prepared;
 use super::completion::{completed, denied, resolved};
 use super::reviewer::{
-    BuiltStage1, First, ReviewEndpoint, Sections, Stage1Worker, StagedSecond, StagedStage1,
-    UnderReview, fanout_stage1, read_first, read_second, sections, under_item,
+    First, ReviewEndpoint, Sections, Stage1Worker, StagedSecond, StagedStage1, UnderReview,
+    fanout_stage1, read_first, read_second, sections, under_item,
 };
 use crate::asking::Release;
 use crate::inner_calls::{InnerRunning, InnerSlot};
@@ -536,24 +536,8 @@ impl Loop {
         let _permission = self
             .diag
             .timed_tool(contract::diag::Op::ToolPermission, &call.name);
-        // The rules are read once for every call, including ones that later
-        // fast-path, so a revoked rule applies to the next call judged
-        // (`docs/tui.md`, "/rules"). `judge` runs the credential deny before
-        // it looks at them, so an unreadable rules file never stops that
-        // deny.
-        let rules = self.rules.read();
-        let judged = super::permission::judge(
-            &call.name,
-            &prepared.effects,
-            &rules,
-            &self.grants,
-            &self.known_hosts,
-            &self.workspace,
-            &self.prompt.home,
-            &self.credentials,
-            &self.credential_files,
-        );
-        let decided = match Judged::from(judged) {
+        let judged = self.judge_call(&call.name, &prepared.effects);
+        let decided = match judged {
             // Step 7 is the reviewer: the call is judged by a separate
             // model (`docs/permissions.md`, "The reviewer").
             Judged::Review => self.review(call, id, turn, prepared),
@@ -562,6 +546,32 @@ impl Loop {
             }
         };
         decided.map(|decision| (decision, state))
+    }
+
+    /// Steps 1 to 6 over one prepared call: the credential deny, the standing
+    /// rules and fast paths, and the session grants — everything before the
+    /// reviewer (`docs/permissions.md`, "The order a call is judged in").
+    /// The serial path, the batch's phase A and grant re-classification
+    /// share it. Each caller holds its own permission guard across the call,
+    /// so the timing spans the same work as before.
+    fn judge_call(&self, tool: &str, effects: &Effects) -> Judged {
+        // The rules are read once for every call, including ones that later
+        // fast-path, so a revoked rule applies to the next call judged
+        // (`docs/tui.md`, "/rules"). `judge` runs the credential deny before
+        // it looks at them, so an unreadable rules file never stops that
+        // deny.
+        let rules = self.rules.read();
+        Judged::from(super::permission::judge(
+            tool,
+            effects,
+            &rules,
+            &self.grants,
+            &self.known_hosts,
+            &self.workspace,
+            &self.prompt.home,
+            &self.credentials,
+            &self.credential_files,
+        ))
     }
 
     /// Applies one call's judged non-`Review` verdict: the Deny, Ask and
@@ -704,12 +714,10 @@ impl Loop {
             cancel: Arc::clone(&self.cancel),
         };
         let mut sent = self.reviewer_sent;
-        let mut staged: Vec<Option<StagedStage1>> = Vec::with_capacity(pending.len());
         let mut requests = Vec::new();
-        let mut indexes = Vec::new();
-        for (index, entry) in pending.iter().enumerate() {
+        let mut metas: Vec<(ReviewerUse, usize)> = Vec::new();
+        for entry in pending.iter() {
             if !matches!(entry.outcome, PendingOutcome::NeedsReview) {
-                staged.push(None);
                 continue;
             }
             let Some(prepared) = entry.prepared.as_ref() else {
@@ -724,27 +732,27 @@ impl Loop {
             let built =
                 self.build_stage1(&under, &endpoint, &prompt.shared, &prompt.first, None, sent);
             sent = Some(built.cut);
-            let BuiltStage1 {
-                request,
-                reviewer_use,
-                cut,
-            } = built;
-            staged.push(None);
-            requests.push(request);
-            indexes.push((index, reviewer_use, cut));
+            requests.push(built.request);
+            metas.push((built.reviewer_use, built.cut));
         }
         let replies = fanout_stage1(&worker, requests);
-        for ((index, reviewer_use, cut), reply) in indexes.into_iter().zip(replies) {
-            let Some(slot) = staged.get_mut(index) else {
-                unreachable!("phase B stages one slot per classified call");
-            };
-            *slot = Some(StagedStage1 {
+        let mut made = metas
+            .into_iter()
+            .zip(replies)
+            .map(|((reviewer_use, cut), reply)| StagedStage1 {
                 reply,
                 resent: None,
                 second: None,
                 reviewer_use,
                 cut,
             });
+        let mut staged: Vec<Option<StagedStage1>> = Vec::with_capacity(pending.len());
+        for entry in pending.iter() {
+            if !matches!(entry.outcome, PendingOutcome::NeedsReview) {
+                staged.push(None);
+                continue;
+            }
+            staged.push(made.next());
         }
         // Phase C1: pre-send every second stage the first stages asked
         // for, in request order. Phase C2 writes everything back.
@@ -860,24 +868,8 @@ impl Loop {
         let _permission = self
             .diag
             .timed_tool(contract::diag::Op::ToolPermission, &call.name);
-        // The rules are read once for every call, including ones that
-        // later fast-path, so a revoked rule applies to the next call
-        // judged (`docs/tui.md`, "/rules"). `judge` runs the credential
-        // deny before it looks at them, so an unreadable rules file never
-        // stops that deny.
-        let rules = self.rules.read();
-        let verdict = super::permission::judge(
-            &call.name,
-            &prepared.effects,
-            &rules,
-            &self.grants,
-            &self.known_hosts,
-            &self.workspace,
-            &self.prompt.home,
-            &self.credentials,
-            &self.credential_files,
-        );
-        match Judged::from(verdict) {
+        let verdict = self.judge_call(&call.name, &prepared.effects);
+        match verdict {
             // Step 7 is the reviewer: the call is judged by a separate
             // model (`docs/permissions.md`, "The reviewer").
             Judged::Review => Ok(PendingCall {
@@ -1158,19 +1150,7 @@ impl Loop {
             let Some(prepared) = entry.prepared.as_ref() else {
                 continue;
             };
-            let rules = self.rules.read();
-            let fresh = super::permission::judge(
-                &entry.tool,
-                &prepared.effects,
-                &rules,
-                &self.grants,
-                &self.known_hosts,
-                &self.workspace,
-                &self.prompt.home,
-                &self.credentials,
-                &self.credential_files,
-            );
-            let fresh = Judged::from(fresh);
+            let fresh = self.judge_call(&entry.tool, &prepared.effects);
             if fresh == *stored {
                 continue;
             }

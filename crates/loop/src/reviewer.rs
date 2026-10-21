@@ -671,6 +671,46 @@ impl Loop {
         self.write_usage(recorded, lookup, Some(turn), None)
     }
 
+    /// Records one fanned-out reply and its re-ask in send order, and returns
+    /// the reply the stage judges: the re-ask replaces the first reply, and
+    /// the replaced reply's usage records first. Both stages share it;
+    /// write-back records in request order, never the fan-out.
+    fn recorded_reply(
+        &mut self,
+        reply: Result<Reply, CallError>,
+        resent: Option<Result<Reply, CallError>>,
+        reviewer: ReviewerUse,
+        endpoint: &ReviewEndpoint,
+        turn: &TurnId,
+    ) -> Result<Result<Reply, CallError>, Error> {
+        self.record_review_usage(&reply, endpoint, reviewer.clone(), turn)?;
+        match resent {
+            Some(resent) => {
+                self.record_review_usage(&resent, endpoint, reviewer, turn)?;
+                Ok(resent)
+            }
+            None => Ok(reply),
+        }
+    }
+
+    /// Judges a fanned-out call that never read: a failure or a cancel takes
+    /// its serial path at `stage`. Both stages share it; only the verdict
+    /// read differs.
+    fn failed_stage(
+        &mut self,
+        error: CallError,
+        stage: u8,
+        under: &UnderReview<'_>,
+        endpoint: &ReviewEndpoint,
+    ) -> Result<Decided, Error> {
+        match error {
+            CallError::Failed { failure, .. } => {
+                self.review_failure(under, failure, Some(reviewer_ref(endpoint, stage)))
+            }
+            CallError::Cancelled { .. } => self.review_cancelled(under.id, under.turn),
+        }
+    }
+
     /// Applies one call's fanned-out first-stage reply at write-back, in
     /// request order: then judges exactly as the serial path does — an
     /// allow applies, a check applies the pre-sent second stage, and
@@ -691,22 +731,9 @@ impl Loop {
             reviewer_use,
             cut: _,
         } = staged;
-        self.record_review_usage(&reply, endpoint, reviewer_use, turn)?;
-        let reply = match resent {
-            Some(resent) => {
-                let reviewer = ReviewerUse::Stage1 {
-                    action_id: under.id.clone(),
-                };
-                self.record_review_usage(&resent, endpoint, reviewer, turn)?;
-                resent
-            }
-            None => reply,
-        };
+        let reply = self.recorded_reply(reply, resent, reviewer_use, endpoint, turn)?;
         match reply {
-            Err(CallError::Failed { failure, .. }) => {
-                self.review_failure(under, failure, Some(reviewer_ref(endpoint, 1)))
-            }
-            Err(CallError::Cancelled { .. }) => self.review_cancelled(under.id, under.turn),
+            Err(error) => self.failed_stage(error, 1, under, endpoint),
             Ok(first) => match read_first(&first.text()) {
                 Ok(First::Allow) => self.second_allow(under, endpoint, 1, None),
                 Ok(First::Check) => self.apply_stored_stage2(under, endpoint, second, turn),
@@ -764,22 +791,12 @@ impl Loop {
             unreachable!("the pre-send fans out every second stage the first asks for");
         };
         let StagedSecond { reply, resent } = second;
-        let reviewer = || ReviewerUse::Stage2 {
+        let reviewer = ReviewerUse::Stage2 {
             action_id: under.id.clone(),
         };
-        self.record_review_usage(&reply, endpoint, reviewer(), turn)?;
-        let reply = match resent {
-            Some(resent) => {
-                self.record_review_usage(&resent, endpoint, reviewer(), turn)?;
-                resent
-            }
-            None => reply,
-        };
+        let reply = self.recorded_reply(reply, resent, reviewer, endpoint, turn)?;
         match reply {
-            Err(CallError::Failed { failure, .. }) => {
-                self.review_failure(under, failure, Some(reviewer_ref(endpoint, 2)))
-            }
-            Err(CallError::Cancelled { .. }) => self.review_cancelled(under.id, under.turn),
+            Err(error) => self.failed_stage(error, 2, under, endpoint),
             Ok(first) => match read_second(&first.text()) {
                 Ok(Second::Allow { reason }) => self.second_allow(under, endpoint, 2, reason),
                 Ok(Second::Block { reason }) => self.second_block(under, endpoint, reason),
