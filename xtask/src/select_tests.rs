@@ -1320,7 +1320,9 @@ fn a_concat_without_the_manifest_dir_or_the_bang_is_not_a_read() {
 
 #[test]
 fn an_xtask_command_read_is_not_a_test_read() {
-    let source = "let doc = std::fs::read_to_string(\"../../docs/ci.md\").unwrap();\n";
+    // One level up: the manifest-relative read must stay inside the
+    // repository for the containment check to report it.
+    let source = "let doc = std::fs::read_to_string(\"../docs/ci.md\").unwrap();\n";
     let files = [
         runtime_src("xtask", "xtask/src/main.rs", "src/main.rs", source),
         runtime_src(
@@ -1334,8 +1336,8 @@ fn an_xtask_command_read_is_not_a_test_read() {
     assert_eq!(
         runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
         [
-            "xtask/src/ci_needs_tests.rs: reads ../../docs/ci.md at run time; compile it in with include_str! or include_bytes!",
-            "xtask/tests/cli.rs: reads ../../docs/ci.md at run time; compile it in with include_str! or include_bytes!"
+            "xtask/src/ci_needs_tests.rs: reads ../docs/ci.md at run time; compile it in with include_str! or include_bytes!",
+            "xtask/tests/cli.rs: reads ../docs/ci.md at run time; compile it in with include_str! or include_bytes!"
         ]
     );
 }
