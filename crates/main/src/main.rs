@@ -205,10 +205,10 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers }), _) => {
             refresh_entry(&providers, clock, read_signals::CancelOnSignal::new)
         }
-        cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, base_url }), _) => {
+        cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, test_base_url }), _) => {
             ::cli::release_install(
                 &version,
-                base_url.as_deref(),
+                test_base_url.base_url.as_deref(),
                 env!("CARGO_PKG_VERSION"),
                 option_env!("FIBER_COMMIT"),
                 clock.as_ref(),
@@ -282,7 +282,7 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
             ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
         }
-        cli::Invocation::Run(Some(cli::Commands::Update { channel, base_url }), _) => {
+        cli::Invocation::Run(Some(cli::Commands::Update { channel, test_base_url }), _) => {
             let flag = channel.map(|flag| match flag {
                 cli::ChannelArg::Stable => ::cli::Channel::Stable,
                 cli::ChannelArg::Nightly => ::cli::Channel::Nightly,
@@ -307,7 +307,7 @@ fn run() -> i32 {
             // point both roots at their fixture server through
             // `--base-url`. Production runs leave it absent.
             let mut bases = ::cli::ReleaseBases::production();
-            if let Some(base) = base_url {
+            if let Some(base) = test_base_url.base_url {
                 bases.web = base.clone();
                 bases.api = base;
             }

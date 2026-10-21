@@ -1308,13 +1308,13 @@ fn doctor_takes_no_arguments() {
 
 #[test]
 fn update_takes_an_optional_channel_and_upgrade_runs_the_same_command() {
-    let Invocation::Run(Some(Commands::Update { channel, base_url }), _) =
+    let Invocation::Run(Some(Commands::Update { channel, test_base_url }), _) =
         parse_from(["fiber", "update"])
     else {
         panic!("bare update did not parse");
     };
     assert_eq!(channel, None);
-    assert_eq!(base_url, None);
+    assert_eq!(test_base_url.base_url, None);
     for (args, expected) in [
         (
             vec!["fiber", "update", "--channel", "stable"],
@@ -1330,21 +1330,40 @@ fn update_takes_an_optional_channel_and_upgrade_runs_the_same_command() {
             Some(ChannelArg::Nightly),
         ),
     ] {
-        let Invocation::Run(Some(Commands::Update { channel, base_url }), _) =
+        let Invocation::Run(Some(Commands::Update { channel, test_base_url }), _) =
             parse_from(args.clone())
         else {
             panic!("{args:?} did not parse");
         };
         assert_eq!(channel, expected, "{args:?}");
-        assert_eq!(base_url, None, "{args:?}");
+        assert_eq!(test_base_url.base_url, None, "{args:?}");
     }
-    let Invocation::Run(Some(Commands::Update { channel, base_url }), _) =
+    let Invocation::Run(Some(Commands::Update { channel, test_base_url }), _) =
         parse_from(["fiber", "update", "--base-url", "http://127.0.0.1:1"])
     else {
         panic!("update with --base-url did not parse");
     };
     assert_eq!(channel, None);
-    assert_eq!(base_url.as_deref(), Some("http://127.0.0.1:1"));
+    assert_eq!(
+        test_base_url.base_url.as_deref(),
+        Some("http://127.0.0.1:1")
+    );
+}
+
+#[test]
+fn update_and_release_install_share_one_hidden_base_url() {
+    let cmd = command();
+    for name in ["update", "release-install"] {
+        let sub = cmd
+            .get_subcommands()
+            .find(|sub| sub.get_name() == name)
+            .unwrap_or_else(|| panic!("{name} is a subcommand"));
+        let arg = sub
+            .get_arguments()
+            .find(|arg| arg.get_long() == Some("base-url"))
+            .unwrap_or_else(|| panic!("{name} takes --base-url"));
+        assert!(arg.is_hide_set(), "{name} hides --base-url");
+    }
 }
 
 #[test]
@@ -2797,14 +2816,14 @@ fn help_hub_install_prints_that_commands_help() {
 
 #[test]
 fn the_hidden_release_install_takes_a_version_and_a_base_url() {
-    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url }), _) =
+    let Invocation::Run(Some(Commands::ReleaseInstall { version, test_base_url }), _) =
         parse_from(["fiber", "release-install", "0.3.0"])
     else {
         panic!("release-install with a version");
     };
     assert_eq!(version, "0.3.0");
-    assert_eq!(base_url, None);
-    let Invocation::Run(Some(Commands::ReleaseInstall { version, base_url }), _) = parse_from([
+    assert_eq!(test_base_url.base_url, None);
+    let Invocation::Run(Some(Commands::ReleaseInstall { version, test_base_url }), _) = parse_from([
         "fiber",
         "release-install",
         "0.3.0",
@@ -2814,7 +2833,7 @@ fn the_hidden_release_install_takes_a_version_and_a_base_url() {
         panic!("release-install with a base URL");
     };
     assert_eq!(version, "0.3.0");
-    assert_eq!(base_url.as_deref(), Some("file:///tmp/r"));
+    assert_eq!(test_base_url.base_url.as_deref(), Some("file:///tmp/r"));
     assert!(
         command()
             .try_get_matches_from(["fiber", "release-install"])

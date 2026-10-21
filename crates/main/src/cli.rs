@@ -165,6 +165,16 @@ pub(crate) enum ChannelArg {
     Nightly,
 }
 
+/// The hidden `--base-url` test seam `update` and `release-install`
+/// share: both release roots point at it, so the binary tests serve one
+/// fixture server as both. Hidden and free to change.
+#[derive(Debug, clap::Args)]
+pub(crate) struct TestBaseUrl {
+    /// Where releases are published, for tests.
+    #[arg(long = "base-url", value_name = "url", hide = true)]
+    pub(crate) base_url: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
     /// Update the Fiber binary and every installed extension together;
@@ -175,10 +185,8 @@ pub(crate) enum Commands {
         /// `FIBER_CHANNEL`; an empty or unset variable means stable.
         #[arg(long, value_name = "channel")]
         channel: Option<ChannelArg>,
-        /// Where releases are published, for tests: both roots point at
-        /// it. Hidden and free to change, like `release-install`'s.
-        #[arg(long = "base-url", value_name = "url", hide = true)]
-        base_url: Option<String>,
+        #[command(flatten)]
+        test_base_url: TestBaseUrl,
     },
     /// Run one session of one turn; its events go to stdout
     Ask(AskArgs),
@@ -300,9 +308,8 @@ pub(crate) enum Commands {
         /// The release's version, which must be this binary's own.
         #[arg(value_name = "version")]
         version: String,
-        /// Where releases are published, for tests.
-        #[arg(long = "base-url", value_name = "url")]
-        base_url: Option<String>,
+        #[command(flatten)]
+        test_base_url: TestBaseUrl,
     },
     /// Manage this client's hub list, the hub's service and paired devices
     #[command(subcommand, arg_required_else_help = false)]
