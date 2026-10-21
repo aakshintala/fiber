@@ -153,11 +153,12 @@ impl Drop for LoginWorker {
 /// Starts `start`'s job: a browser login's `browser_login` returns at
 /// once and does no I/O, so it runs here, and `run` blocks on a
 /// `tui-login` thread whose end is posted back. A successful browser
-/// credential posts its `Done` before the same thread reads the
-/// reviewer choices and posts them; a failed one posts only its `Done`.
-/// A reviewer-only job reads the choices with no credential store. A
-/// spawn failure is dropped: the view stays waiting and Esc still
-/// cancels.
+/// credential posts its `Done`, then its presence gaps, before the same
+/// thread reads the reviewer choices and posts them; a failed one posts
+/// only its `Done`. A failed gaps read posts its error between them: the
+/// reviewer read still runs. A reviewer-only job reads the gaps, then the
+/// choices, with no credential store. A spawn failure is dropped: the
+/// view stays waiting and Esc still cancels.
 pub(crate) fn start(start: LoginStart, clock: Arc<dyn Clock>, out: Sender<Input>) -> LoginWorker {
     let LoginStart {
         ticket,
@@ -195,6 +196,11 @@ fn start_browser(
                 step: LoginStep::Done(result),
             }));
             if stored {
+                let gaps = seam.gaps(&name);
+                drop(out.send(Input::Login {
+                    ticket,
+                    step: LoginStep::Host(gaps),
+                }));
                 let choices = seam.reviewer_models(&name, clock);
                 drop(out.send(Input::Login {
                     ticket,
@@ -206,8 +212,8 @@ fn start_browser(
     worker
 }
 
-/// Starts only the reviewer read for `ticket`: no credential store, no
-/// cancel handle, so dismissal drops nothing.
+/// Starts only the gaps and reviewer reads for `ticket`: no credential
+/// store, no cancel handle, so dismissal drops nothing.
 fn start_reviewer(
     ticket: LoginTicket,
     name: String,
@@ -217,6 +223,11 @@ fn start_reviewer(
 ) -> LoginWorker {
     let worker = LoginWorker::reviewer(ticket);
     drop(crate::sources::builder("tui-login").spawn(move || {
+        let gaps = seam.gaps(&name);
+        drop(out.send(Input::Login {
+            ticket,
+            step: LoginStep::Host(gaps),
+        }));
         let choices = seam.reviewer_models(&name, clock);
         drop(out.send(Input::Login {
             ticket,
