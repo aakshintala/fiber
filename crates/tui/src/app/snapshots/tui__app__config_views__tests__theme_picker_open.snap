@@ -4,7 +4,7 @@ expression: painted_text(&open)
 ---
   Settings › tui.theme  /settings                                    Esc returns
  auto
- dark
+ dark  (current)
  light
  solar
  solar dawn

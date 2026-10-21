@@ -1223,22 +1223,43 @@ fn painted_text(screen: &crate::screen::Screen<TestBackend>) -> String {
 
 #[test]
 fn slash_theme_opens_the_picker_with_live_preview_and_esc_restore() {
-    let seam = Arc::new(theme_fake());
+    // A non-default entry theme: `tui.theme` saved as dark, so a restore
+    // of `Default::default()` (`Follow`) cannot pass for the capture.
+    let mut base = theme_fake();
+    base.rows = std::sync::Mutex::new(Ok(vec![
+        row(
+            "handoff.tokens",
+            Shown::Value("400000".to_owned()),
+            "default",
+            WriteScope::Any { repo: true },
+        ),
+        row(
+            "tui.theme",
+            Shown::Value("\"dark\"".to_owned()),
+            "global",
+            WriteScope::Any { repo: false },
+        ),
+    ]));
+    let seam = Arc::new(base);
 
-    // The picker lists the built-ins plus the seam's file themes.
+    // The picker lists the built-ins plus the seam's file themes, marking
+    // the saved entry.
     let mut app = attached(Some(Arc::clone(&seam)));
     assert_eq!(slash_theme(&mut app), Effect::None);
     assert!(app.config_view_open());
     assert_eq!(
         theme_choices(&app),
-        ["auto", "dark", "light", "solar", "solar dawn"]
+        ["auto", "dark  (current)", "light", "solar", "solar dawn"]
     );
     let open = painted(&mut app, crate::ThemeSetting::Follow);
     insta::assert_snapshot!("theme_picker_open", painted_text(&open));
 
-    // Moving focus previews each focused theme live.
+    // Moving focus previews each focused theme live. The saved dark entry
+    // opens focused on dark; up previews auto, then down walks back.
     app.on_key(Key::Char('x'), now());
     assert_eq!(app.take_theme_choice(), None);
+    app.on_key(Key::Up, now());
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Follow));
     app.on_key(Key::Down, now());
     assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
     app.on_key(Key::Down, now());
@@ -1262,13 +1283,14 @@ fn slash_theme_opens_the_picker_with_live_preview_and_esc_restore() {
         matches!(app.take_theme_choice(), Some(crate::ThemeSetting::File { ref name, .. }) if name == "solar dawn")
     );
 
-    // Esc queues the entry setting and returns to the rows, writing nothing.
+    // Esc queues the non-default entry setting and returns to the rows,
+    // writing nothing.
     assert!(seam.writes().is_empty());
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(app.config_view_open());
-    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Follow));
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
     assert!(seam.writes().is_empty());
-    let restored = painted(&mut app, crate::ThemeSetting::Follow);
+    let restored = painted(&mut app, crate::ThemeSetting::Dark);
     assert!(
         restored
             .backend()
@@ -1280,22 +1302,24 @@ fn slash_theme_opens_the_picker_with_live_preview_and_esc_restore() {
     );
     insta::assert_snapshot!("theme_picker_esc_restored", painted_text(&restored));
 
-    // The picker's `x` cancels like Esc: the capture is queued, then closed.
+    // The picker's `x` cancels like Esc: the non-default capture is queued,
+    // then closed. Queuing `Follow` here would be the default, not the capture.
     app.on_key(Key::Esc, now());
     assert_eq!(slash_theme(&mut app), Effect::None);
     app.on_key(Key::Down, now());
-    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Light));
     assert_eq!(app.on_click(TargetId::View(Spot::Close)), Effect::None);
     assert!(!app.config_view_open());
-    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Follow));
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
     assert!(seam.writes().is_empty());
 
     // A theme file changing between preview and Esc does not leak into
-    // the restore: the queued setting equals the capture.
+    // the restore: the queued setting equals the capture (dark), not the
+    // re-read (light).
     let mut other = theme_fake();
     other.rows = std::sync::Mutex::new(Ok(vec![row(
         "tui.theme",
-        Shown::Value("\"dark\"".to_owned()),
+        Shown::Value("\"light\"".to_owned()),
         "global",
         WriteScope::Any { repo: false },
     )]));
@@ -1303,12 +1327,12 @@ fn slash_theme_opens_the_picker_with_live_preview_and_esc_restore() {
     app.on_key(Key::Down, now());
     app.set_configure(Some(Arc::new(other) as Arc<dyn Configure>));
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
-    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Follow));
+    assert_eq!(app.take_theme_choice(), Some(crate::ThemeSetting::Dark));
 
-    // Enter saves the focused theme globally and queues it live.
+    // Enter saves the focused theme globally and queues it live: from the
+    // saved dark entry one step down focuses light.
     let mut app = attached(Some(Arc::clone(&seam)));
     assert_eq!(slash_theme(&mut app), Effect::None);
-    app.on_key(Key::Down, now());
     app.on_key(Key::Down, now());
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(

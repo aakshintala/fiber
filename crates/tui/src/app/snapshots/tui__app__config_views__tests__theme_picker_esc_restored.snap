@@ -4,7 +4,7 @@ expression: painted_text(&restored)
 ---
   Settings  /settings                                                Esc returns
  handoff.tokens  400000  default
- tui.theme       unset  default
+ tui.theme       "dark"  global
 
 
 
