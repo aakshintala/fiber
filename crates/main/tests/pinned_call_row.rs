@@ -162,9 +162,11 @@ fn scrolled(prev: &[String], next: &[String], up: bool) -> bool {
     false
 }
 
-/// Whether this frame proves the current wheel step or its goal.
-fn wheel_step_done(prev: &[String], next: &[String], up: bool, goal: bool) -> bool {
-    scrolled(prev, next, up) || goal
+/// Whether this frame proves the current wheel step or its goal: the
+/// exact predicate `wheel`'s wait evaluates, so the regression test
+/// below drives this function and no second copy of it exists.
+fn wheel_step_done(prev: &[String], next: &Grid, up: bool, goal: bool) -> bool {
+    scrolled(prev, &next.rows, up) || goal
 }
 
 #[test]
@@ -204,15 +206,18 @@ fn scrolled_ignores_repeated_missing_and_still_anchors() {
 
 #[test]
 fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
-    // This is the exact predicate used by `wheel`'s wait: unrelated row
+    // This is the exact predicate `wheel`'s wait evaluates: unrelated row
     // changes leave it pending, and only this step's movement or its goal
     // releases it (see #2934).
     let prev = vec!["gone".to_string(), "b".to_string(), "c".to_string()];
-    let unrelated = vec!["new".to_string(), "b".to_string(), "c".to_string()];
-    assert_ne!(unrelated, prev, "the old wait passes with no step written");
+    let unrelated = Grid::of_rows(&["new".to_string(), "b".to_string(), "c".to_string()]);
+    assert_ne!(
+        unrelated.rows, prev,
+        "the old wait passes with no step written"
+    );
     assert!(!wheel_step_done(&prev, &unrelated, true, false));
     assert!(!wheel_step_done(&prev, &unrelated, false, false));
-    let wheeled = vec!["new".to_string(), "gone".to_string(), "b".to_string()];
+    let wheeled = Grid::of_rows(&["new".to_string(), "gone".to_string(), "b".to_string()]);
     assert!(wheel_step_done(&prev, &wheeled, true, false));
     assert!(!wheel_step_done(&prev, &wheeled, false, false));
     assert!(wheel_step_done(&prev, &unrelated, true, true));
@@ -239,9 +244,7 @@ fn wheel(run: &mut Run, step: &str, up: bool, cap: usize, pred: impl Fn(&Grid) -
         }
         let prev = grid.rows.clone();
         run.write(if up { UP } else { DOWN });
-        grid = run.wait_screen(step, |next| {
-            wheel_step_done(&prev, &next.rows, up, pred(next))
-        });
+        grid = run.wait_screen(step, |next| wheel_step_done(&prev, next, up, pred(next)));
         if pred(&grid) {
             return grid;
         }
