@@ -38,7 +38,7 @@ pub fn login_provider(
     // The dependency layout follows the resolved directory: a pinned
     // copy serves its own .fiber-depends, a personal install serves home —
     // the same rule start_vm uses.
-    let is_repository_copy = crate::is_repository_copy(&dir, home);
+    let is_repository_copy = crate::hooks::is_repository_copy(&dir, home);
     let deps = crate::dep_dirs(home, &dir, &manifest.depends, is_repository_copy);
     let mut extension = LuaExtension::new(extension_name, dir, home, clock)
         .with_dependencies(deps)

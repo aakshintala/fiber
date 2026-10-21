@@ -141,7 +141,7 @@ WASM, and full TypeScript — are in [ADR 0006](adr/0006-extension-runtime-lua.m
 
 The embedding is bare. An extension sees a stripped standard library — `table`,
 `string`, `math`, `utf8`, `coroutine` — plus a `require` limited to its own
-directory, and nothing else. There is no `io`, no `os`, no `package`, no
+directory and its declared dependencies, and nothing else. There is no `io`, no `os`, no `package`, no
 `debug`. Every capability reaches it through a host-provided global, and the
 host calls give it what a process has natively: files, programs, HTTP and
 timers. Routing them through the host lets Fiber stop them on cancel and at

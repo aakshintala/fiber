@@ -21,7 +21,7 @@ use crate::{Error, LuaProvider};
 /// Whether `dir` is a pinned repository copy: it lives under the pinned
 /// directory, where repository copies live, so a pinned copy never reads
 /// a personal install of the same dependency.
-pub fn is_repository_copy(dir: &Path, home: &Path) -> bool {
+pub(crate) fn is_repository_copy(dir: &Path, home: &Path) -> bool {
     dir.starts_with(config::pinned_dir(home))
 }
 
