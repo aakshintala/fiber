@@ -1,4 +1,5 @@
-//! `fiber hub install`, `fiber hub uninstall` and the restart `fiber update`
+//! `fiber hub install`, `fiber hub uninstall`, the service stop top-level
+//! `fiber stop` runs after its exchange, and the restart `fiber update`
 //! calls (`docs/invocation.md`, "The hub"; `docs/releasing.md`,
 //! "Updating"): the unit file and the service manager's calls.
 //!
@@ -8,9 +9,11 @@
 //! bytes, so the next install sees it changed again and repeats every call.
 
 use std::fs;
-use std::io::{self, BufReader, Write};
+use std::io::{self, BufReader, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -18,6 +21,7 @@ use contract::clock::Clock;
 use contract::commands::hub::{HubCommand, StopArgs};
 use contract::shapes::Failure;
 use serde_json::Value;
+use support::clock::Parker;
 
 use crate::hub_unit::{Manager, Service};
 use crate::sessions::request_value;
@@ -28,6 +32,15 @@ const BOOTOUT_POLL: Duration = Duration::from_millis(100);
 
 /// How long install waits for launchd to drop a booted-out service.
 const BOOTOUT_DEADLINE: Duration = Duration::from_secs(10);
+
+/// How long a manager invocation may run before the stop path kills it:
+/// local `launchctl`/`systemctl` calls answer in milliseconds, so a wait
+/// past this is a hang, not work.
+pub(crate) const MANAGER_WAIT: Duration = Duration::from_secs(10);
+
+/// The watchdog's re-check interval: a command that finishes between
+/// slices still answers within one.
+const WATCH_SLICE: Duration = Duration::from_millis(10);
 
 /// What a failed install adds, so the person knows a rerun converges.
 const RERUN: &str =
@@ -54,6 +67,114 @@ pub(crate) fn system_run(program: &str, args: &[String]) -> io::Result<Ran> {
         code: output.status.code(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })
+}
+
+/// The stop path's bounded [`system_run`]: the child spawns in its
+/// own process group, and past `MANAGER_WAIT` the whole group is killed
+/// and reaped and the run fails `TimedOut`. A quiet child still answers
+/// promptly: the watchdog re-checks every `WATCH_SLICE`, so a command
+/// that finishes between slices returns within one. Only the stop path
+/// runs through this bound; every other manager call keeps `system_run`
+/// bit-identical, and fast manager calls return the same `Ran` either way.
+pub(crate) fn system_run_bounded(
+    program: &str,
+    args: &[String],
+    clock: &dyn Clock,
+) -> io::Result<Ran> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()?;
+    // A chatty manager never blocks on a full stderr pipe: a thread
+    // drains it while the watchdog waits on the child.
+    let drained = {
+        let mut stderr = child.stderr.take();
+        thread::Builder::new()
+            .name("manager-stderr".to_owned())
+            .spawn(move || {
+                let mut text = Vec::new();
+                if let Some(stderr) = stderr.as_mut() {
+                    stderr.read_to_end(&mut text).unwrap_or(0);
+                }
+                String::from_utf8_lossy(&text).into_owned()
+            })
+    };
+    let drained = match drained {
+        Ok(drained) => drained,
+        Err(error) => {
+            kill_group(child.id());
+            // The reap runs for its side effect; after a failed spawn
+            // there is nothing to report past the spawn error itself.
+            #[allow(
+                clippy::let_underscore_must_use,
+                reason = "the reap runs for its side effect; its error changes nothing"
+            )]
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    let deadline = clock.now() + MANAGER_WAIT;
+    let parker = Parker::new();
+    loop {
+        let status = match child.try_wait() {
+            Ok(status) => status,
+            Err(error) => {
+                kill_group(child.id());
+                // The reap runs for its side effect; the wait's own
+                // error is what the caller sees.
+                #[allow(
+                    clippy::let_underscore_must_use,
+                    reason = "the reap runs for its side effect; its error changes nothing"
+                )]
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
+        if let Some(status) = status {
+            return Ok(Ran {
+                success: status.success(),
+                code: status.code(),
+                stderr: drained.join().unwrap_or_default(),
+            });
+        }
+        if clock.now() >= deadline {
+            kill_group(child.id());
+            // The reap and the join both run for their side effects: the
+            // kill above freed every pipe end, so both return at once.
+            #[allow(
+                clippy::let_underscore_must_use,
+                reason = "the reap and the drain join run for their side effects; the timeout is what the caller sees"
+            )]
+            let _ = child.wait();
+            #[allow(
+                clippy::let_underscore_must_use,
+                reason = "the reap and the drain join run for their side effects; the timeout is what the caller sees"
+            )]
+            let _ = drained.join();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("`{program}` did not finish in {} s", MANAGER_WAIT.as_secs()),
+            ));
+        }
+        parker.park_polled(clock, Some(deadline), Some(WATCH_SLICE), 0);
+    }
+}
+
+/// Kills `group` outright, ignoring every outcome: on the expiry path's
+/// races the group may already be gone, and the reap after it still runs.
+/// The guarded helper refuses an id of 1 or less before any syscall, so
+/// no path here can reach the caller's own group or init.
+fn kill_group(group: u32) {
+    // A refused kill means the group is already gone or was never a run's;
+    // the reap after it still runs.
+    #[allow(
+        clippy::let_underscore_must_use,
+        reason = "a refused kill means the group is already gone; the reap after it still runs"
+    )]
+    let _ = support::group::signal(group, rustix::process::Signal::KILL);
 }
 
 /// `fiber hub install [--port <port>]` for this Fiber home and binary.
@@ -100,7 +221,7 @@ fn system_service() -> Result<(std::path::PathBuf, Service), Failure> {
     Ok((home, service))
 }
 
-fn current_exe() -> Result<std::path::PathBuf, Failure> {
+pub(crate) fn current_exe() -> Result<std::path::PathBuf, Failure> {
     std::env::current_exe().map_err(|e| {
         failed(
             ErrorCode::IoFailed,
@@ -126,8 +247,10 @@ pub(crate) fn hub_answers(home: &Path, clock: &dyn Clock, within: Duration) -> b
 /// sync failed.
 type UnitWrite = dyn Fn(&Path, &[u8]) -> Result<(), Failure>;
 
-/// Runs a manager command to completion.
-type ManagerRun = dyn Fn(&str, &[String]) -> io::Result<Ran>;
+/// Runs a manager command to completion. The stop path passes a closure
+/// over [`system_run_bounded`], which borrows the stop's clock, so the
+/// bound lives on the alias and defaults to `'static` for every other call.
+pub(crate) type ManagerRun<'a> = dyn Fn(&str, &[String]) -> io::Result<Ran> + 'a;
 
 /// install's inputs, bundled so the signature stays small.
 pub(crate) struct InstallRow<'a> {
@@ -148,7 +271,7 @@ const STOP_ID: &str = "c_stop";
 /// manager call.
 pub(crate) fn install(
     service: &Service,
-    run: &ManagerRun,
+    run: &ManagerRun<'_>,
     row: InstallRow<'_>,
 ) -> Result<(), Failure> {
     let previous = read_unit(&service.unit)?;
@@ -217,7 +340,7 @@ pub(crate) fn stop_running_hub(home: &Path, clock: &dyn Clock) {
 /// the service was loaded, and whether the file changed.
 fn load(
     service: &Service,
-    run: &ManagerRun,
+    run: &ManagerRun<'_>,
     clock: &dyn Clock,
     loaded: bool,
     changed: bool,
@@ -265,7 +388,7 @@ fn load(
 fn await_gone(
     service: &Service,
     uid: u32,
-    run: &ManagerRun,
+    run: &ManagerRun<'_>,
     clock: &dyn Clock,
 ) -> Result<(), Failure> {
     let deadline = clock.now() + BOOTOUT_DEADLINE;
@@ -289,7 +412,7 @@ fn await_gone(
 /// Unloads `service` and deletes its unit file. Running sessions carry on.
 pub(crate) fn uninstall(
     service: &Service,
-    run: &ManagerRun,
+    run: &ManagerRun<'_>,
     out: &mut dyn Write,
 ) -> Result<(), Failure> {
     let removed = match service.manager {
@@ -328,7 +451,7 @@ pub(crate) fn uninstall(
 
 /// Restarts the installed service; `Ok(false)` with no call when its unit
 /// file is absent.
-pub(crate) fn restart(service: &Service, run: &ManagerRun) -> Result<bool, Failure> {
+pub(crate) fn restart(service: &Service, run: &ManagerRun<'_>) -> Result<bool, Failure> {
     if read_unit(&service.unit)?.is_none() {
         return Ok(false);
     }
@@ -345,6 +468,40 @@ pub(crate) fn restart(service: &Service, run: &ManagerRun) -> Result<bool, Failu
         Manager::Systemd => must(run, "systemctl", &user(&["restart", &unit_name(service)]))?,
     }
     Ok(true)
+}
+
+/// Stops `service`'s loaded manager job, keeping its unit file: true when a
+/// loaded service was stopped. launchd skips a service it has not loaded;
+/// systemd stops an active one and skips an inactive one.
+pub(crate) fn stop_login_service(
+    service: &Service,
+    run: &ManagerRun<'_>,
+    clock: &dyn Clock,
+) -> Result<bool, Failure> {
+    if read_unit(&service.unit)?.is_none() {
+        return Ok(false);
+    }
+    match service.manager {
+        Manager::Launchd { uid } => {
+            if !call(run, "launchctl", &print_args(service, uid))?.success {
+                return Ok(false);
+            }
+            must(
+                run,
+                "launchctl",
+                &["bootout".to_owned(), target(service, uid)],
+            )?;
+            await_gone(service, uid, run, clock)?;
+            Ok(true)
+        }
+        Manager::Systemd => {
+            if !call(run, "systemctl", &user(&["is-active", &unit_name(service)]))?.success {
+                return Ok(false);
+            }
+            must(run, "systemctl", &user(&["stop", &unit_name(service)]))?;
+            Ok(true)
+        }
+    }
 }
 
 /// `gui/<uid>/<name>`.
@@ -369,7 +526,7 @@ fn user(args: &[&str]) -> Vec<String> {
 
 /// Runs a manager command; a missing program names what the installed hub
 /// needs.
-fn call(run: &ManagerRun, program: &str, args: &[String]) -> Result<Ran, Failure> {
+fn call(run: &ManagerRun<'_>, program: &str, args: &[String]) -> Result<Ran, Failure> {
     run(program, args).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
             let needs = if program == "launchctl" {
@@ -389,7 +546,7 @@ fn call(run: &ManagerRun, program: &str, args: &[String]) -> Result<Ran, Failure
 
 /// [`call`], failing when the command fails, naming it, its exit code and
 /// the first line of its stderr.
-fn must(run: &ManagerRun, program: &str, args: &[String]) -> Result<(), Failure> {
+fn must(run: &ManagerRun<'_>, program: &str, args: &[String]) -> Result<(), Failure> {
     let ran = call(run, program, args)?;
     if ran.success {
         return Ok(());
@@ -409,7 +566,7 @@ fn must(run: &ManagerRun, program: &str, args: &[String]) -> Result<(), Failure>
 }
 
 /// The unit file's bytes, `None` when there is none.
-fn read_unit(unit: &Path) -> Result<Option<Vec<u8>>, Failure> {
+pub(crate) fn read_unit(unit: &Path) -> Result<Option<Vec<u8>>, Failure> {
     match fs::read(unit) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),

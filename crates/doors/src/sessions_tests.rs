@@ -1419,3 +1419,28 @@ fn answers_for_another_command_are_skipped() {
     );
     assert_closed(&stream);
 }
+
+#[test]
+fn session_entries_lists_only_session_id_names_sorted() {
+    let dir = TempDir::new("doors-session-entries");
+    let run = dir.path().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::write(run.join("s_ffffffffffffffff"), b"x").unwrap();
+    std::fs::write(run.join("s_0000000000000001"), b"x").unwrap();
+    std::fs::write(run.join("hub"), b"x").unwrap();
+    std::fs::write(run.join("s_short"), b"x").unwrap();
+    std::fs::write(run.join("notes.md"), b"x").unwrap();
+    assert_eq!(
+        session_entries(dir.path()).unwrap(),
+        [
+            SessionId("s_0000000000000001".to_owned()),
+            SessionId("s_ffffffffffffffff".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn session_entries_is_empty_for_a_missing_run_dir() {
+    let dir = TempDir::new("doors-session-entries-missing");
+    assert_eq!(session_entries(dir.path()).unwrap(), vec![]);
+}

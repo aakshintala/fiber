@@ -17,6 +17,8 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -27,8 +29,9 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{
-    InstallRow, RERUN, Ran, current_exe, hub_answers, hub_install, hub_restart, hub_uninstall,
-    install, must, read_unit, restart, system_run, uninstall,
+    InstallRow, MANAGER_WAIT, RERUN, Ran, WATCH_SLICE, current_exe, hub_answers, hub_install,
+    hub_restart, hub_uninstall, install, must, read_unit, restart, stop_login_service, system_run,
+    system_run_bounded, uninstall,
 };
 use crate::hub_unit::{Manager, Service, name};
 
@@ -43,7 +46,7 @@ type Script = Box<dyn FnMut(&str) -> io::Result<Ran>>;
 type Calls = Rc<RefCell<Vec<String>>>;
 
 /// Runs a service manager's command to completion.
-type RunCommand = Box<super::ManagerRun>;
+type RunCommand = Box<super::ManagerRun<'static>>;
 
 /// A manager that records each command line in `calls` and answers it from
 /// `script`.
@@ -1213,5 +1216,256 @@ fn hub_wrappers_exit_without_the_manager() {
             &[("FIBER_HOME", home.as_path()), ("HOME", file.as_path())]
         ),
         1
+    );
+}
+
+fn is_active(service: &Service) -> String {
+    systemctl(&format!("is-active {}.service", service.name))
+}
+
+fn stop(service: &Service) -> String {
+    systemctl(&format!("stop {}.service", service.name))
+}
+
+#[test]
+fn stop_unloads_a_loaded_launchd_service_and_waits_it_out() {
+    let setup = Setup::new();
+    let service = setup.service(launchd());
+    fs::write(&service.unit, service.render(None).unwrap()).unwrap();
+    // Loaded before; after bootout launchd still knows it for one ask.
+    let mut prints = 0;
+    let stub = Stub::new(move |line| {
+        if line.contains(" print ") {
+            prints += 1;
+            return Ok(if prints <= 2 { ok() } else { no() });
+        }
+        Ok(ok())
+    });
+    let stopped = stop_login_service(&service, &stub.run, &*setup.clock).unwrap();
+    assert!(stopped);
+    assert_eq!(
+        stub.calls(),
+        [
+            print(&service),
+            bootout(&service),
+            print(&service),
+            print(&service)
+        ]
+    );
+    assert_eq!(
+        setup.clock.now().duration_since(setup.clock.origin()),
+        Duration::from_millis(100),
+        "one poll interval between the last loaded ask and the gone one"
+    );
+    // The unit file stays: only the manager job goes.
+    assert!(service.unit.exists());
+}
+
+#[test]
+fn stop_skips_a_launchd_service_that_was_never_loaded() {
+    let setup = Setup::new();
+    let service = setup.service(launchd());
+    fs::write(&service.unit, service.render(None).unwrap()).unwrap();
+    let stub = Stub::unloaded();
+    let stopped = stop_login_service(&service, &stub.run, &*setup.clock).unwrap();
+    assert!(!stopped);
+    assert_eq!(stub.calls(), [print(&service)]);
+}
+
+#[test]
+fn stop_stops_an_active_systemd_service_and_keeps_the_file() {
+    let setup = Setup::new();
+    let service = setup.service(Manager::Systemd);
+    let unit = service.render(None).unwrap();
+    fs::write(&service.unit, &unit).unwrap();
+    let stub = Stub::ok();
+    let stopped = stop_login_service(&service, &stub.run, &*setup.clock).unwrap();
+    assert!(stopped);
+    assert_eq!(stub.calls(), [is_active(&service), stop(&service)]);
+    assert_eq!(fs::read_to_string(&service.unit).unwrap(), unit);
+}
+
+#[test]
+fn stop_skips_an_inactive_systemd_service_and_keeps_the_file() {
+    let setup = Setup::new();
+    let service = setup.service(Manager::Systemd);
+    let unit = service.render(None).unwrap();
+    fs::write(&service.unit, &unit).unwrap();
+    let stub = Stub::new(|line| {
+        Ok(if line.contains("is-active") {
+            no()
+        } else {
+            ok()
+        })
+    });
+    let stopped = stop_login_service(&service, &stub.run, &*setup.clock).unwrap();
+    assert!(!stopped);
+    assert_eq!(stub.calls(), [is_active(&service)]);
+    assert_eq!(fs::read_to_string(&service.unit).unwrap(), unit);
+}
+
+#[test]
+fn stop_without_a_unit_file_calls_nothing() {
+    let setup = Setup::new();
+    let service = setup.service(Manager::Systemd);
+    let stub = Stub::ok();
+    let stopped = stop_login_service(&service, &stub.run, &*setup.clock).unwrap();
+    assert!(!stopped);
+    assert!(stub.calls().is_empty());
+}
+
+#[test]
+fn a_prompt_command_answers_through_the_bound() {
+    let clock = FakeClock::new();
+    let ran = system_run_bounded("true", &[], &*clock).unwrap();
+    assert_eq!(
+        ran,
+        Ran {
+            success: true,
+            code: Some(0),
+            stderr: String::new(),
+        }
+    );
+    assert_eq!(clock.now(), clock.origin(), "no wait ran at all");
+}
+
+#[test]
+fn a_slow_but_prompt_command_answers_without_a_kill() {
+    let dir = fakes::TempDir::new("cli-manager-bound");
+    let ready = fakes::children::Ready::new(dir.path());
+    let block = dir.path().join("block.fifo");
+    fakes::fifo(&block);
+    // The child writes its pid, then blocks reading its fifo until the
+    // test releases it: no real-clock sleep holds it.
+    let script = format!(
+        "echo $$ > '{}'; read -r _ < '{}'",
+        ready.path().display(),
+        block.display()
+    );
+    let clock = FakeClock::new();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = Arc::clone(&clock);
+    thread::spawn(move || {
+        done_tx
+            .send(system_run_bounded(
+                "sh",
+                &["-c".to_owned(), script],
+                &*worker,
+            ))
+            .unwrap_or(());
+    });
+    let pids = ready.wait(Deadline::after(DEADLINE));
+    assert_eq!(pids.len(), 1, "the child writes its own pid once");
+    // Still waiting, not answered: the watchdog parks on its bound
+    // while the child holds the fifo.
+    assert!(
+        Deadline::after(WATCH_SLICE * 5).recv(&done_rx).is_err(),
+        "a held child has not answered yet"
+    );
+    // Opening a fifo for writing blocks until a reader arrives: the child
+    // opens its read end only after writing its pid, so the release opens
+    // on a thread and the test bounds it. A child that never opens fails
+    // the release here instead of hanging the test past its wait.
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_block = block.clone();
+    thread::spawn(move || {
+        release_tx
+            .send(fs::write(&release_block, b"\n"))
+            .unwrap_or(());
+    });
+    Deadline::after(DEADLINE)
+        .recv(&release_rx)
+        .expect("the release write completes")
+        .unwrap();
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the released child answers")
+        .unwrap();
+    assert!(ran.success);
+    assert_eq!(ran.code, Some(0));
+    assert_eq!(clock.now(), clock.origin(), "the fake deadline never moved");
+}
+
+#[test]
+fn a_hung_command_is_killed_and_reaped_past_its_wait() {
+    let dir = fakes::TempDir::new("cli-manager-bound");
+    let ready = fakes::children::Ready::new(dir.path());
+    let block = dir.path().join("block.fifo");
+    fakes::fifo(&block);
+    // The child blocks reading its own fifo forever: no pipe the runner
+    // holds ever frees it. Its pid line names its process group, which
+    // the runner leads.
+    let script = format!(
+        "echo $$ > '{}'; read -r _ < '{}'",
+        ready.path().display(),
+        block.display()
+    );
+    let clock = FakeClock::new();
+    let due = clock.origin() + MANAGER_WAIT;
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = Arc::clone(&clock);
+    thread::spawn(move || {
+        done_tx
+            .send(system_run_bounded(
+                "sh",
+                &["-c".to_owned(), script],
+                &*worker,
+            ))
+            .unwrap_or(());
+    });
+    let pids = ready.wait(Deadline::after(DEADLINE));
+    assert_eq!(pids.len(), 1, "the child writes its own pid once");
+    let group = pids[0];
+    // Past the wait, never at it: `>` and `==` mutants hang here instead
+    // of killing.
+    assert!(
+        clock.await_parked(due, Deadline::after(DEADLINE)),
+        "the watchdog parks at its wait"
+    );
+    clock.advance(MANAGER_WAIT + Duration::from_secs(1));
+    let error = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the bound ends the run")
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(
+        fakes::group_empties(group, Deadline::after(DEADLINE)),
+        "the kill leaves no descendant behind"
+    );
+}
+
+#[test]
+fn restart_takeover_still_sends_the_bare_stop() {
+    let dir = fakes::TempDir::new("cli-restart-bare-stop");
+    let run = dir.path().join("run");
+    fs::create_dir_all(&run).unwrap();
+    let listener = UnixListener::bind(run.join("hub")).unwrap();
+    let (line_tx, line_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut hello = serde_json::to_vec(&json!({"kind": "hub_hello", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION, "payload": {}}))
+        .unwrap();
+        hello.push(b'\n');
+        (&stream).write_all(&hello).unwrap();
+        let mut line = String::new();
+        BufReader::new(&stream).read_line(&mut line).unwrap();
+        line_tx.send(line).unwrap_or(());
+        let mut accepted = serde_json::to_vec(&json!({"kind": "command_accepted", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": {"command_id": "c_stop", "result": null}}))
+        .unwrap();
+        accepted.push(b'\n');
+        (&stream).write_all(&accepted).unwrap();
+    });
+    let clock = FakeClock::new();
+    super::stop_running_hub(dir.path(), &*clock);
+    let line = Deadline::after(DEADLINE)
+        .recv(&line_rx)
+        .expect("the hub reads the stop");
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap(),
+        json!({"id": "c_stop", "command": "stop", "args": {}}),
+        "the restart takeover sends the bare stop with no sessions"
     );
 }
