@@ -68,9 +68,9 @@ pub(crate) fn start(
             shutdown_steps(
                 code,
                 |code| turn.shutdown(code),
+                || reads.cancel(),
                 extensions::stop_every_callback,
                 || {
-                    reads.cancel();
                     stopper();
                     for id in jobs.running() {
                         jobs.stop(&id);
@@ -99,12 +99,14 @@ pub(crate) fn start(
 fn shutdown_steps(
     code: i32,
     publish: impl FnOnce(i32),
+    cancel_reads: impl FnOnce(),
     stop_callbacks: impl FnOnce(),
     rest: impl FnOnce(),
 ) {
     // The code first: the loop reads it once the stopper wakes it.
     publish(code);
     stop_callbacks();
+    cancel_reads();
     rest();
 }
 
