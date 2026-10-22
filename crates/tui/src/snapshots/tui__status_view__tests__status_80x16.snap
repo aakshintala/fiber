@@ -1,0 +1,16 @@
+---
+source: crates/tui/src/status_view_tests.rs
+expression: screen
+---
+ Status  /status                                                     Esc returns
+session      s_aaaaaaaaaaaaaaaa · fix the parser
+workspace    /w/fiber · branch main
+model        anthropic/opus · thinking high
+credential   work
+permissions  auto
+hub          this machine
+version      0.4.0
+context      268k of 1M tokens
+spend        $1.35 billed · $0.50 subscription
+turns        3 turns · 12 calls
+clients      2

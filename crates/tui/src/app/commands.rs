@@ -140,6 +140,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_quota,
     },
     CommandEntry {
+        name: "status",
+        description: "Opens the status view.",
+        hint: None,
+        run: run_status,
+    },
+    CommandEntry {
         name: "diff",
         description: "Opens the Changed files view.",
         hint: None,
@@ -403,6 +409,11 @@ fn run_credential(app: &mut App, rest: &str) -> Option<Effect> {
 fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     Some(app.quota_view())
+}
+
+fn run_status(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Status))
 }
 
 fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -925,6 +936,10 @@ mod aliases;
 #[cfg(test)]
 #[path = "diff_command_tests.rs"]
 mod diff_command;
+
+#[cfg(test)]
+#[path = "status_command_tests.rs"]
+mod status_command;
 
 #[cfg(test)]
 #[path = "copy_command_tests.rs"]
