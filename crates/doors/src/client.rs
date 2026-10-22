@@ -273,9 +273,8 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             // hold the session lock. Without a log the session is closing
             // and the answer keeps its byte sizes.
             let rate = conn.gate.log.upgrade().map(|log| {
-                let rate = log.rate();
                 drop(log);
-                rate
+                conn.gate.rate()
             });
             let tools = tools
                 .into_iter()
