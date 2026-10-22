@@ -224,6 +224,48 @@ fn an_overflowing_prompt_prices_the_highest_tier() {
     );
 }
 
+#[test]
+fn a_one_hour_write_prices_at_twice_input() {
+    let cost = Cost {
+        input: 2.0,
+        output: 10.0,
+        cache_read: Some(0.2),
+        cache_write: Some(1.0),
+        tiers: Vec::new(),
+    };
+    assert_eq!(price(&cost, &tokens(0, 0, &[("1h", 1_000_000)], 0)), 4.0);
+}
+
+#[test]
+fn a_five_minute_write_keeps_the_declared_price() {
+    let cost = Cost {
+        input: 2.0,
+        output: 10.0,
+        cache_read: Some(0.2),
+        cache_write: Some(1.0),
+        tiers: Vec::new(),
+    };
+    assert_eq!(price(&cost, &tokens(0, 0, &[("5m", 1_000_000)], 0)), 1.0);
+}
+
+#[test]
+fn mixed_lifetime_writes_sum_both_rates() {
+    let cost = Cost {
+        input: 2.0,
+        output: 10.0,
+        cache_read: Some(0.2),
+        cache_write: Some(1.0),
+        tiers: Vec::new(),
+    };
+    assert_eq!(
+        price(
+            &cost,
+            &tokens(0, 0, &[("5m", 1_000_000), ("1h", 1_000_000)], 0)
+        ),
+        5.0
+    );
+}
+
 fn recorded(id: &str, input: u64, cache_read: u64, written: u64, output: u64) -> UsageRecorded {
     UsageRecorded {
         generation_id: GenerationId(id.into()),

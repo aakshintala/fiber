@@ -172,7 +172,7 @@ fn a_failed_call_counts_its_write_under_the_request_lifetime() {
         Tokens {
             input: 3,
             cache_read: 0,
-            cache_write: BTreeMap::from([("1h".to_owned(), 2344)]),
+            cache_write: BTreeMap::from([("5m".to_owned(), 2344)]),
             output: 28,
         }
     );
