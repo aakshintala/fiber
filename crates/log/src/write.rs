@@ -20,15 +20,16 @@ use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
 use crate::diag::{Diag, Timer, timed};
 use crate::offsets::Offsets;
-use crate::rate::{Rate, RateFold};
+use crate::rate::RateFold;
 use crate::read::{Queue, Watcher};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 
-/// One extension-watcher delivery fan-out: what a subscriber is offered
-/// for every appended event. A plain callback, not a second `Queue`: an
-/// extension watcher needs per-kind matching, the busy-bit ephemeral skip
-/// with durable re-queue through the hub stream, and cursor-tracked
-/// drain — none of which a draining reader provides.
+/// One subscriber delivery fan-out: what a subscriber is offered for every
+/// appended event. A plain callback, not a second `Queue`: an extension
+/// watcher needs per-kind matching, the busy-bit ephemeral skip with
+/// durable re-queue through the hub stream, and cursor-tracked drain, and
+/// a fold needs to see each line before `append` returns — none of which a
+/// draining reader provides.
 type Subscriber = dyn Fn(&Event, &Envelope) + Send + Sync;
 
 /// A session's log, open for writing. Only one exists per session at a time,
@@ -37,7 +38,7 @@ type Subscriber = dyn Fn(&Event, &Envelope) + Send + Sync;
 /// (`docs/architecture.md`, "The threads").
 ///
 /// Besides the draining `Queue` watchers above, the log holds one
-/// extension-watcher subscriber list: each live subscriber is offered
+/// subscriber list: each live subscriber is offered
 /// every appended event, durable and ephemeral, as `(&Event, &Envelope)`,
 /// after the log lock is released, so the log lock is never held with the
 /// hub or cursor locks.
@@ -53,9 +54,13 @@ pub struct Log {
     dir: PathBuf,
     /// The diagnostic writer timing appends, installed once per process.
     diag: OnceLock<Arc<Diag>>,
+    /// The rate fold over the lines [`Log::open`] replayed. No append
+    /// changes it: whoever wants the rate after that folds the lines it
+    /// is offered through [`Log::subscribe`].
+    replayed_rate: RateFold,
 }
 
-/// An extension-watcher subscription: dropping it unregisters the
+/// A subscription: dropping it unregisters the
 /// subscriber, once an append prunes the dead entry. Holds the subscriber
 /// alive until then, so an offer cannot outlive the session that
 /// registered it only through a dead weak entry.
@@ -76,15 +81,13 @@ struct Inner {
     offsets: Arc<Offsets>,
     fsyncs: u64,
     watchers: Vec<Weak<Queue>>,
-    /// The extension-watcher subscribers, weak-held and pruned on append:
+    /// The subscribers, weak-held and pruned on append:
     /// dropping the [`Subscription`] guard unregisters, once an append
     /// prunes the dead entry.
     subscribers: Vec<Weak<Subscriber>>,
     /// The newest line of each latest-wins kind. A subscriber reads it after
     /// registering, so a lagging connection cannot hide it.
     latest: BTreeMap<String, Envelope>,
-    /// The bytes-to-tokens rate folded from every line so far.
-    rate: RateFold,
     /// Why the log stopped, once a write or fsync failed.
     failed: Option<String>,
 }
@@ -169,8 +172,9 @@ impl Log {
         events.set_len(end).map_err(io_at(&path))?;
         let mut inner = Inner::new(id, dir, events, lock, next, offsets);
         inner.latest = latest;
-        inner.rate = rate;
-        Ok(Self::from_parts(inner, clock))
+        let mut log = Self::from_parts(inner, clock);
+        log.replayed_rate = rate;
+        Ok(log)
     }
 
     /// Emits `event` about `turn_id` and `action_id`, where they apply, and
@@ -219,7 +223,6 @@ impl Log {
             Class::Ephemeral => {}
         }
         keep_latest(&mut inner.latest, &line);
-        inner.rate.fold(&line);
         inner.watchers.retain(|w| match w.upgrade() {
             Some(queue) => {
                 queue.push(&line);
@@ -258,9 +261,12 @@ impl Log {
         self.lock().latest.get(kind).cloned()
     }
 
-    /// The bytes-to-tokens rate folded from every line so far.
-    pub fn rate(&self) -> Rate {
-        self.lock().rate.rate()
+    /// The bytes-to-tokens rate fold over the lines [`Log::open`] replayed;
+    /// empty for a log [`Log::create`] made. No append changes it: a caller
+    /// that wants the rate to follow later lines seeds its own fold from
+    /// this one and folds what [`Log::subscribe`] offers it.
+    pub fn replayed_rate(&self) -> RateFold {
+        self.replayed_rate.clone()
     }
 
     /// How many durable lines the log holds: the `seq` the next one gets.
@@ -283,7 +289,7 @@ impl Log {
         Watcher::new(armed.queue, armed.offsets, armed.next)
     }
 
-    /// Registers an extension-watcher subscriber: every event appended
+    /// Registers a subscriber: every event appended
     /// from now on — durable and ephemeral, from every source — is offered
     /// to it as `(&Event, &Envelope)` after the log lock is released.
     /// Dropping the returned guard unregisters, once an append prunes the
@@ -431,6 +437,7 @@ impl Log {
             inner: Mutex::new(inner),
             clock,
             diag: OnceLock::new(),
+            replayed_rate: RateFold::default(),
         }
     }
 
@@ -529,7 +536,6 @@ impl Inner {
             watchers: Vec::new(),
             subscribers: Vec::new(),
             latest: BTreeMap::new(),
-            rate: RateFold::default(),
             failed: None,
         }
     }
