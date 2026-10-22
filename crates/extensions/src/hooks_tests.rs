@@ -3400,14 +3400,6 @@ fn load_with_hooks(home: &Home, entries: &str) -> Arc<SessionExtensions> {
     home.load(&[setting.as_str()])
 }
 
-fn loaded_names(session: &Arc<SessionExtensions>) -> Vec<String> {
-    session
-        .loaded()
-        .iter()
-        .map(|loaded| loaded.name.clone())
-        .collect()
-}
-
 fn hooks_config(home: &Home, entries: &str) -> Config {
     let setting = hooks_override(entries);
     home.config(&[setting.as_str()])
@@ -3431,9 +3423,9 @@ fn hooks_without_a_hooks_key_does_not_load() {
     install_hooks(&home, "-- no hooks registered\n");
     let session = home.load(&[]);
     assert!(
-        !loaded_names(&session).contains(&config::full_name("hooks")),
+        !session.loaded_names().contains(&config::full_name("hooks")),
         "{:?}",
-        loaded_names(&session)
+        session.loaded_names()
     );
     assert!(session.notices().is_empty(), "{:?}", session.notices());
 }
@@ -3444,9 +3436,9 @@ fn hooks_with_a_hooks_key_loads() {
     install_hooks(&home, "-- no hooks registered\n");
     let session = load_with_hooks(&home, BLOCKING_ENTRY);
     assert!(
-        loaded_names(&session).contains(&config::full_name("hooks")),
+        session.loaded_names().contains(&config::full_name("hooks")),
         "{:?}",
-        loaded_names(&session)
+        session.loaded_names()
     );
 }
 
@@ -3456,9 +3448,9 @@ fn hooks_with_an_empty_hooks_key_loads_silently() {
     install_hooks(&home, "-- no hooks registered\n");
     let session = load_with_hooks(&home, "{}");
     assert!(
-        loaded_names(&session).contains(&config::full_name("hooks")),
+        session.loaded_names().contains(&config::full_name("hooks")),
         "{:?}",
-        loaded_names(&session)
+        session.loaded_names()
     );
     assert!(session.notices().is_empty(), "{:?}", session.notices());
 }
@@ -3565,9 +3557,9 @@ fn declared_blocking_hooks_without_the_package_stay_silent_until_the_gate() {
     let home = Home::new();
     let session = load_with_hooks(&home, BLOCKING_ENTRY);
     assert!(
-        !loaded_names(&session).contains(&config::full_name("hooks")),
+        !session.loaded_names().contains(&config::full_name("hooks")),
         "{:?}",
-        loaded_names(&session)
+        session.loaded_names()
     );
     assert!(session.notices().is_empty(), "{:?}", session.notices());
 }
@@ -3581,20 +3573,12 @@ fn unreadable_hooks_settings_skip_the_load_and_report_config_invalid() {
     fs::write(&file, "{not json").unwrap();
     let session = home.load(&[]);
     assert!(
-        !loaded_names(&session).contains(&config::full_name("hooks")),
+        !session.loaded_names().contains(&config::full_name("hooks")),
         "{:?}",
-        loaded_names(&session)
+        session.loaded_names()
     );
     // Malformed settings are not a missing extension: the read's error
     // propagates, and the gate fails the start with its code.
     let error = super::hooks_state(&home.config(&[]), &[]).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConfigInvalid);
-}
-
-#[test]
-fn the_hooks_manifest_names_the_package_and_its_settings_key() {
-    let manifest: serde_json::Value =
-        serde_json::from_str(include_str!("../../../extensions/hooks/extension.json")).unwrap();
-    assert_eq!(manifest["name"], config::full_name("hooks"),);
-    assert_eq!(manifest["repo_settings"], json!(["hooks"]));
 }

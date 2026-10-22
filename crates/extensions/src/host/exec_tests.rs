@@ -1627,7 +1627,15 @@ fn full_duplex_echo_neither_deadlocks_nor_retains() {
         .recv(&done)
         .expect("waited {DEADLINE:?} for the duplex run")
         .expect("the duplex run spawns");
-    assert_eq!(ran.stdout, input, "the echo is byte-exact");
+    assert_eq!(ran.stdout.len(), input.len(), "the echo keeps every byte");
+    assert_eq!(
+        ran.stdout
+            .iter()
+            .zip(input.iter())
+            .position(|(got, want)| got != want),
+        None,
+        "the echo is byte-exact"
+    );
 }
 
 /// An escaped stdin holder does not hang the run: the child forks a
@@ -1642,7 +1650,7 @@ fn an_escaped_stdin_holder_does_not_hang_the_run() {
     let clock = FakeClock::new();
     let ready = ready_in(&cwd);
     let script = format!(
-        "echo $$ > '{}'\n(exec sleep 1000) &\nexit 0\n",
+        "(exec sleep 1000) &\necho $$ > '{}'\nexit 0\n",
         ready.path().display()
     );
     let deadline = clock.now() + Duration::from_millis(500);

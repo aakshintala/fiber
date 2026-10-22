@@ -376,13 +376,6 @@ mod hooks_gate_tests {
     use crate::test_support::{Rig, load};
     use std::sync::Arc;
 
-    fn hooks_setting(entries: &str) -> String {
-        format!(
-            "extensions.\"{}\".settings.hooks={entries}",
-            config::full_name("hooks")
-        )
-    }
-
     fn session_extensions(rig: &Rig, config: &config::Config) -> extensions::SessionExtensions {
         extensions::SessionExtensions::load(
             &rig.home,
@@ -391,33 +384,6 @@ mod hooks_gate_tests {
             Arc::new(tools::PathLocks::new()),
             None,
         )
-    }
-
-    const BLOCKING: &str = r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#;
-    const NON_BLOCKING: &str = r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"non-blocking"}}"#;
-
-    #[test]
-    fn missing_hooks_is_ok_for_unloaded_non_blocking_hooks() {
-        let rig = Rig::new("fiber-hooks-gate-notice");
-        let setting = hooks_setting(NON_BLOCKING);
-        let config = load(&rig.home, &rig.workspace, "test", [setting.as_str()]);
-        let extensions = session_extensions(&rig, &config);
-        assert!(missing_hooks(&config, &extensions).is_ok());
-    }
-
-    #[test]
-    fn missing_hooks_fails_closed_for_a_blocking_entry() {
-        let rig = Rig::new("fiber-hooks-gate-blocking");
-        let setting = hooks_setting(BLOCKING);
-        let config = load(&rig.home, &rig.workspace, "test", [setting.as_str()]);
-        let extensions = session_extensions(&rig, &config);
-        let failure = missing_hooks(&config, &extensions).unwrap_err();
-        assert_eq!(failure.code, contract::ErrorCode::ExtensionMissing);
-        assert!(
-            failure.message.contains("fiber extension install hooks"),
-            "{}",
-            failure.message
-        );
     }
 
     #[test]

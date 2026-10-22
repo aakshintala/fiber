@@ -1527,7 +1527,7 @@ fn notice(code: ErrorCode, message: String, extension: Option<&str>) -> Notice {
 /// this gate. A settings read that fails is not a missing extension:
 /// the error propagates, so malformed settings fail as `config_invalid`
 /// and unreadable ones as `io_failed` (`docs/errors.md`).
-pub fn hooks_state(config: &Config, loaded: &[String]) -> Result<HooksState, config::ConfigError> {
+pub fn hooks_state(config: &Config, loaded: &[String]) -> Result<HooksState, Error> {
     let name = config::full_name("hooks");
     let declared = config.extensions().get(&name, &["hooks"], "hooks")?;
     let Some(declared) = declared else {
