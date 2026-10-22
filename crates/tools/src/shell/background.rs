@@ -10,14 +10,14 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use contract::JobId;
 use contract::clock::{Clock, Wake};
 use contract::diag::{Op, Timing};
 use contract::emit::Emit;
 use contract::events::{JobCompleted, JobStarted, Outcome};
 use contract::jobs::{Foreground, JobRecord, Jobs, Opened, Opening, Stop};
-use contract::shapes::ContentPart;
+use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output};
-use contract::{ErrorCode, JobId};
 
 use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::monitor::Feed;
@@ -25,6 +25,7 @@ use super::moved::Moved;
 use super::output::{JobStream, align_char_boundary};
 use super::tty;
 use super::{Limit, assemble};
+use crate::error::{ShellError, ToolError};
 
 /// A description longer than this is cut, with `…` as the last character.
 /// Picked, not measured.
@@ -42,11 +43,6 @@ const PS_BOUND: Duration = Duration::from_secs(2);
 const PS_POLL: Duration = Duration::from_millis(10);
 
 const UNNAMED: &str = "Processes are still running in its group.";
-
-const CAPPED: &str = "The output passed 5 GB and the job was stopped.";
-
-const FLOODED: &str = "The monitor's output was suppressed for 30 seconds, so it was stopped. \
-     Restart it with a more selective source.";
 
 const AFTER_THIRTY: &str = "Still running after 30 seconds, so it moved to the background.";
 const STARTED: &str = "Started in the background.";
@@ -589,15 +585,9 @@ fn to_completed(job_id: JobId, path: &Path, finished: Finished, limit: Limit) ->
         !capped && !flooded && finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
     let mut output = assemble(limit, finished, None, None);
     if capped {
-        output.error = Some(crate::tool_util::failure(
-            ErrorCode::OutputCap,
-            CAPPED.to_owned(),
-        ));
+        output.error = Some(Failure::from(&ToolError::from(ShellError::Capped)));
     } else if flooded {
-        output.error = Some(crate::tool_util::failure(
-            ErrorCode::Flooded,
-            FLOODED.to_owned(),
-        ));
+        output.error = Some(Failure::from(&ToolError::from(ShellError::Flooded)));
     }
     let status = if stopped {
         Outcome::Cancelled

@@ -33,10 +33,11 @@ fn dim_row(text: String) -> Row {
 
 /// Draws the quit question over `area`: the title, the count of working
 /// sessions, the three choices with Enter's focused, and what the mouse
-/// does. A click on a choice does what its key does.
-pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+/// does. A click on a choice does what its key does. Returns the drawn
+/// slab, empty when the question is not open.
+pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) -> Rect {
     let Some((working, elsewhere)) = app.quit_question() else {
-        return;
+        return Rect::default();
     };
     let mut body = vec![
         dim_row(quit_count(working, elsewhere)),
@@ -64,7 +65,7 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         )),
         prefer: 71,
     };
-    overlay::draw(buf, area, &framed, Place::Centre, targets);
+    overlay::draw(buf, area, &framed, Place::Centre, targets)
 }
 
 #[cfg(test)]

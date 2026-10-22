@@ -419,6 +419,25 @@ fn esc_closes_the_notice_overlay_ahead_of_the_screen() {
 }
 
 #[test]
+fn the_report_above_the_screen_takes_the_strokes_first() {
+    let fake = Arc::new(Fake::new(Vec::new()));
+    let mut app = homed(Some(Arc::clone(&fake)));
+    slash_keys(&mut app);
+    app.open_import_report(None, Default::default(), Vec::new());
+    assert_eq!(app.top_surface(), crate::app::Surface::Report);
+    // A letter reaches neither the screen nor the draft.
+    assert_eq!(tap(&mut app, "x"), Effect::None);
+    assert_eq!(app.draft(), "");
+    assert!(fake.keys_saved().is_empty());
+    // Esc closes the report, and the screen is the next Esc's.
+    assert_eq!(tap(&mut app, "esc"), Effect::None);
+    assert!(!app.import_report_open());
+    assert!(app.keys_screen_open());
+    assert_eq!(tap(&mut app, "esc"), Effect::None);
+    assert!(!app.keys_screen_open());
+}
+
+#[test]
 fn a_letter_over_the_overlay_is_neither_captured_nor_typed() {
     let fake = Arc::new(Fake::new(Vec::new()));
     let mut app = homed(Some(Arc::clone(&fake)));

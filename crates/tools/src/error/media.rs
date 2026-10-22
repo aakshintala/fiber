@@ -41,8 +41,9 @@ pub(crate) enum PdfError {
     #[error("the image child named no page count.")]
     NoPageCount,
     /// The file is no PDF the child reads. The text is made by the image
-    /// child; part 5 of #923 types it.
-    // debt: part 5 of #923 types the image child's PDF refusal
+    /// child.
+    // debt: the text is made by the image child, until the image child names its PDF
+    // refusal by kind
     #[error("`{}` cannot be read as a PDF: {message}", path.display())]
     Unreadable {
         /// The file as resolved.
@@ -113,8 +114,9 @@ impl PdfError {
 }
 
 /// Every way reading an image fails. The last two texts are made in
-/// `contract::images`; part 5 of #923 types them.
-// debt: part 5 of #923 types `contract::images::ImageError`
+/// `contract::images`.
+// debt: the last two texts are made in contract::images, until
+// `contract::images::ImageError` carries typed cases
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ImageReadError {
     /// Image reading is not configured.

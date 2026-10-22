@@ -73,10 +73,10 @@ fn a_missing_file_resolves_under_the_canonical_existing_prefix() {
 fn dotdot_in_the_nonexistent_rest_is_invalid_arguments() {
     let dir = TempDir::new("fiber-resolve-dotdot");
     let err = resolve(dir.path(), "nope/../a.txt").unwrap_err();
-    match err {
-        ResolveError::Arguments(message) => assert!(message.contains("`..`"), "{message}"),
-        ResolveError::Tool(message) => panic!("expected invalid_arguments, got {message}"),
-    }
+    assert!(
+        matches!(err, ResolveError::DotDotThroughMissing { .. }),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -85,10 +85,7 @@ fn dotdot_through_a_regular_file_is_tool_error() {
     fs::write(dir.path().join("f"), "x").unwrap();
     fs::write(dir.path().join("a.txt"), "y").unwrap();
     let err = resolve(dir.path(), "f/../a.txt").unwrap_err();
-    match err {
-        ResolveError::Tool(message) => assert!(message.contains("not a directory"), "{message}"),
-        ResolveError::Arguments(message) => panic!("expected tool_error, got {message}"),
-    }
+    assert!(matches!(err, ResolveError::NotADirectory { .. }), "{err:?}");
 }
 
 #[test]
@@ -106,10 +103,7 @@ fn a_symlink_loop_is_tool_error() {
     symlink("b", dir.path().join("a")).unwrap();
     symlink("a", dir.path().join("b")).unwrap();
     let err = resolve(dir.path(), "a").unwrap_err();
-    match err {
-        ResolveError::Tool(message) => assert!(message.contains("symbolic link"), "{message}"),
-        ResolveError::Arguments(message) => panic!("expected tool_error, got {message}"),
-    }
+    assert!(matches!(err, ResolveError::TooManyLinks { .. }), "{err:?}");
 }
 
 #[test]
@@ -117,15 +111,7 @@ fn a_parent_that_is_a_file_is_tool_error() {
     let dir = TempDir::new("fiber-resolve-parent");
     fs::write(dir.path().join("f"), "x").unwrap();
     let err = resolve(dir.path(), "f/child").unwrap_err();
-    match err {
-        ResolveError::Tool(message) => {
-            assert!(
-                message.contains("not a directory") || message.contains("could not be resolved"),
-                "{message}"
-            );
-        }
-        ResolveError::Arguments(message) => panic!("expected tool_error, got {message}"),
-    }
+    assert!(matches!(err, ResolveError::NotADirectory { .. }), "{err:?}");
 }
 
 #[test]
@@ -288,17 +274,15 @@ fn an_unreadable_file_is_tool_error() {
     let mut perms = fs::metadata(&path).unwrap().permissions();
     perms.set_mode(0o000);
     fs::set_permissions(&path, perms).unwrap();
-    match inspect(&path).unwrap_err() {
-        InspectError::Tool(message) => assert!(message.contains("secret"), "{message}"),
-        InspectError::NotFound => panic!("expected tool_error"),
-    }
+    let err = inspect(&path).unwrap_err();
+    assert!(matches!(err, InspectError::Unreadable { .. }), "{err:?}");
 }
 
 #[test]
 fn a_missing_path_is_not_found() {
     let dir = TempDir::new("fiber-class-missing");
     let err = inspect(&dir.path().join("nope")).unwrap_err();
-    assert!(matches!(err, InspectError::NotFound));
+    assert!(matches!(err, InspectError::NotFound { .. }), "{err:?}");
 }
 
 #[test]
@@ -321,10 +305,7 @@ fn an_unsearchable_directory_is_tool_error() {
     set_mode(&locked, 0o000);
     let err = resolve(dir.path(), "locked/child").unwrap_err();
     set_mode(&locked, 0o755);
-    match err {
-        ResolveError::Tool(message) => assert!(message.contains("locked"), "{message}"),
-        ResolveError::Arguments(message) => panic!("expected tool_error, got {message}"),
-    }
+    assert!(matches!(err, ResolveError::Unreadable { .. }), "{err:?}");
 }
 
 #[test]
@@ -341,10 +322,7 @@ fn forty_symlinks_resolve_and_one_more_is_tool_error() {
     let over_root = canonical(over.path());
     symlink_chain(&over_root, MAX_SYMLINKS + 1);
     let err = resolve(&over_root, "link0").unwrap_err();
-    match err {
-        ResolveError::Tool(message) => assert!(message.contains("symbolic link"), "{message}"),
-        ResolveError::Arguments(message) => panic!("expected tool_error, got {message}"),
-    }
+    assert!(matches!(err, ResolveError::TooManyLinks { .. }), "{err:?}");
 }
 
 #[test]
@@ -355,17 +333,14 @@ fn an_unsearchable_path_is_tool_error_not_missing() {
     set_mode(&locked, 0o000);
     let err = inspect(&locked.join("secret")).unwrap_err();
     set_mode(&locked, 0o755);
-    match err {
-        InspectError::Tool(message) => assert!(message.contains("secret"), "{message}"),
-        InspectError::NotFound => panic!("expected tool_error"),
-    }
+    assert!(matches!(err, InspectError::Unreadable { .. }), "{err:?}");
 }
 
 #[test]
 fn a_file_that_vanishes_before_it_is_read_is_not_found() {
     let dir = TempDir::new("fiber-class-vanished");
     let err = read_regular(&dir.path().join("gone")).unwrap_err();
-    assert!(matches!(err, InspectError::NotFound));
+    assert!(matches!(err, InspectError::NotFound { .. }), "{err:?}");
 }
 
 #[test]
@@ -376,10 +351,7 @@ fn an_unreadable_regular_file_is_tool_error_from_the_read() {
     set_mode(&path, 0o000);
     let err = read_regular(&path).unwrap_err();
     set_mode(&path, 0o644);
-    match err {
-        InspectError::Tool(message) => assert!(message.contains("secret"), "{message}"),
-        InspectError::NotFound => panic!("expected tool_error"),
-    }
+    assert!(matches!(err, InspectError::Unreadable { .. }), "{err:?}");
 }
 
 #[test]

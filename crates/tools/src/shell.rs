@@ -7,7 +7,6 @@ use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::diag::Timing;
 use contract::emit::Emit;
@@ -18,7 +17,8 @@ use contract::tool::{Bound, Cancel, Effects, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::tool_util::{cancelled_before, failed, failure};
+use crate::error::{ShellError, ToolError};
+use crate::tool_util::{cancelled_before, errored};
 
 mod background;
 
@@ -51,9 +51,6 @@ use command::{Finished, StopKind};
 /// The default when the model gives no `timeout_ms`: 10 minutes.
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 
-const BARE_WAIT: &str = "This command waits with `sleep` for 25 seconds or more. \
-     Use `run_in_background`, wait with `jobs wait`, or run a monitor with an `until` loop.";
-
 /// A monitor's deadline when the model gives no `deadline_ms`: 5 minutes
 /// (`docs/tools.md`, "Background jobs").
 const DEFAULT_DEADLINE_MS: u64 = 300_000;
@@ -64,15 +61,9 @@ const MAX_DEADLINE_MS: u64 = 1_800_000;
 /// The longest deadline in a non-interactive run: 10 minutes.
 const MAX_DEADLINE_NON_INTERACTIVE_MS: u64 = 600_000;
 
-const MONITOR_TIMEOUT: &str = "A monitor's limit is `deadline_ms`.";
-const DEADLINE_WITHOUT_MONITOR: &str =
-    "`deadline_ms` is a monitor's deadline; set `monitor: true` with it.";
-const MONITOR_ALONE: &str = "`monitor` cannot be combined with `run_in_background` or `tty`.";
-
-const NO_JOBS: &str = "Background jobs are not available in this session.";
-
 const CANCELLED: &str = "Cancelled and stopped.";
-const INDETERMINATE: &str = "The command was stopped, and Fiber cannot tell whether it completed.";
+pub(crate) const INDETERMINATE: &str =
+    "The command was stopped, and Fiber cannot tell whether it completed.";
 const HELD_OPEN: &str = "Output was still held open.";
 
 /// One shell tool. Each call has its own process; concurrent calls share nothing mutable.
@@ -277,13 +268,13 @@ impl Tool for Shell {
         }
         let parsed = match parse(arguments, &self.workspace, self.max_deadline_ms) {
             Ok(parsed) => parsed,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(error),
         };
         if parsed.mode != Mode::Foreground && self.jobs.is_none() {
-            return failed(ErrorCode::InvalidArguments, NO_JOBS.to_owned());
+            return errored(ShellError::NoJobs);
         }
         if !parsed.mode.in_background() && bare_wait(&parsed.command) {
-            return failed(ErrorCode::InvalidArguments, BARE_WAIT.to_owned());
+            return errored(ShellError::BareWait);
         }
         // The functions reach only the model's own command line: `classify`
         // and `effects` saw the original string above.
@@ -463,14 +454,23 @@ impl Limit {
             timeout_line(self.ms)
         }
     }
+
+    /// The case a stop at this limit is: the same text as [`Limit::line`].
+    pub(crate) fn stopped(self) -> ShellError {
+        if self.monitor {
+            ShellError::DeadlinePassed { ms: self.ms }
+        } else {
+            ShellError::TimedOut { ms: self.ms }
+        }
+    }
 }
 
 fn parse(
     arguments: &Map<String, Value>,
     workspace: &Path,
     max_deadline_ms: u64,
-) -> Result<Parsed, String> {
-    let args: Args = crate::tool_util::arguments(arguments)?;
+) -> Result<Parsed, ShellError> {
+    let args: Args = crate::tool_util::parsed(arguments)?;
     let command = args.command;
     let workdir = workdir(args.workdir.as_deref(), workspace)?;
     let given_timeout = args.timeout_ms;
@@ -480,25 +480,25 @@ fn parse(
     let monitor = args.monitor.unwrap_or(false);
     let mode = match (monitor, tty, run_in_background) {
         (true, false, false) => Mode::Monitor,
-        (true, _, _) => return Err(MONITOR_ALONE.to_owned()),
+        (true, _, _) => return Err(ShellError::MonitorAlone),
         (false, true, run_in_background) => Mode::Terminal { run_in_background },
         (false, false, true) => Mode::Background,
         (false, false, false) => Mode::Foreground,
     };
     let timeout_ms = if mode == Mode::Monitor {
         if given_timeout.is_some() {
-            return Err(MONITOR_TIMEOUT.to_owned());
+            return Err(ShellError::MonitorTimeout);
         }
         let deadline = given_deadline.unwrap_or(DEFAULT_DEADLINE_MS);
         if deadline > max_deadline_ms {
-            return Err(format!(
-                "`deadline_ms` is more than {max_deadline_ms}, the longest a monitor may run here. Give {max_deadline_ms} or less."
-            ));
+            return Err(ShellError::DeadlineTooLong {
+                max_ms: max_deadline_ms,
+            });
         }
         deadline
     } else {
         if given_deadline.is_some() {
-            return Err(DEADLINE_WITHOUT_MONITOR.to_owned());
+            return Err(ShellError::DeadlineWithoutMonitor);
         }
         given_timeout.unwrap_or(DEFAULT_TIMEOUT_MS)
     };
@@ -510,7 +510,7 @@ fn parse(
     })
 }
 
-fn workdir(workdir: Option<&str>, workspace: &Path) -> Result<PathBuf, String> {
+fn workdir(workdir: Option<&str>, workspace: &Path) -> Result<PathBuf, ShellError> {
     let path = match workdir {
         None => workspace.to_path_buf(),
         Some(raw) => {
@@ -525,10 +525,7 @@ fn workdir(workdir: Option<&str>, workspace: &Path) -> Result<PathBuf, String> {
     if path.is_dir() {
         Ok(path)
     } else {
-        Err(format!(
-            "`{}` is not a directory. Give a directory as `workdir`.",
-            path.display()
-        ))
+        Err(ShellError::NotADirectory { path })
     }
 }
 
@@ -595,11 +592,8 @@ fn shell_program() -> &'static Path {
 fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit, command: &str) -> Output {
     match result {
         Ok(finished) => assemble(limit, finished, None, Some(command)),
-        Err(err) => {
-            let mut output = failed(
-                ErrorCode::ToolError,
-                format!("The command could not be started: {err}."),
-            );
+        Err(source) => {
+            let mut output = errored(ShellError::NotStarted { source });
             output.details = Some(details(command, None));
             output
         }
@@ -642,14 +636,14 @@ fn assemble_output(limit: Limit, finished: Finished, extra: Option<&str>) -> Out
             finished,
             extra,
             INDETERMINATE,
-            Some(failure(ErrorCode::Indeterminate, INDETERMINATE.to_owned())),
+            Some(Failure::from(&ToolError::from(ShellError::Indeterminate))),
             process,
             false,
         );
     }
     if finished.stop == Some(StopKind::Timeout) {
         let line = limit.line();
-        let error = Some(failure(ErrorCode::Timeout, line.clone()));
+        let error = Some(Failure::from(&ToolError::from(limit.stopped())));
         let process = process_of(&finished, true);
         return end(finished, extra, &line, error, process, false);
     }
@@ -658,20 +652,19 @@ fn assemble_output(limit: Limit, finished: Finished, extra: Option<&str>) -> Out
         return end(finished, extra, CANCELLED, None, process, false);
     }
     let Some(status) = finished.status else {
-        return failed(
-            ErrorCode::ToolError,
-            "The command's process could not be reaped.".to_owned(),
-        );
+        return errored(ShellError::NotReaped);
     };
     let (exit_code, signal, line) = observed(status);
     let held_open = finished.held_open;
     let sent_signal = finished.sent_signal;
-    let error = if signal.is_some() && !sent_signal {
-        Some(failure(ErrorCode::Signal, line.clone()))
-    } else if exit_code.is_some_and(|code| code != 0) {
-        Some(failure(ErrorCode::NonzeroExit, line.clone()))
+    let error = if let Some(name) = signal.as_ref().filter(|_| !sent_signal) {
+        Some(Failure::from(&ToolError::from(ShellError::Killed {
+            signal: name.clone(),
+        })))
     } else {
-        None
+        exit_code
+            .filter(|code| *code != 0)
+            .map(|code| Failure::from(&ToolError::from(ShellError::Exited { code })))
     };
     end(
         finished,
@@ -731,7 +724,7 @@ fn closing(extra: Option<&str>, line: &str) -> String {
 fn observed(status: ExitStatus) -> (Option<i32>, Option<String>, String) {
     if let Some(number) = status.signal() {
         let name = support::group::signal_name(number);
-        let line = format!("Killed by {name}.");
+        let line = killed_line(&name);
         return (None, Some(name), line);
     }
     let code = status.code().unwrap_or(0);
@@ -758,6 +751,11 @@ fn process_of(finished: &Finished, timed_out: bool) -> Process {
 
 pub(crate) fn exit_line(code: i32) -> String {
     format!("Exit code {code}.")
+}
+
+/// What a command killed by `name` says.
+pub(crate) fn killed_line(name: &str) -> String {
+    format!("Killed by {name}.")
 }
 
 pub(crate) fn timeout_line(timeout_ms: u64) -> String {

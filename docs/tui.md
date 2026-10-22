@@ -1699,10 +1699,11 @@ Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  home screen's delete question or workspace picker, the key map,
-  an approval or question, an offer, or the Ctrl+R panel; or the `/`
-  or `@` completion panel while focus is not in the conversation. An overlay's
-  own keys, such as an approval's ↑ and ↓, are not bindings.
+  import report, the home screen's delete question or workspace picker, the
+  key map, an approval or question, an offer, the Ctrl+R panel, or a
+  notice's whole text; or the `/` or `@` completion panel while focus is not
+  in the conversation. An overlay's own keys, such as an approval's ↑ and ↓,
+  are not bindings.
 - Picker: the model picker or the credential picker is open. Only its own keys and the global actions
   act.
 - Search: conversation search is open.

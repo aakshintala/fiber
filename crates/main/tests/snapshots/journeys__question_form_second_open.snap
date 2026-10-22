@@ -1,0 +1,53 @@
+---
+source: crates/main/tests/journeys.rs
+expression: "grid_text(&second.rows, second.cursor, second.hide_cursor, &ids)"
+---
+
+
+
+
+
+
+
+                                                                                                                    ▄▄▄▄▄▄▄▄▄
+                                                                                                                     run it ▐
+                                                                                                                    ▀▀▀▀▀▀▀▀▀
+                                                                                                                   you HH:MM
+
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   ● Asked 3 questions                                                                                                  [duration] ▸
+
+   you answered · HH:MM ────────────────────────────────────────────────────────────────────────────────────────────────────
+   Scope        tui
+   Tests        skipped
+   Docs         "2"
+
+   Thanks.
+
+   ▣ completed · [duration] · 1 call
+⋮ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ⋮
+⋮                                                                                                                             ⋮
+⋮                                                                                                                    ▄▄▄▄▄▄▄▄ ⋮
+                                                                                                                      again ▐
+                                                                                                                     ▀▀▀▀▀▀▀▀
+                                                                                                                   you HH:MM
+
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   * Asked 3 questions · ask_user 3 questions                                                                           [duration] ▸
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ Question from run it · 3 questions, any can be skipped                                                 Esc: chat about this
+ ▌
+ ▌ ←  ☐ Scope    ☐ Tests    ☐ Docs    ✔ Submit  →
+ ▌
+ ▌ Which crates should the change touch?
+ ▌ choose any
+ ▌
+ ▌ ▸ 1 [ ] hub  the session host
+ ▌   2 [ ] tui  the terminal
+ ▌   3 ✎ Type an answer, alone or with the options
+ ▌   Next →
+ ▌
+ ▌ ←→ question · ↑↓ choose · Enter chooses and moves on · Space toggles · type to answer in words
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+cursor=hidden

@@ -3,7 +3,6 @@
 
 use std::path::Path;
 
-use contract::ErrorCode;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
 use contract::tool::{Effects, Output};
 use serde::Deserialize;
@@ -29,9 +28,8 @@ pub(crate) fn arguments<'a, T: Deserialize<'a>>(
     parsed(arguments).map_err(|error| error.to_string())
 }
 
-/// The call's output for a named failure: the case's sentence with the
-/// trailing newline `failed` adds, and its code. The one place a new-style
-/// `Output` failure is built.
+/// The call's output for a named failure: the case's sentence with a trailing
+/// newline, and its code. The one place a `Output` failure is built.
 pub(crate) fn errored(error: impl Into<ToolError>) -> Output {
     let error = error.into();
     let message = error.to_string();
@@ -41,29 +39,6 @@ pub(crate) fn errored(error: impl Into<ToolError>) -> Output {
         }],
         error: Some(Failure::from(&error)),
         ..Output::default()
-    }
-}
-
-/// The call's output for `code` and `message`.
-// debt: part 5 of #923 deletes this with its last leaf caller
-pub(crate) fn failed(code: ErrorCode, message: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text {
-            text: format!("{message}\n"),
-        }],
-        error: Some(failure(code, message)),
-        ..Output::default()
-    }
-}
-
-/// The error a failed call carries.
-// debt: part 5 of #923 deletes this with its last leaf caller
-pub(crate) fn failure(code: ErrorCode, message: String) -> Failure {
-    Failure {
-        code,
-        message,
-        retry_after_ms: None,
-        provider: None,
     }
 }
 

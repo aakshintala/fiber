@@ -16,9 +16,7 @@ use similar::{ChangeTag, TextDiff};
 
 use crate::error::{FileError, WriteError};
 use crate::files::land::{land, shape_replacement};
-use crate::files::{
-    Shared, declare, effects_error, hash_bytes, kind_of, path_text, resolve, resolved,
-};
+use crate::files::{Shared, declare, effects_error, hash_bytes, kind_of, path_text, resolve};
 use crate::tool_util::errored;
 
 /// The call's arguments, checked against the schema before the call runs.
@@ -84,18 +82,18 @@ impl Tool for Write {
         };
         let raw = args.path;
         let content = args.content;
-        let key = match resolved(self.shared.workspace(), &raw) {
+        let key = match resolve(self.shared.workspace(), &raw) {
             Ok(path) => path,
-            Err(output) => return output,
+            Err(error) => return errored(WriteError::from(FileError::from(error))),
         };
         // Taken before the wait, so two replaces that both saw the same read
         // cannot both land: the second finds the first's bytes.
         let captured = self.shared.seen(&key);
         let locks = self.shared.locks();
         let _guard = locks.lock(&key);
-        let path = match resolved(self.shared.workspace(), &raw) {
+        let path = match resolve(self.shared.workspace(), &raw) {
             Ok(path) => path,
-            Err(output) => return output,
+            Err(error) => return errored(WriteError::from(FileError::from(error))),
         };
         let judged = self.shared.judged(&raw);
         if let Err(error) = crate::tool_util::recheck(
