@@ -41,9 +41,10 @@ pub(crate) enum SkillError {
         /// The skill's name, as the call named it.
         name: String,
     },
-    /// The skill's file does not resolve. The text is made in
-    /// `crate::files`; part 5 of #923 types it.
-    // debt: part 5 of #923 types `ResolveError`/`InspectError`
+    /// The skill's file does not resolve. The text is made in `skill.rs`
+    /// from `std::fs::canonicalize`'s error.
+    // debt: the text is made in skill.rs, until `skill.rs`'s `Resolve::Unreadable`
+    // keeps the `io::Error`
     #[error("Could not read skill {}: {error}.", file.display())]
     Unreadable {
         /// The file discovery opened.
@@ -67,8 +68,9 @@ pub(crate) enum SkillError {
         name: String,
     },
     /// The skill's body could not be read. The text is made in
-    /// `contract::skills`; part 5 of #923 types it.
-    // debt: part 5 of #923 types `contract::skills::SkillRead`
+    /// `contract::skills`.
+    // debt: the text is made in contract::skills, until `contract::skills::SkillRead`
+    // carries a typed error
     #[error("{message}")]
     Io {
         /// The read failure.
