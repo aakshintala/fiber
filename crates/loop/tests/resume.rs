@@ -110,11 +110,26 @@ impl support::History {
         let mut prompt = self.prompt();
         prompt.credential = credential.map(str::to_owned);
         prompt.cache_lifetime = lifetime;
+        self.resume_session(tools, Self::model(), prompt)
+    }
+
+    /// Resumes on `model` with `prompt`: the single `Loop::resume` the
+    /// wrappers share. Renews the inbox, as a second resume in one test
+    /// must.
+    fn resume_session(
+        &mut self,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        model: Model,
+        prompt: r#loop::PromptInputs,
+    ) -> Loop {
+        let (tx, rx) = mpsc::channel();
+        self.inbox_tx = tx;
+        self.inbox_rx = Some(rx);
         Loop::resume(
             r#loop::Session {
                 log: Arc::clone(&self.log),
                 provider: Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
-                model: Self::model(),
+                model,
                 prompt,
                 inbox: self.inbox_rx.take().unwrap(),
                 tools,
@@ -4427,35 +4442,19 @@ impl support::History {
         model: &str,
         thinking: Option<contract::ThinkingLevel>,
     ) -> Loop {
-        let (tx, rx) = mpsc::channel();
-        self.inbox_tx = tx;
-        self.inbox_rx = Some(rx);
         let recorded = r#loop::resumed(&self.dir).unwrap().credential;
         let mut prompt = self.prompt();
         prompt.credential = recorded;
         prompt.thinking = thinking;
-        Loop::resume(
-            r#loop::Session {
-                log: Arc::clone(&self.log),
-                provider: Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
-                model: Model {
-                    reference: model.into(),
-                    cost: None,
-                    subscription: false,
-                },
-                prompt,
-                inbox: self.inbox_rx.take().unwrap(),
-                tools,
-                permissions: r#loop::Permissions {
-                    workspace: self.workspace.clone(),
-                    credentials: self.credentials.clone(),
-                    credential_files: Vec::new(),
-                    rules: self.rules.clone(),
-                },
+        self.resume_session(
+            tools,
+            Model {
+                reference: model.into(),
+                cost: None,
+                subscription: false,
             },
-            r#loop::resumed(&self.dir).unwrap(),
+            prompt,
         )
-        .unwrap()
     }
 }
 
@@ -4509,28 +4508,30 @@ fn a_resume_switching_the_model_drops_the_recorded_reasoning() {
         "{:#?}",
         requests[1].conversation
     );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
 fn a_resume_switching_only_thinking_records_one_model_changed() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
-    history.write(
-        Event::PreambleBuilt(contract::events::PreambleBuilt {
-            reason: contract::events::PreambleReason::Start,
-            model: support::MODEL.into(),
-            context_window: 0,
-            trigger_at: None,
-            budget: None,
-            thinking: Some("low".into()),
-            tool_choice: "auto".into(),
-            cache_lifetime: contract::events::CacheLifetime::OneHour,
-            credential: None,
-            system_prompt: String::new(),
-            tools: Vec::new(),
-            replaced: Vec::new(),
-        }),
-        None,
-    );
+    let mut built = preamble_with(None, contract::events::CacheLifetime::OneHour);
+    if let Event::PreambleBuilt(inner) = &mut built {
+        inner.thinking = Some("low".into());
+    }
+    history.write(built, None);
     history.freeze();
 
     let looped = history.resume_with(
@@ -4549,12 +4550,19 @@ fn a_resume_switching_only_thinking_records_one_model_changed() {
     assert_eq!(new[0].payload["after"]["thinking"], "high");
     assert_eq!(new[0].payload["source"], "driver");
     assert_eq!(
-        history
-            .new_kinds()
-            .iter()
-            .filter(|k| *k == "model_changed")
-            .count(),
-        1
+        history.new_kinds(),
+        [
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
 }
 

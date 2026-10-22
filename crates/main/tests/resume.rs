@@ -46,41 +46,19 @@ impl Setup {
     /// Installs a provider `fake` with `models` on `openai-responses` at the
     /// fake server, and makes `default` the configured model.
     fn provider_models(&self, server: &ProviderServer, models: &[&str], default: &str) {
-        let source = self.root.path().join("src");
+        let url = format!("{}/v1", server.url());
         let ids: Vec<Value> = models
             .iter()
             .map(|m| {
-                json!({"id": m, "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000})
+                json!({"id": m, "protocol": "openai-responses", "base_url": url, "context_window": 100000})
             })
             .collect();
-        // The manifest declares the models' URL.
-        let mut manifest = json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
-        if let Some(into) = manifest.as_object_mut() {
-            into.insert(
-                "providers".to_owned(),
-                json!({"fake": [format!("{}/v1", server.url())]}),
-            );
-        }
-        write(&source.join("extension.json"), &manifest);
-        write(
-            &source.join("providers/fake.json"),
-            &json!({
-                "name": "fake",
-                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": ids,
-            }),
+        install_providers(
+            self,
+            server,
+            &[("fake", "FIBER_TEST_FAKE_KEY", ids)],
+            default,
         );
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
-        write(&self.home().join("config.json"), &json!({"model": default}));
     }
 
     /// The project's sessions directory.
@@ -564,42 +542,29 @@ fn resume_without_flag_keeps_recorded_model() {
     setup.provider_models(&server, &["m1", "m2"], "fake/m1");
     hand_built(&setup, "s_model1", vec![]);
     // The session used `fake/m2` before the crash.
-    {
-        let sessions = setup.sessions();
-        let log = log::Log::open(
-            &sessions,
-            SessionId("s_model1".into()),
-            fakes::clock::FakeClock::new(),
-        )
-        .unwrap();
-        log.append(
-            &Event::ModelChanged(contract::events::ModelChanged {
-                before: contract::events::ModelSettings {
-                    model: "fake/m1".into(),
-                    thinking: None,
-                    cache_lifetime: contract::events::CacheLifetime::OneHour,
-                    credential: None,
-                },
-                after: contract::events::ModelSettings {
-                    model: "fake/m2".into(),
-                    thinking: None,
-                    cache_lifetime: contract::events::CacheLifetime::OneHour,
-                    credential: None,
-                },
-                source: contract::events::SwitchSource::Driver,
-            }),
-            Some(t()),
-            Some(a("a_1")),
-        )
-        .unwrap();
-    }
+    record_switch(&setup, "s_model1", "fake/m1", "fake/m2");
 
     let run = setup.run_in_workspace(&["ask", "--resume", "s_model1", "two"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(
-        run.lines.iter().all(|l| l["kind"] != "model_changed"),
-        "a resume that switches nothing records nothing: {:?}",
-        run.kinds()
+    // A resume that switches nothing records nothing: no `model_changed`.
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
     );
     let built = run
         .lines
@@ -621,39 +586,31 @@ fn resume_with_c_model_beats_the_logs_last_model() {
     setup.provider_models(&server, &["m1", "m2"], "fake/m1");
     hand_built(&setup, "s_model1", vec![]);
     // The session used `fake/m2` before the crash.
-    {
-        let sessions = setup.sessions();
-        let log = log::Log::open(
-            &sessions,
-            SessionId("s_model1".into()),
-            fakes::clock::FakeClock::new(),
-        )
-        .unwrap();
-        log.append(
-            &Event::ModelChanged(contract::events::ModelChanged {
-                before: contract::events::ModelSettings {
-                    model: "fake/m1".into(),
-                    thinking: None,
-                    cache_lifetime: contract::events::CacheLifetime::OneHour,
-                    credential: None,
-                },
-                after: contract::events::ModelSettings {
-                    model: "fake/m2".into(),
-                    thinking: None,
-                    cache_lifetime: contract::events::CacheLifetime::OneHour,
-                    credential: None,
-                },
-                source: contract::events::SwitchSource::Driver,
-            }),
-            Some(t()),
-            Some(a("a_1")),
-        )
-        .unwrap();
-    }
+    record_switch(&setup, "s_model1", "fake/m1", "fake/m2");
 
     let run =
         setup.run_in_workspace(&["ask", "--resume", "s_model1", "-c", "model=fake/m1", "two"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let built = run
         .lines
         .iter()
@@ -682,38 +639,37 @@ fn resume_with_an_unknown_model_fails_before_any_session_line() {
     assert_eq!(fs::read(&events).unwrap(), before);
 }
 
-/// As [`Setup::provider_models`], with every model declaring the `low`
-/// and `high` thinking levels and defaulting to `low`.
-fn provider_models_with_thinking(
+/// Installs providers from already-built model objects, then makes
+/// `default` the configured model: the single write/plan/commit every
+/// model fixture shares. Each entry names a provider, its credential env,
+/// and its models.
+fn install_providers(
     setup: &Setup,
     server: &ProviderServer,
-    models: &[&str],
+    providers: &[(&str, &str, Vec<Value>)],
     default: &str,
 ) {
     let source = setup.root.path().join("src");
-    let ids: Vec<Value> = models
-        .iter()
-        .map(|m| {
-            json!({"id": m, "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000,
-                "thinking_levels": ["low", "high"], "thinking_default": "low"})
-        })
-        .collect();
-    let mut manifest = json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
-    if let Some(into) = manifest.as_object_mut() {
-        into.insert(
-            "providers".to_owned(),
-            json!({"fake": [format!("{}/v1", server.url())]}),
+    let url = format!("{}/v1", server.url());
+    // The manifest declares the models' URL.
+    let mut table = serde_json::Map::new();
+    for (name, _, _) in providers {
+        table.insert((*name).to_owned(), json!([url]));
+    }
+    write(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": table}),
+    );
+    for (name, env, models) in providers {
+        write(
+            &source.join(format!("providers/{name}.json")),
+            &json!({
+                "name": *name,
+                "credential": {"env": *env},
+                "models": models,
+            }),
         );
     }
-    write(&source.join("extension.json"), &manifest);
-    write(
-        &source.join("providers/fake.json"),
-        &json!({
-            "name": "fake",
-            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-            "models": ids,
-        }),
-    );
     extensions::plan(
         &setup.home(),
         &extensions::Request::Path(source),
@@ -727,6 +683,30 @@ fn provider_models_with_thinking(
     write(
         &setup.home().join("config.json"),
         &json!({"model": default}),
+    );
+}
+
+/// As [`Setup::provider_models`], with every model declaring the `low`
+/// and `high` thinking levels and defaulting to `low`.
+fn provider_models_with_thinking(
+    setup: &Setup,
+    server: &ProviderServer,
+    models: &[&str],
+    default: &str,
+) {
+    let url = format!("{}/v1", server.url());
+    let ids: Vec<Value> = models
+        .iter()
+        .map(|m| {
+            json!({"id": m, "protocol": "openai-responses", "base_url": url, "context_window": 100000,
+                "thinking_levels": ["low", "high"], "thinking_default": "low"})
+        })
+        .collect();
+    install_providers(
+        setup,
+        server,
+        &[("fake", "FIBER_TEST_FAKE_KEY", ids)],
+        default,
     );
 }
 
@@ -779,6 +759,26 @@ fn resume_with_a_model_level_suffix_applies_it_for_the_session() {
         "two",
     ]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let built = run
         .lines
         .iter()
@@ -822,6 +822,26 @@ fn resume_without_a_suffix_keeps_the_recorded_thinking_choice() {
 
     let second = setup.run_in_workspace(&["ask", "--resume", &id, "two"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    // The first run already wrote the opening message, so the resume
+    // writes none.
+    assert_eq!(
+        second.kinds(),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let built = second
         .lines
         .iter()
@@ -835,7 +855,6 @@ fn resume_without_a_suffix_keeps_the_recorded_thinking_choice() {
 /// on `openai-responses` at the fake server, and makes `fake/m1` the
 /// configured model.
 fn two_providers(setup: &Setup, server: &ProviderServer) {
-    let source = setup.root.path().join("src2");
     let url = format!("{}/v1", server.url());
     let models = |ids: &[&str]| {
         ids.iter()
@@ -844,38 +863,14 @@ fn two_providers(setup: &Setup, server: &ProviderServer) {
             })
             .collect::<Vec<Value>>()
     };
-    let manifest = json!({"name": "two", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
-        "providers": {"fake": [url], "other": [url]}});
-    write(&source.join("extension.json"), &manifest);
-    write(
-        &source.join("providers/fake.json"),
-        &json!({
-            "name": "fake",
-            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-            "models": models(&["m1", "m2"]),
-        }),
-    );
-    write(
-        &source.join("providers/other.json"),
-        &json!({
-            "name": "other",
-            "credential": {"env": "FIBER_TEST_OTHER_KEY"},
-            "models": models(&["m1"]),
-        }),
-    );
-    extensions::plan(
-        &setup.home(),
-        &extensions::Request::Path(source),
-        "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
-    write(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m1"}),
+    install_providers(
+        setup,
+        server,
+        &[
+            ("fake", "FIBER_TEST_FAKE_KEY", models(&["m1", "m2"])),
+            ("other", "FIBER_TEST_OTHER_KEY", models(&["m1"])),
+        ],
+        "fake/m1",
     );
 }
 
@@ -926,6 +921,27 @@ fn resume_with_model_to_a_new_provider_keeps_or_asks_the_label() {
         "two",
     ]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The first run already wrote the opening message, so the resume
+    // writes none.
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let built = run
         .lines
         .iter()
