@@ -80,6 +80,17 @@ describes, while ceiling-lowering follow-up pull requests stay on stable
 releases, which key off `CHANGELOG.md` sections and version bumps that
 nightlies never write.
 
+### Rehearsing the publish path
+
+A rehearsal dispatch (`gh workflow run release.yml --ref main -f rehearse=true`)
+runs only the `rehearsal` job: every nightly and stable job skips. The job
+exercises the draft, upload and publish path under the real publish working
+directory and environment, against a throwaway version
+(`0.0.0-rehearsal.<run id>`) it creates as a pre-release and then deletes,
+with its tag, in an always-run cleanup step. It proves the publish wiring;
+it does not prove the archives, which carry stand-in bytes while the release
+gate proves the real ones.
+
 ### The changelog
 
 `CHANGELOG.md` is public product copy. Each version's section describes what a

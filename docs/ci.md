@@ -422,6 +422,14 @@ The Release is created as a draft and published last, with the version's
 `CHANGELOG.md` section as its notes; publishing is what creates
 `v<version>`, so a failure leaves no tag and no Release.
 
+A rehearsal dispatch (`gh workflow run release.yml --ref main -f rehearse=true`)
+runs only the `rehearsal` job: every nightly and stable job skips. The job
+proves the draft, upload and publish wiring under the real publish working
+directory and environment, against a throwaway pre-release version it deletes,
+with its tag, in an always-run cleanup step; it does not prove the archives,
+which carry stand-in bytes while the release gate proves the real ones. Only
+`main` can run it: the `release` environment deploys only from `main`.
+
 What the artifacts are, how a release is triggered and how it is signed is
 `docs/releasing.md`.
 
