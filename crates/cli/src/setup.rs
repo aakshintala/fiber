@@ -299,12 +299,18 @@ fn step_providers(
     providers: Option<&Providers>,
     flags: &SetupFlags,
     clock: &Arc<dyn Clock>,
-    stdin: Option<&mut dyn BufRead>,
+    mut stdin: Option<&mut dyn BufRead>,
     err: &mut dyn Write,
 ) -> Result<i32, CliError> {
+    // Each login reads setup's reader: on a terminal setup holds the
+    // standard input lock, and a second lock never returns.
     if !flags.provider.is_empty() {
         for name in &flags.provider {
-            let code = crate::run_login(Some(name), None, false, Arc::clone(clock));
+            let reader = stdin
+                .as_mut()
+                .map(|reader| &mut **reader as &mut dyn BufRead);
+            let code =
+                crate::login::run_login_with(Some(name), None, false, Arc::clone(clock), reader);
             if code != 0 {
                 writeln!(err, "fiber: setup providers failed").map_err(CliError::StandardError)?;
                 return Ok(code);
@@ -339,7 +345,13 @@ fn step_providers(
         "Sign in to providers by number or name, separated by commas (blank skips): ",
         &names,
     )? {
-        let code = crate::run_login(Some(&name), None, false, Arc::clone(clock));
+        let code = crate::login::run_login_with(
+            Some(&name),
+            None,
+            false,
+            Arc::clone(clock),
+            Some(&mut *stdin),
+        );
         if code != 0 {
             writeln!(err, "fiber: setup providers failed").map_err(CliError::StandardError)?;
             return Ok(code);

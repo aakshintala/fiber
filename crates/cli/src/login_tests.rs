@@ -892,6 +892,44 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
 }
 
 #[test]
+fn run_login_with_uses_the_callers_reader_while_stdin_is_locked() {
+    // The child holds the standard input lock, as `fiber setup` does on a
+    // terminal: a login that locks standard input again never returns, so
+    // the child is killed at the deadline.
+    if std::env::var_os(CHILD).is_some() {
+        let _held = io::stdin().lock();
+        std::process::exit(super::run_login_with(
+            Some("acme"),
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+            Some(&mut Cursor::new("sk-key\n")),
+        ));
+    }
+    let setup = Setup::new();
+    setup.install("acme", None, None);
+    let name = module_path!().split_once("::").unwrap().1;
+    let output = fakes::rerun_prepared(
+        &format!("{name}::run_login_with_uses_the_callers_reader_while_stdin_is_locked"),
+        &[(CHILD, "1")],
+        fakes::Deadline::after(CHILD_DEADLINE),
+        |command| {
+            command.env("FIBER_HOME", setup.home());
+        },
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/acme/default")).unwrap(),
+        "sk-key"
+    );
+}
+
+#[test]
 fn login_of_an_unknown_provider_names_the_home_installed_providers() {
     // Pins `home_and_providers`: the message must name the providers the
     // child's FIBER_HOME installs. An empty home and empty providers keep

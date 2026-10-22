@@ -761,10 +761,9 @@ fn setup_providers_terminal_failure_names_the_step() {
         let home = child_home();
         let providers = Providers::load(&home).expect("the parent installed fake").0;
         let flags = SetupFlags::default();
-        // A cursor, never the real standard-input lock: `run_login` locks
-        // standard input itself, and two locks deadlock.
-        // Both picks fail their key read, and the first failure stops the
-        // loop, so the failure line prints once, not twice.
+        // The logins read this cursor. `fake` is stored, so its login
+        // refuses, and the first failure stops the loop before `other`:
+        // the failure line prints once, not twice.
         let mut stdin = Cursor::new("1,2\n".to_owned());
         let code = step_providers(
             &home,
@@ -790,10 +789,15 @@ fn setup_providers_terminal_failure_names_the_step() {
         &[],
         None,
     );
-    // The key read takes EOF for an empty key, so the store refuses:
-    // usage failure, and the step names itself on the way out.
+    // The stored label refuses the login: usage failure, and the step
+    // names itself on the way out.
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("credentials/fake/default is already stored"),
+        "{stderr:?}"
+    );
+    assert!(!setup.home().join("credentials/other").exists());
     // The live marks pin `signed_in`: always false drops the fake mark,
     // always true adds an other mark.
     assert!(
@@ -802,6 +806,89 @@ fn setup_providers_terminal_failure_names_the_step() {
     );
     // With `==` the failures fall through: code 0 and two failure lines.
     assert_eq!(stderr.matches("fiber: setup providers failed\n").count(), 1);
+}
+
+#[test]
+fn setup_providers_pick_reads_the_key_from_setups_reader() {
+    if child_case().as_deref() == Some("providers-pick-key") {
+        let home = child_home();
+        let providers = Providers::load(&home).expect("the parent installed fake").0;
+        let flags = SetupFlags::default();
+        // The pick and the key come from one reader: the login reads the
+        // line after the pick.
+        let mut stdin = Cursor::new("2\nk2\n".to_owned());
+        let code = step_providers(
+            &home,
+            Some(&providers),
+            &flags,
+            &test_clock(),
+            Some(&mut stdin),
+            &mut std::io::stderr(),
+        )
+        .unwrap();
+        std::process::exit(code);
+    }
+    let setup = Setup::new();
+    setup.install("fake", models("m"));
+    setup.install("other", models("m"));
+    store_credential(&setup.home(), "fake", "default", &Secret::new("k".into())).unwrap();
+    let output = spawn_child(
+        &setup,
+        "setup_providers_pick_reads_the_key_from_setups_reader",
+        "providers-pick-key",
+        &[("FIBER_HOME", setup.home().to_str().unwrap())],
+        &[],
+        None,
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stderr:?}");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/other/default")).unwrap(),
+        "k2"
+    );
+    assert_eq!(
+        stderr.matches("stored credentials/").count(),
+        1,
+        "{stderr:?}"
+    );
+}
+
+#[test]
+fn setup_providers_flag_reads_the_key_from_setups_reader() {
+    if child_case().as_deref() == Some("providers-flag-key") {
+        let home = child_home();
+        let flags = SetupFlags {
+            provider: vec!["other".to_owned()],
+            ..Default::default()
+        };
+        let mut stdin = Cursor::new("k3\n".to_owned());
+        let code = step_providers(
+            &home,
+            None,
+            &flags,
+            &test_clock(),
+            Some(&mut stdin),
+            &mut std::io::stderr(),
+        )
+        .unwrap();
+        std::process::exit(code);
+    }
+    let setup = Setup::new();
+    setup.install("other", models("m"));
+    let output = spawn_child(
+        &setup,
+        "setup_providers_flag_reads_the_key_from_setups_reader",
+        "providers-flag-key",
+        &[("FIBER_HOME", setup.home().to_str().unwrap())],
+        &[],
+        None,
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stderr:?}");
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/other/default")).unwrap(),
+        "k3"
+    );
 }
 
 #[test]
