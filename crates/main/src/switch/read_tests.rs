@@ -601,10 +601,16 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
     let clock = FakeClock::new();
     let deadline = clock.origin() + timeout;
     let reads = Arc::new(Reads::default());
-    // Both wakes before the timeout must land before the poll cadence
-    // below: the spawn's listing and the reaper's answer. Captured before
-    // the spawn, so both are still to come.
+    // Every wake before the poll cadence below must land first: the
+    // spawn's listing, both answers, and the deadline advance's own
+    // wake. The generation is captured before the spawn, and the notes
+    // before either answerer starts, so all four are still to come.
     let sent = reads.wake.generation();
+    // The reaper thread and the stdout reader thread each note their
+    // answer after they bump: two notes prove both answers landed, in
+    // no claimed order. Armed before the spawn so no answer is missed.
+    let (noted, is_noted) = mpsc::channel::<()>();
+    reads.note_completions(noted);
     // The `sleep` inherits stdout, so the leader's exit is not the run's
     // end: the wait parks at its deadline with the leader already gone,
     // and the timeout below needs no reap wait, only the group's kills.
@@ -617,27 +623,51 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
         clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
         "the wait parked at its deadline"
     );
-    // The reaper's answer bump can otherwise still be in flight here:
-    // landing after the first poll park below, it would drive an extra
-    // settlement pass with `now` still at the deadline, spending a probe
-    // early so the second poll park never comes. Both wakes before the
-    // timeout — the spawn's listing and the reaper's answer — land first,
-    // so each advance below drives exactly one pass. The stdout reader
-    // never answers while `sleep` holds the pipe, nothing is cancelled,
-    // and the clock has not moved, so these are the only two.
+    // The spawn's listing and at least one answer land before the
+    // timeout: the spawn's bump precedes both the reaper's and the
+    // reader's, and either answer proves the leader already exited, so
+    // the real kill below only ever reaches the `sleep` holding the
+    // pipe. Each advance below still needs exactly one pass, so the
+    // remaining answer is ordered after the kill instead of counted
+    // here: nothing is cancelled and the clock has not moved.
     generation_reaches(&reads.wake, sent + 2, "the leader's wake");
-    assert_eq!(
-        reads.wake.generation(),
-        sent + 2,
-        "the spawn's listing and the reaper's answer are the only wakes before the timeout"
-    );
     // Alive past the first kill, gone after the second.
     reads.script_group(
         pgid,
         vec![Ok(()), Ok(()), Err(Errno::SRCH)],
         vec![Ok(()), Ok(())],
     );
+    // The reader's answer is the one wake no generation count can
+    // order: it fires whenever the `sleep` holding the pipe goes away,
+    // including mid-settlement, where landing on a poll park drives an
+    // extra pass with `now` still at the deadline, spending a probe
+    // early so the repoll park never comes. The settlement holds at the
+    // top of its first pass — before it captures its generation — while
+    // the test kills the real group for real, closing the pipe only
+    // after the wait committed to its timeout so the run cannot finish
+    // early. The two completion notes prove both answers landed; the
+    // pass released after them captures a generation no later wake can
+    // disturb. The scripted probes decide the settlement's liveness
+    // either way — the real kill only closes the pipe — so the claim
+    // below is unchanged: two scripted sends, then SRCH retires the
+    // group.
+    let (passed, is_passed) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_settle_pass(passed, freed);
     clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
+    Deadline::after(DEADLINE).recv_or_fail(&is_passed, "the settlement's first pass");
+    match fakes::kill_group(pgid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    let notes = Deadline::after(DEADLINE);
+    notes.recv_or_fail(&is_noted, "one answer's note");
+    notes.recv_or_fail(&is_noted, "the other answer's note");
+    assert_eq!(
+        reads.wake.generation(),
+        sent + 4,
+        "the spawn's listing, the reaper's answer, the reader's answer and the deadline advance are every wake before the poll cadence"
+    );
+    release.send(()).unwrap();
     // The timeout re-kills on the poll cadence: each advance follows a
     // confirmed park, so the first two parks each earn one more send and
     // the third observation retires the group.
