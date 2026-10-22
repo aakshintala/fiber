@@ -261,18 +261,13 @@ jobs:
         name: Key the zsh and fish archive cache
         id: shell-debs-key
         if: runner.os == 'Linux'
-        env:
-          RUNNER_ARCH: ${{ runner.arch }}
-        run: |
-          if [ -z "${ImageOS:-}" ] || [ -z "${ImageVersion:-}" ]; then
-            echo "ImageOS and ImageVersion must be set on the runner" >&2
-            exit 1
-          fi
-          echo "key=shell-debs-$ImageOS-$ImageVersion-$RUNNER_ARCH-zsh-fish" >> "$GITHUB_OUTPUT"
+        timeout-minutes: 5
+        run: echo "key=shell-debs-${ImageOS:?}-${ImageVersion:?}-${RUNNER_ARCH:?}-zsh-fish" >> "$GITHUB_OUTPUT"
       - &shell-debs-restore
         name: Restore the zsh and fish archives
         id: shell-debs
         if: runner.os == 'Linux'
+        timeout-minutes: 5
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/shell-debs
@@ -281,10 +276,18 @@ jobs:
         name: Install zsh and fish
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: scripts/install-shells "$RUNNER_TEMP/shell-debs"
+        env:
+          SHELL_DEBS_CACHE_HIT: ${{ steps.shell-debs.outputs.cache-hit }}
+        run: |
+          # A restore that fails part way can leave files behind and report no hit.
+          if [ "$SHELL_DEBS_CACHE_HIT" != true ]; then
+            rm -rf "$RUNNER_TEMP/shell-debs"
+          fi
+          scripts/install-shells "$RUNNER_TEMP/shell-debs"
       - &shell-debs-save
         name: Save the zsh and fish archives
         if: runner.os == 'Linux' && steps.shell-debs.outputs.cache-hit != 'true'
+        timeout-minutes: 5
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/shell-debs
