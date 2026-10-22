@@ -14,18 +14,18 @@ expression: "grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &i
                                                                                you HH:MM
 
   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-   ▣ interrupted · [duration]
-  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   Working
 
+   ▣ interrupted · [duration]
+⋮ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ⋮
+⋮                                                                                         ⋮
 ⋮                                                                                ▄▄▄▄▄▄▄▄ ⋮
-⋮                                                                                 again   ⋮
-⋮                                                                                ▀▀▀▀▀▀▀▀ ⋮
+                                                                                  again
+                                                                                 ▀▀▀▀▀▀▀▀
                                                                                you HH:MM
 
   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-   Working
-
-   ● 2 failed model calls                                                           [duration] ▸
+   ● 1 failed model call                                                            [duration] ▸
 
    Recovered.
 

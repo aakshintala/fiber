@@ -1,9 +1,7 @@
 ---
 source: crates/main/tests/journeys.rs
-expression: "grid_text(&declined.rows, declined.cursor, &ids)"
+expression: "grid_text(&settled.rows, settled.cursor, settled.hide_cursor, &ids)"
 ---
-
-
 
 
 
@@ -25,11 +23,11 @@ expression: "grid_text(&declined.rows, declined.cursor, &ids)"
   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    ● Asked 3 questions                                                                                                  [duration] ▸
 
-⋮  you answered · HH:MM ────────────────────────────────────────────────────────────────────────────────────────────────────  ⋮
-⋮  Scope        tui                                                                                                           ⋮
+   you answered · HH:MM ────────────────────────────────────────────────────────────────────────────────────────────────────
+   Scope        tui
 ⋮  Tests        skipped                                                                                                       ⋮
-   Docs         "2"
-
+⋮  Docs         "2"                                                                                                           ⋮
+⋮                                                                                                                             ⋮
    Thanks.
 
    ▣ completed · [duration] · 1 call
@@ -44,6 +42,8 @@ expression: "grid_text(&declined.rows, declined.cursor, &ids)"
    ● Asked 3 questions                                                                                                  [duration] ▸
 
    declined: the turn ended so you could answer in your own words
+
+   Thanks after decline.
 
    ▣ interrupted · [duration] · 1 call
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
