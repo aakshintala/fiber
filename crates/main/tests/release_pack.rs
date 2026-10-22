@@ -90,6 +90,27 @@ impl Pack {
     /// as its standard input when given.
     #[track_caller]
     fn tool(&self, tool: &Path, args: &[&str], stdin: Option<&Path>) -> Output {
+        self.tool_env(tool, args, stdin, &[])
+    }
+
+    /// Runs `scripts/release-pack` with `args` and `env` added to the
+    /// cleared environment, under the test's deadline.
+    #[track_caller]
+    fn pack_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        self.tool_env(&script(), args, None, env)
+    }
+
+    /// Runs `tool` with `args` and `env` added to the cleared environment
+    /// under the test's deadline, with `stdin` as its standard input
+    /// when given.
+    #[track_caller]
+    fn tool_env(
+        &self,
+        tool: &Path,
+        args: &[&str],
+        stdin: Option<&Path>,
+        env: &[(&str, &str)],
+    ) -> Output {
         let path = format!("{}:/usr/bin:/bin", fixture_bin().display());
         let mut command = Command::new(tool);
         command
@@ -108,6 +129,7 @@ impl Pack {
             // outside any checkout, so the script learns the repository
             // from GITHUB_REPOSITORY; GH_REPO stays unset (env_clear).
             .env("GITHUB_REPOSITORY", "aakshintala/fiber")
+            .envs(env.iter().copied())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         match stdin {
@@ -495,6 +517,47 @@ fn the_draft_flow_outside_a_checkout_scopes_every_call_to_the_repo() {
     }
 }
 
+/// An explicit GH_REPO wins over GITHUB_REPOSITORY: every call carries it.
+#[test]
+fn an_explicit_gh_repo_wins_over_github_repository() {
+    let pack = Pack::start();
+    pack.wfile("notes.md", b"notes\n", 0o644);
+    let notes = pack.path("notes.md").to_string_lossy().into_owned();
+    let run = pack.pack_env(
+        &["draft-begin", "1.2.3", &"a".repeat(40), &notes],
+        &[("GH_REPO", "explicit/repo")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let calls = pack.calls();
+    assert!(!calls.is_empty(), "the draft flow made no gh calls");
+    for line in calls.lines() {
+        assert!(
+            line.contains("repo=explicit/repo"),
+            "a gh call left GH_REPO: {line}"
+        );
+    }
+}
+
+/// With both repository variables unset the run fails naming them,
+/// before any gh call runs.
+#[test]
+fn no_repository_at_all_fails_naming_the_variables() {
+    let pack = Pack::start();
+    pack.wfile("notes.md", b"notes\n", 0o644);
+    let notes = pack.path("notes.md").to_string_lossy().into_owned();
+    // Empty counts as unset under `:-`, which is how the script reads it.
+    let run = pack.pack_env(
+        &["draft-begin", "1.2.3", &"a".repeat(40), &notes],
+        &[("GITHUB_REPOSITORY", "")],
+    );
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        "release-pack: GH_REPO is unset and GITHUB_REPOSITORY is unset.\n"
+    );
+    assert!(pack.calls().is_empty(), "a gh call ran: {}", pack.calls());
+}
+
 #[test]
 fn a_failure_before_publish_leaves_no_tag_and_no_release() {
     let pack = Pack::start();
@@ -727,6 +790,9 @@ impl Release {
             .env("HOME", self.setup.root.path())
             .env("TMPDIR", self.root("tmp"))
             .env("FIBER_HOME", self.setup.home())
+            // The fixture packs run through scripts/release-pack, whose
+            // repository export reads GITHUB_REPOSITORY.
+            .env("GITHUB_REPOSITORY", "aakshintala/fiber")
             .envs(env.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -1305,6 +1371,7 @@ fn nightly_notes_outside_the_checkout_reads_the_workspace() {
         .env("HOME", pack.root.path())
         .env("TMPDIR", pack.path("tmp"))
         .env("RELEASE_PACK_STATE", pack.state())
+        .env("GITHUB_REPOSITORY", "aakshintala/fiber")
         .env("GITHUB_WORKSPACE", &repo)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

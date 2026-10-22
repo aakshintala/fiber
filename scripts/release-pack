@@ -307,6 +307,14 @@ nightly_notes() {
   fi
 }
 
+# Every `gh release` call below runs from the asset directory, not a
+# checkout, so no git-remote lookup can scope it: GH_REPO carries the
+# repository for all of them, defaulting to the Actions-provided
+# `GITHUB_REPOSITORY`. An explicit GH_REPO wins; with both unset the run
+# fails here naming the variables, never inside a `gh` call.
+export GH_REPO="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
+[ -n "$GH_REPO" ] || fail "GH_REPO is unset and GITHUB_REPOSITORY is unset."
+
 # Prints `true` when `v$1` is a draft, `false` when it is published, and
 # fails when no release carries the name.
 release_state() {
