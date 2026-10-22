@@ -131,8 +131,8 @@ fn a_working_tree_edit_after_tagging_is_not_in_the_output() {
     fixture.commit_front_page("tagged");
     fixture.tag("v0.1.0");
     fixture.commit_text("index.html", "uncommitted:index.html\n", "later");
-    // Leave the edit uncommitted on top is wrong: commit then dirty the
-    // working tree without committing, so the tag still names "tagged".
+    // The tag still names "tagged": the later commit is untagged and the
+    // working tree holds an uncommitted edit.
     let path = fixture
         .repo
         .path()
@@ -239,30 +239,6 @@ fn unparsable_tags_are_ignored_without_failing() {
 }
 
 #[test]
-fn a_numeric_tie_breaks_by_tag_name() {
-    let fixture = Fixture::new();
-    fixture.commit_text("index.html", "tie:index.html\n", "tie");
-    fixture.commit_text("style.css", "tie\n", "tie");
-    fixture.commit_text("site.js", "tie\n", "tie");
-    fixture.commit_text("fiber-logo.png", "tie\n", "tie");
-    fixture.commit_text("fiber-tui.png", "tie\n", "tie");
-    fixture.commit_text("README.md", "tie\n", "tie");
-    fixture.tag("v0.1.0-nightly.20261023");
-    // Distinct tags never share a numeric key, so the name break is only
-    // reached on exact ties; the unit tests in site.rs pin it. Here the
-    // greater date wins, fixing which tag the tie-break would keep.
-    fixture.tag("v0.1.0-nightly.20261024");
-    let out = TempDir::new("xtask-site-out");
-    let out_dir = out.path().join("site");
-    let (code, text) = site_out(&fixture.repo, &out_dir);
-    assert_eq!(code, Some(0), "{text}");
-    assert_eq!(
-        read_out(&out_dir, "index.html"),
-        b"tie:index.html\n".to_vec()
-    );
-}
-
-#[test]
 fn readme_is_absent_and_every_other_file_is_copied() {
     let fixture = Fixture::new();
     fixture.commit_front_page("files");
@@ -309,6 +285,37 @@ fn non_empty_out_exits_1_naming_the_dir() {
     std::fs::write(out_dir.join("stale.txt"), b"stale\n").unwrap();
     let (code, text) = site_out(&fixture.repo, &out_dir);
     assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains(&out_dir.display().to_string()), "{text}");
+}
+
+#[test]
+fn empty_out_is_fresh_and_builds() {
+    let fixture = Fixture::new();
+    fixture.commit_front_page("tagged");
+    fixture.tag("v0.1.0");
+    let out = TempDir::new("xtask-site-out");
+    let out_dir = out.path().join("site");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let (code, text) = site_out(&fixture.repo, &out_dir);
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(
+        read_out(&out_dir, "index.html"),
+        b"tagged:index.html\n".to_vec(),
+        "{text}"
+    );
+}
+
+#[test]
+fn file_out_exits_1_naming_not_a_directory() {
+    let fixture = Fixture::new();
+    fixture.commit_front_page("tagged");
+    fixture.tag("v0.1.0");
+    let out = TempDir::new("xtask-site-out");
+    let out_dir = out.path().join("site");
+    std::fs::write(&out_dir, b"stale\n").unwrap();
+    let (code, text) = site_out(&fixture.repo, &out_dir);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("is not a directory."), "{text}");
     assert!(text.contains(&out_dir.display().to_string()), "{text}");
 }
 
