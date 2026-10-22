@@ -2601,14 +2601,19 @@ fn settle_waits_for_the_late_childs_reap() {
     Deadline::after(DEADLINE)
         .recv(&is_reaped)
         .expect("the spawn reaped its leader");
+    assert!(
+        listed(&reads).contains(&pgid),
+        "the confirmed poll park still lists the late group: {:?}",
+        listed(&reads)
+    );
     // The scripted probes keep the group listed past the reap, so one
-    // pass after it is never enough: each advance drives one confirmed
-    // poll park while the group is still listed, and the real probe then
-    // retires the group so the settle parks at its end while only the
-    // count is raised. Each advance follows a confirmed park, each wait
-    // takes its own deadline, and the clock never moves past the end: at
-    // a park at the end the test releases the held count and waits for
-    // the answer the count drop delivers.
+    // pass after it is never enough. `still_settling` confirmed the first
+    // poll park, and no clock advance has let the settle probe again since;
+    // check that listing before driving it. Later, the real probe retires
+    // the group so the settle parks at its end while only the count is
+    // raised. Each advance follows a confirmed park, each wait takes its
+    // own deadline, and the clock never moves past the end: at a park at
+    // the end the test releases the held count and waits for its answer.
     let end = clock.origin() + doors::SHUTDOWN_BOUND;
     let mut answer: Option<bool> = None;
     while answer.is_none() {
@@ -2649,13 +2654,7 @@ fn settle_waits_for_the_late_childs_reap() {
                 }
             };
         match stepped {
-            Some(_) => {
-                assert!(
-                    listed(&reads).contains(&pgid),
-                    "the poll park still lists the late group: {:?}",
-                    listed(&reads)
-                );
-            }
+            Some(_) => {}
             None => {
                 if let Ok(got) = settled.try_recv() {
                     answer = Some(got);

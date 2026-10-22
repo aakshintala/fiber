@@ -175,10 +175,29 @@ pub(super) fn unconfigured(
     env: Option<&str>,
     login: bool,
 ) -> Notice {
-    let mut message = format!(
-        "The model `{provider}/{id}` needs the setting `{name}` for its base URL, \
-         which has no value"
-    );
+    let subject = format!("The model `{provider}/{id}` needs");
+    Notice {
+        code: ErrorCode::ModelUnconfigured,
+        message: unset_message(&subject, "its", provider, extension, name, env, login),
+        extension: Some(extension.to_owned()),
+    }
+}
+
+/// The message for a placeholder `name` of `provider` with no value:
+/// `subject`, the setting and the base URL `its` names, the hub's
+/// environment when `env` names a variable, then the remedies, as
+/// [`unconfigured`] describes them.
+fn unset_message(
+    subject: &str,
+    its: &str,
+    provider: &str,
+    extension: &str,
+    name: &str,
+    env: Option<&str>,
+    login: bool,
+) -> String {
+    let mut message =
+        format!("{subject} the setting `{name}` for {its} base URL, which has no value");
     if let Some(var) = env {
         message.push_str(&format!(
             ", and `{var}` is not set in the hub's environment (your login shell)"
@@ -198,10 +217,76 @@ pub(super) fn unconfigured(
         message.push_str(", or export it in your shell profile and run `fiber hub refresh`");
     }
     message.push('.');
-    Notice {
-        code: ErrorCode::ModelUnconfigured,
-        message,
-        extension: Some(extension.to_owned()),
+    message
+}
+
+/// The models of one provider left out because one placeholder has no
+/// value: `fiber models` prints one notice for them all
+/// (`docs/model-routing.md`, "A per-account host").
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unconfigured {
+    /// The provider's name.
+    pub(super) provider: String,
+    /// The extension that registered it.
+    pub(super) extension: String,
+    /// The placeholder with no value.
+    pub(super) setting: String,
+    /// The environment variable the placeholder declares, if any.
+    pub(super) variable: Option<String>,
+    /// Whether `fiber login <provider>` asks for the setting.
+    pub(super) login: bool,
+    /// The ids of the models left out, in model order.
+    pub(super) models: Vec<String>,
+}
+
+impl Unconfigured {
+    /// The provider's name.
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    /// The placeholder with no value.
+    pub fn setting(&self) -> &str {
+        &self.setting
+    }
+
+    /// The ids of every model left out for this setting, in model order.
+    pub fn models(&self) -> &[String] {
+        &self.models
+    }
+
+    /// The `model_unconfigured` notice for the hidden models whose
+    /// `provider/id` reference `listed` admits, counting them, with the
+    /// clauses and remedies of the per-model notice; `None` when it
+    /// admits none.
+    pub fn notice(&self, listed: &dyn Fn(&str) -> bool) -> Option<Notice> {
+        let count = self
+            .models
+            .iter()
+            .filter(|id| listed(&format!("{}/{id}", self.provider)))
+            .count();
+        if count == 0 {
+            return None;
+        }
+        let provider = &self.provider;
+        let (subject, its) = if count == 1 {
+            (format!("`{provider}`: 1 model needs"), "its")
+        } else {
+            (format!("`{provider}`: {count} models need"), "their")
+        };
+        Some(Notice {
+            code: ErrorCode::ModelUnconfigured,
+            message: unset_message(
+                &subject,
+                its,
+                provider,
+                &self.extension,
+                &self.setting,
+                self.variable.as_deref(),
+                self.login,
+            ),
+            extension: Some(self.extension.clone()),
+        })
     }
 }
 

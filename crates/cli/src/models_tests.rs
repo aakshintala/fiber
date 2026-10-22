@@ -1722,8 +1722,184 @@ fn models_leaves_out_what_no_hub_answers_when_the_client_lacks_it() {
     let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert!(!out.contains("acme/"), "{out:?}");
-    assert!(
-        err.contains(HUB_ENV_HOST) && err.contains("hub's environment"),
-        "the list names the unconfigured model: {err:?}"
+    assert_eq!(
+        err,
+        format!(
+            "`acme`: 1 model needs the setting `workspace` for its base URL, \
+             which has no value, and `{HUB_ENV_HOST}` is not set in the hub's environment \
+             (your login shell). Run `fiber login acme`, or set `workspace` in \
+             `config/acme-ext.json` in Fiber home, or export it in your shell profile \
+             and run `fiber hub refresh`.\n"
+        ),
+        "the list counts the unconfigured model once"
+    );
+}
+
+impl Setup {
+    /// Installs the extension `extension` registering the provider `name`
+    /// with these models, declaring the placeholders `workspace` and
+    /// `region` with no environment variable.
+    fn install_templated(&self, extension: &str, name: &str, models: &Value) {
+        self.install(extension, name, models);
+        let data = json!({
+            "name": name,
+            "placeholders": {"workspace": {}, "region": {}},
+            "models": models,
+        });
+        fs::write(
+            self.home()
+                .join("extensions")
+                .join(extension)
+                .join("providers")
+                .join(format!("{name}.json")),
+            data.to_string(),
+        )
+        .unwrap();
+    }
+}
+
+/// A model `id` at `base_url`.
+fn model_at(id: &str, base_url: &str) -> Value {
+    json!({"id": id, "protocol": "openai-responses", "base_url": base_url,
+           "context_window": 1000})
+}
+
+/// The `acme` notice for `count` models left out for its unset `workspace`.
+fn acme_notice(count: usize) -> String {
+    let subject = if count == 1 {
+        "1 model needs the setting `workspace` for its base URL".to_owned()
+    } else {
+        format!("{count} models need the setting `workspace` for their base URL")
+    };
+    format!(
+        "`acme`: {subject}, which has no value. Run `fiber login acme`, \
+         or set `workspace` in `config/acme-ext.json` in Fiber home.\n"
+    )
+}
+
+/// `acme` with the plain model `keep` and the models `hide-1` and
+/// `hide-2` on its unset `workspace`.
+fn install_plain_beside_hidden(setup: &Setup) {
+    setup.install_templated(
+        "acme-ext",
+        "acme",
+        &json!([
+            model_at("keep", "http://127.0.0.1:1/v1"),
+            model_at("hide-1", "https://{workspace}/v1"),
+            model_at("hide-2", "https://{workspace}/v1"),
+        ]),
+    );
+}
+
+#[test]
+fn models_prints_no_notice_when_no_model_is_left_out() {
+    let setup = Setup::new();
+    setup.install_templated(
+        "acme-ext",
+        "acme",
+        &json!([model_at("keep", "http://127.0.0.1:1/v1")]),
+    );
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    assert!(out.contains("acme/keep"), "{out:?}");
+    assert_eq!(err, "");
+}
+
+#[test]
+fn models_lists_the_plain_model_and_counts_the_hidden_ones_once() {
+    let setup = Setup::new();
+    install_plain_beside_hidden(&setup);
+    let (result, out, err) = setup.run(None, true, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    let models: Vec<String> = out
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap()["model"].to_string())
+        .collect();
+    assert_eq!(models, ["\"acme/keep\""]);
+    assert_eq!(err, acme_notice(2));
+}
+
+#[test]
+fn models_search_that_matches_no_hidden_model_prints_no_notice() {
+    let setup = Setup::new();
+    install_plain_beside_hidden(&setup);
+    let (result, out, err) = setup.run(
+        Some("nothing"),
+        false,
+        &no_spawn,
+        fakes::clock::FakeClock::new(),
+    );
+    result.unwrap();
+    assert_eq!(out, "");
+    assert_eq!(err, "");
+    let (result, out, err) = setup.run(
+        Some("KEEP"),
+        false,
+        &no_spawn,
+        fakes::clock::FakeClock::new(),
+    );
+    result.unwrap();
+    assert!(out.contains("acme/keep"), "{out:?}");
+    assert_eq!(err, "");
+    let (result, out, err) = setup.run(
+        Some("hide-2"),
+        false,
+        &no_spawn,
+        fakes::clock::FakeClock::new(),
+    );
+    result.unwrap();
+    assert_eq!(out, "");
+    assert_eq!(err, acme_notice(1));
+}
+
+#[test]
+fn models_prints_one_notice_per_provider_and_setting_in_order() {
+    let setup = Setup::new();
+    setup.install_templated(
+        "zed-ext",
+        "zed",
+        &json!([model_at("m", "https://{workspace}/v1")]),
+    );
+    setup.install_templated(
+        "acme-ext",
+        "acme",
+        &json!([
+            model_at("w", "https://{workspace}/v1"),
+            model_at("r", "https://{region}/v1"),
+        ]),
+    );
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    assert_eq!(out, "");
+    assert_eq!(
+        err,
+        "`acme`: 1 model needs the setting `region` for its base URL, which has no value. \
+         Run `fiber login acme`, or set `region` in `config/acme-ext.json` in Fiber home.\n\
+         `acme`: 1 model needs the setting `workspace` for its base URL, which has no value. \
+         Run `fiber login acme`, or set `workspace` in `config/acme-ext.json` in Fiber home.\n\
+         `zed`: 1 model needs the setting `workspace` for its base URL, which has no value. \
+         Run `fiber login zed`, or set `workspace` in `config/zed-ext.json` in Fiber home.\n"
+    );
+}
+
+#[test]
+fn models_keeps_the_per_model_notice_for_a_value_that_is_not_a_host() {
+    let setup = Setup::new();
+    install_plain_beside_hidden(&setup);
+    fs::create_dir_all(setup.home().join("config")).unwrap();
+    fs::write(
+        setup.home().join("config/acme-ext.json"),
+        r#"{"workspace":"x/y"}"#,
+    )
+    .unwrap();
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    assert!(out.contains("acme/keep"), "{out:?}");
+    assert_eq!(
+        err,
+        "The model `acme/hide-1` needs the setting `workspace` for its base URL, \
+         whose value is not a host.\n\
+         The model `acme/hide-2` needs the setting `workspace` for its base URL, \
+         whose value is not a host.\n"
     );
 }

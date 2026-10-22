@@ -508,7 +508,7 @@ pub fn restart(
         .collect();
     let removed: Vec<String> = before.difference(&after).cloned().collect();
     let link = Arc::downgrade(&slot);
-    let used = declare(slot.spec(), &listed, &link, artifacts, images);
+    let used = declare(&slot.spec(), &listed, &link, artifacts, images);
     Some(Restarted {
         records,
         used,

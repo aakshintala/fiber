@@ -1,5 +1,17 @@
 {
   "credential_label": {
+    "credential_paths": [
+      {
+        "env": "AWS_SHARED_CREDENTIALS_FILE",
+        "path": "~/.aws/credentials"
+      },
+      {
+        "path": "~/.aws/sso/cache"
+      },
+      {
+        "path": "~/.aws/cli/cache"
+      }
+    ],
     "default": "AWS_BEARER_TOKEN_BEDROCK, AWS keys in the environment, or the AWS CLI's default chain",
     "names": "AWS profile"
   },
