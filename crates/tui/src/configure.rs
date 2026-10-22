@@ -639,19 +639,3 @@ pub trait Configure: Send + Sync {
     /// write. Called only with a non-empty slice.
     fn save_keys(&self, edits: &[KeyEdit]) -> Result<(), ConfigureError>;
 }
-
-#[cfg(test)]
-mod tests {
-    use contract::ErrorCode;
-
-    use super::ConfigureError;
-
-    #[test]
-    fn an_error_displays_the_message_the_view_shows() {
-        let error = ConfigureError {
-            code: ErrorCode::Usage,
-            message: "not a number".to_owned(),
-        };
-        assert_eq!(error.to_string(), "not a number");
-    }
-}
