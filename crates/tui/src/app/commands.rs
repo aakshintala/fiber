@@ -9,7 +9,7 @@ use contract::events::CommandAccepted;
 use contract::{CommandId, SessionId};
 use serde_json::json;
 
-use super::{App, Effect, Kind, Link, Phase, mint, session_command};
+use super::{App, Effect, Kind, Link, Phase, Surface, mint, session_command};
 use crate::editor::Target;
 use crate::input::Draft;
 use crate::keymap::KeyMap;
@@ -477,13 +477,21 @@ impl App {
         self.armed_at = None;
         self.copy_owed = false;
         self.history.cancel();
-        // The open report owns every key through `route_key`, so a
-        // paste or a home-owned arrow reaching here changes neither
-        // the draft nor the report behind it. It runs ahead of the
-        // picker, the chip row and the draft, as `report_key` runs
-        // ahead of every other key path.
-        if self.import_report_open() {
+        // The quit question and the import report own every key through
+        // `route_key`, so a paste or a home-owned arrow reaching here
+        // changes neither the draft nor the surface behind them. They run
+        // ahead of the picker, the chip row and the draft, as their keys
+        // run ahead of every other key path.
+        let top = self.top_surface();
+        if matches!(top, Surface::Quit | Surface::Report) {
             return Effect::None;
+        }
+        // The key map above the picker takes the edit: Left and Right
+        // move between its tabs, every other edit does nothing behind it.
+        if top == Surface::Keymap
+            && let Some(effect) = self.keyboard.edit_key(&edit)
+        {
+            return effect;
         }
         // The open picker owns every edit but Ctrl+C, which never
         // arrives as one.
@@ -499,9 +507,6 @@ impl App {
         // Delete on a focused home row asks to delete it when it
         // exited, ahead of the focus early return below.
         if let Some(effect) = self.home_edit(&edit) {
-            return effect;
-        }
-        if let Some(effect) = self.keyboard.edit_key(&edit) {
             return effect;
         }
         // The `/keys` screen takes every stroke in `on_press`, so only

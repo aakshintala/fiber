@@ -6,7 +6,7 @@
 //! Global keys work as from the input box.
 
 use super::rail::Spot as RailSpot;
-use super::{App, Effect};
+use super::{App, Effect, Surface};
 use crate::focus::{Area, Regions, area_of, order};
 use crate::keys::Key;
 use crate::mouse::{Target, TargetId};
@@ -294,20 +294,34 @@ impl App {
         effect
     }
 
-    /// The ✕ on an open overlay: closes the key map when open, else the
-    /// Ctrl+R panel, else the notice overlay, else the search results.
-    /// The order follows the keys: the topmost overlay, the one that has
-    /// them, closes first.
+    /// The ✕ on an open overlay closes the one on top: the import report,
+    /// the key map, the Ctrl+R panel, the notice overlay, or the search
+    /// results. The notice overlay closes ahead of the results, as it
+    /// takes Esc ahead of them.
     pub(super) fn close_overlay(&mut self) {
-        if self.keymap_top().is_some() {
-            self.keymap_key(&Key::Esc);
-            return;
-        }
-        if self.close_search() {
-            return;
-        }
-        if !self.notices.close() {
-            self.close_results();
+        for surface in self.top_surfaces() {
+            if surface == Surface::Report {
+                self.close_import_report();
+                return;
+            }
+            if surface == Surface::Keymap {
+                self.keymap_key(&Key::Esc);
+                return;
+            }
+            if surface == Surface::Search {
+                self.close_search();
+                return;
+            }
+            if surface == Surface::Results {
+                if !self.notices.close() {
+                    self.close_results();
+                }
+                return;
+            }
+            if surface == Surface::Notice {
+                self.notices.close();
+                return;
+            }
         }
     }
 

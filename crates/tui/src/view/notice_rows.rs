@@ -76,10 +76,10 @@ pub(super) fn draw(
 /// Draws the notice overlay over `area` in the shared frame, hiding the
 /// conversation's targets as before: one notice's whole text, or every
 /// notice as `code · text` paragraphs, newest first. An emptied list
-/// draws nothing.
-pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+/// draws nothing. Returns the drawn slab, empty when nothing drew.
+pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) -> Rect {
     let Some(entries) = app.notice_overlay_entries() else {
-        return;
+        return Rect::default();
     };
     targets.retain(|target| {
         !matches!(
@@ -101,7 +101,7 @@ pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec
     let mut body = Vec::new();
     let title = if entries.all {
         if entries.entries.is_empty() {
-            return;
+            return Rect::default();
         }
         for (at, (code, text)) in entries.entries.iter().enumerate() {
             if at > 0 {
@@ -112,7 +112,7 @@ pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec
         "Notices".to_owned()
     } else {
         let Some((code, text)) = entries.entries.first() else {
-            return;
+            return Rect::default();
         };
         body.extend(text_rows(text, room));
         format!("Notice · {code}")
@@ -124,7 +124,7 @@ pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec
         footer: Some(overlay::legend(&[("Esc", "closes")])),
         prefer: PREFER,
     };
-    overlay::draw(buf, area, &framed, Place::Centre, targets);
+    overlay::draw(buf, area, &framed, Place::Centre, targets)
 }
 
 /// One blank body row.

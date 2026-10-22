@@ -422,6 +422,17 @@ fn backspace_edits_the_query() {
 }
 
 #[test]
+fn backspace_over_an_empty_query_keeps_the_generation() {
+    let mut app = attached(40, 10);
+    assert_eq!(app.on_key(Key::CtrlF, now()), Effect::None);
+    let before = app.find.generation();
+    assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+    assert_eq!(query(&app), "");
+    assert_eq!(app.find.generation(), before);
+    assert!(app.find_bar().is_some(), "the bar stays open");
+}
+
+#[test]
 fn esc_closes_the_bar_and_clears_the_marks() {
     let mut app = attached(40, 10);
     search(&mut app, "hi");
