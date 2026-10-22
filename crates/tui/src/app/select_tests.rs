@@ -702,6 +702,23 @@ fn esc_clears_the_selection_before_it_interrupts() {
 }
 
 #[test]
+fn esc_closes_the_notice_overlay_and_keeps_the_selection() {
+    let mut app = replied(40, 24, "hello there");
+    let at = find(&app, "hello");
+    select(&mut app, at, right(at, 4));
+    notice(&mut app, "a notice");
+    app.open_more_notices();
+    assert!(app.notice_overlay().is_some());
+    assert!(app.select.span().is_some());
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.notice_overlay().is_none());
+    assert!(
+        app.select.span().is_some(),
+        "the first Esc left the selection"
+    );
+}
+
+#[test]
 fn esc_with_only_a_press_interrupts() {
     let mut app = attached(40, 10);
     prompt(&mut app, "go");

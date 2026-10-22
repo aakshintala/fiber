@@ -127,10 +127,11 @@ impl App {
         }
     }
 
-    /// The delete question's keys: Enter deletes, Esc keeps the
+    /// The delete question's keys, which it takes before any key below
+    /// it: Enter deletes, Esc keeps the
     /// session, Up and Down scroll its wrapped rows past the screen,
     /// Ctrl+C passes through to quit, and anything else is swallowed.
-    pub(super) fn question_key(&mut self, key: &Key) -> Option<Effect> {
+    pub(in crate::app) fn question_key(&mut self, key: &Key) -> Option<Effect> {
         if matches!(
             self.home.as_ref().and_then(|home| home.questions.prompt()),
             Some(Prompt::Import)

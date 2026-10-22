@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/app/overlay_tests.rs
+expression: text
+---
+ Keys  /key▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ Esc returns
+Enter                                                               e during a t
+Shift+Enter  Imported                                            ✕
+Esc                                                                  interrupt t
+Ctrl+C       Copied · 240                                           it
+⌥0           MCP▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+Ctrl+N       ser
+⌥1 ⌥2 ⌥3 ⌥4  ser  Quit                                       ✕       card N
+Delete, Bac  ser                                                    d session in
+↑            ser  1 session working                                 rom the proj
+←            ser                                                    t box into t
+Ctrl+R       ser  › Enter  leave them running
+⌥← ⌥→, Ctrl  ser    c      close all
+⌥Backspace   ser    Esc    stay
+Ctrl+U       ser                                                     of the line
+⌘← ⌘→        ser  click a choice · they keep running meanwhile
+Ctrl+G       ser                                                    ed token, in
+Ctrl+V       ser▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+Ctrl+O       server12
+Shift+Tab    server13                                               nto the conv
+↓ ↑, j k                                                            r previous i
+Enter        Imported items apply on the next /reload · Esc closes
+y
+↑↓ move · E▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

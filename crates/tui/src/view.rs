@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use crate::app::App;
+use crate::app::{App, Surface};
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
@@ -41,6 +41,7 @@ mod working_line;
 
 pub(crate) use home::list_window;
 pub(crate) use home::max_question_scroll;
+use home::notice_rows_area;
 
 /// The overlay shown while scrolled up once new output arrives.
 const NEW_BELOW: &str = " ↓ New messages below · End ";
@@ -87,6 +88,57 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
     paragraph(line).line_count(width).max(1)
 }
 
+/// The slab the quit question or the notice overlay draws now, or an
+/// empty rect when `frame` is not open: it draws that frame alone over the
+/// area the real frame gives it, into a scratch buffer, and takes the slab
+/// the draw returns. The wheel over the slab is the frame's, whatever lies
+/// beneath.
+pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
+    let (width, height) = app.screen_size();
+    let screen = Rect::new(0, 0, width, height);
+    let swapped = app.config_view_open() || app.model_picker_open() || app.keys_screen_open();
+    let column = app.chrome().layout().map_or(screen, |layout| layout.column);
+    let area = match (app.home_screen(), frame) {
+        (Some(home), Surface::Notice) if !swapped => notice_rows_area(app, &home, screen),
+        (Some(_), _) => screen,
+        (None, Surface::Notice) => Rect::new(
+            column.x,
+            column.y,
+            column.width,
+            u16::try_from(app.conversation_height()).unwrap_or(u16::MAX),
+        ),
+        (None, _) => column,
+    };
+    let mut buf = Buffer::empty(screen);
+    let mut targets = Vec::new();
+    if frame == Surface::Quit {
+        quit::draw(app, area, &mut buf, &mut targets)
+    } else if frame == Surface::Notice {
+        notice_rows::overlay(app, area, &mut buf, &mut targets)
+    } else {
+        Rect::default()
+    }
+}
+
+/// Draws the open framed surfaces, bottom first, so the one on top draws
+/// last: `report` draws the import report where the caller's view puts
+/// it, the quit question over `area`.
+fn draw_framed(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+    mut report: impl FnMut(&mut Vec<Target>, &mut Buffer),
+) {
+    for surface in app.framed_surfaces() {
+        if surface == Surface::Report {
+            report(targets, buf);
+        } else if surface == Surface::Quit {
+            quit::draw(app, area, buf, targets);
+        }
+    }
+}
+
 /// Draws `app` into `area` of `buf`, from the bottom up: the narrow
 /// layout's status rows on the last rows, then the input box with a
 /// completion panel above it, or the approval panel in their place, then
@@ -128,12 +180,12 @@ pub(crate) fn render(
         notice_rows::overlay(app, area, buf, &mut targets);
         let mut rows_bottom = area.bottom();
         notice_rows::draw(app, area, buf, &mut rows_bottom, &mut targets);
-        // The quit question takes every key over these views, so it
-        // draws over them too: without it Enter would quit while the
-        // choices never show.
-        if app.quit_open() {
-            quit::draw(app, area, buf, &mut targets);
-        }
+        // The import report and the quit question take every key over
+        // these views, so they draw over them too, the quit question
+        // last: without it Enter would quit while the choices never show.
+        draw_framed(app, area, buf, &mut targets, |targets, buf| {
+            crate::import_report::draw_report(app, area, buf, targets);
+        });
         if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
             for target in targets.iter().filter(|target| target.id == id) {
                 lift_hover(buf, target.rect);
@@ -287,12 +339,13 @@ pub(crate) fn render(
     if let Some(completions) = app.completions() {
         completions::draw(&completions, conversation, box_top, buf, &mut targets);
     }
-    // The import report draws over the conversation when open: one
-    // overlay with both counts, no notices (`docs/tui.md`,
-    // "Overlays"). The conversation's own targets go away under it,
-    // as under the notices overlay. The quit question draws above
-    // the report, as it takes every key while open.
-    if app.import_report_open() {
+    // The surfaces that draw a frame of their own go up bottom first, so
+    // the one on top draws last. The import report draws over the
+    // conversation: one overlay with both counts, no notices
+    // (`docs/tui.md`, "Overlays"). The conversation's own targets go
+    // away under it, as under the notices overlay. The quit question
+    // draws above the report, as it takes every key while open.
+    draw_framed(app, area, buf, &mut targets, |targets, buf| {
         targets.retain(|target| {
             !matches!(
                 target.id,
@@ -304,11 +357,8 @@ pub(crate) fn render(
                     | TargetId::Offer(_)
             )
         });
-        crate::import_report::draw_report(app, conversation, buf, &mut targets);
-    }
-    if app.quit_open() {
-        quit::draw(app, area, buf, &mut targets);
-    }
+        crate::import_report::draw_report(app, conversation, buf, targets);
+    });
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             lift_hover(buf, target.rect);

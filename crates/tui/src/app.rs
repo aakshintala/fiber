@@ -18,7 +18,7 @@ use contract::{CommandId, Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use serde_json::{Map, Value};
 
-use crate::approvals::{self, Panel, PanelKey, Queue};
+use crate::approvals::{self, Panel, Queue};
 use crate::ext::{Handle, Renderer};
 use crate::home::Level;
 use crate::import_report::ImportReport;
@@ -76,6 +76,7 @@ mod screen;
 mod select;
 mod session_views;
 mod status_rows;
+mod top;
 
 use screen::Screen;
 
@@ -83,6 +84,7 @@ pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
 pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
 pub(crate) use session_views::SessionView;
+pub(crate) use top::Surface;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -397,18 +399,22 @@ impl App {
         self.forget_images();
     }
 
-    /// Hands one key to what is on top: the key map above the model
-    /// picker, the picker, the approval panel, a completion panel,
-    /// then the input box.
+    /// Hands one key to the surfaces on top, topmost first
+    /// ([`Surface`]): the first that handles it wins, and a key none of
+    /// them takes reaches the input box. Home's own screen keys, Ctrl+C
+    /// and the rail's keys sit between the surfaces they always have.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
-        // The import report owns its keys while open, ahead of every
-        // other key path: Esc closes it, arrows and pages scroll it,
-        // Ctrl+C passes through to quit, and anything else is
+        let order = self.top_surfaces();
+        // The import report owns its keys while it is on top, ahead of
+        // every other key path: Esc closes it, arrows and pages scroll
+        // it, Ctrl+C passes through to quit, and anything else is
         // swallowed so nothing reaches the draft, list or conversation
         // behind it. It runs ahead of the anchor reset, so report
         // keys never discard the conversation's held position.
-        if let Some(effect) = self.report_key(&key) {
+        if order.first() == Some(&Surface::Report)
+            && let Some(effect) = self.report_key(&key)
+        {
             return effect;
         }
         // A `/copy` waiting on a pass copies only what was on screen
@@ -432,24 +438,26 @@ impl App {
         }
         // The key map opens above the picker: Esc closes whatever is
         // on top, so its keys never reach the picker underneath.
-        if let Some(effect) = self.keymap_key(&key) {
+        if let Some(effect) = self.route_to(top::between(&order, None, Some(Surface::Picker)), &key)
+        {
             return effect;
         }
-        if let Some(effect) = self.model_picker_key(&key) {
-            return effect;
-        }
-        // Ctrl+L opens the picker ahead of home, except while the quit
-        // question is up, which keeps every key.
-        if key == Key::CtrlL && !self.quit_open() {
+        // Ctrl+L opens the picker ahead of the views and home.
+        if key == Key::CtrlL {
             return self.open_model_picker(crate::model_picker::Mode::Choose);
         }
-        if let Some(effect) = self.config_view_key(&key) {
+        let modals = top::between(
+            &order,
+            Some(Surface::Picker),
+            Some(Surface::WorkspacePicker),
+        );
+        if let Some(effect) = self.route_to(modals, &key) {
             return effect;
         }
-        if let Some(effect) = self.session_view_key(&key) {
-            return effect;
-        }
-        if let Some(effect) = self.home_key(&key) {
+        // Home's question and picker swallow every key but Ctrl+C, which
+        // home's own screen leaves alone, so these keys reach it only
+        // with neither open.
+        if let Some(effect) = self.home_screen_key(&key) {
             return effect;
         }
         if key == Key::CtrlC {
@@ -459,44 +467,57 @@ impl App {
         if let Some(effect) = self.rail_key(&key) {
             return effect;
         }
-        match self.queue.on_key(&key) {
-            Some(PanelKey::Handled) => return Effect::None,
-            Some(PanelKey::Answer) => return self.answer(),
-            Some(PanelKey::Decline) => return self.decline(),
-            None => {}
-        }
-        if let Some(effect) = self.offer_key(&key) {
+        let panels = top::between(&order, Some(Surface::WorkspacePicker), Some(Surface::Offer));
+        if let Some(effect) = self.route_to(panels, &key) {
             return effect;
         }
+        // Recall's keys sit at the search panel's place: the panel while
+        // it is open, else ↑ ↓ through a recalled entry.
         if let Some(effect) = self.history_key(&key) {
             return effect;
         }
-        if let Some(effect) = self.results_key(&key) {
+        let views = top::between(&order, Some(Surface::Search), Some(Surface::Results));
+        if let Some(effect) = self.route_to(views, &key) {
             return effect;
         }
-        if let Some(effect) = self.find_key(&key) {
+        // The search bar sits at its own place whether or not it is open:
+        // Ctrl+F opens it.
+        let bar = if order.contains(&Surface::Find) {
+            self.route_to(&[Surface::Find], &key)
+        } else {
+            self.find_key(&key)
+        };
+        if let Some(effect) = bar {
             return effect;
         }
-        if let Some(effect) = self.select_key(&key) {
+        if let Some(effect) = self.selection_esc(&key) {
             return effect;
         }
-        if let Some(effect) = self.focus_key(&key) {
+        if let Some(effect) = self.route_to(
+            top::between(&order, Some(Surface::Find), Some(Surface::Focus)),
+            &key,
+        ) {
             return effect;
         }
+        // The completion panels sit at their place whether or not a row
+        // shows: an `@` search open before its results arrive takes Esc.
         if let Some(effect) = self.completion_key(&key) {
             return effect;
         }
         // A running `tty` job's view types into the job ahead of the
         // input box, behind every overlay above.
-        if let Some(effect) = self.item_job_key(&key) {
-            return effect;
-        }
-        if let Some(effect) = self.draft_key(&key) {
+        self.route_to(top::between(&order, Some(Surface::Completion), None), &key)
+            .unwrap_or(Effect::None)
+    }
+
+    /// A key no surface above the input box took: the box's own keys,
+    /// then the ones that act on the screen as a whole.
+    fn input_key(&mut self, key: &Key) -> Effect {
+        if let Some(effect) = self.draft_key(key) {
             return effect;
         }
         match key {
             Key::Enter => self.on_enter(),
-            Key::Esc if self.notices.close() => Effect::None,
             // Esc with a queued row selected puts the draft back, and
             // interrupts nothing.
             Key::Esc if self.steering.is_selected() => {
@@ -506,7 +527,7 @@ impl App {
             Key::Esc if self.item_open() => self.item_esc(),
             Key::Esc => self.on_esc(),
             Key::PageUp | Key::PageDown => {
-                self.page(key == Key::PageUp);
+                self.page(*key == Key::PageUp);
                 Effect::None
             }
             Key::CtrlO => {
@@ -527,11 +548,11 @@ impl App {
             Key::CtrlR => self.open_search(),
             Key::CtrlV => self.paste.press(self.draft.serial()),
             Key::CtrlF => Effect::None,
-            // Ctrl+L opens the picker ahead of `home_key`, so it never
+            // Ctrl+L opens the picker ahead of every view, so it never
             // reaches here.
             Key::CtrlL => Effect::None,
             Key::CtrlG => self.open_in_editor(),
-            Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
+            Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(key),
         }
     }
 

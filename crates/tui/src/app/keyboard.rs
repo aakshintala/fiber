@@ -3,10 +3,10 @@
 
 use std::time::Instant;
 
-use super::{App, Effect};
+use super::{App, Effect, Surface};
 use crate::keymap::{KeyMap, KeyPress};
 use crate::keys::{Edit, Event, Key, default_event};
-use crate::keyset::{Context, KeysSetup, Keyset, Resolved, load};
+use crate::keyset::{KeysSetup, Keyset, Resolved, load};
 use crate::rebind::{KeysScreen, Outcome};
 use crate::stroke::{Code, Mods, Stroke};
 use crate::swapped::{Frame, Spot};
@@ -126,7 +126,7 @@ impl App {
     /// attention title (`docs/tui.md`, "Getting the person's attention").
     pub(crate) fn on_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
         self.attention_seen();
-        if self.keys_screen_open() && !self.quit_open() {
+        if self.top_surface() == Surface::KeysScreen {
             // The notice overlay hides the screen: Esc closes the
             // overlay, Ctrl+C goes through the bindings, and every other
             // stroke reaches neither the screen nor the draft. A `None`
@@ -286,52 +286,17 @@ impl App {
         Effect::None
     }
 
-    /// The context a stroke arrives in, front to back: the quit question,
-    /// the import report, an overlay (a configuration or session view,
-    /// a home modal, the key
-    /// map above the model picker, the approval panel, an offer, the
-    /// search bar), the model picker, a focused chip as the input box,
-    /// the focused conversation, a completion panel, a steering
-    /// selection, else the input box. The notice overlay is no context:
-    /// it takes only Esc, which is `close_or_interrupt`'s key everywhere.
-    /// Home's arrows read it through `home_owns_arrows`.
-    pub(super) fn key_context(&self) -> Context {
-        if self.quit_open()
-            || self.import_report_open()
-            || (self.config_view_open() && !self.credential_view_open())
-            || self.session_view_open()
-            || self.home_modal()
-            || self.keymap_top().is_some()
-            || self.panel().is_some()
-            || self.offer_open()
-            || self.search_panel().is_some()
-        {
-            Context::Overlay
-        } else if self.model_picker_open() || self.credential_view_open() {
-            Context::Picker
-        } else if self.find_open() {
-            Context::Search
-        } else if self.focused_chip().is_some() {
-            Context::Input
-        } else if self.focus.is_some() {
-            Context::Conversation
-        } else if self.completions().is_some() {
-            Context::Overlay
-        } else if self.steering.is_selected() {
-            Context::Steering
-        } else {
-            Context::Input
-        }
-    }
-
     /// Runs an action: `new_session` leaves for home the way `/new`
     /// does, and `go_home` the way `/home` does, on the on-screen
     /// session's row. Both drop focus and any steering selection first,
     /// so the entry bar or the row takes focus. `session_only` chooses
     /// in the open model picker for this session only, or saves the open
     /// checklist as `scoped_models`. Anything else does nothing.
-    fn on_action(&mut self, id: &'static str) -> Effect {
+    pub(super) fn on_action(&mut self, id: &'static str) -> Effect {
         if id == "session_only" {
+            if self.top_surface() != Surface::Picker {
+                return Effect::None;
+            }
             if self.credential_view_open() {
                 return self.credential_session_only();
             }
