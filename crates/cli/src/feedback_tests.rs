@@ -658,11 +658,21 @@ fn a_line_torn_mid_character_leaves_the_lines_around_it() {
 #[test]
 fn every_level_the_docs_name_is_reported() {
     let home = Home::new();
-    let lines: Vec<String> = ["error", "warn", "info", "debug"]
-        .iter()
-        .enumerate()
-        .map(|(at, level)| line(at as u64, level, "tui", Some(SESSION), level))
-        .collect();
+    let lines = [
+        line(0, "error", "tui", Some(SESSION), "error"),
+        line(1, "warn", "tui", Some(SESSION), "warn"),
+        line(2, "info", "tui", Some(SESSION), "info"),
+        serde_json::json!({
+            "ts": 3,
+            "level": "debug",
+            "process": "tui",
+            "session_id": SESSION,
+            "code": "some_code",
+            "message": "debug",
+            "data": {}
+        })
+        .to_string(),
+    ];
     home.put(&format!("logs/tui-{SESSION}.log"), &lines);
     assert_eq!(
         messages(&home.report(Some(SESSION)), "Session log lines"),
