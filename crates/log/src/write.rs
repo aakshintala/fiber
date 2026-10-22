@@ -230,7 +230,7 @@ impl Log {
             }
             None => false,
         });
-        // The extension-watcher subscribers, collected under the log lock
+        // The subscribers, collected under the log lock
         // and pruned with it, then offered after the lock is released: a
         // subscriber takes the hub and cursor locks, which must never meet
         // the log lock.
