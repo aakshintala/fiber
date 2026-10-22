@@ -2610,9 +2610,6 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
     ])]);
     let exit = serde_json::to_string(&fiber_exited_line(4, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
-    // The forward parks until the report lands: a loaded machine
-    // schedules the watcher after the drain otherwise (see #3051).
-    let (release, park) = Park::closed();
     let waited = rig
         .start_timeout(
             &shell,
@@ -2620,19 +2617,16 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
             1 << 20,
             Some(1),
             None,
-            Some(parked_forward(&rig, &park)),
+            Some(rig.registry.usage_forward()),
         )
         .0;
     let _waited = waited;
+    // The fold signal fires after `on_line` returned for every line,
+    // so both forwards' inbox sends precede it on the watcher's own
+    // thread: whatever the scheduler did, the take below stashes both
+    // lines deterministically instead of racing the watcher's wakeups.
+    wait_folded(&rig, 1);
     let (notice, usages) = reported_with_usage(&rig);
-    // Nothing is stashed: both lines are still parked behind the
-    // release, which proves the hold before the drain releases it.
-    assert!(usages.is_empty(), "the parked forward holds every line");
-    drop(release);
-    // The Job can precede the watcher's forwards (see #3005): both
-    // streamed lines always follow on the inbox, so the boundary
-    // assertion reads them only after they land.
-    let usages = drain_streamed_usages(&rig, usages, 2);
     let generations: Vec<&str> = usages
         .iter()
         .map(|(_, generation)| generation.as_str())
@@ -3088,9 +3082,6 @@ fn a_correction_applies_only_its_delta() {
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
-    // The forward parks until the report lands: a loaded machine
-    // schedules the watcher after the drain otherwise (see #3051).
-    let (release, park) = Park::closed();
     let waited = rig
         .start_timeout(
             &shell,
@@ -3098,22 +3089,22 @@ fn a_correction_applies_only_its_delta() {
             1 << 20,
             None,
             None,
-            Some(parked_forward(&rig, &park)),
+            Some(rig.registry.usage_forward()),
         )
         .0;
     let _waited = waited;
+    // The fold signal fires after `on_line` returned for every line,
+    // so both forwards' inbox sends precede it on the watcher's own
+    // thread: whatever the scheduler did, the take below stashes both
+    // lines deterministically instead of racing the watcher's wakeups.
+    // The Job can precede the watcher's forwards (see #3005), so the
+    // tap is read only after the take holds both streamed lines.
+    wait_folded(&rig, 1);
     let (notice, usages) = reported_with_usage(&rig);
-    // Nothing is stashed: both lines are still parked behind the
-    // release, which proves the hold before the drain releases it.
-    assert!(usages.is_empty(), "the parked forward holds every line");
-    drop(release);
     // Both arrivals of the corrected generation stream exactly once,
     // and neither trips the budget. The delta arithmetic itself is
     // production logic proved loop-side (the tripwire `pending_tests`),
-    // so no per-generation sum is asserted here. The Job can precede
-    // the watcher's forwards, so the tap is read only after both
-    // streamed lines land on the inbox.
-    let usages = drain_streamed_usages(&rig, usages, 2);
+    // so no per-generation sum is asserted here.
     assert_eq!(trip.stops(), 0);
     assert_eq!(usages.len(), 2);
     assert_eq!(notice.completed.status, Outcome::Completed);
