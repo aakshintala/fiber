@@ -520,6 +520,74 @@ fn classify_replaces_a_nonlive_slot_and_the_commit_files_it_restarted() {
 }
 
 #[test]
+fn classify_files_a_changed_key_by_whether_the_slot_served() {
+    // A changed start key replaces the slot either way, but the commit
+    // files the name under `started` when the old slot never served this
+    // session and under `restarted` when it did.
+    for served in [false, true] {
+        let state = if served { "served" } else { "never-started" };
+        let setup = Setup::new();
+        setup.tools(&serde_json::json!([{"name": "echo"}]));
+        setup.result("echo", HI);
+        let spec = setup.spec("fx");
+        let images = FakeImages::ok();
+        // The first start writes the cache; stopping it leaves the cache
+        // behind, so the second start declares from the cache without
+        // spawning: the slot never serves until its first serve, which
+        // fails here so the slot has served before and is `Down`.
+        let first = setup.start_with_images(vec![spec.clone()], Arc::clone(&images));
+        setup.stop(first.servers);
+        let started = setup.start_with_images(vec![spec.clone()], Arc::clone(&images));
+        let slot = started.servers.slot("fx").expect("the lazy slot");
+        if served {
+            setup.write("fail-start", "");
+            assert!(
+                matches!(setup.serve(&slot), Served::Failed(_)),
+                "the first serve fails"
+            );
+            std::fs::remove_file(setup.dir.path().join("fail-start")).expect("fail-start");
+        }
+        assert_eq!(slot.served_before(), served);
+        assert!(!slot.is_live());
+        let mut changed = spec;
+        let crate::Transport::Stdio(stdio) = &mut changed.transport else {
+            unreachable!("the fixture spec is stdio");
+        };
+        stdio.env.insert("FX_CHANGED".to_owned(), "1".to_owned());
+        assert_ne!(slot.spec().key(), changed.key());
+        let rows = classify_sync(vec![changed], &started.servers);
+        let disposition = if served {
+            Disposition::Restarted
+        } else {
+            Disposition::Started
+        };
+        assert!(
+            matches!(
+                rows.as_slice(),
+                [SyncRow::Shadow { disposition: row, .. }] if *row == disposition
+            ),
+            "a {state} slot with a changed key files {disposition:?}"
+        );
+        let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+        let (outcome, servers) = Deadline::after(WITHIN)
+            .recv(&result)
+            .expect("the stage ends");
+        let staged = outcome.expect("a replacement stages");
+        let owned = setup.owned_inputs(&images);
+        let synced = plan_sync(&staged, &servers, &owned.inputs());
+        apply_sync(staged, &servers, &owned.inputs());
+        let (filed, other) = if served {
+            (&synced.servers.restarted, &synced.servers.started)
+        } else {
+            (&synced.servers.started, &synced.servers.restarted)
+        };
+        assert_eq!(filed, &vec!["fx".to_owned()], "a {state} slot's report");
+        assert!(other.is_empty(), "a {state} slot files under one quadrant");
+        setup.stop(servers);
+    }
+}
+
+#[test]
 fn stage_sync_starts_shadows_in_parallel() {
     // Two shadow starts each park in their spawn guard until both have
     // entered: serial staging parks the first guard forever and never
