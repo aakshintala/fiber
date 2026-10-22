@@ -29,7 +29,7 @@ use support::{Deadline, PIXEL, hello, text_reply, write_json};
 
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
 /// fake server, makes `fake/m` the configured model, and idles the hub
-/// out a second after its last client leaves, so no hub lingers.
+/// out 200 ms after its last client leaves, so no hub lingers.
 fn provider(setup: &support::Setup, server: &ProviderServer) {
     provider_with(setup, &json!({}), server);
 }
@@ -90,7 +90,7 @@ fn provider_full(
     .unwrap()
     .commit()
     .unwrap();
-    let mut config = json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}});
+    let mut config = json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}});
     if let Some(width) = panel_width {
         config["tui"] = json!({"panel": {"width": width}});
     }
@@ -1466,7 +1466,7 @@ fn labels(setup: &support::Setup, label: &str, stored: &[&str]) {
     }
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "providers": {"fake": {"credential": label}}, "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "fake/m", "providers": {"fake": {"credential": label}}, "hub": {"idle_exit_ms": 200}}),
     );
 }
 
