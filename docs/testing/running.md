@@ -83,8 +83,15 @@ binaries in `crates/main/tests/`; no other test retries, including the unit
 tests in `crates/main/src/`. A pass on retry does not block the
 merge. CI opens a flake issue naming the test and its first failure, or
 comments on the open one. The issue's title is `Flaky test: ` followed by
-the test as nextest prints it. Within one report job a test title files or
-comments once; a repeat is skipped. On a pull request run the report reads
+the test as nextest prints it. Each body the report writes (the issue, a
+sighting comment, a pull request comment) names the tested commit on its own
+line: `tested <sha> = main <base> + head <head>` on a pull request run, where
+the merge commit's parents are main and the pull request head, and
+`tested <sha>` on a push run. The shas are full, so the
+`git merge-base --is-ancestor` check below takes them as written. The first
+failure's text is kept to 6000 characters; longer text is cut and `...` is
+appended. Within one report job a test title files or comments once; a repeat
+is skipped. On a pull request run the report reads
 the failing file from the panic path: when main changed that file since
 the run's tested base it files nothing and notes the stale base in the
 summary, and when the pull request itself changed that file it comments on

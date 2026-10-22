@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# The self-test for the flake report's write step (.github/workflows/ci.yml,
+# job flake_report; docs/testing/running.md, "Flaky tests"). It runs that
+# step's own script, cut from the workflow file, against a stub `gh` that
+# records each write and answers each read from the case's fixture. Every
+# write path is proven: a new issue, a comment on an open issue, and a pull
+# request comment for a failing file the pull request owns. Each body names
+# the tested commit: `tested <sha> = main <base> + head <head>` on a pull
+# request run with two parents, and `tested <sha>` on a push run or a pull
+# request run with one parent. Nothing reaches the GitHub API.
+#
+# Usage: scripts/test-flake-report
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "scripts/test-flake-report: $1" >&2
+  exit 1
+}
+
+# The step is the one whose name is given below: its `run: |` block, every
+# line indented past the `run:` key. No YAML parser: the name is unique.
+awk '
+  index($0, "- name: File or comment on the flake issues") { armed = 1; next }
+  armed && !started && $0 ~ /^ *run: \|$/ { started = 1; match($0, /[^ ]/); indent = RSTART - 1; next }
+  started {
+    if ($0 ~ /^ *$/) { print ""; next }
+    match($0, /[^ ]/)
+    if (RSTART - 1 <= indent) exit
+    print
+  }
+' .github/workflows/ci.yml >"$tmp/step.sh"
+grep -Fq 'flake_body() {' "$tmp/step.sh" || fail "the flake report step's script was not found in .github/workflows/ci.yml"
+
+# The stub, written ahead of the step so it needs no executable on PATH.
+# A write becomes one file, numbered in order: its first line is `create
+# <title>` or `comment <number>`, the rest is the body exactly.
+cat >"$tmp/stub.sh" <<'EOF'
+gh() {
+  case "$1" in
+    api)
+      case "$*" in
+        *"/commits/"*) printf '%s\n' "$STUB_PARENTS" ;;
+        *"/compare/"*) printf '%s\n' "$STUB_COMPARE" ;;
+        *"/pulls/"*) printf '%s\n' "$STUB_PR_FILES" ;;
+        *) echo "stub gh: unexpected api call: $*" >&2; return 1 ;;
+      esac
+      ;;
+    issue)
+      verb=$2
+      shift 2
+      case "$verb" in
+        list) printf '%s\n' "$STUB_NUMBER"; return 0 ;;
+        comment) header="comment $1"; shift ;;
+        create) header="create" ;;
+        *) echo "stub gh: unexpected issue verb: $verb" >&2; return 1 ;;
+      esac
+      title=""
+      body=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --title) title=$2 ;;
+          --body) body=$2 ;;
+          *) echo "stub gh: unexpected argument: $1" >&2; return 1 ;;
+        esac
+        shift 2
+      done
+      [ "$verb" = create ] && header="create $title"
+      n=$(find "$STUB_CALLS" -type f | wc -l | tr -d ' ')
+      printf '%s\n%s' "$header" "$body" >"$STUB_CALLS/$n"
+      ;;
+    *) echo "stub gh: unexpected call: $*" >&2; return 1 ;;
+  esac
+}
+EOF
+cat "$tmp/stub.sh" "$tmp/step.sh" >"$tmp/run.sh"
+
+sha=1111111111111111111111111111111111111111
+base=2222222222222222222222222222222222222222
+head=3333333333333333333333333333333333333333
+url=https://github.example/aakshintala/fiber/actions/runs/1
+name='main::flaky_probe fails_once_then_passes'
+title="Flaky test: $name"
+detail='thread fails_once_then_passes panicked at crates/main/tests/flaky_probe.rs:10:9\nfirst attempt'
+fence='```'
+
+# run_case CASE EVENT PR PARENTS COMPARE PR_FILES NUMBER WANT: runs the step
+# on one flake and checks the one write against WANT.
+run_case() {
+  dir=$tmp/$1
+  mkdir -p "$dir/temp/flaky" "$dir/calls"
+  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/flaky/flaky-tests-linux.txt"
+  env -i PATH="$PATH" HOME="$dir" \
+    RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME="$2" \
+    GITHUB_RUN_ID=1 GITHUB_STEP_SUMMARY="$dir/summary" \
+    GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="$3" \
+    STUB_PARENTS="$4" STUB_COMPARE="$5" STUB_PR_FILES="$6" STUB_NUMBER="$7" \
+    STUB_CALLS="$dir/calls" \
+    bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || fail "$1: the step exited $?"
+  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$1: the step printed to stderr"; }
+  writes=$(find "$dir/calls" -type f | wc -l | tr -d ' ')
+  [ "$writes" -eq 1 ] || fail "$1: want one write, got $writes"
+  got=$(cat "$dir/calls/0")
+  [ "$got" = "$8" ] || {
+    echo "--- want:" >&2
+    printf '%s\n' "$8" >&2
+    echo "--- got:" >&2
+    printf '%s\n' "$got" >&2
+    fail "$1: the write differs"
+  }
+}
+
+push_tested="tested $sha"
+pr_tested="tested $sha = main $base + head $head"
+plain="The test \`$name\` passed after a retry on linux: $url."
+see_pr="$plain (see #12)"
+belongs="The test \`$name\` passed after a retry on linux, but its failing file \`crates/main/tests/flaky_probe.rs\` belongs to #12 rather than main: $url."
+
+# The body is the sentence, the tested line, then the failure in a fence.
+body() {
+  printf '%s\n%s\n%s\n%s\n%s' "$1" "$2" "$fence" "$detail" "$fence"
+}
+
+# A push run: a new issue, then a comment on the open one.
+run_case push-create push "" "" "" "" "" "$(printf 'create %s\n%s' "$title" "$(body "$plain" "$push_tested")")"
+run_case push-comment push "" "" "" "" 7 "$(printf 'comment 7\n%s' "$(body "$plain" "$push_tested")")"
+
+# A pull request run with two parents, main then the pull request head: a new
+# issue naming the pull request, a comment on the open one, and a comment for
+# a failing file the pull request changed.
+run_case pr-create pull_request 12 "$base $head" "" "other/file.rs" "" "$(printf 'create %s\n%s' "$title" "$(body "$see_pr" "$pr_tested")")"
+run_case pr-sighting pull_request 12 "$base $head" "" "other/file.rs" 7 "$(printf 'comment 7\n%s' "$(body "$see_pr" "$pr_tested")")"
+run_case pr-comment pull_request 12 "$base $head" "" "crates/main/tests/flaky_probe.rs" "" "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
+
+# A pull request run whose commit has one parent falls back to the push line.
+run_case pr-one-parent pull_request 12 "$base" "" "other/file.rs" "" "$(printf 'create %s\n%s' "$title" "$(body "$see_pr" "$push_tested")")"
+
+echo "scripts/test-flake-report: ok"
