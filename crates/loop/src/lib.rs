@@ -104,7 +104,7 @@ pub use history::forked;
 pub use offer::{Approved, LoadApproved, OfferKey, OfferOutcome};
 pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
-pub use prompt::{Deferrals, DisabledReader, PromptInputs};
+pub use prompt::{Deferrals, DisabledReader, DocsPlace, PromptInputs};
 pub use quota_notice::QuotaRead;
 pub use reload::{
     PrepareReload, PromptPatch, ReconnectServer, Reconnected, ReloadPrepared, ReloadRoute,

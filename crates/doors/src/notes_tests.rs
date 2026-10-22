@@ -692,12 +692,7 @@ fn a_directory_and_a_fifo_where_ci_files_belong_give_no_item() {
     fs::create_dir_all(workspace.join(".gitlab-ci.yml")).unwrap();
     let fifo = workspace.join("azure-pipelines.yml");
     fs::create_dir_all(workspace.as_path()).unwrap();
-    let status = Command::new("mkfifo")
-        .arg(&fifo)
-        .stdin(std::process::Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    fakes::fifo(&fifo);
     let found = files_text(&files_evidence(&workspace));
     assert!(found.is_empty(), "{found:?}");
 }
