@@ -132,3 +132,114 @@ fn a_model_at_an_unlisted_base_url_is_never_chosen() {
     assert!(server.requests().is_empty());
     assert!(!setup.home().join("projects").exists());
 }
+
+/// Installs provider `fake` with one model per id in `ids`, each at
+/// `https://{workspace}/v1`, whose placeholder `workspace` declares no
+/// environment variable and has no setting.
+fn install_unset_host(setup: &Setup, ids: &[String]) {
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    write_json(
+        &setup.home().join("extensions/fake/extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+                "providers": {"fake": ["https://{workspace}/v1"]}}),
+    );
+    let models: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| {
+            json!({"id": id, "protocol": "openai-responses",
+                   "base_url": "https://{workspace}/v1", "context_window": 1000})
+        })
+        .collect();
+    write_json(
+        &setup.home().join("extensions/fake/providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "placeholders": {"workspace": {}},
+            "models": models,
+        }),
+    );
+}
+
+/// The one `fake` notice `fiber models` prints for `count` models left out.
+fn fake_notice(count: usize) -> String {
+    format!(
+        "`fake`: {count} models need the setting `workspace` for their base URL, \
+         which has no value. Run `fiber login fake`, \
+         or set `workspace` in `config/fake.json` in Fiber home.\n"
+    )
+}
+
+/// Runs `fiber` with `args` to its exit, asserting exit 0, and returns its
+/// stdout and stderr.
+fn models_output(setup: &Setup, args: &[&str]) -> (String, String) {
+    let output = run_to_exit(setup.deadline, "fiber models", setup.fiber(args));
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
+#[test]
+fn models_prints_one_notice_for_an_unset_host_of_many_models() {
+    let setup = Setup::new();
+    let ids: Vec<String> = (1..=30).map(|n| format!("m-{n}")).collect();
+    install_unset_host(&setup, &ids);
+    let (stdout, stderr) = models_output(&setup, &["models"]);
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, fake_notice(30));
+}
+
+#[test]
+fn models_search_filters_the_count() {
+    let setup = Setup::new();
+    let ids: Vec<String> = (1..=10)
+        .map(|n| format!("alpha-{n}"))
+        .chain((1..=20).map(|n| format!("beta-{n}")))
+        .collect();
+    install_unset_host(&setup, &ids);
+    let (stdout, stderr) = models_output(&setup, &["models", "ALPHA"]);
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, fake_notice(10));
+}
+
+#[test]
+fn models_json_keeps_the_notice_on_stderr() {
+    let setup = Setup::new();
+    let ids: Vec<String> = (1..=30).map(|n| format!("m-{n}")).collect();
+    install_unset_host(&setup, &ids);
+    let (stdout, stderr) = models_output(&setup, &["models", "--json"]);
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, fake_notice(30));
+}
+
+#[test]
+fn the_bedrock_package_prints_one_line() {
+    let setup = Setup::new();
+    let to = setup.root.path().join("pkg-bedrock");
+    support::package::copy_package("bedrock", &to, "https://", "https://");
+    let installed = run_to_exit(
+        setup.deadline,
+        "fiber extension install",
+        setup.fiber(&["extension", "install", to.to_str().unwrap()]),
+    );
+    assert_eq!(installed.status.code(), Some(0), "{installed:?}");
+    let data: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../providers/bedrock/providers/bedrock.json"
+    ))
+    .unwrap();
+    let count = data["models"].as_array().unwrap().len();
+    let (stdout, stderr) = models_output(&setup, &["models"]);
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        format!(
+            "`bedrock`: {count} models need the setting `region` for their base URL, \
+             which has no value, and `AWS_REGION` is not set in the hub's environment \
+             (your login shell). Set `region` in `config/bedrock.json` in Fiber home, \
+             or export it in your shell profile and run `fiber hub refresh`.\n"
+        )
+    );
+}
