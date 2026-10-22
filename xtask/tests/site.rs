@@ -521,6 +521,10 @@ fn the_nightly_index_is_a_contents_page_starting_with_the_guide() {
     assert_eq!(code, Some(0), "{text}");
 
     let index = read_site(&out_dir, "nightly/index.html");
+    assert!(
+        index.contains("<p><a href=\"user/\">Guide</a></p>"),
+        "the guide paragraph links user/ by the guide's title: {index}"
+    );
     let guide = index.find("href=\"user/\"").unwrap();
     let install = index.find("href=\"user/install.html\"").unwrap();
     assert!(guide < install, "the guide link comes first: {index}");

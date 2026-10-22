@@ -8,10 +8,10 @@
 //! objects at the tag, never from the working tree, so the same tags always
 //! build the same tree.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
+use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd, html};
 
 /// The front-page sources the site serves at its root.
 const PROTOTYPE_DIR: &str = "research/site-prototype";
@@ -58,8 +58,7 @@ fn build(root: &Path, out: &Path) -> Result<(), String> {
         .or(nightly.as_deref())
         .ok_or("no release tag to build from.".to_owned())?;
     copy_prototype(root, root_tag, out)?;
-    let mut pages = Vec::new();
-    render_tree(root, root_tag, out, false, &mut pages)?;
+    render_tree(root, root_tag, out, false)?;
     if let Some(tag) = &nightly {
         let tree = out.join("nightly");
         let reference = format!("refs/tags/{tag}");
@@ -75,8 +74,7 @@ fn build(root: &Path, out: &Path) -> Result<(), String> {
             "research/site-prototype/fiber-logo.png",
             &tree.join("fiber-logo.png"),
         )?;
-        let mut nightly_pages = Vec::new();
-        render_tree(root, tag, &tree, true, &mut nightly_pages)?;
+        let nightly_pages = render_tree(root, tag, &tree, true)?;
         write_contents(tag, &nightly_pages, &tree)?;
     }
     Ok(())
@@ -134,14 +132,13 @@ fn copy_prototype(root: &Path, tag: &str, out: &Path) -> Result<(), String> {
 }
 
 /// Renders every `docs/**/*.md` at `tag` into `tree`, plus `docs.css`,
-/// collecting each page's tree-relative path and title for the contents.
+/// returning each page's tree-relative path and title for the contents.
 fn render_tree(
     root: &Path,
     tag: &str,
     tree: &Path,
     nightly: bool,
-    pages: &mut Vec<(String, String)>,
-) -> Result<(), String> {
+) -> Result<Vec<(String, String)>, String> {
     let reference = format!("refs/tags/{tag}");
     let listing = git(
         root,
@@ -155,6 +152,7 @@ fn render_tree(
             DOCS_DIR,
         ],
     )?;
+    let mut pages = Vec::new();
     let mut sources = Vec::new();
     for entry in listing.split(|byte| *byte == 0) {
         if entry.is_empty() {
@@ -217,7 +215,7 @@ fn render_tree(
     pages.sort();
     std::fs::write(tree.join("docs.css"), DOCS_CSS.as_bytes())
         .map_err(|error| format!("{}: {error}", tree.join("docs.css").display()))?;
-    Ok(())
+    Ok(pages)
 }
 
 /// `depth` levels up from a page to its tree's root.
@@ -314,11 +312,9 @@ fn render(markdown: &str, source_dir: &str, tag: &str) -> String {
                 title,
                 id,
             }) => {
-                let dest =
-                    rewrite(source_dir, &dest_url, tag).unwrap_or_else(|| dest_url.into_string());
                 events.push(Event::Start(Tag::Link {
                     link_type,
-                    dest_url: dest.into(),
+                    dest_url: rewritten(source_dir, dest_url, tag),
                     title,
                     id,
                 }));
@@ -329,11 +325,9 @@ fn render(markdown: &str, source_dir: &str, tag: &str) -> String {
                 title,
                 id,
             }) => {
-                let dest =
-                    rewrite(source_dir, &dest_url, tag).unwrap_or_else(|| dest_url.into_string());
                 events.push(Event::Start(Tag::Image {
                     link_type,
-                    dest_url: dest.into(),
+                    dest_url: rewritten(source_dir, dest_url, tag),
                     title,
                     id,
                 }));
@@ -356,6 +350,15 @@ fn render(markdown: &str, source_dir: &str, tag: &str) -> String {
     let mut body = String::new();
     html::push_html(&mut body, events.into_iter());
     body
+}
+
+/// The rewritten link or image destination for the site at `tag`, or the
+/// original when `rewrite` leaves it alone.
+fn rewritten<'a>(source_dir: &str, dest_url: CowStr<'a>, tag: &str) -> CowStr<'a> {
+    match rewrite(source_dir, &dest_url, tag) {
+        Some(dest) => dest.into(),
+        None => dest_url,
+    }
 }
 
 /// Rewrites one rendered link destination for the site at `tag`: an `.md`
@@ -404,19 +407,9 @@ fn rewrite(source_dir: &str, target: &str, tag: &str) -> Option<String> {
 
 /// `base` joined with `rel`, resolved to a `/`-separated repo-relative path.
 fn join_repo(base: &str, rel: &str) -> String {
-    let joined = crate::docs::join(Path::new(base), rel);
-    let mut out = PathBuf::new();
-    for component in joined.components() {
-        use std::path::Component as C;
-        match component {
-            C::ParentDir => {
-                out.pop();
-            }
-            C::CurDir => {}
-            C::Prefix(_) | C::RootDir | C::Normal(_) => out.push(component),
-        }
-    }
-    out.to_string_lossy().replace('\\', "/")
+    crate::docs::join(Path::new(base), rel)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 /// The relative URL from the page directory `from_dir` to the tree-relative
