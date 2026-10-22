@@ -118,11 +118,10 @@ mod tests {
 
     use contract::clock::Clock as _;
     use fakes::Deadline;
+    use fakes::MUST_SUCCEED_WITHIN;
     use fakes::clock::FakeClock;
 
     use super::{advance_past_grace_or_answer, await_grace_or_answer};
-
-    const TEST_GUARD: Duration = Duration::from_secs(4);
 
     #[track_caller]
     fn park(clock: &Arc<FakeClock>, until: Instant) -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
@@ -131,15 +130,15 @@ mod tests {
         let parked_clock = Arc::clone(clock);
         thread::spawn(move || {
             parked_clock.wait_until(Some(until), &mut |_bound| {
-                Deadline::after(TEST_GUARD)
+                Deadline::after(MUST_SUCCEED_WITHIN)
                     .recv(&release_rx)
                     .expect("waited for the test to release the parked thread");
             });
             let _sent = exited_tx.send(());
         });
         assert!(
-            clock.await_parked(until, fakes::Deadline::after(TEST_GUARD)),
-            "waited {TEST_GUARD:?} for the thread to park at the grace"
+            clock.await_parked(until, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
+            "waited {MUST_SUCCEED_WITHIN:?} for the thread to park at the grace"
         );
         (release_tx, exited_rx)
     }
@@ -174,7 +173,7 @@ mod tests {
         let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
         let outcome = await_grace_or_answer(&clock, &answer_rx, until);
-        release(release_tx, exited_rx, &Deadline::after(TEST_GUARD));
+        release(release_tx, exited_rx, &Deadline::after(MUST_SUCCEED_WITHIN));
 
         assert_eq!(outcome, None);
     }
@@ -188,7 +187,7 @@ mod tests {
         answer_tx.send("answer").expect("the answer is queued");
 
         let outcome = await_grace_or_answer(&clock, &answer_rx, until);
-        release(release_tx, exited_rx, &Deadline::after(TEST_GUARD));
+        release(release_tx, exited_rx, &Deadline::after(MUST_SUCCEED_WITHIN));
 
         assert_eq!(outcome, Some("answer"));
     }
@@ -208,7 +207,7 @@ mod tests {
         let worker = Arc::clone(clock);
         thread::spawn(move || {
             worker.wait_until(Some(kill_at), &mut |_bound| {
-                Deadline::after(TEST_GUARD)
+                Deadline::after(MUST_SUCCEED_WITHIN)
                     .recv(&go_rx)
                     .expect("waited for the test to release the parked run");
             });
@@ -235,7 +234,7 @@ mod tests {
         go_tx
             .send(())
             .expect("the run is parked waiting for release");
-        Deadline::after(TEST_GUARD)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&left_rx)
             .expect("waited for the run to leave the park and answer");
         let before = clock.now();
@@ -253,7 +252,7 @@ mod tests {
         let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
         let outcome = advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
-        release(release_tx, exited_rx, &Deadline::after(TEST_GUARD));
+        release(release_tx, exited_rx, &Deadline::after(MUST_SUCCEED_WITHIN));
 
         assert_eq!(outcome, None);
         assert_eq!(
@@ -289,7 +288,7 @@ mod tests {
         answer_tx.send("answer").expect("the answer is queued");
 
         let outcome = advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
-        release(release_tx, exited_rx, &Deadline::after(TEST_GUARD));
+        release(release_tx, exited_rx, &Deadline::after(MUST_SUCCEED_WITHIN));
 
         assert_eq!(outcome, Some("answer"));
     }

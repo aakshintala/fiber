@@ -8,6 +8,7 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -19,9 +20,6 @@ use fakes::clock::FakeClock;
 use fakes::{Deadline, ProviderServer, Response};
 use serde_json::json;
 
-/// The wall-clock hang guard for each wait; fake time does the real work.
-const WAIT: Duration = Duration::from_secs(5);
-
 /// The extension's grace after a callback's own deadline.
 const GRACE: Duration = Duration::from_secs(1);
 
@@ -30,8 +28,8 @@ const GRACE: Duration = Duration::from_secs(1);
 #[track_caller]
 fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
     let mark = clock
-        .mark_parked(at, fakes::Deadline::after(WAIT))
-        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
+        .mark_parked(at, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
+        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {MUST_SUCCEED_WITHIN:?}"));
     let threads = mark.threads();
     assert_eq!(
         threads.len(),
@@ -145,11 +143,14 @@ fn discover(stuck: Stuck, wait_until: Duration) -> (Vec<(ErrorCode, Option<Strin
         tx.send((notices, models))
     });
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "{stuck:?}: waited for the stuck call to reach the server"
     );
     assert!(
-        clock.await_parked(asked + wait_until + GRACE, fakes::Deadline::after(WAIT)),
+        clock.await_parked(
+            asked + wait_until + GRACE,
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "{stuck:?}: waited for the caller to park at its grace"
     );
     // The stuck `models()` suspends its callback on the wire, so the
@@ -163,7 +164,7 @@ fn discover(stuck: Stuck, wait_until: Duration) -> (Vec<(ErrorCode, Option<Strin
                 Some(asked + wait_until),
                 Some(scheduler),
                 wait_until,
-                &Deadline::after(WAIT),
+                &Deadline::after(MUST_SUCCEED_WITHIN),
             );
         }
         Stuck::AtLoad => {
@@ -171,11 +172,11 @@ fn discover(stuck: Stuck, wait_until: Duration) -> (Vec<(ErrorCode, Option<Strin
                 Some(asked + wait_until + GRACE),
                 None,
                 wait_until,
-                &Deadline::after(WAIT),
+                &Deadline::after(MUST_SUCCEED_WITHIN),
             );
         }
     }
-    Deadline::after(WAIT).recv_or_fail(&rx, "steps 3 and 4 to answer")
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "steps 3 and 4 to answer")
 }
 
 #[test]

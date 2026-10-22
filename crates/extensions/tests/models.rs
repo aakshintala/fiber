@@ -14,6 +14,7 @@ use config::{ModelData, Secret, write_model_cache};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use extensions::{Error, ModelsArg, Providers, leave_out_invalid};
+use fakes::MUST_SUCCEED_WITHIN;
 use fakes::{Deadline, NoLock};
 use serde_json::json;
 
@@ -181,7 +182,7 @@ fn fresh_cache_is_used_before_loading_or_refreshing_provider_lua() {
         drop(home);
     });
     assert_eq!(
-        Deadline::after(Duration::from_secs(5)).recv_or_fail(&rx, "fresh model cache"),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "fresh model cache"),
         "p/cached"
     );
     assert!(!marker.exists());

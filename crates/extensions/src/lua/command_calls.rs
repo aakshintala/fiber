@@ -194,7 +194,7 @@ impl InnerCalls for CommandCalls {
             .take()
         {
             let _sent = entered.send(());
-            fakes::Deadline::after(std::time::Duration::from_secs(3))
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv_or_fail(&held, "runner backstop release");
         }
         let mut shared = hub.lock();

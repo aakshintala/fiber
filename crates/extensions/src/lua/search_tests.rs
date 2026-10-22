@@ -8,6 +8,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -19,9 +20,6 @@ use serde_json::json;
 
 use super::super::hub::Progress;
 use super::*;
-
-/// Wall-clock bound on every wait for the extension.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// An extension named `fiber.test/t` whose entry script is `init`, in a
 /// fresh temporary directory kept beside it.
@@ -37,7 +35,7 @@ fn extension(init: &str) -> (fakes::TempDir, Arc<LuaExtension>) {
     (dir, Arc::new(ext))
 }
 
-/// Runs `read` on the extension's registrations on a thread, under `WAIT`.
+/// Runs `read` on the extension's registrations on a thread, under `MUST_SUCCEED_WITHIN`.
 #[track_caller]
 fn registered<T: Send + 'static>(
     ext: &Arc<LuaExtension>,
@@ -46,7 +44,7 @@ fn registered<T: Send + 'static>(
     let (tx, rx) = mpsc::channel();
     let ext = Arc::clone(ext);
     std::thread::spawn(move || tx.send(ext.registered(read)));
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the entry script")
         .expect("the entry script ran")
@@ -189,7 +187,7 @@ fn fiber_search_backend_after_the_entry_script_raises_and_registers_nothing() {
     let (tx, rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
     std::thread::spawn(move || tx.send(caller.command("late", "")));
-    let said = Deadline::after(WAIT)
+    let said = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the command")
         .unwrap();
@@ -272,13 +270,13 @@ fn a_spinning_run_past_its_timeout_returns_a_timeout() {
     let asked = clock.now();
     let spun =
         on_thread(move || spinning.search_run("spin", json!({}), &fakes::CancelToken::new()));
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for the backend to spin");
     assert!(
         clock.await_parked(
             asked + Duration::from_millis(100) + crate::lua::GRACE,
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the caller parked at the grace"
     );
@@ -286,10 +284,11 @@ fn a_spinning_run_past_its_timeout_returns_a_timeout() {
         Some(asked + Duration::from_millis(100) + crate::lua::GRACE),
         None,
         Duration::from_millis(100),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let Err(Error::Timeout { callback, .. }) =
-        Deadline::after(WAIT).recv(&spun).expect("the run returned")
+    let Err(Error::Timeout { callback, .. }) = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&spun)
+        .expect("the run returned")
     else {
         panic!("the spinning run did not time out");
     };
