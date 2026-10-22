@@ -99,6 +99,29 @@ fn expected_message(model: &str) -> String {
     )
 }
 
+/// The one notice `fiber models` prints for the Databricks models the
+/// hub's environment leaves out: the package's model count, with the
+/// per-model message's clauses and remedies.
+fn expected_list_notice() -> String {
+    let data: Value = serde_json::from_str(include_str!(
+        "../../../providers/databricks/providers/databricks.json"
+    ))
+    .unwrap();
+    let count = data["models"].as_array().unwrap().len();
+    let subject = if count == 1 {
+        "1 model needs the setting `workspace` for its base URL".to_owned()
+    } else {
+        format!("{count} models need the setting `workspace` for their base URL")
+    };
+    format!(
+        "`databricks`: {subject}, \
+         which has no value, and `DATABRICKS_HOST` is not set in the hub's \
+         environment (your login shell). Run `fiber login databricks`, \
+         or set `workspace` in `config/databricks.json` in Fiber home, \
+         or export it in your shell profile and run `fiber hub refresh`.\n"
+    )
+}
+
 #[test]
 fn models_leaves_out_what_the_hub_lacks_and_the_session_names_it() {
     let setup = Setup::new();
@@ -124,9 +147,10 @@ fn models_leaves_out_what_the_hub_lacks_and_the_session_names_it() {
         "the hub lacks the host, so no Databricks model lists: {stdout:?}"
     );
     let stderr = String::from_utf8(models.stderr).unwrap();
-    assert!(
-        stderr.contains(&expected_message("databricks/databricks-claude-opus-5")),
-        "the list names the unconfigured model: {stderr:?}"
+    assert_eq!(
+        stderr,
+        expected_list_notice(),
+        "the list counts the unconfigured models once"
     );
 
     let ask = run(
