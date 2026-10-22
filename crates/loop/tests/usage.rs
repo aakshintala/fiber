@@ -450,6 +450,20 @@ fn a_one_hour_write_costs_twice_input_through_the_session() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let recorded = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
     assert_eq!(recorded.payload["cost"].as_f64(), Some(4.0));
 }
