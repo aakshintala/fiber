@@ -8,7 +8,8 @@ use pulldown_cmark::Alignment;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use super::{Cell, Role, char_width, link_cols, spans_of, style, wrap_joined_indices};
+use super::wrap::{Cell, char_width, link_cols, spans_of, wrap_joined_indices};
+use super::{Role, style};
 
 /// Cells between columns.
 const GAP: usize = 3;

@@ -16,6 +16,8 @@ fn every_field_round_trips_through_take() {
         work.search_order_pages += 8;
         work.shell_visits += 9;
         work.renderer_calls += 10;
+        work.recall_builds += 11;
+        work.path_lowercases += 12;
     });
     let work = take();
     assert_eq!(work.reply_renders, 1);
@@ -28,5 +30,7 @@ fn every_field_round_trips_through_take() {
     assert_eq!(work.search_order_pages, 8);
     assert_eq!(work.shell_visits, 9);
     assert_eq!(work.renderer_calls, 10);
+    assert_eq!(work.recall_builds, 11);
+    assert_eq!(work.path_lowercases, 12);
     assert_eq!(take(), super::Work::default());
 }

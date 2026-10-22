@@ -332,21 +332,45 @@ pub fn list(workspace: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// A workspace listing with each path's lowercase form, made once when the
+/// listing arrives so a search never lowercases a path.
+pub(crate) struct Paths {
+    /// Each path and its lowercase form; `None` when that is the path
+    /// itself, so an already lowercase path keeps no second copy.
+    paths: Vec<(String, Option<Box<str>>)>,
+}
+
+impl Paths {
+    /// Lowercases each of `paths` once.
+    pub(crate) fn new(paths: Vec<String>) -> Self {
+        crate::work::add(|work| work.path_lowercases += paths.len());
+        let paths = paths
+            .into_iter()
+            .map(|path| {
+                let lower = path.to_lowercase();
+                let lower = (lower != path).then(|| lower.into_boxed_str());
+                (path, lower)
+            })
+            .collect();
+        Self { paths }
+    }
+}
+
 /// The first [`KEPT`] paths containing `query`, ignoring case: those whose
 /// file name contains it first, then the shorter, then by path. `None`
 /// when `cancelled` says so; it is asked every [`CHECK_EVERY`] paths.
 pub(crate) fn rank(
-    paths: &[String],
+    paths: &Paths,
     query: &str,
     cancelled: impl Fn() -> bool,
 ) -> Option<Vec<String>> {
     let query = query.to_lowercase();
     let mut found: Vec<(bool, usize, &str)> = Vec::new();
-    for (at, path) in paths.iter().enumerate() {
+    for (at, (path, lower)) in paths.paths.iter().enumerate() {
         if at % CHECK_EVERY == 0 && cancelled() {
             return None;
         }
-        let lower = path.to_lowercase();
+        let lower = lower.as_deref().unwrap_or(path);
         if !lower.contains(&query) {
             continue;
         }
@@ -368,18 +392,18 @@ pub(crate) fn rank(
     )
 }
 
-type ListFiles = Box<dyn FnOnce() -> Result<Vec<String>, String> + Send>;
+type ListFiles = Box<dyn FnOnce() -> Result<Paths, String> + Send>;
 
 /// A lazy workspace listing, retained across queries until its owner drops it.
 pub struct Listing {
-    paths: std::sync::LazyLock<Result<Vec<String>, String>, ListFiles>,
+    paths: std::sync::LazyLock<Result<Paths, String>, ListFiles>,
 }
 
 impl Listing {
     /// Defers `listing` until the first workspace query; path queries never run it.
     pub fn new(listing: impl FnOnce() -> Result<Vec<String>, String> + Send + 'static) -> Self {
         Self {
-            paths: std::sync::LazyLock::new(Box::new(listing)),
+            paths: std::sync::LazyLock::new(Box::new(move || listing().map(Paths::new))),
         }
     }
 }
