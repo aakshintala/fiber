@@ -5589,14 +5589,18 @@ fiber.tool("go", { description = "Start the scan delegate.", input_schema = { ty
 "#;
 
 /// The parent's durable kinds for one command-started delegate, pinned
-/// from a real run: the start pair, then the finish pair, with no turn
-/// anywhere, since the model was never consulted.
+/// from a real run: the start pair, the delegate's own call copied with
+/// its origin added, then the finish pair, with no turn anywhere, since
+/// the parent never consulted the model itself (`docs/events.md`,
+/// "Usage and notices": one `usage_recorded` per call however it
+/// ended, and the parent copies each delegate line).
 const DELEGATE_COMMAND_DURABLE: &[&str] = &[
     "session_started",
     "fiber_started",
     "extensions_loaded",
     "job_started",
     "delegate_started",
+    "usage_recorded",
     "delegate_finished",
     "job_completed",
 ];
@@ -5778,7 +5782,10 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         "the delegate ran exactly its held first request"
     );
     // The whole durable stream, in order, read before close: a
-    // never-prompted session's directory is deleted on close.
+    // never-prompted session's directory is deleted on close. The
+    // cancelled delegate's unfinished call still settles its
+    // `usage_recorded`, copied with the delegate as origin
+    // (`docs/events.md`, "Usage and notices").
     assert_eq!(
         durable_kinds(&read_lines(
             &support::session_dir(&setup, &id).join("events.jsonl")
@@ -5792,6 +5799,7 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
             "reloaded",
             "extensions_loaded",
             "preamble_built",
+            "usage_recorded",
             "delegate_finished",
             "job_completed",
         ]
@@ -5816,7 +5824,7 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         .filter(|kind| *kind != "session_status" && *kind != "clients" && *kind != "attention")
         .map(String::as_str)
         .collect();
-    let started_first: [&str; 15] = [
+    let started_first: [&str; 16] = [
         "session_started",
         "fiber_started",
         "extensions_loaded",
@@ -5828,6 +5836,9 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         "command_accepted",
         "extensions_loaded",
         "preamble_built",
+        // The cancelled delegate's unfinished call settles here too
+        // (`docs/events.md`, "Usage and notices").
+        "usage_recorded",
         "delegate_finished",
         "job_completed",
         "command_accepted",
