@@ -432,8 +432,8 @@ repository's Pages, with GitHub Actions as the source, under the account's
 custom domain. The front page is a product page, built from
 `research/site-prototype/`; the user guide sits beside it. The site carries
 the rest of `docs/` too, for readers who follow a link into an area doc. Every
-docs page renders in the front page's theme: its palette in dark and light,
-its faces and its theme toggle.
+docs page renders in the front page's theme, with the same palette and faces.
+The front page's "Docs" link opens the rendered guide.
 
 The site follows releases, not merges. `/fiber/` shows the front page and
 `docs/` at the newest stable release tag, and `/fiber/nightly/` shows `docs/`
@@ -441,10 +441,11 @@ at the newest nightly tag, under a banner naming the nightly. A deploy
 replaces the whole site, so the release job and the nightly job each build
 both trees from those two tags and deploy them together, after the
 release is published. Until the first stable release, `/fiber/` shows the
-front page and the nightly's docs. Nothing else hosts Fiber's documentation. The command reference
-in `docs/user/` is generated from the same command definitions as `fiber help`
-and shell completion, and the docs check fails when the committed copy differs
-from what the generator writes.
+front page and the nightly's docs. Nothing else hosts Fiber's documentation.
+
+The command reference in `docs/user/` is generated from the same command
+definitions as `fiber help` and shell completion. A test in the `fiber` crate
+regenerates it and fails when the committed copy differs.
 
 ## Manually dispatched workflows
 
