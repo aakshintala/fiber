@@ -728,6 +728,25 @@ fn the_signal_check_passes_a_signal_in_the_allowlist() {
 }
 
 #[test]
+fn the_must_succeed_check_passes_a_clean_workspace_and_fails_a_short_bound() {
+    let dir = workspace();
+    assert_eq!(
+        xtask(&dir, &["must-succeed"], &[], ""),
+        (0, "must-succeed: ok\n".to_owned())
+    );
+    dir.write(
+        "crates/b/tests/slow.rs",
+        "fn wait() { fakes::Deadline::after(Duration::from_secs(5)); }\n",
+    );
+    let (code, out) = xtask(&dir, &["must-succeed"], &[], "");
+    assert_eq!(code, 1);
+    assert_eq!(
+        out,
+        "must-succeed: crates/b/tests/slow.rs:1: Deadline::after(Duration::from_secs(5)) is below MUST_SUCCEED_WITHIN (10 s)\n"
+    );
+}
+
+#[test]
 fn the_dependency_list_fails_an_unlisted_crate() {
     let dir = workspace();
     assert_eq!(
